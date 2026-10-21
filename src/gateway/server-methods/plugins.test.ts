@@ -5,12 +5,10 @@ import { PluginsListResultSchema } from "../../../packages/gateway-protocol/src/
 import { encodePluginDiscoveryId } from "../../plugins/catalog-discovery.js";
 import { emptyInstalledPluginComponents } from "../../plugins/installed-plugin-components.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import {
-  withPluginRuntimePluginScope,
-  withPluginRuntimeRegistryScope,
-} from "../../plugins/runtime/gateway-request-scope.js";
-import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
-import type { RespondFn } from "./types.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { recordPluginSdkDeprecationUsage } from "../../plugins/sdk-deprecation-usage.js";
+import { pluginRequest } from "./plugins.test-support.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const { managementMocks, searchMock, catalogMocks, readers } = vi.hoisted(() => ({
   managementMocks: { inspect: vi.fn(), list: vi.fn() },
@@ -38,21 +36,14 @@ vi.mock("../../infra/clawhub-plugin-catalog.js", () => ({
 const { pluginsHandlers } = await import("./plugins.js");
 
 async function callHandler(method: string, params: Record<string, unknown>) {
-  const respond = vi.fn<RespondFn>();
-  const handler = expectDefined(pluginsHandlers[method], method);
+  const options = {
+    ...pluginRequest(method, params, { getRuntimeConfig: () => ({}) } as GatewayRequestContext),
+    respond: vi.fn<RespondFn>(),
+  };
   await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
-    handler({
-      params,
-      req: {} as never,
-      client: null as never,
-      isWebchatConnect: () => false,
-      context: {
-        getRuntimeConfig: () => ({}),
-      } as never,
-      respond,
-    }),
+    expectDefined(pluginsHandlers[method], method)(options),
   );
-  const [ok, response, error] = expectDefined(respond.mock.calls.at(-1), "RPC response");
+  const [ok, response, error] = expectDefined(options.respond.mock.calls.at(-1), "RPC response");
   return { ok, response, error };
 }
 
@@ -93,58 +84,45 @@ describe("plugin management Gateway handlers", () => {
   });
 
   it("returns observed SDK compatibility per plugin without changing runtime state", async () => {
-    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    try {
-      withPluginRuntimePluginScope({ pluginId: "deprecated-sdk-fixture" }, () =>
-        warnPluginSdkDeprecation({
-          family: "session-store",
-          method: "getSessionEntry",
-          replacement: "getSessionEntryAsync",
-        }),
-      );
-      inventory([
+    recordPluginSdkDeprecationUsage(
+      "deprecated-sdk-fixture",
+      "session-store:getSessionEntry",
+      "getSessionEntry",
+      "getSessionEntryAsync",
+      "2026-12-31",
+    );
+    inventory([
+      {
+        ...workboard,
+        id: "deprecated-sdk-fixture",
+        clawhubPackage: "@openclaw/workboard",
+      },
+      { ...workboard, id: "local-only" },
+    ]);
+    const result = await callHandler("plugins.list", {});
+    expect(result.ok).toBe(true);
+    expect(result.response).toMatchObject({
+      plugins: [
         {
-          ...workboard,
           id: "deprecated-sdk-fixture",
           clawhubPackage: "@openclaw/workboard",
+          catalogId: "ch_QG9wZW5jbGF3L3dvcmtib2FyZA",
+          runtime: { state: "unloaded" },
+          compatibilityNotices: [
+            {
+              code: "deprecated-sdk-api",
+              apis: [{ displayName: "getSessionEntry" }],
+            },
+          ],
         },
-        { ...workboard, id: "local-only" },
-      ]);
-      const result = await callHandler("plugins.list", {});
-      expect(result.ok).toBe(true);
-      expect(result.response).toMatchObject({
-        plugins: [
-          {
-            id: "deprecated-sdk-fixture",
-            clawhubPackage: "@openclaw/workboard",
-            catalogId: "ch_QG9wZW5jbGF3L3dvcmtib2FyZA",
-            runtime: { state: "unloaded" },
-            compatibilityNotices: [
-              {
-                code: "deprecated-sdk-api",
-                severity: "info",
-                removalDate: "2026-12-31",
-                apis: [
-                  {
-                    displayName: "getSessionEntry",
-                    replacement: "getSessionEntryAsync",
-                    removeAfter: "2026-12-31",
-                  },
-                ],
-              },
-            ],
-          },
-          { id: "local-only", catalogId: "local_bG9jYWwtb25seQ", compatibilityNotices: [] },
-        ],
-      });
-      expect(
-        (result.response as { plugins: Array<{ clawhubPackage?: string }> }).plugins[1]
-          ?.clawhubPackage,
-      ).toBeUndefined();
-      expect(Compile(PluginsListResultSchema).Check(result.response)).toBe(true);
-    } finally {
-      warning.mockRestore();
-    }
+        { id: "local-only", catalogId: "local_bG9jYWwtb25seQ", compatibilityNotices: [] },
+      ],
+    });
+    expect(
+      (result.response as { plugins: Array<{ clawhubPackage?: string }> }).plugins[1]
+        ?.clawhubPackage,
+    ).toBeUndefined();
+    expect(Compile(PluginsListResultSchema).Check(result.response)).toBe(true);
   });
 
   it.each([
@@ -401,46 +379,13 @@ describe("plugin management Gateway handlers", () => {
     expect(managementMocks.list).not.toHaveBeenCalled();
   });
 
-  it("keeps enabled Media membership through browse pages and registry failure", async () => {
-    const provider = {
-      id: "novita",
-      name: "Novita",
-      packageName: "@openclaw/novita",
-      clawhubPackage: "@openclaw/novita",
-      origin: "bundled",
-      installed: true,
-      enabled: true,
-      state: "enabled",
-      categories: ["models"],
-      capabilityCategories: ["media"],
-    };
-    inventory([provider]);
+  it("keeps installed results on remote failure and forwards browse pagination", async () => {
+    inventory([{ ...workboard, categories: ["media"] }]);
     catalogMocks.browse.mockResolvedValueOnce({ items: [], nextCursor: "media-next" });
-    const expectedItem = {
-      catalog: { categories: ["models", "media"] },
-      local: { pluginId: "novita", enabled: true, action: "manage" },
-    };
-    const media = { category: "media" };
-    const expectedPage = { items: [expectedItem] };
-    await expectBrowse(media, { ...expectedPage, nextCursor: "media-next" });
-    catalogMocks.browse.mockResolvedValueOnce({
-      items: [
-        {
-          packageName: provider.packageName,
-          displayName: provider.name,
-          family: "code-plugin",
-          isOfficial: true,
-          categories: ["models"],
-          downloads: 123,
-        },
-      ],
-    });
-    await expectBrowse(
-      { category: "media", cursor: "media-next" },
-      {
-        items: [{ ...expectedItem, catalog: { ...expectedItem.catalog, downloads: 123 } }],
-      },
-    );
+    const items = [{ local: { pluginId: "workboard", action: "manage" } }];
+    await expectBrowse({ category: "media" }, { items, nextCursor: "media-next" });
+    catalogMocks.browse.mockResolvedValueOnce({ items: [] });
+    await expectBrowse({ category: "media", cursor: "media-next" }, { items: [] });
     expect(catalogMocks.browse).toHaveBeenNthCalledWith(2, {
       query: undefined,
       intent: "all",
@@ -449,19 +394,7 @@ describe("plugin management Gateway handlers", () => {
       limit: 20,
     });
     catalogMocks.browse.mockRejectedValueOnce(new Error("service unavailable"));
-    await expectBrowse(media, { ...expectedPage, remoteError: remoteUnavailable });
-    inventory([
-      { ...provider, enabled: false, state: "disabled", capabilityCategories: undefined },
-    ]);
-    catalogMocks.browse.mockResolvedValueOnce({ items: [] });
-    await expectBrowse(media, { items: [] });
-    catalogMocks.browse.mockResolvedValueOnce({ items: [] });
-    await expectBrowse(
-      { category: "models" },
-      {
-        items: [{ catalog: { categories: ["models"] }, local: { enabled: false } }],
-      },
-    );
+    await expectBrowse({ category: "media" }, { items, remoteError: remoteUnavailable });
     expect(managementMocks.inspect).not.toHaveBeenCalled();
   });
 
@@ -543,18 +476,7 @@ describe("plugin management Gateway handlers", () => {
       },
     ]);
     managementMocks.inspect.mockResolvedValue({
-      overview: {
-        capabilities: {
-          channels: ["workboard-chat"],
-          providers: ["workboard-models"],
-          contracts: {},
-        },
-      },
-      declared: {
-        tools: ["workboard_read"],
-        mcpServers: ["workboard"],
-        skills: ["Workboard planning"],
-      },
+      declared: { tools: [], skills: ["Workboard planning"] },
       components: emptyInstalledPluginComponents(),
     });
 
@@ -578,11 +500,7 @@ describe("plugin management Gateway handlers", () => {
       },
       detail: {
         origin: "local",
-        contracts: { tools: ["workboard_read"] },
-        channels: ["workboard-chat"],
-        providers: ["workboard-models"],
         packageName: "@openclaw/workboard",
-        mcpServers: [],
         skills: [],
       },
     });

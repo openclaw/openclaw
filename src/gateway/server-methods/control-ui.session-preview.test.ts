@@ -310,18 +310,11 @@ describe("controlUi.sessionPreview", () => {
           origin: { provider: "webchat" },
         },
       });
+      const content = `  OPENAI_API_KEY=${secret} ${"x".repeat(240)}  `;
       await persistSessionTranscriptTurn(scope, {
         cwd: "/tmp",
         updateMode: "none",
-        messages: [
-          {
-            message: {
-              role: "user",
-              content: `  OPENAI_API_KEY=${secret} ${"x".repeat(240)}  `,
-            },
-            now: 1_786_000_000_000,
-          },
-        ],
+        messages: [{ message: { role: "user", content }, now: 1_786_000_000_000 }],
       });
       const published = createDeferred();
       const publishTranscriptFields = sessionRows.publishTranscriptFields;
