@@ -150,20 +150,8 @@ function resolveCopilotHome(args: {
   }
 
   const openClawHome = readNonEmptyString(process.env.OPENCLAW_HOME);
-  const rootHome = openClawHome ? resolve(openClawHome) : safeHomeDir();
+  const rootHome = openClawHome ? resolve(openClawHome) : osHomedir();
   return resolve(join(rootHome, ".openclaw", "agents", args.agentId, "copilot"));
-}
-
-function safeHomeDir(): string {
-  try {
-    const value = osHomedir();
-    if (value.length > 0) {
-      return value;
-    }
-  } catch {
-    // fall through
-  }
-  return process.cwd();
 }
 
 function readEnvTokenFallback():

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { ThemeBranding, ThemeMascot } from "../../../packages/gateway-protocol/src/theme.ts";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
@@ -434,8 +434,13 @@ function LoginGateContent(
     );
   };
   const feedback = createMemo(() => resolveLoginFailureFeedback(props.model));
-  onCleanup(cancelRefresh);
-  onCleanup(listen(host, "login-gate-disconnect", cancelRefresh));
+  onSettled(() => {
+    const stopDisconnect = listen(host, "login-gate-disconnect", cancelRefresh);
+    return () => {
+      cancelRefresh();
+      stopDisconnect();
+    };
+  });
   const refreshPage = async () => {
     if (refreshAttempt && !ownsRefresh(refreshAttempt)) {
       refreshAttempt = undefined;

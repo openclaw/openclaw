@@ -19,7 +19,7 @@ import {
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
-import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
+import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
 import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
@@ -184,7 +184,7 @@ export function projectionOperations(
     // Never inspect guest Git metadata on the host. Canonical inventory uses only
     // the trusted managed worktree; ignored host files cannot enter the projection.
     const includePaths = target === "projection" ? await canonicalPaths() : undefined;
-    const snapshot = await captureWorkspaceSnapshot({
+    const snapshot = await captureWorkspaceManifestDocument({
       root,
       baseCommit: selected.base_commit,
       includePaths,
@@ -227,7 +227,10 @@ export function projectionOperations(
     });
     await update({ pending_ref: null });
   };
-  const settle = async (retainAccepted = false) => {
+  const settle = async (
+    retainAccepted = false,
+    preparedSnapshot?: Awaited<ReturnType<typeof capture>>,
+  ) => {
     await recover();
     if (!retainAccepted) {
       await cleanupAccepted();
@@ -258,7 +261,7 @@ export function projectionOperations(
           "Workspace integration source is unavailable; retry github_publish prepare_pr for an imported PR, or refresh_base for the selected project. Saved work was preserved.",
         );
       }
-      const snapshot = await capture(target);
+      const snapshot = preparedSnapshot ?? (await capture(target));
       await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
         root: owner.worktree.path,
         stagingRoot: sourcePath(target),
@@ -368,7 +371,7 @@ export function projectionOperations(
       return;
     }
     await update({ pending_ref: workerWorkspaceResultRef(randomUUID()), pending_target: target });
-    await settle();
+    await settle(false, snapshot);
   };
   const prepare = async (dependencies?: {
     sandbox: SandboxConfig;
@@ -456,7 +459,7 @@ export function projectionOperations(
           );
         }
         const initial = await timeWorktreePreparationPhase("snapshot", async () =>
-          captureWorkspaceSnapshot({
+          captureWorkspaceManifestDocument({
             root: repo,
             baseCommit: selected.base_commit,
             buildCacheInputs: new Set(await buildCacheInputs()),
@@ -551,6 +554,11 @@ export function projectionOperations(
       if (accepted.manifestRef !== current().baseline_ref) {
         throw new Error("Local workspace changed before archive capture");
       }
+      const manifest = parseWorkerWorkspaceManifest(
+        accepted.rawManifest,
+        accepted.manifestRef,
+        await buildCacheInputs(),
+      );
       const projection = current().projection_path;
       // Git omits accepted ignored leaves and empty directories; retain only that delta.
       if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(snapshotCommit)) {
@@ -567,7 +575,7 @@ export function projectionOperations(
       );
       current();
       const paths = new Set(splitNullBuffer(listed).map((entry) => entry.toString("hex")));
-      const entries = accepted.manifest.entries.filter((entry) =>
+      const entries = manifest.entries.filter((entry) =>
         paths.has(Buffer.from(entry.path).toString("hex")),
       );
       const directories = new Set<string>();
@@ -577,7 +585,7 @@ export function projectionOperations(
         }
       }
       const base = serializeWorkerWorkspaceManifest({
-        ...accepted.manifest,
+        ...manifest,
         entries,
         directories: [...directories].toSorted(),
       });
@@ -600,7 +608,7 @@ export function projectionOperations(
         stagedResultRef: resultRef,
         baseManifestRaw: base,
         baseManifestRef: baseRef,
-        currentManifestRaw: serializeWorkerWorkspaceManifest(accepted.manifest),
+        currentManifestRaw: accepted.rawManifest,
         currentManifestRef: accepted.manifestRef,
         buildCacheInputs: await buildCacheInputs(),
         assertCurrent,

@@ -18,11 +18,9 @@ export type ClientConfig = {
 };
 
 type StorageConfiguration = {
-  buckets: string[];
   currentBucket: string;
   region: string;
   publicUrlBase: string;
-  presignedUrl: string;
   service: "presigned-url" | "credentials";
 };
 

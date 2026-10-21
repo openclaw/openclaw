@@ -22,23 +22,17 @@ vi.mock("../chat-pane-layout-view.tsx", () => import("../chat-pane-layout.test-s
 class GeometryPane extends ChatPaneRuntime {
   session: ChatSessionVirtualizerHost | undefined;
   readonly renderedRects: Array<{ width: number; height: number } | null> = [];
-  private rows: TranscriptRow[] = Array.from({ length: 100 }, (_, index) => ({
-    kind: "content",
-    key: `row-${index}`,
-    content: <div style="height: 120px">Row {index}</div>,
-  }));
+  private rows: TranscriptRow[] = [];
 
   initialize(context: ApplicationContext, followEnd = false) {
     this.context = context;
     this.paneId = "geometry-render";
     this.sessionKey = "agent:main:geometry-render";
-    if (followEnd) {
-      this.rows = this.rows.map((row, index) => ({
-        kind: "content",
-        key: row.key,
-        content: <div style="height: 360px">Row {index}</div>,
-      }));
-    }
+    this.rows = Array.from({ length: 100 }, (_, index) => ({
+      kind: "content",
+      key: `row-${index}`,
+      content: <div style={{ height: `${followEnd ? 360 : 120}px` }}>Row {index}</div>,
+    }));
     saveChatSessionScrollPosition(this.paneId, this.sessionKey, {
       scrollTop: 0,
       anchorToEnd: followEnd,
@@ -143,7 +137,13 @@ async function mountPane(followEnd = false) {
   await settleLayout();
   const session = expectDefined(pane.session, "mounted transcript session");
   const viewport = expectDefined(session.scrollElement, "mounted transcript viewport");
-  return { host: pane, session, viewport };
+  return {
+    host: pane,
+    session,
+    viewport,
+    slot: expectDefined(viewport.parentElement, "viewport slot"),
+    virtualizer: session["virtualizer"],
+  };
 }
 
 it("keeps the initial tail rows mounted while their estimated sizes settle", async () => {
@@ -239,8 +239,7 @@ it("publishes reader policy and the tail indicator through the pane state", asyn
 it.each(["pending", "committed"] as const)(
   "commits a non-sync measurement before paint with a %s pane update",
   async (phase) => {
-    const { host, session } = await mountPane();
-    const virtualizer = session["virtualizer"];
+    const { host, session, virtualizer } = await mountPane();
     const notification = vi.spyOn(virtualizer.options, "onChange");
     const updates = vi.spyOn(host, "render");
     const paint = vi.fn();
@@ -281,8 +280,7 @@ it.each([
 ])(
   "consumes the unscaled $boxSizing rect once at scale $scale",
   async ({ scale, boxSizing, width, height }) => {
-    const { host, session, viewport } = await mountPane();
-    const slot = expectDefined(viewport.parentElement, "viewport slot");
+    const { host, session, viewport, slot } = await mountPane();
     const observed: Array<{ width: number; height: number }> = [];
     const observer = new ResizeObserver(([entry]) => {
       const size = expectDefined(entry?.borderBoxSize[0], "viewport border box");
@@ -308,9 +306,7 @@ it.each([
 );
 
 it("synchronizes padding changes even when the viewport's outer rect stays the same", async () => {
-  const { session, viewport } = await mountPane();
-  const slot = expectDefined(viewport.parentElement, "viewport slot");
-  const virtualizer = session["virtualizer"];
+  const { session, viewport, slot, virtualizer } = await mountPane();
   const rect = virtualizer.scrollRect;
   expect(virtualizer.options.scrollMargin).toBe(20);
   slot.style.paddingTop = "24px";
@@ -324,8 +320,7 @@ it("synchronizes padding changes even when the viewport's outer rect stays the s
 it.each(["border-box", "content-box"])(
   "syncs the unscaled %s viewport idempotently and publishes its native clamp once",
   async (boxSizing) => {
-    const { session, viewport } = await mountPane();
-    const slot = expectDefined(viewport.parentElement, "viewport slot");
+    const { session, viewport, slot } = await mountPane();
     viewport.scrollTop = viewport.scrollHeight;
     const before = viewport.scrollTop;
     const resized = vi.fn();
@@ -359,8 +354,7 @@ it.each(["border-box", "content-box"])(
 );
 
 it("retains measured viewport geometry while its slot is hidden", async () => {
-  const { session, viewport } = await mountPane();
-  const slot = expectDefined(viewport.parentElement, "viewport slot");
+  const { session, viewport, slot } = await mountPane();
   const before = viewport.style.cssText;
   const rect = session["virtualizer"].scrollRect;
   slot.style.display = "none";

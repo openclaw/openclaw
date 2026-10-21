@@ -336,7 +336,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   protected markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
-    if (!state?.connected || !row || !isGatewayAvailable(this.context.gateway.snapshot)) {
+    if (!state || !row || !this.secondarySessionReadsReady()) {
       return;
     }
     const failureAt = row.endedAt ?? row.updatedAt ?? 0;
@@ -383,6 +383,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     guard: SessionUnreadPatchGuard,
     agentId: string | undefined,
   ) {
+    const state = this.state;
+    const sessionKey = state?.sessionKey;
     const settle = guard.settlePatch();
     void this.context.sessions
       .patch(
@@ -391,7 +393,17 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         { agentId, expectedMarkedUnreadAt: row.markedUnreadAt ?? null },
       )
       .then(
-        (result) => settle(result !== null),
+        (result) => {
+          if (
+            settle(result !== null) &&
+            result !== null &&
+            state &&
+            this.state === state &&
+            state.sessionKey === sessionKey
+          ) {
+            this.markSessionRead(selectedChatSessionRow(state));
+          }
+        },
         (error: unknown) => settle(false, error),
       );
   }

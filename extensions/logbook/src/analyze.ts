@@ -260,10 +260,9 @@ export function validateCardCoverage(params: {
       );
     }
   }
-  const covered = params.drafts.toSorted((a, b) => a.startMs - b.startMs);
   for (const span of params.requiredSpans) {
     let cursor = span.startMs;
-    for (const interval of covered) {
+    for (const interval of params.drafts) {
       if (interval.endMs <= cursor) {
         continue;
       }
@@ -325,12 +324,6 @@ export function selectBatchFrames(params: {
       break;
     }
     if (selected.length > 0 && frame.capturedAtMs - previousTs > BATCH_MAX_GAP_MS) {
-      endedEarly = true;
-      break;
-    }
-    // Batches never span local midnight: every downstream clock (observations,
-    // cards, day keys) is parsed against the batch's single day.
-    if (selected.length > 0 && dayKeyFor(frame.capturedAtMs) !== firstDay) {
       endedEarly = true;
       break;
     }

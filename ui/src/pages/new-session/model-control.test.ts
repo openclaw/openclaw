@@ -3,7 +3,8 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
+import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
+import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import {
   modelOption,
   managedModelControls,
@@ -622,13 +623,16 @@ describe("runtime choices", () => {
         model: "openai/gpt-5.6-sol",
         agentRuntime: "codex",
       });
+      const { state } = createRepositoryFixture();
+      managed.track(state.modelControl);
+      state.modelControl.agentRuntime = control.agentRuntime;
+      vi.spyOn(state.modelControl, "modelForSubmission").mockReturnValue(
+        control.modelForSubmission(),
+      );
       expect(
-        buildDraftSessionCreateParams({
-          agentId: "main",
+        buildSelectedSessionCreateParams(state, {
           message: "hello",
-          worktree: false,
-          model: control.modelForSubmission(),
-          agentRuntime: control.agentRuntime,
+          visibility: "normal",
         }),
       ).toMatchObject({ model: "openai/gpt-5.6-sol", agentRuntime: "codex" });
       control.reset();

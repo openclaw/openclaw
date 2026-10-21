@@ -49,24 +49,19 @@ it.each([
   expect(buildRequesterSettleWakeIdentity({ ...identity, retainedWake }).runId).toBe(retryId);
 });
 
-// The control scope must recognize exactly the key dispatch used, or a settle
-// turn loses authority over its own children.
 it.each([
-  { name: "private batch", yieldedFinalDeliverable: undefined, pause: false },
-  { name: "deliverable yielded batch", yieldedFinalDeliverable: true as const, pause: false },
-  { name: "paused private batch", yieldedFinalDeliverable: undefined, pause: true },
-])("matches the dispatched key: $name", ({ yieldedFinalDeliverable, pause }) => {
+  ["private batch", false, false],
+  ["deliverable yielded batch", true, false],
+  ["paused private batch", false, true],
+] as const)("matches the dispatched key: %s", (_name, yieldedFinalDeliverable, pause) => {
   const entry = child(
-    { completionTarget: "parent", ...(pause ? { pauseReason: "sessions_yield" as const } : {}) },
+    { completionTarget: "parent", pauseReason: pause ? "sessions_yield" : undefined },
     {
-      ...(pause ? { pauseNotice: { acknowledgment: "Waiting for direction" } } : {}),
-      ...(yieldedFinalDeliverable ? { yieldedFinalDeliverable } : {}),
+      pauseNotice: pause ? { acknowledgment: "Waiting for direction" } : undefined,
+      yieldedFinalDeliverable: yieldedFinalDeliverable || undefined,
     },
   );
-  const dispatched = buildRequesterSettleWakeIdentity({
-    ...identity,
-    pause,
-  }).runId;
+  const dispatched = buildRequesterSettleWakeIdentity({ ...identity, pause }).runId;
   expect(recognizes(entry, dispatched)).toBe(true);
 });
 
@@ -79,12 +74,12 @@ it.each([
   "recognizes the persisted admitted retry for %s custody",
   (_name, completionTarget, pause, yielded, matched) => {
     const entry = child(
-      { completionTarget, ...(pause ? { pauseReason: "sessions_yield" as const } : {}) },
+      { completionTarget, pauseReason: pause ? "sessions_yield" : undefined },
       {
         status: "dispatching",
         attemptCount: 2,
-        ...(pause ? { pauseNotice: { acknowledgment: "Waiting for direction" } } : {}),
-        ...(yielded ? { yieldedFinalDeliverable: true } : {}),
+        pauseNotice: pause ? { acknowledgment: "Waiting for direction" } : undefined,
+        yieldedFinalDeliverable: yielded || undefined,
       },
     );
     const persistedRunId = pause
@@ -99,8 +94,7 @@ it.each([
     entry.requesterSettleWake!.status = "pending";
     expect(matches(persistedRunId)).toBe(matched);
     entry.requesterSettleWake!.nextAttemptAt = 30_000;
-    expect(matches(persistedRunId)).toBe(matched);
-    expect(matches(nextRunId)).toBe(false);
+    expect([matches(persistedRunId), matches(nextRunId)]).toEqual([matched, false]);
     entry.requesterSettleWake!.status = "dispatching";
     entry.requesterSettleWake!.nextAttemptAt = undefined;
     entry.requesterSettleWake!.attemptCount = 3;

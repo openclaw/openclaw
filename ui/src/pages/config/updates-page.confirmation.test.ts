@@ -53,6 +53,8 @@ it.each(["loading", "open"] as const)(
         configObject: {},
         configBusy: false,
         updateBusy: false,
+        statusRead: null,
+        onCheckStatus: () => overlays.refreshUpdateStatus(),
       }),
     );
     const updateButton = () => {

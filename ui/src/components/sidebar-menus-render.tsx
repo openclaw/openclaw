@@ -50,7 +50,6 @@ import {
 } from "./app-sidebar-session-menu-renderers.tsx";
 import "../styles/sidebar-menus.css";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
 import { canRetryGatewayStatus } from "./gateway-status.ts";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import {
@@ -66,13 +65,24 @@ import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
 import type { MenuEntry } from "./solid/menu.tsx";
 
+export { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
+
 const AgentCreateDialog = lazy(() => import("./agent-create-dialog.tsx"), {
   export: "AgentCreateDialog",
 });
 
 registerAgentCreationEnglish();
 
-export function renderSidebarMenus(
+export function SidebarMenusRenderer(props: {
+  menus: SidebarMenus;
+  host: SidebarMenusOwner;
+  avatars: IdentityAvatars;
+  revision: () => number;
+}) {
+  return <>{renderSidebarMenus(props.menus, props.host, props.avatars, props.revision)}</>;
+}
+
+function renderSidebarMenus(
   menus: SidebarMenus,
   view: SidebarMenusOwner,
   agentMenuAvatars: IdentityAvatars,
@@ -111,7 +121,6 @@ export function renderSidebarMenus(
     <Show when={projected.sessionMenu} keyed>
       {(menu) => renderSidebarSessionMenuForMenus(projected, view, menu)}
     </Show>,
-    projected.catalogMenuView.render(CatalogSessionMenu),
     <Show when={projected.sessionGroupMenu} keyed>
       {(menu) => renderSidebarSessionGroupMenuForMenus(projected, view, menu)}
     </Show>,

@@ -2,7 +2,17 @@
 // the Gateway schedule DTO owns runtime status.
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { action, createOptimistic, For, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  Errored,
+  For,
+  isPending,
+  latest,
+  Loading,
+  Show,
+} from "solid-js";
 import { isAcknowledgedAbandonedUpdateRun } from "../../../../src/infra/update-run-record.ts";
 import {
   classifyUpdateOutcome,
@@ -21,12 +31,14 @@ import {
   SettingsRow,
   SettingsSection,
   SettingsSegmented,
+  SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { UpdateGitRevisions } from "../../components/solid/update-git-revisions.tsx";
 import { UpdateRunView } from "../../components/update-run-view.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { DeviceUpdates } from "./updates-device.tsx";
@@ -372,12 +384,17 @@ function GatewayUpdates(props: UpdatesViewProps) {
     setConfirming(true);
     yield props.onUpdateNow();
   });
-  const [checking, setChecking] = createOptimistic(false);
-  const checkStatus = action(function* () {
-    setChecking(true);
-    const refreshed: boolean = yield props.onCheckStatus();
-    return refreshed;
+  // Seed only the first paint so checking does not suspend the surrounding settings.
+  const completion = createMemo<boolean | null>(async () => (await props.statusRead) ?? false, {
+    loadingValue: null,
   });
+  const checking = () => Boolean(props.statusRead) && isPending(completion);
+  const statusChecking = () => {
+    if (!props.statusRead || props.updateBusy || props.update.updateRun?.status === "running") {
+      return false;
+    }
+    return isPending(completion) || latest(completion) === null;
+  };
   const [holdingCampaignId, setHoldingCampaignId] = createOptimistic<string | null>(null);
   const holdUpdate = action(function* (campaignId: string) {
     setHoldingCampaignId(campaignId);
@@ -461,7 +478,6 @@ function GatewayUpdates(props: UpdatesViewProps) {
         confirming={confirming()}
         checking={checking()}
         onUpdateNow={updateNow}
-        onCheckStatus={checkStatus}
       />
       <SettingsSection title={t("updates.page.policyTitle")}>
         <SettingsRow
@@ -517,7 +533,32 @@ function GatewayUpdates(props: UpdatesViewProps) {
           control={
             <div class="updates-status-control">
               <div>
-                <UpdatesStatus {...props} />
+                <Errored
+                  fallback={(error, reset) => (
+                    <span class="updates-status-check-failed">
+                      <SettingsStatus kind="warn" label={formatUiError(error())} dot={false} />
+                      <button
+                        class="btn btn--sm"
+                        type="button"
+                        onClick={() => {
+                          reset();
+                          void props.onCheckStatus();
+                        }}
+                      >
+                        {t("common.retry")}
+                      </button>
+                    </span>
+                  )}
+                >
+                  <Loading
+                    on={props.statusRead}
+                    fallback={
+                      <SettingsStatus kind="muted" label={t("updates.page.checking")} dot={false} />
+                    }
+                  >
+                    <UpdatesStatus {...props} checking={statusChecking()} />
+                  </Loading>
+                </Errored>
                 <Show when={!run() && !props.update.updateStatusRefreshing}>
                   <UpdateGitRevisions
                     schedule={props.update.updateSchedule}
@@ -542,7 +583,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
                     props.update.updateStatusRefreshing ||
                     props.updateBusy
                   }
-                  onClick={() => void checkStatus()}
+                  onClick={() => void props.onCheckStatus()}
                 >
                   {t("updates.page.checkForUpdates")}
                 </button>

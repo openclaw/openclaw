@@ -42,8 +42,8 @@ function expectRejectedProbe(options: Parameters<typeof probe>[0]) {
   expect(probe({ ...options, run })).toBeNull();
   expect(run).not.toHaveBeenCalled();
 }
-function expectLauncher(npm_execpath: string, manager: string) {
-  expect(detectLifecyclePackageManager({ npm_execpath })).toBe(manager);
+function runtimeReply(execPath: string, version: string, bunVersion: string | null = null) {
+  return { status: 0, stdout: JSON.stringify({ version, bunVersion, execPath }) };
 }
 type LauncherCase = {
   name: string;
@@ -177,19 +177,12 @@ describe("install runtime enforcement", () => {
           expect(options.env).not.toHaveProperty("NODE_OPTIONS");
           expect(options.env).not.toHaveProperty("Node_Options");
           expect(options.timeout).toBe(10_000);
-          return {
-            status: 0,
-            stdout: JSON.stringify({
-              version:
-                _command === "/opt/node/bin/node"
-                  ? persistent === "old-node"
-                    ? "24.14.1"
-                    : "24.16.0"
-                  : "24.3.0",
-              bunVersion: _command === "/opt/node/bin/node" ? null : bun,
-              execPath: _command,
-            }),
-          };
+          const isNode = _command === "/opt/node/bin/node";
+          return runtimeReply(
+            _command,
+            isNode ? (persistent === "old-node" ? "24.14.1" : "24.16.0") : "24.3.0",
+            isNode ? null : bun,
+          );
         },
       );
       const result = enforce(
@@ -271,14 +264,7 @@ describe("install runtime enforcement", () => {
       }
       const run = vi.fn((command: string) =>
         command === executable
-          ? {
-              status: 0,
-              stdout: JSON.stringify({
-                version: "24.16.0",
-                bunVersion: null,
-                execPath: executable,
-              }),
-            }
+          ? runtimeReply(executable, "24.16.0")
           : { error: Object.assign(new Error("absent executable"), { code: "ENOENT" }) },
       );
       const reportError = vi.fn();
@@ -323,14 +309,7 @@ describe("install runtime enforcement", () => {
       ].join(":"),
       run: (command) => {
         candidates.push(command);
-        return {
-          status: 0,
-          stdout: JSON.stringify({
-            version: "24.14.1",
-            bunVersion: null,
-            execPath: command,
-          }),
-        };
+        return runtimeReply(command, "24.14.1");
       },
     });
 
@@ -341,10 +320,7 @@ describe("install runtime enforcement", () => {
   it.each([["/work/node_modules/.bin"], ["/work/node_modules/.bin", "/node_modules/.bin"]])(
     "preserves inherited ancestor bins before later Node paths: %j",
     (...inherited) => {
-      const run = vi.fn((command: string) => ({
-        status: 0,
-        stdout: JSON.stringify({ version: "24.14.1", bunVersion: null, execPath: command }),
-      }));
+      const run = vi.fn((command: string) => runtimeReply(command, "24.14.1"));
       const runtime = probe({
         bunVersion: "1.4.4",
         env: { npm_config_local_prefix: "/work" },
@@ -367,14 +343,9 @@ describe("install runtime enforcement", () => {
   it.each(["1.4.3", "1.4.4"])(
     "preserves an inherited ancestor suffix in a prefix-only Bun %s lifecycle",
     (bunVersion) => {
-      const run = vi.fn((command: string) => ({
-        status: 0,
-        stdout: JSON.stringify({
-          version: command === "/opt/node/bin/node" ? "24.16.0" : "24.14.1",
-          bunVersion: null,
-          execPath: command,
-        }),
-      }));
+      const run = vi.fn((command: string) =>
+        runtimeReply(command, command === "/opt/node/bin/node" ? "24.16.0" : "24.14.1"),
+      );
       const runtime = probe({
         bunVersion,
         env: { npm_config_local_prefix: "/work/openclaw" },
@@ -448,20 +419,13 @@ describe("install runtime enforcement", () => {
 });
 
 describe("detectLifecyclePackageManager", () => {
-  it("detects npm cli launchers from npm_execpath", () => {
-    expectLauncher("C:\\Tools\\nodejs\\node_modules\\npm\\bin\\npm-cli.js", "npm");
-  });
-
-  it("detects yarnpkg launchers from npm_execpath", () => {
-    expectLauncher("C:\\Tools\\corepack\\yarnpkg.cmd", "yarn");
-  });
-
-  it("detects versioned Yarn release launchers from npm_execpath", () => {
-    expectLauncher("/work/project/.yarn/releases/yarn-4.5.0.cjs", "yarn");
-  });
-
-  it("ignores package manager names in npm_execpath parent directories", () => {
-    expectLauncher("/tmp/npm-cache/bin/yarn.js", "yarn");
+  it.each([
+    ["C:\\Tools\\nodejs\\node_modules\\npm\\bin\\npm-cli.js", "npm"],
+    ["C:\\Tools\\corepack\\yarnpkg.cmd", "yarn"],
+    ["/work/project/.yarn/releases/yarn-4.5.0.cjs", "yarn"],
+    ["/tmp/npm-cache/bin/yarn.js", "yarn"],
+  ])("detects %s without interpreting its parent directories", (npm_execpath, manager) => {
+    expect(detectLifecyclePackageManager({ npm_execpath })).toBe(manager);
   });
 });
 

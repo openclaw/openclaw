@@ -43,28 +43,20 @@ function toggle(title: string) {
   return row(title).querySelector<HTMLInputElement>('input[role="switch"]')!;
 }
 
-it.each(["confirmation", "status", "report"] as const)(
+it.each(["confirmation", "report"] as const)(
   "retains %s progress until its admitted operation completes",
   async (operation) => {
     const confirmation = Promise.withResolvers<void>();
-    const check = Promise.withResolvers<boolean>();
     const report = Promise.withResolvers<void>();
     const onUpdateNow = vi.fn(() => confirmation.promise);
-    const onCheckStatus = vi.fn(() => check.promise);
     const onReportFailure = vi.fn(() => report.promise);
     const run = failedRun();
     renderUpdates({
       onUpdateNow,
-      onCheckStatus,
       onReportFailure,
       update: { updateRun: run, reportableUpdateFailureId: run.runId },
     });
-    const label =
-      operation === "confirmation"
-        ? "Update now"
-        : operation === "status"
-          ? "Check status"
-          : "Report update failure";
+    const label = operation === "confirmation" ? "Update now" : "Report update failure";
     const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (candidate) => candidate.textContent?.trim() === label,
     )!;
@@ -72,17 +64,9 @@ it.each(["confirmation", "status", "report"] as const)(
     flush();
     expect(button.disabled).toBe(true);
     button.click();
-    expect(
-      operation === "confirmation"
-        ? onUpdateNow
-        : operation === "status"
-          ? onCheckStatus
-          : onReportFailure,
-    ).toHaveBeenCalledOnce();
+    expect(operation === "confirmation" ? onUpdateNow : onReportFailure).toHaveBeenCalledOnce();
     if (operation === "confirmation") {
       confirmation.resolve();
-    } else if (operation === "status") {
-      check.resolve(true);
     } else {
       report.resolve();
     }

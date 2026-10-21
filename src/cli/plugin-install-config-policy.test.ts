@@ -55,17 +55,20 @@ function parseInstallRequest(
   return request;
 }
 
+function writePlugin(dir: string, id: string, allowed: boolean) {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [file, value] of Object.entries({
+    "package.json": { openclaw: { install: { allowInvalidConfigRecovery: allowed } } },
+    "openclaw.plugin.json": { id, configSchema: { type: "object" } },
+  })) {
+    fs.writeFileSync(path.join(dir, file), JSON.stringify(value));
+  }
+}
+
 describe("plugin install recovery source ownership", () => {
   beforeEach(() => {
     fixture.bundledPath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-recovery-owner-"));
-    fs.writeFileSync(
-      path.join(fixture.bundledPath, "package.json"),
-      JSON.stringify({ openclaw: { install: { allowInvalidConfigRecovery: true } } }),
-    );
-    fs.writeFileSync(
-      path.join(fixture.bundledPath, "openclaw.plugin.json"),
-      JSON.stringify({ id: "bundled-demo", configSchema: { type: "object" } }),
-    );
+    writePlugin(fixture.bundledPath, "bundled-demo", true);
     fixture.entries = [];
   });
 
@@ -140,15 +143,7 @@ describe("plugin install recovery source ownership", () => {
     "uses local recovery=$allowed through $prefix without borrowing metadata",
     ({ prefix, allowed }) => {
       const localPath = path.join(fixture.bundledPath, "local-plugin");
-      fs.mkdirSync(localPath);
-      fs.writeFileSync(
-        path.join(localPath, "package.json"),
-        JSON.stringify({ openclaw: { install: { allowInvalidConfigRecovery: allowed } } }),
-      );
-      fs.writeFileSync(
-        path.join(localPath, "openclaw.plugin.json"),
-        JSON.stringify({ id: "local-demo", configSchema: { type: "object" } }),
-      );
+      writePlugin(localPath, "local-demo", allowed);
       const request = parseInstallRequest(`${prefix}${localPath}`);
       expect(request).toMatchObject({
         bundledPluginId: "local-demo",

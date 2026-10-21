@@ -155,6 +155,8 @@ it.each([
 
 it("shows submission progress and clears a rejected run before retrying", async () => {
   const { page, request, reply } = await mount();
+  const runControl = button(page, "Run now");
+  const ageControl = page.querySelector<HTMLInputElement>('input[type="number"]')!;
   const failed = createDeferred<SessionsStorageStatusResult>();
   request.mockImplementation(reply("sessions.storage.run", () => failed.promise));
   click(page, "Run now");
@@ -163,7 +165,9 @@ it("shows submission progress and clears a rejected run before retrying", async 
 
   failed.reject(new Error("Maintenance unavailable"));
   await waitText(page, "Maintenance unavailable", '[role="alert"]');
-  expect(button(page, "Run now").disabled).toBe(false);
+  expect(button(page, "Run now")).toBe(runControl);
+  expect(page.querySelector('input[type="number"]')).toBe(ageControl);
+  expect(runControl.disabled).toBe(false);
 
   const retry = createDeferred<SessionsStorageStatusResult>();
   request.mockImplementation(reply("sessions.storage.run", () => retry.promise));
@@ -172,7 +176,9 @@ it("shows submission progress and clears a rejected run before retrying", async 
   expect(page.textContent).not.toContain("Maintenance unavailable");
   retry.resolve(inventory(7));
   await waitText(page, "Batch completed. 0 transcripts archived.");
-  expect(button(page, "Run now").disabled).toBe(false);
+  expect(button(page, "Run now")).toBe(runControl);
+  expect(page.querySelector('input[type="number"]')).toBe(ageControl);
+  expect(runControl.disabled).toBe(false);
 });
 
 it("does not hold a replacement submission behind a retired request", async () => {

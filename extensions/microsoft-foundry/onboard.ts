@@ -166,8 +166,7 @@ export async function selectFoundryDeployment(
   resource: FoundryResourceOption,
   deployments: AzDeploymentSummary[],
 ): Promise<{ selected: AzDeploymentSummary; supported: AzDeploymentSummary[] }> {
-  const supported = deployments;
-  if (supported.length === 0) {
+  if (deployments.length === 0) {
     throw new Error(
       [
         `No model deployments were found in ${resource.accountName}.`,
@@ -175,14 +174,14 @@ export async function selectFoundryDeployment(
       ].join("\n"),
     );
   }
-  if (supported.length === 1) {
-    const only = expectDefined(supported[0], "single Microsoft Foundry deployment");
+  if (deployments.length === 1) {
+    const only = expectDefined(deployments[0], "single Microsoft Foundry deployment");
     await ctx.prompter.note(`Using deployment: ${only.name}`, "Model Deployment");
-    return { selected: only, supported };
+    return { selected: only, supported: deployments };
   }
   const selectedDeploymentName = await ctx.prompter.select({
     message: "Select model deployment",
-    options: supported.map((deployment) => ({
+    options: deployments.map((deployment) => ({
       value: deployment.name,
       label: deployment.name,
       hint: [deployment.modelName, deployment.modelVersion, deployment.sku]
@@ -191,9 +190,9 @@ export async function selectFoundryDeployment(
     })),
   });
   const selected =
-    supported.find((deployment) => deployment.name === selectedDeploymentName) ??
-    expectDefined(supported[0], "fallback Microsoft Foundry deployment");
-  return { selected, supported };
+    deployments.find((deployment) => deployment.name === selectedDeploymentName) ??
+    expectDefined(deployments[0], "fallback Microsoft Foundry deployment");
+  return { selected, supported: deployments };
 }
 
 type ManualFoundryModelFamilyChoice = "claude" | "reasoning-family" | "mai-image" | "other-chat";

@@ -15,6 +15,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
@@ -257,6 +258,11 @@ suite.define(() => {
         await panel
           .locator("openclaw-chat-html-preview [role=status]")
           .waitFor({ state: "hidden" });
+        // Inner-frame readiness does not settle the enclosing panel's layout transition.
+        await page
+          .locator('[data-region="side"]')
+          .filter({ has: panel })
+          .evaluate(finishElementAnimations);
         await document.getByRole("button", { name: "Count", exact: true }).click();
         await expect.poll(() => document.locator("output").textContent()).toBe("1");
         expect(
