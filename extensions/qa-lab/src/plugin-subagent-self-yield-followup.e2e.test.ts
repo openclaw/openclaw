@@ -1,35 +1,15 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, expect, it } from "vitest";
-import { startQaBusServer } from "./bus-server.js";
-import { createQaBusState } from "./bus-state.js";
-import { createQaGatewayChild } from "./gateway-child.js";
+import { startSubagentFixture } from "./plugin-subagent.e2e.test-support.ts";
 import { QA_SUBAGENT_SELF_YIELD_MARKER } from "./providers/mock-openai/mock-openai-contracts.js";
-import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
-import { createQaChannelTransport } from "./qa-channel-transport.js";
 
-const PLUGIN_ID = "qa-self-yield-followup-subagent";
 const REQUESTER_CONVERSATION = { id: "requester-user", kind: "direct" as const };
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
-const PLUGIN_DIR = path.join(
-  REPO_ROOT,
-  "extensions/qa-lab/test-fixtures/self-yield-followup-subagent-plugin",
-);
 const VERDICT_PATH = path.join(
   REPO_ROOT,
   ".artifacts/qa-e2e/handoff-adoption/channel-handoff-verdict.json",
 );
-
-function withFixturePlugin(config: OpenClawConfig): OpenClawConfig {
-  const plugins = (config.plugins ??= {});
-  plugins.enabled = true;
-  plugins.allow = [...new Set([...(plugins.allow ?? []), PLUGIN_ID])];
-  const load = (plugins.load ??= {});
-  load.paths = [...new Set([...(load.paths ?? []), PLUGIN_DIR])];
-  plugins.entries = { ...plugins.entries, [PLUGIN_ID]: { enabled: true } };
-  return config;
-}
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -40,37 +20,13 @@ afterEach(async () => {
 });
 
 it("announces to the original requester only after the follow-up run ends", async () => {
-  const state = createQaBusState();
-  const transport = createQaChannelTransport(state);
-  const bus = await startQaBusServer({ state });
-  cleanups.push(() => bus.stop());
-  const mock = await startQaMockOpenAiServer();
-  cleanups.push(() => mock.stop());
-  const owner = createQaGatewayChild();
-  cleanups.push(async () => {
-    expect((await owner.stop()).errors).toEqual([]);
-  });
-  const gateway = await owner.start({
-    repoRoot: REPO_ROOT,
-    providerBaseUrl: `${mock.baseUrl}/v1`,
-    mockSessionObserverUrl: mock.sessionObserverUrl,
-    providerMode: "mock-openai",
+  const {
+    state,
     transport,
-    transportBaseUrl: bus.baseUrl,
-    controlUiEnabled: false,
-    mutateConfig: withFixturePlugin,
-    // E2E prerequisites own the build; keep the packaged plugin/auth path.
-    command: {
-      executablePath: process.execPath,
-      argsPrefix: [path.join(REPO_ROOT, "dist/index.js")],
-      cwd: REPO_ROOT,
-      usePackagedPlugins: true,
-    },
-  });
-  await transport.waitReady({ gateway });
-
-  const outboundMessages = () =>
-    state.getSnapshot().messages.filter((message) => message.direction === "outbound");
+    mock,
+    gateway,
+    outbound: outboundMessages,
+  } = await startSubagentFixture("self-yield-followup", cleanups, true);
   const completionCount = () =>
     outboundMessages().filter((message) => message.text.includes(QA_SUBAGENT_SELF_YIELD_MARKER))
       .length;

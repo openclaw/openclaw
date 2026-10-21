@@ -1,34 +1,9 @@
-import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, expect, it } from "vitest";
-import { startQaBusServer } from "./bus-server.js";
-import { createQaBusState } from "./bus-state.js";
-import { createQaGatewayChild } from "./gateway-child.js";
-import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
-import { createQaChannelTransport } from "./qa-channel-transport.js";
+import { startSubagentFixture } from "./plugin-subagent.e2e.test-support.ts";
 
-const PLUGIN_ID = "qa-current-requester-subagent";
 const COMPLETION_MARKER = "QA-CURRENT-REQUESTER-COMPLETION-OK";
 const conversation = { id: "requester-user", kind: "direct" as const };
-const repoRoot = path.resolve(import.meta.dirname, "../../..");
-const pluginDir = path.join(
-  repoRoot,
-  "extensions/qa-lab/test-fixtures/current-requester-subagent-plugin",
-);
 const cleanups: Array<() => Promise<void>> = [];
-
-function withFixturePlugin({ plugins, ...config }: OpenClawConfig): OpenClawConfig {
-  return {
-    ...config,
-    plugins: {
-      ...plugins,
-      enabled: true,
-      allow: [...new Set([...(plugins?.allow ?? []), PLUGIN_ID])],
-      load: { ...plugins?.load, paths: [...new Set([...(plugins?.load?.paths ?? []), pluginDir])] },
-      entries: { ...plugins?.entries, [PLUGIN_ID]: { enabled: true } },
-    },
-  };
-}
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).toReversed()) {
@@ -37,29 +12,10 @@ afterEach(async () => {
 });
 
 it("delivers to the captured requester and rejects forged lineage outside hook scope", async () => {
-  const state = createQaBusState();
-  const outbound = () =>
-    state.getSnapshot().messages.filter(({ direction }) => direction === "outbound");
-  const transport = createQaChannelTransport(state);
-  const bus = await startQaBusServer({ state });
-  cleanups.push(() => bus.stop());
-  const mock = await startQaMockOpenAiServer();
-  cleanups.push(() => mock.stop());
-  const owner = createQaGatewayChild();
-  cleanups.push(async () => {
-    expect((await owner.stop()).errors).toEqual([]);
-  });
-  const gateway = await owner.start({
-    repoRoot,
-    useRepoCli: true,
-    providerBaseUrl: `${mock.baseUrl}/v1`,
-    providerMode: "mock-openai",
-    transport,
-    transportBaseUrl: bus.baseUrl,
-    controlUiEnabled: false,
-    mutateConfig: withFixturePlugin,
-  });
-  await transport.waitReady({ gateway });
+  const { gateway, outbound, transport } = await startSubagentFixture(
+    "current-requester",
+    cleanups,
+  );
   const response = await fetch(`${gateway.baseUrl}/qa/current-requester/outside-hook`, {
     method: "POST",
     headers: { Authorization: `Bearer ${gateway.token}` },

@@ -15,21 +15,20 @@ function checkReport(worked: string, failed = "None.", missing = false, leak = f
 }
 
 describe("qa discovery evaluation", () => {
-  it("accepts explicit reads despite quoted file-miss phrases", () => {
-    checkReport(
+  it.each([
+    [
+      "explicit reads despite quoted file-miss phrases",
       `Read all three requested files: ${refs}. The helper quotes "not present", "missing files", "blocked by missing", and "could not inspect" as examples.`,
-    );
-  });
-
-  it("accepts numeric required-file read confirmations", () => {
-    checkReport(
+    ],
+    [
+      "numeric required-file read confirmations",
       `Source: ${refs}; all 3 required files read. The evaluator may quote "not present".`,
-    );
-  });
-
-  it("accepts retrieved-file discovery summaries", () => {
-    checkReport(`All three files retrieved. All three mandated files read successfully: ${refs}.`);
-  });
+    ],
+    [
+      "retrieved-file discovery summaries",
+      `All three files retrieved. All three mandated files read successfully: ${refs}.`,
+    ],
+  ])("accepts %s", (_name, report) => checkReport(report));
 
   it("flags genuine file-miss language without confirmed reads", () => {
     checkReport(

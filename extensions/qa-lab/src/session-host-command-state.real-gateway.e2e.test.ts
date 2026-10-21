@@ -86,13 +86,7 @@ suite.define(() => {
           identity: DeviceIdentity,
           displayName: string,
           commands: string[] = [],
-        ) => ({
-          gateway,
-          operator,
-          identity,
-          displayName,
-          commands,
-        });
+        ) => ({ gateway, operator, identity, displayName, commands });
         const undeclaredNode = await connectPairedNode(
           nodeParams(undeclaredIdentity, "Undeclared command"),
         );
@@ -135,6 +129,15 @@ suite.define(() => {
             replacePaths: ["gateway.nodes.commands.allow", "gateway.nodes.commands.deny"],
           });
         };
+        const waitState = (...states: Parameters<typeof expectState>[]) =>
+          vi.waitFor(
+            async () => {
+              for (const state of states) {
+                await expectState(...state);
+              }
+            },
+            { interval: 250, timeout: 60_000 },
+          );
         await expectState(undeclaredIdentity, "undeclared", undeclaredMessage);
         await expectState(pendingIdentity, "pending-approval", pendingMessage);
         await expectState(unauthorizedIdentity, "invocable");
@@ -181,10 +184,7 @@ suite.define(() => {
 
             const unauthorizedHelloCount = helloCounts.get(unauthorizedNode) ?? 0;
             await setCommands([], [COMMAND]);
-            await vi.waitFor(
-              () => expectState(unauthorizedIdentity, "unauthorized", unauthorizedMessage),
-              { interval: 250, timeout: 60_000 },
-            );
+            await waitState([unauthorizedIdentity, "unauthorized", unauthorizedMessage]);
             expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
 
             await page.reload();
@@ -198,12 +198,9 @@ suite.define(() => {
             await page.keyboard.press("Escape");
 
             await setCommands([COMMAND], []);
-            await vi.waitFor(
-              async () => {
-                await expectState(unauthorizedIdentity, "invocable");
-                await expectState(pendingIdentity, "pending-approval", pendingMessage);
-              },
-              { interval: 250, timeout: 60_000 },
+            await waitState(
+              [unauthorizedIdentity, "invocable"],
+              [pendingIdentity, "pending-approval", pendingMessage],
             );
             expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
             await page.reload();

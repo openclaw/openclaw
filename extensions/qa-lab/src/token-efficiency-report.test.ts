@@ -5,7 +5,6 @@ import type {
   RuntimeParityCell,
   RuntimeParityResult,
   RuntimeParityToolCall,
-  RuntimeParityUsagePolicy,
 } from "./runtime-parity.js";
 import {
   buildTokenEfficiencyReport,
@@ -46,7 +45,7 @@ function makeRuntimeParity(
   scenarioId: string,
   openclaw: CellFixture,
   codex: CellFixture,
-  runtimeParityUsage?: RuntimeParityUsagePolicy,
+  runtimeParityUsage?: RuntimeParityResult["runtimeParityUsage"],
 ): RuntimeParityResult {
   return {
     scenarioId,
@@ -88,12 +87,10 @@ describe("token efficiency report", () => {
       ),
     );
 
-    expect(report.pass).toBe(false);
-    expect(report.aggregate.flaggedScenarios).toEqual(["runtime-tool-fs-read"]);
-    expect(report.rows[0]).toMatchObject({
-      classification: "regression",
-      flagged: true,
-      toolsUsed: ["fs.read"],
+    expect(report).toMatchObject({
+      pass: false,
+      aggregate: { flaggedScenarios: ["runtime-tool-fs-read"] },
+      rows: [{ classification: "regression", flagged: true, toolsUsed: ["fs.read"] }],
     });
     expect(report.failures).toEqual([
       "runtime-tool-fs-read token delta=+65.1% exceeds 15.0% Codex increase threshold",
@@ -175,9 +172,7 @@ describe("token efficiency report", () => {
       usage(1_050, 11, 1_061, 0, 0),
       usage(0, 11),
     ]);
-
     const report = liveReport("mixed-cache-telemetry", makeCell(), codex);
-
     expect(report.rows[0]?.codex).toMatchObject({
       cacheMisses: [{ turn: 2, inputTokens: 1_050, cacheRead: 0, cacheWrite: 0 }],
       unmeasuredPostWarmTurns: [3],
@@ -197,9 +192,7 @@ describe("token efficiency report", () => {
       usage(3, 11, 1_014, undefined, 1_000),
       usage(100, 11),
     ]);
-
     const report = liveReport("partial-warm-telemetry", makeCell(), codex);
-
     expect(report.pass).toBe(true);
     expect(report.rows[0]?.codex).toMatchObject({
       cacheMisses: null,
@@ -212,14 +205,26 @@ describe("token efficiency report", () => {
     expect(renderTokenEfficiencyMarkdownReport(report)).toContain("N/A (unmeasured turns 2)");
   });
 
-  it("keeps live zero-usage rows failing instead of passing as neutral", () => {
-    const report = liveReport("missing-live-usage", makeCell(usage(0)), makeCell(usage(0)));
-
-    expect(report.pass).toBe(false);
-    expect(report.failures).toEqual([
-      "missing-live-usage openclaw live usage totalTokens=0",
-      "missing-live-usage codex live usage totalTokens=0",
-    ]);
+  it.each([
+    [
+      "zero",
+      usage(0),
+      usage(0),
+      ["openclaw live usage totalTokens=0", "codex live usage totalTokens=0"],
+    ],
+    [
+      "fractional",
+      usage(100.5),
+      usage(101),
+      [
+        "openclaw live usage inputTokens must be a non-negative integer",
+        "openclaw live usage totalTokens must be a non-negative integer",
+      ],
+    ],
+  ] as const)("rejects %s live token usage", (name, openclaw, codex, failures) => {
+    const report = liveReport(name, makeCell(openclaw), makeCell(codex));
+    expect(report).toMatchObject({ pass: false });
+    expect(report.failures).toEqual(failures.map((failure) => `${name} ${failure}`));
   });
 
   it("keeps completed measurements but fails a live report with an incomplete pair", () => {
@@ -247,20 +252,6 @@ describe("token efficiency report", () => {
     expect(renderTokenEfficiencyMarkdownReport(report)).toContain("- Verdict: fail");
   });
 
-  it("fails live reports with non-integer token usage evidence", () => {
-    const report = liveReport(
-      "fractional-live-usage",
-      makeCell(usage(100.5)),
-      makeCell(usage(101)),
-    );
-
-    expect(report.pass).toBe(false);
-    expect(report.failures).toEqual([
-      "fractional-live-usage openclaw live usage inputTokens must be a non-negative integer",
-      "fractional-live-usage openclaw live usage totalTokens must be a non-negative integer",
-    ]);
-  });
-
   it("keeps empty mock runtime summaries skipped as non-live estimates", () => {
     const report = buildTokenEfficiencyReport({
       summary: makeSummary([], "mock-openai"),
@@ -277,12 +268,11 @@ describe("token efficiency report", () => {
       ),
     });
 
-    expect(report).toMatchObject({ status: "estimated", pass: true });
-    expect(report.aggregate.flaggedScenarios).toEqual([]);
-    expect(report.rows[0]).toMatchObject({
-      usageSource: "mock-estimate",
-      classification: "regression",
-      flagged: false,
+    expect(report).toMatchObject({
+      status: "estimated",
+      pass: true,
+      aggregate: { flaggedScenarios: [] },
+      rows: [{ usageSource: "mock-estimate", classification: "regression", flagged: false }],
     });
   });
 

@@ -69,24 +69,19 @@ describe("readProcessTreeCpuMs on Windows", () => {
     });
   });
 
-  it("rejects non-decimal Windows process counters", () => {
-    useSnapshot(
-      processEntry({ KernelModeTime: "0x10", UserModeTime: "30000", WorkingSetSize: "0x1000" }),
-    );
-    expectMetrics(100, null, null);
-  });
-
-  it("skips Windows process entries with non-decimal process ids", () => {
-    useSnapshot(processEntry({ ProcessId: "0x64" }));
+  it.each([
+    [
+      "rejects non-decimal counters",
+      { KernelModeTime: "0x10", UserModeTime: "30000", WorkingSetSize: "0x1000" },
+    ],
+    ["skips non-decimal process ids", { ProcessId: "0x64" }],
+  ] as const)("%s", (_name, overrides) => {
+    useSnapshot(processEntry(overrides));
     expectMetrics(100, null, null);
   });
 
   it("rejects malformed Windows process snapshots", () => {
-    spawnSyncMock.mockReturnValue({
-      status: 0,
-      stdout: "not json",
-    });
-
+    spawnSyncMock.mockReturnValue({ status: 0, stdout: "not json" });
     expectMetrics(100, null, null);
   });
 });
