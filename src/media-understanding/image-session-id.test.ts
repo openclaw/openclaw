@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ProviderStreamOptions } from "../llm/types.js";
 import {
   imageCompletion,
   imageRequestDefaults,
@@ -11,11 +12,6 @@ const { registerProviderStreamForModelMock } = imageRuntimeMocks;
 
 const { describeImageWithModelCore } = await import("./image.js");
 
-type CapturedStreamOptions = {
-  sessionId?: string;
-  headers?: Record<string, string>;
-};
-
 const SESSION_HEADER = "x-opencode-session";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const OPENCODE_GO_IMAGE = {
@@ -24,25 +20,23 @@ const OPENCODE_GO_IMAGE = {
   baseUrl: "https://opencode.ai/zen/go/v1",
 };
 
+const api = "openai-completions";
 const completion = () =>
-  imageCompletion(
-    "openai-completions",
-    OPENCODE_GO_IMAGE.provider,
-    OPENCODE_GO_IMAGE.model,
-    "vision ok",
-  );
+  imageCompletion(api, OPENCODE_GO_IMAGE.provider, OPENCODE_GO_IMAGE.model, "vision ok");
 function stubProviderStream(result = vi.fn(async () => completion())) {
-  const streamFn = vi.fn(() => ({ result }));
+  const streamFn = vi.fn((_model: unknown, _context: unknown, _options: ProviderStreamOptions) => ({
+    result,
+  }));
   registerProviderStreamForModelMock.mockReturnValue(streamFn);
   return streamFn;
 }
 
 function capturedStreamOptions(streamFn: ReturnType<typeof stubProviderStream>, index: number) {
-  const call = (streamFn.mock.calls as unknown[][]).at(index);
+  const call = streamFn.mock.calls.at(index);
   if (!call) {
     throw new Error(`Expected provider stream call ${index}`);
   }
-  const options = call[2] as CapturedStreamOptions;
+  const options = call[2];
   return { sessionId: options.sessionId, header: options.headers?.[SESSION_HEADER] };
 }
 
@@ -50,7 +44,7 @@ function requestImage(
   { provider, model, baseUrl }: typeof OPENCODE_GO_IMAGE,
   modelExtras: Record<string, unknown> = {},
 ) {
-  mockImageModel({ provider, id: model, api: "openai-completions", baseUrl, ...modelExtras });
+  mockImageModel({ provider, id: model, api, baseUrl, ...modelExtras });
   return describeImageWithModelCore({
     ...imageRequestDefaults(),
     provider,

@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
@@ -33,7 +32,6 @@ const {
   unwrapSecretSentinelsForProviderEgressMock,
 } = imageRuntimeMocks;
 
-const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 const {
   describeImageWithModelCore,
   describeImagesWithModelCore,
@@ -117,11 +115,7 @@ describe("describeImageWithModelCore", () => {
 
     await describeImageWithModelCore(request(minimax));
 
-    const guardedOptions = requireRecord(
-      expectDefined(imageTestFetchWithSsrFGuardMock.mock.calls[0], "guarded fetch call 0")[0],
-      "guarded fetch options",
-    );
-    expect(guardedOptions.dispatcherPolicy).toEqual({
+    expect(imageTestFetchWithSsrFGuardMock.mock.calls[0]?.[0]?.dispatcherPolicy).toEqual({
       mode: "explicit-proxy",
       proxyUrl: "https://proxy.example.com",
     });
@@ -142,10 +136,8 @@ describe("describeImageWithModelCore", () => {
       sentinelValue,
       "MiniMax VLM request",
     );
-    const [, fetchOptionsValue] = expectDefined(fetchMock.mock.calls[0], "fetch call 0");
-    const fetchOptions = requireRecord(fetchOptionsValue, "fetch options");
-    expect(new Headers(fetchOptions.headers as HeadersInit).get("Authorization")).toBe(
-      ["Bearer", "test-token"].join(" "),
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
+      "Bearer test-token",
     );
   });
 
@@ -181,8 +173,7 @@ describe("describeImageWithModelCore", () => {
     expect(result).toEqual({ text: "an orange tabby cat", model: bedrock.model });
     expect(requireApiKeyMock).not.toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).not.toHaveBeenCalled();
-    const completeCall = expectDefined(completeMock.mock.calls[0], "complete call 0");
-    expect(requireRecord(completeCall[2], "stream options").apiKey).toBe("");
+    expect(completeMock.mock.calls[0]?.[2]).toMatchObject({ apiKey: "" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

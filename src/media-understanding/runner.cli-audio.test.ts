@@ -51,6 +51,18 @@ async function runAudioEntry(
   return result;
 }
 
+function withCompressedAudio(run: (fixture: Fixture) => Promise<void>) {
+  return withMediaFixture(
+    {
+      filePrefix: "openclaw-cli-compressed",
+      extension: "mp3",
+      mediaType: "audio/mpeg",
+      fileContents: createSafeAudioFixtureBuffer(),
+    },
+    run,
+  );
+}
+
 function expectExec(
   command: string,
   args: unknown[],
@@ -251,36 +263,28 @@ it.each(transcriptFileCases)(
 it("does not convert or transcribe when admission expires during attachment path resolution", async () => {
   const pathResolutionStarted = createDeferred();
   const releasePathResolution = createDeferred();
-  await withMediaFixture(
-    {
-      filePrefix: "openclaw-cli-expired-admission",
-      extension: "mp3",
-      mediaType: "audio/mpeg",
-      fileContents: createSafeAudioFixtureBuffer(),
-    },
-    async (fixture) => {
-      const getPath = fixture.cache.getPath.bind(fixture.cache);
-      vi.spyOn(fixture.cache, "getPath").mockImplementation(async (params) => {
-        pathResolutionStarted.resolve();
-        await releasePathResolution.promise;
-        return await getPath(params);
-      });
-      let admitted = true;
-      const assertCurrent = () => {
-        if (!admitted) {
-          throw new Error("admission expired");
-        }
-      };
-      const transcription = runFixture(fixture, whisper, { assertCurrent });
+  await withCompressedAudio(async (fixture) => {
+    const getPath = fixture.cache.getPath.bind(fixture.cache);
+    vi.spyOn(fixture.cache, "getPath").mockImplementation(async (params) => {
+      pathResolutionStarted.resolve();
+      await releasePathResolution.promise;
+      return await getPath(params);
+    });
+    let admitted = true;
+    const assertCurrent = () => {
+      if (!admitted) {
+        throw new Error("admission expired");
+      }
+    };
+    const transcription = runFixture(fixture, whisper, { assertCurrent });
 
-      await pathResolutionStarted.promise;
-      admitted = false;
-      releasePathResolution.resolve();
-      await expect(transcription).rejects.toThrow("admission expired");
-      expect(runFfmpegMock).not.toHaveBeenCalled();
-      expect(runExecMock).not.toHaveBeenCalled();
-    },
-  );
+    await pathResolutionStarted.promise;
+    admitted = false;
+    releasePathResolution.resolve();
+    await expect(transcription).rejects.toThrow("admission expired");
+    expect(runFfmpegMock).not.toHaveBeenCalled();
+    expect(runExecMock).not.toHaveBeenCalled();
+  });
 });
 
 it.each([
@@ -376,17 +380,9 @@ it("removes the CLI scratch directory when audio conversion fails", async () => 
     scratchDir = path.dirname(outputPath);
     throw new Error("ffmpeg conversion failed");
   });
-  await withMediaFixture(
-    {
-      filePrefix: "openclaw-cli-conversion",
-      extension: "mp3",
-      mediaType: "audio/mpeg",
-      fileContents: createSafeAudioFixtureBuffer(),
-    },
-    async (fixture) => {
-      await expect(runFixture(fixture, whisper)).rejects.toThrow("ffmpeg conversion failed");
-    },
-  );
+  await withCompressedAudio(async (fixture) => {
+    await expect(runFixture(fixture, whisper)).rejects.toThrow("ffmpeg conversion failed");
+  });
   expect(scratchDir).not.toBe("");
   await expect(fs.stat(scratchDir)).rejects.toMatchObject({ code: "ENOENT" });
 });

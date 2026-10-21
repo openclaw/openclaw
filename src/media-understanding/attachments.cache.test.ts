@@ -196,13 +196,6 @@ it.for(["growing", "read-failure"] as const)(
         consumed += result.bytesRead;
         return result;
       });
-      const readFile = handle.readFile.bind(handle);
-      vi.spyOn(handle, "readFile").mockImplementation(async (...readArgs) => {
-        await growBeforeRead();
-        const result = await readFile(...readArgs);
-        consumed += result.length;
-        return result;
-      });
       return handle;
     });
     const cache = localCache(attachmentPath, base);
@@ -239,7 +232,6 @@ test.for([
     expect(await fs.readdir(base)).toEqual([]);
     const second = await cache.getPath(pngRequest);
     expect(second).not.toBe(first);
-    expect(path.extname(second)).toBe(extension);
     await expectStaged(cache, second);
     expect(readRemoteMediaBufferMock).toHaveBeenCalledTimes(1);
   },

@@ -1,16 +1,24 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it as baseIt,
+  onTestFinished,
+  vi,
+  type MockInstance,
+} from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { toInboundMediaFacts } from "../channels/inbound-event/media.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { applyMediaUnderstanding } from "./apply.js";
 import { MediaAttachmentCache } from "./attachments.js";
-import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
+import { normalizeMediaAttachments } from "./runner.attachments.js";
 import { formatDecisionSummary } from "./runner.entries.js";
 import { runCapability } from "./runner.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
@@ -26,7 +34,18 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
   return createEmptyCapabilityProviderMockModule();
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const it = baseIt.extend<{ stateDir: string; saved: { id: string; path: string } }>({
+  stateDir: async ({ task: _task }, use) => {
+    await withTestDir({ prefix: "openclaw-media-store-ref-" }, (stateDir) =>
+      withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, PATH: "" }, () => use(stateDir)),
+    );
+  },
+  saved: async ({ stateDir: _stateDir }, use) => {
+    await use(
+      await saveMediaBuffer(createSafeAudioFixtureBuffer(2048, 0x52), "audio/ogg", "inbound"),
+    );
+  },
+});
 let fetchSpy: MockInstance<typeof fetch>;
 beforeEach(() => {
   fetchSpy = vi.spyOn(globalThis, "fetch");
@@ -53,52 +72,32 @@ const urlDisabledFileCfg: OpenClawConfig = {
   gateway: { http: { endpoints: { responses: { files: { allowUrl: false } } } } },
 };
 
-async function withStoredInboundAudio<T>(
-  run: (saved: { id: string; path: string }, stateDir: string) => Promise<T>,
-): Promise<T> {
-  return withStoredInbound(createSafeAudioFixtureBuffer(2048, 0x52), "audio/ogg", run);
-}
-
-async function withStoredInbound<T>(
-  buffer: Buffer,
-  mime: string,
-  run: (saved: { id: string; path: string }, stateDir: string) => Promise<T>,
-): Promise<T> {
-  // Store paths are canonical; match them even when macOS aliases os.tmpdir().
-  const stateDir = await fs.realpath(tempDirs.make("openclaw-media-store-ref-", os.tmpdir()));
-  return withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, PATH: "" }, async () =>
-    run(await saveMediaBuffer(buffer, mime, "inbound"), stateDir),
-  );
-}
-
 const request = { attachmentIndex: 0, maxBytes: 4096, timeoutMs: 1000 };
-function storedAttachment(saved: { id: string }, sourcePath?: string) {
-  return { index: 0, path: sourcePath, url: `media://inbound/${saved.id}`, mime: "audio/ogg" };
-}
-async function withStoredCache(
-  saved: { id: string; path: string },
-  sourcePath: string,
-  run: (cache: MediaAttachmentCache) => Promise<void>,
-) {
-  const cache = new MediaAttachmentCache([storedAttachment(saved, sourcePath)], {
-    localPathRoots: [path.dirname(saved.path)],
-    includeDefaultLocalPathRoots: false,
-  });
-  try {
-    await run(cache);
-  } finally {
-    await cache.cleanup();
-  }
+function storedCache(saved: { id: string; path: string }, sourcePath: string) {
+  const cache = new MediaAttachmentCache(
+    [{ index: 0, path: sourcePath, url: `media://inbound/${saved.id}`, mime: "audio/ogg" }],
+    {
+      localPathRoots: [path.dirname(saved.path)],
+      includeDefaultLocalPathRoots: false,
+    },
+  );
+  onTestFinished(() => cache.cleanup());
+  return cache;
 }
 
 describe("inbound media-store references in the attachment url field", () => {
-  it("extracts a stored document when remote URLs are disabled", async () => {
-    await withStoredInbound(Buffer.from("stored document text"), "text/plain", async (saved) => {
-      const ctx = documentContext(`media://inbound/${saved.id}`, "text/plain");
-      await applyMediaUnderstanding({ ctx, cfg: urlDisabledFileCfg });
-      expect(ctx.Body).toContain("stored document text");
-      expect(fetchSpy).not.toHaveBeenCalled();
-    });
+  it("extracts a stored document when remote URLs are disabled", async ({
+    stateDir: _stateDir,
+  }) => {
+    const saved = await saveMediaBuffer(
+      Buffer.from("stored document text"),
+      "text/plain",
+      "inbound",
+    );
+    const ctx = documentContext(`media://inbound/${saved.id}`, "text/plain");
+    await applyMediaUnderstanding({ ctx, cfg: urlDisabledFileCfg });
+    expect(ctx.Body).toContain("stored document text");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("never renders signed URL query credentials as attachment names", async () => {
@@ -114,70 +113,64 @@ describe("inbound media-store references in the attachment url field", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("prefers the media:// alias when the supplied path is blocked", async () => {
-    await withStoredInboundAudio(async (saved, stateDir) => {
-      const blockedPath = path.join(stateDir, "blocked.ogg");
-      await fs.writeFile(blockedPath, "blocked");
-      const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
-        text: "hello from the voice note",
-        model: req.model ?? "unknown",
-      }));
-      const ctx = {
-        media: toInboundMediaFacts([
-          { path: blockedPath, url: `media://inbound/${saved.id}`, contentType: "audio/ogg" },
-        ]),
-      };
-      const media = normalizeMediaAttachments(ctx);
-      const cache = createMediaAttachmentCache(media, {
-        localPathRoots: [path.dirname(saved.path)],
-        includeDefaultLocalPathRoots: false,
+  it("prefers the media:// alias when the supplied path is blocked", async ({
+    saved,
+    stateDir,
+  }) => {
+    const blockedPath = path.join(stateDir, "blocked.ogg");
+    await fs.writeFile(blockedPath, "blocked");
+    const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+      text: "hello from the voice note",
+      model: req.model ?? "unknown",
+    }));
+    const ctx = {
+      media: toInboundMediaFacts([
+        { path: blockedPath, url: `media://inbound/${saved.id}`, contentType: "audio/ogg" },
+      ]),
+    };
+    const media = normalizeMediaAttachments(ctx);
+    const cache = storedCache(saved, blockedPath);
+    const providerRegistry = new Map<string, MediaUnderstandingProvider>([
+      ["openai", { id: "openai", capabilities: ["audio"], transcribeAudio }],
+    ]);
+    try {
+      const result = await runCapability({
+        capability: "audio",
+        cfg: audioCfg,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry,
       });
-      const providerRegistry = new Map<string, MediaUnderstandingProvider>([
-        ["openai", { id: "openai", capabilities: ["audio"], transcribeAudio }],
-      ]);
-      try {
-        const result = await runCapability({
-          capability: "audio",
-          cfg: audioCfg,
-          ctx,
-          attachments: cache,
-          media,
-          providerRegistry,
-        });
-        expect(result).toMatchObject({
-          decision: { outcome: "success" },
-          outputs: [expect.objectContaining({ text: "hello from the voice note" })],
-        });
-        expect(transcribeAudio).toHaveBeenCalledTimes(1);
-        expect(transcribeAudio.mock.calls[0]?.[0].buffer).toEqual(
-          createSafeAudioFixtureBuffer(2048, 0x52),
-        );
-        expect(formatDecisionSummary(result.decision)).toBe(
-          "audio: success (1/1) via openai/gpt-4o-transcribe",
-        );
-      } finally {
-        await cache.cleanup();
-      }
-    });
+      expect(result).toMatchObject({
+        decision: { outcome: "success" },
+        outputs: [expect.objectContaining({ text: "hello from the voice note" })],
+      });
+      expect(transcribeAudio).toHaveBeenCalledTimes(1);
+      expect(transcribeAudio.mock.calls[0]?.[0].buffer).toEqual(
+        createSafeAudioFixtureBuffer(2048, 0x52),
+      );
+      expect(formatDecisionSummary(result.decision)).toBe(
+        "audio: success (1/1) via openai/gpt-4o-transcribe",
+      );
+    } finally {
+      await cache.cleanup();
+    }
   });
 
-  it("returns the stored path after a stale path fails", async () => {
-    await withStoredInboundAudio(async (saved) => {
-      await withStoredCache(saved, `${saved.path}.missing`, async (cache) => {
-        expect(await cache.getPath(request)).toBe(await fs.realpath(saved.path));
-      });
-      expect((await fs.stat(saved.path)).isFile()).toBe(true);
-    });
+  it("returns the stored path after a stale path fails", async ({ saved }) => {
+    const cache = storedCache(saved, `${saved.path}.missing`);
+    expect(await cache.getPath(request)).toBe(await fs.realpath(saved.path));
+    await cache.cleanup();
+    expect((await fs.stat(saved.path)).isFile()).toBe(true);
   });
 
-  it("does not bypass a path maxBytes failure through the media:// alias", async () => {
-    await withStoredInboundAudio(async (saved) => {
-      const oversizedPath = path.join(path.dirname(saved.path), "oversized.ogg");
-      await fs.writeFile(oversizedPath, createSafeAudioFixtureBuffer(8192, 0x41));
-      await withStoredCache(saved, oversizedPath, async (cache) => {
-        await expect(cache.getBuffer(request)).rejects.toMatchObject({ reason: "maxBytes" });
-      });
-    });
+  it("does not bypass a path maxBytes failure through the media:// alias", async ({ saved }) => {
+    const oversizedPath = path.join(path.dirname(saved.path), "oversized.ogg");
+    await fs.writeFile(oversizedPath, createSafeAudioFixtureBuffer(8192, 0x41));
+    const cache = storedCache(saved, oversizedPath);
+    await expect(cache.getBuffer(request)).rejects.toMatchObject({ reason: "maxBytes" });
+    await cache.cleanup();
   });
 
   it("rejects malformed media:// aliases without attempting a remote fetch", async () => {
