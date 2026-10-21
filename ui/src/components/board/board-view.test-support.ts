@@ -26,67 +26,47 @@ export async function openBoardMenu(
   await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
 }
 
-export function boardWidget(overrides: Partial<BoardWidget> = {}): BoardWidget {
-  return {
-    name: "alpha",
-    tabId: "main",
-    title: "Alpha status",
-    contentKind: "html",
-    sizeW: 6,
-    sizeH: 4,
-    position: 0,
-    grantState: "none",
-    revision: 1,
-    ...overrides,
-  };
-}
+export const boardWidget = (overrides: Partial<BoardWidget> = {}): BoardWidget => ({
+  name: "alpha",
+  tabId: "main",
+  title: "Alpha status",
+  contentKind: "html",
+  sizeW: 6,
+  sizeH: 4,
+  position: 0,
+  grantState: "none",
+  revision: 1,
+  ...overrides,
+});
 
-export function snapshot(overrides: Partial<BoardSnapshot> = {}): BoardSnapshot {
-  return {
-    sessionKey: "agent:main:test",
-    revision: 1,
-    tabs: [
-      { tabId: "main", title: "Main", position: 0, chatDock: "right" },
-      { tabId: "ops", title: "Operations", position: 1, chatDock: "bottom" },
-    ],
-    widgets: [
-      boardWidget(),
-      boardWidget({
-        name: "beta",
-        title: "Beta chart",
-        sizeW: 6,
-        position: 1,
-        revision: 2,
-      }),
-      boardWidget({
-        name: "ops-only",
-        title: "Queue depth",
-        tabId: "ops",
-        sizeW: 12,
-      }),
-    ],
-    ...overrides,
-  };
-}
+export const snapshot = (overrides: Partial<BoardSnapshot> = {}): BoardSnapshot => ({
+  sessionKey: "agent:main:test",
+  revision: 1,
+  tabs: [
+    { tabId: "main", title: "Main", position: 0, chatDock: "right" },
+    { tabId: "ops", title: "Operations", position: 1, chatDock: "bottom" },
+  ],
+  widgets: [
+    boardWidget(),
+    boardWidget({ name: "beta", title: "Beta chart", position: 1, revision: 2 }),
+    boardWidget({ name: "ops-only", title: "Queue depth", tabId: "ops", sizeW: 12 }),
+  ],
+  ...overrides,
+});
 
-export function callbacks(overrides: Partial<BoardViewCallbacks> = {}): BoardViewCallbacks {
-  return {
-    applyOps: vi.fn(async () => undefined),
-    grant: vi.fn(async () => undefined),
-    selectTab: vi.fn(),
-    ...overrides,
-  };
-}
+export const callbacks = (overrides: Partial<BoardViewCallbacks> = {}): BoardViewCallbacks => ({
+  applyOps: vi.fn(async () => undefined),
+  grant: vi.fn(async () => undefined),
+  selectTab: vi.fn(),
+  ...overrides,
+});
 
 export function gatewayContext(client: { request: GatewayRequestHandler } | null, basePath = "") {
   const { gateway } = createApplicationGateway();
   gateway.connection.gatewayUrl = "";
   gateway.snapshot.client = client ? createTestGatewayClient(client.request) : null;
   gateway.snapshot.phase = "connected";
-  return {
-    basePath,
-    gateway,
-  } as unknown as ApplicationContext;
+  return { basePath, gateway } as unknown as ApplicationContext;
 }
 
 export async function settleCells(view: OpenClawBoardView): Promise<OpenClawBoardWidgetCell[]> {
