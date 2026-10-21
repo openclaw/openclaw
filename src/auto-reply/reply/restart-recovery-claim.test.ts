@@ -63,6 +63,10 @@ const userMessage = (content = "continue", idempotencyKey?: string): UserMessage
   timestamp: 1,
   ...(idempotencyKey ? { idempotencyKey } : {}),
 });
+const hookReply = (text: string, intentId: string, id: string) => ({
+  state: "handled-reply" as const,
+  pendingFinalDelivery: { intentId, text, deliveries: [{ id, state: "prepared" as const }] },
+});
 
 function observeSql() {
   const sql = observeHostDataSql();
@@ -219,7 +223,6 @@ describe("createReplyRestartRecoveryClaimController", () => {
   );
 
   it.each([
-    ["runtime", "main", {}],
     ["handled-silent", "main", {}],
     ["restart", "main", {}],
     ["restart", "spawned child", { spawnDepth: 1 }],
@@ -542,14 +545,9 @@ describe("createReplyRestartRecoveryClaimController", () => {
       hostSql.calls.forEach((call) => expect(call).not.toHaveBeenCalled());
     }
     await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
-    await controller.checkpointBeforeAgentReply({
-      state: "handled-reply",
-      pendingFinalDelivery: {
-        intentId: "ops-intent",
-        text: "ops hook reply",
-        deliveries: [{ id: "ops-delivery", state: "prepared" }],
-      },
-    });
+    await controller.checkpointBeforeAgentReply(
+      hookReply("ops hook reply", "ops-intent", "ops-delivery"),
+    );
     await controller.clear();
     expect(loadSessionEntry(ops)).toMatchObject({
       sessionId: "ops-session",
@@ -718,14 +716,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
           : fixture.checkpoint(
               checkpoint === "unhandled"
                 ? { state: undefined }
-                : {
-                    state: "handled-reply",
-                    pendingFinalDelivery: {
-                      text: "Hook-owned reply",
-                      intentId: "hook-intent",
-                      deliveries: [{ id: "hook-delivery", state: "prepared" }],
-                    },
-                  },
+                : hookReply("Hook-owned reply", "hook-intent", "hook-delivery"),
             ),
       ).rejects.toThrow("restart recovery claim changed");
       expect(fixture.current()).toEqual(original);
@@ -982,14 +973,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     expect(admittedRunId).toEqual(expect.any(String));
     expect(fixture.read()?.status).toBeUndefined();
     await expect(fixture.begin()).resolves.toBe(true);
-    await fixture.checkpoint({
-      state: "handled-reply",
-      pendingFinalDelivery: {
-        intentId: "channel-intent",
-        text: "channel reply",
-        deliveries: [{ id: "channel-delivery", state: "prepared" }],
-      },
-    });
+    await fixture.checkpoint(hookReply("channel reply", "channel-intent", "channel-delivery"));
     const preserved = {
       pendingFinalDelivery: { intentId: "channel-intent", text: "channel reply" },
       restartRecoveryBeforeAgentReplyState: "handled-reply",

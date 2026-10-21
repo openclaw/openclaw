@@ -363,11 +363,10 @@ function resolveModelSelectionForCommand(params: {
 async function persistModelDirectiveForTest(params: {
   command: string;
   directiveOnly?: boolean;
-  agentId?: string;
   profiles?: Record<string, ApiKeyProfile>;
   cfg?: OpenClawConfig;
   aliasIndex?: ModelAliasIndex;
-  allowedModelKeys: string[];
+  allowedModelKeys?: string[];
   allowedModelCatalog?: ModelCatalogEntry[];
   sessionEntry?: SessionEntry;
   provider?: string;
@@ -388,14 +387,15 @@ async function persistModelDirectiveForTest(params: {
   const sessionEntry = params.sessionEntry ?? createSessionEntry();
   const provider = params.provider ?? "anthropic";
   const model = params.model ?? "claude-opus-4-6";
-  const agentId = params.agentId ?? "main";
-  const sessionKey = `agent:${agentId}:dm:1`;
+  const sessionKey = "agent:main:dm:1";
   const modelState = createModelSelectionStateFixture({
     agentCfg: cfg.agents?.defaults,
     provider,
     model,
   });
-  modelState.allowedModelKeys = new Set(params.allowedModelKeys);
+  modelState.allowedModelKeys = new Set(
+    params.allowedModelKeys ?? ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+  );
   modelState.allowedModelCatalog = params.allowedModelCatalog ?? [];
   modelState.resolveThinkingCatalog = async () => params.allowedModelCatalog;
   const input: Parameters<typeof applyInlineDirectiveOverrides>[0] = createInlineDirectiveParams({
@@ -410,26 +410,13 @@ async function persistModelDirectiveForTest(params: {
     defaultModel: "claude-opus-4-6",
     senderIsOwner: params.canPersistStickyModelSelection ?? true,
   });
-  input.agentId = agentId;
   input.modelState = modelState;
   input.elevatedEnabled = input.elevatedAllowed = false;
   input.command.isAuthorizedSender = params.isAuthorizedSender ?? true;
   input.initialModelLabel = params.initialModelLabel ?? input.initialModelLabel;
   input.formatModelSwitchEvent = (label) => label;
   const result = await applyInlineDirectiveOverrides(input);
-  const persisted =
-    result.kind === "continue"
-      ? {
-          provider: result.provider,
-          model: result.model,
-          errorText: undefined,
-        }
-      : {
-          provider,
-          model,
-          errorText: Array.isArray(result.reply) ? result.reply[0]?.text : result.reply?.text,
-        };
-  return { persisted, sessionEntry, result };
+  return { sessionEntry, result };
 }
 
 type HandleDirectiveParams = Parameters<typeof handleDirectiveOnly>[0];
@@ -699,14 +686,17 @@ describe("/model chat UX", () => {
       nativeRuntimeConsent: "codex",
     });
     const initial = { ...sessionEntry };
-    const { persisted } = await persistModelDirectiveForTest({
+    const { result } = await persistModelDirectiveForTest({
       command: "/model anthropic/claude-opus-4-6 --runtime codex hello",
       allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
       sessionEntry,
       provider: "openai",
       model: "gpt-4o",
     });
-    expect(persisted.errorText).toContain('Runtime "codex" is not supported');
+    expect(result).toMatchObject({
+      kind: "reply",
+      reply: { text: expect.stringContaining('Runtime "codex" is not supported') },
+    });
     expect(sessionEntry).toEqual(initial);
   });
 
@@ -749,13 +739,12 @@ describe("/model chat UX", () => {
   it("commits openclaw selection while keeping supported mixed thinking on its turn", async () => {
     setOpenAiRuntimeScopedUltraProvider();
     const sessionEntry = createSessionEntry({ thinkingLevel: "high" });
-    const { persisted, result } = await persistModelDirectiveForTest({
+    const { result } = await persistModelDirectiveForTest({
       command: "/model openai/gpt-5.6-luna --runtime openclaw /think ultra please solve",
       allowedModelKeys: ["openai/gpt-5.6-luna"],
       sessionEntry,
     });
 
-    expect(persisted.errorText).toBeUndefined();
     expect(result).toMatchObject({
       kind: "continue",
       provider: "openai",
@@ -785,7 +774,7 @@ describe("/model chat UX", () => {
   });
 
   it("ignores invalid mixed-content model directives during persistence", async () => {
-    const { persisted, sessionEntry } = await persistModelDirectiveForTest({
+    const { sessionEntry } = await persistModelDirectiveForTest({
       command: "/model 99 hello",
       profiles: createDateAuthProfiles("openai"),
       allowedModelKeys: ["openai/gpt-4o"],
@@ -800,8 +789,6 @@ describe("/model chat UX", () => {
       initialModelLabel: "openai/gpt-4o",
     });
 
-    expect(persisted.provider).toBe("openai");
-    expect(persisted.model).toBe("gpt-4o");
     expect(sessionEntry.providerOverride).toBe("openai");
     expect(sessionEntry.modelOverride).toBe("gpt-4o");
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
@@ -865,12 +852,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       agentRuntimeOverride: "codex",
       nativeRuntimeConsent: "codex",
     });
-    await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineSessionDirectives("/model openai/gpt-4o"),
-        sessionEntry,
-      }),
-    );
+    await runHandleCommand("/model openai/gpt-4o", { sessionEntry });
 
     expect(sessionEntry.agentRuntimeOverride).toBe("codex");
     expect(sessionEntry.nativeRuntimeConsent).toBe("codex");
@@ -925,61 +907,28 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("persists a model at explicit global scope", async () => {
-    await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o -g continue with the request",
-      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
-      allowedModelCatalog: [{ provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" }],
-    });
-    expect(stickyModelMock.persistBestEffort).toHaveBeenCalledWith({
-      agentId: "main",
-      model: "openai/gpt-4o",
-      target: "defaults",
-    });
-  });
-
   it.each([
-    {
-      command: "/model openai/gpt-4o -a continue with the request",
-      canPersistStickyModelSelection: false,
-      error: "require owner authority",
-    },
-    {
-      command: "/model openai/gpt-4o -a -g continue with the request",
-      canPersistStickyModelSelection: true,
-      error: "only one model scope",
-    },
-  ])(
-    "rejects persistent model scope: $error",
-    async ({ command, canPersistStickyModelSelection, error }) => {
-      const { persisted, sessionEntry } = await persistModelDirectiveForTest({
-        command,
-        allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
-        canPersistStickyModelSelection,
+    ["-a", true, false, "require owner authority"],
+    ["-a -g", true, true, "only one model scope"],
+    ["-a", false, false, undefined],
+  ] as const)(
+    "handles scoped model flags %s (authorized=%s, owner=%s)",
+    async (flags, authorized, owner, error) => {
+      // Unauthorized input stays plain text; it cannot surface an owner-scope error.
+      const { result, sessionEntry } = await persistModelDirectiveForTest({
+        command: `/model openai/gpt-4o ${flags} continue with the request`,
+        isAuthorizedSender: authorized,
+        canPersistStickyModelSelection: owner,
       });
-
-      expect(persisted.errorText).toContain(error);
+      expect(result).toMatchObject(
+        error
+          ? { kind: "reply", reply: { text: expect.stringContaining(error) } }
+          : { kind: "continue" },
+      );
       expect(sessionEntry.providerOverride).toBeUndefined();
       expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
     },
   );
-
-  it("leaves a scoped model directive as plain text for an unauthorized sender", async () => {
-    const { persisted, sessionEntry } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o -a continue with the request",
-      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
-      // An unauthorized sender is never the owner; setting only one of these
-      // describes a state the gateway cannot produce.
-      isAuthorizedSender: false,
-      canPersistStickyModelSelection: false,
-    });
-
-    // An unauthorized sender's directives are cleared to plain text, so the
-    // persistent-scope authority error must not surface the command at all.
-    expect(persisted.errorText).toBeUndefined();
-    expect(sessionEntry.providerOverride).toBeUndefined();
-    expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
-  });
 
   it("suppresses model side effects when a concurrent switch wins", async () => {
     const { storePath, sessionEntry, sessionStore } = await persistedSession(
@@ -998,15 +947,12 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       patchEvents.push(event);
     });
 
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineSessionDirectives("/model openai/gpt-4o"),
-        sessionEntry,
-        sessionStore,
-        storePath,
-        persistenceState,
-      }),
-    );
+    const result = await runHandleCommand("/model openai/gpt-4o", {
+      sessionEntry,
+      sessionStore,
+      storePath,
+      persistenceState,
+    });
 
     expect(result?.text).toContain("Model change was not applied");
     expect(result?.isError).toBe(true);
@@ -1026,50 +972,39 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(loadSessionEntry({ sessionKey, storePath })).toEqual(sessionStore[sessionKey]);
   });
 
-  it("reports a rejected non-model directive after session rotation", async () => {
-    const {
-      storePath,
-      sessionEntry,
-      sessionStore,
-      persistedEntry: rotatedEntry,
-    } = await persistedSession({ elevatedLevel: "full" }, { sessionId: "s2" });
-    const result = await runHandleCommand("/elevated off", {
-      sessionEntry,
-      sessionStore,
-      storePath,
-      elevatedEnabled: true,
-      elevatedAllowed: true,
-      currentElevatedLevel: "full",
-    });
+  it.each([false, true])(
+    "rejects an elevated directive after a concurrent change (rotation=%s)",
+    async (rotated) => {
+      const initialLevel = rotated ? "full" : "off";
+      const { storePath, sessionEntry, sessionStore, persistedEntry } = await persistedSession(
+        { elevatedLevel: initialLevel },
+        rotated ? { sessionId: "s2" } : { elevatedLevel: "full" },
+      );
+      const result = await runHandleCommand("/elevated off", {
+        sessionEntry,
+        sessionStore,
+        storePath,
+        elevatedEnabled: true,
+        elevatedAllowed: true,
+        currentElevatedLevel: initialLevel,
+      });
 
-    expect(result?.text).toContain("Session settings were not applied");
-    expect(result?.isError).toBe(true);
-    expect(result?.text).not.toContain("Elevated mode disabled");
-    expect(enqueueSystemEvent).not.toHaveBeenCalledWith(
-      expect.stringContaining("Elevated"),
-      expect.anything(),
-    );
-    expect(sessionStore[sessionKey]).toEqual(rotatedEntry);
-  });
-
-  it("rejects an explicit same-value directive after a concurrent change", async () => {
-    const { storePath, sessionEntry, sessionStore } = await persistedSession(
-      { elevatedLevel: "off" },
-      { elevatedLevel: "full" },
-    );
-    const result = await runHandleCommand("/elevated off", {
-      sessionEntry,
-      sessionStore,
-      storePath,
-      elevatedEnabled: true,
-      elevatedAllowed: true,
-      currentElevatedLevel: "off",
-    });
-
-    expect(result?.text).toContain("Session settings were not applied");
-    expect(result?.isError).toBe(true);
-    expect(sessionEntry).toMatchObject({ sessionId: "s1", elevatedLevel: "full" });
-  });
+      expect(result).toMatchObject({
+        text: expect.stringContaining("Session settings were not applied"),
+        isError: true,
+      });
+      if (rotated) {
+        expect(result?.text).not.toContain("Elevated mode disabled");
+        expect(enqueueSystemEvent).not.toHaveBeenCalledWith(
+          expect.stringContaining("Elevated"),
+          expect.anything(),
+        );
+        expect(sessionStore[sessionKey]).toEqual(persistedEntry);
+      } else {
+        expect(sessionEntry).toMatchObject({ sessionId: "s1", elevatedLevel: "full" });
+      }
+    },
+  );
 
   it("preserves a concurrent thinking preference while applying an unrelated directive", async () => {
     pluginPolicyMock.thinkingProfiles.set("anthropic", () => ({
@@ -1119,15 +1054,12 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       agentRuntimeOverride: "codex",
     });
 
-    const result = await handleDirectiveOnly(
-      createHandleParams({
-        directives: parseInlineSessionDirectives("/think"),
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        currentThinkLevel: "ultra",
-        sessionEntry,
-      }),
-    );
+    const result = await runHandleCommand("/think", {
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      currentThinkLevel: "ultra",
+      sessionEntry,
+    });
 
     expect(result?.text).toContain("Current thinking level: ultra.");
     expect(result?.text).toContain("Options: default, off, low, medium, high, max, ultra.");

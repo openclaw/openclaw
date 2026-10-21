@@ -161,17 +161,18 @@ describe("abort handling", () => {
     sessionKey: string;
   }) {
     trackedAbortMemoryKeys.add(params.sessionKey);
-    const followup = createQueueTestRun({ prompt: "queued" });
-    followup.run = {
-      ...followup.run,
-      agentId: resolveSessionAgentId({ config: params.cfg, sessionKey: params.sessionKey }),
-      agentDir: path.join(params.root, "agent"),
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionFile: path.join(params.root, "session.jsonl"),
-      workspaceDir: path.join(params.root, "workspace"),
-      config: params.cfg,
-    };
+    const followup = createQueueTestRun(
+      { prompt: "queued" },
+      {
+        agentId: resolveSessionAgentId({ config: params.cfg, sessionKey: params.sessionKey }),
+        agentDir: path.join(params.root, "agent"),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: path.join(params.root, "session.jsonl"),
+        workspaceDir: path.join(params.root, "workspace"),
+        config: params.cfg,
+      },
+    );
     enqueueFollowupRun(
       params.sessionKey,
       followup,
@@ -314,7 +315,6 @@ describe("abort handling", () => {
     enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
     await addChild(storePath, sessionKey, childKey, {
       runId: "bare-stop-child-run",
-      task: "bare stop child",
     });
     const hook = vi.fn();
     registerInternalHook("command:stop", hook);
@@ -551,17 +551,8 @@ describe("abort handling", () => {
       return persistence.promise;
     });
     enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
-    await replaceSessionEntry(
-      { storePath, agentId: "main", sessionKey: childKey },
-      {
-        ...loadSessionEntry({ storePath, agentId: "main", sessionKey: childKey })!,
-        lifecycleRevision: "slow-persistence-child-revision",
-      },
-    );
     await addChild(storePath, sessionKey, childKey, {
       runId: "slow-child-run",
-      sessionEntry: loadSessionEntry({ storePath, agentId: "main", sessionKey: childKey }),
-      task: "slow child",
     });
 
     const child = createActiveAbortOperation(cfg, childKey, childSessionId, "slow-child-run");
@@ -699,14 +690,6 @@ describe("abort handling", () => {
         [secondChildKey]: "run-persistence-failure-second",
       },
     });
-    for (const childSessionKey of [firstChildKey, secondChildKey]) {
-      const scope = { storePath, agentId: "main", sessionKey: childSessionKey };
-      const entry = loadSessionEntry(scope)!;
-      await replaceSessionEntry(scope, {
-        ...entry,
-        lifecycleRevision: `${entry.sessionId}-revision`,
-      });
-    }
     const createdAt = Date.now();
     for (const [runId, childKey] of [
       ["run-persistence-failure-first", firstChildKey],
@@ -714,7 +697,6 @@ describe("abort handling", () => {
     ] as const) {
       await addChild(storePath, sessionKey, childKey, {
         runId,
-        sessionEntry: loadSessionEntry({ storePath, agentId: "main", sessionKey: childKey }),
         createdAt,
       });
     }

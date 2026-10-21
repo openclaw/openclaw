@@ -594,6 +594,13 @@ describe("mixed inline directives", () => {
   });
   it.each([
     { prefix: "", scope: "session", flag: " --global", owner: true, target: "defaults" },
+    {
+      prefix: "please reply ",
+      scope: "session",
+      flag: " --global",
+      owner: true,
+      target: "defaults",
+    },
     { prefix: "please reply ", scope: "global", flag: "", owner: false, target: undefined },
   ] as const)(
     "resolves scope=$scope flag=$flag owner=$owner without widening authority",
