@@ -1968,8 +1968,9 @@ client; this also enables compressed ingress. Both modes verify trusted-proxy
 authentication, negotiated compression, and the expected user-profile count.
 They configure only the generated Gateway fixture and use documentation-only
 forwarded addresses; no real proxy, account, or external connection is involved.
-Use the same mode on both sides of a comparison. These modes support only
-`transcript-broadcast` without `--mixed-rpc`.
+Use the same mode on both sides of a comparison. These modes support
+`transcript-broadcast` and `memory-soak` without `--mixed-rpc` or
+`--operator-access-policy`.
 
 Use `--transport-counts` in a separate transcript-broadcast pass to attribute
 `Buffer.concat` calls and copied bytes by source call site, and count outbound

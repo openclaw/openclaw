@@ -202,9 +202,12 @@ const proxyViewers = values.compressed || values["distinct-viewers"];
 if (proxyViewers && values["operator-access-policy"]) {
   throw new Error("--compressed/--distinct-viewers cannot combine with --operator-access-policy");
 }
-if (proxyViewers && (scenario !== "transcript-broadcast" || values["mixed-rpc"])) {
+if (
+  proxyViewers &&
+  ((scenario !== "transcript-broadcast" && scenario !== "memory-soak") || values["mixed-rpc"])
+) {
   throw new Error(
-    "--compressed/--distinct-viewers require transcript-broadcast without --mixed-rpc",
+    "--compressed/--distinct-viewers require transcript-broadcast or memory-soak without --mixed-rpc",
   );
 }
 const reasoningScenario = retentionScenario || idleScenario || soakScenario;
@@ -2898,7 +2901,10 @@ async function connectClient(index: number) {
   ) {
     throw new Error("connect did not return a valid hello snapshot");
   }
-  if (client.ws.extensions.includes("permessage-deflate") !== proxyViewers) {
+  if (
+    client.ws.extensions.includes("permessage-deflate") !==
+    (proxyViewers || values["operator-access-policy"])
+  ) {
     throw new Error("Gateway compression negotiation did not match the requested ingress");
   }
   if (proxyViewers) {
