@@ -6,7 +6,8 @@ const mocks = vi.hoisted(() => ({
     throw new Error("read-only inspection activated the runtime");
   }),
   staticStatus: vi.fn(async () => ({ activation: "inactive" })),
-  nativeReady: vi.fn(async () => true),
+  nativePackageReady: vi.fn(async () => true),
+  inspectDriver: vi.fn(async () => "current"),
   uninstallDriver: vi.fn(async (_params?: unknown): Promise<void> => undefined),
   setup: vi.fn(async ({ nativePackageReady }: { nativePackageReady: boolean }) => ({
     actions: nativePackageReady ? [] : [{ id: "install-native-package" }],
@@ -15,9 +16,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./runtime-api.js", () => ({ createFaceTimeRuntime: mocks.activateRuntime }));
 vi.mock("./src/static-status.js", () => ({ inspectFaceTimeStaticStatus: mocks.staticStatus }));
-vi.mock("./src/plugin-paths.js", () => ({ inspectFaceTimeNativePackage: mocks.nativeReady }));
+vi.mock("./src/plugin-paths.js", () => ({
+  inspectFaceTimeNativePackage: mocks.nativePackageReady,
+}));
 vi.mock("./src/driver-setup.js", () => ({
-  inspectFaceTimeDriver: vi.fn(async () => "current"),
+  inspectFaceTimeDriver: mocks.inspectDriver,
   uninstallFaceTimeDriver: mocks.uninstallDriver,
 }));
 vi.mock("./src/setup.js", () => ({ runFaceTimeSetup: mocks.setup }));
@@ -58,7 +61,7 @@ function registerPlugin(enabled?: boolean) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.nativeReady.mockResolvedValue(true);
+  mocks.nativePackageReady.mockResolvedValue(true);
 });
 
 it("serves gateway and model status without build, socket, injection, or runtime activation", async () => {
@@ -73,7 +76,7 @@ it("serves gateway and model status without build, socket, injection, or runtime
 });
 
 it("reports native installation remediation without attempting runtime activation", async () => {
-  mocks.nativeReady.mockResolvedValue(false);
+  mocks.nativePackageReady.mockResolvedValue(false);
   const { request } = registerPlugin();
   const installAction = expect.objectContaining({ id: "install-native-package" });
   expect(await request("setup")).toHaveBeenCalledWith(

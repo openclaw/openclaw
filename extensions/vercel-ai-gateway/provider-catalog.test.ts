@@ -2,10 +2,12 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 
-const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
+const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+  fetchWithSsrFGuardMock: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchMock,
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => ({
     allowedHostnames: [new URL(baseUrl).hostname],
   }),
@@ -20,7 +22,7 @@ import {
 
 function mockResponse(response: Response) {
   const release = vi.fn(async () => {});
-  fetchMock.mockResolvedValueOnce({
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({
     response,
     release,
     finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
@@ -43,7 +45,7 @@ const pricedModel = (id: string, input: number, output: number, cacheRead = 0, c
 
 afterEach(() => {
   clearLiveCatalogCacheForTests();
-  fetchMock.mockReset();
+  fetchWithSsrFGuardMock.mockReset();
 });
 
 it("falls back to the static provider on HTTP 503", async () => {
@@ -71,7 +73,7 @@ it("excludes non-language models while preserving vision and legacy catalog rows
     { id: visionModelId, reasoning: true, input: ["text", "image"] },
     { id: "custom/legacy-model", input: ["text"] },
   ]);
-  expect(fetchMock).toHaveBeenCalledWith(
+  expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
     expect.objectContaining({
       mode: "trusted_env_proxy",
       url: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
