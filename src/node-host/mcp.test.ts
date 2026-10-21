@@ -271,62 +271,72 @@ describe("node host MCP manager", () => {
     await manager.close();
   });
 
-  it("isolates a repeated pagination cursor while a sibling server survives", async () => {
-    const looping = createClient({
-      list: async () => ({ tools: [tool("loop")], nextCursor: "same" }),
-    });
-    const healthy = createClient({ tools: [tool("search")] });
-    const warn = vi.fn();
-    const manager = await startNodeHostMcpManager(
-      { looping: { command: "looping" }, healthy: { command: "healthy" } },
-      {
-        createClient: (serverName) => (serverName === "looping" ? looping : healthy),
-        resolveTransport: () => transport,
-        warn,
+  it.each([
+    {
+      name: "repeated pagination cursor",
+      client: () =>
+        createClient({ list: async () => ({ tools: [tool("loop")], nextCursor: "same" }) }),
+      requests: 2,
+      warning: /repeated pagination cursor/u,
+    },
+    {
+      name: "unique-cursor page ceiling",
+      client: () => {
+        let page = 0;
+        return createClient({
+          list: async () => ({ tools: [tool(`tool-${++page}`)], nextCursor: `cursor-${page}` }),
+        });
       },
-    );
-
-    expect(looping.request).toHaveBeenCalledTimes(2);
-    expect(looping.close).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("repeated pagination cursor"));
-    expect(manager.descriptors.map((descriptor) => descriptor.name)).toEqual(["healthy_search"]);
-    await expect(manager.callMcpTool({ server: "healthy", tool: "search" })).resolves.toEqual({
-      content: [{ type: "text", text: "ok" }],
-    });
-
-    await manager.close();
-    expect(looping.close).toHaveBeenCalledOnce();
-    expect(healthy.close).toHaveBeenCalledOnce();
-  });
-
-  itWithFrozenClock("isolates endless unique-cursor pagination at the page ceiling", async () => {
-    let page = 0;
-    const endless = createClient({
-      list: async () => {
-        page += 1;
-        return { tools: [tool(`tool-${page}`)], nextCursor: `cursor-${page}` };
+      requests: 128,
+      warning: /exceeded 128 pages/u,
+    },
+    {
+      name: "accumulated catalog byte ceiling",
+      client: () => {
+        const large = {
+          ...tool("large"),
+          inputSchema: { type: "object" as const, description: "x".repeat(6 * 1024 * 1024) },
+        };
+        return createClient({
+          list: async (params) =>
+            params?.cursor ? { tools: [large] } : { tools: [large], nextCursor: "next" },
+        });
       },
-    });
-    const healthy = createClient({ tools: [tool("search")] });
-    const warn = vi.fn();
-    const manager = await startNodeHostMcpManager(
-      { endless: { command: "endless" }, healthy: { command: "healthy" } },
-      {
-        createClient: (serverName) => (serverName === "endless" ? endless : healthy),
-        resolveTransport: () => transport,
-        warn,
-      },
-    );
-
-    expect(endless.request).toHaveBeenCalledTimes(128);
-    expect(endless.close).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("exceeded 128 pages"));
-    expect(manager.descriptors.map((descriptor) => descriptor.name)).toEqual(["healthy_search"]);
-
-    await manager.close();
-  });
+      requests: 2,
+      warning: /listing exceeded \d+ bytes/u,
+    },
+    {
+      name: "retained candidate ceiling",
+      client: () =>
+        createClient({
+          tools: Array.from({ length: 16_385 }, (_, index) => tool(`tool-${index}`)),
+        }),
+      requests: 1,
+      warning: /exceeded 16384 tools/u,
+    },
+  ])(
+    "isolates $name while a sibling survives",
+    async ({ client: makeClient, requests, warning }) => {
+      useFrozenTime(1_000);
+      const failing = makeClient();
+      const healthy = createClient({ tools: [tool("search")] });
+      const warn = vi.fn();
+      const manager = await startManager(
+        { createClient: (name) => (name === "failing" ? failing : healthy), warn },
+        { failing: { command: "failing" }, healthy: { command: "healthy" } },
+      );
+      expect(failing.request).toHaveBeenCalledTimes(requests);
+      expect(failing.close).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(warning));
+      expect(manager.descriptors.map((descriptor) => descriptor.name)).toEqual(["healthy_search"]);
+      await expect(manager.callMcpTool({ server: "healthy", tool: "search" })).resolves.toEqual(
+        okResult,
+      );
+      await manager.close();
+      expect(failing.close).toHaveBeenCalledOnce();
+      expect(healthy.close).toHaveBeenCalledOnce();
+    },
+  );
 
   it("isolates slow unique-cursor pagination at one catalog deadline", async () => {
     vi.useFakeTimers();
@@ -368,56 +378,6 @@ describe("node host MCP manager", () => {
     await vi.advanceTimersByTimeAsync(10);
     await manager.close();
     expect(healthy.close).toHaveBeenCalledOnce();
-  });
-
-  itWithFrozenClock(
-    "isolates an oversized multi-page catalog at the accumulated byte ceiling",
-    async () => {
-      const largeTool = {
-        ...tool("large"),
-        inputSchema: { type: "object" as const, description: "x".repeat(6 * 1024 * 1024) },
-      };
-      const oversized = createClient({
-        list: async (params) =>
-          params?.cursor ? { tools: [largeTool] } : { tools: [largeTool], nextCursor: "next" },
-      });
-      const healthy = createClient({ tools: [tool("search")] });
-      const warn = vi.fn();
-      const manager = await startNodeHostMcpManager(
-        { oversized: { command: "oversized" }, healthy: { command: "healthy" } },
-        {
-          createClient: (serverName) => (serverName === "oversized" ? oversized : healthy),
-          resolveTransport: () => transport,
-          warn,
-        },
-      );
-
-      expect(oversized.request).toHaveBeenCalledTimes(2);
-      expect(oversized.close).toHaveBeenCalledOnce();
-      expect(warn).toHaveBeenCalledOnce();
-      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/listing exceeded \d+ bytes/u));
-      expect(manager.descriptors.map((descriptor) => descriptor.name)).toEqual(["healthy_search"]);
-
-      await manager.close();
-    },
-  );
-
-  itWithFrozenClock("isolates a listing that exceeds the retained candidate ceiling", async () => {
-    const overflowing = createClient({
-      tools: Array.from({ length: 16_385 }, (_, index) => tool(`tool-${index}`)),
-    });
-    const warn = vi.fn();
-    const manager = await startNodeHostMcpManager(
-      { overflowing: { command: "overflowing" } },
-      { createClient: () => overflowing, resolveTransport: () => transport, warn },
-    );
-
-    expect(overflowing.close).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("exceeded 16384 tools"));
-    expect(manager.descriptors).toEqual([]);
-
-    await manager.close();
   });
 
   it("closes a server when startup is aborted during paginated listing", async () => {

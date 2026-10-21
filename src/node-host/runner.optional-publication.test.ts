@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayClientRequestError, type GatewayClientOptions } from "../gateway/client.js";
 import { NODE_RUNNER_INVENTORY_UPDATE_METHOD } from "../infra/node-runner-inventory.js";
-import { mocks, resetRunnerTestState, withReadyNodeHost } from "./runner.test-support.js";
+import {
+  mocks,
+  receiveHello,
+  resetRunnerTestState,
+  withReadyNodeHost,
+} from "./runner.test-support.js";
 
 const NODE_PLUGIN_TOOLS_UPDATE_METHOD = "node.pluginTools.update";
 const NODE_SKILLS_UPDATE_METHOD = "node.skills.update";
@@ -16,13 +21,6 @@ type CapturedClient = (typeof mocks.capturedGatewayClients)[number];
 
 function getPublications(client: CapturedClient, method = NODE_PLUGIN_TOOLS_UPDATE_METHOD) {
   return client.request.mock.calls.filter(([calledMethod]) => calledMethod === method);
-}
-
-function receiveHello(options: GatewayClientOptions | undefined, protocol = 4) {
-  options?.onHelloOk?.({
-    protocol,
-    features: { methods: [], events: [] },
-  } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
 }
 
 const settlePublications = () => setImmediate();

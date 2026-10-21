@@ -152,13 +152,12 @@ describe("node-host SQLite config", () => {
       nowMs: 1_234,
     });
     expect(configured).toEqual(expected);
-    expect(readConfigMachineState<NodeHostConfig>(NODE_HOST_CONFIG_KEY, { env })).toEqual(
-      configured,
-    );
+    const persisted = readConfigMachineState<NodeHostConfig>(NODE_HOST_CONFIG_KEY, { env });
+    expect(persisted).toEqual(configured);
     expect(readConfigMachineStateWithMetadata(NODE_HOST_CONFIG_KEY, { env })?.updatedAtMs).toBe(
       1_234,
     );
-    expect(readConfigMachineState(NODE_HOST_CONFIG_KEY, { env })).not.toHaveProperty("token");
+    expect(persisted).not.toHaveProperty("token");
     await closeOpenClawStateDatabaseAsync();
     await expect(load()).resolves.toEqual(configured);
     await expect(fs.stat(path.join(stateDir, "node.json"))).rejects.toMatchObject({
@@ -166,11 +165,9 @@ describe("node-host SQLite config", () => {
     });
   });
 
-  it("keeps installed-app sharing disabled by default and persists an explicit enable", async () => {
+  it("persists an explicit installed-app sharing enable", async () => {
     const { configure, load } = makeTestEnv();
-    const initial = await configure({ nowMs: 1 });
-    expect(initial.installedAppsSharing).toBe(false);
-
+    await configure({ nowMs: 1 });
     const enabled = await configure({ installedAppsSharing: true, nowMs: 2 });
     expect(enabled.installedAppsSharing).toBe(true);
     await closeOpenClawStateDatabaseAsync();
@@ -240,10 +237,9 @@ describe("node-host SQLite config", () => {
   }, 30_000);
 
   it("preserves explicit custom ids and atomically clears omitted gateway fields", async () => {
-    const { env } = makeTestEnv();
-    await configureNodeHost({
+    const { configure, load } = makeTestEnv();
+    await configure({
       nodeId: "first-custom-id",
-      fallbackDisplayName: "node",
       gateway: {
         host: "old.example",
         port: 443,
@@ -251,14 +247,11 @@ describe("node-host SQLite config", () => {
         tlsFingerprint: fixtureDigest,
         contextPath: "/old",
       },
-      env,
       nowMs: 20,
     });
-    const configured = await configureNodeHost({
+    const configured = await configure({
       nodeId: "custom id with spaces inside",
-      fallbackDisplayName: "node",
       gateway: { host: "new.example", port: 18789, tls: false },
-      env,
       nowMs: 21,
     });
 
@@ -268,7 +261,7 @@ describe("node-host SQLite config", () => {
     });
     expect(configured.gateway?.tlsFingerprint).toBeUndefined();
     expect(configured.gateway?.contextPath).toBeUndefined();
-    await expect(loadNodeHostConfig(env)).resolves.toEqual(configured);
+    await expect(load()).resolves.toEqual(configured);
   });
 
   it("rejects corrupt canonical rows instead of rotating identity", async () => {

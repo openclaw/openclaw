@@ -184,7 +184,7 @@ describe("node-host state readiness", () => {
         await expect(withExistingOpenClawStateSchema({ path: databasePath() }, run)).rejects.toBe(
           fixture.admitted,
         );
-      } else if (mode === "canonical") {
+      } else {
         const canonical = identityStore.loadOrCreateDeviceIdentity({ env });
         const { sourcePath, raw } = writeSource("identity/device.json", {
           version: 1,
@@ -233,13 +233,12 @@ describe("node-host state readiness", () => {
   });
 
   it("refuses malformed selected Gateway state without replacing it", async () => {
-    const selectedPath = path.join(stateDir, "state", "openclaw.sqlite");
+    const selectedPath = databasePath();
     fs.mkdirSync(path.dirname(selectedPath), { recursive: true });
     fs.writeFileSync(selectedPath, "synthetic selected Gateway state sentinel");
     await expect(run()).rejects.toThrow();
     expect(fs.readFileSync(selectedPath, "utf8")).toBe("synthetic selected Gateway state sentinel");
-    expect(fixture.configure).not.toHaveBeenCalled();
-    expect(fixture.prepare).not.toHaveBeenCalled();
+    expectUnprepared();
     expect(fs.existsSync(path.join(stateDir, "client", "credentials.sqlite"))).toBe(false);
   });
 });

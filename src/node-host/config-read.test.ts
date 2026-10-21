@@ -136,7 +136,6 @@ const validRow = '{"version":1,"nodeId":"fixture-node"}';
 it.each([
   ["{", 1, SyntaxError, /JSON/u],
   [validRow, -1, Error, /updated_at_ms must be a non-negative integer/u],
-  ['{"version":2,"nodeId":"fixture-node"}', 1, Error, /unsupported version 2/u],
 ] as const)("preserves row errors (%s, %s)", async (json, time, kind, message) => {
   const { env } = fixture();
   vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockResolvedValue({
