@@ -210,7 +210,11 @@ it.for([
           closing = closeOpenClawAgentDatabaseByPathAsync(database.path);
         }
         resume.resolve();
-        await withinTest(closing ?? scheduled(signal), signal);
+        if (closing) {
+          await withinTest(closing, signal);
+        } else {
+          await scheduled(signal);
+        }
         if (scenario === "retired admission") {
           expect(warn).not.toHaveBeenCalled();
         } else {
