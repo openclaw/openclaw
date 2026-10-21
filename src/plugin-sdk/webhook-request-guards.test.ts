@@ -106,13 +106,22 @@ it("rejects missing media types", () => {
 });
 
 describe("applyBasicWebhookRequestGuards", () => {
-  it("rejects disallowed HTTP methods", () => {
-    const req = createMockRequest({ method: "GET" });
+  it.each([
+    ["HTTP method", { method: "GET" }, { allowMethods: ["POST"] }, 405, "POST"],
+    [
+      "media type",
+      { headers: { "content-type": "text/plain" } },
+      { requireJsonContentType: true },
+      415,
+      undefined,
+    ],
+  ] as const)("rejects a disallowed %s", (_name, request, guards, statusCode, allow) => {
     const res = createMockServerResponse();
-    const ok = applyBasicWebhookRequestGuards({ req, res, allowMethods: ["POST"] });
-    expect(ok).toBe(false);
-    expect(res.statusCode).toBe(405);
-    expect(res.getHeader("allow")).toBe("POST");
+    expect(
+      applyBasicWebhookRequestGuards({ req: createMockRequest(request), res, ...guards }),
+    ).toBe(false);
+    expect(res.statusCode).toBe(statusCode);
+    expect(res.getHeader("allow")).toBe(allow);
   });
 
   it("enforces rate limits", () => {
@@ -134,18 +143,6 @@ describe("applyBasicWebhookRequestGuards", () => {
     expect(guard(res1, 1_000)).toBe(true);
     expect(guard(res2, 1_001)).toBe(false);
     expect(res2.statusCode).toBe(429);
-  });
-
-  it("rejects non-json requests when required", () => {
-    const req = createMockRequest({ headers: { "content-type": "text/plain" } });
-    const res = createMockServerResponse();
-    const ok = applyBasicWebhookRequestGuards({
-      req,
-      res,
-      requireJsonContentType: true,
-    });
-    expect(ok).toBe(false);
-    expect(res.statusCode).toBe(415);
   });
 });
 

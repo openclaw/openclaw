@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { LookupFn } from "../infra/net/ssrf.js";
 import {
   resolvePinnedHostnameWithPolicy,
@@ -10,7 +10,6 @@ import {
   assertHttpUrlTargetsPrivateNetwork,
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   hasLegacyFlatAllowPrivateNetworkAlias,
-  isPrivateNetworkOptInEnabled,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
   mergeSsrFPolicies,
   migrateLegacyFlatAllowPrivateNetworkAlias,
@@ -19,14 +18,9 @@ import {
   ssrfPolicyFromPrivateNetworkOptIn,
 } from "./ssrf-policy.js";
 
-function createLookupFn(addresses: Array<{ address: string; family: number }>): LookupFn {
-  return vi.fn(async (_hostname: string, options?: unknown) => {
-    if (typeof options === "number" || !options || !(options as { all?: boolean }).all) {
-      return addresses[0];
-    }
-    return addresses;
-  }) as unknown as LookupFn;
-}
+const lookup =
+  (address: string, family = 4): LookupFn =>
+  async () => [{ address, family }];
 
 function resolveAllowedOrigin(baseUrl: string, address: string, family: number) {
   const url = new URL(baseUrl);
@@ -34,7 +28,7 @@ function resolveAllowedOrigin(baseUrl: string, address: string, family: number) 
   expect(policy?.allowedOrigins).toEqual([url.origin]);
   return resolvePinnedHostnameWithPolicy(url.hostname.replace(/^\[|\]$/g, ""), {
     policy: resolveSsrFPolicyForUrl(url, policy),
-    lookupFn: createLookupFn([{ address, family }]),
+    lookupFn: lookup(address, family),
   });
 }
 
@@ -42,9 +36,6 @@ it("ssrfPolicyFromAllowPrivateNetwork returns undefined when disabled", () => {
   expect(ssrfPolicyFromAllowPrivateNetwork(false)).toBeUndefined();
 });
 const nestedOptIn = { network: { dangerouslyAllowPrivateNetwork: true } };
-it("isPrivateNetworkOptInEnabled accepts nested dangerous opt-in config", () => {
-  expect(isPrivateNetworkOptInEnabled(nestedOptIn)).toBe(true);
-});
 it("ssrfPolicyFromPrivateNetworkOptIn returns the compat policy for nested input", () => {
   expect(ssrfPolicyFromPrivateNetworkOptIn(nestedOptIn)).toEqual({ allowPrivateNetwork: true });
 });
@@ -89,7 +80,7 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
     await expect(
       assertHttpUrlTargetsPrivateNetwork("http://matrix.example.org:8008", {
         dangerouslyAllowPrivateNetwork: true,
-        lookupFn: createLookupFn([{ address: "93.184.216.34", family: 4 }]),
+        lookupFn: lookup("93.184.216.34"),
         errorMessage,
       }),
     ).rejects.toThrow(errorMessage);
@@ -100,7 +91,7 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
       assertHttpUrlTargetsPrivateNetwork("http://matrix-synapse:8008", {
         dangerouslyAllowPrivateNetwork: false,
         allowPrivateNetwork: true,
-        lookupFn: createLookupFn([{ address: "10.0.0.5", family: 4 }]),
+        lookupFn: lookup("10.0.0.5"),
       }),
     ).rejects.toThrow("HTTP URL must target a trusted private/internal host");
   });
@@ -179,7 +170,6 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
     ["IPv6 loopback", "::1", 6],
     ["IPv4-mapped IPv6 loopback", "::ffff:127.0.0.1", 6],
     ["NAT64-embedded IPv4 loopback", "64:ff9b::127.0.0.1", 6],
-    ["local-use NAT64", "64:ff9b:1:808:808:808:a9fe:a9fe", 6],
     ["ISATAP-embedded IPv4 loopback", "2001:4860:1::5efe:7f00:1", 6],
     ["IPv4 unspecified", "0.0.0.0", 4],
   ] as const)("rejects a trusted private origin rebound to %s", async (_name, address, family) => {

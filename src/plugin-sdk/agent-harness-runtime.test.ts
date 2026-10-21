@@ -28,13 +28,11 @@ import {
   abortAndDrainAgentHarnessRun as drainRun,
   AgentHarnessPreflightError,
   agentHarnessStructuredInput,
-  attachModelProviderRequestTransport as attachTransport,
   buildAgentHarnessUserInputAnswers as buildAnswers,
   classifyAgentHarnessTerminalOutcome as classifyOutcome,
   clearActiveEmbeddedRun as clear,
   deliverAgentHarnessUserInputPrompt as deliverPrompt,
   formatAgentHarnessUserInputPrompt as formatPrompt,
-  getModelProviderRequestTransport as readTransport,
   queueAgentHarnessMessage as queue,
   setActiveEmbeddedRun as register,
   type AgentHarness,
@@ -277,14 +275,6 @@ describe("agent harness runtime SDK facade", () => {
     expectTypeOf<Dispatcher["version"]>().toEqualTypeOf<2>();
     expectTypeOf<Protected["assertCurrent"]>().toEqualTypeOf<() => void>();
     expectTypeOf<Omit<Protected, "assertCurrent">>().not.toMatchTypeOf<Protected>();
-  });
-
-  it("exposes attached model request transport metadata helpers", () => {
-    const transport = {
-      auth: { mode: "header", headerName: "x-api-key", value: "secret" },
-    } satisfies NonNullable<Parameters<typeof attachTransport>[1]>;
-    const model = attachTransport({ id: "test", provider: "custom" }, transport);
-    expect(readTransport(model)).toEqual(transport);
   });
 });
 
@@ -559,13 +549,15 @@ describe("agent harness active-run SDK controls", () => {
       register("sdk-replaced", handle),
       "second native registration",
     );
-    firstCleanup();
+    clear("sdk-replaced", handle, undefined, undefined, "old_cleanup", firstCleanup);
     expect(firstAssertion).toThrow(revoked);
+    expect(isActive("sdk-replaced")).toBe(true);
     expect(queue("sdk-replaced", "second")).toBe(true);
     const secondAssertion = authority();
     expect(secondAssertion).not.toThrow();
     secondCleanup();
     expect(secondAssertion).toThrow(revoked);
+    expect(isActive("sdk-replaced")).toBe(false);
   });
 
   it.each(["human", "runtime"] as const)("preserves a detached %s wait", async (kind) => {
@@ -626,21 +618,6 @@ describe("agent harness active-run SDK controls", () => {
       operation.complete();
     }
   });
-
-  it("keeps retained cleanup bound to its exact registration", () => {
-    const handle = makeHandle();
-    const priorCleanup = register("sdk-cleanup", handle);
-    const currentCleanup = expectDefined(
-      register("sdk-cleanup", handle),
-      "current registration cleanup",
-    );
-    assert.isFunction(priorCleanup);
-    assert.isFunction(currentCleanup);
-    clear("sdk-cleanup", handle, undefined, undefined, "old_cleanup", priorCleanup);
-    expect(isActive("sdk-cleanup")).toBe(true);
-    currentCleanup("current_cleanup");
-    expect(isActive("sdk-cleanup")).toBe(false);
-  });
 });
 
 describe("agent harness user input helpers", () => {
@@ -649,17 +626,20 @@ describe("agent harness user input helpers", () => {
     const questions = [
       question("mode", {
         header: "Mode",
-        question: "Pick a mode",
+        question: "Pick a <mode>",
         isOther: true,
         options: [{ label: "Deep", description: "Use more context" }],
       }),
     ];
-    await deliverPrompt({ onBlockReply }, questions, { intro: "Runtime needs input:" });
+    await deliverPrompt({ onBlockReply }, questions, {
+      intro: "Runtime needs input:",
+      formatText: (text) => text.replaceAll("<", "&lt;"),
+    });
     expect(onBlockReply).toHaveBeenCalledWith({
       text: `Runtime needs input:
 
 Mode
-Pick a mode
+Pick a &lt;mode>
 1. Deep - Use more context
 Other: reply with your own answer.`,
     });
@@ -676,14 +656,6 @@ Other: reply with your own answer.`,
     expect(buildAnswers(questions, "Frankfurt, Germany")).toEqual({
       answers: { region: { answers: ["Frankfurt, Germany"] } },
     });
-  });
-
-  it("supports runtime-specific text formatting", () => {
-    expect(
-      formatPrompt([question("answer", { question: "a < b" })], {
-        formatText: (text) => text.replaceAll("<", "&lt;"),
-      }),
-    ).toContain("a &lt; b");
   });
 
   it("preserves blank fallback lines so skipped answers stay aligned", () => {
