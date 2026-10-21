@@ -30,9 +30,11 @@ function fixture(maxTokens = 512) {
     },
     {},
   );
-  const run = vi.fn<InferenceSession["run"]>().mockResolvedValue({
-    logits: new Tensor("float32", Float32Array.from([2, -1]), [1, 2]),
-  });
+  const run = vi
+    .fn<(feeds: InferenceSession.FeedsType) => Promise<InferenceSession.ReturnType>>()
+    .mockResolvedValue({
+      logits: new Tensor("float32", Float32Array.from([2, -1]), [1, 2]),
+    });
   return { run, adapter: createGliclassAdapter({ tokenizer, session: { run }, maxTokens }) };
 }
 
