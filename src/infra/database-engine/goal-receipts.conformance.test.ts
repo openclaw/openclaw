@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { beforeEach, describe, expect, it } from "vitest";
 import { lookupSessionGoalOperation } from "../../config/sessions/goals-operations-read.js";
 import { mutateSessionGoal } from "../../config/sessions/goals-operations.js";
+import type { SessionAccessScope } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.transcript-turn.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -13,7 +14,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
   (engine) => {
     useMixedAgentPair(engine, engine);
     let sequence = 0;
-    let scope: Parameters<typeof persistSessionTranscriptTurn>[0] & { sessionId: string };
+    let scope: SessionAccessScope & { sessionId: string };
     beforeEach(async () => {
       const sessionId = `goal-receipt-${++sequence}`;
       const { path: storePath } = withEngineStoreAdmission(() =>
