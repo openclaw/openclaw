@@ -10,6 +10,7 @@ import { CORE_HEALTH_CHECKS } from "../flows/doctor-core-checks.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import type { HealthCheckContext } from "../flows/health-checks.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import * as diskSpace from "../infra/disk-space.js";
 import { resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-record-cache.js";
@@ -547,6 +548,34 @@ describe("runDoctorLintCli", () => {
       expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual(sourceConfig);
     },
   );
+
+  it.each([false, true])("checks the operator disk volume in mixed lint: %s", async (mixed) => {
+    const { stateDir, databasePath } = await seedSemanticState({
+      gateway: { mode: "local" },
+    });
+    const before = snapshotDoctorLintSqliteFamily(databasePath);
+    vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+      targetPath,
+      checkedPath: targetPath,
+      availableBytes: targetPath === stateDir ? 50 * 1024 ** 2 : 10 * 1024 ** 3,
+      totalBytes: 20 * 1024 ** 3,
+    }));
+
+    const diskCheckId = "core/doctor/disk-space";
+    const exitCode = await runDoctorLintCli(runtime, {
+      json: true,
+      severityMin: "error",
+      onlyIds: mixed ? [diskCheckId, "memory-core/managed-local-embedding-setup"] : [diskCheckId],
+    });
+
+    expect(outputReport()).toMatchObject({
+      ok: false,
+      checksRun: mixed ? 2 : 1,
+      findings: [{ checkId: diskCheckId, severity: "error", path: stateDir }],
+    });
+    expect(exitCode).toBe(1);
+    expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
+  });
 
   it("fails closed when a semantic index needs plugin state that cannot be prepared", async () => {
     const config = {

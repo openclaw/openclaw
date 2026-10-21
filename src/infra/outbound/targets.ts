@@ -218,17 +218,6 @@ async function resolveProactiveOwnerRoute(
   return undefined;
 }
 
-/** Read-only owner-route probe for status/doctor surfaces. Unproven targets fail closed. */
-export async function hasResolvableHeartbeatOwnerRoute(
-  params: Omit<HeartbeatDeliveryParams, "turnSource" | "turnSourceKind">,
-): Promise<boolean> {
-  const delivery = await resolveHeartbeatDeliveryTarget({
-    ...params,
-    heartbeat: { ...params.heartbeat, target: "owner" },
-  });
-  return delivery.channel !== "none" && Boolean(delivery.to);
-}
-
 /** Explicit policy shared by automation execution and read-only owner-route diagnostics. */
 export async function resolveProactiveDeliveryTarget(
   params: ProactiveDeliveryParams,
@@ -251,16 +240,6 @@ export async function resolveProactiveDeliveryTargetWithSessionRoute(
   params: ProactiveDeliveryParams & { agentId: string; currentSessionKey?: string },
 ): Promise<OutboundTarget> {
   return resolveDeliveryTargetWithPolicyAndSessionRoute(params);
-}
-
-// Legacy SDK callers still own heartbeat defaults and captured exec-route constraints.
-export async function resolveHeartbeatDeliveryTarget(
-  params: HeartbeatDeliveryParams,
-): Promise<OutboundTarget> {
-  return resolveDeliveryTargetWithPolicy({
-    ...params,
-    policy: params.heartbeat ?? params.cfg.agents?.defaults?.heartbeat,
-  });
 }
 
 export async function resolveHeartbeatDeliveryTargetWithSessionRoute(

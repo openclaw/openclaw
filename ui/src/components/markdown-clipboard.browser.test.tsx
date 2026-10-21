@@ -195,14 +195,12 @@ describe("Markdown clipboard operation lifetime", () => {
           { container: owner },
         );
         await waitForSolid(() => expect(owner.querySelector(".chat-image-action")).not.toBeNull());
-        owner.querySelector<HTMLButtonElement>(".chat-image-action")!.click();
-        const menu = owner.querySelector<HTMLElement>(".chat-image-actions .oc-menu")!;
-        await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
         copy = async () => {
           owner
-            .querySelector<HTMLButtonElement>('.chat-image-actions [data-value="copy"]')!
+            .querySelector<HTMLButtonElement>(
+              '.chat-image-actions button[aria-label="Copy image"]',
+            )!
             .click();
-          await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
         };
       } else {
         const frame = document.body.appendChild(document.createElement("iframe"));

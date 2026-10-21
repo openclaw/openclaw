@@ -5,7 +5,7 @@ import type { ChannelAccountSnapshot, CronJob } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
-import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
+import { createInitialCronState } from "../../lib/cron/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
@@ -15,6 +15,7 @@ import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createSkill } from "../skills/view.test-support.ts";
+import { createAgentCronPresenter } from "./agent-cron-presenter.ts";
 import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
 import {
   createAgentViewTestProps as createProps,
@@ -218,8 +219,12 @@ describe("renderAgents", () => {
   });
 
   it("shows a rejected agent jobs refresh beside retained jobs without hiding scheduler feedback", async () => {
-    const client = createTestGatewayClient(async () => {
-      throw new Error("Agent jobs could not be refreshed.");
+    const client = createTestGatewayClient(async (method) => {
+      throw new Error(
+        method === "cron.status"
+          ? "Scheduler status is unavailable."
+          : "Agent jobs could not be refreshed.",
+      );
     });
     const cronState = {
       ...createInitialCronState({ client, connected: true }),
@@ -228,15 +233,20 @@ describe("renderAgents", () => {
       cronJobs: [createCronJob("retained-job", { name: "Retained reminder" })],
     };
     const container = document.createElement("div");
+    const presenter = createAgentCronPresenter({
+      currentState: () => cronState,
+      readState: () => cronState,
+      canCall: () => true,
+      publish: () => renderCurrent(),
+    });
     const renderCurrent = (): void => {
       renderView(
         {
           selectedAgentId: "alpha",
           cron: {
             ...createProps().cron,
-            onRefresh: () => {
-              void loadCronJobsPage(cronState, { tableFilters: true }).then(renderCurrent);
-            },
+            read: presenter.read,
+            onRefresh: presenter.onRefresh,
           },
           readData: () => ({ ...createProps().readData(), agentsPanel: "cron", cron: cronState }),
         },
@@ -294,17 +304,20 @@ describe("renderAgents", () => {
       cronJobsNextOffset: 50,
     };
     const container = document.createElement("div");
+    const presenter = createAgentCronPresenter({
+      currentState: () => cronState,
+      readState: () => cronState,
+      canCall: () => true,
+      publish: () => renderCurrentPage(),
+    });
     const renderCurrentPage = (): void => {
       renderView(
         {
           selectedAgentId: "alpha",
           cron: {
             ...createProps().cron,
-            onLoadMore: () => {
-              const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
-              renderCurrentPage();
-              void nextPage.then(renderCurrentPage);
-            },
+            read: presenter.read,
+            onLoadMore: presenter.onLoadMore,
           },
           readData: () => ({
             ...createProps().readData(),

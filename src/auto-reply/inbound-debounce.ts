@@ -182,7 +182,16 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   const runFlush = async (items: T[]) => {
     let flush: InboundDebounceFlush;
     try {
-      flush = params.onFlush(items, createInboundDebounceFlush);
+      // SAFETY: Released plugins return PromiseLike<void>; current callbacks return lifecycle objects.
+      const result = params.onFlush(items, createInboundDebounceFlush) as
+        | InboundDebounceFlush
+        | PromiseLike<void>;
+      if ("then" in result) {
+        const completion = Promise.resolve(result);
+        flush = { admission: completion, completion };
+      } else {
+        flush = result;
+      }
     } catch (err) {
       reportFlushError(err, items);
       return;

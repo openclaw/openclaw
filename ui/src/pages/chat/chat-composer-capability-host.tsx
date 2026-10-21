@@ -467,8 +467,7 @@ export class ChatComposerCapabilityHost {
     return {
       basePath: state.basePath,
       skills: this.skillCatalog.rows(agentId, session?.toolOverrides),
-      skillsLoading: this.skillCatalog.isLoading(agentId),
-      skillsError: this.skillCatalog.hasError(agentId),
+      skillsRead: this.skillCatalog.read(agentId),
       mcpServers: summarizeMcpServers(runtimeConfig) ?? [],
       toolsEffectiveResult,
       toolsEffectiveLoading,

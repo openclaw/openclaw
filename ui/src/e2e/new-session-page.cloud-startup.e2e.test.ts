@@ -8,7 +8,6 @@ import {
   pollAttribute,
   pollCount,
   pollValue,
-  LOCAL_GIT_WORKSPACE_RESPONSES,
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
   controlUiSessionPath,
@@ -21,6 +20,12 @@ import {
   replaceGatewayClient,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
+import {
+  cloudWorkspaceResponses,
+  disableComposerStorage,
+  expectNoRequests,
+} from "./new-session-startup-family.test-support.ts";
+
 const suite = createNewSessionPageE2eSuite();
 const cloudAgents = createCloudAgentsListResponse();
 
@@ -33,9 +38,7 @@ async function openCloudPage(page: Page, overrides: Record<string, unknown>) {
   const gateway = await installMockGateway(page, {
     workspaceGit: true,
     methodResponses: {
-      "agents.list": cloudAgents,
-      "environments.list": { environments: [], profiles: [{ id: "aws", providerId: "crabbox" }] },
-      "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
+      ...cloudWorkspaceResponses(),
       ...overrides,
     },
   });
@@ -116,19 +119,7 @@ suite.define(() => {
         },
       });
       await chooseCloud(page);
-      await page.evaluate(() => {
-        const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
-        Storage.prototype.setItem = function (key: string, value: string) {
-          if (
-            key.startsWith("openclaw.new-session.session-placement-recovery.v1:") ||
-            key.startsWith("openclaw.control-ui-e2e.")
-          ) {
-            originalSetItem(key, value);
-            return;
-          }
-          throw new DOMException("composer storage disabled", "SecurityError");
-        };
-      });
+      await disableComposerStorage(page);
       await gateway.deferNext("sessions.send");
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
@@ -215,9 +206,7 @@ suite.define(() => {
       expect(await gateway.waitForRequest("chat.send")).toMatchObject({
         params: { sessionKey, message: followUpMessage },
       });
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+      await expectNoRequests(gateway, "sessions.create", "sessions.dispatch", "sessions.send");
     });
   });
 
@@ -288,8 +277,7 @@ suite.define(() => {
           ),
         )
         .toHaveLength(0);
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
-      expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+      await expectNoRequests(gateway, "sessions.send", "sessions.dispatch");
       await pollValue(page.locator(".new-session-page__message")).toBe("");
       await chooseCloud(page);
       await page.locator(".new-session-page__message").fill("start another cloud task");

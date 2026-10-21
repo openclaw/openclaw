@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import { FsSafeError, root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
 import { activeWorkspaceHashContext, withWorkspaceHashMemo } from "./workspace-hash-memo.js";
-import { hasPathAncestor, manifestNodes, sameEntry } from "./workspace-manifest-comparison.js";
+import {
+  hasPathAncestor,
+  manifestNodes,
+  prepareWorkspaceReconciliation,
+  sameEntry,
+} from "./workspace-manifest-comparison.js";
 import {
   captureWorkspaceManifest,
   preflightWorkspaceApply,
@@ -95,8 +100,7 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   }
   const preflight = await preflightWorkspaceApply({
     root,
-    base: params.base,
-    current: params.current,
+    ...prepareWorkspaceReconciliation(params.base, params.current).preflight,
   });
   const conflictPaths = params.allowAdvancedLocalState
     ? retainedConflictPaths(preflight)
@@ -139,8 +143,8 @@ export function createWorkspaceManifestVerifier(
 
 export async function applyWorkspaceDirectoryChanges(params: {
   root: string;
-  base: WorkerWorkspaceManifest;
-  current: WorkerWorkspaceManifest;
+  baseNodes: ReturnType<typeof manifestNodes>;
+  currentNodes: ReturnType<typeof manifestNodes>;
   applyPaths: ReadonlySet<string>;
   assertCurrent?: () => void;
 }): Promise<void> {
@@ -148,8 +152,7 @@ export async function applyWorkspaceDirectoryChanges(params: {
     mode: 0o700,
     assertBeforeMutation: params.assertCurrent,
   });
-  const baseNodes = manifestNodes(params.base);
-  const currentNodes = manifestNodes(params.current);
+  const { baseNodes, currentNodes } = params;
   const directoryPaths = [...params.applyPaths].filter(
     (entryPath) =>
       baseNodes.get(entryPath)?.type === "directory" ||

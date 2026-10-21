@@ -40,6 +40,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     connected: page.cron().connected,
     status: page.cron().cronStatus,
     jobs: page.cron().cronJobs,
+    reads: page.reads,
     jobsLoadingMore: page.cron().cronJobsLoadingMore,
     jobsTotal: page.cron().cronJobsTotal,
     jobsHasMore: page.cron().cronJobsHasMore,

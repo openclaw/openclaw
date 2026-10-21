@@ -1,15 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { configureAiTransportHost } from "../host.js";
 import type { AssistantMessage } from "../types.js";
-import {
-  closeOpenAICodexWebSocketSessions,
-  resetOpenAICodexWebSocketStateForTest,
-  streamOpenAICodexResponses,
-} from "./openai-chatgpt-responses.js";
+import { streamOpenAICodexResponses } from "./openai-chatgpt-responses.js";
 import {
   chatgptModel as model,
   chatgptContext as context,
   completedResponse,
+  resetChatgptTransport,
 } from "./openai-chatgpt-responses.test-helpers.js";
 
 const apiKey = `eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.${Buffer.from(
@@ -44,14 +40,7 @@ function repeatedBody(chunk: Uint8Array, onCancel?: () => Promise<void>) {
   return { body, state };
 }
 
-afterEach(() => {
-  closeOpenAICodexWebSocketSessions();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
-  resetOpenAICodexWebSocketStateForTest();
-  configureAiTransportHost({});
-});
+afterEach(resetChatgptTransport);
 
 describe("OpenAI ChatGPT Responses resource limits", () => {
   it("bounds non-OK response bodies without awaiting cancellation before formatting API errors", async () => {

@@ -78,9 +78,31 @@ it.each([
 
 it.each([
   { env: {}, expected: path.resolve("config-dir-home", ".openclaw") },
+  ...[
+    { profile: " work ", directory: ".openclaw-work" },
+    { profile: "dev", directory: ".openclaw-dev" },
+    { profile: "Default", directory: ".openclaw" },
+    { profile: "bad profile", directory: ".openclaw" },
+  ].map(({ profile, directory }) => ({
+    env: { OPENCLAW_PROFILE: profile },
+    expected: path.resolve("config-dir-home", directory),
+  })),
   {
-    env: { HOME: "/tmp/openclaw-home", OPENCLAW_STATE_DIR: "~/state" },
+    env: {
+      HOME: "/tmp/openclaw-home",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: "~/state",
+      OPENCLAW_CONFIG_PATH: "~/custom/openclaw.json",
+    },
     expected: path.resolve("/tmp/openclaw-home", "state"),
+  },
+  {
+    env: {
+      HOME: "/tmp/openclaw-home",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_CONFIG_PATH: "~/custom/openclaw.json",
+    },
+    expected: path.resolve("/tmp/openclaw-home", "custom"),
   },
 ])("resolveConfigDir selects and expands its root: $env", ({ env, expected }) => {
   expect(resolveConfigDir(env, () => path.resolve("config-dir-home"))).toBe(expected);
