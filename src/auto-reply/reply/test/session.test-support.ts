@@ -1,7 +1,6 @@
 // Shared store and reset fixtures for session.test.ts.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions.js";
 import {
   appendTranscriptEvent,
@@ -56,35 +55,28 @@ export async function writeTerminalTranscriptSessionStore(params: {
   sessionKey: string;
   sessionId: string;
   status?: SessionEntry["status"];
-  omitStatus?: boolean;
   updatedAt: number;
   endedAt: number;
   transcriptMutationOrder: "after-registry" | "before-registry";
 }): Promise<void> {
-  const sessionFile = `${params.sessionId}.jsonl`;
-  const status = params.status ?? (params.omitStatus ? undefined : "done");
+  const { storePath, sessionKey, sessionId } = params;
   const appendTranscript = () =>
     appendTranscriptEvent(
-      {
-        agentId: "main",
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
+      { agentId: "main", sessionId, sessionKey, storePath },
       { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
     );
   if (params.transcriptMutationOrder === "before-registry") {
     await appendTranscript();
   }
-  await writeSessionStore(params.storePath, {
-    [params.sessionKey]: {
-      sessionId: params.sessionId,
-      sessionFile,
+  await writeSessionStore(storePath, {
+    [sessionKey]: {
+      sessionId,
+      sessionFile: `${sessionId}.jsonl`,
       updatedAt: params.updatedAt,
       startedAt: params.endedAt - 10_000,
       endedAt: params.endedAt,
       runtimeMs: 9_000,
-      ...(status ? { status } : {}),
+      status: params.status ?? "done",
     },
   });
   if (params.transcriptMutationOrder === "after-registry") {
@@ -101,12 +93,11 @@ export function readSessionStore(storePath: string): Record<string, ProjectedSes
   ) as Record<string, ProjectedSessionEntry>;
   return new Proxy(entries, {
     get(target, prop, receiver) {
-      if (typeof prop !== "string" || prop in target) {
-        return Reflect.get(target, prop, receiver);
-      }
-      const entry = loadSessionEntry({ storePath, sessionKey: prop, readConsistency: "latest" });
-      if (entry) {
-        target[prop] = projectSessionEntry(entry);
+      if (typeof prop === "string" && !(prop in target)) {
+        const entry = loadSessionEntry({ storePath, sessionKey: prop, readConsistency: "latest" });
+        if (entry) {
+          target[prop] = projectSessionEntry(entry);
+        }
       }
       return Reflect.get(target, prop, receiver);
     },
@@ -118,14 +109,10 @@ export async function runExplicitResetCases(params: {
   sessionKey: string;
   sessionId: string;
   entry?: Record<string, unknown>;
-  ctx?: Record<string, unknown>;
-  cfg?: Omit<OpenClawConfig, "session">;
 }) {
   const results = [];
-  for (const testCase of [
-    { name: "new", body: "/new" },
-    { name: "reset", body: "/reset" },
-  ] as const) {
+  for (const name of ["new", "reset"] as const) {
+    const body = `/${name}`;
     await writeSessionStore(params.storePath, {
       [params.sessionKey]: {
         sessionId: params.sessionId,
@@ -135,24 +122,19 @@ export async function runExplicitResetCases(params: {
     });
     const result = await initSessionState({
       ctx: {
-        Body: testCase.body,
-        RawBody: testCase.body,
-        CommandBody: testCase.body,
+        Body: body,
+        RawBody: body,
+        CommandBody: body,
         From: "reset-user",
         To: "bot",
         ChatType: "direct",
         SessionKey: params.sessionKey,
         Provider: "telegram",
         Surface: "telegram",
-        ...params.ctx,
       },
-      cfg: {
-        ...params.cfg,
-        session: { store: params.storePath, idleMinutes: 999 },
-      } as OpenClawConfig,
-      commandAuthorized: true,
+      cfg: { session: { store: params.storePath, idleMinutes: 999 } },
     });
-    results.push({ ...testCase, result, stored: readSessionStore(params.storePath) });
+    results.push({ name, body, result, stored: readSessionStore(params.storePath) });
   }
   return results;
 }
