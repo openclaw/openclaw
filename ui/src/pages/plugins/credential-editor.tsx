@@ -1,4 +1,4 @@
-import { For, action, createEffect, createOptimistic, createSignal, onCleanup } from "solid-js";
+import { For, createEffect, createSignal, onCleanup } from "solid-js";
 import type {
   PluginCredentialDescriptor,
   PluginCredentialInspection,
@@ -61,20 +61,13 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   });
   const [literal, setLiteral] = createSignal("");
   const [revealed, setRevealed] = createSignal(false);
-  const [operation, setOperation] = createOptimistic<CredentialOperation>();
+  const [operation, setOperation] = createSignal<CredentialOperation>();
   const operationKind = () => {
     const value = operation();
     return value?.current() ? value.kind : undefined;
   };
   const saving = () => operationKind() === "save";
   const cancelling = () => operationKind() === "discard";
-  const mutateReference = action(function* (
-    admitted: CredentialOperation,
-    completed: Promise<void>,
-  ) {
-    setOperation(admitted);
-    yield completed;
-  });
   let referenceSubmitted = false;
   let referenceTrigger: HTMLElement | null = null;
   let generation = 0;
@@ -130,6 +123,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
       }
       if (sourceChanged || next.epoch !== previous?.epoch) {
         pending = undefined;
+        setOperation(undefined);
       }
       setLoading(false);
       setInspection((current) =>
@@ -264,6 +258,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     };
     // Admission is synchronous; Solid publishes the pending presentation after this task.
     pending = admitted;
+    setOperation(admitted);
     if (value !== undefined) {
       referenceSubmitted ||= dialogOpen();
     }
@@ -300,15 +295,11 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
       } finally {
         if (current()) {
           pending = undefined;
+          setOperation(undefined);
         }
       }
     })();
-    // An action owns its opening tick, including already queued owner writes.
-    // Let same-turn save/refresh continuations publish before starting presentation.
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    return current() ? mutateReference(admitted, completed) : completed;
+    return completed;
   }
 
   const environment = () => {
