@@ -151,8 +151,9 @@ export function retainAuthProfileAuthorizationObservation(inputPath: string, pro
         }
         const fact = projectAuthProfileAuthorization(raw, profileId);
         if (!isDeepStrictEqual(retained.fact, fact)) {
+          // Reads populate the shared fact without invalidating concurrent readers.
+          // Only the credential writer advances the revision.
           retained.fact = fact;
-          retained.revision = {};
         }
         return fact;
       };
