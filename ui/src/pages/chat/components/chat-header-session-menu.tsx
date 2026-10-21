@@ -5,7 +5,6 @@ import {
   createSignal,
   flush,
   merge,
-  onCleanup,
   onSettled,
   Show,
 } from "solid-js";
@@ -207,15 +206,17 @@ function ChatHeaderSessionMenuContent(
     ),
     controls,
   );
-  menus.set(host, () => menu);
   const shortcut = (event: KeyboardEvent) => {
     if (props.paneTitle !== undefined || !actions.handleKeydown(event, view.appearance)) {
       activateMenuShortcut(menu?.overlay.surface, event);
     }
   };
-  onCleanup(() => {
-    menus.delete(host);
-    stopShortcut?.();
+  onSettled(() => {
+    menus.set(host, () => menu);
+    return () => {
+      menus.delete(host);
+      stopShortcut?.();
+    };
   });
   const content = (id: string, value: JSX.Element): MenuEntry => ({
     kind: "content",

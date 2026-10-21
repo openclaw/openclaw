@@ -13,6 +13,8 @@ import {
 } from "./chat-attachment-href.ts";
 import "./chat-audio-player.tsx";
 import "./chat-video-player.tsx";
+import type { FileSessionAttachment } from "./chat-file-session-attachment.ts";
+import { FileSessionMenu } from "./chat-file-session-menu.tsx";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { ChatPdfPreview, isPdfAttachment } from "./chat-pdf-preview.tsx";
@@ -33,6 +35,7 @@ type SidebarAttachmentProps = {
   embedSandboxMode: EmbedSandboxMode;
   download?: { pending: boolean; error: string | null; onDownload: () => void };
   mobile?: boolean;
+  attachment?: FileSessionAttachment;
   back?: MobileFileBack;
   onOpenImage?: (item: ImageLightboxItem) => void;
 };
@@ -94,43 +97,54 @@ function prepareAttachment(input: SidebarAttachmentProps, onSourceChange: () => 
 export function SidebarAttachment(props: SidebarAttachmentProps) {
   // Download-only attachments never resolve preview sources.
   return (
-    <Show
-      when={props.content.download && props.download}
-      fallback={<AttachmentPreview {...props} />}
-    >
-      {(download) => (
-        <>
-          <Show when={props.mobile}>
-            <SidebarFileMobileRail
-              name={props.content.title}
-              identity={props.content.sourceIdentity ?? props.content.title}
-              back={props.back}
-              actions={
-                <button
-                  type="button"
-                  class="sidebar-file-mobile__button"
-                  aria-label={t("chat.mediaPlayer.download", { filename: props.content.title })}
-                  aria-busy={download().pending ? "true" : "false"}
-                  disabled={download().pending}
-                  onClick={() => download().onDownload()}
-                >
-                  <Icon name="download" />
-                </button>
-              }
+    <>
+      <Show when={!props.mobile && props.attachment}>
+        <div class="sidebar-file-view__path-bar session-panel-rail" data-presentation="desktop">
+          <span class="sidebar-file-view__path-field">{props.content.title}</span>
+          <div class="session-panel-rail__actions">
+            <FileSessionMenu attachment={props.attachment} />
+          </div>
+        </div>
+      </Show>
+      <Show
+        when={props.content.download && props.download}
+        fallback={<AttachmentPreview {...props} />}
+      >
+        {(download) => (
+          <>
+            <Show when={props.mobile}>
+              <SidebarFileMobileRail
+                name={props.content.title}
+                identity={props.content.sourceIdentity ?? props.content.title}
+                back={props.back}
+                attachment={props.attachment}
+                actions={
+                  <button
+                    type="button"
+                    class="sidebar-file-mobile__button"
+                    aria-label={t("chat.mediaPlayer.download", { filename: props.content.title })}
+                    aria-busy={download().pending ? "true" : "false"}
+                    disabled={download().pending}
+                    onClick={() => download().onDownload()}
+                  >
+                    <Icon name="download" />
+                  </button>
+                }
+              />
+            </Show>
+            <CompactAttachmentCard
+              kind="document"
+              label={props.content.title}
+              mimeType={props.content.mimeType ?? undefined}
+              sizeBytes={props.content.sizeBytes}
+              onDownload={download().onDownload}
+              downloadPending={download().pending}
             />
-          </Show>
-          <CompactAttachmentCard
-            kind="document"
-            label={props.content.title}
-            mimeType={props.content.mimeType ?? undefined}
-            sizeBytes={props.content.sizeBytes}
-            onDownload={download().onDownload}
-            downloadPending={download().pending}
-          />
-          <Show when={download().error}>{(error) => <div role="alert">{error()}</div>}</Show>
-        </>
-      )}
-    </Show>
+            <Show when={download().error}>{(error) => <div role="alert">{error()}</div>}</Show>
+          </>
+        )}
+      </Show>
+    </>
   );
 }
 
@@ -253,6 +267,7 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
           name={props.content.title}
           identity={props.content.sourceIdentity ?? props.content.title}
           back={props.back}
+          attachment={props.attachment}
           actions={
             <Show when={model().src}>
               {(src) => (

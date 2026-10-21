@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "extensions/memory-core/src/memory/manager-duplicate-chunks.postgres.test.ts",
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",
   "src/gateway/server-methods/chat-send-admission.reads.test.ts",
   "src/sessions/background-session-result.test.ts",
@@ -809,7 +810,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/agent-deletion-cleanup.test.ts",
   "src/state/agent-deletion-cleanup.straggling-write.test.ts",
   "src/state/openclaw-database-preflight.startup-index.test.ts",
-  "src/state/openclaw-database-preflight.startup-fts.test.ts",
   "src/state/openclaw-state-lease.retention.test.ts",
   "src/system-agent/setup-lifetime.test.ts",
   "src/auto-reply/reply/agent-runner-memory.test.ts",
@@ -1017,7 +1017,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/user-profiles.test.ts",
   "src/state/user-profiles-multi-account.test.ts",
   "src/commands/agents.commands.list.worker.test.ts",
-  "src/state/openclaw-agent-worker-store-v2.test.ts",
   "src/state/openclaw-agent-worker-store.test.ts",
   "src/state/openclaw-agent-db.integrity-lease.test.ts",
   "src/state/openclaw-agent-db.registration-settlement.test.ts",
@@ -1137,7 +1136,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/management-service.install.test.ts",
 
   "src/plugins/installed-plugin-index-generation-precedence.test.ts",
-  "src/plugins/installed-plugin-index-read-state.test.ts",
   "src/plugins/installed-plugin-index-store.availability.test.ts",
   "src/plugins/installed-plugin-index-store.test.ts",
   "src/plugins/install-record-commit.sqlite.test.ts",
@@ -1236,7 +1234,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-catalog-worker.secrets.test.ts",
   "src/agents/prepared-model-catalog-worker.workspace-heap.integration.test.ts",
   "src/agents/prepared-model-runtime.published-resources.test.ts",
-  "src/agents/prepared-model-runtime.stale-resources.test.ts",
   "src/agents/prepared-model-catalog-worker.metadata.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.pool.integration.test.ts",

@@ -140,7 +140,13 @@ describe("chat Details presentation", () => {
   it("automatically docks within the available pane, preserves intent, and releases its column", async () => {
     await page.viewport(1700, 900);
     const { update, updateChat, frame, conversation, footer, trigger, panel } = await fixture(
-      props(),
+      props({
+        detailsWorkspace: {
+          root: "/workspace/details",
+          label: "details",
+          branch: "feature/docking",
+        },
+      }),
       1320,
     );
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { action, createOptimistic, For, Show } from "solid-js";
 import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
@@ -408,10 +408,15 @@ function NativeNotificationSection(props: {
   actions: NotificationsSectionProps;
 }) {
   const status = () => nativeNotificationsStatus(props.native.permission);
-  const testPending = () => props.native.test?.state === "pending";
+  const [sending, setSending] = createOptimistic(false);
+  const testPending = () => sending() || props.native.test?.state === "pending";
+  const sendTest = action(function* () {
+    setSending(true);
+    yield props.actions.onNativeNotificationsSendTest?.();
+  });
   const testDescription = () => {
     const test = props.native.test;
-    return test?.state === "error" ? test.message : undefined;
+    return !testPending() && test?.state === "error" ? test.message : undefined;
   };
   return (
     <NotificationSection
@@ -431,11 +436,7 @@ function NativeNotificationSection(props: {
       >
         <NotificationActions>
           {props.native.permission === "granted" ? (
-            <button
-              class="btn primary"
-              disabled={testPending()}
-              onClick={() => props.actions.onNativeNotificationsSendTest?.()}
-            >
+            <button class="btn primary" disabled={testPending()} onClick={() => void sendTest()}>
               <Icon name={testPending() ? "loader" : "send"} />
               {testPending()
                 ? t("configView.notifications.sendingTest")
@@ -458,25 +459,25 @@ function NativeNotificationSection(props: {
       <Show when={props.native.permission === "denied"}>
         <BlockedNotifications description={t("configView.notifications.nativeBlockedHint")} />
       </Show>
-      <Show when={props.native.test}>
-        {(test) => (
-          <SettingsRow
-            title={t("configView.notifications.testOutcome")}
-            description={testDescription()}
-            control={
-              <SettingsStatus
-                kind={testPending() ? "accent" : test().state === "sent" ? "ok" : "danger"}
-                label={t(
-                  testPending()
-                    ? "configView.notifications.sendingTest"
-                    : test().state === "sent"
-                      ? "configView.notifications.testQueued"
-                      : "configView.notifications.testFailed",
-                )}
-              />
-            }
-          />
-        )}
+      <Show when={testPending() || props.native.test}>
+        <SettingsRow
+          title={t("configView.notifications.testOutcome")}
+          description={testDescription()}
+          control={
+            <SettingsStatus
+              kind={
+                testPending() ? "accent" : props.native.test?.state === "sent" ? "ok" : "danger"
+              }
+              label={t(
+                testPending()
+                  ? "configView.notifications.sendingTest"
+                  : props.native.test?.state === "sent"
+                    ? "configView.notifications.testQueued"
+                    : "configView.notifications.testFailed",
+              )}
+            />
+          }
+        />
       </Show>
     </NotificationSection>
   );

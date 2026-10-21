@@ -82,7 +82,7 @@ function describeGitHubPublishTool(
 - edit: omit title/body to read current metadata. To change either field, send expectedHeadCommit, requestId when a publication receipt is returned, and its new value with the observed expectedTitle/expectedBody. Keep attribution, marker and footer unchanged in the full body. Omitted fields stay unchanged. Edit never synchronizes, stages, commits or pushes files or changes PR state. Read with edit after an uncertain response before retrying.
 - ready: mark the current session's own draft ready for review, using the expectedHeadCommit and any publication requestId observed with edit. After an uncertain response, read with edit before retrying. This does not merge the PR.
 - request_review: after an explicit re-review request, read the current PR with edit, then send expectedHeadCommit and any publication requestId to post only "@clawsweeper re-review". No comment text, focus or child target is accepted. Posting is not review acceptance or completion. If the response is uncertain, read existing PR comments before any new request; never retry blindly.
-- prepare_pr: when the user asks to continue their own existing PR, supply only pullRequestUrl to prepare its source in this conversation's managed sandbox. Intent may be established before the URL arrives. Verification runs again; inspect_pr is optional. Initial preparation requires a clean workspace without dirty, untracked, staged, or unpublished work; otherwise preparation refuses and preserves that work. A clean workspace receives exactly the PR head files. Keeps its directory, sandbox scope and guest Git history, and associates the original PR without publishing. Repeating a completed same-head preparation preserves edits without resetting files. A newer remote head is refused until source updates are supported. An interrupted first import recovers the same accepted head; headChanged reports whether GitHub has since advanced. Tests and Auto Review use the returned exact review base. Imported source publication is not available yet; do not create a replacement PR. Existing edit, ready${evidenceAvailable ? ", upload_evidence" : ""} and request_review actions use the original bound PR before any new push. Read with edit first: an imported target returns pullRequest instead of a publication receipt; send expectedHeadCommit without requestId.
+- prepare_pr: when the user asks to continue their own existing PR, supply pullRequestUrl to prepare its source in this conversation's managed sandbox. Intent may be established before the URL arrives. Verification runs again; inspect_pr is optional. Initial preparation requires a clean workspace without dirty, untracked, staged, or unpublished work; otherwise preparation refuses and preserves that work. A clean workspace receives exactly the PR head files. Keeps its directory, sandbox scope and guest Git history, and associates the original PR without publishing. Repeating a completed same-head preparation preserves edits without resetting files. ${refreshBaseAvailable ? "An explicit refresh of the bound PR integrates its newer head while preserving later guest work. Files with both staged and unstaged changes must have their staged changes committed first; refresh preserves them and refuses. Resolve returned conflictPaths, then repeat with conflictsResolved: true and expectedHeadCommit set to the returned headCommit. " : ""}Interrupted preparation finishes the same accepted head; if headChanged is true, repeat to integrate the newer remote head. Tests and Auto Review use the returned exact review base. Imported source publication is not available yet; do not create a replacement PR. Existing edit, ready${evidenceAvailable ? ", upload_evidence" : ""} and request_review actions use the original bound PR before any new push. Read with edit first: an imported target returns pullRequest instead of a publication receipt; send expectedHeadCommit without requestId.
 ${evidenceAvailable ? "- upload_evidence: upload one inspected image/video from this conversation's sandbox workspace to its existing GitHub.com PR repository. First read the PR with edit; send its expectedHeadCommit, any publication requestId, and evidence {path: workspace-relative path, sha256: inspected lowercase SHA-256, sizeBytes: inspected byte count, at most 10 MB}. Supports PNG, JPEG, GIF, WebP, MP4, MOV and WebM. Only the inspected bytes are sent. Use the returned uploaded URL with edit to associate it in the PR body, then verify reviewer access; uploaded does not prove public access. An unconfirmed result may have created an attachment: never repeat the upload blindly. No host credentials, other mounts, remote URLs, repository or PR selectors are accepted.\n" : ""}${refreshBaseAvailable ? "- refresh_base: integrate the selected base into this local managed sandbox before tests and Auto Review. Resolve returned conflicts, then acknowledge with conflictsResolved: true and the returned baseCommit, including unchanged binary choices. Tests and Auto Review use the returned exact review base (mode local). Refresh stages source but preserves guest HEAD/branches/commits and never publishes.\n" : ""}Edit${evidenceAvailable ? ", upload_evidence" : ""}, request_review${refreshBaseAvailable ? ", refresh_base" : ""} and own-draft readiness accept no other repository, PR, ref or publishing session.`
     : "This conversation cannot publish its own workspace. It can act on an explicitly selected publishing child's PR.";
   return actionsAvailable
@@ -179,9 +179,16 @@ export function createGitHubPublishTool(
         if (
           !publicationAvailable ||
           !input.pullRequestUrl ||
-          Object.keys(input).some((key) => !["action", "pullRequestUrl"].includes(key))
+          Object.keys(input).some(
+            (key) =>
+              !["action", "pullRequestUrl", "conflictsResolved", "expectedHeadCommit"].includes(
+                key,
+              ),
+          )
         ) {
-          throw new Error("prepare_pr accepts only this PR's URL for the current workspace.");
+          throw new Error(
+            "prepare_pr accepts this PR's URL and its returned conflict acknowledgement for the current workspace.",
+          );
         }
         return jsonResult(
           await withGatewayToolCallerIdentity(
@@ -193,6 +200,12 @@ export function createGitHubPublishTool(
                   sessionKey: caller.sessionKey,
                   action: "prepare_pr",
                   pullRequestUrl: input.pullRequestUrl,
+                  ...(input.conflictsResolved !== undefined
+                    ? { conflictsResolved: input.conflictsResolved }
+                    : {}),
+                  ...(input.expectedHeadCommit
+                    ? { expectedHeadCommit: input.expectedHeadCommit }
+                    : {}),
                 },
                 { timeoutMs: 600_000 },
               ),

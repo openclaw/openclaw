@@ -5,9 +5,11 @@ import type { SettingsMediaDeviceState } from "./view-state.ts";
 import type { TabIconViewProps } from "./view-tab-icon.tsx";
 
 type ConfigPageProps = ReturnType<ReturnType<typeof createConfigPage>["configProps"]>;
-// Most callbacks ignore completion values; custom-theme import tracks its admitted request.
+// Most callbacks are fire-and-forget; actions retain their owner's completion receipt.
 type ConfigData = {
-  [Key in keyof ConfigPageProps]: Key extends "onImportCustomTheme"
+  [Key in keyof ConfigPageProps]: Key extends
+    | "onNativeNotificationsSendTest"
+    | "onImportCustomTheme"
     ? ConfigPageProps[Key]
     : ConfigPageProps[Key] extends (...args: infer Args) => unknown
       ? (...args: Args) => void

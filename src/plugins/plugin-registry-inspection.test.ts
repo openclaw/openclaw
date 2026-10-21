@@ -155,32 +155,48 @@ async function installedFixture(sourceDir?: string) {
 }
 
 describe("plugin registry inspection", () => {
-  it.each([false, true])(
-    "revalidates a configured-path warning after cold inspection (removed: %s)",
-    async (removed) => {
+  it.for(
+    ["missing", "symlink-loop"].flatMap((failure) =>
+      [false, true].map((removed) => ({ failure, removed })),
+    ),
+  )(
+    "revalidates a $failure configured-path warning after cold inspection (removed: $removed)",
+    async ({ failure, removed }, context) => {
+      if (failure === "symlink-loop" && process.platform === "win32") {
+        context.skip();
+      }
       const stateDir = makeTempDir();
-      const missingPath = path.join(stateDir, "missing-plugin");
+      const loadPath = path.join(stateDir, "unavailable-plugin");
+      if (failure === "symlink-loop") {
+        fs.symlinkSync(loadPath, loadPath);
+      }
       const env = hermeticEnv({
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       });
-      const configured = { plugins: { load: { paths: [missingPath] } } };
+      const configured = { plugins: { load: { paths: [loadPath] } } };
       const refreshed = await refreshPluginRegistry({
         reason: "manual",
         stateDir,
         config: configured,
         env,
       });
-      const warning = { code: "configured-plugin-path-unavailable", source: missingPath };
+      const warning = {
+        code:
+          failure === "missing"
+            ? "configured-plugin-path-unavailable"
+            : "configured-plugin-path-inspection-failed",
+        source: loadPath,
+      };
       expect(refreshed.diagnostics).toContainEqual(expect.objectContaining(warning));
       expect(
-        refreshed.diagnostics.find((diagnostic) => diagnostic.source === missingPath)?.pluginId,
+        refreshed.diagnostics.find((diagnostic) => diagnostic.source === loadPath)?.pluginId,
       ).toBeUndefined();
 
       const config = removed ? {} : configured;
       const hasWarning = (diagnostics: typeof refreshed.diagnostics) =>
         diagnostics.some(
-          (diagnostic) => diagnostic.code === warning.code && diagnostic.source === missingPath,
+          (diagnostic) => diagnostic.code === warning.code && diagnostic.source === loadPath,
         );
       for (let inspectionNumber = 0; inspectionNumber < 2; inspectionNumber += 1) {
         await closeOpenClawStateDatabaseAsync();

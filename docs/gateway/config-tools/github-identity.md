@@ -149,14 +149,18 @@ status with a warning; a failed own-PR authorization clears it.
 
 Repeating a completed preparation of the same head preserves later edits without
 resetting or synchronizing source files. If the remote PR head has advanced,
-preparation refuses clearly; updating an already prepared workspace is not yet
-supported. The returned review base is the common ancestor of the accepted PR
+an explicit refresh with `prepare_pr` integrates that head and preserves subsequent
+guest work. Resolve returned `conflictPaths`, then repeat with
+`conflictsResolved: true` and `expectedHeadCommit` set to the returned `headCommit`.
+If a file has both staged and unstaged changes, commit its staged changes first;
+refresh refuses that case so its index-only version is not lost. The returned review base is the common ancestor of the accepted PR
 head and its base, so an older PR head does not make newer base work appear to be
 deleted.
 
-An interrupted initial preparation retains the same accepted source for retry.
+An interrupted preparation retains the same accepted source for retry.
 If recovery returns `headChanged: true`, it completed that original accepted
-head while GitHub has since advanced. Preparation makes no GitHub writes
+head while GitHub has since advanced; repeat preparation to integrate the newer
+head. Preparation makes no GitHub writes
 and is not a publication receipt. Source publication for an imported association
 remains unavailable; it refuses instead of creating a replacement PR.
 

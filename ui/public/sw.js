@@ -361,7 +361,11 @@ self.addEventListener("fetch", (event) => {
       pathname.startsWith("/chat/") &&
       pathname !== "/chat/" &&
       [...url.searchParams.keys()].every(
-        (key) => key === "dashboard" || key === "draft" || key === "openclaw_mount_recovery",
+        (key) =>
+          key === "dashboard" ||
+          key === "draft" ||
+          key === "openclaw_mount_recovery" ||
+          key === "__openclawSessionFacePreference",
       );
     const route = pathname.replace(/\/$/u, "") || "/";
     // Static routes and dedicated dynamic namespaces come from the router.

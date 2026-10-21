@@ -88,6 +88,7 @@ if (
   const kinds = new Set([
     "prewarm",
     "transcript-hydration",
+    "transcript-maintenance",
     "history-page",
     "session-entry-list",
     "session-store-projection",

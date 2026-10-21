@@ -441,10 +441,18 @@ describe("chat pane session menu boundary", () => {
       ),
     };
     const { pane, state } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
+      client: createGatewayBrowserClientFixture({
+        request: (method) =>
+          method === "agents.list"
+            ? { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] }
+            : method === "sessions.describe"
+              ? { session: null }
+              : {},
+      }),
       sessions: createSessionCapabilityFixture({ state: presentation }),
     });
-    state.connected = false;
+    const connected = { ...pane.context.gateway.snapshot };
+    pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting" });
     const container = document.createElement("div");
     const row = {
       key: "agent:main:dashboard:retained",
@@ -466,16 +474,33 @@ describe("chat pane session menu boundary", () => {
       return container.querySelector(".chat-pane__session-title-text")?.textContent?.trim();
     };
     expect(draw(undefined)).toBe("Retained conversation");
+    expect(container.querySelector(".chat-pane__session-title")?.getAttribute("title")).toBe(
+      "Connect to the Gateway to change sessions.",
+    );
+    expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
+    pane.applyGatewaySnapshot(connected);
+    expect(draw(undefined)).toBe("Retained conversation");
+    expect(container.querySelector(".chat-pane__session-title")?.getAttribute("title")).toBe(
+      "Retained conversation",
+    );
+    expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
+    expect(draw({ ...row, sessionId: "retained", sharingRole: "owner" })).toBe(
+      "Retained conversation",
+    );
+    expect(container.querySelector(".chat-pane__session-title-button")?.getAttribute("title")).toBe(
+      "Rename session",
+    );
+    pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting" });
     expect(draw(row)).toBe("Retained conversation");
     expect(draw({ ...row, label: "Older scoped label" })).toBe("Retained conversation");
     expect(container.querySelector("openclaw-chat-header-session-menu")).toBeNull();
-    state.connected = true;
+    pane.applyGatewaySnapshot(connected);
     expect(draw(row)).toBe("Retained conversation");
     const menu = container.querySelector<HTMLElement & { session: { label: string } }>(
       "openclaw-chat-header-session-menu",
     );
     expect(menu?.session.label).toBe("Retained conversation");
-    state.connected = false;
+    pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting" });
     pane.history.catalogSession = {
       threadId: "catalog",
       name: "Imported conversation",
