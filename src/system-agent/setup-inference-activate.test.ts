@@ -905,7 +905,7 @@ describe("setup utility activation", () => {
       expect(resolveConfiguredPrimaryModelForAgent({ cfg: candidate, agentId: "main" })).toBe(
         priorModel,
       );
-      const { valid, sourceConfig: source } = await readConfigFileSnapshot();
+      const { valid, sourceConfig: source } = await readSnapshot();
       const profile = setup.readProfile();
       assert(profile);
       expect(valid).toBe(true);
@@ -931,7 +931,7 @@ describe("setup utility activation", () => {
       expect(await setup.activate()).toMatchObject({ ok: true });
       const profile = setup.readProfile();
       assert(profile);
-      const config = (await readConfigFileSnapshot()).sourceConfig;
+      const config = (await readSnapshot()).sourceConfig;
       const defaults = config.agents?.defaults;
       assert(defaults?.models?.[modelRef]);
       defaults.models[modelRef].alias = "helper";
