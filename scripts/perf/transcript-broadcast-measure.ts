@@ -123,6 +123,7 @@ const { values } = parseArgs({
     "session-envelope-refs": { type: "boolean", default: false },
     "start-at": { type: "string" },
     "list-interval-ms": { type: "string", default: "0" },
+    "list-profile-reference": { type: "string" },
     "poll-seed": { type: "string" },
   },
 });
@@ -3702,7 +3703,14 @@ try {
                     const page = await rpc(
                       client,
                       method,
-                      { rowMode, limit, archived: "all" },
+                      {
+                        rowMode,
+                        limit,
+                        archived: "all",
+                        ...(values["list-profile-reference"]
+                          ? { involvingProfileId: values["list-profile-reference"] }
+                          : {}),
+                      },
                       onResponse,
                     );
                     if (
@@ -3711,7 +3719,7 @@ try {
                       page.count !== Math.min(limit, page.totalCount) ||
                       !Array.isArray(page.sessions) ||
                       page.sessions.length !== page.count ||
-                      page.count === 0
+                      (page.count === 0 && !values["list-profile-reference"])
                     ) {
                       throw new Error("concurrent sessions.list did not return the requested page");
                     }
@@ -4246,7 +4254,7 @@ try {
   }
   // Capture filter/paging equivalence after the measured window, without warming its caches.
   const listResponses: Array<{ params: unknown; payload: unknown }> = [];
-  if (values["capture-responses"] && scenario === "sessions.list") {
+  if (values["capture-responses"] && (scenario === "sessions.list" || soakScenario)) {
     // Fresh harness sessions contain random IDs and current clocks; compare the seeded roster.
     if (!historyTurns) {
       for (const key of [...keys, parentKey]) {
@@ -4274,6 +4282,14 @@ try {
       { requireLastInteraction: true },
       { includeGlobal: true, includeUnknown: true },
       { ownerFirst: true },
+      ...(values["list-profile-reference"]
+        ? [
+            { involvingProfileId: values["list-profile-reference"] },
+            { involvingProfileId: "team-shape-profile-0", includePeople: true },
+            { involvingProfileId: "team-shape-profile-0", archived: true },
+            { involvingProfileId: "team-shape-profile-0", search: "no-such-synthetic-session" },
+          ]
+        : []),
     ]) {
       const params = { limit, rowMode, archived: "all", ...request };
       listResponses.push({ params, payload: await rpc(sender, "sessions.list", params) });
