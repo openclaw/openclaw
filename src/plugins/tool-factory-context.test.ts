@@ -14,23 +14,22 @@ import { createPluginToolFactoryContext } from "./tool-factory-context.js";
 import { bindPluginToolCallbacks } from "./tool-factory-runtime.js";
 import type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "./tool-types.js";
 
-function probe(effect: () => void, assertCurrent?: () => void) {
-  return {
-    name: "probe",
-    label: "Probe",
-    description: "Synthetic probe",
-    parameters: { type: "object", properties: {} },
-    async execute() {
-      assertCurrent?.();
-      effect();
-      return { content: [], details: {} };
-    },
-  };
-}
+const probe = (effect: () => void, assertCurrent?: () => void) => ({
+  name: "probe",
+  label: "Probe",
+  description: "Synthetic probe",
+  parameters: { type: "object", properties: {} },
+  async execute() {
+    assertCurrent?.();
+    effect();
+    return { content: [], details: {} };
+  },
+});
 
-type ContextOptions = Omit<
-  Parameters<typeof createPluginToolFactoryContext>[0],
-  "entry" | "registry"
+type FactoryContext = Parameters<typeof createPluginToolFactoryContext>[0];
+type ContextOptions = Partial<
+  Omit<FactoryContext, "entry" | "registry"> &
+    Pick<FactoryContext["registry"], "memoryCapabilities">
 >;
 function toolRegistry(contracts: Parameters<typeof createPluginRecord>[0]["contracts"]) {
   const builder = createTestPluginRegistry(createPluginRuntimeMock());
@@ -45,25 +44,14 @@ function toolRegistry(contracts: Parameters<typeof createPluginRecord>[0]["contr
 
 function register(
   factory: OpenClawPluginToolFactory | OpenClawPluginToolFactory<2>,
-  { memoryOwner, ...options }: Partial<ContextOptions> & { memoryOwner?: string } = {},
+  { memoryCapabilities = [], ...options }: ContextOptions = {},
 ) {
   const { registry, api } = toolRegistry({ tools: ["probe"] });
   api.registerTool(factory, { name: "probe" });
   const entry = registry.tools[0];
   assert(entry, "expected registered probe");
-  if (memoryOwner) {
-    registry.memoryCapabilities.push({
-      pluginId: memoryOwner,
-      capability: {},
-      memorySlotSelected: true,
-    });
-  }
-  const context = createPluginToolFactoryContext({
-    entry,
-    registry,
-    context: {},
-    ...options,
-  });
+  registry.memoryCapabilities.push(...memoryCapabilities);
+  const context = createPluginToolFactoryContext({ entry, registry, context: {}, ...options });
   return {
     registry,
     entry,
@@ -78,31 +66,26 @@ function register(
   };
 }
 
-function declarations(readNames: () => string[] | undefined) {
-  return toolRegistry({
+const declarations = (readNames: () => string[] | undefined) =>
+  toolRegistry({
     get tools() {
       return readNames();
     },
   });
-}
 
-function continuation(isCurrent: () => boolean) {
-  return {
-    isCurrent,
-    assertCurrent() {
-      assert(isCurrent(), "owner closed");
-    },
-    senderId: "original-owner",
-    channel: "discord",
-    accountId: "original-account",
-  };
-}
+const continuation = (isCurrent: () => boolean) => ({
+  isCurrent,
+  assertCurrent: () => assert(isCurrent(), "owner closed"),
+  senderId: "original-owner",
+  channel: "discord",
+  accountId: "original-account",
+});
 
 it("prepares detached, ordered, case-sensitive declarations once per record", () => {
   const names = [" beta ", "Alpha", "beta", " ", "alpha"];
   const declared = ["beta", "Alpha", "alpha"];
   const readNames = vi.fn(() => names);
-  const { api, record, ...builder } = declarations(readNames);
+  const { api, record, registry, createApi } = declarations(readNames);
   expect(readNames).not.toHaveBeenCalled();
 
   api.registerTool(() => null, { names: [" beta ", "Alpha", "beta"] });
@@ -111,28 +94,21 @@ it("prepares detached, ordered, case-sensitive declarations once per record", ()
   api.registerTool(() => null, { name: "alpha" });
   api.registerTool(() => null, { names: ["new_tool", "BETA"] });
 
-  expect(builder.registry.tools.map((entry) => entry.names)).toEqual([
-    ["beta", "Alpha"],
-    [],
-    ["alpha"],
-  ]);
-  expect(builder.registry.tools.map((entry) => [...(entry.declaredNames ?? [])])).toEqual([
-    declared,
-    declared,
-    declared,
-  ]);
+  expect(registry.tools.map((entry) => entry.names)).toEqual([["beta", "Alpha"], [], ["alpha"]]);
+  const registeredNames = registry.tools.map((entry) => [...(entry.declaredNames ?? [])]);
+  expect(registeredNames).toEqual([declared, declared, declared]);
   expect(record.toolNames).toEqual(declared);
-  expect(builder.registry.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+  expect(registry.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
     "plugin must declare contracts.tools for: new_tool, BETA",
   ]);
   expect(readNames).toHaveBeenCalledOnce();
 
   const replacement = createPluginRecord({ id: "probe", contracts: { tools: ["new_tool"] } });
-  builder.registry.plugins[0] = replacement;
-  builder
-    .createApi(replacement, { config: {}, registrationMode: "full" })
-    .registerTool(() => null, { name: "new_tool" });
-  const latest = builder.registry.tools.at(-1);
+  registry.plugins[0] = replacement;
+  createApi(replacement, { config: {}, registrationMode: "full" }).registerTool(() => null, {
+    name: "new_tool",
+  });
+  const latest = registry.tools.at(-1);
   expect([latest?.names, [...(latest?.declaredNames ?? [])]]).toEqual([["new_tool"], ["new_tool"]]);
   expect(readNames).toHaveBeenCalledOnce();
 });
@@ -161,12 +137,9 @@ it.each([undefined, []])("retains empty declarations before factory validation (
 it.each([false, true])("preserves V1 callbacks with host authority=%s", async (hostAuthority) => {
   const effect = vi.fn();
   let hostCurrent = true;
-  const assertHostCurrent = vi.fn(() => {
-    assert(hostCurrent, "host invocation retired");
-  });
+  const assertHostCurrent = vi.fn(() => assert(hostCurrent, "host invocation retired"));
   const registration = register((context) => probe(effect, context.assertInvocationCurrent), {
     context: {
-      // Input context fields cannot manufacture a host assertion.
       assertInvocationCurrent: () => assert.fail("untrusted input assertion"),
     },
     assertInvocationCurrent: hostAuthority ? assertHostCurrent : undefined,
@@ -225,12 +198,10 @@ it("rejects an operational caller that has no live receipt authority", async () 
 });
 
 it.each(["probe", "records"])("checks memory audience currency for slot owner=%s", (slotOwner) => {
-  const assertMemoryAudienceCurrent = vi.fn(() =>
-    assert.fail("memory audience is no longer current"),
-  );
+  const checkAudience = vi.fn(() => assert.fail("memory audience is no longer current"));
   const { context } = register(() => null, {
-    memoryOwner: slotOwner,
-    context: { assertMemoryAudienceCurrent },
+    memoryCapabilities: [{ pluginId: slotOwner, capability: {}, memorySlotSelected: true }],
+    context: { assertMemoryAudienceCurrent: checkAudience },
     assertInvocationCurrent: () => {},
   });
   expect(context.assertInvocationCurrent).toBeTypeOf("function");
@@ -239,7 +210,7 @@ it.each(["probe", "records"])("checks memory audience currency for slot owner=%s
     expect(() => context.assertInvocationCurrent?.()).toThrow("no longer current");
   } else {
     expect(() => context.assertInvocationCurrent?.()).not.toThrow();
-    expect(assertMemoryAudienceCurrent).not.toHaveBeenCalled();
+    expect(checkAudience).not.toHaveBeenCalled();
   }
 });
 
@@ -248,20 +219,17 @@ it("allows metadata construction but rejects V2 effects without an admitted invo
     () => void
   >();
   const effect = vi.fn();
-  const registration = register(
+  const { entry, context, tool } = register(
     {
       contextVersion: 2,
       create: (ctx) => probe(effect, ctx.assertInvocationCurrent),
     },
     { context: { senderIsOwner: false } },
   );
-  const { context } = registration;
-  expect(registration.entry.contextVersion).toBe(2);
-  expect(() => registration.entry.factory({ senderIsOwner: true })).toThrow(
-    "require host invocation authority",
-  );
+  expect(entry.contextVersion).toBe(2);
+  expect(() => entry.factory({ senderIsOwner: true })).toThrow("require host invocation authority");
   expect(context.senderIsOwner).toBe(false);
-  const raw = registration.tool(false);
+  const raw = tool(false);
   expect(raw.name).toBe("probe");
   await expect(raw.execute("missing-run", {})).rejects.toThrow("outside an admitted run");
   expect(effect).not.toHaveBeenCalled();
