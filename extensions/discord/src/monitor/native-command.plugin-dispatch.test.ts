@@ -327,6 +327,22 @@ describe("Discord native plugin command dispatch", () => {
     );
   });
 
+  it("blocks unauthorized Discord senders before requireAuth:false plugin commands execute", async () => {
+    cfg = guildConfig({ allowFrom: { discord: ["user:123456789012345678"] } });
+    interaction = guildInteraction();
+    registerPairPlugin();
+    const command = await createPluginCommand({ cfg, name: "pair" });
+    dispatchReply.mockResolvedValue({} as never);
+    await command.run(interaction);
+    expect(pluginHandler).not.toHaveBeenCalled();
+    expect(dispatchReply).not.toHaveBeenCalled();
+    expectSingleCallFirstArg(interaction.followUp, {
+      content: "You are not authorized to use this command.",
+      ephemeral: true,
+    });
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
   for (const { name, ownerAllowFrom } of [
     {
       name: "ignores non-Discord generic command owners when authorizing guild plugin commands",

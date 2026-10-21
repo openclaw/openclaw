@@ -465,8 +465,7 @@ describe("models.authStatus", () => {
 
     const admin = createOptions({ agentId: "main" });
     const reader = createOptions({ agentId: "main" }, ["operator.read"]);
-    await handler(admin);
-    await handler(reader);
+    await Promise.all([admin, reader].map(async (opts) => await handler(opts)));
 
     expect(firstRespondCall(admin)?.[1]?.providers[0]?.profiles[0]).toMatchObject({
       email: "owner@example.com",
