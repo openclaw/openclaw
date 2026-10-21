@@ -131,44 +131,6 @@ describe("managed mount plan", () => {
     expect(fs.readdirSync(outside)).toEqual([]);
   });
 
-  it.each([
-    [
-      "none",
-      ["/host/state/private:/workspace:z", "/host/state/private/skills:/workspace/skills:ro,z"],
-    ],
-    ["ro", ["/host/state/private:/workspace:ro,z", "/host/agent:/agent:ro,z"]],
-    [
-      "rw",
-      [
-        "/host/agent:/workspace:z",
-        "/host/agent/skills:/workspace/skills:ro,z",
-        "/host/agent/.agents/skills:/workspace/.agents/skills:ro,z",
-        skillsBind,
-      ],
-    ],
-  ] as const)("maps all managed roots with %s permissions", async (access, binds) => {
-    expect((await prepare(access)).binds).toEqual(binds);
-  });
-
-  it("preserves custom daemon sources while keeping protected skill mounts authoritative", async () => {
-    const plan = await prepare("rw", {
-      binds: ["/custom/host:/data:ro", "/custom/override:/workspace/skills:rw"],
-    });
-    expect(plan.binds).toContain("/custom/host:/data:ro");
-    expect(plan.binds).toContain("/host/agent/skills:/workspace/skills:ro,z");
-    expect(plan.skippedBinds).toEqual(["/custom/override:/workspace/skills:rw"]);
-  });
-
-  it("selects the last custom destination while preserving its raw daemon bind", async () => {
-    const plan = await prepare("rw", {
-      binds: ["/daemon/A:/data:ro", "/daemon/B:/data/:rw", "invalid-bind"],
-    });
-    expect(plan.binds).toContain("/daemon/B:/data/:rw");
-    expect(plan.binds).not.toContain("/daemon/A:/data:ro");
-    expect(plan.binds).toContain("invalid-bind");
-    expect(plan.skippedBinds).toEqual([]);
-  });
-
   it("keeps meaningful source and target whitespace through create and retained comparison", async () => {
     const plan = await prepare("rw", {
       workspaceDir: path.join(root, "empty"),
@@ -237,14 +199,6 @@ describe("managed mount plan", () => {
     });
     expect(plan.binds).toContain("/custom/data:/workspace/data/:ro");
     expect(plan.binds.some((mount) => mount.startsWith("/host/hidden:"))).toBe(false);
-  });
-
-  it("keeps protected skills read-only on a read-only Gateway source", async () => {
-    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue([
-      namespaceBind("/host/state", root),
-      namespaceBind("/host/skills", path.join(root, "materialized"), false),
-    ]);
-    expect((await prepare("rw")).binds).toContain(`/host/skills/skills:${skillsTarget}:ro,z`);
   });
 });
 

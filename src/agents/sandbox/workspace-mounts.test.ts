@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createSandbox } from "./fs-bridge.test-helpers.js";
+import { buildSandboxFsMounts, resolveSandboxFsPathWithMounts } from "./fs-paths.js";
+import { createRemoteShellSandboxFsBridge } from "./remote-fs-bridge.js";
+import { createLocalRemoteShellScriptRunner } from "./remote-fs-bridge.test-helpers.js";
 import {
   resolveWorkspaceMounts,
   resolveSandboxMountSelection,
@@ -29,6 +33,59 @@ function addSkill(workspaceDir: string, root = "skills") {
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const makeTempWorkspace = () => dirs.make("openclaw-sandbox-mounts-");
+
+function resolveSkillPath(workspaceDir: string, filePath: string, skillsWorkspaceDir?: string) {
+  const sandbox = createSandbox({
+    workspaceDir,
+    agentWorkspaceDir: workspaceDir,
+    skillsWorkspaceDir,
+  });
+  return resolveSandboxFsPathWithMounts({
+    filePath,
+    cwd: workspaceDir,
+    defaultWorkspaceRoot: workspaceDir,
+    defaultContainerRoot: sandbox.containerWorkdir,
+    mounts: buildSandboxFsMounts(sandbox),
+  });
+}
+
+const runRemoteShellScript = createLocalRemoteShellScriptRunner({ shellArg0: "openclaw-test" });
+function remoteBridge(
+  workspaceDir: string,
+  remoteWorkspaceDir = workspaceDir,
+  skillsWorkspaceDir?: string,
+) {
+  const localRoot = fs.realpathSync(workspaceDir);
+  const remoteRoot = fs.realpathSync(remoteWorkspaceDir);
+  return {
+    remoteRoot,
+    bridge: createRemoteShellSandboxFsBridge({
+      sandbox: createSandbox({
+        workspaceDir: localRoot,
+        agentWorkspaceDir: localRoot,
+        skillsWorkspaceDir: skillsWorkspaceDir && fs.realpathSync(skillsWorkspaceDir),
+      }),
+      runtime: {
+        remoteWorkspaceDir: remoteRoot,
+        remoteAgentWorkspaceDir: remoteRoot,
+        runRemoteShellScript,
+      },
+    }),
+  };
+}
+
+async function expectWriteRejected(
+  { bridge, remoteRoot }: ReturnType<typeof remoteBridge>,
+  filePath: string,
+  targetPath = filePath,
+) {
+  await expect(bridge.writeFile({ filePath, cwd: remoteRoot, data: "# Demo\n" })).rejects.toThrow(
+    /read-only/,
+  );
+  await expect(fs.promises.stat(path.join(remoteRoot, targetPath))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+}
 
 describe("resolveWorkspaceMounts", () => {
   it.each([
@@ -70,6 +127,10 @@ describe("resolveWorkspaceMounts", () => {
       `${agentWorkspaceDir}:/workspace:z`,
       `${path.join(agentWorkspaceDir, root)}:/workspace/${root}:ro,z`,
     ]);
+    expect(resolveSkillPath(agentWorkspaceDir, "normal.txt").writable).toBe(true);
+    for (const filePath of [`${root}/demo/SKILL.md`, `/workspace/${root}/demo/SKILL.md`]) {
+      expect(resolveSkillPath(agentWorkspaceDir, filePath).writable).toBe(false);
+    }
   });
 
   describe.runIf(process.platform !== "win32")("symlink containment", () => {
@@ -92,6 +153,18 @@ describe("resolveWorkspaceMounts", () => {
       `${agentWorkspaceDir}:/workspace:z`,
       `${materializedSkillsDir}:/workspace/.openclaw/sandbox-skills/skills:ro,z`,
     ]);
+    for (const prefix of ["", "/workspace/"]) {
+      expect(
+        resolveSkillPath(
+          agentWorkspaceDir,
+          `${prefix}.openclaw/sandbox-skills/skills/demo/SKILL.md`,
+          skillsWorkspaceDir,
+        ),
+      ).toMatchObject({
+        writable: false,
+        hostPath: path.join(materializedSkillsDir, "demo/SKILL.md"),
+      });
+    }
   });
 
   it("does not add a separate synced skill overlay when workspaceAccess is ro", () => {
@@ -127,6 +200,53 @@ describe("resolveWorkspaceMounts", () => {
       `${path.join(sandboxWorkspaceDir, "skills")}:/workspace/skills:ro,z`,
       `${path.join(sandboxWorkspaceDir, ".agents", "skills")}:/workspace/.agents/skills:ro,z`,
     ]);
+  });
+});
+
+describe.runIf(process.platform !== "win32")("remote skill mount enforcement", () => {
+  it("rejects materialized skill writes with a separate remote workspace", async () => {
+    const workspaceDir = makeTempWorkspace();
+    const skillsWorkspaceDir = makeTempWorkspace();
+    addSkill(skillsWorkspaceDir);
+    await expectWriteRejected(
+      remoteBridge(workspaceDir, makeTempWorkspace(), skillsWorkspaceDir),
+      ".openclaw/sandbox-skills/skills/demo/SKILL.md",
+    );
+  });
+
+  it("rejects mkdirp under skill roots from container cwd", async () => {
+    const workspaceDir = makeTempWorkspace();
+    const remoteWorkspaceDir = makeTempWorkspace();
+    addSkill(workspaceDir);
+    addSkill(remoteWorkspaceDir);
+    const { bridge, remoteRoot } = remoteBridge(workspaceDir, remoteWorkspaceDir);
+    const filePath = "skills/demo/generated";
+    await expect(bridge.mkdirp({ filePath, cwd: remoteRoot })).rejects.toThrow(/read-only/);
+    await expect(fs.promises.stat(path.join(remoteRoot, filePath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+});
+
+// Canonical path checks execute the real GNU readlink/stat scripts.
+describe.runIf(process.platform === "linux")("remote skill canonical paths", () => {
+  it("allows writes under absent skill roots", async () => {
+    const { bridge, remoteRoot } = remoteBridge(makeTempWorkspace());
+    await bridge.writeFile({ filePath: "skills/new.txt", data: "created" });
+    expect(await fs.promises.readFile(path.join(remoteRoot, "skills/new.txt"), "utf8")).toBe(
+      "created",
+    );
+  });
+
+  it("rejects writes through symlinks into skill roots", async () => {
+    const remoteWorkspaceDir = makeTempWorkspace();
+    addSkill(remoteWorkspaceDir);
+    fs.symlinkSync("skills", path.join(remoteWorkspaceDir, "link"), "dir");
+    await expectWriteRejected(
+      remoteBridge(makeTempWorkspace(), remoteWorkspaceDir),
+      "link/demo/SKILL.md",
+      "skills/demo/SKILL.md",
+    );
   });
 });
 

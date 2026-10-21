@@ -44,15 +44,11 @@ function homeAlias(credentialDir: string) {
   return { realHome, aliasHome };
 }
 
-function expectBlockedTargetReason(
-  bind: string,
-): Extract<NonNullable<ReturnType<typeof getBlockedBindReason>>, { kind: "targets" }> {
-  const reason = getBlockedBindReason(bind);
-  expect(reason?.kind).toBe("targets");
-  if (reason?.kind !== "targets") {
-    throw new Error(`expected blocked target reason for ${bind}`);
-  }
-  return reason;
+function expectBlockedTarget(bind: string, blockedPath?: string) {
+  expect(getBlockedBindReason(bind)).toMatchObject({
+    kind: "targets",
+    ...(blockedPath ? { blockedPath } : {}),
+  });
 }
 
 describe("getBlockedBindReason", () => {
@@ -70,24 +66,24 @@ describe("getBlockedBindReason", () => {
       ] as const;
 
       for (const source of cases) {
-        expectBlockedTargetReason(`${source}:/mnt/test:ro`);
+        expectBlockedTarget(`${source}:/mnt/test:ro`);
+        bindResult(`${source}:/mnt/test:ro`).toThrow(/blocked path/);
       }
     });
   });
 
   it("still blocks OS-home credential paths when OPENCLAW_HOME points elsewhere", () => {
     withEnv({ HOME: "/home/tester", OPENCLAW_HOME: "/srv/openclaw-home" }, () => {
-      const reason = expectBlockedTargetReason("/home/tester/.gnupg/secring.gpg:/mnt/gnupg:ro");
-      expect(reason?.blockedPath).toBe("/home/tester/.gnupg");
+      expectBlockedTarget("/home/tester/.gnupg/secring.gpg:/mnt/gnupg:ro", "/home/tester/.gnupg");
     });
   });
 
   it("blocks Windows USERPROFILE credential paths when HOME points elsewhere", () => {
     withEnv({ HOME: "D:\\Users\\shell-home", USERPROFILE: "C:\\Users\\tester" }, () => {
-      const reason = expectBlockedTargetReason(
+      expectBlockedTarget(
         "C:\\Users\\tester\\.docker\\config.json:/mnt/docker:ro",
+        "C:/Users/tester/.docker",
       );
-      expect(reason?.blockedPath).toBe("C:/Users/tester/.docker");
     });
   });
 });
@@ -147,13 +143,6 @@ describe("validateBindMounts", () => {
           `covers blocked path "${blockedPath}"`,
         );
       }
-    });
-  });
-
-  it("blocks sensitive home credential binds", () => {
-    withEnv({ HOME: "/home/tester" }, () => {
-      bindResult("/home/tester/.docker/config.json:/mnt/docker:ro").toThrow(/blocked path/);
-      bindResult("/home/tester/.netrc:/mnt/netrc:ro").toThrow(/blocked path/);
     });
   });
 
