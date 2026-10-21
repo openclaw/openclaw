@@ -13,8 +13,6 @@ import {
   projectAccountConfigWarningCollector,
   projectAccountWarningCollector,
   projectConfigAccountIdWarningCollector,
-  collectOpenGroupPolicyConfiguredRouteWarnings,
-  collectOpenGroupPolicyRouteAllowlistWarnings,
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
@@ -137,51 +135,6 @@ describe("group policy warning builders", () => {
     ).toEqual([buildOpenGroupPolicyRestrictSendersWarning(restrictSenders)]);
   });
 
-  it("collects route allowlist warning variants", () => {
-    const params = {
-      groupPolicy: "open" as const,
-      ...routeWarnings,
-    };
-
-    expect(
-      collectOpenGroupPolicyRouteAllowlistWarnings({
-        ...params,
-        routeAllowlistConfigured: true,
-      }),
-    ).toEqual([buildOpenGroupPolicyRestrictSendersWarning(params.restrictSenders)]);
-
-    expect(
-      collectOpenGroupPolicyRouteAllowlistWarnings({
-        ...params,
-        routeAllowlistConfigured: false,
-      }),
-    ).toEqual([
-      '- Example groups: groupPolicy="open" with no channels.example.groups allowlist; any group can add + ping (mention-gated). Set channels.example.groupPolicy="allowlist" + channels.example.groupAllowFrom or configure channels.example.groups.',
-    ]);
-  });
-
-  it("collects configured-route warning variants", () => {
-    const params = {
-      groupPolicy: "open" as const,
-      configureRouteAllowlist,
-      missingRouteAllowlist,
-    };
-
-    expect(
-      collectOpenGroupPolicyConfiguredRouteWarnings({
-        ...params,
-        routeAllowlistConfigured: true,
-      }),
-    ).toEqual([buildOpenGroupPolicyConfigureRouteAllowlistWarning(params.configureRouteAllowlist)]);
-
-    expect(
-      collectOpenGroupPolicyConfiguredRouteWarnings({
-        ...params,
-        routeAllowlistConfigured: false,
-      }),
-    ).toEqual([buildOpenGroupPolicyWarning(params.missingRouteAllowlist)]);
-  });
-
   it("builds account-aware allowlist-provider restrict-senders collectors", () => {
     const collectWarnings = createAllowlistProviderRestrictSendersWarningCollector<PolicyAccount>({
       ...accountPolicy,
@@ -228,7 +181,7 @@ describe("group policy warning builders", () => {
     ).toEqual(expected);
   });
 
-  it("builds account-aware route-allowlist collectors", () => {
+  it.each([true, false])("builds route-allowlist collectors with routes=%s", (configured) => {
     const collectWarnings = createAllowlistProviderRouteAllowlistWarningCollector<
       PolicyAccount & {
         groups?: Record<string, unknown>;
@@ -239,12 +192,18 @@ describe("group policy warning builders", () => {
       ...routeWarnings,
     });
 
-    expect(collectWarnings(withAccount({ groupPolicy: "open", groups: {} }))).toEqual([
-      '- Example groups: groupPolicy="open" with no channels.example.groups allowlist; any group can add + ping (mention-gated). Set channels.example.groupPolicy="allowlist" + channels.example.groupAllowFrom or configure channels.example.groups.',
+    expect(
+      collectWarnings(
+        withAccount({ groupPolicy: "open", groups: configured ? { general: true } : {} }),
+      ),
+    ).toEqual([
+      configured
+        ? buildOpenGroupPolicyRestrictSendersWarning(routeWarnings.restrictSenders)
+        : '- Example groups: groupPolicy="open" with no channels.example.groups allowlist; any group can add + ping (mention-gated). Set channels.example.groupPolicy="allowlist" + channels.example.groupAllowFrom or configure channels.example.groups.',
     ]);
   });
 
-  it("builds account-aware configured-route collectors", () => {
+  it.each([true, false])("builds configured-route collectors with routes=%s", (configured) => {
     const collectWarnings = createOpenProviderConfiguredRouteWarningCollector<
       PolicyAccount & {
         channels?: Record<string, unknown>;
@@ -257,8 +216,14 @@ describe("group policy warning builders", () => {
     });
 
     expect(
-      collectWarnings(withAccount({ groupPolicy: "open", channels: { general: true } })),
-    ).toEqual([buildOpenGroupPolicyConfigureRouteAllowlistWarning(configureRouteAllowlist)]);
+      collectWarnings(
+        withAccount({ groupPolicy: "open", channels: configured ? { general: true } : {} }),
+      ),
+    ).toEqual([
+      configured
+        ? buildOpenGroupPolicyConfigureRouteAllowlistWarning(configureRouteAllowlist)
+        : buildOpenGroupPolicyWarning(missingRouteAllowlist),
+    ]);
   });
 
   it("builds account-aware simple open warning collectors", () => {

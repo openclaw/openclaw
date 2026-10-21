@@ -68,14 +68,9 @@ function resolveLegacyAccount(cfg: OpenClawConfig): AccountConfig {
 function setLegacyAccount(cfg: OpenClawConfig, patch: AccountConfig): OpenClawConfig {
   const channel = getChannelConfig(cfg);
   const accountId = resolveDefaultAccountId(cfg);
-  const updated = channel.accounts
-    ? {
-        ...channel,
-        accounts: {
-          ...channel.accounts,
-          [accountId]: { ...channel.accounts[accountId], ...patch },
-        },
-      }
+  const accounts = channel.accounts;
+  const updated = accounts
+    ? { ...channel, accounts: { ...accounts, [accountId]: { ...accounts[accountId], ...patch } } }
     : { ...channel, ...patch };
   return {
     ...cfg,
@@ -187,14 +182,12 @@ describe("channel setup wizard account scoping", () => {
     wizard.credentials = [
       {
         ...wizard.credentials[0]!,
-        inspect: ({ cfg, accountId }) => ({
-          accountConfigured: Boolean(
+        inspect: ({ cfg, accountId }) => {
+          const configured = Boolean(
             getChannelConfig(cfg).accounts?.[accountId ?? "default"]?.botId,
-          ),
-          hasConfiguredValue: Boolean(
-            getChannelConfig(cfg).accounts?.[accountId ?? "default"]?.botId,
-          ),
-        }),
+          );
+          return { accountConfigured: configured, hasConfiguredValue: configured };
+        },
         applySet: undefined,
       },
     ];
@@ -211,24 +204,32 @@ describe("channel setup wizard account scoping", () => {
     expect(queued.confirm).not.toHaveBeenCalled();
   });
 
-  it("promotes mixed root credentials before adding another named account", async () => {
-    const queued = newAccountPrompter();
-
-    const result = await configure(
-      {
-        defaultAccount: "main",
-        ...mainCredentials,
-        accounts: { main: { marker: { keep: "mixed-shape" } } },
-      },
-      queued,
-    );
-
-    const channel = expectPromotion(result, queued, {
-      main: { ...mainCredentials, marker: { keep: "mixed-shape" } },
-      alerts: alertCredentials,
-    });
-    expect(channel.defaultAccount).toBe("main");
-  });
+  it.each([false, true])(
+    "promotes root credentials with an existing named account=%s",
+    async (mixed) => {
+      const queued = newAccountPrompter();
+      const marker = { marker: { keep: "mixed-shape" } };
+      const result = await configure(
+        mixed
+          ? {
+              defaultAccount: "main",
+              ...mainCredentials,
+              accounts: { main: marker },
+            }
+          : { enabled: true, ...mainCredentials },
+        queued,
+      );
+      const channel = expectPromotion(result, queued, {
+        [mixed ? "main" : "default"]: { ...mainCredentials, ...(mixed ? marker : {}) },
+        alerts: alertCredentials,
+      });
+      if (mixed) {
+        expect(channel.defaultAccount).toBe("main");
+      } else {
+        expect(channel).not.toHaveProperty("defaultAccount");
+      }
+    },
+  );
 
   it("scopes a named default account when another account is the channel default", async () => {
     const main = { ...mainCredentials };
@@ -259,17 +260,5 @@ describe("channel setup wizard account scoping", () => {
       secret: "mock-secret",
     });
     expect(queued.confirm).toHaveBeenCalledTimes(2);
-  });
-
-  it("promotes root credentials before adding the first named account", async () => {
-    const queued = newAccountPrompter();
-
-    const result = await configure({ enabled: true, ...mainCredentials }, queued);
-
-    const channel = expectPromotion(result, queued, {
-      default: mainCredentials,
-      alerts: alertCredentials,
-    });
-    expect(channel).not.toHaveProperty("defaultAccount");
   });
 });

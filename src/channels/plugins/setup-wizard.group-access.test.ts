@@ -73,46 +73,36 @@ describe("channel setup wizard group access", () => {
     expect(finalize).toHaveBeenCalledOnce();
   });
 
-  it("applies non-allowlist policy without resolving or reapplying old entries", async () => {
-    const resolveAllowlist = vi.fn(async () => ["ignored"]);
-    const applyAllowlist = vi.fn<NonNullable<GroupAccess["applyAllowlist"]>>(({ cfg }) => cfg);
-    const next = await configure({}, createPrompter({ confirm: true, policy: "open" }), {
-      label: "Discord channels",
-      placeholder: "guild/channel",
-      setPolicy: ({ cfg, policy }) => ({
-        ...cfg,
-        channels: { discord: { groupPolicy: policy } },
-      }),
-      resolveAllowlist,
-      applyAllowlist,
-    });
+  it.each([
+    { name: "non-allowlist", policy: "open" as const, skipAllowlistEntries: false },
+    { name: "entry-free allowlist", policy: "allowlist" as const, skipAllowlistEntries: true },
+  ])(
+    "applies $name policy without resolving old entries",
+    async ({ policy, skipAllowlistEntries }) => {
+      const resolveAllowlist = vi.fn(async () => ["ignored"]);
+      const applyAllowlist = vi.fn<NonNullable<GroupAccess["applyAllowlist"]>>(({ cfg }) => cfg);
+      const next = await configure({}, createPrompter({ confirm: true, policy }), {
+        ...(skipAllowlistEntries
+          ? {
+              currentPolicy: () => "disabled" as const,
+              updatePrompt: () => false,
+              skipAllowlistEntries,
+              placeholder: "",
+            }
+          : {}),
+        setPolicy: ({ cfg, policy: selectedPolicy }) => ({
+          ...cfg,
+          channels: { demo: { groupPolicy: selectedPolicy } },
+        }),
+        resolveAllowlist,
+        applyAllowlist,
+      });
 
-    expect(next.channels?.discord?.groupPolicy).toBe("open");
-    expect(resolveAllowlist).not.toHaveBeenCalled();
-    expect(applyAllowlist).not.toHaveBeenCalled();
-  });
-
-  it("supports allowlist policies without prompting for entries", async () => {
-    const resolveAllowlist = vi.fn(async () => ["ignored"]);
-    const applyAllowlist = vi.fn<NonNullable<GroupAccess["applyAllowlist"]>>(({ cfg }) => cfg);
-    const next = await configure({}, createPrompter({ confirm: true }), {
-      label: "Twitch chat",
-      placeholder: "",
-      currentPolicy: () => "disabled",
-      updatePrompt: () => false,
-      skipAllowlistEntries: true,
-      setPolicy: ({ cfg, policy }) => ({
-        ...cfg,
-        channels: { twitch: { groupPolicy: policy } },
-      }),
-      resolveAllowlist,
-      applyAllowlist,
-    });
-
-    expect(next.channels).toEqual({ twitch: { groupPolicy: "allowlist" } });
-    expect(resolveAllowlist).not.toHaveBeenCalled();
-    expect(applyAllowlist).not.toHaveBeenCalled();
-  });
+      expect(next.channels).toEqual({ demo: { groupPolicy: policy } });
+      expect(resolveAllowlist).not.toHaveBeenCalled();
+      expect(applyAllowlist).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolves entries before setting policy and applying the resolved allowlist", async () => {
     const cfg: OpenClawConfig = {};

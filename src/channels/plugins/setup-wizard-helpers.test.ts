@@ -67,6 +67,20 @@ const allowFromDefaults = {
   parseId: () => null,
   invalidWithoutTokenNote: "ids only",
 };
+const parsedPromptDefaults = {
+  defaultAccountId: DEFAULT_ACCOUNT_ID,
+  message: "msg",
+  placeholder: "placeholder",
+  noteTitle: "Nostr allowlist",
+  noteLines: ["line"],
+  parseEntries: (raw: string) => ({ entries: [raw.trim().toLowerCase()] }),
+};
+const sectionDefaults = {
+  credentialInputKey: "token",
+  message: "allowFrom",
+  placeholder: "user-id",
+  invalidWithoutCredentialNote: "need ids",
+};
 
 function createPrompter(
   inputs: string[],
@@ -77,20 +91,13 @@ function createPrompter(
 ) {
   const confirms = [...(options.confirms ?? [])];
   const texts = [...inputs];
-  const confirm = vi.fn(async () => confirms.shift() ?? false);
-  const text = vi.fn(async () => texts.shift() ?? "");
-  const note = vi.fn(async () => undefined);
-  const prompter = createWizardPrompter(undefined, {
-    defaultSelect: options.selects ? "plaintext" : undefined,
-    selectValues: options.selects,
-  });
-  return {
-    ...prompter,
-    select: vi.mocked(prompter.select),
-    confirm,
-    text,
-    note,
-  };
+  return createWizardPrompter(
+    {
+      confirm: vi.fn(async () => confirms.shift() ?? false),
+      text: vi.fn(async () => texts.shift() ?? ""),
+    },
+    { defaultSelect: options.selects ? "plaintext" : undefined, selectValues: options.selects },
+  );
 }
 
 async function runPromptSingleChannelSecretInput(params: {
@@ -168,48 +175,32 @@ describe("setup wizard helpers", () => {
     expect(prompter.note).toHaveBeenCalledWith(note, "allowlist");
     expect(resolveEntries).toHaveBeenCalledTimes(2);
   });
-  it.each([
-    {
-      name: "plaintext env fallback",
-      selects: ["plaintext"],
-      confirms: [true],
-      accountConfigured: false,
-      canUseEnv: true,
-      hasConfigToken: false,
-      expected: { action: "use-env" },
-    },
-    {
-      name: "external env reference",
-      selects: ["ref", "env"],
-      texts: ["OPENCLAW_TEST_TOKEN"],
-      accountConfigured: false,
-      canUseEnv: false,
-      hasConfigToken: false,
-      preferredEnvVar: "OPENCLAW_TEST_TOKEN",
-      expected: {
-        action: "set",
-        value: { source: "env", provider: "default", id: "OPENCLAW_TEST_TOKEN" },
-        resolvedValue: "secret-token",
-      },
-    },
-    {
-      name: "existing configured reference",
-      selects: ["ref"],
-      confirms: [true],
-      accountConfigured: true,
-      canUseEnv: false,
-      hasConfigToken: true,
-      expected: { action: "keep" },
-    },
-  ])("selects $name", async ({ expected, name: _name, ...params }) => {
+  it.each(["use-env", "set", "keep"] as const)("selects %s", async (action) => {
+    const expected =
+      action === "set"
+        ? {
+            action,
+            value: { source: "env", provider: "default", id: "OPENCLAW_TEST_TOKEN" },
+            resolvedValue: "secret-token",
+          }
+        : { action };
     if (expected.action === "set") {
       vi.stubEnv("OPENCLAW_TEST_TOKEN", "secret-token");
       onTestFinished(() => {
         vi.unstubAllEnvs();
       });
     }
-    const prompter = createPrompter(params.texts ?? [], params);
-    const result = await runPromptSingleChannelSecretInput({ ...params, prompter });
+    const prompter = createPrompter(action === "set" ? ["OPENCLAW_TEST_TOKEN"] : [], {
+      selects: action === "use-env" ? ["plaintext"] : action === "set" ? ["ref", "env"] : ["ref"],
+      confirms: [true],
+    });
+    const result = await runPromptSingleChannelSecretInput({
+      prompter,
+      accountConfigured: action === "keep",
+      hasConfigToken: action === "keep",
+      canUseEnv: action === "use-env",
+      ...(action === "set" ? { preferredEnvVar: "OPENCLAW_TEST_TOKEN" } : {}),
+    });
     expect(result).toEqual(expected);
     if (expected.action === "keep") {
       expect(prompter.text).not.toHaveBeenCalled();
@@ -217,14 +208,9 @@ describe("setup wizard helpers", () => {
   });
   it("can merge parsed values with existing entries", async () => {
     const next = await promptParsedAllowFromForAccount<OpenClawConfig>({
+      ...parsedPromptDefaults,
       cfg: { channels: { nostr: { allowFrom: ["old"] } } },
-      defaultAccountId: DEFAULT_ACCOUNT_ID,
       prompter: createPrompter(["new"]),
-      noteTitle: "Nostr allowlist",
-      noteLines: ["line"],
-      message: "msg",
-      placeholder: "placeholder",
-      parseEntries: (raw) => ({ entries: [raw.trim()] }),
       getExistingAllowFrom: ({ cfg }) => [...(cfg.channels?.nostr?.allowFrom ?? [])],
       mergeEntries: ({ existing, parsed }) => [...existing.map(String), ...parsed],
       applyAllowFrom: ({ cfg, allowFrom }) =>
@@ -239,9 +225,10 @@ describe("setup wizard helpers", () => {
   });
   it("supports computed default account ids and optional notes", async () => {
     const promptAllowFrom = createPromptParsedAllowFromForAccount<OpenClawConfig>({
+      ...parsedPromptDefaults,
       defaultAccountId: () => "work",
-      message: "msg",
-      placeholder: "placeholder",
+      noteTitle: undefined,
+      noteLines: undefined,
       parseEntries: (raw) =>
         parseSetupEntriesWithParser(raw, (entry) => ({ value: entry.toLowerCase() })),
       getExistingAllowFrom: ({ cfg, accountId }) => [
@@ -271,13 +258,8 @@ describe("setup wizard helpers", () => {
   });
   it("builds a top-level parsed allowFrom prompt", async () => {
     const promptAllowFrom = createTopLevelChannelParsedAllowFromPrompt({
+      ...parsedPromptDefaults,
       channel: "nostr",
-      defaultAccountId: DEFAULT_ACCOUNT_ID,
-      noteTitle: "Nostr allowlist",
-      noteLines: ["line"],
-      message: "msg",
-      placeholder: "placeholder",
-      parseEntries: (raw) => ({ entries: [raw.trim().toLowerCase()] }),
     });
 
     const prompter = createPrompter(["npub1"]);
@@ -325,9 +307,10 @@ describe("setup wizard helpers", () => {
       allowFrom: ["alt-new"],
     });
 
-    expect(next.channels?.signal?.allowFrom).toEqual(["default-old"]);
-    expect(next.channels?.signal?.accounts?.alt?.allowFrom).toEqual(["alt-new"]);
-    expect(next.channels?.signal?.accounts?.alt?.account).toBe("+15555550123");
+    expect(next.channels?.signal).toMatchObject({
+      allowFrom: ["default-old"],
+      accounts: { alt: { allowFrom: ["alt-new"], account: "+15555550123" } },
+    });
   });
   it.each([
     {
@@ -433,9 +416,7 @@ describe("setup wizard helpers", () => {
       enabled: true,
     });
 
-    expect(next.channels?.nostr?.privateKey).toBeUndefined();
-    expect(next.channels?.nostr?.relays).toEqual(["wss://new.example"]);
-    expect(next.channels?.nostr?.enabled).toBe(true);
+    expect(next.channels?.nostr).toEqual({ relays: ["wss://new.example"], enabled: true });
   });
   it("creates a reusable dm policy definition", () => {
     const dmPolicy = createTopLevelChannelDmPolicy({
@@ -473,11 +454,8 @@ describe("setup wizard helpers", () => {
   });
   it("builds an account-scoped allowFrom section with shared apply wiring", async () => {
     const section = createAccountScopedAllowFromSection({
+      ...sectionDefaults,
       channel: "discord",
-      credentialInputKey: "token",
-      message: "Discord allowFrom",
-      placeholder: "@alice",
-      invalidWithoutCredentialNote: "need ids",
       parseId: (value) => value.trim() || null,
       resolveEntries: async ({ entries }) =>
         entries.map((input) => ({ input, resolved: true, id: input.toUpperCase() })),
@@ -502,12 +480,9 @@ describe("setup wizard helpers", () => {
   });
   it("builds a parsed allowFrom section with default local resolution", async () => {
     const section = createAllowFromSection({
+      ...sectionDefaults,
       helpTitle: "LINE allowlist",
       helpLines: ["line"],
-      credentialInputKey: "token",
-      message: "LINE allowFrom",
-      placeholder: "U123",
-      invalidWithoutCredentialNote: "need ids",
       parseId: (value) => value.trim().toUpperCase() || null,
       apply: ({ cfg, accountId, allowFrom }) =>
         patchChannelConfigForAccount({
@@ -598,21 +573,14 @@ describe("setup wizard helpers", () => {
       ),
     ).toEqual(expected);
   });
-  it.each([
-    {
-      token: undefined,
-      entries: ["alice", "bob"],
-      expected: [
-        { input: "alice", resolved: false, id: null },
-        { input: "bob", resolved: false, id: null },
-      ],
-    },
-    {
-      token: "xoxb-test",
-      entries: ["alice"],
-      expected: [{ input: "alice", resolved: true, id: "xoxb-test:alice" }],
-    },
-  ])("resolves entries with token $token", async ({ token, entries, expected }) => {
+  it.each([undefined, "xoxb-test"])("resolves entries with token %s", async (token) => {
+    const entries = token ? ["alice"] : ["alice", "bob"];
+    const expected = token
+      ? [{ input: "alice", resolved: true, id: "xoxb-test:alice" }]
+      : [
+          { input: "alice", resolved: false, id: null },
+          { input: "bob", resolved: false, id: null },
+        ];
     const resolveEntries = vi.fn(
       async ({ token: resolvedToken, entries: inputs }: { token: string; entries: string[] }) =>
         inputs.map((input) => ({ input, resolved: true, id: `${resolvedToken}:${input}` })),

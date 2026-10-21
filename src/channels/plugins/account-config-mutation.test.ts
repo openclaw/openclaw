@@ -9,8 +9,7 @@ import {
 import { defineChannelSetupContract } from "./setup-contract.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
-const { log, error, exit } = createNonExitingRuntimeEnv();
-const runtime = { log, error, exit };
+const runtime = createNonExitingRuntimeEnv();
 
 function prepare(
   plugin: ChannelPlugin,
@@ -48,16 +47,8 @@ it("prepares, validates, applies, and reports lifecycle changes in order", async
         callOrder.push("apply");
         const accounts: Record<string, { token: string }> =
           inputCfg.channels?.["test-chat"]?.accounts ?? {};
-        return {
-          channels: {
-            "test-chat": {
-              accounts: {
-                ...accounts,
-                [accountId]: { token: (input as { token: string }).token },
-              },
-            },
-          },
-        };
+        const updated = { ...accounts, [accountId]: { token: (input as { token: string }).token } };
+        return { channels: { "test-chat": { accounts: updated } } };
       },
     },
     lifecycle: {

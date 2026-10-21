@@ -16,8 +16,7 @@ beforeAll(async () => {
   }>({ pluginId: "msteams", artifactBasename: "setup-plugin-api.js" }));
 });
 
-const { log, error, exit } = createRuntimeEnv();
-const runtime = { log, error, exit };
+const runtime = createRuntimeEnv();
 const credentials = (id: string) => ({ appId: `${id}-app`, appPassword: `${id}-secret` });
 const webhookPath = "/teams/messages";
 
@@ -50,12 +49,12 @@ async function configure(cfg: OpenClawConfig, accountId: string, input: unknown)
   if (!prepared.ok) {
     throw new Error(JSON.stringify(prepared.error));
   }
-  const result = await applyPreparedChannelAccountConfiguration({
+  const { nextConfig } = await applyPreparedChannelAccountConfiguration({
     ...context,
     channel: "msteams",
     prepared: prepared.value,
   });
-  return result.nextConfig;
+  return nextConfig;
 }
 
 beforeEach(() => {

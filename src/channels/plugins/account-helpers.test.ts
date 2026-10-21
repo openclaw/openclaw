@@ -109,9 +109,7 @@ describe("createAccountListHelpers account resolution", () => {
 
   it("merges owner-declared nested fields while omitting account-selection metadata", () => {
     const input = cfg(
-      {
-        "Work Team": { enabled: true, name: "Work", commands: { callbackPath: "/work" } },
-      },
+      { "Work Team": { enabled: true, name: "Work", commands: { callbackPath: "/work" } } },
       "Work Team",
       { enabled: false, commands: { native: true } },
     );

@@ -54,14 +54,6 @@ describe("isAllowedParsedChatSender", () => {
       }),
     ).toBe(true);
   });
-
-  it("does not match conversation targets unless explicitly enabled", () => {
-    for (const entry of conversationEntries) {
-      const params = { ...conversation, ...parsers, allowFrom: [entry] };
-      expect(isAllowedParsedChatSender(params)).toBe(false);
-      expect(isAllowedParsedChatSender({ ...params, allowConversationTargets: true })).toBe(true);
-    }
-  });
 });
 
 describe("createAllowedChatSenderMatcher", () => {

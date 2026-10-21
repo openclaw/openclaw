@@ -41,16 +41,13 @@ describe("defineChannelSetupContract", () => {
   it("keeps ignored aliases ineligible during cold channel-owned promotion", () => {
     const defaultAccount = "work-phone";
     const next = withPluginCache(createPluginCache(), () => {
-      const promotion = {
-        accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
-        singleAccountKeysToMove: ["account"],
-        namedAccountPromotionKeys: ["account"],
-      };
       const plugin = {
         setupContract: defineChannelSetupContract({
           fields: {},
           adapter: {
-            ...promotion,
+            accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
+            singleAccountKeysToMove: ["account"],
+            namedAccountPromotionKeys: ["account"],
             applyAccountConfig: ({ cfg }) => cfg,
           },
         }),
@@ -132,23 +129,16 @@ describe("defineChannelSetupContract", () => {
     });
   });
 
-  it("rejects unsupported fields and invalid channel-owned values", () => {
+  it.each([
+    [{ token: "wrong channel" }, "Unsupported setup option: token"],
+    [{ transport: "managed" }, 'transport must be one of: "external-native", "container".'],
+    [{ port: "8.5" }, "port must be a non-negative integer."],
+  ] as const)("rejects invalid input %j", (input, error) => {
     const contract = defineChannelSetupContract({
       fields: { transport: fields.transport, port: fields.port },
       adapter,
     });
 
-    expect(contract.parseInput({ token: "wrong channel" })).toEqual({
-      ok: false,
-      error: "Unsupported setup option: token",
-    });
-    expect(contract.parseInput({ transport: "managed" })).toEqual({
-      ok: false,
-      error: 'transport must be one of: "external-native", "container".',
-    });
-    expect(contract.parseInput({ port: "8.5" })).toEqual({
-      ok: false,
-      error: "port must be a non-negative integer.",
-    });
+    expect(contract.parseInput(input)).toEqual({ ok: false, error });
   });
 });

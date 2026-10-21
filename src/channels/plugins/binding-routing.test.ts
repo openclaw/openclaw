@@ -14,11 +14,18 @@ import {
   resolveRuntimeConversationBindingRouteAsync,
   inspectRuntimeConversationBindingRoute,
 } from "./binding-routing.js";
-const acpReadiness = vi.hoisted(() => vi.fn());
-// mock-isolation: Readiness timeout tests must not initialize ACP backend registries or Gateway reset state.
-vi.mock("./acp-stateful-target-driver.js", () => ({
-  ensureConfiguredAcpBindingTargetReady: acpReadiness,
+import {
+  ensureConfiguredBindingTargetReady,
+  resetConfiguredBindingTargetInPlace,
+} from "./binding-targets.js";
+import type { ConfiguredBindingResolution } from "./binding-types.js";
+const acp = vi.hoisted(() => ({
+  ensureConfiguredAcpBindingTargetReady: vi.fn(),
+  resolveAcpBindingTargetBySessionKey: vi.fn(),
+  resetConfiguredAcpBindingTargetInPlace: vi.fn(),
 }));
+// mock-isolation: Readiness timeout tests must not initialize ACP backend registries or Gateway reset state.
+vi.mock("./acp-stateful-target-driver.js", () => acp);
 
 const conversation = { channel: "demo", accountId: "default", conversationId: "room-1" };
 const peer = { kind: "group", id: "room-1" } as const;
@@ -94,11 +101,11 @@ function inspectBinding(binding: SessionBindingRecord, baseRoute = route) {
   });
 }
 
-beforeEach(() => testing.resetSessionBindingAdaptersForTests());
-afterEach(() => {
-  vi.useRealTimers();
-  acpReadiness.mockReset();
+beforeEach(() => {
+  testing.resetSessionBindingAdaptersForTests();
+  vi.resetAllMocks();
 });
+afterEach(() => vi.useRealTimers());
 
 it.each([
   { targetSessionKey: "agent:review:home", metadata: { agentId: "other" } },
@@ -245,7 +252,7 @@ it("rejects opaque targets missing plugin ownership", () => {
 });
 it("bounds unsettled configured-binding readiness", async () => {
   vi.useFakeTimers();
-  acpReadiness.mockReturnValue(new Promise<never>(() => {}));
+  acp.ensureConfiguredAcpBindingTargetReady.mockReturnValue(new Promise<never>(() => {}));
   const resultPromise = ensureConfiguredBindingRouteReady({
     cfg: {} as never,
     bindingResolution: { statefulTarget: { driverId: "acp" } } as never,
@@ -255,4 +262,98 @@ it("bounds unsettled configured-binding readiness", async () => {
     ok: false,
     error: "Configured binding route ready check timed out",
   });
+});
+
+function createBindingResolution(driverId: string): ConfiguredBindingResolution {
+  const target = { conversationId: conversation.conversationId };
+  const statefulTarget = {
+    kind: "stateful" as const,
+    driverId,
+    sessionKey: `agent:codex:${driverId}`,
+    agentId: "codex",
+  };
+  const record = createBinding({ targetSessionKey: statefulTarget.sessionKey });
+  return {
+    conversation,
+    match: target,
+    record,
+    statefulTarget,
+    compiledBinding: {
+      channel: conversation.channel,
+      binding: {
+        type: "acp",
+        agentId: "codex",
+        match: {
+          channel: conversation.channel,
+          peer: { kind: "channel", id: target.conversationId },
+        },
+        acp: { mode: "persistent" },
+      },
+      bindingConversationId: target.conversationId,
+      target,
+      agentId: "codex",
+      provider: { compileConfiguredBinding: () => target, matchInboundConversation: () => target },
+      targetFactory: { driverId, materialize: () => ({ record, statefulTarget }) },
+    },
+  };
+}
+
+it("delegates readiness to the ACP owner", async () => {
+  const ensureReady = acp.ensureConfiguredAcpBindingTargetReady.mockResolvedValue({ ok: true });
+  const params = { cfg: {}, bindingResolution: createBindingResolution("acp") };
+  await expect(ensureConfiguredBindingTargetReady(params)).resolves.toEqual({ ok: true });
+  expect(ensureReady).toHaveBeenCalledTimes(1);
+  expect(ensureReady).toHaveBeenCalledWith(params);
+});
+
+it("resolves resets through the ACP session-key lookup", async () => {
+  const resetInPlace = acp.resetConfiguredAcpBindingTargetInPlace.mockResolvedValue({ ok: true });
+  const bindingTarget = createBindingResolution("acp").statefulTarget;
+  acp.resolveAcpBindingTargetBySessionKey.mockResolvedValue(bindingTarget);
+  const params = {
+    cfg: {},
+    sessionKey: "agent:codex:acp",
+    reason: "reset" as const,
+    commandSource: "discord:native",
+  };
+  await expect(resetConfiguredBindingTargetInPlace(params)).resolves.toEqual({ ok: true });
+  expect(resetInPlace).toHaveBeenCalledTimes(1);
+  expect(resetInPlace).toHaveBeenCalledWith({ ...params, bindingTarget });
+});
+
+it("returns a typed error for an unsupported target driver", async () => {
+  await expect(
+    ensureConfiguredBindingTargetReady({
+      cfg: {},
+      bindingResolution: createBindingResolution("missing-driver"),
+    }),
+  ).resolves.toEqual({
+    ok: false,
+    error: "Configured binding target driver unavailable: missing-driver",
+  });
+});
+
+it("does not enter the ACP owner after readiness authority is revoked", async () => {
+  await expect(
+    ensureConfiguredBindingTargetReady({
+      cfg: {},
+      bindingResolution: createBindingResolution("acp"),
+      assertActive: () => {
+        throw new Error("admission retired");
+      },
+    }),
+  ).resolves.toEqual({ ok: false, error: "admission retired" });
+  expect(acp.ensureConfiguredAcpBindingTargetReady).not.toHaveBeenCalled();
+});
+
+it("skips reset when the ACP owner finds no target", async () => {
+  acp.resolveAcpBindingTargetBySessionKey.mockResolvedValue(null);
+  await expect(
+    resetConfiguredBindingTargetInPlace({
+      cfg: {},
+      sessionKey: "agent:main:main",
+      reason: "new",
+    }),
+  ).resolves.toEqual({ ok: false, skipped: true });
+  expect(acp.resetConfiguredAcpBindingTargetInPlace).not.toHaveBeenCalled();
 });
