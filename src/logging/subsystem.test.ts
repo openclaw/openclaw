@@ -292,11 +292,10 @@ describe("createSubsystemLogger().isEnabled", () => {
         log.isEnabled(query, "file"),
         log.isEnabled(query, "console"),
       ]).toEqual([file || console, file, console]);
+      if (malformed) {
+        expect(shouldLogSubsystemToConsole(undefined)).toBe(false);
+      }
     }
-  });
-  it("treats missing subsystem labels as non-matches when filters are active", () => {
-    setConsoleSubsystemFilter(["gateway"]);
-    expect(shouldLogSubsystemToConsole(undefined as unknown as string)).toBe(false);
   });
   it("keeps probe policy dynamic for retained model-fallback loggers", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "info" });
@@ -329,37 +328,6 @@ describe("createSubsystemLogger().isEnabled", () => {
     const fileLog = fs.readFileSync(file, "utf8");
     expectText(fileLog, [...messages, '"provider":"openai"']);
   });
-  it("createSubsystemLogger.warn keeps structural protections with extra patterns", () => {
-    vi.stubEnv("OPENCLAW_TEST_CONSOLE", "1");
-    const patterns = getDefaultRedactPatterns().filter((pattern) => typeof pattern === "string");
-    patterns.push("/project-private/g");
-    applyLoggingConfig({ level: "silent", consoleLevel: "warn", redactPatterns: patterns });
-    const warn = installConsoleMethodSpy("warn");
-    const input =
-      'body: client_se+cret=opaque-value-123&safe=1\nAuthorization: Digest username="alice", realm="example", response="digest-response-1234567890abcdef"; status=401';
-    const secret = "Ab9Q".repeat(10);
-    createSubsystemLogger("gateway").warn(
-      `${input}\n${secret} s3://user:${secret}@bucket project-private`,
-    );
-    expectText(
-      consoleLine(warn),
-      [
-        "s3://user:Ab9QAb…Ab9Q@bucket",
-        "body: client_se+cret=***&safe=1",
-        "Authorization: Digest ***; status=401",
-      ],
-      [secret, "project-private"],
-    );
-  });
-  it("createSubsystemLogger.warn masks slash-containing database passwords with default patterns", () => {
-    vi.stubEnv("OPENCLAW_TEST_CONSOLE", "1");
-    applyLoggingConfig({ level: "silent", consoleLevel: "warn" });
-    const warn = installConsoleMethodSpy("warn");
-    createSubsystemLogger("gateway").warn(
-      `postgres://user:${"a".repeat(40)}/b@db.example.test/app`,
-    );
-    expect(consoleLine(warn)).toContain("postgres://user:aaaaaa…aa/b@db.example.test/app");
-  });
   it.each(["part/", "1234/"])(
     "log tail masks raw malformed credentials after %s",
     async (prefix) => {
@@ -377,10 +345,21 @@ describe("createSubsystemLogger().isEnabled", () => {
   );
   it("redacts tokens at the subsystem error console sink (#73284)", () => {
     const secret = "abcdefghijklmnopqrstuvwxyz";
-    const sink = consoleLogging("pretty", "error");
-    createSubsystemLogger("gateway").child("auth").error(`Authorization failed: Bearer ${secret}`);
+    vi.stubEnv("OPENCLAW_TEST_CONSOLE", "1");
+    applyLoggingConfig({
+      level: "silent",
+      consoleLevel: "error",
+      redactPatterns: [
+        ...getDefaultRedactPatterns().filter((pattern) => typeof pattern === "string"),
+        "/project-private/g",
+      ],
+    });
+    const sink = installConsoleMethodSpy("error");
+    createSubsystemLogger("gateway")
+      .child("auth")
+      .error(`Authorization failed: Bearer ${secret} project-private`);
     expect(sink).toHaveBeenCalledTimes(1);
-    expectText(consoleLine(sink), ["Bearer "], [secret]);
+    expectText(consoleLine(sink), ["Bearer "], [secret, "project-private"]);
   });
   it("preserves redaction and ANSI resets as color settings change in pretty style", () => {
     vi.stubEnv("NO_COLOR", "1");

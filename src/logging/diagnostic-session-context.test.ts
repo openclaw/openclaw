@@ -11,6 +11,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { readLatestTranscriptAssistantTextAsync } from "../config/sessions/session-transcript-assistant-read.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { saveCronStore } from "../cron/store.js";
 import {
   areDiagnosticsEnabledForProcess,
@@ -38,21 +39,21 @@ let tempDir: string | undefined;
 let testState: OpenClawTestState | undefined;
 let diagnosticsEnabled: boolean;
 
-async function seedSessionTranscript(params: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  messages: unknown[];
-  incognito?: boolean;
-}) {
-  const { agentId, sessionId, sessionKey, messages, incognito } = params;
+async function seedSessionTranscript(
+  agentId: string,
+  sessionId: string,
+  sessionKey: string,
+  content: string,
+  incognito = false,
+) {
   await replaceSessionEntry(
     { agentId, sessionKey },
     { sessionId, updatedAt: 1, ...(incognito ? { incognito: true } : {}) },
   );
-  for (const message of messages) {
-    await appendTranscriptMessage({ agentId, sessionId, sessionKey }, { message });
-  }
+  await appendTranscriptMessage(
+    { agentId, sessionId, sessionKey },
+    { message: { role: "assistant", content } },
+  );
 }
 
 async function assistantText(agentId: string, sessionId: string, sessionKey: string) {
@@ -111,33 +112,19 @@ describe("diagnostic session context", () => {
     await saveCronStore(path.join(stateDir, "cron", "jobs.json"), {
       version: 1,
       jobs: [
-        {
+        makeCronJob({
           id: "job-123",
           name: `${"a".repeat(136)}😀${"b".repeat(140)}`,
-          enabled: true,
-          createdAtMs: 1_700_000_000_000,
-          updatedAtMs: 1_700_000_000_000,
-          schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "tick" },
-          state: {},
-        },
+        }),
       ],
     });
     const sessionKey = "agent:clawblocker:cron:job-123:run:run-456";
-    await seedSessionTranscript({
-      agentId: "clawblocker",
-      sessionId: "run-456",
+    await seedSessionTranscript(
+      "clawblocker",
+      "run-456",
       sessionKey,
-      messages: [
-        { role: "user", content: "run" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "There are 40\ncached mentions ready." }],
-        },
-      ],
-    });
+      "There are 40\ncached mentions ready.",
+    );
 
     const message = await captureSessionLog({ sessionKey });
     expect(message).toContain("cronJobId=job-123");
@@ -156,13 +143,7 @@ describe("diagnostic session context", () => {
       const sessionKey = `agent:incognito-agent:${sessionSurface}:incognito-private`;
       const sessionId = `incognito-${sessionSurface}`;
       const privateReply = `memory-only ${sessionSurface} reply`;
-      await seedSessionTranscript({
-        agentId: "incognito-agent",
-        incognito: true,
-        sessionId,
-        sessionKey,
-        messages: [{ role: "assistant", content: privateReply }],
-      });
+      await seedSessionTranscript("incognito-agent", sessionId, sessionKey, privateReply, true);
 
       expect(await assistantText("incognito-agent", sessionId, sessionKey)).toBe(privateReply);
       expect(await captureSessionLog({ sessionKey })).toBe("");

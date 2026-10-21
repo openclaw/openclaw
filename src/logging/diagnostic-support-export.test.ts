@@ -61,6 +61,62 @@ function expectOmits(value: unknown, ...needles: string[]) {
   }
 }
 
+type SupportSecrets = Record<"token" | "chat" | "auth" | "tls" | "proxyTls", string>;
+function supportConfig(secrets: SupportSecrets, sanitized = false) {
+  const secret = (key: keyof SupportSecrets) => (sanitized ? "<redacted>" : secrets[key]);
+  return {
+    gateway: {
+      mode: "local",
+      bind: "loopback",
+      port: 18789,
+      tailscale: { mode: "serve" },
+      auth: { mode: "token", token: secret("token") },
+    },
+    logging: { redactSensitive: "off" },
+    models: {
+      providers: {
+        supportProxy: {
+          request: {
+            auth: { value: secret("auth") },
+            tls: { passphrase: secret("tls") },
+            proxy: {
+              tls: { passphrase: secret("proxyTls") },
+            },
+          },
+        },
+      },
+    },
+    channels: {
+      $include: "./other-channels.json",
+      defaults: { groupPolicy: "disabled" },
+      modelByChannel: {},
+      telegram: {
+        accounts: {
+          [sanitized ? "<identifier#1>" : "15555551212"]: {
+            botToken: secret("token"),
+            allowFrom: sanitized ? { redacted: true, count: 1 } : [secret("chat")],
+          },
+        },
+      },
+    },
+    agents: {
+      entries: {
+        $include: "./other-agents.json",
+        main: { name: "personal-agent", instructions: secret("chat") },
+      },
+    },
+    plugins: {
+      enabled: false,
+      allow: ["telegram", "slack"],
+      entries: {
+        $include: "./other-plugins.json",
+        telegram: { enabled: true },
+        slack: { enabled: false },
+      },
+    },
+  };
+}
+
 describe("diagnostic support export", () => {
   let tempDir: string;
 
@@ -200,68 +256,21 @@ describe("diagnostic support export", () => {
   });
 
   it("writeDiagnosticSupportExport writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
-    const fakeToken = "sk-test-support-export-secret-token-1234567890";
-    const privateChat = "private user said diagnose my bank transfer";
+    const secrets = {
+      token: "sk-test-support-export-secret-token-1234567890",
+      chat: "private user said diagnose my bank transfer",
+      auth: "support-request-auth-value",
+      tls: "support-request-tls-passphrase",
+      proxyTls: "support-proxy-tls-passphrase",
+    };
+    const { token: fakeToken, chat: privateChat } = secrets;
     const privateAssistantReply = "the reimbursement is approved for 420 credits";
     const privateLogTapeAssistantReply = "the wire transfer clears on Thursday";
     const webhookBody = "raw webhook body with message contents";
-    const requestAuthValue = "support-request-auth-value";
-    const requestTlsPassphrase = "support-request-tls-passphrase";
-    const proxyTlsPassphrase = "support-proxy-tls-passphrase";
     const credentialUrl =
       "wss://support-user:support-password@gateway.example/ws?token=short-token&ok=1";
     const configPath = path.join(tempDir, "openclaw.json");
-    writeJson(configPath, {
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        port: 18789,
-        tailscale: { mode: "serve" },
-        auth: { mode: "token", token: fakeToken },
-      },
-      logging: { redactSensitive: "off" },
-      models: {
-        providers: {
-          supportProxy: {
-            request: {
-              auth: { value: requestAuthValue },
-              tls: { passphrase: requestTlsPassphrase },
-              proxy: {
-                tls: { passphrase: proxyTlsPassphrase },
-              },
-            },
-          },
-        },
-      },
-      channels: {
-        $include: "./other-channels.json",
-        defaults: { groupPolicy: "disabled" },
-        modelByChannel: {},
-        telegram: {
-          accounts: {
-            "15555551212": {
-              botToken: fakeToken,
-              allowFrom: [privateChat],
-            },
-          },
-        },
-      },
-      agents: {
-        entries: {
-          $include: "./other-agents.json",
-          main: { name: "personal-agent", instructions: privateChat },
-        },
-      },
-      plugins: {
-        enabled: false,
-        allow: ["telegram", "slack"],
-        entries: {
-          $include: "./other-plugins.json",
-          telegram: { enabled: true },
-          slack: { enabled: false },
-        },
-      },
-    });
+    writeJson(configPath, supportConfig(secrets));
 
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({
@@ -376,11 +385,10 @@ describe("diagnostic support export", () => {
     );
 
     const combined = Object.values(entries).join("\n");
-    expectOmits(combined, fakeToken, privateChat, privateAssistantReply);
+    expectOmits(combined, ...Object.values(secrets), privateAssistantReply);
     expectOmits(combined, privateLogTapeAssistantReply, webhookBody, "15555551212");
     expectOmits(combined, "support-password", "short-token", tempDir);
     expectOmits(combined, "cron/jobs.json", os.hostname(), "structured secret payload");
-    expectOmits(combined, requestAuthValue, requestTlsPassphrase, proxyTlsPassphrase);
     expectOmits(combined, "__OPENCLAW_REDACTED__", "gateway-session-15555551212");
     expectOmits(combined, "supportEventSecret");
     expectContains(combined, "payload.large", "gateway.http.json", "$OPENCLAW_STATE_DIR");
@@ -435,27 +443,7 @@ describe("diagnostic support export", () => {
     expect(JSON.parse(entries["diagnostics.json"] ?? "{}").config).toEqual(configShape);
 
     const sanitizedConfig = readJsonEntry(entries, "config/sanitized.json");
-    properties(sanitizedConfig, {
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        port: 18789,
-        tailscale: { mode: "serve" },
-        auth: { mode: "token", token: "<redacted>" },
-      },
-      "logging.redactSensitive": "off",
-      "models.providers.supportProxy.request.auth.value": "<redacted>",
-      "models.providers.supportProxy.request.tls.passphrase": "<redacted>",
-      "models.providers.supportProxy.request.proxy.tls.passphrase": "<redacted>",
-      "channels.telegram.accounts": {
-        "<identifier#1>": {
-          botToken: "<redacted>",
-          allowFrom: { redacted: true, count: 1 },
-        },
-      },
-      "agents.entries.main.name": "personal-agent",
-      "agents.entries.main.instructions": "<redacted>",
-    });
+    expect(sanitizedConfig).toEqual(supportConfig(secrets, true));
   });
 
   it.each([
