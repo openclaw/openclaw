@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { appendSessionTranscriptMessageByIdentityStrict } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import type { VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
 import { copyCallRecord } from "./manager/state.js";
@@ -116,20 +117,6 @@ const REPORT_SUMMARY_INSTRUCTIONS = [
   "Include agreed date, time, price, reference, and person spoken to when recorded. State uncertainty clearly.",
 ].join("\n");
 
-/** Keep every transcript character while bounding messages for common channel text limits. */
-function splitDeliveryText(text: string): string[] {
-  const chunks: string[] = [];
-  for (let start = 0; start < text.length;) {
-    let end = Math.min(start + 4000, text.length);
-    if (end < text.length && /[\uD800-\uDBFF]/.test(text.charAt(end - 1))) {
-      end -= 1;
-    }
-    chunks.push(text.slice(start, end));
-    start = end;
-  }
-  return chunks;
-}
-
 /** Async Gateway route lookup and sends retain the service's existing plugin runtime authority. */
 export function createCallDeliveryRuntime(params: {
   config: VoiceCallConfig;
@@ -199,7 +186,7 @@ export function createCallDeliveryRuntime(params: {
       sessionId: session.sessionId,
       ...(session.lifecycleRevision ? { lifecycleRevision: session.lifecycleRevision } : {}),
     };
-    const chunks = splitDeliveryText(message.text);
+    const chunks = chunkTextForOutbound(message.text, 4000, { preserveWhitespace: true });
     for (const [index, text] of chunks.entries()) {
       assertActive();
       const current = await describeRequester(message.sessionKey);
@@ -265,7 +252,6 @@ export function createCallDeliveryRuntime(params: {
   const live = new Map<string, LiveCallDelivery>();
   const ended = new WeakMap<CallRecord, Promise<void>>();
   const pending = new Set<Promise<void>>();
-  let closed = false;
   let stopping: Promise<void> | undefined;
 
   const track = (work: Promise<void>): Promise<void> => {
@@ -275,7 +261,7 @@ export function createCallDeliveryRuntime(params: {
     return work;
   };
   const assertDeliveryActive = () => {
-    if (closed) {
+    if (abort.signal.aborted) {
       throw new Error("Voice Call delivery stopped");
     }
   };
@@ -388,7 +374,7 @@ export function createCallDeliveryRuntime(params: {
     if (existing) {
       return existing;
     }
-    if (closed) {
+    if (abort.signal.aborted) {
       return Promise.resolve();
     }
     const snapshot = copyCallRecord(call);
@@ -432,7 +418,6 @@ export function createCallDeliveryRuntime(params: {
     stop() {
       abort.abort(new Error("Voice Call requester delivery stopped"));
       if (!stopping) {
-        closed = true;
         for (const state of live.values()) {
           if (state.timer) {
             clearTimeout(state.timer);

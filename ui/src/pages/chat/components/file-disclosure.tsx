@@ -3,25 +3,27 @@ import { createSignal, onSettled, Show } from "solid-js";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 
-/** Retains only the exiting DOM; expansion and directory data remain with the workspace. */
-export function FolderDisclosure(props: {
+/** Retains exiting file content; disclosure state and data remain with the caller. */
+export function FileDisclosure(props: {
+  variant: "folder" | "review";
   open: boolean;
   active: boolean;
   instant: boolean;
   children: JSX.Element;
 }) {
-  // Render an initially open folder synchronously and retain its children through exit.
+  // Render initially open content synchronously and retain it through exit.
   const [present, setPresent] = createSignal<boolean>(
     (previous) => props.open || previous || false,
   );
   let shell!: HTMLDivElement;
   let content!: HTMLDivElement;
   let animation: Animation | undefined;
-  let targetHeight = 0;
-  let ready = false;
   let current = { open: false, active: false, instant: true };
   let applied: typeof current | undefined;
+  let height = 0;
+  let ready = false;
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const folder = () => props.variant === "folder";
   const finish = () => {
     animation?.cancel();
     animation = undefined;
@@ -30,47 +32,73 @@ export function FolderDisclosure(props: {
     shell.style.overflow = "";
     setPresent(current.open);
   };
-  const move = (from: number, opacity: number) => {
+  function move(from: number, to?: number, opacity = 1) {
     animation?.cancel();
     animation = undefined;
-    const to = current.open ? content.getBoundingClientRect().height : 0;
-    targetHeight = to;
-    if (!ready || !current.active || current.instant || reducedMotion.matches || from === to) {
+    // Folder content is measured after revealing/cancelling; Review supplies its settled target.
+    const destination = to ?? (current.open ? content.getBoundingClientRect().height : 0);
+    height = destination;
+    if (
+      !ready ||
+      !current.active ||
+      current.instant ||
+      reducedMotion.matches ||
+      from === destination
+    ) {
       finish();
       return;
     }
-    shell.style.height = `${to}px`;
+    shell.style.height = `${destination}px`;
     shell.style.overflow = "clip";
     animation = shell.animate(
-      [
-        { height: `${from}px`, opacity },
-        { height: `${to}px`, opacity: current.open ? 1 : 0 },
-      ],
-      { duration: 200, easing: getComputedStyle(shell).getPropertyValue("--ease-out").trim() },
+      folder()
+        ? [
+            { height: `${from}px`, opacity },
+            { height: `${destination}px`, opacity: current.open ? 1 : 0 },
+          ]
+        : [{ height: `${from}px` }, { height: `${destination}px` }],
+      folder()
+        ? { duration: 200, easing: getComputedStyle(shell).getPropertyValue("--ease-out").trim() }
+        : { duration: 240, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
     );
     animation.onfinish = finish;
-  };
+  }
   createLayoutMeasurement(
     () => ({ open: props.open, active: props.active, instant: props.instant }),
     (next) => {
       if (!next) {
         return undefined;
       }
-      if (
-        next === applied &&
-        (!animation || !current.open || content.getBoundingClientRect().height === targetHeight)
-      ) {
-        return undefined;
+      if (next === applied) {
+        if (folder()) {
+          if (!animation || !current.open || content.getBoundingClientRect().height === height) {
+            return undefined;
+          }
+        } else {
+          if (!current.open || !current.active) {
+            return undefined;
+          }
+          const to = content.getBoundingClientRect().height;
+          if (to === height) {
+            return undefined;
+          }
+          const from = animation ? shell.getBoundingClientRect().height : height;
+          return () => move(from, to);
+        }
       }
       const closed = !current.open && !animation;
       const from = closed || shell.hidden ? 0 : shell.getBoundingClientRect().height;
-      const opacity = closed || shell.hidden ? 0 : Number(getComputedStyle(shell).opacity);
+      const opacity =
+        folder() && !closed && !shell.hidden ? Number(getComputedStyle(shell).opacity) : 0;
       return () => {
         applied = next;
         current = next;
         shell.hidden = false;
-        // A hidden folder has no measurable destination until it is revealed.
-        move(from, opacity);
+        move(
+          from,
+          folder() ? undefined : next.open ? content.getBoundingClientRect().height : 0,
+          opacity,
+        );
       };
     },
     { targets: () => [content], changeTiming: "sync" },
@@ -93,7 +121,7 @@ export function FolderDisclosure(props: {
       ref={(element) => {
         shell = element;
       }}
-      class="workspace-desktop__disclosure"
+      class={folder() ? "workspace-desktop__disclosure" : "session-diff__disclosure"}
       hidden={!present()}
       inert={!props.open || !props.active}
       aria-hidden={props.open ? "false" : "true"}

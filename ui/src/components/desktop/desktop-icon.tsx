@@ -1,4 +1,5 @@
 import { For } from "solid-js";
+import { StrokeIcon } from "../solid/stroke-icon.tsx";
 
 // Desktop-only glyphs keep the established expand/restore icons and other panels unchanged.
 const paths = {
@@ -29,16 +30,8 @@ const paths = {
 
 export function DesktopIcon(props: { name: keyof typeof paths }) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.65"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-    >
+    <StrokeIcon stroke-width="1.65" aria-hidden="true">
       <For each={paths[props.name]}>{(d) => <path d={d} />}</For>
-    </svg>
+    </StrokeIcon>
   );
 }

@@ -374,6 +374,7 @@ src/infra/database-engine/index-hint.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
 src/infra/database-engine/open.ts
+src/infra/database-engine/physical-facts-contract.ts
 src/infra/database-engine/physical-facts.ts
 src/infra/database-engine/physical-store.ts
 src/infra/database-engine/policy.ts
@@ -396,6 +397,7 @@ src/infra/database-engine/sqlite-vector-types.ts
 src/infra/database-engine/sqlite-vector.ts
 src/infra/database-engine/text-bytes.ts
 src/infra/database-engine/vector-contract.ts
+src/infra/postgres-sync/bridge-prestart.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/idle-bridges.ts
 src/infra/postgres-sync/protocol.ts

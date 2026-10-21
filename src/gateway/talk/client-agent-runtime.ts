@@ -109,6 +109,7 @@ export function createTalkClientAgentRuntime(params: {
               // Speech is mirrored separately. Keep generated input in current-turn custody,
               // but never display it or replay it as a later user request.
               userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+                sessionLifecyclePatch: { lastInteractionAt: Date.now() },
                 input: {
                   text: runParams.prompt,
                   display: false,
