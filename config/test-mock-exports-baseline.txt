@@ -6746,7 +6746,6 @@
 ["src/plugin-activation-boundary.test.ts","./plugins/plugin-registry.js","002297ede76df959f83d8d9ffb68a0400d5d91f1b3be5330ef8fc19b11133cf2",1]
 ["src/plugin-activation-boundary.test.ts","./secrets/channel-env-vars.js","85ee23e815b8be861925fdb8d7d4cb2dd23054f9626f27b5d901795e8f3ac096",1]
 ["src/plugin-sdk/acp-runtime.test.ts","../auto-reply/reply/dispatch-acp.runtime.js","c4575c8af22284d651326b59e12902e0ca2e7139b5aea0fe11277beb66f6cea9",1]
-["src/plugin-sdk/agent-harness-completion.test.ts","../agents/agent-harness-completion-custody.js","10413d40ed2af84b242b096f68e5216b7564bbade97e56e9682c20d711679d41",1]
 ["src/plugin-sdk/agent-harness-completion.test.ts","../agents/agent-harness-completion-delivery.js","5ac9228917c0a2b8253bf417370a30738559823b6fd20266f77fff4af21e819c",1]
 ["src/plugin-sdk/agent-harness-completion.test.ts","../agents/subagents/announce/subagent-announce-delivery.js","8628e9e5b5f2a0dce57401ba8ad92979ea638a1edf238fc916c2a61465b0c6b2",1]
 ["src/plugin-sdk/agent-harness-completion.test.ts","../agents/subagents/announce/subagent-announce-origin.js","a1032f9897a27a107b3d8dc532785823c451851763ae78824ed9af059f7d8d77",1]

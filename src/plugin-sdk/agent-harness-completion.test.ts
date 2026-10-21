@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     },
   ),
 }));
+// mock-isolation: Keep process-global custody and Gateway continuation state outside this fixture.
 vi.mock("../agents/agent-harness-completion-custody.js", () => ({
   captureAgentHarnessCompletionCustody: vi.fn(),
   createAgentHarnessCompletionEventSink: vi.fn(),
