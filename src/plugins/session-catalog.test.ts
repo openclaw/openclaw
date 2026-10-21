@@ -9,6 +9,7 @@ import {
   SESSION_CATALOG_TRANSCRIPT_IMPORT_LIMITS,
 } from "./session-catalog-history-import.js";
 import { listSessionCatalogEntries } from "./session-catalog.js";
+import { catalogReader } from "./session-catalog.test-support.js";
 
 const transcript = vi.hoisted(() => ({
   messages: [] as Array<Record<string, unknown>>,
@@ -45,8 +46,6 @@ vi.mock("../plugin-sdk/session-transcript-runtime.js", () => ({
   },
 }));
 
-type CatalogItem = Parameters<Parameters<typeof importSessionCatalogHistory>[0]["read"]>[0];
-
 function item(id: string, type: TranscriptItem["type"], text?: string): TranscriptItem {
   return { id, type, text };
 }
@@ -57,23 +56,6 @@ function runtimeWithList() {
     listSessionEntries,
     runtime: { agent: { session: { listSessionEntries } } } as unknown as PluginRuntime,
   };
-}
-
-function catalogReader(items: TranscriptItem[], maxPageSize = Number.POSITIVE_INFINITY) {
-  return vi.fn(async ({ cursor, limit }: CatalogItem) => {
-    const offset = cursor ? Number(cursor) : 0;
-    const pageLimit = Math.min(limit, maxPageSize);
-    const end = Math.max(0, items.length - offset);
-    const start = Math.max(0, end - pageLimit);
-    const page = items.slice(start, end).toReversed();
-    const consumed = offset + page.length;
-    return {
-      hostId: "gateway",
-      threadId: "thread-1",
-      items: page,
-      ...(consumed < items.length ? { nextCursor: String(consumed) } : {}),
-    };
-  });
 }
 
 function importHistory(
@@ -193,19 +175,6 @@ describe("importSessionCatalogHistory", () => {
     expect(transcript.messages.map((message) => message.idempotencyKey)).toEqual(
       ["u-1", "u-2", "u-3", "r-1", "a-1", "t-1", "o-1"].map((id) => `pi-catalog:thread-1:${id}`),
     );
-  });
-
-  it("deduplicates a recovered import by scanning item idempotency keys", async () => {
-    const items: TranscriptItem[] = [
-      { id: "u-1", type: "userMessage", text: "hello" },
-      { id: "a-1", type: "agentMessage", text: "hi" },
-    ];
-
-    await importHistory(items);
-    await importHistory(items);
-
-    expect(transcript.lockCalls).toBe(2);
-    expect(transcript.messages).toHaveLength(2);
   });
 
   it("keeps only the most recent 200 items and returns them oldest-first", async () => {

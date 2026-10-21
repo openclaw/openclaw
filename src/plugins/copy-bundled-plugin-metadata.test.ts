@@ -22,6 +22,12 @@ function readText(root: string, relative: string): string {
   return fs.readFileSync(path.join(root, relative), "utf8");
 }
 
+function expectFiles(root: string, files: Record<string, string>) {
+  for (const [file, contents] of Object.entries(files)) {
+    expect(readText(root, file)).toBe(contents);
+  }
+}
+
 function createPlugin(
   repoRoot: string,
   params: {
@@ -68,11 +74,14 @@ function expectBundledSkills(repoRoot: string, pluginId: string, skills: string[
   expect(readBundledManifest(repoRoot, pluginId).skills).toEqual(skills);
 }
 
-function createTlonSkillPlugin(repoRoot: string, skillPath = "node_modules/@tloncorp/tlon-skill") {
-  return createPlugin(repoRoot, {
-    id: "tlon",
-    manifest: { skills: [skillPath] },
-  });
+function fixture(id: string, manifest: Record<string, unknown> = {}) {
+  const repoRoot = makeRepoRoot("openclaw-bundled-plugin-");
+  const pluginDir = createPlugin(repoRoot, { id, manifest });
+  return { repoRoot, pluginDir, distDir: bundledPluginDir(repoRoot, id) };
+}
+
+function skillFixture() {
+  return fixture("tlon", { skills: ["node_modules/@tloncorp/tlon-skill"] });
 }
 
 function theme(source: string, beret: string) {
@@ -100,15 +109,14 @@ describe("copyBundledPluginMetadata", () => {
   it.each([false, true])(
     "copies owned channel Settings declarations from generated=%s metadata without touching siblings",
     (generated) => {
-      const repoRoot = makeRepoRoot("openclaw-bundled-channel-settings-");
       const controlUi = {
         entry: "dist/control-ui/fixture/index.js",
         activation: "settings-only",
         settingsViews: [{ section: "channels", panel: "detail", channelId: "custom" }],
       };
-      const pluginDir = createPlugin(repoRoot, {
-        id: "profile-fixture",
-        manifest: { channels: ["custom"], controlUi },
+      const { repoRoot, pluginDir } = fixture("profile-fixture", {
+        channels: ["custom"],
+        controlUi,
       });
       if (generated) {
         writeJsonFile(path.join(pluginDir, "package.json"), {
@@ -132,18 +140,14 @@ describe("copyBundledPluginMetadata", () => {
     },
   );
   it("copies plugin metadata, README, activity artwork, and skills without replacing runtime assets", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-meta-");
-    const pluginDir = createPlugin(repoRoot, {
-      id: "acpx",
-      manifest: {
-        skills: ["./skills"],
-        themes: [
-          {
-            ...theme("themes/workshop.json", "assets/theme-art/beret.svg"),
-            critters: { ferris: { source: "assets/theme-art/ferris.svg" } },
-          },
-        ],
-      },
+    const { repoRoot, pluginDir, distDir } = fixture("acpx", {
+      skills: ["./skills"],
+      themes: [
+        {
+          ...theme("themes/workshop.json", "assets/theme-art/beret.svg"),
+          critters: { ferris: { source: "assets/theme-art/ferris.svg" } },
+        },
+      ],
     });
     const activityIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"/>';
     writeFiles(pluginDir, {
@@ -158,8 +162,7 @@ describe("copyBundledPluginMetadata", () => {
       "assets/activity/notes.txt": "not artwork",
       "assets/activity/bad name.svg": activityIcon,
     });
-    const distDir = bundledPluginDir(repoRoot, "acpx");
-    const distAssetsDir = path.join(bundledPluginDir(repoRoot, "acpx"), "assets");
+    const distAssetsDir = path.join(distDir, "assets");
     writeFiles(distAssetsDir, {
       "activity/retired.svg": "stale",
       "runtime.js": "keep runtime asset",
@@ -170,28 +173,26 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(path.join(distDir, "openclaw.plugin.json"))).toBe(true);
     expect(readText(distDir, "skills/acp-router/SKILL.md")).toContain("ACP Router");
     expectBundledSkills(repoRoot, "acpx", ["./skills"]);
-    expect(readText(distDir, "README.md")).toBe("# ACP overview\n");
     expect(fs.readFileSync(path.join(distAssetsDir, "icon.png"))).toEqual(
       Buffer.from("package icon"),
     );
-    expect(readText(distAssetsDir, "activity.svg")).toBe(activityIcon);
-    expect(readText(distAssetsDir, "theme-art/beret.svg")).toBe(activityIcon);
-    expect(readText(distAssetsDir, "theme-art/ferris.svg")).toBe(activityIcon);
-    expect(readText(distDir, "themes/workshop.json")).toBe('{"name":"Workshop"}');
+    expectFiles(distDir, {
+      "README.md": "# ACP overview\n",
+      "themes/workshop.json": '{"name":"Workshop"}',
+      "assets/activity.svg": activityIcon,
+      "assets/theme-art/beret.svg": activityIcon,
+      "assets/theme-art/ferris.svg": activityIcon,
+      "assets/activity/acp_status.svg": activityIcon,
+      "assets/runtime.js": "keep runtime asset",
+    });
     expect(fs.readdirSync(path.join(distAssetsDir, "activity"))).toEqual(["acp_status.svg"]);
-    expect(readText(distAssetsDir, "activity/acp_status.svg")).toBe(activityIcon);
-    expect(readText(distAssetsDir, "runtime.js")).toBe("keep runtime asset");
     const packageJson = readBundledPackageJson(repoRoot, "acpx");
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
   });
 
   it.skipIf(process.platform === "win32")("does not copy escaped theme artwork", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-theme-boundary-");
-    const pluginDir = createPlugin(repoRoot, {
-      id: "acpx",
-      manifest: {
-        themes: [theme("theme.json", "art/beret.svg")],
-      },
+    const { repoRoot, pluginDir } = fixture("acpx", {
+      themes: [theme("theme.json", "art/beret.svg")],
     });
     const outside = path.join(repoRoot, "outside.svg");
     fs.writeFileSync(outside, "outside bytes");
@@ -208,17 +209,13 @@ describe("copyBundledPluginMetadata", () => {
   });
 
   it("copies generated bundled channel config schemas into dist manifests", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-channel-config-meta-");
-    createPlugin(repoRoot, {
-      id: "telegram",
-      manifest: {
-        channels: ["telegram"],
-        channelConfigs: {
-          telegram: {
-            schema: { type: "object", properties: { stale: { type: "boolean" } } },
-            uiHints: {
-              "channels.telegram.stale": { help: "stale hint" },
-            },
+    const { repoRoot } = fixture("telegram", {
+      channels: ["telegram"],
+      channelConfigs: {
+        telegram: {
+          schema: { type: "object", properties: { stale: { type: "boolean" } } },
+          uiHints: {
+            "channels.telegram.stale": { help: "stale hint" },
           },
         },
       },
@@ -252,8 +249,7 @@ describe("copyBundledPluginMetadata", () => {
   });
 
   it("relocates node_modules-backed skill paths into bundled-skills and rewrites the manifest", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-node-modules-");
-    const pluginDir = createTlonSkillPlugin(repoRoot);
+    const { repoRoot, pluginDir } = skillFixture();
     const storeSkillDir = path.join(
       repoRoot,
       "node_modules/.pnpm/@tloncorp+tlon-skill@0.2.2/node_modules/@tloncorp/tlon-skill",
@@ -290,8 +286,7 @@ describe("copyBundledPluginMetadata", () => {
   });
 
   it("falls back to repo-root hoisted node_modules skill paths", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-hoisted-skill-");
-    createTlonSkillPlugin(repoRoot);
+    const { repoRoot } = skillFixture();
     const hoistedSkillDir = path.join(repoRoot, "node_modules", "@tloncorp", "tlon-skill");
     writeFiles(hoistedSkillDir, { "SKILL.md": "# Hoisted Tlon Skill\n" });
 
@@ -304,8 +299,7 @@ describe("copyBundledPluginMetadata", () => {
   });
 
   it("omits missing declared skill paths and removes stale generated outputs", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-missing-skill-");
-    createTlonSkillPlugin(repoRoot);
+    const { repoRoot } = skillFixture();
     const staleBundledSkillDir = bundledSkillPath(
       repoRoot,
       "tlon",
@@ -323,11 +317,7 @@ describe("copyBundledPluginMetadata", () => {
   });
 
   it("retries transient skill copy races from concurrent runtime postbuilds", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-retry-");
-    const pluginDir = createPlugin(repoRoot, {
-      id: "diffs",
-      manifest: { skills: ["./skills"] },
-    });
+    const { repoRoot, pluginDir } = fixture("diffs", { skills: ["./skills"] });
     writeFiles(pluginDir, { "skills/diffs/SKILL.md": "# Diffs\n" });
 
     const realCpSync = fs.cpSync.bind(fs);

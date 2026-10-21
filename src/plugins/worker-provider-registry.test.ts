@@ -1,4 +1,3 @@
-/** Covers cloud-worker provider manifest ownership, uniqueness, and lookup ordering. */
 import { describe, expect, it } from "vitest";
 import { createPluginRecord } from "./loader-records.js";
 import { createTestPluginRegistry as createTestRegistry } from "./registry-runtime.test-helpers.js";
@@ -57,27 +56,23 @@ describe("worker provider registry", () => {
     expectRejected(provider, "worker provider registration missing method: resolveAllocation");
   });
 
-  it.each(["renew", "runSetupCommand"] as const)(
-    "rejects a non-function optional %s hook",
-    (method) => {
-      const provider = {
-        ...createWorkerProvider("static-ssh"),
-        [method]: "later",
-      } as unknown as WorkerProvider;
+  it.each([
+    ["renew", "later", "must be a function"],
+    ["runSetupCommand", "later", "must be a function"],
+    ["resolveSshIdentity", "later", "must be a function"],
+    ["provisionBeforeInstallation", "sometimes", "must be a boolean"],
+  ])("rejects an invalid %s declaration", (field, value, error) => {
+    const provider = createWorkerProvider("static-ssh");
+    Reflect.set(provider, String(field), value);
+    expectRejected(provider, `worker provider registration ${field} ${error}`);
+  });
 
-      expectRejected(provider, `worker provider registration ${method} must be a function`);
-    },
-  );
-
-  it("rejects a non-boolean provision-before-installation declaration", () => {
-    const provider = {
-      ...createWorkerProvider("static-ssh"),
-      provisionBeforeInstallation: "sometimes",
-    } as unknown as WorkerProvider;
-
+  it("rejects an unknown mode in a placement declaration", () => {
+    const provider = createWorkerProvider("static-ssh");
+    Reflect.set(provider, "supportedExecutionModes", ["unsupported"]);
     expectRejected(
       provider,
-      "worker provider registration provisionBeforeInstallation must be a boolean",
+      expect.stringContaining("worker provider registration supportedExecutionModes"),
     );
   });
 
@@ -92,27 +87,6 @@ describe("worker provider registry", () => {
 
     expect(pluginRegistry.registry.workerProviders.get("static-ssh")?.provider).toBe(provider);
     expect(pluginRegistry.registry.diagnostics).toEqual([]);
-  });
-
-  it("rejects an unknown mode in a placement declaration", () => {
-    const provider = {
-      ...createWorkerProvider("static-ssh"),
-      supportedExecutionModes: ["unsupported"],
-    } as unknown as WorkerProvider;
-
-    expectRejected(
-      provider,
-      expect.stringContaining("worker provider registration supportedExecutionModes"),
-    );
-  });
-
-  it("rejects a non-function optional SSH identity resolver", () => {
-    const provider = {
-      ...createWorkerProvider("static-ssh"),
-      resolveSshIdentity: "later",
-    } as unknown as WorkerProvider;
-
-    expectRejected(provider, "worker provider registration resolveSshIdentity must be a function");
   });
 
   it("rejects invalid provider ids", () => {

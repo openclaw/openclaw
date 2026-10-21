@@ -114,17 +114,20 @@ function requireHandlerCall(handler: ReturnType<typeof vi.fn>, index = 0): unkno
   return call[0];
 }
 
-const binding = {
+const bindingMetadata = {
   bindingId: "binding-1",
   pluginId: "codex-plugin",
   pluginName: "Codex",
   pluginRoot: "/plugins/codex",
+  boundAt: 1,
+};
+const binding = {
+  ...bindingMetadata,
   channel: "telegram",
   accountId: "default",
   conversationId: "-10099:topic:77",
   parentConversationId: "-10099",
   threadId: 77,
-  boundAt: 1,
 };
 const boundFixtureResult = { status: "bound" as const, binding };
 const handled = { matched: true, handled: true, duplicate: false };
@@ -233,30 +236,17 @@ describe("plugin interactive handlers", () => {
       name: "OpenClaw Code Agent",
       status: "loaded",
     } as never);
+    const registration = { channel: "telegram", namespace: "code-agent", handler };
+    const metadata = {
+      pluginName: "OpenClaw Code Agent",
+      pluginRoot: "/plugins/openclaw-code-agent",
+    };
     registry.interactiveHandlers = [
-      {
-        channel: "telegram",
-        namespace: "code-agent",
-        pluginId: "openclaw-code-agent",
-        pluginName: "OpenClaw Code Agent",
-        pluginRoot: "/plugins/openclaw-code-agent",
-        handler: handler as never,
-      },
+      { ...registration, ...metadata, pluginId: "openclaw-code-agent" },
     ];
-    expect(
-      registerPluginInteractiveHandler(
-        "openclaw-code-agent",
-        {
-          channel: "telegram",
-          namespace: "code-agent",
-          handler: handler as never,
-        },
-        {
-          pluginName: "OpenClaw Code Agent",
-          pluginRoot: "/plugins/openclaw-code-agent",
-        },
-      ),
-    ).toEqual({ ok: true });
+    expect(registerPluginInteractiveHandler("openclaw-code-agent", registration, metadata)).toEqual(
+      { ok: true },
+    );
     setActivePluginRegistry(registry);
 
     await expect(
@@ -278,17 +268,14 @@ describe("plugin interactive handlers", () => {
   });
 
   it("rejects duplicate namespace registrations", () => {
-    const first = registerPluginInteractiveHandler("plugin-a", {
+    const registration = {
       channel: "telegram",
       namespace: "codex",
       handler: async () => ({ handled: true }),
-    });
-    const second = registerPluginInteractiveHandler("plugin-b", {
-      channel: "telegram",
-      namespace: "codex",
-      handler: async () => ({ handled: true }),
-    });
-
+    };
+    const [first, second] = ["plugin-a", "plugin-b"].map((id) =>
+      registerPluginInteractiveHandler(id, registration),
+    );
     expect(first).toEqual({ ok: true });
     expect(second).toEqual({
       ok: false,
@@ -319,59 +306,52 @@ describe("plugin interactive handlers", () => {
   });
 
   it.each([
-    {
-      channel: "telegram" as const,
-      dispatchParams: telegramParams("codex:bind", "cb-bind"),
-      conversation: {
+    [
+      "telegram",
+      telegramParams("codex:bind", "cb-bind"),
+      {
         channel: "telegram",
         accountId: "default",
         conversationId: "-10099:topic:77",
         parentConversationId: "-10099",
         threadId: 77,
       },
-    },
-    {
-      channel: "discord" as const,
-      dispatchParams: interactionParams("discord", "codex:bind", "ix-bind", {
+    ],
+    [
+      "discord",
+      interactionParams("discord", "codex:bind", "ix-bind", {
         kind: "button",
         values: ["allow"],
       }),
-      conversation: {
+      {
         channel: "discord",
         accountId: "default",
         conversationId: "channel-1",
         parentConversationId: "parent-1",
       },
-    },
-    {
-      channel: "slack" as const,
-      dispatchParams: interactionParams("slack", "codex:bind", "slack-bind", {
+    ],
+    [
+      "slack",
+      interactionParams("slack", "codex:bind", "slack-bind", {
         kind: "button",
         value: "bind",
         selectedValues: ["bind"],
         selectedLabels: ["Bind"],
       }),
-      conversation: {
+      {
         channel: "slack",
         accountId: "default",
         conversationId: "C123",
         parentConversationId: "C123",
         threadId: "1710000000.000100",
       },
-    },
-  ])(
-    "wires $channel conversation binding helpers with channel context",
-    async ({ channel, dispatchParams, conversation }) => {
+    ],
+  ] as const)(
+    "wires %s conversation binding helpers with channel context",
+    async (channel, dispatchParams, conversation) => {
       const requestResult = {
         status: "bound" as const,
-        binding: {
-          ...conversation,
-          bindingId: binding.bindingId,
-          pluginId: binding.pluginId,
-          pluginName: binding.pluginName,
-          pluginRoot: binding.pluginRoot,
-          boundAt: binding.boundAt,
-        },
+        binding: { ...bindingMetadata, ...conversation },
       };
       const currentBinding = { ...requestResult.binding, boundAt: 2 };
       requestPluginConversationBindingMock.mockResolvedValueOnce(requestResult);

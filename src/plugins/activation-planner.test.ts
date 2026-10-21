@@ -1,4 +1,3 @@
-/** Tests manifest activation planning for commands, providers, channels, and capabilities. */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -14,6 +13,14 @@ let resolveManifestActivationPluginIds: typeof import("./activation-planner.js")
 type PlanParams = Parameters<typeof resolveManifestActivationPluginIds>[0];
 function ids(trigger: PlanParams["trigger"], options: Omit<PlanParams, "trigger"> = {}) {
   return resolveManifestActivationPluginIds({ trigger, ...options });
+}
+
+function expectHarness(
+  runtime: string,
+  expected: string[],
+  options: Omit<PlanParams, "trigger"> = {},
+) {
+  expect(ids({ kind: "agentHarness", runtime }, options)).toEqual(expected);
 }
 
 function mockRegistry(plugins: Record<string, unknown>[]) {
@@ -48,51 +55,32 @@ describe("activation planner", () => {
       },
       {
         id: "browser",
-        cliCommands: [
-          {
-            name: "browser",
-            description: "Manage the browser",
-            hasSubcommands: true,
-          },
-        ],
+        cliCommands: [{ name: "browser", description: "Manage the browser", hasSubcommands: true }],
         origin: "bundled",
       },
       {
         id: "openai",
         providers: ["openai"],
-        activation: {
-          onAgentHarnesses: ["codex"],
-        },
-        setup: {
-          providers: [{ id: "openai" }],
-        },
+        activation: { onAgentHarnesses: ["codex"] },
+        setup: { providers: [{ id: "openai" }] },
         origin: "bundled",
       },
       {
         id: "custom-harness-plugin",
-        activation: {
-          onAgentHarnesses: ["custom-harness"],
-        },
+        activation: { onAgentHarnesses: ["custom-harness"] },
         origin: "workspace",
       },
       {
         id: "load-path-harness-plugin",
-        activation: {
-          onAgentHarnesses: ["load-path-harness"],
-        },
+        activation: { onAgentHarnesses: ["load-path-harness"] },
         origin: "config",
       },
       {
         id: "demo-channel",
         channels: ["telegram"],
         hooks: ["before-agent-start"],
-        contracts: {
-          tools: ["web-search"],
-        },
-        activation: {
-          onRoutes: ["webhook"],
-          onCommands: ["demo-tools"],
-        },
+        contracts: { tools: ["web-search"] },
+        activation: { onRoutes: ["webhook"], onCommands: ["demo-tools"] },
         origin: "workspace",
       },
     ]);
@@ -106,47 +94,32 @@ describe("activation planner", () => {
   });
 
   it("plans manifest-owned custom harnesses and respects their activation policy", () => {
-    const trigger = { kind: "agentHarness", runtime: "custom-harness" } as const;
-    expect(ids(trigger)).toEqual(["custom-harness-plugin"]);
-
-    expect(
-      ids(trigger, {
-        config: { plugins: { entries: { "custom-harness-plugin": { enabled: false } } } },
-      }),
-    ).toEqual([]);
+    expectHarness("custom-harness", ["custom-harness-plugin"]);
+    expectHarness("custom-harness", [], {
+      config: { plugins: { entries: { "custom-harness-plugin": { enabled: false } } } },
+    });
   });
 
   it("requires canonical ids for explicit manifest owner trust", () => {
-    const trigger = { kind: "agentHarness", runtime: "custom-harness" } as const;
-    expect(
-      ids(trigger, {
-        config: { plugins: { allow: ["legacy-custom-harness-plugin"] } },
+    for (const [owner, expected] of [
+      ["legacy-custom-harness-plugin", []],
+      ["custom-harness-plugin", ["custom-harness-plugin"]],
+    ] as const) {
+      expectHarness("custom-harness", [...expected], {
+        config: { plugins: { allow: [owner] } },
         requireExplicitManifestOwnerTrust: true,
-      }),
-    ).toEqual([]);
-
-    expect(
-      ids(trigger, {
-        config: { plugins: { allow: ["custom-harness-plugin"] } },
-        requireExplicitManifestOwnerTrust: true,
-      }),
-    ).toEqual(["custom-harness-plugin"]);
+      });
+    }
   });
 
   it("treats load-path manifest owners as explicitly trusted for activation planning", () => {
-    const trigger = { kind: "agentHarness", runtime: "load-path-harness" } as const;
-    expect(
-      ids(trigger, {
-        requireExplicitManifestOwnerTrust: true,
-      }),
-    ).toEqual(["load-path-harness-plugin"]);
-
-    expect(
-      ids(trigger, {
-        config: { plugins: { deny: ["load-path-harness-plugin"] } },
-        requireExplicitManifestOwnerTrust: true,
-      }),
-    ).toEqual([]);
+    expectHarness("load-path-harness", ["load-path-harness-plugin"], {
+      requireExplicitManifestOwnerTrust: true,
+    });
+    expectHarness("load-path-harness", [], {
+      config: { plugins: { deny: ["load-path-harness-plugin"] } },
+      requireExplicitManifestOwnerTrust: true,
+    });
   });
 
   it("keeps ids-only capability planning stable", () => {
@@ -177,9 +150,7 @@ describe("activation planner", () => {
       },
       {
         id: "owned-tool",
-        contracts: {
-          tools: ["custom-tool"],
-        },
+        contracts: { tools: ["custom-tool"] },
         origin: "workspace",
       },
     ]);
