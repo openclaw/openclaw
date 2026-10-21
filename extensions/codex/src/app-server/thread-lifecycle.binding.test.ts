@@ -3099,7 +3099,9 @@ describe("Codex app-server thread lifecycle bindings", () => {
       await startOrResumeThread({ client, params, dynamicTools });
       await endTurn("thread-1");
       const reviewedBinding = await readCodexAppServerBinding(sessionFile);
-      type Acknowledgment = NonNullable<AgentHarnessAttemptParamsV2["providerReviewAcknowledgment"]>;
+      type Acknowledgment = NonNullable<
+        AgentHarnessAttemptParamsV2["providerReviewAcknowledgment"]
+      >;
       const methods: Pick<Acknowledgment, "read" | "assertRuntime" | "acceptNativeTurn"> = {
         read: () => ({
           phase: "pending",
@@ -3113,7 +3115,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
             api: params.model.api,
             nativeThreadId: "thread-1",
             nativeTurnId: "failed-turn",
-            review: { continuation: { message: "Continue the reviewed operation." } },
+            review: {
+              explanation: "Review the intended operation.",
+              continuation: { message: "Continue the reviewed operation." },
+            },
           },
         }),
         assertRuntime: vi.fn(),
