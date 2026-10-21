@@ -5,9 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
+import { formatCliFailureLines } from "../cli/failure-output.js";
 import { waitForCliSignalExit, waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { resolveStateDir } from "../config/paths.js";
 import * as backupCreate from "../infra/backup-create.js";
@@ -17,8 +18,12 @@ import * as integrity from "../infra/sqlite-integrity-worker.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
-import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
-import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
+import * as driver from "../infra/update-run-driver.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  recordUpdateRunStep,
+} from "../infra/update-run-ledger.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { migrateOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -40,32 +45,22 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { VERSION } from "../version.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 import { backupRestoreCommand } from "./backup-restore.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
 import * as backupVerify from "./backup-verify.js";
-import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
+import * as databasePreflight from "./doctor-database-preflight.js";
 import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
-import { guardUpdateDoctorSchemaUpgrade } from "./doctor-update-schema-guard.js";
+import {
+  guardUpdateDoctorSchemaUpgrade,
+  preflightUpdateDoctorCli,
+  preflightUpdatePackageLifecycle,
+} from "./doctor-update-schema-guard.js";
+import { externalDoctorEnv, pendingSchema } from "./doctor-update.test-support.js";
 
-beforeEach(() => {
-  // Exact 2026.9.2 package caller arguments; plugin deferral does not identify the schema phase.
-  for (const [key, value] of Object.entries(
-    buildUpdateDoctorEnv({
-      allowGatewayServiceRepair: false,
-      allowGatewayActivation: false,
-      deferConfiguredPluginInstallRepair: true,
-      serviceRepairPolicy: "external",
-      compatibilityHostVersion: VERSION,
-    }),
-  )) {
-    vi.stubEnv(key, value);
-  }
-  vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", undefined);
-  vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", undefined);
-});
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -76,6 +71,13 @@ function withLegacyAgent(
   postCore: boolean,
   run: (fixture: AgentFixture, state: OpenClawTestState) => Promise<void>,
 ) {
+  // Exact 2026.9.2 package caller arguments; plugin deferral does not identify the schema phase.
+  for (const [key, value] of Object.entries(externalDoctorEnv())) {
+    vi.stubEnv(key, value);
+  }
+  vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", VERSION);
+  vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", undefined);
+  vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", undefined);
   return withOpenClawTestState({ scenario: "minimal" }, async (state) =>
     run(await legacyAgentFixture(postCore), state),
   );
@@ -150,18 +152,18 @@ async function legacyAgentFixture(postCore: boolean) {
     restoreEmptyV21StorageForHistoricalFixture(db);
     removeCanonicalValidationFromHistoricalAgentFixture(db);
     db.exec(`
-      DROP TABLE session_transcript_cold_archives;
-      PRAGMA user_version = 19;
-      UPDATE schema_meta SET schema_version = 19 WHERE meta_key = 'primary';
-      INSERT INTO cache_entries(scope,key,value_json,expires_at,updated_at)
-        VALUES ('upgrade-proof','retained','{"keep":true}',NULL,7);
-    `);
+    DROP TABLE session_transcript_cold_archives;
+    PRAGMA user_version = 19;
+    UPDATE schema_meta SET schema_version = 19 WHERE meta_key = 'primary';
+    INSERT INTO cache_entries(scope,key,value_json,expires_at,updated_at)
+      VALUES ('upgrade-proof','retained','{"keep":true}',NULL,7);
+  `);
   });
   return {
     runId: run.runId,
     pathname,
     bytes: fs.readFileSync(pathname),
-    schemas: await prepareDoctorDatabasePreflight(),
+    schemas: await databasePreflight.prepareDoctorDatabasePreflight(),
   };
 }
 
@@ -170,9 +172,9 @@ it("rehearses shared-only schema changes before the shipped package rollback is 
     const pathname = resolveOpenClawStateSqlitePath();
     withDatabase(pathname, false, (database) => {
       database.exec(`PRAGMA user_version = 15;
-        DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';`);
+      DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';`);
     });
-    const schemas = await prepareDoctorDatabasePreflight({ scope: "state" });
+    const schemas = await databasePreflight.prepareDoctorDatabasePreflight({ scope: "state" });
     expect(schemas.pendingMigrations).toContainEqual(
       expect.objectContaining({ kind: "state", path: pathname, foundVersion: 15 }),
     );
@@ -506,14 +508,14 @@ it("refuses early unregistered WAL state and admits post-core repair after verif
     const db = new DatabaseSync(pathname);
     try {
       db.exec(`PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
-        PRAGMA wal_checkpoint(TRUNCATE);
-        INSERT INTO cache_entries(scope,key,value_json,expires_at,updated_at)
-          VALUES ('upgrade-proof','wal-only','{"durable":true}',NULL,8);`);
+      PRAGMA wal_checkpoint(TRUNCATE);
+      INSERT INTO cache_entries(scope,key,value_json,expires_at,updated_at)
+        VALUES ('upgrade-proof','wal-only','{"durable":true}',NULL,8);`);
       expect(fs.statSync(`${pathname}-wal`).size).toBeGreaterThan(32);
       // Online SQLite readers can update SHM read marks; DB/WAL/config are the
       // durable input bytes, and the WAL-only row below must remain readable.
       const expectUnchanged = captureBytes([pathname, `${pathname}-wal`, state.configPath]);
-      const schemas = await prepareDoctorDatabasePreflight();
+      const schemas = await databasePreflight.prepareDoctorDatabasePreflight();
       await expect(guardUpdateDoctorSchemaUpgrade({ schemas })).rejects.toThrow(
         "Missing recoverable database backup coverage",
       );
@@ -545,7 +547,10 @@ it("refuses early unregistered WAL state and admits post-core repair after verif
       const archive = await expectDefined(create.mock.results[0], "canonical backup creation")
         .value;
       const restoredRoot = state.path("restored");
-      await backupRestoreCommand(runtime(), { archive: archive.archivePath, target: restoredRoot });
+      await backupRestoreCommand(runtime(), {
+        archive: archive.archivePath,
+        target: restoredRoot,
+      });
       const restoredPath = path.join(
         restoredRoot,
         buildBackupArchivePath(archive.archiveRoot, pathname),
@@ -716,8 +721,8 @@ it("retains disposable coverage through the real migration of a mixed backed-up 
     withDatabase(external, false, (database) => {
       database.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
       database.exec(`PRAGMA user_version = 24;
-        INSERT INTO schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
-        VALUES ('primary', 'agent', 24, 'external', '2026.9.9', 1, 1)`);
+      INSERT INTO schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+      VALUES ('primary', 'agent', 24, 'external', '2026.9.9', 1, 1)`);
     });
     await state.writeConfig({
       plugins: { enabled: false },
@@ -728,7 +733,7 @@ it("retains disposable coverage through the real migration of a mixed backed-up 
       },
     });
     await closeStateDatabaseForTest();
-    const schemas = await prepareDoctorDatabasePreflight();
+    const schemas = await databasePreflight.prepareDoctorDatabasePreflight();
     expect(schemas.pendingMigrations?.filter((entry) => entry.kind === "agent")).toHaveLength(2);
     const beforeExternal = fs.readFileSync(external);
     stubRehearsalEnv(fs.realpathSync(state.stateDir));
@@ -759,5 +764,157 @@ it("retains disposable coverage through the real migration of a mixed backed-up 
       ).toEqual({ value_json: '{"keep":true}' });
     });
     expect(fs.readFileSync(external)).toEqual(beforeExternal);
+  });
+});
+
+describe("released Windows updater", () => {
+  type Scenario = {
+    version?: string;
+    platform?: "win32" | "darwin";
+    liveness?: "alive" | "dead" | "unknown";
+    previousDriver?: boolean;
+    noDriver?: boolean;
+    identityUnavailable?: boolean;
+    invocation?: "cli" | "flow" | "package";
+    finished?: boolean;
+    update?: boolean;
+    publicationOnly?: boolean;
+    databaseKind?: "state" | "agent";
+  };
+
+  async function inspectDoctor(scenario: Scenario) {
+    return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const recorded = { host: "update-fixture", pid: 4000, startIdentity: "100" };
+      const run = createUpdateRun({
+        trigger: "cli",
+        before: { version: scenario.version ?? "2026.9.4" },
+        origin: scenario.noDriver
+          ? {}
+          : scenario.previousDriver
+            ? {
+                driver: { ...recorded, pid: 4001 },
+                previousDrivers: [recorded],
+              }
+            : { driver: recorded },
+      });
+      if (scenario.identityUnavailable) {
+        recordUpdateRunStep(run.runId, {
+          step: "driver:identity-unavailable",
+          status: "completed",
+        });
+      }
+      if (scenario.finished) {
+        finishUpdateRun(run.runId, { status: "failed", reason: "fixture-finished" });
+      }
+      await closeStateDatabaseForTest();
+      const databasePath = resolveOpenClawStateSqlitePath();
+      const before = fs.readFileSync(databasePath);
+      const snapshotPath = state.path("diagnostic.sqlite");
+      const cleanup = () => {
+        fs.unlinkSync(snapshotPath);
+        return true;
+      };
+      // Use a closed private copy; native directory creation is proved separately.
+      vi.spyOn(sqliteSnapshot, "prepareSqliteReadOnlyLocation").mockImplementation(async () => {
+        fs.copyFileSync(databasePath, snapshotPath);
+        return {
+          location: snapshotPath,
+          cleanup,
+          cleanupAsync: async () => cleanup(),
+        };
+      });
+      // These are prepared preflight facts, not a synthetic migration or a claim
+      // that the current test database has the shipped schema's full layout.
+      const schemas = pendingSchema(databasePath, scenario.databaseKind ?? "state", 17, 19);
+      vi.spyOn(databasePreflight, "prepareDoctorDatabasePreflight").mockResolvedValue(schemas);
+      vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(null);
+      vi.spyOn(driver, "readUpdateRunDriver").mockReturnValue(recorded);
+      mockProcessPlatform(scenario.platform ?? "win32");
+      vi.spyOn(driver, "inspectUpdateRunDriver").mockImplementation((observed) =>
+        observed.pid === recorded.pid ? (scenario.liveness ?? "alive") : "dead",
+      );
+      for (const [name, value] of Object.entries(externalDoctorEnv())) {
+        vi.stubEnv(name, value);
+      }
+      if (scenario.update === false) {
+        vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
+      }
+      let error: unknown;
+      const result = await (
+        scenario.invocation === "package"
+          ? preflightUpdatePackageLifecycle()
+          : scenario.invocation === "flow"
+            ? guardUpdateDoctorSchemaUpgrade({
+                schemas,
+                statePublicationOnly: scenario.publicationOnly,
+              })
+            : preflightUpdateDoctorCli({})
+      ).catch((caught: unknown) => {
+        error = caught;
+      });
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+      return { error, result, schemas };
+    });
+  }
+
+  const refusalScenarios: (Scenario & { name: string })[] = [
+    { name: "publication-only pre-capture inspection", invocation: "flow", publicationOnly: true },
+    { name: "package lifecycle before repair", invocation: "package" },
+    { name: "live driver", liveness: "alive" },
+    { name: "unobservable driver", liveness: "unknown" },
+    { name: "live retained parent", previousDriver: true },
+    { name: "missing driver identity", noDriver: true },
+    { name: "unrecorded adopter with dead parent", identityUnavailable: true, liveness: "dead" },
+  ];
+  it.each(refusalScenarios)(
+    "refuses the released Windows ledger incompatibility before writes ($name)",
+    async (scenario) => {
+      const { error } = await inspectDoctor(scenario);
+      expect(error).toMatchObject({
+        code: "update-schema-bump-unfenced",
+        updaterVersion: "2026.9.4",
+        message: expect.stringContaining("The blocked schema change was not applied"),
+      });
+      // The shipped canary retains only 40 lines, each truncated to its last 512 characters.
+      const parentOutput = formatCliFailureLines({
+        title: "CLI failed",
+        error,
+        argv: ["node", "openclaw", "doctor", "--fix", "--non-interactive"],
+        env: {},
+      })
+        .join("\n")
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .map((line) => line.slice(-512))
+        .slice(-40)
+        .join("\n");
+      for (const text of [
+        "Doctor refused update-time schema repair driven by OpenClaw 2026.9.4:",
+        "openclaw gateway stop && npm install -g openclaw@",
+        "original service account, package prefix, profile, and state/config overrides",
+      ]) {
+        expect(parentOutput).toContain(text);
+      }
+    },
+  );
+
+  const allowedScenarios: (Scenario & { name: string })[] = [
+    { name: "current package updater", invocation: "package", version: "2026.9.6" },
+    { name: "other shipped package updater", invocation: "package", version: "2026.9.2" },
+    { name: "independent package installation", invocation: "package", update: false },
+    { name: "current driver", version: "2026.9.6" },
+    { name: "other platform", platform: "darwin" },
+    { name: "dead driver", liveness: "dead" },
+    { name: "finished driver", finished: true },
+    { name: "independent Doctor", update: false },
+    { name: "agent-only migration", databaseKind: "agent" },
+    { name: "direct flow with separate caller admission", invocation: "flow" },
+  ];
+  it.each(allowedScenarios)("preserves existing Doctor admission for $name", async (scenario) => {
+    const { error, result, schemas } = await inspectDoctor(scenario);
+    expect(error).toBeUndefined();
+    expect(result).toBe(
+      scenario.update === false || scenario.invocation === "package" ? undefined : schemas,
+    );
   });
 });

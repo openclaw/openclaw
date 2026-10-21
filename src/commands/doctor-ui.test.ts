@@ -1,17 +1,24 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as notes from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../gateway/control-ui-root-assets.js";
+import * as assets from "../infra/control-ui-assets.js";
 import * as packageRoot from "../infra/openclaw-root.js";
 import * as commands from "../process/exec.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import * as version from "../version.js";
 import { fixtureGit } from "./doctor-git.test-support.js";
+import { createDoctorPrompter } from "./doctor-prompter.js";
 import {
   detectUiProtocolFreshnessIssues,
+  maybeRepairUiProtocolFreshness,
   uiProtocolFreshnessIssueToHealthFinding,
   uiProtocolFreshnessIssueToRepairEffects,
 } from "./doctor-ui.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -139,4 +146,121 @@ it("does not report stale assets when git history is unavailable", async () => {
   await touch(path.join(root, "packages/gateway-protocol/src/schema.ts"), new Date("2026-01-02"));
   mockGitLog(null);
   await expect(inspectRoot(root)).resolves.toEqual([]);
+});
+
+describe("UI repair", () => {
+  const buildId = "doctor-runtime-build";
+  const runtime = createTestRuntime();
+  const prompter = createDoctorPrompter({ runtime, options: { yes: true, force: true } });
+  let root: string;
+  const repair = () => maybeRepairUiProtocolFreshness(runtime, prompter);
+  const writeIndex = async (html: string) => {
+    const index = path.join(root, "dist/control-ui/index.html");
+    await fs.mkdir(path.dirname(index), { recursive: true });
+    await fs.writeFile(index, html);
+    return index;
+  };
+
+  beforeEach(async () => {
+    root = await createOpenClawRoot();
+    await touch(path.join(root, "ui/package.json"), new Date("2026-01-01"));
+    vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
+    vi.spyOn(packageRoot, "resolveOpenClawPackageRootSync").mockReturnValue(root);
+    vi.spyOn(version, "resolveRuntimeServiceBuildId").mockReturnValue(buildId);
+    vi.spyOn(notes, "note").mockImplementation(() => {});
+    vi.spyOn(prompter, "confirmAutoFix").mockResolvedValue(true);
+    vi.spyOn(prompter, "confirmAggressiveAutoFix").mockResolvedValue(true);
+    vi.spyOn(assets, "ensureControlUiAssetsBuilt").mockImplementation(async (_runtime, opts) => {
+      opts?.onBuildStart?.();
+      return { ok: true, built: true };
+    });
+    mockGitLog("abc123 protocol schema changed\n");
+  });
+
+  it("routes missing app-owned assets to the host without package or git commands", async () => {
+    await fs.writeFile(
+      path.join(root, "openclaw-install-owner.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        owner: "macos-app",
+        displayName: "OpenClaw.app",
+        updateHint: "Update OpenClaw.app to update this Gateway.",
+      }),
+    );
+    await repair();
+    expect(notes.note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+      ),
+      "UI",
+    );
+    for (const fn of [
+      prompter.confirmAutoFix,
+      prompter.confirmAggressiveAutoFix,
+      assets.ensureControlUiAssetsBuilt,
+      commands.runCommandWithTimeout,
+    ]) {
+      expect(fn).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([false, true])("repairs source assets (protocol changed=%s)", async (force) => {
+    await writeIndex(
+      force
+        ? `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${buildId}-${"a".repeat(64)}"></html>`
+        : '<script src="./assets/startup.js"></script>',
+    );
+    await repair();
+    expect(prompter[force ? "confirmAggressiveAutoFix" : "confirmAutoFix"]).toHaveBeenCalledOnce();
+    expect(assets.ensureControlUiAssetsBuilt).toHaveBeenCalledWith(runtime, {
+      root,
+      expectedBuildId: buildId,
+      force,
+      onBuildStart: expect.any(Function),
+    });
+    expect(commands.runCommandWithTimeout).toHaveBeenCalledTimes(force ? 1 : 0);
+    if (force) {
+      expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
+      expect(notes.note).toHaveBeenCalledWith("UI rebuild complete.", "UI");
+      expect(notes.note).toHaveBeenCalledWith(expect.stringContaining("ui:build"), "UI Freshness");
+    }
+  });
+
+  it.each(["incomplete", "markerless", "dev-build"])(
+    "checks packaged UI identity without rebuilding it: %s",
+    async (failure) => {
+      const marker =
+        failure === "dev-build" ? ` ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="dev-${"a".repeat(64)}"` : "";
+      const html = `<html${marker}><script src="./assets/startup.js"></script></html>`;
+      const indexPath = await writeIndex(html);
+      if (failure !== "incomplete") {
+        await fs.mkdir(path.join(path.dirname(indexPath), "assets"));
+        await fs.writeFile(path.join(path.dirname(indexPath), "assets/startup.js"), "// startup");
+      }
+      await fs.rm(path.join(root, "ui/package.json"));
+      await repair();
+      if (failure === "dev-build") {
+        expect(notes.note).not.toHaveBeenCalled();
+      } else {
+        expect(notes.note).toHaveBeenCalledWith(
+          expect.stringContaining("Reinstall OpenClaw to restore bundled Control UI assets."),
+          expect.any(String),
+        );
+      }
+      expect(assets.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+      expect(commands.runCommandWithTimeout).not.toHaveBeenCalled();
+      expect(await fs.readFile(indexPath, "utf8")).toBe(html);
+    },
+  );
+
+  it("reports owner-normalized build failures instead of claiming repair success", async () => {
+    vi.mocked(assets.ensureControlUiAssetsBuilt).mockResolvedValueOnce({
+      ok: false,
+      built: false,
+      message: "Control UI build failed: spawn ENOENT",
+    });
+    await repair();
+    expect(notes.note).toHaveBeenCalledWith("Control UI build failed: spawn ENOENT", "UI");
+    expect(notes.note).not.toHaveBeenCalledWith("UI build complete.", "UI");
+  });
 });

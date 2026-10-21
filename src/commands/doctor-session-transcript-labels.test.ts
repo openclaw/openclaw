@@ -69,11 +69,6 @@ function createMessageEvent({
   return { type: "message", id, parentId, message: { role, content } };
 }
 
-function findMessageContent(events: readonly unknown[], eventId: string): unknown {
-  const event = events.find((entry) => isRecord(entry) && entry.id === eventId);
-  return isRecord(event) && isRecord(event.message) ? event.message.content : undefined;
-}
-
 function expectNote(message: unknown) {
   expect(note).toHaveBeenCalledWith(message, "Session transcript labels");
 }
@@ -81,29 +76,29 @@ function expectNote(message: unknown) {
 describe("doctor SQLite session transcript label migration", () => {
   let state: OpenClawTestState;
   let databaseOptions: OpenClawAgentDatabaseOptions;
+  let database: OpenClawAgentDatabase;
   const health = (shouldRepair: boolean) =>
     noteSessionTranscriptLabelHealth({ cfg: CFG, env: state.env, shouldRepair });
-  const snapshot = (database: OpenClawAgentDatabase, sessionId = SESSION_ID) =>
-    readTranscriptSnapshot(database, sessionId);
-  const messageContent = (database: OpenClawAgentDatabase, id: string, sessionId = SESSION_ID) =>
-    findMessageContent(snapshot(database, sessionId).events, id);
-  const toolRow = (database: OpenClawAgentDatabase) =>
+  const snapshot = (sessionId = SESSION_ID) => readTranscriptSnapshot(database, sessionId);
+  const messageContent = (id: string, sessionId = SESSION_ID) => {
+    const event = snapshot(sessionId).events.find((entry) => isRecord(entry) && entry.id === id);
+    return isRecord(event) && isRecord(event.message) ? event.message.content : undefined;
+  };
+  const toolRow = () =>
     database.db
       .prepare("SELECT * FROM transcript_events WHERE session_id = ? AND seq = 1")
       .get(SESSION_ID);
   const write = (change: (database: OpenClawAgentDatabase) => void) =>
     agentDatabase.runOpenClawAgentWriteTransaction(change, databaseOptions);
-  const fencedThread = () =>
-    legacyFence("Thread starter (untrusted, for context):", '{"body":"test"}');
 
   function appendTranscriptFixture(
     events: readonly TranscriptEvent[],
     scope: { sessionId?: string; sessionKey?: string } = {},
-  ): OpenClawAgentDatabase {
-    agentDatabase.runOpenClawAgentWriteTransaction((database) => {
+  ) {
+    agentDatabase.runOpenClawAgentWriteTransaction((writer) => {
       expect(
         appendTranscriptEventsInTransaction(
-          database,
+          writer,
           {
             ...databaseOptions,
             sessionId: scope.sessionId ?? SESSION_ID,
@@ -113,14 +108,13 @@ describe("doctor SQLite session transcript label migration", () => {
         ),
       ).toBe(events.length);
     }, databaseOptions);
-    return openOpenClawAgentDatabase(databaseOptions);
   }
 
   function seedMessageTranscript(
     messages: readonly MessageFixture[],
     scope: { sessionId?: string; sessionKey?: string } = {},
-  ): OpenClawAgentDatabase {
-    return appendTranscriptFixture(
+  ) {
+    appendTranscriptFixture(
       [createSessionEvent(scope.sessionId), ...messages.map(createMessageEvent)],
       scope,
     );
@@ -136,7 +130,7 @@ describe("doctor SQLite session transcript label migration", () => {
     );
   }
 
-  function seedLegacyLabelTranscript(): OpenClawAgentDatabase {
+  function seedLegacyLabelTranscript() {
     const legacyContent = [
       "[Wed 2026-03-11 23:51 PDT] " + legacyFence(undefined, '{"chat_type":"direct"}'),
       legacyFence("Thread starter (untrusted, for context):", '{"body":"hi"}'),
@@ -144,7 +138,7 @@ describe("doctor SQLite session transcript label migration", () => {
       "actual user question",
       `${CONTEXT_LABEL}\nprovenance line`,
     ].join("\n\n");
-    return seedMessageTranscript([
+    seedMessageTranscript([
       { id: "legacy-user", content: legacyContent },
       {
         id: "assistant",
@@ -167,6 +161,7 @@ describe("doctor SQLite session transcript label migration", () => {
       prefix: "openclaw-doctor-transcript-labels-",
     });
     databaseOptions = { agentId: AGENT_ID, env: state.env };
+    database = openOpenClawAgentDatabase(databaseOptions);
   });
 
   afterEach(async () => {
@@ -180,7 +175,7 @@ describe("doctor SQLite session transcript label migration", () => {
   it("skips compressed tool bodies and repairs duplicate-key user and assistant labels", async () => {
     const legacyContent =
       "Conversation info (untrusted metadata):\n```json\n{}\n```\n" + "retained text ".repeat(100);
-    const database = appendTranscriptFixture([
+    appendTranscriptFixture([
       createSessionEvent(),
       {
         type: "message",
@@ -189,7 +184,7 @@ describe("doctor SQLite session transcript label migration", () => {
       },
     ]);
     await waitForSessionTranscriptIndexReconcile(databaseOptions);
-    const storedTool = toolRow(database);
+    const storedTool = toolRow();
     expect(storedTool?.event_zstd).toBeInstanceOf(Uint8Array);
     const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
     await health(false);
@@ -217,17 +212,26 @@ describe("doctor SQLite session transcript label migration", () => {
     await health(true);
 
     for (const id of ["last-role-user", "last-message-assistant"]) {
-      expect(messageContent(database, id)).toContain(
-        `Conversation info: ${INBOUND_CONTEXT_MARKER}`,
-      );
+      expect(messageContent(id)).toContain(`Conversation info: ${INBOUND_CONTEXT_MARKER}`);
     }
-    expect(toolRow(database)).toEqual(storedTool);
+    expect(toolRow()).toEqual(storedTool);
     expectNote("- Rewrote legacy inbound-context labels in 1 session (2 events).");
   });
 
   it("detects and idempotently rewrites legacy labels in user events", async () => {
-    const database = seedLegacyLabelTranscript();
-    const before = snapshot(database);
+    seedLegacyLabelTranscript();
+    // Maintenance keeps stored row/search timestamps and advances only the mutation watermark.
+    const oldTimestamp = 1_000_000;
+    write(({ db }) => {
+      db.prepare("UPDATE transcript_events SET created_at = ? WHERE session_id = ?").run(
+        oldTimestamp,
+        SESSION_ID,
+      );
+      db.prepare(
+        "UPDATE session_windows SET transcript_updated_at = ?, transcript_observed_at = ? WHERE session_id = ?",
+      ).run(oldTimestamp, oldTimestamp - 1000, SESSION_ID);
+    });
+    const before = snapshot();
     const originalStorage = database.db
       .prepare("SELECT * FROM transcript_events ORDER BY seq")
       .all();
@@ -239,7 +243,7 @@ describe("doctor SQLite session transcript label migration", () => {
 
     await health(false);
 
-    expect(snapshot(database).rows).toEqual(before.rows);
+    expect(snapshot().rows).toEqual(before.rows);
     expect(recoveryDirectories()).toEqual([]);
     expectNote(
       '- Found 1 session with legacy inbound-context labels.\n- Run "openclaw doctor --fix" to rewrite them.',
@@ -260,8 +264,8 @@ describe("doctor SQLite session transcript label migration", () => {
       );
     }
 
-    const repaired = snapshot(database);
-    const repairedContent = findMessageContent(repaired.events, "legacy-user");
+    const repaired = snapshot();
+    const repairedContent = messageContent("legacy-user");
     expect(repairedContent).toBe(
       [
         "[Wed 2026-03-11 23:51 PDT] " +
@@ -275,19 +279,37 @@ describe("doctor SQLite session transcript label migration", () => {
     expect(hasInboundMetadataSentinel(repairedContent as string)).toBe(true);
     expect(stripInboundMetadata(repairedContent as string)).toBe("actual user question");
     expect(repaired.rows.slice(2)).toEqual(untouchedRows);
+    expect(
+      database.db.prepare("SELECT seq, created_at FROM transcript_events ORDER BY seq").all(),
+    ).toEqual(originalStorage.map(({ seq, created_at }) => ({ seq, created_at })));
+    expect(
+      database.db
+        .prepare("SELECT transcript_updated_at AS v FROM session_windows WHERE session_id = ?")
+        .get(SESSION_ID)?.v,
+    ).toBe(oldTimestamp + 1);
+    await waitForSessionTranscriptIndexReconcile(databaseOptions);
+    expect(
+      Number(
+        database.db
+          .prepare(
+            "SELECT timestamp AS v FROM session_transcript_fts WHERE session_id = ? AND message_id = ?",
+          )
+          .get(SESSION_ID, "legacy-user")?.v,
+      ),
+    ).toBe(oldTimestamp);
     expectNote("- Rewrote legacy inbound-context labels in 1 session (1 event).");
 
     note.mockClear();
     const afterFirstRepair = repaired.rows;
     await health(true);
 
-    expect(snapshot(database).rows).toEqual(afterFirstRepair);
+    expect(snapshot().rows).toEqual(afterFirstRepair);
     expect(note).not.toHaveBeenCalled();
     expect(recoveryDirectories()).toEqual(backups);
   });
 
   it("rejects a sibling change between detection and label repair", async () => {
-    const database = seedLegacyLabelTranscript();
+    seedLegacyLabelTranscript();
     const before = readTranscriptEventRows(database, SESSION_ID);
     changeBeforeRepair((db) => {
       const update = createTranscriptPayloadUpdater(db.db, SESSION_ID);
@@ -301,7 +323,7 @@ describe("doctor SQLite session transcript label migration", () => {
   });
 
   it("observes later sessions changed while an earlier session is repaired", async () => {
-    const database = seedLegacyLabelTranscript();
+    seedLegacyLabelTranscript();
     const laterSessionId = "z-later-session";
     seedMessageTranscript([{ id: "later-user", content: "unchanged" }], {
       sessionId: laterSessionId,
@@ -318,7 +340,7 @@ describe("doctor SQLite session transcript label migration", () => {
 
     await health(true);
 
-    expect(messageContent(database, "later-user", laterSessionId)).toContain(
+    expect(messageContent("later-user", laterSessionId)).toContain(
       `Conversation info: ${INBOUND_CONTEXT_MARKER}`,
     );
     expectNote("- Rewrote legacy inbound-context labels in 2 sessions (2 events).");
@@ -326,12 +348,10 @@ describe("doctor SQLite session transcript label migration", () => {
 
   it("preserves the bare Context header for a CRLF active-memory block", async () => {
     const legacyContent = `${CONTEXT_LABEL}\r\n<active_memory_plugin>\r\nUser prefers aisle seats.\r\n</active_memory_plugin>\r\n\r\nWhat should I grab?`;
-    const database = seedMessageTranscript([
-      { id: "crlf-active-memory-user", content: legacyContent },
-    ]);
+    seedMessageTranscript([{ id: "crlf-active-memory-user", content: legacyContent }]);
     await health(true);
 
-    const repairedContent = messageContent(database, "crlf-active-memory-user");
+    const repairedContent = messageContent("crlf-active-memory-user");
     expect(typeof repairedContent).toBe("string");
     expect(repairedContent).toContain("Context:\r\n<active_memory_plugin>");
     expect(repairedContent).not.toContain(`Context: ${INBOUND_CONTEXT_MARKER}`);
@@ -357,11 +377,11 @@ describe("doctor SQLite session transcript label migration", () => {
       ].join("\n\n"),
     ],
   ])("preserves %s verbatim", async (_name, content) => {
-    const database = seedMessageTranscript([{ id: "user-prose", content }]);
-    const before = snapshot(database).rows;
+    seedMessageTranscript([{ id: "user-prose", content }]);
+    const before = snapshot().rows;
     for (const shouldRepair of [false, true]) {
       await health(shouldRepair);
-      expect(snapshot(database).rows).toEqual(before);
+      expect(snapshot().rows).toEqual(before);
       expect(note).not.toHaveBeenCalled();
     }
   });
@@ -370,7 +390,7 @@ describe("doctor SQLite session transcript label migration", () => {
     const assistantEcho =
       legacyFence(undefined, '{"channel":"discord"}') + "\n\nSure, here is the answer.";
     const capitalizedEcho = `Sure, here is the answer.\n\n${CONTEXT_LABEL}\nChannel provenance.`;
-    const database = seedMessageTranscript([
+    seedMessageTranscript([
       { id: "assistant-echo", content: assistantEcho, role: "assistant" },
       { id: "assistant-context-echo", content: capitalizedEcho, role: "assistant" },
     ]);
@@ -391,83 +411,20 @@ describe("doctor SQLite session transcript label migration", () => {
     });
     await health(true);
 
-    const content = messageContent(database, "assistant-echo");
+    const content = messageContent("assistant-echo");
     expect(content).toContain(`Conversation info: ${INBOUND_CONTEXT_MARKER}`);
     expect(content).not.toContain("Conversation info (untrusted metadata):");
     expect(hasInboundMetadataSentinel(content as string)).toBe(true);
     expect(stripInboundMetadata(content as string)).toBe("Sure, here is the answer.");
-    const capitalizedContent = messageContent(database, "assistant-context-echo");
+    const capitalizedContent = messageContent("assistant-context-echo");
     expect(capitalizedContent).toContain(`Context: ${INBOUND_CONTEXT_MARKER}`);
     expect(capitalizedContent).not.toContain("Untrusted context");
     expect(stripInboundMetadata(capitalizedContent as string)).toBe("Sure, here is the answer.");
   });
 
-  it("preserves seq and created_at during surgical repair (metadata preservation test)", async () => {
-    const database = seedMessageTranscript([
-      { id: "legacy-fenced", content: fencedThread() },
-      {
-        id: "normal-msg",
-        content: "normal response",
-        parentId: "legacy-fenced",
-        role: "assistant",
-      },
-    ]);
-    const readRowMetadata = () =>
-      database.db
-        .prepare(
-          "SELECT seq, created_at FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
-        )
-        .all(SESSION_ID);
-    const before = snapshot(database);
-    const beforeMetadata = readRowMetadata();
-
-    const OLD_UPDATED_AT = 1_000_000;
-    write((db) => {
-      db.db
-        .prepare(
-          "UPDATE session_windows SET transcript_updated_at = ?, transcript_observed_at = ? WHERE session_id = ?",
-        )
-        .run(OLD_UPDATED_AT, OLD_UPDATED_AT - 1000, SESSION_ID);
-    });
-    await health(true);
-
-    const after = snapshot(database);
-    expect(after.rows.map((row) => row.seq)).toEqual(before.rows.map((row) => row.seq));
-    expect(readRowMetadata()).toEqual(beforeMetadata);
-    // Invalidate projections without jumping recency to repair-time.
-    expect(
-      database.db
-        .prepare("SELECT transcript_updated_at AS v FROM session_windows WHERE session_id = ?")
-        .get(SESSION_ID)?.v,
-    ).toBe(OLD_UPDATED_AT + 1);
-    expect(after.rows[1]?.eventJson).not.toBe(before.rows[1]?.eventJson);
-  });
-
-  it("preserves FTS entry timestamps when rebuilding the index during repair", async () => {
-    const database = seedMessageTranscript([{ id: "fts-user", content: fencedThread() }]);
-    // Timestamp-less messages must fall back to their original row timestamp, not repair-time.
-    const OLD_CREATED_AT = 1_000_000;
-    write((db) => {
-      db.db
-        .prepare("UPDATE transcript_events SET created_at = ? WHERE session_id = ?")
-        .run(OLD_CREATED_AT, SESSION_ID);
-    });
-    await health(true);
-    await waitForSessionTranscriptIndexReconcile(databaseOptions);
-    expect(
-      Number(
-        database.db
-          .prepare(
-            "SELECT timestamp AS v FROM session_transcript_fts WHERE session_id = ? AND message_id = ?",
-          )
-          .get(SESSION_ID, "fts-user")?.v,
-      ),
-    ).toBe(OLD_CREATED_AT);
-  });
-
   it("isolates malformed siblings before labels", async () => {
     const CORRUPT_SESSION_ID = "corrupt-sibling-session";
-    const database = seedLegacyLabelTranscript();
+    seedLegacyLabelTranscript();
     seedMessageTranscript(
       [
         { id: "malformed-sibling", content: "response", role: "assistant" },
@@ -487,7 +444,7 @@ describe("doctor SQLite session transcript label migration", () => {
 
     await health(true);
 
-    const cleanContent = messageContent(database, "legacy-user");
+    const cleanContent = messageContent("legacy-user");
     expect(cleanContent).toContain("Conversation info:");
     expect(cleanContent).not.toContain("Conversation info (untrusted metadata):");
 

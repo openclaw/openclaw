@@ -4,24 +4,38 @@ import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { prepareClientCredentialMigration } from "../infra/client-credential-migration.js";
+import { createClientCredentialMigrationFixture } from "../infra/client-credential-migration.test-support.js";
+import { runClientCredentialOperation } from "../infra/client-credential-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  listSessionSqliteMigrationManifestPaths,
+  readSessionSqliteMigrationManifest,
+} from "../infra/session-sqlite-migration-manifest.js";
 import { readSqliteReaderDiagnosticsForPath } from "../infra/sqlite-reader-lifecycle.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { isSqlitePathOnBtrfs } from "../infra/sqlite-wal-filesystem.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
+import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
+import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
+import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { inspectDoctorSqliteNoCow, repairDoctorSqliteNoCow } from "./doctor-sqlite-nocow.js";
 import {
   baseAcl,
   inheritedDefaultAcl,
   createDoctorNoCowToolFixture,
 } from "./doctor-sqlite-nocow.test-support.js";
+import * as updateCaptureCleanup from "./update-capture-cleanup.js";
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -71,14 +85,26 @@ function seedDatabase() {
   fs.writeFileSync(path.join(directory, "sibling.txt"), "preserve me");
 }
 
-async function repair(assertCurrent = () => {}) {
-  const result = await repairDoctorSqliteNoCow({
+function rewrite(assertCurrent = () => {}) {
+  return repairDoctorSqliteNoCow({
     paths: [sqlitePath],
     stateDir: root,
     env: { ...process.env, OPENCLAW_STATE_DIR: root },
     assertCurrent,
   });
+}
+
+async function repair(assertCurrent = () => {}) {
+  const result = await rewrite(assertCurrent);
   return [...result.changes, ...result.warnings];
+}
+
+async function useNativeTools(useNative: (command: string) => boolean) {
+  const native = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const tools = vi.mocked(spawnSync).getMockImplementation()!;
+  vi.mocked(spawnSync).mockImplementation((command, args, options) =>
+    useNative(command) ? native.spawnSync(command, args, options) : tools(command, args, options),
+  );
 }
 
 function expectDatabaseValue(pathname: string, table: string, value: string) {
@@ -171,13 +197,8 @@ it.skipIf(process.platform !== "linux")(
     await withOpenClawTestState(
       { scenario: "external-service", label: "doctor-nocow-owner" },
       async () => {
-        const native =
-          await vi.importActual<typeof import("node:child_process")>("node:child_process");
-        const fakeTools = vi.mocked(spawnSync).getMockImplementation()!;
-        vi.mocked(spawnSync).mockImplementation((command, args, options) =>
-          ["lsattr", "getfacl", "setfacl", "mv"].includes(command)
-            ? fakeTools(command, args, options)
-            : native.spawnSync(command, args, options),
+        await useNativeTools(
+          (command) => !["lsattr", "getfacl", "setfacl", "mv"].includes(command),
         );
         const log = vi.fn();
         const maintenance = await beginDoctorMaintenance({
@@ -191,11 +212,6 @@ it.skipIf(process.platform !== "linux")(
             const agents = ["main", "secondary", "unconfigured"].map((agentId) =>
               openOpenClawAgentDatabase({ agentId }),
             );
-            for (const database of [state, ...agents]) {
-              database.db.exec(
-                "CREATE TABLE nocow_payload(value TEXT); INSERT INTO nocow_payload VALUES ('preserved');",
-              );
-            }
             for (const agent of agents) {
               loadPersistedAuthProfileStore(path.dirname(agent.path));
             }
@@ -223,18 +239,9 @@ it.skipIf(process.platform !== "linux")(
           expect(fixture.exchanges).toBeGreaterThanOrEqual(4);
           expect(handleCounts.length).toBeGreaterThan(0);
           expect(handleCounts.every((count) => count === 0)).toBe(true);
-          for (const [index, pathname] of paths.entries()) {
-            expect(fs.statSync(pathname).ino).not.toBe(originals[index]);
-            const storeDir = path.dirname(pathname);
-            const parent = path.dirname(storeDir);
-            const retained = fs
-              .readdirSync(parent)
-              .find((name) => name.startsWith(`${path.basename(storeDir)}.nocow-backup-`))!;
-            expect(fs.statSync(path.join(parent, retained, path.basename(pathname))).ino).toBe(
-              originals[index],
-            );
-            expectDatabaseValue(pathname, "nocow_payload", "preserved");
-          }
+          expect(
+            paths.every((pathname, index) => fs.statSync(pathname).ino !== originals[index]),
+          ).toBe(true);
           expect(
             log.mock.calls.filter(([line]) => line.startsWith("Rewrote SQLite files")),
           ).toHaveLength(4);
@@ -274,13 +281,7 @@ it.skipIf(process.platform !== "linux")(
         .toSorted((left, right) => left - right);
     const descriptors = sourceDescriptors();
     expect(descriptors.length).toBeGreaterThanOrEqual(2);
-    const native = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    const fakeTools = vi.mocked(spawnSync).getMockImplementation()!;
-    vi.mocked(spawnSync).mockImplementation((command, args, options) =>
-      command === "fuser"
-        ? native.spawnSync(command, args, options)
-        : fakeTools(command, args, options),
-    );
+    await useNativeTools((command) => command === "fuser");
     try {
       expect((await repair()).join("\n")).toContain("store files are open");
       expect(sourceDescriptors()).toEqual(descriptors);
@@ -605,4 +606,165 @@ it.each([
       fs.readdirSync(root).filter((name) => name.startsWith("state.nocow-snapshots-")),
     ).toEqual([]);
   }
+});
+
+describe("Doctor NOCOW recovery identities", () => {
+  let env: NodeJS.ProcessEnv;
+
+  function readTarget() {
+    return readSessionSqliteMigrationManifest(listSessionSqliteMigrationManifestPaths(env)[0]!)!
+      .targets[0]!;
+  }
+
+  async function prepareCompletedBackup() {
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => {},
+    });
+    try {
+      await maintenance.run(async () => {
+        await backupDoctorMigrationDatabases({
+          env,
+          pendingDatabasePaths: [sqlitePath],
+          databasePaths: [sqlitePath],
+        });
+        completeDoctorMigrationBackups(env, [sqlitePath]);
+      });
+    } finally {
+      await maintenance.close();
+    }
+    return readTarget().plannedMoves[0]!.archivePath;
+  }
+
+  function retire() {
+    return retireSessionSqliteRecovery({
+      env,
+      preview: inspectSessionSqliteRecovery({ cfg: {}, env }),
+      readConfig: async () => ({}),
+      confirm: async () => true,
+    });
+  }
+
+  beforeEach(async () => {
+    env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    using database = new DatabaseSync(sqlitePath);
+    database.exec(
+      "PRAGMA user_version = 1; CREATE TABLE preserved (value TEXT NOT NULL); INSERT INTO preserved VALUES ('before migration');",
+    );
+    await useNativeTools((command) => command === process.execPath);
+    // Only the later-update gate is synthetic; backup, rewrite and retirement stay real.
+    vi.spyOn(updateCaptureCleanup, "readCompletedUpdateHistory").mockReturnValue({
+      runs: [],
+      latestCompletedStartedAt: Date.now() + 86_400_000,
+    });
+  });
+
+  it.each([false, true])(
+    "preserves migrated credentials only for the rewritten generation (replaced beforehand: %s)",
+    async (replaced) => {
+      fs.rmSync(sqlitePath);
+      const credentials = await createClientCredentialMigrationFixture(root);
+      try {
+        credentials.maintenance.run(() =>
+          runSqliteImmediateTransactionSync(credentials.source, () => {
+            prepareClientCredentialMigration(credentials.source, {
+              path: sqlitePath,
+              env,
+              fromVersion: 25,
+              capture: credentials.maintenance.capture,
+            });
+            credentials.source.exec(
+              "UPDATE schema_meta SET schema_version=29; PRAGMA user_version=29;",
+            );
+          }),
+        );
+      } finally {
+        credentials.source.close();
+        await credentials.maintenance.close();
+      }
+      const readToken = () =>
+        runClientCredentialOperation(env, {
+          kind: "token.read",
+          key: { device_id: credentials.identity.deviceId, role: "v2.gateway.operator" },
+        });
+      expect(readToken()).toMatchObject({
+        kind: "token",
+        token: { token: "token-original", scopes_json: '["operator.read"]' },
+      });
+      if (replaced) {
+        const replacement = path.join(root, "replacement.sqlite");
+        fs.copyFileSync(sqlitePath, replacement);
+        fs.renameSync(replacement, sqlitePath);
+      }
+      const rewritten = await rewrite();
+      expect(rewritten.changes).toHaveLength(1);
+      if (replaced) {
+        expect(rewritten.warnings.join("\n")).toContain("recorded generation");
+        expect(readToken).toThrow("migration is incomplete or stale");
+      } else {
+        expect(rewritten.warnings).toEqual([]);
+        expect(readToken()).toMatchObject({
+          kind: "token",
+          token: { token: "token-original", scopes_json: '["operator.read"]' },
+        });
+      }
+    },
+  );
+
+  it("retires a recorded recovery original after a NOCOW rewrite without changing live data", async () => {
+    const backupPath = await prepareCompletedBackup();
+    const original = fs.readFileSync(backupPath);
+    const recorded = readTarget().plannedMoves[0]!.artifact!.identity;
+    expect((await rewrite()).warnings).toEqual([]);
+    expect(String(fs.lstatSync(backupPath, { bigint: true }).ino)).toBe(recorded.ino);
+    expect(fs.readFileSync(backupPath)).toEqual(original);
+
+    const result = await retire();
+    expect(result.artifacts.find((item) => item.path === backupPath)).toMatchObject({
+      outcome: "removed",
+      reason: "rollback-original-retired",
+    });
+    expect(fs.existsSync(backupPath)).toBe(false);
+    expectDatabaseValue(sqlitePath, "preserved", "before migration");
+  });
+
+  it.each(["destination", "backup", "backup metadata"])(
+    "keeps the original protected after changing %s",
+    async (change) => {
+      const backupPath = await prepareCompletedBackup();
+      const recorded = readTarget();
+      if (change === "destination" || change === "backup") {
+        const replacedPath = change === "destination" ? sqlitePath : backupPath;
+        const replacement = path.join(root, "replacement.sqlite");
+        fs.copyFileSync(replacedPath, replacement);
+        fs.renameSync(replacement, replacedPath);
+      } else if (change === "backup metadata") {
+        const touched = new Date("2030-01-01T00:00:00Z");
+        fs.utimesSync(backupPath, touched, touched);
+      }
+      const rewritten = await rewrite();
+      expect(rewritten.changes).toHaveLength(1);
+      if (change === "destination") {
+        expect(rewritten.warnings.join("\n")).toContain("left unchanged");
+      } else {
+        expect(rewritten.warnings).toEqual([]);
+      }
+      if (change === "destination") {
+        expect(readTarget().databaseIdentity).toEqual(recorded.databaseIdentity);
+      } else {
+        expect(readTarget().plannedMoves[0]!.artifact!.identity).toEqual(
+          recorded.plannedMoves[0]!.artifact!.identity,
+        );
+      }
+      const result = await retire();
+      expect(result.artifacts.find((item) => item.path === backupPath)).toMatchObject({
+        outcome: "blocked",
+        reason:
+          change === "destination"
+            ? "destination-verification-failed"
+            : "artifact-metadata-changed",
+      });
+      expect(fs.existsSync(backupPath)).toBe(true);
+    },
+  );
 });

@@ -15,6 +15,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { createUnsafeIndexDrift } from "../state/sqlite-index-drift.test-support.js";
 import * as compactOwner from "./doctor-sqlite-compact.js";
 import { runDoctorStateSqliteCompact } from "./doctor-state-sqlite-compact.js";
 
@@ -78,30 +79,6 @@ function seedStateDatabase(env: NodeJS.ProcessEnv, withBloat = false): string {
 function readPragma(database: DatabaseSync, name: string): number {
   const row = database.prepare(`PRAGMA ${name};`).get() as Record<string, unknown>;
   return Number(row[name] ?? Object.values(row)[0]);
-}
-
-function createUnsafeIndexDrift(sqlitePath: string): void {
-  withDatabase(sqlitePath, false, (database) => {
-    database.exec(`
-      CREATE TABLE unsafe_index_records (
-        id INTEGER PRIMARY KEY,
-        indexed_value TEXT NOT NULL,
-        alternate_value TEXT NOT NULL
-      );
-      CREATE INDEX unsafe_index_records_value ON unsafe_index_records(indexed_value);
-      INSERT INTO unsafe_index_records (indexed_value, alternate_value)
-      VALUES ('alpha', 'zeta'), ('beta', 'eta'), ('gamma', 'theta');
-    `);
-    database.enableDefensive?.(false);
-    database.exec("PRAGMA writable_schema = ON;");
-    database
-      .prepare(
-        "UPDATE sqlite_schema SET sql = 'CREATE INDEX unsafe_index_records_value ON unsafe_index_records(alternate_value)' WHERE name = 'unsafe_index_records_value'",
-      )
-      .run();
-    database.exec("PRAGMA writable_schema = OFF;");
-    database.exec(`PRAGMA schema_version = ${readPragma(database, "schema_version") + 1};`);
-  });
 }
 
 function expectUnsafeIndex(database: DatabaseSync) {
