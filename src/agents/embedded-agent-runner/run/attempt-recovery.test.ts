@@ -197,6 +197,23 @@ function retryHeaders(milliseconds: string, seconds = "7") {
   return { "retry-after": seconds, "retry-after-ms": milliseconds };
 }
 
+function expectNoProfileFailure(fixture: Awaited<ReturnType<typeof recoverAfterTransportDrop>>) {
+  expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
+  expect(fixture.failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+}
+
+function expectNoContinuation(fixture: Awaited<ReturnType<typeof recoverAfterTransportDrop>>) {
+  expect(fixture.recovery).toEqual({ action: "proceed" });
+  expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
+}
+
+function failedBatch(toolName = "exec"): TransportDropScenario {
+  return {
+    failedToolCallId: "call_2",
+    lastToolError: { toolName, error: toolName === "write" ? "write failed" : "command failed" },
+  };
+}
+
 describe("recoverEmbeddedRunAttempt", () => {
   it.each([
     { retryAvailable: true, decision: "accepted", reason: "transient_retry" },
@@ -270,8 +287,7 @@ describe("recoverEmbeddedRunAttempt", () => {
         messages: fixture.attempt.messagesSnapshot,
       });
       expect(fixture.failoverRetryController.transientRetryCount).toBe(1);
-      expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(fixture.failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+      expectNoProfileFailure(fixture);
       expect(fixture.onAgentEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           stream: "run_status",
@@ -289,23 +305,20 @@ describe("recoverEmbeddedRunAttempt", () => {
         noTools: true,
         retryAvailable: false,
       });
-      expect(fixture.recovery).toEqual({ action: "proceed" });
-
       await expect(handleAssistantFailureAfterRecovery(fixture)).resolves.toMatchObject({
         action: "proceed",
         emptyErrorRetries: 0,
       });
-      expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
-      expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(fixture.failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+      expectNoContinuation(fixture);
+      expectNoProfileFailure(fixture);
     },
   );
 
   it.each(outputLimitScenarios)(
     "allows only one output-limit continuation even after successful model progress",
     async (scenario) => {
-      const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
-        await recoverAfterTransportDrop(scenario);
+      const fixture = await recoverAfterTransportDrop(scenario);
+      const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } = fixture;
       expect(recovery.action).toBe("retry");
       failoverRetryController.observeAttempt({
         providerRetryMaxRetries: 8,
@@ -315,8 +328,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(await recover()).toEqual({ action: "proceed" });
       expect(failoverRetryController.transientRetryCount).toBe(0);
       expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
-      expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-      expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+      expectNoProfileFailure(fixture);
     },
   );
 
@@ -366,18 +378,17 @@ describe("recoverEmbeddedRunAttempt", () => {
     { label: "tool media", toolMediaUrls: ["https://example.com/result.png"] },
     { label: "source reply already delivered", sourceReplyDelivered: true },
   ])("preserves $label after a length stop", async ({ label: _label, ...scenario }) => {
-    const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+    const fixture = await recoverAfterTransportDrop({
       ...emptyLengthScenario,
       ...scenario,
     });
-    expect(recovery).toEqual({ action: "proceed" });
-    expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+    expectNoContinuation(fixture);
   });
 
   it.each(["pending", "delivered", "error"] as const)(
     "preserves %s source delivery after an empty length stop",
     async (state) => {
-      const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+      const fixture = await recoverAfterTransportDrop({
         ...emptyLengthScenario,
         resolveReplyDelivery: async () => {
           if (state === "error") {
@@ -386,8 +397,7 @@ describe("recoverEmbeddedRunAttempt", () => {
           return state;
         },
       });
-      expect(recovery).toEqual({ action: "proceed" });
-      expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+      expectNoContinuation(fixture);
     },
   );
 
@@ -449,7 +459,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     { eventType: "response.incomplete", incompleteReason: "content_filter" },
     { eventType: "response.completed", incompleteReason: "max_output_tokens" },
   ])("does not resume an incomplete call after $eventType/$incompleteReason", async (details) => {
-    const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+    const fixture = await recoverAfterTransportDrop({
       ...outputLimitScenario,
       diagnostics: [
         {
@@ -459,8 +469,7 @@ describe("recoverEmbeddedRunAttempt", () => {
         },
       ],
     });
-    expect(recovery).toEqual({ action: "proceed" });
-    expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+    expectNoContinuation(fixture);
   });
 
   it.each<[string, TransportDropScenario]>([
@@ -675,20 +684,12 @@ describe("recoverEmbeddedRunAttempt", () => {
       "unresolved stream",
       { errorMessage: "Responses stream ended with unresolved tool calls", diagnostics: [] },
     ],
-    [
-      "settled failed batch",
-      { failedToolCallId: "call_2", lastToolError: { toolName: "exec", error: "command failed" } },
-    ],
+    ["settled failed batch", failedBatch()],
     ...[false, true].map((toolFailed): [string, TransportDropScenario] => [
       `idle timeout, tool failed=${toolFailed}`,
       {
         terminal: { kind: "timeout", phase: "prompt", source: "idle", aborted: true },
-        ...(toolFailed
-          ? {
-              failedToolCallId: "call_2",
-              lastToolError: { toolName: "exec", error: "command failed" },
-            }
-          : {}),
+        ...(toolFailed ? failedBatch() : {}),
       },
     ]),
     ...[0, 1].map((activeCount): [string, TransportDropScenario] => [
@@ -696,17 +697,13 @@ describe("recoverEmbeddedRunAttempt", () => {
       { codeModeSuspended: true, activeCount },
     ]),
     ["uncertain outcomes", { activeCount: 1 }],
-    [
-      "mismatched failed summary",
-      { failedToolCallId: "call_2", lastToolError: { toolName: "write", error: "write failed" } },
-    ],
+    ["mismatched failed summary", failedBatch("write")],
     [
       "parked failed batch",
       {
         activeCount: 1,
         codeModeSuspended: true,
-        failedToolCallId: "call_2",
-        lastToolError: { toolName: "exec", error: "command failed" },
+        ...failedBatch(),
       },
     ],
     [
@@ -740,8 +737,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       includeToolFailureInstruction: Boolean(scenario.lastToolError),
       messages: fixture.attempt.messagesSnapshot,
     });
-    expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(fixture.failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expectNoProfileFailure(fixture);
     expect(fixture.onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "run_status",
@@ -816,10 +812,9 @@ describe("recoverEmbeddedRunAttempt", () => {
     ]),
   ])("keeps the replay gate closed: %s", async (_label, scenario) => {
     const fixture = await recoverAfterTransportDrop(scenario);
-    expect(fixture.recovery).toEqual({ action: "proceed" });
+    expectNoContinuation(fixture);
     expect(fixture.failoverRetryController.transientRetryCount).toBe(0);
     expect(fixture.markOwnedTranscriptRetry).not.toHaveBeenCalled();
-    expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
   });
 
   it("surfaces before_agent_run blocks with current carried usage", async () => {

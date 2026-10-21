@@ -161,10 +161,10 @@ async function withCronBusy(
     reportFeedback: (message: string) => void,
     isCurrent: () => boolean,
   ) => Promise<void>,
-) {
+): Promise<string | null | void> {
   const client = state.client;
   if (!client || !state.connected || state.cronBusy) {
-    return;
+    return undefined;
   }
   const target = job ? { id: job.id, name: job.displayName ?? job.name } : null;
   const operation = {};
@@ -184,6 +184,7 @@ async function withCronBusy(
     await run(client, reportFeedback, isCurrent);
   } catch (err) {
     reportFeedback(formatUiError(err));
+    return isCurrent() ? state.cronError : null;
   } finally {
     if (isCurrent()) {
       activeCronMutations.delete(state);
@@ -191,6 +192,7 @@ async function withCronBusy(
       state.cronBusy = false;
     }
   }
+  return undefined;
 }
 
 function requireCronConfigRevision(revision: string | null | undefined): string {
@@ -576,7 +578,7 @@ export async function runCronJob(state: CronState, jobId: string, mode: "force" 
     state.cronEditingJob?.id === jobId
       ? state.cronEditingJob
       : (state.cronJobs.find((candidate) => candidate.id === jobId) ?? { id: jobId, name: jobId });
-  await withCronBusy(state, job, async (client, reportFeedback, isCurrent) => {
+  return withCronBusy(state, job, async (client, reportFeedback, isCurrent) => {
     const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode });
     if (!isCurrent()) {
       return;

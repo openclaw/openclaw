@@ -891,13 +891,13 @@ export function createConfigPage(
       onNativeNotificationsSendTest: () => context.nativeNotifications?.sendTest(),
       // Downstream equality checks need a new value for the mutable owner snapshot.
       webPush: { ...webPush.read() },
-      onWebPushSubscribe: () => void context.webPush.run({ kind: "enable" }),
-      onWebPushUnsubscribe: () => void context.webPush.run({ kind: "disable" }),
-      onWebPushTest: () => void context.webPush.run({ kind: "test" }),
+      onWebPushSubscribe: () => context.webPush.run({ kind: "enable" }),
+      onWebPushUnsubscribe: () => context.webPush.run({ kind: "disable" }),
+      onWebPushTest: () => context.webPush.run({ kind: "test" }),
       onWebPushSetUserPreferences: (preferences: Push.WebPushNotificationPreferences) =>
-        void context.webPush.run({ kind: "set", scope: "user", preferences }),
+        context.webPush.run({ kind: "set", scope: "user", preferences }),
       onWebPushSetDevicePreferences: (preferences: Push.WebPushDevicePreferences) =>
-        void context.webPush.run({ kind: "set", scope: "device", preferences }),
+        context.webPush.run({ kind: "set", scope: "device", preferences }),
     };
   }
   const refresh = () => {

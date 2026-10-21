@@ -56,7 +56,11 @@ const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     allocations: { type: "boolean", default: false },
+    "worker-allocations": { type: "boolean", default: false },
     diagnostics: { type: "boolean", default: false },
+    "transport-counts": { type: "boolean", default: false },
+    compressed: { type: "boolean", default: false },
+    "distinct-viewers": { type: "boolean", default: false },
     "prep-trace": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "workload-cpu-profile": { type: "boolean", default: false },
@@ -81,6 +85,8 @@ const { values } = parseArgs({
     scenario: { type: "string", default: "transcript-broadcast" },
     revision: { type: "string" },
     operations: { type: "string" },
+    "warmup-operations": { type: "string" },
+    "heap-sampling-interval": { type: "string" },
     "rpc-concurrency": { type: "string", default: "1" },
     "reconnect-stagger-ms": { type: "string", default: "125" },
     limit: { type: "string", default: "100" },
@@ -104,6 +110,7 @@ const { values } = parseArgs({
     "duration-ms": { type: "string", default: "3600000" },
     "warmup-ms": { type: "string", default: "300000" },
     "round-interval-ms": { type: "string", default: "15000" },
+    "soak-rounds": { type: "string" },
     "memory-interval-ms": { type: "string", default: "60000" },
     "retained-profile-ms": { type: "string", default: "600000" },
     "reset-every-rounds": { type: "string", default: "20" },
@@ -118,6 +125,7 @@ const { values } = parseArgs({
     "session-envelope-refs": { type: "boolean", default: false },
     "start-at": { type: "string" },
     "list-interval-ms": { type: "string", default: "0" },
+    "list-profile-reference": { type: "string" },
     "poll-seed": { type: "string" },
   },
 });
@@ -195,6 +203,18 @@ if (verifyHistoryReplay && (historyLastTurns || historyPayloadBytes)) {
     "--verify-history-replay uses equal-length histories with two 4 KiB reasoning items per turn; omit --history-last-turns and --history-payload-kib",
   );
 }
+const proxyViewers = values.compressed || values["distinct-viewers"];
+if (proxyViewers && values["operator-access-policy"]) {
+  throw new Error("--compressed/--distinct-viewers cannot combine with --operator-access-policy");
+}
+if (
+  proxyViewers &&
+  ((scenario !== "transcript-broadcast" && scenario !== "memory-soak") || values["mixed-rpc"])
+) {
+  throw new Error(
+    "--compressed/--distinct-viewers require transcript-broadcast or memory-soak without --mixed-rpc",
+  );
+}
 const reasoningScenario = retentionScenario || idleScenario || soakScenario;
 if (
   (values["session-census"] || values["fingerprint-retention"]) &&
@@ -216,18 +236,31 @@ if (
   !values["stream-start-allocations"] &&
   !values["workload-cpu-profile"] &&
   !values["operator-access-policy"] &&
+  !(scenario === "sessions.list" && values["capture-responses"]) &&
   scenario !== "transcript-broadcast" &&
   !retentionScenario &&
   !idleScenario &&
   !soakScenario
 ) {
-  throw new Error("--scenario requires --allocations or --workload-cpu-profile");
+  throw new Error(
+    "--scenario requires --allocations, --workload-cpu-profile, or --capture-responses for sessions.list",
+  );
 }
 const operations = integer(
   values.operations ??
     (scenario === "plugins.reload" ? "1" : scenario === "reconnect" ? values.clients : "100"),
   "--operations",
 );
+const warmupOperations = integer(
+  values["warmup-operations"] ?? String(operations),
+  "--warmup-operations",
+);
+if (values["warmup-operations"] !== undefined && turnScenario) {
+  throw new Error("--warmup-operations requires an RPC scenario");
+}
+const heapSamplingIntervalBytes = values["heap-sampling-interval"]
+  ? integer(values["heap-sampling-interval"], "--heap-sampling-interval")
+  : undefined;
 const limit = integer(values.limit, "--limit");
 const rowMode = values["row-mode"];
 if (!["compact", "sidebar", "dashboard"].includes(rowMode)) {
@@ -287,6 +320,14 @@ const rounds = integer(values.rounds, "--rounds");
 const durationMs = integer(values["duration-ms"], "--duration-ms");
 const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
 const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-ms");
+const soakRounds =
+  values["soak-rounds"] === undefined ? undefined : integer(values["soak-rounds"], "--soak-rounds");
+if (soakRounds !== undefined && !soakScenario) {
+  throw new Error("--soak-rounds requires --scenario memory-soak");
+}
+if (values["worker-allocations"] && (!soakScenario || !values.allocations)) {
+  throw new Error("--worker-allocations requires memory-soak --allocations");
+}
 const memoryIntervalMs = integer(values["memory-interval-ms"], "--memory-interval-ms");
 const retainedProfileMs = integer(values["retained-profile-ms"], "--retained-profile-ms", 0);
 const resetEveryRounds = integer(values["reset-every-rounds"], "--reset-every-rounds", 0);
@@ -379,6 +420,20 @@ if (values["stream-start-allocations"] && (!turnScenario || values.allocations))
 if (values["poll-seed"] !== undefined && !listIntervalMs) {
   throw new Error("--poll-seed requires --list-interval-ms");
 }
+if (
+  values["transport-counts"] &&
+  (values.allocations ||
+    values.diagnostics ||
+    values["cpu-profile"] ||
+    values["workload-cpu-profile"] ||
+    values["stream-start-allocations"] ||
+    values["stream-start-diagnostics"] ||
+    values["active-work-diagnostics"] ||
+    values["trace-gc"] ||
+    soakScenario)
+) {
+  throw new Error("--transport-counts needs a separate pass without profiling or diagnostics");
+}
 const recordListRequests =
   values.diagnostics ||
   values["dashboard-rpc"] ||
@@ -429,6 +484,10 @@ if (values["stress-tools"] || values["mixed-rpc"]) {
     diffControlOriginal = readFileSync(path.join(stressWorktree, "README.md"), "utf8");
   }
 }
+const viewerOrigin = "https://broadcast-measure.example.invalid";
+const viewerIdentity = (index: number) =>
+  `broadcast-viewer-${values["distinct-viewers"] ? index : 0}@example.invalid`;
+const viewerProfiles = new Set<string>();
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
 applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
 if (verifyHistoryReplay) {
@@ -437,6 +496,32 @@ if (verifyHistoryReplay) {
     model.contextWindow = 2_097_152;
     model.contextTokens = 2_000_000;
   }
+}
+if (proxyViewers) {
+  const identities = Array.from(
+    { length: values["distinct-viewers"] ? clientCount : 1 },
+    (_, index) => viewerIdentity(index),
+  );
+  const scopes = ["operator.admin", "operator.read", "operator.write"];
+  cfg.gateway = {
+    ...cfg.gateway,
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "x-forwarded-user",
+        requiredHeaders: ["x-forwarded-proto"],
+        allowUsers: identities,
+        allowLoopback: true,
+      },
+      identityScopes: Object.fromEntries(identities.map((identity) => [identity, scopes])),
+    },
+    trustedProxies: ["127.0.0.1", "::1"],
+    controlUi: { enabled: false, allowedOrigins: [viewerOrigin] },
+    roles: {
+      default: "administrator",
+      definitions: { administrator: { agents: "*", sessions: { others: "write" }, scopes } },
+    },
+  };
 }
 cfg.agents.defaults = {
   ...cfg.agents.defaults,
@@ -452,13 +537,15 @@ cfg.tools = {
 if (stressWorktree) {
   cfg.agents.entries.main.workspace = stressWorktree;
 }
-cfg.plugins = {
-  ...cfg.plugins,
-  entries: {
-    ...(soakScenario ? cfg.plugins?.entries : {}),
-    "memory-core": { config: { dreaming: { enabled: false } } },
-  },
-};
+if (scenario !== "plugins.reload") {
+  cfg.plugins = {
+    ...cfg.plugins,
+    entries: {
+      ...(soakScenario ? cfg.plugins?.entries : {}),
+      "memory-core": { config: { dreaming: { enabled: false } } },
+    },
+  };
+}
 if (values["active-work-diagnostics"]) {
   if (scenario !== "transcript-broadcast") {
     throw new Error("--active-work-diagnostics requires --scenario transcript-broadcast");
@@ -584,7 +671,12 @@ let reloadPluginId: string | undefined;
 if (scenario === "plugins.reload") {
   const plugin = writePluginFixtures(output, { count: 1, activationOnStartup: true });
   reloadPluginId = plugin.pluginIds[0];
-  cfg.plugins = { enabled: true, allow: plugin.pluginIds, load: { paths: [plugin.pluginsDir] } };
+  cfg.plugins = {
+    ...cfg.plugins,
+    enabled: true,
+    allow: [...new Set([...(cfg.plugins?.allow ?? []), ...plugin.pluginIds])],
+    load: { paths: [plugin.pluginsDir] },
+  };
 }
 const authorityChannel = "openclaw-operator-authority-bench";
 const authorityEmail = "operator@authority.example.test";
@@ -1057,7 +1149,7 @@ const mock = createServer((req, res) => {
       : undefined;
     const index = facts.turnIndex;
     const toolOutputs =
-      Array.isArray(input) && cohort
+      facts.hasToolOutput && Array.isArray(input) && cohort
         ? input.filter(
             (item) =>
               item?.type === "function_call_output" && cohort?.toolCallIds.has(item.call_id),
@@ -1337,6 +1429,7 @@ const mock = createServer((req, res) => {
 const children: ChildProcess[] = [];
 const clients: ReturnType<typeof createGatewayWsClient>[] = [];
 const githubOptionsClients: ReturnType<typeof createGatewayWsClient>[] = [];
+const chatDeltaDeliveryMs: number[] = [];
 const expectedClosures = new WeakSet<ReturnType<typeof createGatewayWsClient>>();
 const responseFrameBytes = new WeakMap<
   ReturnType<typeof createGatewayWsClient>,
@@ -1905,11 +1998,11 @@ const connectParams = {
   minProtocol: PROTOCOL_VERSION,
   maxProtocol: PROTOCOL_VERSION,
   client: {
-    id: trustedProxyScenario ? "openclaw-control-ui" : "gateway-client",
+    id: proxyViewers || trustedProxyScenario ? "openclaw-control-ui" : "gateway-client",
     displayName: "synthetic-broadcast-measurement",
     version: "1.0.0",
     platform: process.platform,
-    mode: trustedProxyScenario ? "webchat" : "backend",
+    mode: proxyViewers ? "ui" : trustedProxyScenario ? "webchat" : "backend",
   },
   role: "operator",
   scopes: ["operator.read", "operator.admin"],
@@ -2119,7 +2212,9 @@ function latencySummary(latenciesMs: number[]) {
   return {
     count: sorted.length,
     p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1] ?? null,
+    p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? null,
     p99Ms: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
+    latenciesMs,
   };
 }
 function readPromotion(profilePath: string, operationCount: number) {
@@ -2309,7 +2404,9 @@ async function runRound(
 ) {
   if (
     retentionScenario ||
-    (soakScenario && resetEveryRounds > 0 && completedSoakRounds % resetEveryRounds === 0)
+    (soakScenario &&
+      resetEveryRounds > 0 &&
+      (measuredRound ?? completedSoakRounds) % resetEveryRounds === 0)
   ) {
     // Retire each previous session generation so retained history is not the measurement.
     for (const key of keys) {
@@ -2721,6 +2818,17 @@ async function connectClient(index: number) {
   let receivedFrameBytes = 0;
   const client = createGatewayWsClient({
     ...clientConnection,
+    ...(proxyViewers
+      ? {
+          origin: viewerOrigin,
+          headers: {
+            "x-forwarded-for": "203.0.113.50",
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "broadcast-measure.example.invalid",
+            "x-forwarded-user": viewerIdentity(index),
+          },
+        }
+      : {}),
     onEvent: (event) => {
       lastSubscriberEventAt = performance.now();
       if (event.seq !== undefined) {
@@ -2762,6 +2870,14 @@ async function connectClient(index: number) {
         }
       }
       if (measuring) {
+        if (
+          event.event === "chat" &&
+          payload?.state === "delta" &&
+          isRecord(payload.message) &&
+          typeof payload.message.timestamp === "number"
+        ) {
+          chatDeltaDeliveryMs.push(epochNow() - payload.message.timestamp);
+        }
         counters.set(event.event, (counters.get(event.event) ?? 0) + 1);
         clientCounters.set(event.event, (clientCounters.get(event.event) ?? 0) + 1);
         eventBytes.set(event.event, (eventBytes.get(event.event) ?? 0) + receivedFrameBytes);
@@ -2822,6 +2938,32 @@ async function connectClient(index: number) {
   ) {
     throw new Error("connect did not return a valid hello snapshot");
   }
+  if (
+    client.ws.extensions.includes("permessage-deflate") !== (proxyViewers || trustedProxyScenario)
+  ) {
+    throw new Error("Gateway compression negotiation did not match the requested ingress");
+  }
+  if (proxyViewers) {
+    if (hello.auth.method !== "trusted-proxy") {
+      throw new Error("Synthetic viewer did not authenticate through the trusted proxy");
+    }
+    const self = await rpc(client, "users.self", {});
+    if (
+      !isRecord(self) ||
+      !isRecord(self.profile) ||
+      typeof self.profile.id !== "string" ||
+      !self.profile.id
+    ) {
+      throw new Error("Synthetic viewer did not acquire a user profile");
+    }
+    viewerProfiles.add(self.profile.id);
+    const expectedProfiles = values["distinct-viewers"] ? index + 1 : 1;
+    if (viewerProfiles.size !== expectedProfiles) {
+      throw new Error(
+        "Synthetic viewer profile identities did not match the requested cardinality",
+      );
+    }
+  }
   if (measuring) {
     handshakeLatenciesMs.push(handshakeElapsedMs);
   }
@@ -2876,33 +3018,39 @@ try {
     mock.listen(mockPort, "127.0.0.1", resolve);
   });
   await ready(mockPort, "/health");
+  const gatewayArgs = buildGatewayBenchChildArgs(
+    values.entry,
+    port,
+    [
+      ...(values.allocations || values["stream-start-allocations"] || values["trace-gc"]
+        ? ["--trace-gc-nvp"]
+        : []),
+      "--import",
+      "./scripts/tsx.mjs",
+      "--import",
+      "./scripts/lib/gateway-bench-profile-preload.ts",
+      ...(values["transport-counts"]
+        ? ["--import", "./scripts/lib/gateway-bench-transport-preload.ts"]
+        : []),
+      ...(values["transcript-hydration-counts"]
+        ? ["--import", "./scripts/perf/transcript-hydration-counts-preload.ts"]
+        : []),
+      ...(values["worker-memory"] || values["baseline-owners"]
+        ? ["--import", "./scripts/perf/transcript-worker-memory-preload.ts"]
+        : []),
+      ...(values["dashboard-rpc"] ? ["--import", dashboardPreload] : []),
+      ...(values["github-options-observe"]
+        ? ["--import", "./scripts/perf/github-options-measure-preload.ts"]
+        : []),
+    ],
+    proxyViewers || trustedProxyScenario ? "trusted-proxy" : "none",
+  );
   gateway = launch(
-    buildGatewayBenchChildArgs(
-      values.entry,
-      port,
-      [
-        ...(values.allocations || values["stream-start-allocations"] || values["trace-gc"]
-          ? ["--trace-gc-nvp"]
-          : []),
-        "--import",
-        "./scripts/tsx.mjs",
-        "--import",
-        "./scripts/lib/gateway-bench-profile-preload.ts",
-        ...(values["transcript-hydration-counts"]
-          ? ["--import", "./scripts/perf/transcript-hydration-counts-preload.ts"]
-          : []),
-        ...(values["worker-memory"] || values["baseline-owners"]
-          ? ["--import", "./scripts/perf/transcript-worker-memory-preload.ts"]
-          : []),
-        ...(values["dashboard-rpc"] ? ["--import", dashboardPreload] : []),
-        ...(values["github-options-observe"]
-          ? ["--import", "./scripts/perf/github-options-measure-preload.ts"]
-          : []),
-      ],
-      trustedProxyScenario ? "trusted-proxy" : "none",
-    ),
+    gatewayArgs,
     "gateway",
-    {},
+    values["transport-counts"]
+      ? { OPENCLAW_BENCH_TRANSPORT_COUNTS_PATH: path.join(output, "transport-counts.json") }
+      : {},
     true,
   );
   await ready(port, "/readyz", gateway);
@@ -3064,6 +3212,12 @@ try {
       validateDashboardRpc(method, await rpc(sender, method, params));
     }
   }
+  if (reloadPluginId) {
+    writeFileSync(
+      path.join(output, "plugin-inventory.json"),
+      JSON.stringify(await rpc(sender, "plugins.list", {}), null, 2),
+    );
+  }
   const expectedSidebar =
     scenario === "reconnect"
       ? sidebarIdentity(await rpc(sender, "sessions.list", { limit, rowMode, archived: "all" }))
@@ -3118,7 +3272,7 @@ try {
   }
   console.log("PHASE subscribed-and-reset");
   let idleTurnCohorts: Awaited<ReturnType<typeof runRound>>[] = [];
-  const runScenario = async (measuredRound?: number) => {
+  const runScenario = async (measuredRound?: number, operationCount = operations) => {
     if (idleScenario) {
       idleTurnCohorts = [];
       for (let offset = 0; offset < keys.length; offset += runCount) {
@@ -3135,8 +3289,8 @@ try {
       }
       return streamStart;
     }
-    for (let offset = 0; offset < operations; offset += clientCount) {
-      const batchCount = Math.min(clientCount, operations - offset);
+    for (let offset = 0; offset < operationCount; offset += clientCount) {
+      const batchCount = Math.min(clientCount, operationCount - offset);
       const batchStarted = performance.now();
       const reconnectStarted: number[] = [];
       const slots = clients.slice(0, batchCount).entries();
@@ -3240,7 +3394,9 @@ try {
     return undefined;
   };
   const warmupStartedAt = performance.now();
-  do {
+  // Equal warmup work keeps paired runs at the same retained-history boundary.
+  const warmupRoundCount = soakScenario ? Math.max(1, Math.ceil(warmupMs / roundIntervalMs)) : 1;
+  for (let round = 0; round < warmupRoundCount; round++) {
     // Warm runtime imports on the parent, leaving all measured sessions untouched.
     if (idleScenario) {
       await runRound(sender, undefined, [parentKey]);
@@ -3248,7 +3404,7 @@ try {
       break;
     }
     const started = performance.now();
-    await runScenario();
+    await runScenario(undefined, warmupOperations);
     await drainEvents();
     if (!soakScenario) {
       break;
@@ -3262,7 +3418,7 @@ try {
         ),
       ),
     );
-  } while (performance.now() - warmupStartedAt < warmupMs);
+  }
   console.log("PHASE warmed");
   if (startAt !== undefined) {
     if (Date.now() >= startAt) {
@@ -3285,18 +3441,20 @@ try {
       ? path.join(output, "allocation-soak.heapprofile")
       : undefined;
   // A twenty-minute churn profile needs coarser sampling to bound native records and JSON export.
-  const soakSamplingIntervalBytes = 512 * 1024;
+  const soakSamplingIntervalBytes = heapSamplingIntervalBytes ?? 512 * 1024;
   if (soakAllocationPath) {
     // Reading or stopping a V8 sampling profile forces GC; keep one window for the entire soak.
     await controlGatewayProfile(gateway, "heap", "start", soakAllocationPath, {
       samplingIntervalBytes: soakSamplingIntervalBytes,
+      includeWorkers: values["worker-allocations"],
     });
   }
   const measurementStartedAt = Date.now();
   const measuredGateway = gateway;
-  const finishWholeSoakDiagnostics =
-    soakScenario && (values.diagnostics || values.allocations || values["trace-gc"])
-      ? await startGatewayDiagnostics(gateway, "whole-soak")
+  const finishWholeWorkloadDiagnostics =
+    (soakScenario || scenario === "plugins.reload") &&
+    (values.diagnostics || values.allocations || values["trace-gc"])
+      ? await startGatewayDiagnostics(gateway, soakScenario ? "whole-soak" : "whole-reload")
       : undefined;
   const samples = [];
   const memorySamples: Array<{
@@ -3383,7 +3541,9 @@ try {
   for (
     let round = 0;
     soakScenario
-      ? Date.now() - measurementStartedAt < durationMs
+      ? soakRounds === undefined
+        ? Date.now() - measurementStartedAt < durationMs
+        : round < soakRounds
       : round < (idleScenario ? 2 : rounds);
     round++
   ) {
@@ -3400,6 +3560,7 @@ try {
       retainedProfileStartedAt = Date.now();
     }
     counters.clear();
+    chatDeltaDeliveryMs.length = 0;
     rpcMeasurements.clear();
     handshakeLatenciesMs.length = 0;
     reconnectStorms.length = 0;
@@ -3425,9 +3586,10 @@ try {
     recapReceipts.length = 0;
     recapPhase = undefined;
     activeWorkCounts = undefined;
-    const finishGatewayDiagnostics = values.diagnostics
-      ? await startGatewayDiagnostics(gateway)
-      : undefined;
+    const finishGatewayDiagnostics =
+      values.diagnostics || values["transport-counts"]
+        ? await startGatewayDiagnostics(gateway)
+        : undefined;
     const finishControllerDiagnostics = values.diagnostics
       ? startGatewayBenchDiagnostics()
       : undefined;
@@ -3435,7 +3597,6 @@ try {
     const workloadCpuProfilePath = values["workload-cpu-profile"]
       ? path.join(output, `workload-${round}.cpuprofile`)
       : undefined;
-    measuring = !workloadCpuProfilePath;
     const rpcLatencies: Record<string, number[]> = Object.fromEntries(
       mixedRpcMethods.map((method) => [method, []]),
     );
@@ -3570,7 +3731,14 @@ try {
                     const page = await rpc(
                       client,
                       method,
-                      { rowMode, limit, archived: "all" },
+                      {
+                        rowMode,
+                        limit,
+                        archived: "all",
+                        ...(values["list-profile-reference"]
+                          ? { involvingProfileId: values["list-profile-reference"] }
+                          : {}),
+                      },
                       onResponse,
                     );
                     if (
@@ -3579,7 +3747,7 @@ try {
                       page.count !== Math.min(limit, page.totalCount) ||
                       !Array.isArray(page.sessions) ||
                       page.sessions.length !== page.count ||
-                      page.count === 0
+                      (page.count === 0 && !values["list-profile-reference"])
                     ) {
                       throw new Error("concurrent sessions.list did not return the requested page");
                     }
@@ -3642,18 +3810,38 @@ try {
         await listWork;
       }
     };
-    const measuredWorkload = workloadCpuProfilePath
-      ? async () => {
-          await controlGatewayProfile(measuredGateway, "cpu", "start", workloadCpuProfilePath);
-          measuring = true;
-          try {
-            await workload();
-          } finally {
-            measuring = false;
-            await controlGatewayProfile(measuredGateway, "cpu", "stop", workloadCpuProfilePath);
-          }
+    const measuredWorkload = async () => {
+      if (workloadCpuProfilePath) {
+        await controlGatewayProfile(measuredGateway, "cpu", "start", workloadCpuProfilePath);
+      }
+      try {
+        if (turnScenario) {
+          await drainEvents();
         }
-      : workload;
+        measuring = true;
+        await workload();
+        // Polling RPCs can publish after workload's first drain. Freeze counters
+        // at a quiet boundary, rather than midway through their recipient fanout.
+        if (turnScenario) {
+          const beforeDrain = perClientCounters.map((counts) => Object.fromEntries(counts));
+          const drainStarted = performance.now();
+          await drainEvents();
+          console.log(
+            `FANOUT_BOUNDARY ${JSON.stringify({
+              round,
+              waitMs: performance.now() - drainStarted,
+              before: beforeDrain,
+              after: perClientCounters.map((counts) => Object.fromEntries(counts)),
+            })}`,
+          );
+        }
+      } finally {
+        measuring = false;
+        if (workloadCpuProfilePath) {
+          await controlGatewayProfile(measuredGateway, "cpu", "stop", workloadCpuProfilePath);
+        }
+      }
+    };
     if (values["operator-access-policy"]) {
       await controlAuthorityCounters(gateway, "start");
     }
@@ -3664,6 +3852,7 @@ try {
             path.join(output, `allocation-${round}.heapprofile`),
             turnScenario ? sessionCount : operations,
             measuredWorkload,
+            { samplingIntervalBytes: heapSamplingIntervalBytes },
           )
         : undefined;
     if (!values.allocations || soakScenario) {
@@ -3686,7 +3875,6 @@ try {
     if (listIntervalMs && listLatencies.length === 0) {
       throw new Error("No sessions.list samples collected; shorten --list-interval-ms");
     }
-    measuring = false;
     const diagnostics = finishGatewayDiagnostics
       ? { gateway: await finishGatewayDiagnostics(), controller: finishControllerDiagnostics?.() }
       : undefined;
@@ -3861,6 +4049,14 @@ try {
           }
         : {}),
       ...cpu,
+      chatDeltaDeliveryMs: summarizeLatencies([...chatDeltaDeliveryMs]),
+      ...(values["transport-counts"]
+        ? {
+            transportCounts: JSON.parse(
+              readFileSync(path.join(output, "transport-counts.json"), "utf8"),
+            ),
+          }
+        : {}),
       eventCounts: Object.fromEntries(counters),
       eventBytes: Object.fromEntries(eventBytes),
       sessionEventSizes: Object.fromEntries(sessionEventSizes),
@@ -3929,17 +4125,17 @@ try {
         // Verify the retained prefix after reopening; reading it now warms idle workers.
       }
     }
-    if (soakScenario) {
-      if (Date.now() - (memorySamples.at(-1)?.atEpochMs ?? 0) >= memoryIntervalMs) {
+    if (soakScenario || scenario === "plugins.reload") {
+      if (soakScenario && Date.now() - (memorySamples.at(-1)?.atEpochMs ?? 0) >= memoryIntervalMs) {
         await sampleMemory();
       }
+      const remainingMs = roundIntervalMs - (Date.now() - roundStartedAt);
       await delay(
         Math.max(
           0,
-          Math.min(
-            roundIntervalMs - (Date.now() - roundStartedAt),
-            durationMs - (Date.now() - measurementStartedAt),
-          ),
+          soakScenario
+            ? Math.min(remainingMs, durationMs - (Date.now() - measurementStartedAt))
+            : remainingMs,
         ),
       );
     }
@@ -3989,7 +4185,11 @@ try {
     };
     console.log(`FINGERPRINT_RETENTION ${JSON.stringify(fingerprintRetention)}`);
   }
-  const wholeSoakDiagnostics = await finishWholeSoakDiagnostics?.();
+  if (soakScenario && soakRounds !== undefined) {
+    // Keep equal work counts without shortening the continuous GC/allocation window.
+    await delay(Math.max(0, durationMs - (Date.now() - measurementStartedAt)));
+  }
+  const wholeWorkloadDiagnostics = await finishWholeWorkloadDiagnostics?.();
   if (values["dashboard-rpc"] && dashboardFixtureRequests === 0) {
     throw new Error("Dashboard GitHub preview never reached the synthetic transport");
   }
@@ -4015,6 +4215,9 @@ try {
       ...profile,
       completedTurns,
       allocatedMbPerTurn: profile.sampledAllocatedBytes / 1_000_000 / completedTurns,
+      ...(values["worker-allocations"]
+        ? { workerManifestPath: `${soakAllocationPath}.workers.json` }
+        : {}),
     };
   }
   let retainedProfile;
@@ -4084,25 +4287,70 @@ try {
       throw new Error("stress cron did not complete during the measured soak");
     }
   }
+  // Capture filter/paging equivalence after the measured window, without warming its caches.
+  const listResponses: Array<{ params: unknown; payload: unknown }> = [];
+  if (values["capture-responses"] && (scenario === "sessions.list" || soakScenario)) {
+    // Fresh harness sessions contain random IDs and current clocks; compare the seeded roster.
+    if (!historyTurns) {
+      for (const key of [...keys, parentKey]) {
+        await rpc(sender, "sessions.delete", { key, deleteTranscript: true });
+      }
+    }
+    for (const request of [
+      {},
+      { limit: 1 },
+      { offset: 1 },
+      { offset: 199 },
+      { offset: fixtureSessionCount },
+      { archived: false },
+      { archived: true },
+      { sortBy: "updatedAt" },
+      { sortBy: "lastInteractionAt" },
+      { sortBy: "activity" },
+      { pinned: true },
+      { pinned: false },
+      { search: "team" },
+      { search: "no-such-synthetic-session" },
+      { agentId: "main" },
+      { excludeSubagents: true },
+      { excludeSystem: true, excludeCron: true },
+      { requireLastInteraction: true },
+      { includeGlobal: true, includeUnknown: true },
+      { ownerFirst: true },
+      ...(values["list-profile-reference"]
+        ? [
+            { involvingProfileId: values["list-profile-reference"] },
+            { involvingProfileId: "team-shape-profile-0", includePeople: true },
+            { involvingProfileId: "team-shape-profile-0", archived: true },
+            { involvingProfileId: "team-shape-profile-0", search: "no-such-synthetic-session" },
+          ]
+        : []),
+    ]) {
+      const params = { limit, rowMode, archived: "all", ...request };
+      listResponses.push({ params, payload: await rpc(sender, "sessions.list", params) });
+    }
+    writeFileSync(path.join(output, "list-responses.json"), JSON.stringify(listResponses));
+  }
   // Process exit plus drained log streams makes promotion accounting independent of pipe buffering.
   await cleanup();
   let wholeSoakGc;
-  if (wholeSoakDiagnostics && (values.allocations || values["trace-gc"])) {
+  if (soakScenario && wholeWorkloadDiagnostics && (values.allocations || values["trace-gc"])) {
     const trace = readGatewayGcTrace(
       path.join(output, "gateway.stdout.log"),
       "whole-soak",
       "diagnostics",
     );
     const completedTurns = samples.length * runCount;
-    const wallMs = wholeSoakDiagnostics.durationMs;
+    const wallMs = wholeWorkloadDiagnostics.durationMs;
     wholeSoakGc = {
       ...trace,
       completedTurns,
       wallMs,
       promotedMbPerTurn: trace.promotedBytes / 1_000_000 / completedTurns,
       scavengeSecondsPerMinute:
-        ((wholeSoakDiagnostics.gc.minorDurationMs?.total ?? 0) * 60) / wallMs,
-      majorSecondsPerMinute: ((wholeSoakDiagnostics.gc.majorDurationMs?.total ?? 0) * 60) / wallMs,
+        ((wholeWorkloadDiagnostics.gc.minorDurationMs?.total ?? 0) * 60) / wallMs,
+      majorSecondsPerMinute:
+        ((wholeWorkloadDiagnostics.gc.majorDurationMs?.total ?? 0) * 60) / wallMs,
     };
   }
   const result = {
@@ -4111,6 +4359,7 @@ try {
     verifyHistoryReplay,
     revision: values.revision ?? null,
     operationsPerRound: turnScenario ? sessionCount : operations,
+    warmupOperations: turnScenario ? undefined : warmupOperations,
     rpcConcurrency,
     reconnectStaggerMs,
     rpcLatencyScope:
@@ -4195,6 +4444,10 @@ try {
     ...(values["mixed-rpc"] ? { diffEditControlVerified: true, diffEditVisibilityMs } : {}),
     pollSeed: values["poll-seed"] ?? null,
     diagnostics: values.diagnostics,
+    transportCounts: values["transport-counts"],
+    compressed: proxyViewers,
+    distinctViewers: values["distinct-viewers"],
+    viewerProfileCount: viewerProfiles.size,
     cpuProfile: values["cpu-profile"],
     workloadCpuProfile: values["workload-cpu-profile"],
     captureResponses: values["capture-responses"],
@@ -4203,6 +4456,7 @@ try {
     streamStartAllocations: values["stream-start-allocations"],
     activeWorkDiagnostics: values["active-work-diagnostics"],
     measurementStartedAt,
+    ...(scenario === "plugins.reload" ? { wholeReloadDiagnostics: wholeWorkloadDiagnostics } : {}),
     initialFullFrame,
     clientCount,
     exactClients,
@@ -4249,6 +4503,7 @@ try {
           durationMs,
           warmupMs,
           roundIntervalMs,
+          soakRounds,
           memoryIntervalMs,
           retainedProfileMs,
           resetEveryRounds,
@@ -4262,7 +4517,7 @@ try {
           memorySamples,
           retainedProfile,
           wholeSoakAllocation,
-          wholeSoakDiagnostics,
+          wholeSoakDiagnostics: wholeWorkloadDiagnostics,
           wholeSoakGc,
         }
       : {}),

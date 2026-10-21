@@ -93,10 +93,6 @@ async function readOpenRouterAudioStream(response: Response, maxBytes: number) {
     if (!canonicalAudio) {
       throw new Error("OpenRouter music generation returned malformed base64 audio data");
     }
-    const decodedBytes = Buffer.byteLength(canonicalAudio, "base64");
-    if (decodedBytes > remainingBytes) {
-      throw createOpenRouterMusicTooLargeError("audio", maxBytes);
-    }
     const buffer = Buffer.from(canonicalAudio, "base64");
     result.audioBytes += buffer.byteLength;
     result.audioBuffers.push(buffer);

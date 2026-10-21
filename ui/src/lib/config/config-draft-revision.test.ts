@@ -64,6 +64,36 @@ it.each([
   },
 );
 
+it("replays own map keys after an acknowledgement without losing canonical siblings", async () => {
+  vi.useFakeTimers();
+  const keys = ["constructor", "prototype", "__proto__"];
+  const aliases = Object.fromEntries(keys.map((key) => [key, "before"]));
+  const { request, submissions, firstSet } = createDeferredSetServerMock({
+    count: 1,
+    aliases,
+    canonical: "retained",
+  });
+  const { runtimeConfig } = await loadedConfig(request);
+  runtimeConfig.patchForm(["aliases"], aliases);
+  await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+  expect(submissions).toHaveLength(1);
+  for (const key of keys) {
+    runtimeConfig.patchForm(["aliases", key], "edited");
+  }
+  await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+  expect(submissions).toHaveLength(1);
+  firstSet.resolve({});
+  await vi.advanceTimersByTimeAsync(0);
+  expect(submissions).toHaveLength(2);
+  expect(submissions[1]?.baseHash).toBe("hash-2");
+  expect(JSON.parse(submissions[1]!.raw)).toEqual({
+    count: 1,
+    aliases: Object.fromEntries(keys.map((key) => [key, "edited"])),
+    canonical: "retained",
+  });
+  expect(runtimeConfig.state.configFormDirty).toBe(false);
+});
+
 it.each(["raw", "form"] as const)(
   "keeps a newer %s edit when discard waits for a pending autosave",
   async (mode) => {

@@ -1,7 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createUpdateRunFixture } from "./update-run.test-support.ts";
 
@@ -236,6 +236,7 @@ suite.define(() => {
         const card = updateCard(page);
         await card.locator("summary").click();
         await card.locator(".sidebar-update-card__action").click();
+        await waitForConfirmModal(page);
 
         if (owner === "native") {
           await restoreNative(page);

@@ -2533,6 +2533,7 @@
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.9b7f1144eec4f829","source":"OPENCLAW_HELPER_SESSION"},
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.f8896f44264e6de4","source":"OPENCLAW_LONG_CHAT_LATEST"},
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.7f15ddf66c36dada","source":"Prepare a detailed project review."},
+    {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.5852273b7c3d616d","source":"Read external-fixture.txt. Sent from another client."},
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.5017a99fd3c4ec24","source":"Which build is on my phone?"},
     {"path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift","kind":"ui-named-argument-multiline","surface":"apple","id":"native.apple.cd0d41d2c20a48ff","source":"\\(self.fixture.responsePrefix) I can help with \\(subject), summarize current project context, prepare agent actions, and keep the mobile workflow connected to the gateway."},
     {"path":"apps/ios/WatchApp/Sources/WatchRealtimeAudioIO.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.7d6a7269deff28c3","source":"Another voice session is still stopping."},

@@ -17,22 +17,33 @@ afterEach(cleanupUsagePageTest);
 const sortedKeys = (labels: string[]) =>
   labels.map((label) => `agent:main:${label}`).toSorted((a, b) => a.localeCompare(b));
 
-it.each<[string, string[], string, string[], number, boolean?]>([
-  ["multiple selections", ["first", "second"], "", ["first", "second"], 400],
-  ["selection intersected with a query", ["first", "second"], "provider:openai", ["first"], 100],
-  ["query without a selection", [], "provider:openai", ["first", "third"], 300],
-  ["selection excluded by a query", ["second"], "provider:openai", [], 0],
+// The export owner tests the format matrix; exercise each menu action across distinct UI scopes.
+it.each<
+  [string, string[], string, string[], number, "sessions-csv" | "json" | "daily-csv", boolean?]
+>([
+  ["multiple selections", ["first", "second"], "", ["first", "second"], 400, "sessions-csv"],
+  [
+    "selection intersected with a query",
+    ["first", "second"],
+    "provider:openai",
+    ["first"],
+    100,
+    "json",
+  ],
+  ["query without a selection", [], "provider:openai", ["first", "third"], 300, "daily-csv"],
+  ["selection excluded by a query", ["second"], "provider:openai", [], 0, "sessions-csv"],
   [
     "quoted label retained while selecting a provider",
     [],
     '"label:Team Planning"',
     ["first"],
     100,
+    "json",
     true,
   ],
 ])(
   "exports the displayed session scope: %s",
-  async (_name, selected, query, expected, tokens, menuProvider) => {
+  async (_name, selected, query, expected, tokens, format, menuProvider) => {
     const snapshot = cacheSnapshot("fresh");
     const sessions = ["first", "second", "third"].map((label, index) => {
       const totalTokens = [100, 300, 200][index]!;
@@ -51,7 +62,7 @@ it.each<[string, string[], string, string[], number, boolean?]>([
         agentId: "main",
         sessionId: `${label}-instance`,
         modelProvider: index === 1 ? "anthropic" : "openai",
-        updatedAt: 3 - index,
+        updatedAt: Date.parse("2026-08-07T12:00:00Z") + 3 - index,
         hasContextWeight: true,
         usage: {
           ...totals,
@@ -84,6 +95,13 @@ it.each<[string, string[], string, string[], number, boolean?]>([
     });
     const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
     const { page } = await loadUsagePage(request);
+    // Match the fixture range so each export interaction renders only its populated day.
+    page.read().callbacks.filters.onDatesChange({
+      startDate: snapshot.result.startDate,
+      endDate: snapshot.result.endDate,
+    });
+    await page.refresh();
+    await page.updateComplete;
     const settled = async () => {
       await vi.waitFor(() => expect(page.usageLoading).toBe(false));
       await page.updateComplete;
@@ -155,33 +173,36 @@ it.each<[string, string[], string, string[], number, boolean?]>([
       expect(download).not.toHaveBeenCalled();
       return;
     }
-    for (const [index, value] of ["sessions-csv", "json", "daily-csv"].entries()) {
-      const before = usageCalls(request).length;
-      await selectUsageExport(menu, value);
-      await vi.waitFor(() => expect(download).toHaveBeenCalledTimes(index + 1));
-      const sent = usageCalls(request)
-        .slice(before)
-        .find(([, params]) =>
-          value === "daily-csv"
-            ? params?.projection === "overview"
-            : params?.limit === Number.MAX_SAFE_INTEGER,
-        )?.[1];
-      expect(sent).toMatchObject(
-        value === "daily-csv"
-          ? { projection: "overview", limit: 50 }
-          : { limit: Number.MAX_SAFE_INTEGER, includeContextWeight: value === "json" },
-      );
-      if (value !== "daily-csv") {
-        expect(sent).not.toHaveProperty("projection");
-      }
+    const before = usageCalls(request).length;
+    await selectUsageExport(menu, format);
+    await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
+    const sent = usageCalls(request)
+      .slice(before)
+      .find(([, params]) =>
+        format === "daily-csv"
+          ? params?.projection === "overview"
+          : params?.limit === Number.MAX_SAFE_INTEGER,
+      )?.[1];
+    expect(sent).toMatchObject(
+      format === "daily-csv"
+        ? { projection: "overview", limit: 50 }
+        : { limit: Number.MAX_SAFE_INTEGER, includeContextWeight: format === "json" },
+    );
+    if (format !== "daily-csv") {
+      expect(sent).not.toHaveProperty("projection");
     }
-    const csv = download.mock.calls.find(([filename]) => filename.endsWith(".csv"))![1];
-    const [header, ...rows] = csv.split("\n").map((row) => row.split(","));
     const keys = sortedKeys(expected);
-    expect.soft(rows.map(([key]) => key).toSorted((a, b) => a!.localeCompare(b!))).toEqual(keys);
-    expect
-      .soft(rows.reduce((sum, row) => sum + Number(row[header!.indexOf("totalTokens")]), 0))
-      .toBe(tokens);
+    if (format !== "json") {
+      const csv = download.mock.calls.find(([filename]) => filename.endsWith(".csv"))![1];
+      const [header, ...rows] = csv.split("\n").map((row) => row.split(","));
+      expect
+        .soft(rows.map(([key]) => key).toSorted((a, b) => a!.localeCompare(b!)))
+        .toEqual(format === "sessions-csv" ? keys : ["2026-08-07"]);
+      expect
+        .soft(rows.reduce((sum, row) => sum + Number(row[header!.indexOf("totalTokens")]), 0))
+        .toBe(tokens);
+      return;
+    }
     const payload = JSON.parse(
       download.mock.calls.find(([filename]) => filename.endsWith(".json"))![1],
     ) as UsageJsonExport;

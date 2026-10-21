@@ -567,7 +567,7 @@ export async function runChatSendPreAdmission(
   let durableEntry = entry;
   if (requiresReconciliation) {
     const { reconcileOrphanedGatewaySessionRecovery } =
-      await import("../session-recovery-service.js");
+      await import("../session-recovery-source.js");
     try {
       const recoveryEntry = entry;
       if (recoveryEntry) {

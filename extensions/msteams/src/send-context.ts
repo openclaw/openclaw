@@ -1,10 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  resolveChannelMediaMaxBytes,
-  type MSTeamsConfig,
-  type OpenClawConfig,
-} from "../runtime-api.js";
+import { resolveChannelMediaMaxBytes, type OpenClawConfig } from "../runtime-api.js";
 import {
   resolveDefaultMSTeamsAccountId,
   resolveMSTeamsAccount,
@@ -21,10 +17,7 @@ import {
   validateMSTeamsProactiveServiceUrlBoundary,
 } from "./cloud.js";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
-import type {
-  MSTeamsConversationStore,
-  StoredConversationReference,
-} from "./conversation-store.js";
+import type { StoredConversationReference } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";
@@ -41,97 +34,6 @@ type MSTeamsProactiveReplyTarget =
   | { replyStyle: "top-level"; threadActivityId?: never };
 
 export type MSTeamsProactiveContext = Awaited<ReturnType<typeof resolveMSTeamsSendContext>>;
-
-function resolveMSTeamsProactiveReplyTarget(params: {
-  cfg?: MSTeamsConfig;
-  conversationId: string;
-  ref: StoredConversationReference;
-  conversationType: MSTeamsConversationType;
-}): MSTeamsProactiveReplyTarget {
-  const threadRootId = params.ref.threadId ?? params.ref.activityId;
-  if (params.conversationType !== "channel" || !threadRootId) {
-    return { replyStyle: "top-level" };
-  }
-
-  const routeConfig = resolveMSTeamsRouteConfig({
-    cfg: params.cfg,
-    teamId: params.ref.teamId,
-    conversationId: params.conversationId,
-    allowNameMatching: false,
-  });
-  const { replyStyle } = resolveMSTeamsReplyPolicy({
-    isDirectMessage: false,
-    globalConfig: params.cfg,
-    teamConfig: routeConfig.teamConfig,
-    channelConfig: routeConfig.channelConfig,
-  });
-  return replyStyle === "thread" ? { replyStyle, threadActivityId: threadRootId } : { replyStyle };
-}
-
-/**
- * Parse the target value into a conversation reference lookup key.
- * Supported formats:
- * - conversation:19:abc@thread.tacv2 → lookup by conversation ID
- * - conversation:19:abc@thread.tacv2;messageid=root → lookup base ID, use root
- * - user:aad-object-id → lookup by user AAD object ID
- * - 19:abc@thread.tacv2 → direct conversation ID
- */
-function parseRecipient(to: string): {
-  type: "conversation" | "user";
-  id: string;
-  threadId?: string;
-} {
-  const trimmed = to.trim();
-  const finalize = (type: "conversation" | "user", id: string) => {
-    const normalized = id.trim();
-    if (!normalized) {
-      throw new Error(`Invalid target value: missing ${type} id`);
-    }
-    if (type === "conversation") {
-      const threadId = extractMSTeamsConversationMessageId(normalized);
-      const normalizedConversationId = normalizeMSTeamsConversationId(normalized);
-      const slashIndex = normalizedConversationId.indexOf("/");
-      const graphChannelId =
-        slashIndex > 0 ? normalizedConversationId.slice(slashIndex + 1) : undefined;
-      return {
-        type,
-        id:
-          graphChannelId && (graphChannelId.startsWith("19:") || graphChannelId.includes("@thread"))
-            ? graphChannelId
-            : normalizedConversationId,
-        ...(threadId ? { threadId } : {}),
-      };
-    }
-    return { type, id: normalized };
-  };
-  if (trimmed.startsWith("conversation:")) {
-    return finalize("conversation", trimmed.slice("conversation:".length));
-  }
-  if (trimmed.startsWith("user:")) {
-    return finalize("user", trimmed.slice("user:".length));
-  }
-  if (trimmed.startsWith("19:") || trimmed.includes("@thread")) {
-    return finalize("conversation", trimmed);
-  }
-  return finalize("user", trimmed);
-}
-
-async function findConversationReference(recipient: {
-  type: "conversation" | "user";
-  id: string;
-  store: MSTeamsConversationStore;
-}): Promise<{
-  conversationId: string;
-  ref: StoredConversationReference;
-} | null> {
-  if (recipient.type === "conversation") {
-    const ref = await recipient.store.get(recipient.id);
-    return ref ? { conversationId: recipient.id, ref } : null;
-  }
-
-  const found = await recipient.store.findPreferredDmByUserId(recipient.id);
-  return found ? { conversationId: found.conversationId, ref: found.reference } : null;
-}
 
 export async function resolveMSTeamsSendContext(params: {
   cfg: OpenClawConfig;
@@ -165,8 +67,55 @@ export async function resolveMSTeamsSendContext(params: {
 
   const store = createMSTeamsConversationStoreState({ accountId });
 
-  const recipient = parseRecipient(params.to);
-  const found = await findConversationReference({ ...recipient, store });
+  const recipient = ((): { type: "conversation" | "user"; id: string; threadId?: string } => {
+    const trimmed = params.to.trim();
+    const finalize = (type: "conversation" | "user", id: string) => {
+      const normalized = id.trim();
+      if (!normalized) {
+        throw new Error(`Invalid target value: missing ${type} id`);
+      }
+      if (type === "conversation") {
+        const threadId = extractMSTeamsConversationMessageId(normalized);
+        const normalizedConversationId = normalizeMSTeamsConversationId(normalized);
+        const slashIndex = normalizedConversationId.indexOf("/");
+        const graphChannelId =
+          slashIndex > 0 ? normalizedConversationId.slice(slashIndex + 1) : undefined;
+        return {
+          type,
+          id:
+            graphChannelId &&
+            (graphChannelId.startsWith("19:") || graphChannelId.includes("@thread"))
+              ? graphChannelId
+              : normalizedConversationId,
+          ...(threadId ? { threadId } : {}),
+        };
+      }
+      return { type, id: normalized };
+    };
+    if (trimmed.startsWith("conversation:")) {
+      return finalize("conversation", trimmed.slice("conversation:".length));
+    }
+    if (trimmed.startsWith("user:")) {
+      return finalize("user", trimmed.slice("user:".length));
+    }
+    if (trimmed.startsWith("19:") || trimmed.includes("@thread")) {
+      return finalize("conversation", trimmed);
+    }
+    return finalize("user", trimmed);
+  })();
+  const found = await (async (): Promise<{
+    conversationId: string;
+    ref: StoredConversationReference;
+  } | null> => {
+    if (recipient.type === "conversation") {
+      const ref = await store.get(recipient.id);
+      return ref ? { conversationId: recipient.id, ref } : null;
+    }
+    const preferred = await store.findPreferredDmByUserId(recipient.id);
+    return preferred
+      ? { conversationId: preferred.conversationId, ref: preferred.reference }
+      : null;
+  })();
 
   if (!found) {
     throw new Error(
@@ -238,12 +187,27 @@ export async function resolveMSTeamsSendContext(params: {
   const replyTarget: MSTeamsProactiveReplyTarget =
     recipient.threadId && conversationType === "channel"
       ? { replyStyle: "thread", threadActivityId: recipient.threadId }
-      : resolveMSTeamsProactiveReplyTarget({
-          cfg: msteamsCfg,
-          conversationId,
-          ref: safeRef,
-          conversationType,
-        });
+      : ((): MSTeamsProactiveReplyTarget => {
+          const threadRootId = safeRef.threadId ?? safeRef.activityId;
+          if (conversationType !== "channel" || !threadRootId) {
+            return { replyStyle: "top-level" };
+          }
+          const routeConfig = resolveMSTeamsRouteConfig({
+            cfg: msteamsCfg,
+            teamId: safeRef.teamId,
+            conversationId,
+            allowNameMatching: false,
+          });
+          const { replyStyle } = resolveMSTeamsReplyPolicy({
+            isDirectMessage: false,
+            globalConfig: msteamsCfg,
+            teamConfig: routeConfig.teamConfig,
+            channelConfig: routeConfig.channelConfig,
+          });
+          return replyStyle === "thread"
+            ? { replyStyle, threadActivityId: threadRootId }
+            : { replyStyle };
+        })();
 
   const mediaMaxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,

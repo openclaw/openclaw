@@ -737,6 +737,7 @@ describe("channel refresh sequencing", () => {
       }));
       const channels = createChannelCapability(gateway);
       const refresh = channels.refresh();
+      const initialRead = channels.state.channelsRead!;
 
       emitEvent("config.changed");
       emitEvent("config.changed");
@@ -746,12 +747,16 @@ describe("channel refresh sequencing", () => {
         probeTiming === "pending"
           ? channels.refresh(true)
           : pending.promise.then(() => channels.refresh(true));
+      expect(channels.state.channelsRead).toBe(initialRead);
       try {
         pending.resolve(createChannelsSnapshot("before save"));
         await refresh;
 
         expect(channels.state.channelsSnapshot).toBe(configured);
         expect(channels.state.channelsLoading).toBe(false);
+        expect(channels.state.channelsRead).not.toBe(initialRead);
+        await expect(initialRead.completion).resolves.toBeNull();
+        await expect(channels.state.channelsRead!.completion).resolves.toBeNull();
         expect(request).toHaveBeenCalledTimes(2);
         expect(request).toHaveBeenLastCalledWith("channels.status", {
           probe: false,
@@ -779,6 +784,7 @@ describe("channel refresh sequencing", () => {
       const { gateway, publish, emitEvent } = createChannelGatewayFixture(() => snapshot);
       const channels = createChannelCapability(gateway);
       const refresh = channels.refresh();
+      const receipt = channels.state.channelsRead!;
       emitEvent("config.changed");
 
       if (transition === "reconnect") {
@@ -796,6 +802,8 @@ describe("channel refresh sequencing", () => {
         channels.dispose();
         emitEvent("config.changed");
       }
+      await expect(receipt.completion).resolves.toBeNull();
+      expect(channels.state.channelsRead).toBeNull();
       pending.resolve(createChannelsSnapshot("retired"));
       await refresh;
 
@@ -817,6 +825,7 @@ describe("channel refresh sequencing", () => {
 
     await channels.refresh();
     expect(channels.state.channelsError).toBe("status unavailable");
+    await expect(channels.state.channelsRead!.completion).resolves.toBe("status unavailable");
 
     snapshot = { client, phase: "reconnecting" };
     publish();
@@ -826,6 +835,7 @@ describe("channel refresh sequencing", () => {
     expect(channels.state.channelsError).toBeNull();
     await channels.refresh();
     expect(channels.state.channelsSnapshot?.channelLabels.test).toBe("recovered");
+    await expect(channels.state.channelsRead!.completion).resolves.toBeNull();
     channels.dispose();
   });
 
@@ -879,11 +889,18 @@ describe("channel refresh sequencing", () => {
     });
 
     const probeLoad = channels.refresh(true);
+    const probeReceipt = channels.state.channelsRead!;
+    await channels.refresh(true);
+    expect(channels.state.channelsRead).toBe(probeReceipt);
     emitEvent("config.changed");
     expect(request).toHaveBeenCalledTimes(2);
+    const runtimeReceipt = channels.state.channelsRead!;
+    expect(runtimeReceipt).not.toBe(probeReceipt);
+    await expect(probeReceipt.completion).resolves.toBeNull();
 
     fastRuntime.resolve(fresh);
     await runtimeLoaded.promise;
+    await expect(runtimeReceipt.completion).resolves.toBeNull();
     slowProbe.resolve(createChannelsSnapshot("stale"));
     await probeLoad;
 

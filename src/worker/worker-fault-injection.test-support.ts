@@ -25,6 +25,7 @@ import {
 } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
+import { gatewayTestTextTransport } from "../gateway/server/connection-transport.test-support.js";
 import * as workerServer from "../gateway/server/ws-connection/worker-connection.js";
 import type { GatewayWsClient } from "../gateway/server/ws-types.js";
 import type { WorkerInstallationArtifact } from "../gateway/worker-environments/bundle.js";
@@ -628,6 +629,7 @@ export class ComposedGatewayHarness {
     const service = this.serviceValue;
     const cleanup = workerServer.attachWorkerWsMessageHandler({
       socket,
+      transport: gatewayTestTextTransport(socket),
       connectionWork: this.connectionWork,
       connId,
       service: {

@@ -14,7 +14,7 @@ import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  hasResolvableHeartbeatOwnerRoute,
+  hasResolvableProactiveOwnerRoute,
   resolveHeartbeatDeliveryTargetWithSessionRoute,
 } from "./targets.js";
 
@@ -44,7 +44,7 @@ it.each([
     await withPluginRuntimeRegistryScope(
       scope === "scoped" ? telegramRegistry : undefined,
       async () => {
-        expect(await hasResolvableHeartbeatOwnerRoute({ cfg })).toBe(true);
+        expect(await hasResolvableProactiveOwnerRoute({ cfg })).toBe(true);
         expect(
           await resolveHeartbeatDeliveryTargetWithSessionRoute({ cfg, agentId: "main" }),
         ).toMatchObject({ channel: "telegram", to: "telegram:1234567890", chatType: "direct" });
