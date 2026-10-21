@@ -1,8 +1,84 @@
 import { isDeepStrictEqual } from "node:util";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { callGateway } from "../../../gateway/call.js";
+import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { immutableSubagentRun, subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+
+type DeliveryRuntimeMockOptions = {
+  callGateway: (request: unknown) => Promise<unknown>;
+  getRuntimeConfig: () => OpenClawConfig;
+  loadSessionStore: (storePath: string) => unknown;
+  resolveMainSessionKey: (cfg: unknown) => string;
+  resolveSessionStorePathCore: (store: unknown, options: unknown) => string;
+  isSessionRunActive: (sessionId: string) => boolean;
+  hasHooks?: () => boolean;
+};
+
+function resolveExternalBestEffortDeliveryTarget(params: {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
+}) {
+  return {
+    deliver: Boolean(params.channel && params.to),
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId,
+    threadId: params.threadId,
+  };
+}
+
+function resolveQueueSettings(params: {
+  cfg?: Pick<OpenClawConfig, "messages">;
+  channel?: string;
+}) {
+  return {
+    mode:
+      (params.channel && params.cfg?.messages?.queue?.byChannel?.[params.channel]) ?? "followup",
+  };
+}
+
+export async function createSubagentAnnounceDeliveryRuntimeMock(
+  options: DeliveryRuntimeMockOptions,
+) {
+  return {
+    ...(await vi.importActual<typeof import("./subagent-announce-delivery.runtime.js")>(
+      "./subagent-announce-delivery.runtime.js",
+    )),
+    callGateway: (async <T = Record<string, unknown>>(request: Parameters<typeof callGateway>[0]) =>
+      (await options.callGateway(request)) as T) as typeof callGateway,
+    dispatchGatewayMethodInProcess: (async <T = Record<string, unknown>>(
+      method: string,
+      params: Record<string, unknown>,
+      callOptions?: { expectFinal?: boolean; timeoutMs?: number },
+    ) =>
+      (await options.callGateway({
+        method,
+        params,
+        expectFinal: callOptions?.expectFinal,
+        timeoutMs: callOptions?.timeoutMs,
+      })) as T) as typeof dispatchGatewayMethodInProcess,
+    getRuntimeConfig: options.getRuntimeConfig,
+    loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
+      (options.loadSessionStore(scope.storePath ?? "") as Record<string, unknown>)[
+        scope.sessionKey
+      ],
+    loadSessionStore: options.loadSessionStore,
+    resolveMainSessionKey: options.resolveMainSessionKey,
+    resolveSessionStorePathCore: options.resolveSessionStorePathCore,
+    isSessionRunActive: options.isSessionRunActive,
+    getGlobalHookRunner: () => ({ hasHooks: () => options.hasHooks?.() ?? false }),
+    resolveBoundDeliveryDestination: async () => null,
+    resolveConversationIdFromTargets: () => "",
+    resolveExternalBestEffortDeliveryTarget,
+    resolveQueueSettings,
+  };
+}
 
 export type AgentCallRequest = {
   method?: string;
@@ -52,23 +128,28 @@ export function expectAgentCallFields(
   });
 }
 
-export type MockSubagentRun = Pick<
-  SubagentRunRecord,
-  | "runId"
-  | "childSessionKey"
-  | "requesterSessionKey"
-  | "requesterDisplayKey"
-  | "task"
-  | "cleanup"
-  | "createdAt"
-  | "cleanupCompletedAt"
-  | "label"
-> & {
-  execution: Pick<SubagentRunRecord["execution"], "endedAt" | "outcome">;
-  completion?: Pick<
-    NonNullable<SubagentRunRecord["completion"]>,
-    "required" | "resultText" | "terminalReply"
-  >;
+export type MockSubagentRun = {
+  runId: string;
+  childSessionKey: string;
+  requesterSessionKey: string;
+  requesterDisplayKey: string;
+  task: string;
+  cleanup: "keep" | "delete";
+  createdAt: number;
+  execution: {
+    endedAt?: number;
+    outcome?: {
+      status: "ok" | "timeout" | "error" | "unknown";
+      error?: string;
+    };
+  };
+  cleanupCompletedAt?: number;
+  label?: string;
+  completion?: {
+    required: boolean;
+    resultText?: string | null;
+    terminalReply?: AgentRunTerminalReplySnapshot;
+  };
 };
 
 export function publishAnnounceRunFixture(fixture: MockSubagentRun): SubagentRunRecord {
