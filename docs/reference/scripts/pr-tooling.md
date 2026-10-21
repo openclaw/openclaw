@@ -45,6 +45,9 @@ captured by merge admission. For inherited-failure admin admission, the publishe
 must be a successful Security Review run on that main history, and its workflow
 and every declared checkout source must match that tip's Git blobs. The verified
 workflow supplies the checkout inventory; the bound wrapper's older files do not.
+Initial admission reads those owner blobs from GitHub at the captured main SHA,
+so it does not require a newly observed main to be materialized locally yet. The
+final local-only source check still follows main materialization.
 An older run remains eligible only while all publisher sources still match main.
 Foreign, malformed, or outdated sources refuse admission. This does not refresh
 or replace the retained workflow binding, select caller-provided source code, or

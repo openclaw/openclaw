@@ -165,7 +165,8 @@ const securityResponse=()=>{
     reply(endpoint.includes("/attempts/")?{...publisher,run_attempt:1}:publisher);
   } else if(endpoint.startsWith("repos/fixture/repo/contents/")) {
     const path=endpoint.slice("repos/fixture/repo/contents/".length).split("?")[0];
-    const bytes=execFileSync("git",["show",source+":"+path],{cwd:process.env.FIXTURE_REPO,env:process.env});
+    const revision=new URLSearchParams(endpoint.split("?")[1]).get("ref");
+    const bytes=execFileSync("git",["--git-dir="+process.env.FIXTURE_REMOTE,"show",revision+":"+path],{env:process.env});
     const sha=createHash("sha1").update("blob "+bytes.length+"\0").update(bytes).digest("hex");
     reply({type:"file",path,sha:config.fault==="changed-publisher-source"&&path!==publisher.path?"0".repeat(40):sha,
       encoding:config.fault==="malformed-workflow"?"utf8":"base64",

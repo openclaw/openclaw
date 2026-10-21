@@ -110,6 +110,24 @@ async function latestStatuses(path) {
   return [...latest.values()];
 }
 
+async function readSource(prefix, path, revision) {
+  const source = await read(`${prefix}/contents/${path}?ref=${revision}`);
+  requireEvidence(
+    source.type === "file" &&
+      source.path === path &&
+      oid.test(source.sha ?? "") &&
+      source.encoding === "base64" &&
+      typeof source.content === "string",
+    `complete protected publisher source is required: ${path}`,
+  );
+  const bytes = Buffer.from(source.content, "base64");
+  requireEvidence(
+    createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex") === source.sha,
+    `Security Review publisher source differs from the current owner: ${path} (blob bytes mismatch)`,
+  );
+  return { path, sha: source.sha, bytes };
+}
+
 function sourceFiles(bytes) {
   const workflow = parse(bytes.toString("utf8"));
   const primary = workflow?.jobs?.review?.steps?.find((step) => step.id === "checkout");
@@ -142,7 +160,7 @@ function sourceFiles(bytes) {
       ),
     "publisher sources must be explicit repository files",
   );
-  return paths;
+  return [workflowPath, ...paths];
 }
 
 function statusSnapshot(statuses) {
@@ -268,36 +286,24 @@ export async function verifyPriorCiSecurity({
     "successful protected Security Review publisher is required",
   );
   const attemptPath = `${runPath}/attempts/${run.run_attempt}`;
-  const workflowSource = await read(`${prefix}/contents/${workflowPath}?ref=${run.head_sha}`);
-  requireEvidence(
-    workflowSource.type === "file" &&
-      workflowSource.path === workflowPath &&
-      oid.test(workflowSource.sha ?? "") &&
-      workflowSource.encoding === "base64" &&
-      typeof workflowSource.content === "string",
-    "complete protected publisher workflow is required",
-  );
-  const workflowBytes = Buffer.from(workflowSource.content, "base64");
-  requireEvidence(
-    createHash("sha1")
-      .update(`blob ${workflowBytes.length}\0`)
-      .update(workflowBytes)
-      .digest("hex") === workflowSource.sha,
-    "publisher workflow bytes differ from its source identity",
-  );
-  const workflow = { path: workflowPath, sha: workflowSource.sha };
+  requireEvidence(oid.test(main ?? ""), "complete current main identity is required");
   // The publisher follows protected main, independently of the frozen PR wrapper.
-  verifyPriorCiSecurityMainSources({ sources: [workflow] }, main);
-  const paths = sourceFiles(workflowBytes);
+  // Read pinned owner blobs remotely: this observation may precede main materialization.
+  const workflow = await readSource(prefix, workflowPath, main);
+  const paths = sourceFiles(workflow.bytes);
   const [attempt, comparison, sources, jobs] = await readTogether([
     read(attemptPath),
     read(`${prefix}/compare/${run.head_sha}...${main}?per_page=1&page=2`),
     readTogether(
       paths.map(async (path) => {
-        const source = await read(`${prefix}/contents/${path}?ref=${run.head_sha}`);
+        const currentSource = path === workflowPath ? workflow : readSource(prefix, path, main);
+        const [source, expected] = await readTogether([
+          run.head_sha === main ? currentSource : readSource(prefix, path, run.head_sha),
+          currentSource,
+        ]);
         requireEvidence(
-          source.type === "file" && source.path === path && oid.test(source.sha ?? ""),
-          `complete Security Review publisher source is required: ${path}`,
+          source.sha === expected.sha,
+          `Security Review publisher source differs from the current owner: ${path}`,
         );
         return { path, sha: source.sha };
       }),
@@ -314,8 +320,6 @@ export async function verifyPriorCiSecurity({
       ["ahead", "identical"].includes(comparison.status),
     "publisher source is not on protected main",
   );
-  sources.unshift(workflow);
-  verifyPriorCiSecurityMainSources({ sources }, main);
   requireEvidence(
     new Set(jobs.map((job) => job.id)).size === jobs.length &&
       jobs.every(
