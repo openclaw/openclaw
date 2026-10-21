@@ -36,17 +36,6 @@ function getOptions(includeSkip = false) {
   return [...groups.flatMap((group) => group.options), ...(skipOption ? [skipOption] : [])];
 }
 
-function requireChoiceGroup(
-  groups: ReturnType<typeof buildAuthChoiceGroups>["groups"],
-  value: string,
-) {
-  const group = groups.find((entry) => entry.value === value);
-  if (!group) {
-    throw new Error(`expected auth choice group ${value}`);
-  }
-  return group;
-}
-
 describe("buildAuthChoiceOptions", () => {
   beforeEach(() => {
     resolveProviderSetupFlowContributions.mockReset();
@@ -69,32 +58,6 @@ describe("buildAuthChoiceOptions", () => {
     expect(formatAuthChoiceChoicesForCli().split("|")).toContain("native-local");
   });
 
-  it("builds cli help choices from the same prepared flow results", () => {
-    resolveProviderSetupFlowContributions.mockReturnValue([
-      { providerId: "chutes", option: { value: "chutes", label: "Chutes (OAuth)" } },
-      { providerId: "litellm", option: { value: "litellm-api-key", label: "LiteLLM API key" } },
-      { providerId: "openai", option: { value: "openai-api-key", label: "OpenAI API key" } },
-      groupedFlow("ollama", "ollama", "Ollama", "Ollama", {
-        hint: "Cloud and local open models",
-      }),
-    ]);
-
-    const options = getOptions(true);
-    const cliChoices = formatAuthChoiceChoicesForCli().split("|");
-
-    expect(cliChoices).toEqual(
-      expect.arrayContaining([
-        "openai-api-key",
-        "chutes",
-        "litellm-api-key",
-        "custom-api-key",
-        "skip",
-        "ollama",
-      ]),
-    );
-    expect(options.map((option) => option.value)).toContain("ollama");
-  });
-
   it("orders common auth provider groups before the alphabetical remainder", () => {
     resolveProviderSetupFlowContributions.mockReturnValue([
       groupedFlow("google", "gemini-api-key", "Gemini API key", "Google"),
@@ -109,9 +72,7 @@ describe("buildAuthChoiceOptions", () => {
       }),
     ]);
 
-    const { groups } = buildAuthChoiceGroups({
-      includeSkip: false,
-    });
+    const { groups } = buildAuthChoiceGroups({ includeSkip: false });
 
     expect(groups.map((group) => group.label)).toEqual([
       "OpenAI",
@@ -149,10 +110,9 @@ describe("buildAuthChoiceOptions", () => {
       assistantVisibleOnly: false,
     });
 
-    expect(requireChoiceGroup(groups, "openai").options.map((option) => option.value)).toEqual([
-      "openai-device-code",
-      "openai-api-key",
-    ]);
+    expect(
+      groups.find((group) => group.value === "openai")?.options.map(({ value }) => value),
+    ).toEqual(["openai-device-code", "openai-api-key"]);
   });
 
   it("groups OpenCode Zen and Go under one OpenCode entry", () => {
@@ -162,14 +122,10 @@ describe("buildAuthChoiceOptions", () => {
         group: { id: "opencode", label: "OpenCode" },
       }),
     ]);
-    const { groups } = buildAuthChoiceGroups({
-      includeSkip: false,
-    });
-    const openCodeGroup = requireChoiceGroup(groups, "opencode");
-
-    const openCodeValues = openCodeGroup.options.map((option) => option.value);
-    expect(openCodeValues).toContain("opencode-zen");
-    expect(openCodeValues).toContain("opencode-go");
+    const { groups } = buildAuthChoiceGroups({ includeSkip: false });
+    expect(
+      groups.find((group) => group.value === "opencode")?.options.map(({ value }) => value),
+    ).toEqual(expect.arrayContaining(["opencode-zen", "opencode-go"]));
   });
 
   it("keeps media-generation auth choices available to the CLI but out of the interactive picker", () => {
@@ -188,12 +144,11 @@ describe("buildAuthChoiceOptions", () => {
         groupedFlow("ollama", "ollama", "Ollama", "Ollama"),
       ]);
 
-    const options = getOptions();
+    const options = getOptions(true);
     const optionValues = options.map((option) => option.value);
     const cliChoiceValues = formatAuthChoiceChoicesForCli().split("|");
 
-    expect(optionValues).toContain("openai-api-key");
-    expect(optionValues).toContain("ollama");
+    expect(optionValues).toEqual(expect.arrayContaining(["openai-api-key", "ollama", "skip"]));
     expect(optionValues).not.toContain("fal-api-key");
     expect(optionValues).not.toContain("vydra-api-key");
     expect(optionValues).not.toContain("openrouter-api-key");

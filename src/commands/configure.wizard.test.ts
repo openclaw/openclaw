@@ -285,18 +285,14 @@ describe("runConfigureWizard", () => {
     expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
   });
 
-  it.each([["  ", '""']])(
-    "rejects section %j before the terminal guard",
-    async (section, diagnostic) => {
-      const runtime = mocks.runtime;
-      mocks.isTerminalInteractive.mockReturnValue(false);
-      await configureCommandFromSectionsArg(["channels", section]);
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining(`Invalid --section: ${diagnostic}`),
-      );
-      expect(mocks.clackIntro).not.toHaveBeenCalled();
-      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects a blank section before the terminal guard", async () => {
+    mocks.isTerminalInteractive.mockReturnValue(false);
+    await configureCommandFromSectionsArg(["channels", "  "]);
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining('Invalid --section: ""'),
+    );
+    expect(mocks.clackIntro).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
 });

@@ -103,6 +103,15 @@ const makeAccount = (accountId: string, fields: Partial<ChannelAccountSnapshot> 
   ...fields,
 });
 const repairHint = "Install the official Feishu plugin.";
+const feishuRepair: OfficialExternalPluginRepairHint = {
+  channelId: "feishu",
+  pluginId: "feishu",
+  label: "Feishu",
+  installSpec: "@openclaw/feishu",
+  installCommand: "openclaw plugins install @openclaw/feishu",
+  doctorFixCommand: "openclaw doctor --fix",
+  repairHint,
+};
 const route = (channel: string, accountId?: string): AgentRouteBinding => ({
   agentId: "proof",
   match: { channel, accountId },
@@ -118,17 +127,7 @@ function configureDisplayPlugins() {
   imessage.meta.label = "iMessage";
   mocks.plugins.mockReturnValue([telegram, imessage]);
   mocks.configuredChannels.mockReturnValue(["feishu"]);
-  mocks.repairs.mockReturnValue([
-    {
-      channelId: "feishu",
-      pluginId: "feishu",
-      label: "Feishu",
-      installSpec: "@openclaw/feishu",
-      installCommand: "openclaw plugins install @openclaw/feishu",
-      doctorFixCommand: "openclaw doctor --fix",
-      repairHint,
-    },
-  ]);
+  mocks.repairs.mockReturnValue([feishuRepair]);
 }
 
 describe("agent provider inventories", () => {
@@ -220,17 +219,7 @@ describe("agent provider inventories", () => {
       raw,
     ]);
     mocks.configuredChannels.mockReturnValue(["telegram", "feishu"]);
-    mocks.repairs.mockReturnValue([
-      {
-        channelId: "feishu",
-        pluginId: "feishu",
-        label: "Feishu",
-        installSpec: "@openclaw/feishu",
-        installCommand: "openclaw plugins install @openclaw/feishu",
-        doctorFixCommand: "openclaw doctor --fix",
-        repairHint,
-      },
-    ]);
+    mocks.repairs.mockReturnValue([feishuRepair]);
 
     const bindings = mocks.plugins().map((entry) => route(entry.id, "*"));
     bindings.push(route("feishu"));

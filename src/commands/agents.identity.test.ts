@@ -38,7 +38,7 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: configMocks.replaceConfigFile,
 }));
 
-import type { AgentRouteBinding } from "../config/types.js";
+import type { AgentRouteBinding, IdentityConfig } from "../config/types.js";
 import { applyAgentBindings, removeAgentBindings } from "./agents.bindings.js";
 import { agentsSetIdentityCommand } from "./agents.commands.identity.js";
 import { applyAgentConfig, buildAgentSummaries, pruneAgentConfig } from "./agents.config.js";
@@ -103,35 +103,20 @@ describe("agents set-identity command", () => {
     setAgents({ entries: { main: {} } });
   });
 
-  it.each([
-    {
-      label: "renames the synchronized roster label after the identity conversation",
-      name: "New Bot",
-      update: { name: "Pip" },
-      expectedName: "Pip",
-      expectedIdentity: { name: "Pip" },
-    },
-    {
-      label: "preserves a separate operator roster label when identity changes",
-      name: "Research assistant",
-      update: { name: "Pip" },
-      expectedName: "Research assistant",
-      expectedIdentity: { name: "Pip" },
-    },
-    {
-      label: "preserves the roster label for an emoji-only identity update",
-      name: "New Bot",
-      update: { emoji: "🐦" },
-      expectedName: "New Bot",
-      expectedIdentity: { name: "New Bot", emoji: "🐦" },
-    },
-  ])("$label", async ({ name, update, expectedName, expectedIdentity }) => {
-    setAgents({ entries: { main: { name, identity: { name: "New Bot" } } } });
+  it.each<[string, IdentityOptions, string, IdentityConfig]>([
+    ["New Bot", { name: "Pip" }, "Pip", { name: "Pip" }],
+    ["Research assistant", { name: "Pip" }, "Research assistant", { name: "Pip" }],
+    ["New Bot", { emoji: "🐦" }, "New Bot", { name: "New Bot", emoji: "🐦" }],
+  ])(
+    "updates identity while preserving independent roster label %s (%j)",
+    async (name, update, expectedName, expectedIdentity) => {
+      setAgents({ entries: { main: { name, identity: { name: "New Bot" } } } });
 
-    await agentsSetIdentityCommand({ agent: "main", ...update });
+      await agentsSetIdentityCommand({ agent: "main", ...update });
 
-    expect(writtenAgent()).toMatchObject({ name: expectedName, identity: expectedIdentity });
-  });
+      expect(writtenAgent()).toMatchObject({ name: expectedName, identity: expectedIdentity });
+    },
+  );
 
   it("resolves --from-identity against the selected agent workspace", async () => {
     const { root, workspace } = await createIdentityWorkspace();
@@ -149,32 +134,24 @@ describe("agents set-identity command", () => {
     expect(writtenAgent()?.identity).toEqual({ name: "Workspace Agent" });
   });
 
-  it("errors when multiple agents match the same workspace", async () => {
-    const { workspace } = await createIdentityWorkspace("shared");
-    const identityPath = await writeIdentityFile(workspace, ["- Name: Echo"]);
-    const originalIdentity = await fs.readFile(identityPath, "utf8");
-
-    setAgents({ entries: { main: { workspace }, ops: { workspace } } });
-
-    await expectIdentityCommandFailure(
-      { workspace },
-      `Multiple agents match ${workspace}: main, ops. Pass --agent to choose one.`,
-    );
-    await expect(fs.readFile(identityPath, "utf8")).resolves.toBe(originalIdentity);
-  });
-
-  it("rejects an unmatched workspace before reading or changing its identity file", async () => {
-    const { workspace } = await createIdentityWorkspace("unmatched");
-    const identityPath = await writeIdentityFile(workspace, ["- Name: Untouched"]);
-    const originalIdentity = await fs.readFile(identityPath, "utf8");
-
-    await expectIdentityCommandFailure(
-      { workspace, name: "Override", json: true },
-      `No agent workspace matches ${workspace}. Pass --agent to target a specific agent.`,
-    );
-
-    await expect(fs.readFile(identityPath, "utf8")).resolves.toBe(originalIdentity);
-  });
+  it.each([false, true])(
+    "rejects ambiguous=%s workspace without modifying identity",
+    async (ambiguous) => {
+      const { workspace } = await createIdentityWorkspace();
+      const identityPath = await writeIdentityFile(workspace, ["- Name: Untouched"]);
+      const originalIdentity = await fs.readFile(identityPath, "utf8");
+      if (ambiguous) {
+        setAgents({ entries: { main: { workspace }, ops: { workspace } } });
+      }
+      await expectIdentityCommandFailure(
+        ambiguous ? { workspace } : { workspace, name: "Override", json: true },
+        ambiguous
+          ? `Multiple agents match ${workspace}: main, ops. Pass --agent to choose one.`
+          : `No agent workspace matches ${workspace}. Pass --agent to target a specific agent.`,
+      );
+      await expect(fs.readFile(identityPath, "utf8")).resolves.toBe(originalIdentity);
+    },
+  );
 
   it("sanitizes identity echoes while preserving stored and JSON values", async () => {
     const name = "Operator\u001B]0;identity-injection\u0007🦞\r\nforged-row\tbadge";

@@ -39,16 +39,12 @@ const wizardTestMocks = vi.hoisted(() => {
     resolveGatewayPort: vi.fn(),
     createClackPrompter: vi.fn(),
     note: vi.fn(),
-    printWizardHeader: vi.fn(),
     probeGatewayReachable: vi.fn(),
     waitForGatewayReachable: vi.fn(async () => ({ ok: true })),
     resolveAdvertisedControlUiLinks: vi.fn(),
-    resolveControlUiLinks: vi.fn(),
     resolveLocalControlUiProbeLinks: vi.fn(),
-    inspectWindowsGatewayFirewall: vi.fn(),
     summarizeExistingConfig: vi.fn(),
     healthCommand: vi.fn(),
-    formatHealthCheckFailure: vi.fn<typeof import("./health-format.js").formatHealthCheckFailure>(),
     maybeInstallDaemon: vi.fn<typeof import("./configure.daemon.js").maybeInstallDaemon>(),
     promptAuthConfig: vi.fn(),
     promptGatewayConfig: vi.fn(),
@@ -160,7 +156,6 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
-  inspectWindowsGatewayFirewall: wizardTestMocks.inspectWindowsGatewayFirewall,
   formatWindowsGatewayFirewallGuidance: (params: { bind?: string }) =>
     params.bind === "lan"
       ? [
@@ -182,10 +177,8 @@ vi.mock("./onboard-helpers.js", () => ({
   applyWizardMetadata: (cfg: OpenClawConfig) => cfg,
   ensureWorkspaceAndSessions: wizardTestMocks.ensureWorkspaceAndSessions,
   guardCancel: wizardTestMocks.guardCancel,
-  printWizardHeader: wizardTestMocks.printWizardHeader,
   probeGatewayReachable: wizardTestMocks.probeGatewayReachable,
   resolveAdvertisedControlUiLinks: wizardTestMocks.resolveAdvertisedControlUiLinks,
-  resolveControlUiLinks: wizardTestMocks.resolveControlUiLinks,
   resolveLocalControlUiProbeLinks: wizardTestMocks.resolveLocalControlUiProbeLinks,
   summarizeExistingConfig: wizardTestMocks.summarizeExistingConfig,
   waitForGatewayReachable: wizardTestMocks.waitForGatewayReachable,
@@ -195,12 +188,6 @@ vi.mock("./health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./health.js")>()),
   healthCommandNonExiting: wizardTestMocks.healthCommand,
 }));
-
-vi.mock("./health-format.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./health-format.js")>();
-  wizardTestMocks.formatHealthCheckFailure = vi.fn(actual.formatHealthCheckFailure);
-  return { ...actual, formatHealthCheckFailure: wizardTestMocks.formatHealthCheckFailure };
-});
 
 vi.mock("./configure.gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./configure.gateway.js")>()),
@@ -293,22 +280,12 @@ export function setupBaseWizardTestState(config: OpenClawConfig = {}) {
   wizardTestMocks.readConfigFileSnapshot.mockResolvedValue({ ...EMPTY_CONFIG_SNAPSHOT, config });
   wizardTestMocks.resolveGatewayPort.mockReturnValue(18789);
   wizardTestMocks.probeGatewayReachable.mockResolvedValue({ ok: false });
-  wizardTestMocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
-  wizardTestMocks.resolveLocalControlUiProbeLinks.mockReturnValue({
+  const links = {
     httpUrl: "http://127.0.0.1:18789/",
     wsUrl: "ws://127.0.0.1:18789",
-  });
-  wizardTestMocks.resolveAdvertisedControlUiLinks.mockResolvedValue({
-    httpUrl: "http://127.0.0.1:18789/",
-    wsUrl: "ws://127.0.0.1:18789",
-  });
-  wizardTestMocks.inspectWindowsGatewayFirewall.mockResolvedValue({
-    applies: false,
-    severity: "info",
-    code: "windows_firewall_not_applicable",
-    message: "Windows LAN firewall diagnostics do not apply.",
-    details: [],
-  });
+  };
+  wizardTestMocks.resolveLocalControlUiProbeLinks.mockReturnValue(links);
+  wizardTestMocks.resolveAdvertisedControlUiLinks.mockResolvedValue(links);
   wizardTestMocks.summarizeExistingConfig.mockReturnValue("");
   wizardTestMocks.createClackPrompter.mockReturnValue({
     intro: vi.fn(async () => {}),

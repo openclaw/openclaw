@@ -44,6 +44,15 @@ async function list(options: Parameters<typeof agentsListCommand>[0]) {
 }
 
 const telegramBinding = [{ agentId: "main", match: { channel: "telegram" } }];
+const telegramPlugin = (label = "Telegram", name?: string) =>
+  createChannelTestPluginBase({
+    id: "telegram",
+    label,
+    config: {
+      resolveAccount: () => ({ accountId: "default", enabled: true, configured: true }),
+      describeAccount: () => ({ accountId: "default", enabled: true, configured: true, name }),
+    },
+  });
 function setEntries(
   entries: NonNullable<OpenClawConfig["agents"]>["entries"],
   bindings?: OpenClawConfig["bindings"],
@@ -56,16 +65,7 @@ describe("agentsListCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setEntries({ main: {} }, telegramBinding);
-    mocks.plugins.mockReturnValue([
-      createChannelTestPluginBase({
-        id: "telegram",
-        label: "Telegram",
-        config: {
-          resolveAccount: () => ({ accountId: "default", enabled: true, configured: true }),
-          describeAccount: () => ({ accountId: "default", enabled: true, configured: true }),
-        },
-      }),
-    ]);
+    mocks.plugins.mockReturnValue([telegramPlugin()]);
     mocks.provenance.mockResolvedValue([]);
     mocks.displayProvenance.mockResolvedValue([]);
   });
@@ -102,13 +102,16 @@ describe("agentsListCommand", () => {
       "unrelated stored provenance is invalid",
     );
   });
-  it("renders roots, children, missing rows, and dangling creators as a tree", async () => {
-    setEntries({
-      main: { name: "Main" },
-      child: { name: "Child" },
-      legacy: { name: "Legacy" },
-      orphan: { name: "Orphan" },
-    });
+  it("renders roots, children, missing and dangling creators with optional routing rules", async () => {
+    setEntries(
+      {
+        main: { name: "Main" },
+        child: { name: "Child" },
+        legacy: { name: "Legacy" },
+        orphan: { name: "Orphan" },
+      },
+      [{ agentId: "child", match: { channel: "telegram" } }],
+    );
     mocks.provenance.mockResolvedValue([
       { agentId: "main", createdVia: "operator", creatorAgentId: null, createdAtMs: 1 },
       { agentId: "child", createdVia: "agent", creatorAgentId: "main", createdAtMs: 2 },
@@ -118,26 +121,15 @@ describe("agentsListCommand", () => {
       "Agents:\n- main (Main)\n  - child (Child)\n- legacy (Legacy)\n- orphan (Orphan)",
     );
     expect(mocks.plugins).not.toHaveBeenCalled();
-  });
-  it("shows requested routing rules beneath their agent in tree output", async () => {
-    setEntries({ main: { name: "Main" }, child: { name: "Child" }, unbound: { name: "Unbound" } }, [
-      { agentId: "child", match: { channel: "telegram" } },
-    ]);
-    mocks.provenance.mockResolvedValue([
-      { agentId: "child", createdVia: "agent", creatorAgentId: "main", createdAtMs: 2 },
-    ]);
-
-    const plainTree = (await list({ tree: true })).text;
-    const treeWithBindings = (await list({ tree: true, bindings: true })).text;
-    expect(plainTree).toBe("Agents:\n- main (Main)\n  - child (Child)\n- unbound (Unbound)");
-    expect(treeWithBindings).toBe(
-      "Agents:\n- main (Main)\n  - child (Child)\n    Routing rules:\n      - telegram\n- unbound (Unbound)",
+    expect((await list({ tree: true, bindings: true })).text).toBe(
+      "Agents:\n- main (Main)\n  - child (Child)\n    Routing rules:\n      - telegram\n- legacy (Legacy)\n- orphan (Orphan)",
     );
     expect((await list({ bindings: true })).text).toContain("    - telegram");
     expect((await list({ json: true, bindings: true })).json).toMatchObject([
       { id: "main" },
       { id: "child", bindingDetails: ["telegram"] },
-      { id: "unbound" },
+      { id: "legacy" },
+      { id: "orphan" },
     ]);
   });
   it("lists configured, inherited, and local avatar identities without changing the workspace", async () => {
@@ -204,19 +196,7 @@ describe("agentsListCommand", () => {
       telegramBinding,
     );
     mocks.plugins.mockReturnValue([
-      createChannelTestPluginBase({
-        id: "telegram",
-        label: `${control}Telegram\nroute`,
-        config: {
-          resolveAccount: () => ({ accountId: "default", enabled: true, configured: true }),
-          describeAccount: () => ({
-            accountId: "default",
-            enabled: true,
-            configured: true,
-            name: `${control}Telegram\tconfigured`,
-          }),
-        },
-      }),
+      telegramPlugin(`${control}Telegram\nroute`, `${control}Telegram\tconfigured`),
     ]);
     const { text: textOutput } = await list({ bindings: true });
     expect(textOutput).not.toContain("\u001B");
