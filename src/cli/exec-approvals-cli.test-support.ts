@@ -1,7 +1,9 @@
 // Suites load this fixture before the CLI so runtime dependencies see the mocks.
 import { Command } from "commander";
 import { vi } from "vitest";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import type { ClientSocketRecord } from "../infra/client-credential-store.js";
+import { applyExecApprovalsUpdate } from "../infra/exec-approvals-mutation.kernel.js";
+import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { registerExecApprovalsCli } from "./exec-approvals-cli.js";
 
 const mocks = vi.hoisted(() => {
@@ -79,8 +81,19 @@ export const localSnapshot: ExecApprovalsSnapshot = {
   hash: "hash-local",
   file: { version: 1, agents: {} },
 };
+let localSocket: ClientSocketRecord | null = null;
+
+export function setLocalSocket(path: string, token: string): void {
+  localSocket = {
+    socket_key: "current",
+    socket_path: path,
+    socket_token: token,
+    updated_at_ms: 1,
+  };
+}
 
 function resetLocalSnapshot() {
+  localSocket = null;
   localSnapshot.exists = true;
   localSnapshot.raw = "{}";
   localSnapshot.hash = "hash-local";
@@ -123,29 +136,42 @@ vi.mock("../infra/exec-approvals.js", async () => {
   );
   return {
     ...actual,
-    readExecApprovalsSnapshot: () => localSnapshot,
+    readExecApprovalsSnapshotAsync: async () => localSnapshot,
     updateExecApprovals: vi.fn(
-      async ({
-        baseHash,
-        update,
-      }: {
-        baseHash?: string;
-        update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
-      }) => {
+      async ({ baseHash, update }: Parameters<typeof actual.updateExecApprovals>[0]) => {
         if (baseHash !== undefined && baseHash !== localSnapshot.hash) {
           return null;
         }
-        const next = update(structuredClone(localSnapshot.file));
+        const next = applyExecApprovalsUpdate(structuredClone(localSnapshot.file), update);
         if (next !== null) {
           localSnapshot.file = next;
           localSnapshot.raw = JSON.stringify(next);
           localSnapshot.hash = "hash-local-written";
         }
-        return structuredClone(localSnapshot);
+        const snapshot = structuredClone(localSnapshot);
+        if (update.kind === "replace" && update.preserveSocket) {
+          setLocalSocket(
+            update.file.socket?.path?.trim() ||
+              localSocket?.socket_path ||
+              "/tmp/local-exec-approvals.sock",
+            update.file.socket?.token?.trim() || localSocket?.socket_token || "fixture-token",
+          );
+          snapshot.file.socket = {
+            ...snapshot.file.socket,
+            path: localSocket?.socket_path ?? undefined,
+            token: localSocket?.socket_token ?? undefined,
+          };
+        }
+        return snapshot;
       },
     ),
   };
 });
+
+// mock-isolation: CLI fixtures use synthetic socket data without admitting the real credential owner.
+vi.mock("../infra/exec-approvals-socket.js", () => ({
+  readExecApprovalsSocket: async () => structuredClone(localSocket),
+}));
 
 export function loggedOutput(): string {
   return defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");

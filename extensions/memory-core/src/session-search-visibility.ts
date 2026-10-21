@@ -13,7 +13,7 @@ import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { sessionDeliveryOrigin } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayAsync,
   resolveTranscriptStemToSessionKeys,
 } from "openclaw/plugin-sdk/session-transcript-hit";
 import {
@@ -26,6 +26,7 @@ import {
   normalizeOptionalLowercaseString as normalizeAgentIdForCompare,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isActiveMemoryRecallSessionKey } from "./active-memory-recall-session.js";
 import {
   readSessionArchiveReasonFromHitPath,
   type SessionResetRecallCutoff,
@@ -37,7 +38,7 @@ function isGlobalSessionKeyForSharedScope(cfg: OpenClawConfig, key: string): boo
 
 type ConversationRecallContext = NonNullable<OpenClawPluginToolContext["conversationRecall"]>;
 
-type SessionStore = ReturnType<typeof loadCombinedSessionStoreForGateway>["store"];
+type SessionStore = Awaited<ReturnType<typeof loadCombinedSessionStoreForGatewayAsync>>["store"];
 
 function isSameStoredTranscript(
   // Keep the existing file-alias privacy check even though the public store type omits locators.
@@ -69,7 +70,7 @@ function isPrivateConversation(params: {
   );
   if (
     chatTypes.some((chatType) => chatType === "group" || chatType === "channel") ||
-    /:active-memory:[a-f0-9]{12}$/i.test(key)
+    isActiveMemoryRecallSessionKey(key)
   ) {
     return false;
   }
@@ -94,10 +95,7 @@ function isPrivateConversation(params: {
   if (chatTypes.length > 0) {
     return chatTypes.every((chatType) => chatType === "direct");
   }
-  if (key.includes(":direct:") || key.includes(":dm:")) {
-    return true;
-  }
-  return false;
+  return key.includes(":direct:") || key.includes(":dm:");
 }
 
 function anchorAliasesArePrivate(params: {
@@ -109,18 +107,12 @@ function anchorAliasesArePrivate(params: {
   // The anchor/destination must satisfy the same all-alias fail-closed policy as
   // candidate sources: a direct key whose transcript identity also lives under a
   // group/channel alias would leak recalled private context into a shared surface.
-  for (const [key, entry] of Object.entries(params.store)) {
-    if (key === params.anchorSessionKey) {
-      continue;
-    }
-    if (!isSameStoredTranscript(params.anchorEntry, entry)) {
-      continue;
-    }
-    if (!isPrivateConversation({ agentId: params.agentId, entry, key })) {
-      return false;
-    }
-  }
-  return true;
+  return Object.entries(params.store).every(
+    ([key, entry]) =>
+      key === params.anchorSessionKey ||
+      !isSameStoredTranscript(params.anchorEntry, entry) ||
+      isPrivateConversation({ agentId: params.agentId, entry, key }),
+  );
 }
 
 function isTrustedRecallRequester(params: {
@@ -128,17 +120,11 @@ function isTrustedRecallRequester(params: {
   requesterSessionKey: string | undefined;
 }): boolean {
   const requesterSessionKey = params.requesterSessionKey?.trim();
-  if (!requesterSessionKey) {
-    return false;
-  }
-  if (requesterSessionKey === params.anchorSessionKey) {
-    return true;
-  }
-  if (!requesterSessionKey.startsWith(params.anchorSessionKey)) {
+  if (!requesterSessionKey || !requesterSessionKey.startsWith(params.anchorSessionKey)) {
     return false;
   }
   const recallSuffix = requesterSessionKey.slice(params.anchorSessionKey.length);
-  return /^:active-memory:[a-f0-9]{12}$/i.test(recallSuffix);
+  return recallSuffix.length === 0 || /^:active-memory:[a-f0-9]{12}$/i.test(recallSuffix);
 }
 
 function filterSessionKeysByScopedAgent(params: {
@@ -230,7 +216,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       })
     : null;
 
-  const { store: combinedSessionStore, storePath } = loadCombinedSessionStoreForGateway(
+  const { store: combinedSessionStore, storePath } = await loadCombinedSessionStoreForGatewayAsync(
     params.cfg,
     scopedAgentId ? { agentId: scopedAgentId } : {},
   );

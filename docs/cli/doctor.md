@@ -48,7 +48,7 @@ reader job. Open the page that matches your task.
 | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | [Run doctor](/cli/doctor/running)                                          | Pick a posture, copy a working example, or look up what an option does.                 |
 | [Gateway and service recovery](/cli/doctor/recovery)                       | The Gateway service, remote target, Control UI assets, or Gateway token needs repair.   |
-| [Lint and post-upgrade modes](/cli/doctor/lint)                            | You want read-only findings for a CI gate, or post-upgrade plugin compatibility probes. |
+| [Lint and post-upgrade modes](/cli/doctor/lint)                            | You want read-only findings for a CI gate, or post-upgrade plugin compatibility checks. |
 | [Structured health check contract](/cli/doctor/health-contract)            | You are writing a doctor check or a plugin-backed health check.                         |
 | [Legacy state migration](/cli/doctor/state-migrations)                     | A file-to-SQLite migration is blocked and needs manual reconciliation.                  |
 | [SQLite maintenance and session migration](/cli/doctor/sqlite-maintenance) | You are compacting a database, or importing, validating, or recovering session history. |
@@ -84,4 +84,4 @@ Each entry points at the page that now holds the content.
 - [CLI reference](/cli)
 - [Gateway doctor](/gateway/doctor)
 - [`openclaw policy`](/cli/policy) — the policy rules `doctor --lint` reports on
-- [`openclaw status`](/cli/status) — channel and session diagnostics, probes, and usage snapshots
+- [`openclaw status`](/cli/status) — channel and session diagnostics, checks, and usage snapshots

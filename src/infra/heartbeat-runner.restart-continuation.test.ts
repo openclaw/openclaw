@@ -1,82 +1,140 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
-import { resolveAgentTimeoutMs } from "../agents/timeout.js";
-import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
-import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deliverQueuedSessionDelivery } from "../gateway/server-restart-sentinel.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { runHeartbeatOnce } from "./heartbeat-runner.js";
-import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
-import * as heartbeatWake from "./heartbeat-wake.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { runHeartbeatOnce } from "./heartbeat-runner-run.js";
+import { seedHeartbeatScratchForTest } from "./heartbeat-runner.test-utils.js";
+import {
+  completeSessionDelivery,
+  enqueueSessionDelivery,
+  loadPendingSessionDelivery,
+} from "./session-delivery-queue-storage.js";
 import { resetSystemEventsForTest } from "./system-events.js";
 
-installHeartbeatRunnerTestRuntime();
+// mock-isolation: Only inference is synthetic; recovery, admission, and the model budget stay real.
+vi.mock("../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
+const model = vi.mocked(runEmbeddedAgent);
+await Promise.all([
+  import("../auto-reply/dispatch.js"),
+  import("../auto-reply/reply/get-reply-from-config.runtime.js").then((runtime) =>
+    runtime.prewarmConfigDrivenReplyRuntime(),
+  ),
+]);
 
 afterEach(() => {
-  clearRuntimeConfigSnapshot();
   resetSystemEventsForTest();
   vi.restoreAllMocks();
 });
 
 it("keeps recovered work on the ordinary budget and periodic heartbeats on 600 seconds", async () => {
-  await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { workspace: tmpDir, heartbeat: { every: "30m", target: "none" } },
-      },
-      session: { store: storePath },
-    };
-    setRuntimeConfigSnapshot(cfg);
-    const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "main" });
-    await seedSessionStore(storePath, sessionKey, { sessionId: "requester" });
-    // Drive the emitted wake explicitly; recovery delivery, queueing, and classification stay real.
-    const wake = vi.spyOn(heartbeatWake, "requestHeartbeat").mockImplementation(() => {});
-    const deps = { getReplyFromConfig: replySpy, getQueueSize: () => 0, nowMs: () => 0 };
-    for (const kind of ["systemEvent", "agentTurn"] as const) {
-      replySpy.mockReset().mockResolvedValue({ text: "HEARTBEAT_OK" });
-      wake.mockClear();
-      resetSystemEventsForTest();
-      const message = `Continue interrupted ${kind} work.`;
-      const shared = { id: `restart-${kind}`, sessionKey, enqueuedAt: 1, retryCount: 0 };
-      await deliverQueuedSessionDelivery({
-        deps: {},
-        queueContext: captureOpenClawStateWorkerContext(),
-        entry:
-          kind === "systemEvent"
-            ? { ...shared, kind, text: message }
-            : { ...shared, kind, message, messageId: shared.id },
-      });
-      expect(wake).toHaveBeenCalledOnce();
-      await runHeartbeatOnce({ ...wake.mock.calls[0]![0], cfg, deps });
-      expect(replySpy).toHaveBeenCalledOnce();
-      const options = replySpy.mock.calls[0]![1];
-      expect(getReplySystemEventContext(options)?.events?.map((event) => event.text)).toContain(
-        message,
+  await withOpenClawTestState(
+    { label: "restart-continuation-budget", env: { OPENCLAW_TEST_FAST: "0" } },
+    async (state) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: { workspace: state.workspaceDir } },
+          defaults: {
+            workspace: state.workspaceDir,
+            skipBootstrap: true,
+            heartbeat: { every: "30m", target: "none" },
+            model: { primary: "openai/gpt-5.6-luna" },
+            models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.test/v1",
+              apiKey: "synthetic-fixture-key",
+              models: [
+                {
+                  id: "gpt-5.6-luna",
+                  name: "Recovery fixture model",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+        messages: { visibleReplies: "automatic" },
+        plugins: { enabled: false },
+        skills: { load: { watch: false } },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      await state.writeConfig(cfg);
+      openOpenClawStateDatabase();
+      const sessionKey = "agent:main:main";
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "requester",
+          lifecycleRevision: "original",
+          updatedAt: Date.now(),
+          sessionStartedAt: Date.now(),
+        },
       );
-      expect.soft(options?.timeoutOverrideSeconds, kind).toBeUndefined();
-      expect
-        .soft(
-          resolveAgentTimeoutMs({ cfg, overrideSeconds: options?.timeoutOverrideSeconds }),
-          kind,
-        )
-        .toBe(172_800_000);
-    }
-    replySpy.mockClear();
-    resetSystemEventsForTest();
-    await runHeartbeatOnce({
-      cfg,
-      agentId: "main",
-      sessionKey,
-      source: "interval",
-      intent: "scheduled",
-      deps,
-    });
-    expect(replySpy).toHaveBeenCalledOnce();
-    expect(replySpy.mock.calls[0]![1]?.timeoutOverrideSeconds).toBe(600);
-  });
+      await seedHeartbeatScratchForTest({ content: "- Review pending work\n" });
+      model.mockImplementation(async (params) => {
+        const admission = expectDefined(params.preparedRunAdmission, "ordinary run admission");
+        await admission.admit("gateway", params.runId);
+        params.onExecutionPhase?.({ phase: "model_call_started" });
+        await params.onExecutionStarted?.();
+        await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+        return {
+          payloads: [
+            { text: params.trigger === "heartbeat" ? "HEARTBEAT_OK" : "Recovered work continued" },
+          ],
+          meta: { durationMs: 1 },
+        };
+      });
+      const queueContext = captureOpenClawStateWorkerContext();
+      for (const kind of ["systemEvent", "agentTurn"] as const) {
+        model.mockClear();
+        const message = `Continue interrupted ${kind} work.`;
+        const id = await enqueueSessionDelivery(
+          kind === "systemEvent"
+            ? { kind, sessionKey, text: message }
+            : { kind, sessionKey, message, messageId: `restart-${kind}` },
+          queueContext,
+        );
+        const entry = expectDefined(
+          await loadPendingSessionDelivery(id, queueContext),
+          "queued recovery",
+        );
+        await deliverQueuedSessionDelivery({ deps: {}, queueContext, entry });
+        expect(model).toHaveBeenCalledOnce();
+        const turn = expectDefined(model.mock.calls[0]?.[0], "recovered turn");
+        expect(turn.trigger).toBe("event");
+        expect(turn.prompt).toContain(message);
+        expect(turn.timeoutMs).toBe(172_800_000);
+        expect(await loadPendingSessionDelivery(id, queueContext)).toMatchObject({
+          deliveryStartedAt: expect.any(Number),
+        });
+        await completeSessionDelivery(id, queueContext);
+      }
+      model.mockClear();
+      expect(
+        await runHeartbeatOnce({
+          cfg,
+          agentId: "main",
+          sessionKey,
+          source: "interval",
+          intent: "scheduled",
+        }),
+      ).toMatchObject({ status: "ran" });
+      expect(model).toHaveBeenCalledOnce();
+      expect(model.mock.calls[0]?.[0]).toMatchObject({ trigger: "heartbeat", timeoutMs: 600_000 });
+    },
+  );
 });

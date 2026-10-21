@@ -1,4 +1,3 @@
-// Ollama plugin module implements memory embedding adapter behavior.
 import { createHash } from "node:crypto";
 import {
   sanitizeEmbeddingCacheHeaders,

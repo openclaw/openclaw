@@ -83,6 +83,7 @@ describe("private worker launch wire", () => {
           capacity: { total: 1, available: 1 },
           environmentSession: 1,
           capturedExecPolicy: true,
+          promptContext: 1,
         },
       },
     });

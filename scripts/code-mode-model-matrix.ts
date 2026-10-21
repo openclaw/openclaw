@@ -23,9 +23,9 @@ import {
 import type { CodeModeExecutorId } from "../src/agents/code-mode-executor-types.js";
 import type { AgentExecEnvelope } from "../src/commands/agent-exec-result.ts";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { mergeDeep } from "../src/infra/deep-merge.js";
 import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { summarizeGatewayMatrixOutcomes } from "./lib/code-mode-matrix-comparison.ts";
+import { createAgentExecMatrixConfig } from "./lib/code-mode-matrix-config.ts";
 import {
   GATEWAY_MATRIX_TASKS,
   type GatewayMatrixTask,
@@ -41,7 +41,6 @@ import {
 } from "./lib/code-mode-matrix-performance-fixtures.ts";
 import {
   classifyCodeModeMatrixProviderFailure,
-  matrixModelConfig,
   matrixProviderEnv,
   matrixProviderAuthSelection,
   type MatrixProviderFailureCategory,
@@ -115,10 +114,7 @@ type MatrixTaskFixture = {
   resultPath?: string;
 };
 
-export type MatrixRuntimeEntrypoint = {
-  args: string[];
-  cwd: string;
-};
+export type MatrixRuntimeEntrypoint = Awaited<ReturnType<typeof prepareRuntimeEntrypoint>>;
 
 type CellFailureCategory =
   | MatrixProviderFailureCategory
@@ -132,59 +128,49 @@ type CellFailureCategory =
   | "timeout"
   | "tool_execution";
 
-export type CodeModeMatrixCellResult = {
-  accounting?: MatrixUsageAccounting;
-  assistantTurns?: number;
-  bridgeCalls?: AgentExecEnvelope["bridgeCalls"];
-  buildSha256: string;
-  codeModeEngaged: boolean | null;
-  costUsd?: number;
-  diagnostics?: string;
-  elapsedMs: number;
-  evidenceOccurrenceId?: string;
-  executor?: CodeModeExecutorId;
-  error?: AgentExecEnvelope["error"];
-  expected: string;
-  failureCategory: CellFailureCategory | null;
-  final: string;
-  gitSha: string;
-  id: string;
-  mode: CodeModeMatrixMode;
-  model: string;
-  observedModel: string | null;
-  observedProvider: string | null;
-  oracle: {
-    answer: boolean | null;
-    effect: boolean;
-    engagement: boolean;
-    identity: boolean;
-    toolExecution: boolean;
+export type CodeModeMatrixCellResult = MatrixCell &
+  SourceIdentity & {
+    accounting?: MatrixUsageAccounting;
+    assistantTurns?: number;
+    bridgeCalls?: AgentExecEnvelope["bridgeCalls"];
+    buildSha256: string;
+    codeModeEngaged: boolean | null;
+    costUsd?: number;
+    diagnostics?: string;
+    elapsedMs: number;
+    evidenceOccurrenceId?: string;
+    executor?: CodeModeExecutorId;
+    error?: AgentExecEnvelope["error"];
+    expected: string;
+    failureCategory: CellFailureCategory | null;
+    final: string;
+    observedModel: string | null;
+    observedProvider: string | null;
+    oracle: {
+      answer: boolean | null;
+      effect: boolean;
+      engagement: boolean;
+      identity: boolean;
+      toolExecution: boolean;
+    };
+    passed: boolean;
+    status: AgentExecEnvelope["status"];
+    timestamp: string;
+    toolSummary?: AgentExecEnvelope["toolSummary"];
+    usage?: AgentExecEnvelope["usage"];
+    gateway?: GatewayMatrixEvidence;
+    workload?: GatewayMatrixWorkload;
   };
-  passed: boolean;
-  repetition: number;
-  sourceDirty: boolean;
-  sourcePatchSha256: string | null;
-  status: AgentExecEnvelope["status"];
-  task: CodeModeMatrixTask;
-  timestamp: string;
-  toolSummary?: AgentExecEnvelope["toolSummary"];
-  usage?: AgentExecEnvelope["usage"];
-  gateway?: GatewayMatrixEvidence;
-  workload?: GatewayMatrixWorkload;
-};
 
-export type RunCellParams = {
+export type RunCellParams = SourceIdentity & {
   abortSignal?: AbortSignal;
   buildSha256: string;
   cell: MatrixCell;
   executor?: CodeModeExecutorId;
-  gitSha: string;
   keepState: boolean;
   outputDir: string;
   repoRoot: string;
   runtime?: MatrixRuntimeEntrypoint;
-  sourceDirty: boolean;
-  sourcePatchSha256: string | null;
   thinking: string;
   timeoutSeconds: number;
 };
@@ -197,11 +183,7 @@ type MatrixRunDependencies = {
   runCell?: (params: RunCellParams) => Promise<CodeModeMatrixCellResult>;
 };
 
-type SourceIdentity = {
-  gitSha: string;
-  sourceDirty: boolean;
-  sourcePatchSha256: string | null;
-};
+type SourceIdentity = Awaited<ReturnType<typeof readSourceIdentity>>;
 
 function usage() {
   return `Usage: pnpm qa:code-mode-models --model <provider/model> [options]
@@ -1058,10 +1040,7 @@ async function cloneTreeWithHardlinks(source: string, destination: string): Prom
   }
 }
 
-async function prepareRuntimeEntrypoint(
-  repoRoot: string,
-  runtimeRoot: string,
-): Promise<MatrixRuntimeEntrypoint> {
+async function prepareRuntimeEntrypoint(repoRoot: string, runtimeRoot: string) {
   const entrypoint = path.join(repoRoot, "dist", "entry.js");
   try {
     await fs.access(entrypoint);
@@ -1146,18 +1125,10 @@ async function executeAgentExec(params: {
   if (!runtime) {
     throw new Error("matrix runtime entrypoint was not prepared");
   }
-  const provider = params.matrix.cell.model.split("/")[0]!;
   const home = path.join(params.stateDir, "home");
   const tmp = path.join(params.stateDir, "tmp");
   await Promise.all([fs.mkdir(home, { recursive: true }), fs.mkdir(tmp, { recursive: true })]);
-  const config = mergeDeep(
-    {
-      agents: { entries: { main: {} } },
-      plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
-      tools: { codeMode: { executor: "node" } },
-    },
-    { agents: matrixModelConfig(params.matrix.cell.model, params.matrix.thinking) },
-  );
+  const config = createAgentExecMatrixConfig(params.matrix.cell.model, params.matrix.thinking);
   const configPath = path.join(params.stateDir, "matrix-config.json");
   await fs.writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
   const args = [
@@ -1395,9 +1366,10 @@ function summarizeResults(results: CodeModeMatrixCellResult[]) {
       p50WallMs: summarizeMetric(group.map((result) => result.elapsedMs)).p50 ?? 0,
       metrics: {
         assistantTurns: summarizeMetric(group.map((result) => result.assistantTurns)),
-        outerToolCalls: summarizeMetric(
-          group.map((result) => result.toolSummary?.calls ?? result.gateway?.outerCalls),
-        ),
+        // Embedded tool summaries include nested terminals; only Gateway traces
+        // observe outer calls. Keep scopes separate rather than filling gaps.
+        toolCalls: summarizeMetric(group.map((result) => result.toolSummary?.calls)),
+        outerToolCalls: summarizeMetric(group.map((result) => result.gateway?.outerCalls)),
         bridgeSearchCalls: summarizeMetric(group.map((result) => result.bridgeCalls?.search)),
         bridgeDescribeCalls: summarizeMetric(group.map((result) => result.bridgeCalls?.describe)),
         bridgeToolCalls: summarizeMetric(group.map((result) => result.bridgeCalls?.call)),

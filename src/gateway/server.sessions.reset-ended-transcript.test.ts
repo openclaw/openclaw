@@ -10,7 +10,7 @@ import {
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import type { PluginHookEndedTranscriptReadResult } from "../plugins/session-end-transcript.js";
-import { testState, writeSessionStore } from "./test-helpers.js";
+import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   seedSessionTranscript,
@@ -33,17 +33,7 @@ afterEach(() => {
   }
 });
 
-afterAll(() => {
-  cleanupPluginLoaderFixturesForTest();
-});
-
-function requireStorePath(): string {
-  expect(typeof testState.sessionStorePath).toBe("string");
-  if (typeof testState.sessionStorePath !== "string") {
-    throw new Error("expected test session store path");
-  }
-  return testState.sessionStorePath;
-}
+afterAll(cleanupPluginLoaderFixturesForTest);
 
 async function resetMainSession(): Promise<void> {
   const result = await directSessionReq("sessions.reset", { key: "main", reason: "new" });
@@ -60,12 +50,11 @@ module.exports = {
   id: ${JSON.stringify(pluginId)},
   name: ${JSON.stringify(pluginId)},
   register(api) {
-    api.on("session_end", async (_event, context) => {
+    api.on("session_end", async (_event, { endedTranscript }) => {
       try {
-        const transcript = context.endedTranscript;
-        const result = transcript?.available
-          ? await transcript.readTail({ maxMessages: 10, maxBytes: 4 * 1024 })
-          : transcript;
+        const result = endedTranscript?.available
+          ? await endedTranscript.readTail({ maxMessages: 10, maxBytes: 4 * 1024 })
+          : endedTranscript;
         globalThis[resultKey]?.resolve(result);
       } catch (error) {
         globalThis[resultKey]?.reject(error);
@@ -79,25 +68,20 @@ module.exports = {
 }
 
 test("sessions.reset delivers the ended SQLite window only to a loaded granted plugin", async () => {
-  await createSessionStoreDir();
-  const storePath = requireStorePath();
+  const { storePath } = await createSessionStoreDir();
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
   const latestEndedContent = "latest ended interval ".padEnd(3_600, "x");
-  await seedSessionTranscript({
-    agentId: "main",
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    storePath,
-    messages: [{ role: "user", content: "first closed interval", id: "m1" }],
-  });
+  const seed = (content: string, id: string) =>
+    seedSessionTranscript({
+      agentId: "main",
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      storePath,
+      messages: [{ role: "user", content, id }],
+    });
+  await seed("first closed interval", "m1");
   await resetMainSession();
-  await seedSessionTranscript({
-    agentId: "main",
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    storePath,
-    messages: [{ role: "user", content: latestEndedContent, id: "m2" }],
-  });
+  await seed(latestEndedContent, "m2");
 
   useNoBundledPlugins();
   const grantedPlugin = writeReaderPlugin("granted");
@@ -120,13 +104,8 @@ test("sessions.reset delivers the ended SQLite window only to a loaded granted p
   const hookSettled = createDeferred();
   setSessionLifecycleHookRunnerForTest({
     ...runner,
-    runSessionEnd: async (...args: Parameters<typeof runner.runSessionEnd>) => {
-      try {
-        await runner.runSessionEnd(...args);
-      } finally {
-        hookSettled.resolve();
-      }
-    },
+    runSessionEnd: (...args: Parameters<typeof runner.runSessionEnd>) =>
+      runner.runSessionEnd(...args).finally(() => hookSettled.resolve()),
   });
   const grantedResult = createDeferred<PluginHookEndedTranscriptReadResult>();
   const ungrantedResult = createDeferred<unknown>();
@@ -153,7 +132,7 @@ test("sessions.reset delivers the ended SQLite window only to a loaded granted p
       reason: "conversation-access-required",
     });
     expect(historyRead).toHaveBeenCalledOnce();
-    expect(historyRead).toHaveBeenCalledWith({
+    expect(historyRead.mock.calls[0]?.[0]).toEqual({
       kind: "around-id",
       params: expect.objectContaining({
         options: expect.objectContaining({ closedResetInterval: true }),

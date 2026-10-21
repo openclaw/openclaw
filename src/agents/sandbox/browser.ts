@@ -7,7 +7,6 @@ import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js"
 import { withContainerEnvFile } from "../../infra/container-env-file.js";
 import { isSameSsrFPolicy, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import {
-  type BrowserBridge,
   startBrowserBridgeServer,
   stopBrowserBridgeServer,
 } from "../../plugin-sdk/browser-bridge.js";
@@ -20,6 +19,7 @@ import {
 } from "../../plugin-sdk/browser-profiles.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { defaultRuntime } from "../../runtime.js";
+import { sleep } from "../../utils/sleep.js";
 import {
   BROWSER_BRIDGES,
   stopCachedBrowserBridge,
@@ -111,9 +111,7 @@ async function waitForSandboxCdp(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await new Promise((r) => {
-      setTimeout(r, Math.min(150, remainingMs));
-    });
+    await sleep(Math.min(150, remainingMs));
   }
   return false;
 }
@@ -284,10 +282,6 @@ async function ensureSandboxBrowserContainer(
   containerName: string,
 ): Promise<SandboxBrowserContext> {
   let existing = BROWSER_BRIDGES.get(params.scopeKey);
-  const stopExistingForContainer = async () => {
-    await stopCachedBrowserBridgesForContainer(containerName, params.assertCurrent);
-    existing = BROWSER_BRIDGES.get(params.scopeKey);
-  };
   const state = await dockerContainerState(containerName);
   params.assertCurrent?.();
   const browserImage = params.cfg.browser.image;
@@ -334,10 +328,18 @@ async function ensureSandboxBrowserContainer(
   let hasContainer = state.exists;
   let running = state.running;
   let currentHash: string | null = null;
-  let hashMismatch = false;
   const noVncEnabled = isNoVncEnabled(params.cfg.browser);
   let noVncPassword: string | undefined;
   let cdpAuthToken: string | undefined;
+
+  const removeExistingContainer = async () => {
+    await stopCachedBrowserBridgesForContainer(containerName, params.assertCurrent);
+    existing = BROWSER_BRIDGES.get(params.scopeKey);
+    params.assertCurrent?.();
+    await execDocker(["rm", "-f", containerName], { allowFailure: true });
+    hasContainer = false;
+    running = false;
+  };
 
   if (hasContainer) {
     if (noVncEnabled) {
@@ -352,11 +354,7 @@ async function ensureSandboxBrowserContainer(
       defaultRuntime.log(
         `Removing stale sandbox browser container ${containerName} because it lacks the current CDP relay auth contract; it will be recreated.`,
       );
-      await stopExistingForContainer();
-      params.assertCurrent?.();
-      await execDocker(["rm", "-f", containerName], { allowFailure: true });
-      hasContainer = false;
-      running = false;
+      await removeExistingContainer();
     }
   }
 
@@ -369,8 +367,7 @@ async function ensureSandboxBrowserContainer(
     if (!currentHash) {
       currentHash = registryEntry?.configHash ?? null;
     }
-    hashMismatch = !currentHash || currentHash !== expectedHash;
-    if (hashMismatch) {
+    if (!currentHash || currentHash !== expectedHash) {
       const lastUsedAtMs = registryEntry?.lastUsedAtMs;
       const isHot =
         running && (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_BROWSER_WINDOW_MS);
@@ -389,11 +386,7 @@ async function ensureSandboxBrowserContainer(
           mountsChanged: !mountsMatch,
         });
       } else {
-        await stopExistingForContainer();
-        params.assertCurrent?.();
-        await execDocker(["rm", "-f", containerName], { allowFailure: true });
-        hasContainer = false;
-        running = false;
+        await removeExistingContainer();
       }
     }
   }
@@ -405,7 +398,7 @@ async function ensureSandboxBrowserContainer(
     createdAtMs: now,
     lastUsedAtMs: now,
     image: browserImage,
-    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+    configHash: currentHash !== expectedHash && running ? (currentHash ?? undefined) : expectedHash,
   };
   if (params.withWorkspace) {
     // Reserve the mount before allocation; a bridge/port failure must not hide
@@ -471,9 +464,8 @@ async function ensureSandboxBrowserContainer(
       params.assertCurrent?.();
       await execDocker(args);
     });
-    params.assertCurrent?.();
-    await execDocker(["start", containerName]);
-  } else if (!running) {
+  }
+  if (!hasContainer || !running) {
     params.assertCurrent?.();
     await execDocker(["start", containerName]);
   }
@@ -531,7 +523,6 @@ async function ensureSandboxBrowserContainer(
   }
 
   let bridge = canReuse ? (existing?.bridge ?? null) : null;
-  let createdBridge: BrowserBridge | undefined;
   try {
     if (!bridge) {
       const startTarget = async () => {
@@ -572,7 +563,6 @@ async function ensureSandboxBrowserContainer(
         onEnsureAttachTarget,
         resolveSandboxNoVncToken: consumeNoVncObserverToken,
       });
-      createdBridge = bridge;
       params.assertCurrent?.();
       BROWSER_BRIDGES.set(params.scopeKey, {
         bridge,
@@ -611,10 +601,10 @@ async function ensureSandboxBrowserContainer(
     };
   } catch (error) {
     // Roll back this attempt's bridge even after custody closes; never retire a reused bridge.
-    if (createdBridge) {
+    if (!canReuse && bridge) {
       try {
-        await stopBrowserBridgeServer(createdBridge.server);
-        if (BROWSER_BRIDGES.get(params.scopeKey)?.bridge === createdBridge) {
+        await stopBrowserBridgeServer(bridge.server);
+        if (BROWSER_BRIDGES.get(params.scopeKey)?.bridge === bridge) {
           BROWSER_BRIDGES.delete(params.scopeKey);
         }
       } catch (cleanupError) {

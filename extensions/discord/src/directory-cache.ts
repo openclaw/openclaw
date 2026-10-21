@@ -1,6 +1,6 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -28,7 +28,7 @@ export function normalizeDiscordHandleKey(raw: string): string | null {
   if (!handle || /\s/.test(handle)) {
     return null;
   }
-  return normalizeLowercaseStringOrEmpty(handle);
+  return handle.toLowerCase();
 }
 
 function ensureAccountCache(accountId?: string | null): Map<string, string> {
@@ -45,13 +45,7 @@ function ensureAccountCache(accountId?: string | null): Map<string, string> {
 function setCacheEntry(cache: Map<string, string>, key: string, userId: string): void {
   cache.delete(key);
   cache.set(key, userId);
-  if (cache.size <= DISCORD_DIRECTORY_CACHE_MAX_ENTRIES) {
-    return;
-  }
-  const oldest = cache.keys().next();
-  if (!oldest.done) {
-    cache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(cache, DISCORD_DIRECTORY_CACHE_MAX_ENTRIES);
 }
 
 export function rememberDiscordDirectoryUser(params: {

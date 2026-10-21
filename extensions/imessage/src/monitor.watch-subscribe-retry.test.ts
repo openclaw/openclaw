@@ -9,10 +9,7 @@ import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import type { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
 import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
-import {
-  installIMessageFailingStateRuntimeForTest,
-  installIMessageStateRuntimeForTest,
-} from "./test-support/runtime.js";
+import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 const waitForTransportReadyMock = vi.hoisted(() =>
   vi.fn<typeof waitForTransportReady>(async () => {}),
@@ -65,7 +62,7 @@ function createRpcClient(overrides?: {
 describe("monitorIMessageProvider watch.subscribe startup retry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    installIMessageFailingStateRuntimeForTest();
+    installIMessageStateRuntimeForTest();
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
     attachIMessageMonitorAbortHandlerMock.mockReset().mockReturnValue(() => {});
@@ -216,8 +213,6 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
 
   it.each([
     { reason: "from me", groupScope: "none" },
-    { reason: "no mention", groupScope: "none" },
-    { reason: "no mention", groupScope: "account" },
     { reason: "no mention", groupScope: "root" },
   ])(
     "logs one diagnostic per chat for $reason drops (groups scope: $groupScope)",

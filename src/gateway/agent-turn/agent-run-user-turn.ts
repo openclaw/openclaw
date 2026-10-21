@@ -12,7 +12,15 @@ import {
 } from "../../agents/bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults } from "../../agents/bash-tools.exec-types.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import type { ReplyExpectation } from "../../agents/reply-completion.js";
+import {
+  captureRequesterOrigin,
+  resolveRequesterPrincipalKey,
+  type RequesterOrigin,
+} from "../../agents/requester-origin.js";
+import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deleteMediaBuffer } from "../../media/store.js";
 import {
@@ -23,13 +31,17 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
+import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import {
   buildRunUserTurnIdempotencyKey,
+  buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import type { registerChatAbortController } from "../chat-abort.js";
 import {
   INLINE_IMAGE_DURABLE_OMISSION_MARKER,
@@ -42,7 +54,8 @@ import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { readSessionSendDeliveryAdmission } from "../session-send-delivery.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { formatForLog } from "../ws-log.js";
 import {
   shouldSuppressAgentPromptPersistence,
@@ -53,6 +66,8 @@ import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.
 
 export type PreparedAgentRunUserTurn = {
   privateCompletion?: true;
+  /** Trusted input-owner policy; not accepted from the wire request. */
+  replyExpectation?: ReplyExpectation;
   bashElevated?: ExecElevatedDefaults;
   claimedExecApprovalFollowupHandoffId?: string;
   execApprovalFollowupHandoffClaimId: string;
@@ -60,6 +75,8 @@ export type PreparedAgentRunUserTurn = {
   message: string;
   inputProvenance?: InputProvenance;
   recorder?: UserTurnTranscriptRecorder;
+  requesterOrigin?: RequesterOrigin;
+  assertRequesterCurrent?: () => void;
   senderIsOwner: boolean;
   suppressPromptPersistence: boolean;
   releaseProcessingAbortObserver?: () => void;
@@ -133,16 +150,19 @@ export function recordAgentRunUserTurnParticipant(
 
 export async function prepareAgentRunUserTurn(params: {
   assertCurrent: () => void;
+  onUserTurnMediaPersisted: () => void;
   assertCompletionCurrent?: () => void;
   privateCompletion?: true;
+  replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
   abortSignal?: AbortSignal;
   getAbortStopReason?: () => string;
-  deferTimeoutCompletion?: (settle: () => void) => boolean;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
   sessionEntry?: SessionEntry;
+  /** Exact creation target carried only by the host-bound fresh-child admission. */
+  freshChildStorePath?: string;
   resolvedSessionKey?: string;
   requestedSessionKeyRaw?: string;
   admittedSessionId: string;
@@ -162,34 +182,50 @@ export async function prepareAgentRunUserTurn(params: {
   client: AgentTurnPrincipal | null;
   context: AgentTurnContext;
 }): Promise<PreparedAgentRunUserTurn> {
+  const caller = params.client?.internal?.agentToolCaller;
+  const operatorAuthority = params.client?.internal?.operatorRunAuthority;
+  operatorAuthority?.assertCurrent();
+  let requesterOrigin = caller
+    ? captureRequesterOrigin(caller)
+    : operatorAuthority ||
+        (params.client?.authenticatedUserProfile && !params.client.internal?.syntheticClient)
+      ? captureRequesterOrigin({
+          sessionKey: params.resolvedSessionKey,
+          operatorProfileId:
+            operatorAuthority?.profileId ?? params.client?.authenticatedUserProfile?.profileId,
+        })
+      : undefined;
+  const resolveRuntimeSenderIsOwner = () =>
+    Boolean(params.restoredCronContinuation || hasGatewayAdminScope(params.client)) &&
+    (!requesterOrigin ||
+      Boolean(requesterOrigin.operatorProfileId) ||
+      ((!requesterOrigin.messageProvider ||
+        requesterOrigin.messageProvider === INTERNAL_MESSAGE_CHANNEL) &&
+        !resolveRequesterPrincipalKey({ requesterOrigin }) &&
+        params.client?.internal?.operatorRoleActor?.kind === "system"));
   const execApprovalFollowupHandoffClaimId = randomUUID();
   let claimedExecApprovalFollowupHandoffId: string | undefined;
-  let durableMediaIds: string[] = [];
+  let createdMediaIds: string[] = [];
+  let recorder: UserTurnTranscriptRecorder | undefined;
   try {
-    let execApprovalFollowupRuntimeHandoff =
-      params.canUseInternalRuntimeHandoff && params.execApprovalFollowupApprovalId
-        ? claimExecApprovalFollowupRuntimeHandoff({
-            handoffId: params.request.internalRuntimeHandoffId,
-            approvalId: params.execApprovalFollowupApprovalId,
-            idempotencyKey: params.runId,
-            sessionKey: params.resolvedSessionKey,
-            claimId: execApprovalFollowupHandoffClaimId,
-          })
-        : undefined;
-    if (
-      !execApprovalFollowupRuntimeHandoff &&
-      params.canUseInternalRuntimeHandoff &&
-      params.execApprovalFollowupApprovalId &&
-      params.requestedSessionKeyRaw &&
-      params.requestedSessionKeyRaw !== params.resolvedSessionKey
-    ) {
-      execApprovalFollowupRuntimeHandoff = claimExecApprovalFollowupRuntimeHandoff({
+    const claimFollowup = (sessionKey: string | undefined) =>
+      claimExecApprovalFollowupRuntimeHandoff({
         handoffId: params.request.internalRuntimeHandoffId,
         approvalId: params.execApprovalFollowupApprovalId,
         idempotencyKey: params.runId,
-        sessionKey: params.requestedSessionKeyRaw,
+        sessionKey,
         claimId: execApprovalFollowupHandoffClaimId,
       });
+    let execApprovalFollowupRuntimeHandoff: ReturnType<typeof claimFollowup>;
+    if (params.canUseInternalRuntimeHandoff && params.execApprovalFollowupApprovalId) {
+      execApprovalFollowupRuntimeHandoff = claimFollowup(params.resolvedSessionKey);
+      if (
+        !execApprovalFollowupRuntimeHandoff &&
+        params.requestedSessionKeyRaw &&
+        params.requestedSessionKeyRaw !== params.resolvedSessionKey
+      ) {
+        execApprovalFollowupRuntimeHandoff = claimFollowup(params.requestedSessionKeyRaw);
+      }
     }
     if (execApprovalFollowupRuntimeHandoff) {
       claimedExecApprovalFollowupHandoffId = params.request.internalRuntimeHandoffId;
@@ -209,9 +245,7 @@ export async function prepareAgentRunUserTurn(params: {
       throw new Error("exec approval followup runtime handoff is unavailable");
     }
 
-    const senderIsOwner = params.restoredCronContinuation
-      ? true
-      : hasGatewayAdminScope(params.client);
+    let senderIsOwner = resolveRuntimeSenderIsOwner();
     const settleWakeReplay = params.settleWakeReplay;
     if (
       settleWakeReplay &&
@@ -236,6 +270,7 @@ export async function prepareAgentRunUserTurn(params: {
         "Private completion requires an exact internal requester turn with delivery disabled",
       );
     }
+    const trackRequesterCompletion = params.privateCompletion || settleWakeReplay !== undefined;
     const suppressPromptPersistence =
       !params.privateCompletion &&
       (params.requestedPromptPersistenceSuppression ||
@@ -243,7 +278,6 @@ export async function prepareAgentRunUserTurn(params: {
           inputProvenance: params.inputProvenance,
           internalEvents: params.request.internalEvents,
         }));
-    let recorder: UserTurnTranscriptRecorder | undefined;
     if (
       params.resolvedSessionKey &&
       !params.suppressVisibleSessionEffects &&
@@ -256,12 +290,74 @@ export async function prepareAgentRunUserTurn(params: {
         logContext: "agent",
         assertCurrent: params.assertCurrent,
       });
-      durableMediaIds = persistedMedia.entries.map((entry) => entry.id);
+      // The parser still owns offloaded files until admission retains them.
+      // This scope only removes inline files it created, avoiding a second delete.
+      createdMediaIds = persistedMedia.entries
+        .filter((entry) => entry.imageKind === "inline")
+        .map((entry) => entry.id);
       params.assertCurrent();
       const media = persistedMedia.entries.map((entry) => entry.fact);
       const slots = persistedMedia.entries.flatMap((entry, factIndex) =>
         entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
       );
+      const resolveTarget = async () => {
+        params.assertCurrent();
+        const loaded = params.freshChildStorePath
+          ? {
+              entry: params.sessionEntry,
+              storePath: params.freshChildStorePath,
+              store: undefined,
+            }
+          : await loadGatewaySessionEntryReadOnlyInWorker({
+              cfg: params.cfgForAgent ?? params.cfg,
+              key: params.resolvedSessionKey!,
+              agentId: params.activeSessionAgentId,
+              assertActive: params.assertCurrent,
+              excludeInternalEffects: true,
+            });
+        params.assertCurrent();
+        const latestEntry = loaded.entry;
+        const loadedSessionId = latestEntry?.sessionId?.trim();
+        // Fresh children carry committed creation facts; their live lease still
+        // authorizes the write. Other callers must resolve their current target.
+        if (
+          !params.freshChildStorePath &&
+          (!latestEntry || loadedSessionId !== params.admittedSessionId)
+        ) {
+          return undefined;
+        }
+        return {
+          sessionId: params.admittedSessionId,
+          expectedSessionId: params.admittedSessionId,
+          sessionKey: params.resolvedSessionKey!,
+          sessionEntry: latestEntry,
+          sessionStore: loaded.store,
+          storePath: loaded.storePath,
+          agentId: params.activeSessionAgentId,
+          cwd: resolveSessionRuntimeCwd({ sessionEntry: latestEntry }),
+          ...(params.resolvedThreadId != null ? { threadId: params.resolvedThreadId } : {}),
+          config: params.cfgForAgent ?? params.cfg,
+        };
+      };
+      const privateTarget = params.privateCompletion ? await resolveTarget() : undefined;
+      const senderFields = gatewayClientSenderFields(params.client);
+      if (privateTarget) {
+        const submitted = await readSessionSubmittedInput(
+          privateTarget,
+          buildRunUserTurnIdempotencyKey(params.runId),
+        );
+        params.assertCurrent();
+        const sender = senderFields.sender;
+        const metadata = submitted?.["__openclaw"];
+        if (sender?.id && metadata?.senderId === sender.id) {
+          // Profile labels can change after acceptance; replay keeps the recorded
+          // presentation while the input owner still compares the complete request.
+          senderFields.sender = {
+            ...sender,
+            name: typeof metadata.senderName === "string" ? metadata.senderName : undefined,
+          };
+        }
+      }
       const input: UserTurnInput = {
         ...(params.privateCompletion ||
         isCompletionReportInputProvenance(params.inputProvenance) ||
@@ -276,42 +372,49 @@ export async function prepareAgentRunUserTurn(params: {
             : effectiveTranscriptInputText,
         timestamp: Date.now(),
         idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
-        ...gatewayClientSenderFields(params.client),
+        ...senderFields,
         senderIsOwner,
+        requesterOrigin,
         ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
         ...(media.length > 0 ? { media } : {}),
         ...(slots.length > 0 ? { mediaImageLayout: { slots } } : {}),
       };
+      const peerDelivery = readSessionSendDeliveryAdmission({
+        runId: params.runId,
+        sessionKey: params.resolvedSessionKey,
+        sessionId: params.admittedSessionId,
+        agentId: params.activeSessionAgentId,
+      });
+      let peerMessage = peerDelivery?.acceptedMessage;
+      if (peerDelivery && !peerMessage) {
+        const { captureQueuedOperatorRecoverySource } =
+          await import("../operator-run-recovery-source.js");
+        params.assertCurrent();
+        const operatorSource =
+          captureQueuedOperatorRecoverySource(operatorAuthority) ??
+          (requesterOrigin?.operatorProfileId ? { kind: "unavailable" as const } : null);
+        const original = buildPersistedUserTurnMessage(input);
+        peerMessage = {
+          ...original,
+          __openclaw: {
+            ...original["__openclaw"],
+            // The exact unconsumed pending input owns this source; a retained
+            // transcript copy cannot authorize replay.
+            sessionSendDelivery: { ...peerDelivery.delivery, operatorSource },
+          },
+        };
+      }
       recorder = createUserTurnTranscriptRecorder({
-        trackInputCompletion: params.privateCompletion,
+        trackInputCompletion: trackRequesterCompletion || peerDelivery !== undefined,
+        ...(peerMessage ? { message: peerMessage } : {}),
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
-        target: () => {
-          params.assertCurrent();
-          const loaded = loadSessionEntry(params.resolvedSessionKey!, {
-            agentId: params.activeSessionAgentId,
-            clone: false,
-          });
-          const latestEntry = loaded.entry;
-          const loadedSessionId = latestEntry?.sessionId?.trim();
-          // Session creation is persisted before this phase. No matching entry
-          // means the admitted lifecycle instance changed and must fail closed.
-          if (!latestEntry || loadedSessionId !== params.admittedSessionId) {
-            return undefined;
-          }
-          return {
-            sessionId: latestEntry.sessionId,
-            expectedSessionId: params.admittedSessionId,
-            sessionKey: params.resolvedSessionKey!,
-            sessionEntry: latestEntry,
-            sessionStore: loaded.store,
-            storePath: loaded.storePath,
-            agentId: params.activeSessionAgentId,
-            cwd: resolveSessionRuntimeCwd({ sessionEntry: latestEntry }),
-            ...(params.resolvedThreadId != null ? { threadId: params.resolvedThreadId } : {}),
-            config: params.cfgForAgent ?? params.cfg,
-          };
-        },
+        target: params.privateCompletion
+          ? () => {
+              params.assertCurrent();
+              return privateTarget;
+            }
+          : resolveTarget,
         errorContext: "gateway agent user turn transcript",
         beforeMessageWrite: (writeContext) => {
           const preparedMessage = runAgentHarnessBeforeMessageWriteHook(writeContext);
@@ -327,6 +430,14 @@ export async function prepareAgentRunUserTurn(params: {
       if (
         !(await recorder.stageApproved!({
           runId: params.runId,
+          storageTarget: params.freshChildStorePath
+            ? {
+                agentId: params.activeSessionAgentId,
+                sessionId: params.admittedSessionId,
+                sessionKey: params.resolvedSessionKey,
+                storePath: params.freshChildStorePath,
+              }
+            : undefined,
           assertCurrent: () => {
             params.assertCurrent();
             settleWakeReplay?.assertCurrent();
@@ -343,31 +454,52 @@ export async function prepareAgentRunUserTurn(params: {
       if (settleWakeReplay) {
         inputProvenance = normalizeInputProvenance(recorder.getPendingInputMessage?.()?.provenance);
       }
+      requesterOrigin = readUserTurnRequesterOrigin(recorder) ?? requesterOrigin;
     }
 
+    const requesterOwner =
+      requesterOrigin?.messageProvider &&
+      requesterOrigin.messageProvider !== INTERNAL_MESSAGE_CHANNEL &&
+      !requesterOrigin.operatorProfileId
+        ? await prepareCommandOwnerAuthority(params.cfg, {
+            channel: requesterOrigin.messageProvider,
+            accountId: requesterOrigin.accountId ?? undefined,
+            senderId: requesterOrigin.senderId ?? undefined,
+            senderE164: requesterOrigin.senderE164 ?? undefined,
+          })
+        : undefined;
+    params.assertCurrent();
+    if (requesterOrigin && !requesterOrigin.operatorProfileId) {
+      senderIsOwner =
+        requesterOwner?.isCurrent(params.cfg) === true || resolveRuntimeSenderIsOwner();
+    }
+    const assertRequesterCurrent =
+      requesterOwner && senderIsOwner
+        ? () => {
+            if (!requesterOwner.isCurrent(params.context.getRuntimeConfig())) {
+              throw new Error("Requester owner authority changed; send a new request.");
+            }
+          }
+        : undefined;
+    assertRequesterCurrent?.();
+
     let releaseProcessingAbortObserver: (() => void) | undefined;
-    if (params.privateCompletion && recorder && !recorder.getProcessingCompletion?.()) {
+    if (trackRequesterCompletion && recorder && !recorder.getProcessingCompletion?.()) {
       const recordAbort = () => {
         const stopReason = params.getAbortStopReason?.() ?? "rpc";
-        const settle = () => {
-          void completeUserTurnProcessing(
-            recorder,
-            buildAgentRunTerminalOutcome({
-              status: stopReason === "timeout" ? "timeout" : "error",
-              stopReason,
-            }),
-          ).catch((error: unknown) => {
-            params.context.logGateway.warn(
-              `private input cancellation persistence failed: ${formatForLog(error)}`,
-            );
-          });
-        };
-        // Give the timed-out producer its existing terminal grace to supply
-        // final facts. Stop starts one retained write that finalization joins.
-        if (stopReason === "timeout" && params.deferTimeoutCompletion?.(settle)) {
+        // Intentional Stop seals non-retry custody immediately. A timeout
+        // retains its source until the producer publishes its actual terminal facts.
+        if (stopReason === "timeout") {
           return;
         }
-        settle();
+        void completeUserTurnProcessing(
+          recorder,
+          buildAgentRunTerminalOutcome({ status: "error", stopReason }),
+        ).catch((error: unknown) => {
+          params.context.logGateway.warn(
+            `private input cancellation persistence failed: ${formatForLog(error)}`,
+          );
+        });
       };
       // Abort reserves terminal ownership before notifying listeners. Record
       // the stop while that exact controller still exists, even after input consumption.
@@ -380,6 +512,7 @@ export async function prepareAgentRunUserTurn(params: {
     }
     return {
       ...(params.privateCompletion ? { privateCompletion: true as const } : {}),
+      replyExpectation: params.replyExpectation,
       ...(releaseProcessingAbortObserver ? { releaseProcessingAbortObserver } : {}),
       ...(execApprovalFollowupRuntimeHandoff?.bashElevated
         ? { bashElevated: execApprovalFollowupRuntimeHandoff.bashElevated }
@@ -391,15 +524,32 @@ export async function prepareAgentRunUserTurn(params: {
       inputProvenance,
       ...(recorder ? { recorder } : {}),
       senderIsOwner,
+      requesterOrigin,
+      assertRequesterCurrent,
       suppressPromptPersistence,
     };
   } catch (error) {
-    releaseExecApprovalFollowupRuntimeHandoff({
-      handoffId: claimedExecApprovalFollowupHandoffId,
-      claimId: execApprovalFollowupHandoffClaimId,
-    });
-    await Promise.allSettled(durableMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
-    throw error;
+    const mediaRetained = recorder !== undefined && retainsUserTurnTranscriptMedia(recorder);
+    if (mediaRetained) {
+      // This callback transfers parser cleanup ownership, not a public success fact.
+      // Retained input must keep its media even if later preparation or cleanup fails.
+      params.onUserTurnMediaPersisted();
+    }
+    const stopReason = params.getAbortStopReason?.() ?? "rpc";
+    const outcome = buildAgentRunTerminalOutcome({ status: "error", stopReason });
+    // Pending input must settle before admission can publish an abort. Timeouts
+    // retain retry custody; an explicit stop cancels it even before execution.
+    const failure = await releasePreparedAgentRunUserTurnAfterFailure(
+      { recorder, claimedExecApprovalFollowupHandoffId, execApprovalFollowupHandoffClaimId },
+      error,
+      params.abortSignal?.aborted && stopReason !== "restart" && outcome.reason === "cancelled"
+        ? "cancelled"
+        : "interrupted",
+    );
+    if (!mediaRetained) {
+      await Promise.allSettled(createdMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
+    }
+    throw failure;
   }
 }
 
@@ -442,7 +592,7 @@ export async function releaseStoppedAgentRunUserTurn(
   prepared: PreparedAgentRunUserTurn,
   abort: Pick<ReturnType<typeof registerChatAbortController>, "controller" | "entry">,
 ): Promise<void> {
-  const stopReason = abort.entry?.abortStopReason;
+  const stopReason = abort.entry?.adapter.abortStopReason;
   const outcome = buildAgentRunTerminalOutcome({ status: "error", stopReason });
   const cancelled =
     abort.controller.signal.aborted &&
@@ -452,7 +602,13 @@ export async function releaseStoppedAgentRunUserTurn(
 }
 
 export async function releasePreparedAgentRunUserTurn(
-  prepared: PreparedAgentRunUserTurn,
+  prepared: Pick<
+    PreparedAgentRunUserTurn,
+    | "recorder"
+    | "releaseProcessingAbortObserver"
+    | "claimedExecApprovalFollowupHandoffId"
+    | "execApprovalFollowupHandoffClaimId"
+  >,
   disposition: "cancelled" | "interrupted" = "interrupted",
 ): Promise<void> {
   try {
@@ -470,9 +626,19 @@ export async function releasePreparedAgentRunUserTurn(
   }
 }
 
+/** A recorded abort cannot replace a failed custody settlement. */
+export class AgentRunUserTurnCleanupError extends AggregateError {
+  constructor(error: unknown, cleanupError: unknown) {
+    super(
+      [error, cleanupError],
+      `${formatForLog(error)}; pending input cleanup failed: ${formatForLog(cleanupError)}`,
+    );
+  }
+}
+
 /** Settles failed input while preserving both admission and settlement failures. */
 export async function releasePreparedAgentRunUserTurnAfterFailure(
-  prepared: PreparedAgentRunUserTurn,
+  prepared: Parameters<typeof releasePreparedAgentRunUserTurn>[0],
   error: unknown,
   disposition: "cancelled" | "interrupted" = "cancelled",
 ): Promise<unknown> {
@@ -480,9 +646,6 @@ export async function releasePreparedAgentRunUserTurnAfterFailure(
     await releasePreparedAgentRunUserTurn(prepared, disposition);
     return error;
   } catch (cleanupError) {
-    return new AggregateError(
-      [error, cleanupError],
-      `${formatForLog(error)}; pending input cleanup failed: ${formatForLog(cleanupError)}`,
-    );
+    return new AgentRunUserTurnCleanupError(error, cleanupError);
   }
 }

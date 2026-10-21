@@ -1,7 +1,15 @@
-/** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
+import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
+import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
+import { scopePreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { SessionRestartRecoveryTombstoneError } from "../../config/sessions/lifecycle.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import { createInboundMessageAuditTerminal } from "./dispatch-from-config.audit.js";
@@ -18,12 +26,23 @@ import type {
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
-import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
-import { sendReplyRestartRecoveryNotice } from "./reply-turn-recovery-notice.js";
+import { prepareInternalGetReplyOptions } from "./get-reply.types.js";
+import { prepareReplySourceInput, retireUnadoptedReplySource } from "./reply-source-binding.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
-/** Dispatches a reply from config, context, command handling, agent run, and delivery policy. */
+type RecoveryNotice = {
+  sessionId: string;
+  cycleId: string;
+};
+
+const MAX_RECOVERY_NOTICES = 1_024;
+const log = createSubsystemLogger("auto-reply/reply-turn-admission");
+const notices = resolveGlobalMap<string, RecoveryNotice>(
+  Symbol.for("openclaw.replyRestartRecoveryNotices"),
+  "close-and-restart",
+);
+
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
@@ -39,26 +58,22 @@ export async function dispatchLowLevelChannelReplyFromConfig(
 }
 
 async function dispatchReplyFromConfigWithQueuePolicy(
-  params: DispatchFromConfigParams,
+  inputParams: DispatchFromConfigParams,
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
-  const ticket = reserveReplyAdmissionTicket([
-    params.ctx.SessionKey,
-    params.ctx.CommandTargetSessionKey,
-  ]);
-  const ticketedParams = ticket
-    ? {
-        ...params,
-        replyOptions: { ...params.replyOptions, [REPLY_ADMISSION_TICKET]: ticket },
-      }
-    : params;
+  const source = prepareReplySourceInput(
+    inputParams.ctx,
+    inputParams.cfg,
+    prepareInternalGetReplyOptions(inputParams.replyOptions, inputParams.ctx),
+  );
+  const params = { ...inputParams, replyOptions: source.options };
   const messageAuditTerminal = createInboundMessageAuditTerminal(params);
   let refreshedSessionSnapshot = false;
   try {
     while (true) {
       try {
         const result = await dispatchReplyFromConfigInner(
-          ticketedParams,
+          params,
           messageAuditTerminal,
           allowActiveQueueResolution,
         );
@@ -68,6 +83,8 @@ async function dispatchReplyFromConfigWithQueuePolicy(
         if (
           error instanceof DispatchSessionRefreshRequiredError &&
           !refreshedSessionSnapshot &&
+          source.input?.retirementRequested !== true &&
+          source.input?.claim?.releaseRequested !== true &&
           params.replyOptions?.abortSignal?.aborted !== true
         ) {
           // Rebuild once from the latest store entry. If another lifecycle mutation wins the
@@ -80,7 +97,9 @@ async function dispatchReplyFromConfigWithQueuePolicy(
       }
     }
   } finally {
-    ticket?.release();
+    if (source.created) {
+      retireUnadoptedReplySource(source.input);
+    }
   }
 }
 
@@ -89,19 +108,25 @@ async function dispatchReplyFromConfigInner(
   messageAuditTerminal: ReturnType<typeof createInboundMessageAuditTerminal>,
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
+  await using runtimeResources = new AsyncDisposableStack();
+  let runtimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
   const gathered = await gatherDispatchRequest(
     params,
     messageAuditTerminal,
     allowActiveQueueResolution,
+    (lease) => {
+      runtimeLease = runtimeResources.use(scopePreparedModelRuntimeLease(lease));
+    },
+    (dispose) => runtimeResources.defer(dispose),
   );
   if (gathered.status === "complete") {
     return gathered.result;
   }
 
-  return await withPluginRuntimeRegistryScope(gathered.state.pluginRegistry, async () => {
+  const execute = async () => {
     const delivery = await prepareDispatchDelivery(gathered.state);
 
-    const context = await prepareDispatchOperationContext(delivery.state);
+    const context = await prepareDispatchOperationContext(delivery);
     if (context.status === "complete") {
       return context.result;
     }
@@ -120,13 +145,12 @@ async function dispatchReplyFromConfigInner(
 
       const execution = await prepareDispatchExecution(route.state);
 
-      const executed = await executeDispatch(execution.state);
+      const executed = await executeDispatch(execution);
       if (executed.status === "complete") {
         return executed.result;
       }
 
-      const finalized = await finalizeDispatchAndAudit(executed.state);
-      return finalized.result;
+      return await finalizeDispatchAndAudit(executed.state);
     } catch (err) {
       const {
         failDispatchReplyOperation,
@@ -171,28 +195,80 @@ async function dispatchReplyFromConfigInner(
         errorState.dispatchOperationSessionKey &&
         errorState.operationSessionStoreEntry.storePath
       ) {
-        await sendReplyRestartRecoveryNotice({
-          agentId: errorState.operationSessionStoreEntry.agentId ?? errorState.sessionAgentId,
-          cfg: errorState.cfg,
-          channel: errorState.deliveryChannel,
-          sessionKey: errorState.dispatchOperationSessionKey,
-          storePath: errorState.operationSessionStoreEntry.storePath,
-          deliver: async (text) => {
-            const payload = { text, isError: true };
-            const routed = await errorState.routeReplyToOriginating(payload, { mirror: false });
-            if (routed) {
-              return errorState.isRoutedReplyDelivered(routed);
+        const agentId = errorState.operationSessionStoreEntry.agentId ?? errorState.sessionAgentId;
+        const cfg = errorState.cfg;
+        const channel = errorState.deliveryChannel;
+        const sessionKey = errorState.dispatchOperationSessionKey;
+        const storePath = errorState.operationSessionStoreEntry.storePath;
+        try {
+          const currentAcpSession = await readAcpSessionEntryAsync({ cfg, agentId, sessionKey });
+          // Admission may have waited while reset or deletion changed the session.
+          const entry: InternalSessionEntry | undefined = await readSessionEntryReadOnlyInWorker({
+            agentId,
+            sessionKey,
+            storePath,
+            readConsistency: "latest",
+          });
+          const recovery = entry?.mainRestartRecovery;
+          if (
+            entry &&
+            recovery?.tombstone &&
+            !isParentOwnedBackgroundAcpSession(
+              currentAcpSession?.entry
+                ? { ...currentAcpSession.entry, acp: currentAcpSession.acp }
+                : undefined,
+            ) &&
+            resolveSendPolicy({
+              cfg,
+              entry,
+              sessionKey,
+              channel,
+              chatType: entry.chatType,
+            }) !== "deny"
+          ) {
+            const key = JSON.stringify([agentId, storePath, sessionKey]);
+            const previous = notices.get(key);
+            if (
+              !(previous?.sessionId === entry.sessionId && previous.cycleId === recovery.cycleId)
+            ) {
+              notices.delete(key);
+              pruneMapToMaxSize(notices, MAX_RECOVERY_NOTICES - 1);
+              // Claim before awaiting delivery; ambiguous failures must not produce a notice storm.
+              notices.set(key, { sessionId: entry.sessionId, cycleId: recovery.cycleId });
+              const hint =
+                entry.modelSelectionLocked === true
+                  ? "Open it in WebChat and use Resume."
+                  : "Use Resume in WebChat, or /reset or /new to start a replacement session.";
+              const payload = {
+                text: `My session in this room ended during restart recovery. ${hint}`,
+                isError: true,
+              };
+              const routed = await errorState.routeReplyToOriginating(payload, { mirror: false });
+              let delivered = false;
+              if (routed) {
+                delivered = errorState.isRoutedReplyDelivered(routed);
+              } else if (params.dispatcher.sendFinalReply(payload)) {
+                const receipt = await params.dispatcher.waitForIdle();
+                // Ambiguous sends suppress retries but do not confirm notice delivery.
+                delivered = receipt ? receipt.counts.final.delivered > 0 : false;
+              }
+              if (!delivered) {
+                log.warn(
+                  `restart recovery notice delivery was not confirmed for session ${sessionKey}`,
+                );
+              }
             }
-            if (!params.dispatcher.sendFinalReply(payload)) {
-              return false;
-            }
-            const receipt = await params.dispatcher.waitForIdle();
-            // Ambiguous sends suppress retries but do not confirm notice delivery.
-            return receipt ? receipt.counts.final.delivered > 0 : false;
-          },
-        });
+          }
+        } catch (error) {
+          log.warn(
+            `failed to deliver restart recovery notice for session ${sessionKey}: ${String(error)}`,
+          );
+        }
       }
       throw err;
     }
-  });
+  };
+  const runWithRegistry = () =>
+    withPluginRuntimeRegistryScope(gathered.state.pluginRegistry, execute);
+  return runtimeLease ? await runtimeLease.run(runWithRegistry) : await runWithRegistry();
 }

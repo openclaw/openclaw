@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
-import { captureEnv, deleteTestEnvValue } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { callGateway, callGatewayCli, type CallGatewayCliOptions } from "./call.js";
 import type { GatewayClientOptions } from "./client.js";
 
@@ -16,14 +16,14 @@ const fixture = vi.hoisted(() => ({
   } satisfies DeviceIdentity,
 }));
 
-vi.mock("../infra/device-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
-  loadOrCreateDeviceIdentity: () => fixture.identity,
-  loadDeviceIdentityIfPresent: () => fixture.identity,
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateDeviceIdentityAsync: () => fixture.identity,
+  loadDeviceIdentityIfPresentAsync: () => fixture.identity,
 }));
 
-vi.mock("./client.js", () => ({
-  prepareGatewayClientDeviceAuth: async () => {},
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
   isGatewayConnectAssemblyError: () => false,
   GatewayClient: class {
     constructor(private readonly options: GatewayClientOptions) {
@@ -91,10 +91,53 @@ it.each<{
   label: string;
   method?: "chat.abort" | "sessions.abort";
   options?: Partial<CallGatewayCliOptions>;
+  env?: NodeJS.ProcessEnv;
   backend?: boolean;
   scopes: string[];
   deviceIdentity: DeviceIdentity | null;
 }>([
+  {
+    label: "explicit target token ignores an unrelated ambient password",
+    options: { config: undefined },
+    env: { OPENCLAW_GATEWAY_PASSWORD: "inactive-password" },
+    scopes: ["operator.admin"],
+    deviceIdentity: null,
+  },
+  {
+    label: "explicit target password ignores an unrelated ambient token",
+    options: { config: undefined, token: undefined, password: "explicit-password" },
+    env: { OPENCLAW_GATEWAY_TOKEN: "inactive-token" },
+    scopes: ["operator.admin"],
+    deviceIdentity: null,
+  },
+  {
+    label: "an explicit password does not override configured token mode",
+    options: { token: undefined, password: "inactive-password" },
+    scopes: ["operator.write"],
+    deviceIdentity: fixture.identity,
+  },
+  {
+    label: "an explicit token does not override configured password mode",
+    options: { config: { gateway: { auth: { mode: "password" } } } },
+    scopes: ["operator.write"],
+    deviceIdentity: fixture.identity,
+  },
+  {
+    label: "an explicit token preserves config-inferred password mode",
+    options: { config: { gateway: { auth: { password: "configured-password" } } } },
+    scopes: ["operator.write"],
+    deviceIdentity: fixture.identity,
+  },
+  {
+    label: "an explicit password preserves config-inferred token mode",
+    options: {
+      config: { gateway: { auth: { token: "configured-token" } } },
+      token: undefined,
+      password: "inactive-password",
+    },
+    scopes: ["operator.write"],
+    deviceIdentity: fixture.identity,
+  },
   {
     label: "local shared password can cancel a run owned by another connection",
     method: "sessions.abort",
@@ -136,19 +179,26 @@ it.each<{
     scopes: ["operator.write"],
     deviceIdentity: null,
   },
-])("$label", async ({ method = "chat.abort", options, backend, scopes, deviceIdentity }) => {
-  const params =
-    method === "chat.abort"
-      ? { sessionKey: "agent:main:running", runId: "running" }
-      : { key: "agent:main:running", runId: "running" };
-  const call = backend ? callGateway : callGatewayCli;
+])(
+  "$label",
+  async ({ method = "chat.abort", options, env = {}, backend, scopes, deviceIdentity }) => {
+    const params =
+      method === "chat.abort"
+        ? { sessionKey: "agent:main:running", runId: "running" }
+        : { key: "agent:main:running", runId: "running" };
+    const call = backend ? callGateway : callGatewayCli;
 
-  await call({ ...localConnection, method, params, ...options });
+    const callOptions = { ...localConnection, method, params, ...options };
+    await withEnvAsync(env, () => call(callOptions));
 
-  expect(fixture.clientOptions?.scopes).toEqual(scopes);
-  expect(fixture.clientOptions?.deviceIdentity).toEqual(deviceIdentity);
-  expect(fixture.request).toHaveBeenCalledExactlyOnceWith(method, params, expect.any(Object));
-});
+    expect(fixture.clientOptions?.url).toBe(callOptions.url);
+    expect(fixture.clientOptions?.token).toBe(callOptions.token);
+    expect(fixture.clientOptions?.password).toBe(callOptions.password);
+    expect(fixture.clientOptions?.scopes).toEqual(scopes);
+    expect(fixture.clientOptions?.deviceIdentity).toEqual(deviceIdentity);
+    expect(fixture.request).toHaveBeenCalledExactlyOnceWith(method, params, expect.any(Object));
+  },
+);
 
 it("keeps unrelated local shared-token CLI methods at least privilege", async () => {
   await callGatewayCli({ ...localConnection, method: "health" });

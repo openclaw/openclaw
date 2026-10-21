@@ -25,6 +25,8 @@ function createStatus(
 
 const gatherDaemonStatus = vi.fn(async (_opts?: unknown) => createStatus());
 const printDaemonStatus = vi.fn();
+const readDaemonServiceStatus = vi.fn();
+const projectDaemonRuntimeStatus = vi.fn();
 const statusOptions = { rpc: {}, probe: true, requireRpc: false, json: false };
 
 vi.mock("../../infra/update-check-package-target.js", () => ({
@@ -51,17 +53,54 @@ vi.mock("./status.print.js", () => ({
   printDaemonStatus: (...args: unknown[]) => printDaemonStatus(...args),
 }));
 
+// mock-isolation: service inspection must not inspect this host's managed services or environment.
+vi.mock("./status.service.js", () => ({
+  readDaemonServiceStatus: (opts: unknown) => readDaemonServiceStatus(opts),
+}));
+
+// mock-isolation: deterministic runtime facts avoid host runtime and configuration probes.
+vi.mock("./status.projection.js", () => ({
+  projectDaemonRuntimeStatus: (opts: unknown) => projectDaemonRuntimeStatus(opts),
+}));
+
 const { runDaemonStatus } = await import("./status.js");
 
 describe("runDaemonStatus", () => {
   beforeEach(() => {
-    gatherDaemonStatus.mockClear();
+    gatherDaemonStatus.mockReset().mockResolvedValue(createStatus());
+    readDaemonServiceStatus.mockReset();
+    projectDaemonRuntimeStatus.mockReset();
     vi.mocked(fetchNpmPackageTargetStatus).mockReset();
     printDaemonStatus.mockClear();
     defaultRuntime.error.mockClear();
     defaultRuntime.exit.mockClear();
     defaultRuntime.writeJson.mockClear();
     resetRuntimeCapture();
+  });
+
+  it("returns local runtime intent while shared-state diagnostics are unavailable", async () => {
+    gatherDaemonStatus.mockRejectedValue(new Error("Shared state is unavailable"));
+    const localService = {
+      service: {},
+      state: { command: null, loadState: { status: "not-loaded" } },
+    };
+    readDaemonServiceStatus.mockResolvedValue(localService);
+    const projection = {
+      cli: { version: "fixture" },
+      runtimeIntent: { runtimeIntent: { status: "known", stored: false, revision: "empty" } },
+    };
+    projectDaemonRuntimeStatus.mockResolvedValue(projection);
+
+    await runDaemonStatus({ ...statusOptions, json: true, runtimeIntentOnly: true });
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      cli: projection.cli,
+      service: projection.runtimeIntent,
+    });
+    expect(projectDaemonRuntimeStatus).toHaveBeenCalledWith({ deep: true, ...localService });
+    expect(gatherDaemonStatus).not.toHaveBeenCalled();
+    expect(printDaemonStatus).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it.each([false, true])("confirms repair targets only for deep status (deep=%s)", async (deep) => {
@@ -106,11 +145,27 @@ describe("runDaemonStatus", () => {
       error: {
         type: "cli_error",
         message:
-          "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
+          "Gateway status failed: --require-rpc needs checking enabled. Remove --no-probe or drop --require-rpc.",
       },
     });
     expect(defaultRuntime.error).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an RPC requirement for local-only runtime inspection", async () => {
+    await expect(
+      runDaemonStatus({ ...statusOptions, runtimeIntentOnly: true, requireRpc: true, json: true }),
+    ).rejects.toThrow("__exit__:1");
+    expect(readDaemonServiceStatus).not.toHaveBeenCalled();
+    expect(gatherDaemonStatus).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message:
+          "Gateway status failed: --runtime-intent-only cannot be combined with --require-rpc.",
+      },
+    });
   });
 
   it("renders service-inspection failures as JSON in JSON mode", async () => {

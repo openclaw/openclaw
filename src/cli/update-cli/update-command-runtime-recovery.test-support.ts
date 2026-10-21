@@ -53,78 +53,86 @@ export function mockNonContainerSystemRuntime(): void {
   vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
 }
 
-export const alreadyCurrentConvergenceCases = [
-  { restart: true, running: true, failure: undefined },
-  { restart: false, running: true, failure: undefined },
-  { restart: true, running: false, failure: undefined },
-  { restart: true, running: true, failure: "doctor" },
-  { restart: true, running: true, failure: "stop" },
-  { restart: true, running: true, failure: undefined, platform: "linux" as const },
-  { restart: true, running: true, failure: "changed owner" },
-];
-
 export function expectedRuntimeSelectionCommand(manager: "nvm" | "fnm", version: string): string {
   return process.platform === "win32"
     ? `${manager} install ${version}; if ($LASTEXITCODE -eq 0) { ${manager} use ${version} }`
     : `${manager} install ${version} && ${manager} use ${version}`;
 }
 
+const clearedContext =
+  "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_PROFILE OPENCLAW_GATEWAY_PORT OPENCLAW_LAUNCHD_LABEL OPENCLAW_SYSTEMD_UNIT OPENCLAW_WINDOWS_TASK_NAME OPENCLAW_WORKSPACE_DIR";
+const instruction = (kind: UpdateRecoveryStep["kind"], text: string): UpdateRecoveryStep => ({
+  kind,
+  instruction: text,
+});
+
 // Independent operator-facing fixtures shared by CLI and preflight boundary tests.
+export function expectedRuntimeRecoverySteps(
+  node: string,
+  root?: string,
+  version?: string,
+  context?: string,
+  pinnedServiceNode?: string,
+): UpdateRecoveryStep[] {
+  const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+  const steps: (UpdateRecoveryStep | undefined)[] = [
+    instruction(
+      "preserve-context",
+      "Use the same service account and keep the existing OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH overrides throughout recovery.",
+    ),
+    context ? { kind: "preserve-context", command: context } : undefined,
+    instruction(
+      "select-runtime",
+      `Install and select Node ${node} using your system package manager or https://nodejs.org/en/download.`,
+    ),
+    pinnedServiceNode
+      ? instruction(
+          "select-runtime",
+          `The Gateway service still selects ${pinnedServiceNode}. Before continuing, have its deployment owner select Node ${node} in the service definition while retaining its installation, service account, and state/config selectors. Switching the shell runtime alone does not update that service definition.`,
+        )
+      : undefined,
+    root
+      ? {
+          kind: "continue-update",
+          command: `node ${quote(path.join(root, "openclaw.mjs"))} update${version !== undefined ? ` --tag ${version}` : ""}`,
+        }
+      : instruction(
+          "continue-update",
+          "Run this installation's absolute openclaw.mjs launcher with the selected Node and the update command to recheck package and service ownership before installation.",
+        ),
+  ];
+  return steps.filter((step): step is UpdateRecoveryStep => step !== undefined);
+}
+
 export function expectedPlainRecovery(
   version: string,
   node: string,
   service: "refresh" | "owner" | "absent" = "owner",
-  context = service === "refresh"
-    ? "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_PROFILE OPENCLAW_GATEWAY_PORT OPENCLAW_LAUNCHD_LABEL OPENCLAW_SYSTEMD_UNIT OPENCLAW_WINDOWS_TASK_NAME OPENCLAW_WORKSPACE_DIR"
-    : undefined,
+  context = service === "refresh" ? clearedContext : undefined,
   root?: string,
   pinnedServiceNode?: string,
 ): string {
   return [
     "Recovery:",
-    "1. Use the same service account and keep the existing OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH overrides throughout recovery.",
-    ...(context ? [`2. Run \`${context}\`.`] : []),
-    `2. Install and select Node ${node} using your system package manager or https://nodejs.org/en/download.`,
-    ...(pinnedServiceNode
-      ? [
-          `3. The Gateway service still selects ${pinnedServiceNode}. Before continuing, have its deployment owner select Node ${node} in the service definition while retaining its installation, service account, and state/config selectors. Switching the shell runtime alone does not update that service definition.`,
-        ]
-      : []),
-    root
-      ? `3. Run \`node ${process.platform === "win32" ? quotePowerShellArg(path.join(root, "openclaw.mjs")) : quoteCliArg(path.join(root, "openclaw.mjs"))} update --tag ${version}\`.`
-      : "3. Run this installation's absolute openclaw.mjs launcher with the selected Node and the update command to recheck package and service ownership before installation.",
-  ]
-    .map((line, index) => (index ? line.replace(/^\d+\./, `${index}.`) : line))
-    .join("\n");
+    ...expectedRuntimeRecoverySteps(node, root, version, context, pinnedServiceNode).map(
+      (step, index) =>
+        `${index + 1}. ${"command" in step ? `Run \`${step.command}\`.` : step.instruction}`,
+    ),
+  ].join("\n");
 }
 
 export function expectedManagedRuntimeRecoverySteps(
   manager: "nvm" | "system",
   root: string,
 ): UpdateRecoveryStep[] {
-  return [
-    {
-      kind: "preserve-context",
-      instruction:
-        "Use the same service account and keep the existing OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH overrides throughout recovery.",
-    },
-    {
-      kind: "preserve-context",
-      command:
-        "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_PROFILE OPENCLAW_GATEWAY_PORT OPENCLAW_LAUNCHD_LABEL OPENCLAW_SYSTEMD_UNIT OPENCLAW_WINDOWS_TASK_NAME OPENCLAW_WORKSPACE_DIR",
-    },
-    manager === "nvm"
-      ? { kind: "select-runtime", command: expectedRuntimeSelectionCommand("nvm", "24.16.0") }
-      : {
-          kind: "select-runtime",
-          instruction:
-            "Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.",
-        },
-    {
-      kind: "continue-update",
-      command: `node ${process.platform === "win32" ? quotePowerShellArg(path.join(root, "openclaw.mjs")) : quoteCliArg(path.join(root, "openclaw.mjs"))} update --tag 2026.5.20`,
-    },
-  ];
+  const steps = expectedRuntimeRecoverySteps("24.16.0", root, "2026.5.20", clearedContext);
+  if (manager === "nvm") {
+    steps[2] = {
+      kind: "select-runtime",
+      command: expectedRuntimeSelectionCommand("nvm", "24.16.0"),
+    };
+  }
+  return steps;
 }
 
 export const unsupportedServiceRuntimeFixture = {
@@ -158,21 +166,6 @@ export function currentGitCoreFixture(root: string, version: string) {
     steps: [],
     durationMs: 1,
   };
-  const entry = path.join(root, "openclaw.mjs");
-  const launcher = `node ${process.platform === "win32" ? quotePowerShellArg(entry) : quoteCliArg(entry)}`;
-  const recoverySteps: UpdateRecoveryStep[] = [
-    {
-      kind: "preserve-context",
-      instruction:
-        "Use the same service account and keep the existing OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH overrides throughout recovery.",
-    },
-    {
-      kind: "select-runtime",
-      instruction:
-        "Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.",
-    },
-    { kind: "continue-update", command: `${launcher} update` },
-  ];
   return {
     outcome,
     converged: {
@@ -184,7 +177,7 @@ export function currentGitCoreFixture(root: string, version: string) {
     runtimeRefusal: {
       status: "error",
       reason: "node-runtime-preflight",
-      failedStep: { recoverySteps },
+      failedStep: { recoverySteps: expectedRuntimeRecoverySteps("24.16.0", root) },
     },
   };
 }

@@ -7,7 +7,7 @@ import OSLog
 /// Audio events and synchronous relay controls use the same critical section.
 final class RealtimeTalkOutput: @unchecked Sendable {
     private let lock = NSLock()
-    private let player: (any RealtimePCMPlayback)?
+    private let player: RealtimePCMStreamingAudioPlayer?
     private let legacyPlayer: PCMStreamingAudioPlaying
     private let transport: RealtimeTalkRelayTransport
     private let notification: AsyncStream<Void>.Continuation
@@ -34,8 +34,6 @@ final class RealtimeTalkOutput: @unchecked Sendable {
     var terminalOutputCancellationReason: String?
     var cancellationInFlight = false
     var outputStartedAtMs: Double?
-    var outputAudioChunkCount = 0
-    var outputAudioByteCount = 0
     var envelope = OutputEnvelope()
 
     enum Effect: Sendable {
@@ -49,7 +47,7 @@ final class RealtimeTalkOutput: @unchecked Sendable {
         transport: RealtimeTalkRelayTransport,
         notification: AsyncStream<Void>.Continuation)
     {
-        self.player = player as? any RealtimePCMPlayback
+        self.player = player as? RealtimePCMStreamingAudioPlayer
         self.legacyPlayer = player
         self.transport = transport
         self.notification = notification
@@ -155,15 +153,6 @@ final class RealtimeTalkOutput: @unchecked Sendable {
             self.stopOutputPlayback()
         }
         self.acknowledgePlaybackMarks(marks)
-    }
-
-    func recordOutputAudioChunk(byteCount: Int) {
-        self.outputAudioChunkCount += 1
-        self.outputAudioByteCount += byteCount
-        guard self.outputAudioChunkCount == 1 || self.outputAudioChunkCount % 20 == 0 else { return }
-        let chunks = self.outputAudioChunkCount
-        let bytes = self.outputAudioByteCount
-        self.logger.debug("talk realtime audio: chunks=\(chunks) bytes=\(bytes)")
     }
 
     func markOutputAudioStarted(nowMs: Double) {
@@ -278,7 +267,6 @@ final class RealtimeTalkOutput: @unchecked Sendable {
             self.stopOutputPlayback()
         }
         self.outputIdentity = incomingIdentity
-        self.recordOutputAudioChunk(byteCount: data.count)
         self.markOutputAudioStarted(nowMs: ProcessInfo.processInfo.systemUptime * 1000)
         self.reportSpeaking(true)
         self.ensureOutputPlaybackStarted()

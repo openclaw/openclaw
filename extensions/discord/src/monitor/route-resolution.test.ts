@@ -6,7 +6,6 @@ import {
   buildDiscordConversationRouteContext,
   buildDiscordRoutePeer,
   resolveDiscordBoundConversationRoute,
-  resolveDiscordEffectiveRoute,
   shouldIgnoreStaleDiscordRouteBinding,
 } from "./route-resolution.js";
 
@@ -60,35 +59,6 @@ describe("discord route resolution helpers", () => {
       MessageThreadId: undefined,
       ThreadParentId: undefined,
     });
-  });
-
-  it("falls back to configured route when no bound session exists", () => {
-    const route: ResolvedAgentRoute = {
-      agentId: "main",
-      channel: "discord",
-      accountId: "default",
-      sessionKey: "agent:main:discord:channel:c1",
-      mainSessionKey: "agent:main:main",
-      lastRoutePolicy: "session",
-      matchedBy: "default",
-    };
-    const configuredRoute = {
-      route: {
-        ...route,
-        agentId: "worker",
-        sessionKey: "agent:worker:discord:channel:c1",
-        mainSessionKey: "agent:worker:main",
-        lastRoutePolicy: "session" as const,
-        matchedBy: "binding.peer" as const,
-      },
-    };
-
-    expect(
-      resolveDiscordEffectiveRoute({
-        route,
-        configuredRoute,
-      }),
-    ).toEqual(configuredRoute.route);
   });
 
   it("composes route building with effective-route overrides", () => {

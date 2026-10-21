@@ -31,12 +31,13 @@ export function sendGatewayHttpAuthFailure(
 export function bindHttpOperatorAccessAuthority(
   res: ServerResponse,
   authority: PluginGatewayAccessAuthority | null | undefined,
+  replyOnFailure = true,
 ): boolean {
   if (!authority) {
     return true;
   }
   if (!hasCurrentGatewayOperatorAccess(authority)) {
-    if (!res.writableEnded && !res.destroyed) {
+    if (replyOnFailure && !res.writableEnded && !res.destroyed) {
       sendGatewayHttpAuthFailure(res, { ok: false, reason: "operator_access_denied" });
     }
     return false;

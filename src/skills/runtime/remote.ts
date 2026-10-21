@@ -88,7 +88,7 @@ function logRemoteBinProbeFailure(
   const details = `command=${context.command} timeoutMs=${context.timeoutMs} requiredBins=${context.requiredBinCount} connected=${remoteNodes.get(nodeId)?.connected === true ? "yes" : "no"}`;
   if (phase === "preflight") {
     log.info(
-      `remote bin probe skipped: node connectivity unavailable (${label}; ${details}): ${
+      `remote bin check skipped: node connectivity unavailable (${label}; ${details}): ${
         message ?? "unknown"
       }`,
     );
@@ -97,16 +97,16 @@ function logRemoteBinProbeFailure(
   // Node unavailable errors (not connected or disconnected mid-operation) are expected
   // when nodes have transient connections - log at info level instead of warn
   if (message?.includes("node not connected") || message?.includes("node disconnected")) {
-    log.info(`remote bin probe skipped: node unavailable (${label}; ${details})`);
+    log.info(`remote bin check skipped: node unavailable (${label}; ${details})`);
     return;
   }
   if (message?.includes("invoke timed out") || message?.includes("timeout")) {
     log.warn(
-      `remote bin probe timed out (${label}; ${details}); check node connectivity for ${label}`,
+      `remote bin check timed out (${label}; ${details}); check node connectivity for ${label}`,
     );
     return;
   }
-  log.warn(`remote bin probe error (${label}; ${details}): ${message ?? "unknown"}`);
+  log.warn(`remote bin check error (${label}; ${details}): ${message ?? "unknown"}`);
 }
 
 function upsertNode(
@@ -338,17 +338,10 @@ export async function refreshRemoteNodeBins(params: RemoteNodeBinRefreshParams):
       // before starting another probe so they stay coalesced.
       continue;
     }
-    const inflight: RemoteBinProbeInflight = {
-      ...owner,
-      promise: Promise.resolve(),
-    };
     const run = refreshRemoteNodeBinsUncoalesced(params).finally(() => {
-      if (remoteBinProbeInflight.get(params.nodeId) === inflight) {
-        remoteBinProbeInflight.delete(params.nodeId);
-      }
+      remoteBinProbeInflight.delete(params.nodeId);
     });
-    inflight.promise = run;
-    remoteBinProbeInflight.set(params.nodeId, inflight);
+    remoteBinProbeInflight.set(params.nodeId, { ...owner, promise: run });
     await run;
     return;
   }
@@ -372,7 +365,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
   if (!remoteRegistry) {
     return;
   }
-  const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
+  const { prepareWorkspaceSkillEntries } = await import("../loading/workspace-skill-loader.js");
   // Pairing can replace the command surface while the connect-time readiness
   // delay or loader import is pending. Probe the live session after both settle.
   const liveSession = remoteRegistry?.get(params.nodeId);
@@ -399,11 +392,14 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
   for (const agentId of listAgentIds(params.cfg)) {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     // Probe prerequisites before host eligibility can hide remote-only skills.
-    const entries = loadWorkspaceSkills(workspaceDir, {
+    const { entries } = await prepareWorkspaceSkillEntries(workspaceDir, {
       config: params.cfg,
       agentId,
       agentSkillFilter: "ignore",
     });
+    if (params.readinessSignal?.aborted || !isCurrentRemoteNodeOwner(params.nodeId, probeOwner)) {
+      return;
+    }
     for (const bin of collectRequiredBins(entries, "darwin")) {
       requiredBins.add(bin);
     }

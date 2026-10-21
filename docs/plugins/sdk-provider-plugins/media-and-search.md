@@ -18,6 +18,14 @@ the private `openclaw/plugin-sdk/concurrency-runtime` subpath. It returns
 `promise`, `resolve`, and `reject` without loading logging or provider auth;
 the adapter retains responsibility for cancellation and terminal settlement.
 
+Speech providers can use `createSpeechDirectiveParser` from the lightweight
+`openclaw/plugin-sdk/speech-provider` subpath. Map each override field to its
+policy key and accepted token aliases; optional field callbacks retain vendor
+validation and warning text. The shared parser handles alias dispatch and policy
+gating and returns an override patch. The host merges these patches into the
+provider's accumulated overrides; callbacks use `currentOverrides` only when
+merging a nested value such as voice settings.
+
 ## Media and search capabilities
 
 <Tabs>
@@ -61,10 +69,50 @@ the adapter retains responsibility for cancellation and terminal settlement.
     The shared factory always supplies the client's `model` and the original
     `input` array after those fields, preserving response-count validation.
 
+    Clients returned by `resolveRemoteEmbeddingClient` resolve OAuth authorization
+    through the auth-profile owner before each HTTP request. API keys and explicit
+    authorization headers remain static. Pass the client's optional
+    `resolveRequestHeaders` callback through batch helpers too: it receives
+    `{ forceRefresh, signal }` and returns request headers. `withRemoteHttpResponse`
+    applies those headers before guarded dispatch and supplies the actual headers
+    as the second `onResponse` argument for error redaction. If that handler throws
+    a provider HTTP error for `401 token_expired`, the helper releases the response,
+    resolves headers once with `forceRefresh: true`, and retries only that request.
+    Uploads must use a replayable body such as the batch helper's `FormData`.
+
+    Embedding adapters can use `resolveEmbeddingProviderSsrFPolicy` from
+    `openclaw/plugin-sdk/memory-core-host-engine-embeddings` to apply the shared model
+    provider network policy. Pass the embedding provider ID, API, effective base URL,
+    and configured `request.allowPrivateNetwork` value; reuse the returned policy for
+    embedding requests and batch upload, status, and download requests.
+
+    If an endpoint documents an input-array limit, set the optional
+    `maxInputsPerRequest` field on the created provider instance. Use a positive
+    safe integer for the selected endpoint and model; omit it when unknown.
+    Memory caps inline embedding requests at that number before sending them,
+    alongside its existing byte budget. Undeclared or stale limits still use
+    reactive splitting when the endpoint reports a supported limit error.
+    Invalid declarations are ignored. Provider batch jobs keep their own limits.
+
+    The native OpenAI adapter declares [2048 inputs](https://developers.openai.com/api/reference/resources/embeddings/methods/create).
+    A plugin serving Zhipu [embedding-3](https://docs.bigmodel.cn/cn/guide/models/embedding/embedding-3)
+    can declare 64; do not apply that limit to other models without documentation.
+    Custom OpenAI-compatible endpoints stay undeclared. Bundled adapters using
+    `createRemoteEmbeddingProvider` can pass the same field to that factory.
+    This optional field preserves existing plugin contracts, index contents,
+    and embedding-cache identities.
+
+    `embed` and `embedBatch` accept an optional `onUsage` call option. A provider
+    that reports usage calls it once per successful upstream request, before
+    resolving, with `{ promptTokens, totalTokens }` or `undefined` when that
+    response has no valid counts. Callers can sum these reports and treat any
+    unavailable response as incomplete usage. The shared remote factory reports
+    OpenAI-style usage; vector return values and existing plugins stay unchanged.
+
     Providers that accept model aliases can expose
     `normalizeModel(options): string`. Memory uses this synchronous hook for
     both creation options and cold index identity checks. Keep it configuration-only:
-    do not authenticate or access the network. Make normalization idempotent and
+    do not authenticate or access the network. Make repeated normalization leave an already-normalized value unchanged, and
     reuse it in `create`, which may receive an already-normalized model or be
     called outside memory. Return an empty string only when the
     model remains unknown until discovery; do not turn an invalid explicit
@@ -74,6 +122,16 @@ the adapter retains responsibility for cancellation and terminal settlement.
 
   </Tab>
   <Tab title="Image and video generation">
+    OpenAI-compatible image adapters can use `createOpenAiCompatibleImageGenerationProvider`
+    from `openclaw/plugin-sdk/image-generation`. Adapters with custom request handling can
+    use `inlineOpenAiCompatibleImageUrls` before `parseOpenAiCompatibleImageResponse`.
+    The URL helper bounds downloads by `maxDownloads`, `maxBytes`, and the remaining
+    operation budget returned by `timeoutMs`. It trusts only `providerUrl`'s origin
+    automatically, checks every redirect, and never forwards provider HTTP credentials.
+    Pass only explicit operator permission as `allowPrivateNetwork`; an inferred local
+    endpoint allowance must not authorize other private hosts. TLS and hostname
+    overrides in `dispatcherPolicy` stay confined to the provider origin.
+
     Image and video capabilities use a **mode-aware** shape. Image
     providers declare required `generate` and `edit` capability blocks;
     video providers declare `generate`, `imageToVideo`, and
@@ -82,10 +140,16 @@ the adapter retains responsibility for cancellation and terminal settlement.
     transform-mode support or disabled modes cleanly. Music generation
     follows the same `generate` / `edit` pattern.
 
-    Bundled providers can use `selectSupportedVideoDuration` from the private
-    `openclaw/plugin-sdk/video-generation` subpath to select the nearest value
-    from a nonempty list, preferring the longer duration on ties. Keep input
-    validation, rounding, bounds, and default durations in the provider.
+    Bundled providers can use `normalizeVideoGenerationDuration({ durationSeconds })`
+    from the private `openclaw/plugin-sdk/video-generation` subpath to round an
+    optional duration and reject values outside 1–9007199254740991 seconds after
+    rounding. Omission returns `undefined`; provider defaults remain provider-owned.
+    Pass `supportedDurationSeconds` to the same helper to select the nearest allowed
+    value, preferring the longer duration on ties. This list overrides provider/model/mode
+    capabilities; omit it to use those capabilities, or pass an empty list to return
+    the rounded duration without selecting an allowed value. `selectSupportedVideoDuration`
+    provides selection alone for an already-normalized duration and a nonempty list.
+    Keep provider-specific bounds in the provider.
 
     ```typescript
     api.registerImageGenerationProvider({
@@ -234,6 +298,12 @@ the adapter retains responsibility for cancellation and terminal settlement.
     `hint`, `envVars`, `placeholder`, `signupUrl`, `credentialPath`,
     `getCredentialValue`, `setCredentialValue`, and `createTool` are all
     required.
+
+    Search tools limited to ten results can spread
+    `WEB_SEARCH_QUERY_COUNT_PROPERTIES` from
+    `openclaw/plugin-sdk/provider-web-search-contract` (or its config-only
+    companion) into their schema's `properties`. Providers retain their own
+    required fields, additional-property policy, and optional filters.
 
     Search providers can declare `configPath` as a path relative to their own
     plugin configuration for the Search settings page. It defaults to

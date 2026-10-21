@@ -1,16 +1,15 @@
 import type {
+  WorkerInferenceCancelParams,
   WorkerInferenceCancelResult,
   WorkerInferenceErrorReason,
   WorkerInferenceEventFrame,
-  WorkerInferenceEventParams,
   WorkerInferenceStartParams,
   WorkerInferenceStartResult,
   WorkerInferenceTerminalFrame,
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
-import type { OpenClawConfig } from "../../config/types.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerInferenceStore, WorkerInferenceTurnInput } from "./inference-store.js";
 
 type WorkerInferenceFenceReason = Extract<
@@ -22,16 +21,6 @@ export type WorkerInferenceSink = {
   connectionId: string;
   send(frame: WorkerInferenceEventFrame | WorkerInferenceTerminalFrame): void;
 };
-
-export type WorkerInferenceExecutor = (params: {
-  identity: WorkerConnectionIdentity;
-  request: WorkerInferenceStartParams;
-  signal: AbortSignal;
-  emit: (event: WorkerInferenceEventParams["event"]) => void;
-  isCurrent(): boolean;
-  sessionTarget: BoundAgentRunSessionTarget;
-  config?: OpenClawConfig;
-}) => Promise<WorkerInferenceTerminalOutcome>;
 
 export type RevalidateInference = () => WorkerInferenceFenceReason | null;
 
@@ -47,10 +36,7 @@ export type WorkerInferenceCancelApplicationResult =
   | { ok: true; result: WorkerInferenceCancelResult }
   | { ok: false; reason: WorkerInferenceErrorReason };
 
-export type InferenceTurnIdentity = Pick<
-  WorkerInferenceTurnInput,
-  "sessionId" | "runEpoch" | "runId" | "turnId"
->;
+export type InferenceTurnIdentity = WorkerInferenceCancelParams;
 
 export type ActiveInference = {
   claimKey: string;
@@ -58,7 +44,6 @@ export type ActiveInference = {
   identity: WorkerConnectionIdentity;
   request: WorkerInferenceStartParams;
   sessionTarget: BoundAgentRunSessionTarget;
-  requestHash: string;
   storeInput: WorkerInferenceTurnInput;
   sink: WorkerInferenceSink;
   sinkReady: boolean;
@@ -84,7 +69,6 @@ export type ActiveInference = {
 export type WorkerInferenceManagerOptions = {
   execute: WorkerInferenceExecutor;
   store?: WorkerInferenceStore;
-  getConfig?: () => OpenClawConfig;
   requestMaxBytes?: number;
   streamMaxBytes?: number;
 };

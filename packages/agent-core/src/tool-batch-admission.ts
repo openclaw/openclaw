@@ -63,7 +63,7 @@ export function createRejectedToolCallLauncher(
         continue;
       }
       try {
-        lifecycle?.commitReadyCalls([
+        lifecycle?.commitReadyCalls?.([
           { toolCallId: entry.toolCall.id, args: entry.toolCall.arguments },
         ]);
       } catch (error) {

@@ -88,10 +88,15 @@ export function createRequesterSettleReceiptAdmission(params: {
     },
   };
   return Object.assign(admission, {
-    isRequesterCurrent: () =>
-      evaluateGatewayToolCallerReceiptAdmission(admission, () =>
-        isEntryCurrent(params.readCurrent()),
-      ),
+    isRequesterCurrent: () => {
+      try {
+        return evaluateGatewayToolCallerReceiptAdmission(admission, () =>
+          isEntryCurrent(params.readCurrent()),
+        );
+      } catch {
+        return false;
+      }
+    },
     isStoreCurrent: () =>
       evaluateGatewayToolCallerReceiptAdmission(admission, () => params.isStoreCurrent()),
   });

@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAgentToolAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
 import { listConnectedNodePluginTools } from "../gateway/node-plugin-tool-snapshot.js";
 import {
   NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS,
@@ -93,11 +94,10 @@ export function createNodePluginTools(params: {
       continue;
     }
     const pluginId = normalizeToolPolicyName(descriptor.pluginId);
-    const originalToolName = normalizeToolPolicyName(descriptor.name);
     const exposedToolName = normalizeToolPolicyName(toolName);
     if (
       matchesAnyGlobPattern(pluginId, denylist) ||
-      matchesAnyGlobPattern(originalToolName, denylist) ||
+      matchesAnyGlobPattern(entry.normalizedName, denylist) ||
       matchesAnyGlobPattern(exposedToolName, denylist) ||
       matchesAnyGlobPattern("group:plugins", denylist)
     ) {
@@ -110,13 +110,13 @@ export function createNodePluginTools(params: {
       !allowlist.includesDefaults &&
       !(
         (pluginIdTrusted && allowlist.allowsPlugin(pluginId)) ||
-        allowlist.allowsToolName(originalToolName) ||
+        allowlist.allowsToolName(entry.normalizedName) ||
         allowlist.allowsToolName(exposedToolName)
       )
     ) {
       continue;
     }
-    existingNormalized.add(normalizeToolPolicyName(toolName));
+    existingNormalized.add(exposedToolName);
     const mcpTool = descriptor.command === NODE_MCP_TOOLS_CALL_COMMAND ? descriptor.mcp : undefined;
     const tool: AnyAgentTool = {
       name: toolName,
@@ -127,6 +127,7 @@ export function createNodePluginTools(params: {
         ? { executionMode: "sequential" as const, resultContentSource: "network" as const }
         : {}),
       execute: async (toolCallId, toolParams, signal) => {
+        const assistantTurnId = getAgentToolAssistantTurnId();
         const raw = await callGatewayTool(
           "node.invoke",
           {
@@ -145,7 +146,7 @@ export function createNodePluginTools(params: {
                 }
               : toolParams,
             timeoutMs: mcpTool ? NODE_MCP_TOOL_CALL_TIMEOUT_MS : NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
-            idempotencyKey: toolCallId,
+            idempotencyKey: assistantTurnId ? `${assistantTurnId}:${toolCallId}` : toolCallId,
             ...(params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
           },
           { scopes: ["operator.write"], ...(signal ? { signal } : {}) },

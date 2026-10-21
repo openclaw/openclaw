@@ -8,7 +8,7 @@ import { readTranscriptDisplayPosition } from "../../chat/transcript-display-pos
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
-import type { InFlightRunSnapshot } from "../chat-abort.js";
+import type { InFlightRunSnapshot } from "../chat-inflight-snapshot.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
@@ -22,24 +22,27 @@ export function createChatHistoryActivityProjection(
   activity: readonly AgentHistoryActivity[] = [],
 ) {
   const byId = new Map(activity.map((entry) => [entry.messageId, entry]));
-  return new Map(
-    messages.flatMap((message) => {
-      const messageId = readChatHistoryMessageId(message);
-      const entry = messageId ? byId.get(messageId) : undefined;
-      const record = asOptionalRecord(message);
-      const toolBearing =
-        record &&
-        (isToolResultContentType(record.role) ||
-          record.role === "tool" ||
-          record.role === "function" ||
-          (Array.isArray(record.content) &&
-            record.content.some((block) => {
-              const type = asOptionalRecord(block)?.type;
-              return isToolCallContentType(type) || isToolResultContentType(type);
-            })));
-      return entry && toolBearing ? [[message, entry] as const] : [];
-    }),
-  );
+  const projected = new Map<unknown, AgentHistoryActivity>();
+  for (const message of messages) {
+    const messageId = readChatHistoryMessageId(message);
+    const entry = messageId ? byId.get(messageId) : undefined;
+    const record = asOptionalRecord(message);
+    if (
+      entry &&
+      record &&
+      (isToolResultContentType(record.role) ||
+        record.role === "tool" ||
+        record.role === "function" ||
+        (Array.isArray(record.content) &&
+          record.content.some((block) => {
+            const type = asOptionalRecord(block)?.type;
+            return isToolCallContentType(type) || isToolResultContentType(type);
+          })))
+    ) {
+      projected.set(message, entry);
+    }
+  }
+  return projected;
 }
 
 export function createChatHistoryByteCounter(
@@ -100,7 +103,7 @@ function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
   };
 }
 
-function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
+export function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
   const entry = asOptionalRecord(message) ?? {};
   const role = typeof entry.role === "string" ? entry.role : "assistant";
   const timestamp = typeof entry.timestamp === "number" ? entry.timestamp : Date.now();

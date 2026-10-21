@@ -2,7 +2,7 @@ import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coer
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
+import { readResolvedSessionEntryInWorker } from "../../config/sessions/session-accessor.entry.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
@@ -36,8 +36,9 @@ export const attachHandlers: GatewayRequestHandlers = {
     const sessionKey = parseAgentSessionKey(storageSessionKey)
       ? storageSessionKey
       : `agent:${agentId}:${storageSessionKey}`;
+    await ensureMcpLoopbackServer();
     const harnessEntry = isAgentHarnessSessionKey(storageSessionKey)
-      ? resolveSessionEntryAccessTarget({ cfg, sessionKey: storageSessionKey }).entry
+      ? await readResolvedSessionEntryInWorker({ cfg, sessionKey: storageSessionKey })
       : undefined;
     if (
       isAgentHarnessSessionKey(storageSessionKey) &&
@@ -50,7 +51,6 @@ export const attachHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await ensureMcpLoopbackServer();
     const runtime = getActiveMcpLoopbackRuntime();
     if (!runtime) {
       respond(

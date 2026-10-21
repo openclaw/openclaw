@@ -2,8 +2,7 @@ import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -12,7 +11,8 @@ import {
   postJsonRequest,
   readProviderJsonObjectResponse,
   resolveProviderOperationTimeoutMs,
-  resolveProviderHttpRequestConfig,
+  resolveProviderApiKeyHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   isRecord,
@@ -20,12 +20,13 @@ import {
   normalizeOptionalString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  GeneratedVideoAsset,
-  VideoGenerationProvider,
-  VideoGenerationRequest,
-  VideoGenerationResult,
-  VideoGenerationSourceAsset,
+import {
+  normalizeVideoGenerationDuration,
+  type GeneratedVideoAsset,
+  type VideoGenerationProvider,
+  type VideoGenerationRequest,
+  type VideoGenerationResult,
+  type VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
 
 const DEFAULT_RUNWAY_BASE_URL = "https://api.dev.runwayml.com";
@@ -39,7 +40,6 @@ const MAX_DURATION_SECONDS = 10;
 type RunwayTaskStatus = "PENDING" | "RUNNING" | "THROTTLED" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
 type RunwayTaskDetailResponse = {
-  id?: unknown;
   status?: unknown;
   output?: unknown;
   failure?: unknown;
@@ -117,10 +117,11 @@ function resolveSourceUri(
 }
 
 function resolveDurationSeconds(value: number | undefined): number {
-  if (value === undefined || !Number.isSafeInteger(value)) {
+  const duration = normalizeVideoGenerationDuration({ durationSeconds: value });
+  if (duration === undefined || !Number.isSafeInteger(value)) {
     return 5;
   }
-  return Math.max(2, Math.min(MAX_DURATION_SECONDS, value));
+  return Math.max(2, Math.min(MAX_DURATION_SECONDS, duration));
 }
 
 const RUNWAY_RATIO_SIZES = new Map([
@@ -133,12 +134,13 @@ const RUNWAY_RATIO_SIZES = new Map([
 ]);
 
 function resolveRunwayRatio(req: VideoGenerationRequest): string {
-  const hasImageInput = (req.inputImages?.length ?? 0) > 0;
+  const hasReferenceInput =
+    (req.inputImages?.length ?? 0) > 0 || (req.inputVideos?.length ?? 0) > 0;
   const requested =
     normalizeOptionalString(req.size) ||
     RUNWAY_RATIO_SIZES.get(normalizeOptionalString(req.aspectRatio) ?? "");
   if (requested) {
-    if (!hasImageInput && requested !== "1280:720" && requested !== "720:1280") {
+    if (!hasReferenceInput && requested !== "1280:720" && requested !== "720:1280") {
       throw new Error("Runway text-to-video currently supports only 16:9 or 9:16 output ratios.");
     }
     return requested;
@@ -218,7 +220,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
     label: "Runway",
     defaultModel: DEFAULT_RUNWAY_MODEL,
     models: ["gen4.5", "gen4_turbo", "gen4_aleph", "gen3a_turbo", "veo3.1", "veo3.1_fast", "veo3"],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "runway", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "runway", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,
@@ -243,38 +245,28 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
       },
     },
     async generateVideo(req): Promise<VideoGenerationResult> {
-      const auth = await resolveApiKeyForProvider({
-        provider: "runway",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("Runway API key missing");
-      }
-
       const fetchFn = fetch;
-      const deadline = createProviderOperationDeadline({
-        timeoutMs: req.timeoutMs,
-        label: "Runway video generation",
-      });
       const endpoint = resolveEndpoint(req);
       const requestBody = buildCreateBody(req, endpoint);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl:
-            normalizeOptionalString(req.cfg?.models?.providers?.runway?.baseUrl) ??
-            DEFAULT_RUNWAY_BASE_URL,
+        await resolveProviderApiKeyHttpRequestConfig({
+          req,
+          missingApiKeyMessage: "Runway API key missing",
+          baseUrl: req.cfg?.models?.providers?.runway?.baseUrl,
           defaultBaseUrl: DEFAULT_RUNWAY_BASE_URL,
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.runway?.request,
+          ),
           defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
             "X-Runway-Version": RUNWAY_API_VERSION,
           },
           provider: "runway",
           capability: "video",
-          transport: "http",
         });
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "Runway video generation",
+      });
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}${endpoint}`,
         headers,
@@ -309,6 +301,8 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
               : { ...deadline, label: `Runway video generation task ${taskId}` },
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           fetchFn,
+          ssrfPolicy: { allowPrivateNetwork },
+          dispatcherPolicy,
           maxAttempts: MAX_POLL_ATTEMPTS,
           pollIntervalMs: POLL_INTERVAL_MS,
           requestFailedMessage: "Runway video status request failed",

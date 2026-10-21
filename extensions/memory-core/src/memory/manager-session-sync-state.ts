@@ -1,10 +1,13 @@
+import type {
+  SessionFileEntry,
+  SessionFileState,
+  SessionTranscriptCorpusEntry,
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,
-  type SessionFileEntry,
-  type SessionFileState,
-  type SessionTranscriptCorpusEntry,
-} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+} from "openclaw/plugin-sdk/session-key-runtime";
+import { isActiveMemoryRecallSession } from "../active-memory-recall-session.js";
 import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 
 export type MemorySessionStartupFileState = SessionFileState;
@@ -14,12 +17,19 @@ export function isMemorySessionIndexable(
     SessionTranscriptCorpusEntry,
     "generatedByDreamingNarrative" | "generatedByCronRun" | "sessionKind"
   > &
+    Partial<Pick<SessionTranscriptCorpusEntry, "sessionId" | "sessionKey" | "pluginOwnerId">> &
     Partial<Pick<SessionFileEntry, "lineProvenance">>,
   archivedSessionKey?: string,
 ): boolean {
   return !(
     entry.generatedByDreamingNarrative ||
     entry.generatedByCronRun ||
+    // Like cron and heartbeat runs: the recall sub-agent's prompt, not a conversation.
+    isActiveMemoryRecallSession({
+      sessionId: entry.sessionId,
+      pluginOwnerId: entry.pluginOwnerId,
+      sessionKey: entry.sessionKey ?? archivedSessionKey,
+    }) ||
     entry.sessionKind === "cron" ||
     entry.sessionKind === "heartbeat" ||
     (archivedSessionKey !== undefined &&
@@ -72,12 +82,7 @@ export function resolveMemorySessionSyncPlan(params: {
   targetSessionFiles: Set<string> | null;
   existingRows?: MemorySourceFileStateRow[] | null;
   sessionPathForFile: (file: string) => string;
-}): {
-  activePaths: Set<string> | null;
-  existingRows: MemorySourceFileStateRow[] | null;
-  existingHashes: Map<string, string> | null;
-  indexAll: boolean;
-} {
+}) {
   const activePaths = params.targetSessionFiles
     ? null
     : new Set(params.files.map((file) => params.sessionPathForFile(file)));
@@ -85,7 +90,6 @@ export function resolveMemorySessionSyncPlan(params: {
   return {
     activePaths,
     existingRows,
-    existingHashes: existingRows ? new Map(existingRows.map((row) => [row.path, row.hash])) : null,
     indexAll: params.needsFullReindex || Boolean(params.targetSessionFiles),
   };
 }

@@ -1,26 +1,26 @@
-// Gateway chat integration tests cover dashboard chat requests, transcript
-// history limits, model overrides, inbound dispatch, and streaming event fanout.
-
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+// Gateway chat integration tests cover dashboard chat requests, transcript
+// history limits, model overrides, inbound dispatch, and streaming event fanout.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { bindActiveOperatorTurnAuthority } from "../agents/cron-creator-authority-context.js";
 import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/run-state.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+  attachActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
+import { createModelCatalogDecisions } from "../agents/model-catalog-decisions.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
+import { admitFollowupRunLifecycle } from "../auto-reply/reply/queue/lifecycle.js";
 import {
   getRuntimeConfig,
   resetConfigRuntimeState,
@@ -52,12 +52,13 @@ import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { getMediaDir } from "../media/store.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import {
-  getSessionWorkAdmissionRelease,
-  isSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../sessions/session-lifecycle-admission.js";
-import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+  captureSessionControllerSettlement,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
+import { isRpcSourceQueued } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -71,11 +72,18 @@ import { readWarmChatStartup } from "./server-chat-startup.test-support.js";
 import {
   createChatVisionModelCatalogSnapshot,
   createDirectChatContext,
+  createOversizedReplayTranscriptEvent,
   createTextTranscriptEvent,
   registerChatConnectionIdentityTest,
 } from "./server-chat.agent-events.test-helpers.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import { createGatewayChatMetadataRuntime } from "./server-methods/chat-metadata-runtime.js";
+import {
+  createQueuedFollowupFixtureForTest,
+  requestQueuedFollowupCancellationForTest,
+  settleQueuedFollowupRunForTest,
+} from "./server-methods/queued-followup-fixtures.test-support.js";
+import { registerActiveRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import {
   disposeSessionReadContexts,
   initializeSessionReadContext,
@@ -86,6 +94,12 @@ import type {
   RespondFn,
 } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import { registerChatAbortAdmissionRetryTests } from "./server.chat-abort-admission.test-support.js";
+import {
+  callDirectChatHandler,
+  callDirectChat,
+} from "./server.chat-direct-handler.test-support.js";
+import { CHAT_DOT_PNG_BASE64, INLINE_DOT_PNG_IMAGE } from "./server.chat-image.test-support.js";
 import {
   captureChatResponse,
   captureChatResult,
@@ -93,10 +107,16 @@ import {
 } from "./server.chat-response.test-support.js";
 import {
   createDirectChatSessionStoreFixture,
+  futureFixtureUpdatedAt,
+  prepareMainHistoryHarness,
+  writeMainSessionStore,
+  writeStoredMainSession,
   writeMainChatSessionTranscript as writeMainSessionTranscript,
   type ChatSessionDirectoryOptions,
+  type StoredChatSessionEntry as StoredSessionEntry,
 } from "./server.chat-session-store.test-support.js";
 import type { GatewaySessionsDefaults } from "./session-utils.types.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -129,6 +149,8 @@ vi.mock(
       >();
     return {
       ...actual,
+      // Keep background recovery out of this shared-store chat fixture.
+      scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease: vi.fn(),
       retryRestartAbortedMainSessionRecovery:
         restartRecoveryMocks.retryRestartAbortedMainSessionRecovery,
     };
@@ -212,16 +234,14 @@ function testSessionFilePath(sessionDir: string, sessionId: string): string {
   return path.join(sessionDir, `${sessionId}.jsonl`);
 }
 
-async function writeMainSessionStore(sessionId = "sess-main") {
-  await writeStoredMainSession({
-    sessionId,
-    updatedAt: futureFixtureUpdatedAt(),
-  });
-}
-
-function futureFixtureUpdatedAt(): number {
-  return Date.now() + 60_000;
-}
+type HistoryPage = {
+  messages?: Array<{
+    __openclaw?: { id?: string; seq?: number; truncated?: boolean; reason?: string };
+  }>;
+  nextOffset?: number;
+  hasMore?: boolean;
+  totalMessages?: number;
+};
 
 function readOpenClawSeq(message: unknown): number | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
@@ -243,12 +263,14 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
   resetConfigRuntimeState();
+  setRuntimeConfigSnapshot(loadGatewayTestConfig());
 }
 
 async function withDirectChatSession(
   run: (sessionDir: string, storePath: string) => Promise<void>,
 ) {
-  const { sessionDir, storePath } = openDirectChatSession();
+  // Deferred recovery must not adopt a later case that reuses this synthetic session ID.
+  const { sessionDir, storePath } = openDirectChatSession({ fresh: true });
   try {
     await run(sessionDir, storePath);
   } finally {
@@ -256,10 +278,8 @@ async function withDirectChatSession(
   }
 }
 
-type StoredSessionEntry = Parameters<typeof writeSessionStore>[0]["entries"][string];
-
 function getDirectChatSessionWorkRelease(sessionKey = "agent:main:main") {
-  return getSessionWorkAdmissionRelease({
+  return captureSessionControllerSettlement({
     scope: resolveSessionStorePathForScope({ sessionKey }, getRuntimeConfig()),
     identities: [sessionKey],
   });
@@ -270,51 +290,6 @@ async function resetDirectChatSession() {
   await sessionStoreFixture.reset();
   dispatchInboundMessageMock.mockReset();
   resetConfigRuntimeState();
-}
-
-async function writeStoredMainSession(entry: StoredSessionEntry = {}) {
-  await writeSessionStore({
-    entries: {
-      main: {
-        sessionId: "sess-main",
-        updatedAt: Date.now(),
-        ...entry,
-      },
-    },
-  });
-}
-
-type DirectChatMethod = "chat.abort" | "chat.history" | "chat.send" | "chat.startup";
-
-async function callDirectChatHandler(
-  method: DirectChatMethod,
-  options: GatewayRequestHandlerOptions,
-) {
-  const { coreGatewayHandlers } = await import("./server-methods.js");
-  if (method === "chat.history" || method === "chat.startup") {
-    await initializeSessionReadContext(options.context);
-  }
-  await expectDefined(coreGatewayHandlers[method], `${method} test invariant`)(options);
-}
-
-type DirectChatCallOptions = Omit<
-  GatewayRequestHandlerOptions,
-  "client" | "isWebchatConnect" | "req"
-> & {
-  id: string;
-  client?: GatewayRequestHandlerOptions["client"];
-  isWebchatConnect?: GatewayRequestHandlerOptions["isWebchatConnect"];
-  req?: GatewayRequestHandlerOptions["req"];
-};
-
-async function callDirectChat(method: DirectChatMethod, options: DirectChatCallOptions) {
-  const { client, id, isWebchatConnect, req, ...handlerOptions } = options;
-  await callDirectChatHandler(method, {
-    ...handlerOptions,
-    req: req ?? { type: "req", id, method, params: options.params },
-    client: client ?? null,
-    isWebchatConnect: isWebchatConnect ?? (() => false),
-  });
 }
 
 function createControlUiClient(
@@ -552,18 +527,6 @@ const configuredImageModelCases: ConfiguredImageModelCase[] = [
   },
 ];
 
-async function prepareMainHistoryHarness(params: {
-  ws: GatewaySocket;
-  createSessionDir: (options?: ChatSessionDirectoryOptions) => Promise<string>;
-  freshStore?: boolean;
-  sessionId?: string;
-}) {
-  await connectOk(params.ws);
-  const sessionDir = await params.createSessionDir({ fresh: params.freshStore });
-  await writeMainSessionStore(params.sessionId);
-  return sessionDir;
-}
-
 async function prepareUnconfiguredAcpHarnessSession(options?: { withMetadata?: boolean }) {
   openDirectChatSession({ fresh: true });
   const sessionKey = `agent:codex:acp:${randomUUID()}`;
@@ -682,51 +645,47 @@ describe("gateway server chat", () => {
     "%s projects the session's durable worker placement",
     async (method) => {
       openDirectChatSession();
-      try {
-        await writeMainSessionStore();
-        const placement = {
-          sessionId: "sess-main",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          executionMode: "worker-turn",
-          state: "active",
-          environmentId: "env-placement",
-          generation: 7,
-          activeOwnerEpoch: 12,
-          workspaceBaseManifestRef: "manifest-base",
-          remoteWorkspaceDir: "/workspace/main",
-          workerBundleHash: "ab".repeat(32),
-          recoveryError: null,
-          terminalReason: null,
-          terminalAtMs: null,
-          turnClaim: null,
-          createdAtMs: 100,
-          updatedAtMs: 300,
-          stateChangedAtMs: 200,
-        };
-        const context = createDirectChatContext({
-          workerSessionPlacementService: {
-            getMany: () => new Map([[placement.sessionId, placement]]),
-          },
-        } as unknown as Partial<GatewayRequestContext>);
-        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-        await callDirectChat(method, {
-          id: method,
-          params: makeMainSessionParams(),
-          respond: captureChatResult(responses),
-          context,
-        });
+      await writeMainSessionStore();
+      const placement = {
+        sessionId: "sess-main",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        executionMode: "worker-turn",
+        state: "active",
+        environmentId: "env-placement",
+        generation: 7,
+        activeOwnerEpoch: 12,
+        workspaceBaseManifestRef: "manifest-base",
+        remoteWorkspaceDir: "/workspace/main",
+        workerBundleHash: "ab".repeat(32),
+        recoveryError: null,
+        terminalReason: null,
+        terminalAtMs: null,
+        turnClaim: null,
+        createdAtMs: 100,
+        updatedAtMs: 300,
+        stateChangedAtMs: 200,
+      };
+      const context = createDirectChatContext({
+        workerSessionPlacementService: {
+          getMany: () => new Map([[placement.sessionId, placement]]),
+        },
+      } as unknown as Partial<GatewayRequestContext>);
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      await callDirectChat(method, {
+        id: method,
+        params: makeMainSessionParams(),
+        respond: captureChatResult(responses),
+        context,
+      });
 
-        expect(responses[0]?.ok).toBe(true);
-        // Clients merge this row into the same store sessions.list fills, so a
-        // missing placement here silently erases a live worker placement.
-        expect(
-          (responses[0]?.payload as { sessionInfo?: { placement?: { state?: string } } })
-            ?.sessionInfo?.placement,
-        ).toMatchObject({ state: "active", environmentId: "env-placement" });
-      } finally {
-        testState.sessionStorePath = undefined;
-      }
+      expect(responses[0]?.ok).toBe(true);
+      // Clients merge this row into the same store sessions.list fills, so a
+      // missing placement here silently erases a live worker placement.
+      expect(
+        (responses[0]?.payload as { sessionInfo?: { placement?: { state?: string } } })?.sessionInfo
+          ?.placement,
+      ).toMatchObject({ state: "active", environmentId: "env-placement" });
     },
   );
 
@@ -738,7 +697,7 @@ describe("gateway server chat", () => {
         createSessionEventSubscriberRegistry,
         createSessionMessageSubscriberRegistry,
       } = await import("./server-chat.js");
-      openDirectChatSession();
+      const { storePath } = openDirectChatSession();
       await writeMainSessionStore();
       const context = createDirectChatContext();
       const handler = createAgentEventHandler({
@@ -763,16 +722,33 @@ describe("gateway server chat", () => {
         isStreaming: () => true,
         queueMessage: async () => undefined,
       };
-      setActiveEmbeddedRun("sess-main", handle, "main");
+      const source = await registerActiveRpcSourceForTest(
+        "run-queued-client",
+        { controlUiVisible: false },
+        {
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          storeScope: storePath,
+        },
+      );
+      attachActiveEmbeddedRun(
+        "sess-main",
+        handle,
+        "agent:main:main",
+        undefined,
+        "main",
+        expectDefined(source.input.claim?.operation, "expected embedded turn owner"),
+      );
       try {
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 1,
           stream: "item",
           ts: 1_001,
           data: { kind: "preamble", itemId: "preamble-1", progressText: "Checking files" },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 2,
           stream: "tool",
@@ -784,7 +760,7 @@ describe("gateway server chat", () => {
             args: { command: "SECRET_COMMAND" },
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 3,
           stream: "tool",
@@ -796,7 +772,7 @@ describe("gateway server chat", () => {
             diff: "SECRET_DIFF",
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 4,
           stream: "tool",
@@ -808,7 +784,7 @@ describe("gateway server chat", () => {
             partialResult: "SECRET_PARTIAL",
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 5,
           stream: "tool",
@@ -820,7 +796,7 @@ describe("gateway server chat", () => {
             review: { id: "review-1", text: "SECRET_REVIEW" },
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 6,
           stream: "tool",
@@ -832,7 +808,7 @@ describe("gateway server chat", () => {
             result: "SECRET_RESULT",
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 7,
           stream: "plan",
@@ -908,9 +884,67 @@ describe("gateway server chat", () => {
           plan: { steps: [{ step: "Inspect", status: "in_progress" }] },
         });
         expect(JSON.stringify(inFlightRun)).not.toContain("SECRET");
+
+        // A queued chat source keeps its accepted identity when the runtime gets
+        // a new ID. History must use the same ID and buffer as live delivery.
+        context.chatRunState.registry.add("run-embedded", {
+          sessionKey: "main",
+          clientRunId: "run-queued-client",
+        });
+        await handler({
+          runId: "run-embedded",
+          seq: 8,
+          stream: "assistant",
+          ts: 1_008,
+          data: { text: "Queued reply", delta: "Queued reply" },
+        });
+        const queuedResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+        await callDirectChat(method, {
+          id: "queued-history",
+          params: makeMainSessionParams(),
+          respond: captureChatResult(queuedResponses),
+          context,
+        });
+        expect(queuedResponses).toEqual([
+          expect.objectContaining({
+            ok: true,
+            payload: expect.objectContaining({
+              inFlightRun: expect.objectContaining({
+                runId: "run-queued-client",
+                text: "Queued reply",
+                sessionAbortable: true,
+              }),
+            }),
+          }),
+        ]);
+        for (const registration of [
+          { sessionKey: "agent:main:other", agentId: "main" },
+          { sessionKey: "main", agentId: "other" },
+        ]) {
+          context.chatRunState.registry.remove("run-embedded", "run-queued-client");
+          context.chatRunState.registry.add("run-embedded", {
+            ...registration,
+            clientRunId: "run-queued-client",
+          });
+          const otherSourceResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+          await callDirectChat(method, {
+            id: `other-source-history-${registration.agentId}`,
+            params: makeMainSessionParams(),
+            respond: captureChatResult(otherSourceResponses),
+            context,
+          });
+          expect(otherSourceResponses).toEqual([
+            expect.objectContaining({
+              ok: true,
+              payload: expect.objectContaining({
+                inFlightRun: expect.objectContaining({ runId: "run-embedded", text: "" }),
+              }),
+            }),
+          ]);
+        }
       } finally {
-        clearActiveEmbeddedRun("sess-main", handle, "main");
-        testState.sessionStorePath = undefined;
+        detachActiveEmbeddedRun("sess-main", handle, "agent:main:main");
+        source.release();
       }
     },
   );
@@ -919,6 +953,7 @@ describe("gateway server chat", () => {
     "%s adopts the in-flight run for a non-default agent alias key",
     async (method) => {
       const { sessionDir } = openDirectChatSession({ fresh: true });
+      let source: Awaited<ReturnType<typeof registerActiveRpcSourceForTest>> | undefined;
       try {
         // Per-agent stores: bare keys then carry no persisted fixed-store
         // owner, so an explicit non-default agentId is a valid pairing.
@@ -948,19 +983,19 @@ describe("gateway server chat", () => {
         const context = createDirectChatContext({
           getRuntimeConfig: () => writerConfig,
         });
-        const controller = new AbortController();
         // chat.send registers the agent-scoped canonical key; the handler's
         // in-flight adoption must resolve the same scoped key for the bare
         // alias request or the streaming run renders idle on switch-back.
-        context.chatAbortControllers.set("run-writer", {
-          controller,
-          sessionId: "sess-writer",
-          sessionKey: "agent:writer:notes",
-          agentId: "writer",
-          startedAtMs: 1_000,
-          expiresAtMs: Date.now() + 60_000,
-          projectSessionActive: true,
-        });
+        source = await registerActiveRpcSourceForTest(
+          "run-writer",
+          { projectSessionActive: true },
+          {
+            sessionId: "sess-writer",
+            sessionKey: "agent:writer:notes",
+            agentId: "writer",
+            storeScope: path.join(sessionDir, "sessions-writer.json"),
+          },
+        );
         context.chatRunState.getOrCreate("run-writer").buffer = "writer partial";
         const responses: CapturedChatResponse[] = [];
         await callDirectChat(method, {
@@ -976,6 +1011,7 @@ describe("gateway server chat", () => {
           (responses[0]?.payload as { inFlightRun?: unknown } | undefined)?.inFlightRun,
         ).toMatchObject({ runId: "run-writer", text: "writer partial" });
       } finally {
+        source?.release();
         testState.sessionConfig = undefined;
         testState.sessionStorePath = undefined;
       }
@@ -990,7 +1026,7 @@ describe("gateway server chat", () => {
         createSessionEventSubscriberRegistry,
         createSessionMessageSubscriberRegistry,
       } = await import("./server-chat.js");
-      openDirectChatSession();
+      const { storePath } = openDirectChatSession();
       const context = createDirectChatContext();
       const handler = createAgentEventHandler({
         broadcast: context.broadcast,
@@ -1005,38 +1041,39 @@ describe("gateway server chat", () => {
         sessionEventSubscribers: createSessionEventSubscriberRegistry(),
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
       });
+      let activeSource: Awaited<ReturnType<typeof registerActiveRpcSourceForTest>> | undefined;
       try {
         await writeMainSessionStore();
-        const controller = new AbortController();
-        context.chatAbortControllers.set("run-active", {
-          controller,
-          sessionId: "sess-main",
-          sessionKey: "main",
-          startedAtMs: 1_000,
-          expiresAtMs: 10_000,
-          projectSessionActive: true,
-        });
+        activeSource = await registerActiveRpcSourceForTest(
+          "run-active",
+          { projectSessionActive: true },
+          { sessionId: "sess-main", sessionKey: "main", storeScope: storePath },
+        );
+        const startedAt = expectDefined(
+          activeSource.input.claim?.operation,
+          "expected active turn owner",
+        ).startedAtMs;
         context.chatRunState.registry.add("provider-run", {
           sessionKey: "main",
           clientRunId: "run-active",
         });
         const toolArgs = { path: "a" };
 
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 1,
           stream: "item",
           ts: 1_001,
           data: { kind: "preamble", itemId: "preamble-1", progressText: "Checking files" },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 2,
           stream: "tool",
           ts: 1_002,
           data: { phase: "start", name: "read", toolCallId: "tool-active", args: toolArgs },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 3,
           stream: "tool",
@@ -1048,14 +1085,14 @@ describe("gateway server chat", () => {
             partialResult: "halfway",
           },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 4,
           stream: "tool",
           ts: 1_004,
           data: { phase: "start", name: "exec", toolCallId: "tool-finished", args: {} },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 5,
           stream: "tool",
@@ -1069,14 +1106,14 @@ describe("gateway server chat", () => {
         });
         // A delayed result older than the latest accepted progress event must
         // not remove the active tool from the reconnect projection.
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 3,
           stream: "tool",
           ts: 1_006,
           data: { phase: "result", name: "read", toolCallId: "tool-active", result: "stale" },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 6,
           stream: "item",
@@ -1104,7 +1141,7 @@ describe("gateway server chat", () => {
         ).toEqual({
           runId: "run-active",
           text: "",
-          startedAt: 1_000,
+          startedAt,
           events: [
             {
               runId: "run-active",
@@ -1184,8 +1221,8 @@ describe("gateway server chat", () => {
           ],
         });
       } finally {
-        handler.dispose();
-        testState.sessionStorePath = undefined;
+        activeSource?.release();
+        await handler.dispose();
       }
     },
   );
@@ -1215,7 +1252,7 @@ describe("gateway server chat", () => {
           },
         },
       });
-      recordAgentProvenance(
+      await recordAgentProvenance(
         "research",
         { createdVia: "agent", creatorAgentId: "main" },
         { nowMs: 42 },
@@ -1261,14 +1298,10 @@ describe("gateway server chat", () => {
         key: "agent:main:main",
         sessionId: "sess-main",
       });
-      expect(startup.payload?.metadata?.models).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "gpt-main",
-            provider: "openai",
-          }),
-        ]),
-      );
+      expect(startup.payload?.metadata).not.toHaveProperty("models");
+      expect(startup.payload?.metadata).not.toHaveProperty("accountSelection");
+      expect(startup.payload?.metadata).not.toHaveProperty("runtimeSelectionLocked");
+      expect(startup.payload?.metadata).not.toHaveProperty("revision");
       expect(startup.payload?.metadata?.commands).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -1381,7 +1414,6 @@ describe("gateway server chat", () => {
         }
       } finally {
         testState.agentConfig = undefined;
-        testState.sessionStorePath = undefined;
       }
     },
   );
@@ -1633,7 +1665,6 @@ describe("gateway server chat", () => {
       preparedThinkingPolicy.fallback = "off";
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
-      testState.sessionStorePath = undefined;
     }
   });
 
@@ -1727,9 +1758,9 @@ describe("gateway server chat", () => {
                   },
                 },
               });
-              const { loadGatewaySessionEntryReadOnly } = await import("./session-utils.js");
+              const { loadGatewaySessionEntryReadOnlyAsync } = await import("./session-utils.js");
               setRuntimeConfigSnapshot(initialConfig);
-              const loaded = loadGatewaySessionEntryReadOnly("agent:work:main");
+              const loaded = await loadGatewaySessionEntryReadOnlyAsync("agent:work:main");
               expect(loaded.cfg.agents?.defaults?.model).toEqual(config.agents.defaults.model);
               expect(loaded.cfg.agents?.entries).toEqual(config.agents.entries);
               expect(loaded.canonicalKey).toBe("agent:work:main");
@@ -1825,20 +1856,13 @@ describe("gateway server chat", () => {
                 return authStore;
               };
               const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-              const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
-                await import("./server-methods/models-list-result.js");
               const projectionByKey = new Map<
                 string,
                 Promise<{
                   modelCatalog: ModelCatalogEntry[];
-                  metadata: {
-                    models: import("../../packages/gateway-protocol/src/index.js").ModelChoice[];
-                    swarmEnabled: boolean;
-                  };
                 }>
               >();
               const projectAgent = (
-                context: GatewayRequestContext,
                 agentId: string,
                 sessionEntry?: Parameters<
                   GatewayRequestContext["readChatMetadata"]
@@ -1858,7 +1882,7 @@ describe("gateway server chat", () => {
                 if (existing) {
                   return existing;
                 }
-                const projector = createGatewayAgentModelCatalogProjector({
+                const projector = createModelCatalogDecisions({
                   cfg: initialConfig,
                   agentId,
                   snapshot: catalogSnapshot,
@@ -1869,24 +1893,9 @@ describe("gateway server chat", () => {
                     ? { pinnedProfileId: profileId }
                     : {}),
                 });
-                const projection = Promise.all([
-                  projector.projectCatalog(),
-                  buildModelsListResult({
-                    source: { kind: "gateway", context },
-                    agentId,
-                    params: { view: "configured" },
-                    preloadedCatalog: {
-                      agentId,
-                      config: initialConfig,
-                      snapshot: catalogSnapshot,
-                    },
-                    preloadedOnly: true,
-                    catalogProjector: projector,
-                  }),
-                ]).then(([modelCatalog, metadata]) => ({
-                  modelCatalog,
-                  metadata: { ...metadata, swarmEnabled: false },
-                }));
+                const projection = projector
+                  .projectCatalog()
+                  .then((modelCatalog) => ({ modelCatalog }));
                 projectionByKey.set(key, projection);
                 return projection;
               };
@@ -1905,8 +1914,8 @@ describe("gateway server chat", () => {
                 readPreparedGatewayModelCatalog: async () => catalogSnapshot,
                 readChatStartupProjection: vi.fn(async ({ agentId, sessionEntry }) => {
                   const [neutralProjection, sessionProjection] = await Promise.all([
-                    projectAgent(context, agentId),
-                    projectAgent(context, agentId, sessionEntry),
+                    projectAgent(agentId),
+                    projectAgent(agentId, sessionEntry),
                   ]);
                   preparedThinkingPolicy.fallback = sessionProjection.modelCatalog.some(
                     (entry) => entry.reasoning === true,
@@ -1914,13 +1923,13 @@ describe("gateway server chat", () => {
                     ? "base"
                     : "off";
                   return {
-                    metadata: sessionProjection.metadata,
+                    metadata: { swarmEnabled: false },
                     sessionModelCatalog: sessionProjection.modelCatalog,
                     defaultModelCatalog: neutralProjection.modelCatalog,
                   };
                 }),
               });
-              const expiredPreferenceEvaluation = await createGatewayAgentModelCatalogProjector({
+              const expiredPreferenceEvaluation = createModelCatalogDecisions({
                 cfg: initialConfig,
                 agentId: "work",
                 snapshot: catalogSnapshot,
@@ -1970,27 +1979,10 @@ describe("gateway server chat", () => {
               expect(responses[0]?.ok).toBe(true);
               const payload = responses[0]?.payload as
                 | {
-                    metadata?: { models?: unknown[] };
                     sessionInfo?: { thinkingLevels?: Array<{ id?: string }> };
                     defaults?: { thinkingLevels?: Array<{ id?: string }> };
                   }
                 | undefined;
-              expect(payload?.metadata?.models).toEqual([
-                expect.objectContaining({
-                  id: "gpt-5.5",
-                  name: "GPT-5.5",
-                  provider: "openai",
-                  agentRuntime: {
-                    id: "codex",
-                    cloudPlacementSupported: false,
-                    devicePlacementSupported: false,
-                    source: "implicit",
-                  },
-                  contextWindow: 400_000,
-                  reasoning: false,
-                  available: true,
-                }),
-              ]);
               expect(payload?.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual([
                 "off",
               ]);
@@ -2040,7 +2032,6 @@ describe("gateway server chat", () => {
                 expect(responses[0]?.ok).toBe(true);
                 const preferredPayload = responses[0]?.payload as
                   | {
-                      metadata?: { models?: Array<{ contextWindow?: number }> };
                       defaults?: GatewaySessionsDefaults;
                       sessionInfo?: {
                         agentRuntime?: unknown;
@@ -2051,9 +2042,6 @@ describe("gateway server chat", () => {
                       };
                     }
                   | undefined;
-                expect(preferredPayload?.metadata?.models?.[0]?.contextWindow, sessionKey).toBe(
-                  expectedRoute === "subscription" ? 400_000 : 1_000_000,
-                );
                 const thinkingLevels = preferredPayload?.sessionInfo?.thinkingLevels?.map(
                   (level) => level.id,
                 );
@@ -2188,7 +2176,7 @@ describe("gateway server chat", () => {
           swarmEnabled: false,
         };
         const readChatStartupProjection = vi.fn(async () => ({
-          metadata,
+          metadata: { swarmEnabled: false },
           sessionModelCatalog: metadata.models,
           defaultModelCatalog: metadata.models,
         }));
@@ -2243,7 +2231,7 @@ describe("gateway server chat", () => {
         const payload = responses[0]?.payload as
           | {
               metadata?: {
-                models?: Array<{ id?: string; provider?: string }>;
+                swarmEnabled?: boolean;
               };
               sessionInfo?: { key?: string; sessionId?: string };
               defaults?: { modelProvider?: string; model?: string };
@@ -2258,14 +2246,7 @@ describe("gateway server chat", () => {
           modelProvider: "minimax",
         });
         if (method === "chat.startup") {
-          expect(payload?.metadata?.models).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                id: "MiniMax-M2.7-highspeed",
-                provider: "minimax",
-              }),
-            ]),
-          );
+          expect(payload?.metadata).toEqual({ swarmEnabled: false });
         } else {
           expect(payload).not.toHaveProperty("metadata");
         }
@@ -2345,9 +2326,11 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.send returns in_flight when duplicate attachment send wins parsing race", async () => {
+  test("chat.send returns in_flight when duplicate attachment send wins parsing race", async ({
+    signal,
+  }) => {
     openDirectChatSession();
-    const dispatchRelease = createDeferred();
+    const [dispatchEntered, dispatchRelease] = [createDeferred(), createDeferred()];
     try {
       await writeStoredMainSession({
         modelProvider: "test-provider",
@@ -2355,9 +2338,7 @@ describe("gateway server chat", () => {
       });
 
       const firstCatalogSnapshot =
-        createDeferred<
-          Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>>
-        >();
+        createDeferred<ReturnType<typeof createChatVisionModelCatalogSnapshot>>();
       const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
       const context = createDirectChatContext({
         loadGatewayModelCatalogSnapshot: vi
@@ -2365,10 +2346,11 @@ describe("gateway server chat", () => {
           .mockImplementationOnce(() => firstCatalogSnapshot.promise)
           .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
       });
-      dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
+      dispatchInboundMessageMock.mockImplementation(async () => {
+        dispatchEntered.resolve();
+        await dispatchRelease.promise;
+      });
 
-      const pngB64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
       const params = makeChatSendParams({
         message: "see image",
         idempotencyKey: "idem-attachment-race",
@@ -2377,7 +2359,8 @@ describe("gateway server chat", () => {
             type: "image",
             mimeType: "image/png",
             fileName: "dot.png",
-            content: pngB64,
+            content:
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
           },
         ],
       });
@@ -2391,31 +2374,25 @@ describe("gateway server chat", () => {
           context,
         });
 
+      const duplicateResponse = {
+        id: "duplicate",
+        ok: true,
+        payload: { runId: "idem-attachment-race", status: "in_flight" },
+        error: undefined,
+      };
       const first = Promise.resolve(callSend("first"));
       await waitForFast(() => {
         expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
       }, FAST_WAIT_OPTS);
 
       await callSend("duplicate");
-      expect(responses).toEqual([
-        {
-          id: "duplicate",
-          ok: true,
-          payload: { runId: "idem-attachment-race", status: "in_flight" },
-          error: undefined,
-        },
-      ]);
+      expect(responses).toEqual([duplicateResponse]);
 
       firstCatalogSnapshot.resolve(createChatVisionModelCatalogSnapshot());
       await first;
 
       expect(responses).toEqual([
-        {
-          id: "duplicate",
-          ok: true,
-          payload: { runId: "idem-attachment-race", status: "in_flight" },
-          error: undefined,
-        },
+        duplicateResponse,
         {
           id: "first",
           ok: true,
@@ -2423,6 +2400,7 @@ describe("gateway server chat", () => {
           error: undefined,
         },
       ]);
+      await withinTest(dispatchEntered.promise, signal);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
       dispatchRelease.resolve();
@@ -2582,7 +2560,7 @@ describe("gateway server chat", () => {
     try {
       await writeStoredMainSession({});
       const mutationStarted = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation("patch", {
+      const mutation = runSessionMutation({
         scope: storePath,
         identities: ["sess-main"],
         run: async () => {
@@ -2627,7 +2605,7 @@ describe("gateway server chat", () => {
         expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
       }, FAST_WAIT_OPTS);
       expect(context.dedupe.get(collidingFinalKey)).toBe(collidingFinalEntry);
-      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(isRpcSourceQueued(rpcSourceTesting.get(runId))).toBe(true);
 
       const retryResponses: CapturedChatResponse[] = [];
       await callDirectChat("chat.send", {
@@ -2679,7 +2657,7 @@ describe("gateway server chat", () => {
       ]);
       expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
       expect(context.dedupe.get(collidingFinalKey)).toBe(collidingFinalEntry);
-      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(rpcSourceTesting.has(runId)).toBe(false);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
@@ -2693,7 +2671,7 @@ describe("gateway server chat", () => {
     try {
       await writeStoredMainSession({});
       const mutationStarted = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation("patch", {
+      const mutation = runSessionMutation({
         scope: storePath,
         identities: ["sess-main"],
         run: async () => {
@@ -2741,7 +2719,7 @@ describe("gateway server chat", () => {
         },
       ]);
       expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
-      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(rpcSourceTesting.has(runId)).toBe(false);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
@@ -2755,16 +2733,17 @@ describe("gateway server chat", () => {
     let mutation: Promise<void> | undefined;
     try {
       await writeStoredMainSession({});
-      const [{ deleteSessionEntryLifecycle }, { loadSessionEntry: loadGatewaySessionEntry }] =
+      const [{ deleteSessionEntryLifecycle }, { loadSessionEntryAsync: loadGatewaySessionEntry }] =
         await Promise.all([
           import("../config/sessions/session-accessor.js"),
-          import("./session-utils.js"),
+          import("./session-entry-load.test-support.js"),
         ]);
-      const seededSession = loadGatewaySessionEntry("main");
+      const seededSession = await loadGatewaySessionEntry("main");
       const seededSessionId = seededSession.entry?.sessionId;
       expect(seededSessionId).toBe("sess-main");
       const mutationStarted = createDeferred();
-      mutation = runExclusiveSessionLifecycleMutation("delete", {
+      mutation = runSessionMutation({
+        kind: "delete",
         scope: seededSession.storePath,
         identities: [seededSession.canonicalKey, seededSessionId],
         run: async () => {
@@ -2773,7 +2752,7 @@ describe("gateway server chat", () => {
           // Read the authoritative row inside the mutation. Admission startup
           // may refresh metadata before it blocks, but this test deletes that
           // same session generation rather than a stale pre-admission snapshot.
-          const deletionSession = loadGatewaySessionEntry("main");
+          const deletionSession = await loadGatewaySessionEntry("main");
           const deletionEntry = expectDefined(
             deletionSession.entry,
             "session deletion test invariant",
@@ -2836,7 +2815,7 @@ describe("gateway server chat", () => {
           meta: undefined,
         },
       ]);
-      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(rpcSourceTesting.has(runId)).toBe(false);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       performDeletion.resolve();
@@ -2853,7 +2832,8 @@ describe("gateway server chat", () => {
         sessionId: "sess-before-reset",
       });
       const mutationStarted = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation("reset", {
+      const mutation = runSessionMutation({
+        kind: "reset",
         scope: storePath,
         identities: ["agent:main:main", "sess-before-reset"],
         run: async () => {
@@ -2894,7 +2874,7 @@ describe("gateway server chat", () => {
       expect(sendResponses[0]?.error).toMatchObject({
         message: expect.stringMatching(/changed while starting work/i),
       });
-      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(rpcSourceTesting.has(runId)).toBe(false);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
@@ -2909,7 +2889,7 @@ describe("gateway server chat", () => {
     try {
       await writeStoredMainSession({});
       const mutationStarted = createDeferred();
-      const mutation = runExclusiveSessionLifecycleMutation("patch", {
+      const mutation = runSessionMutation({
         scope: storePath,
         identities: ["sess-main"],
         run: async () => {
@@ -2963,11 +2943,11 @@ describe("gateway server chat", () => {
         },
       ]);
       expect(context.dedupe.get(pendingKey)).toBe(replacement);
-      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(rpcSourceTesting.has(runId)).toBe(false);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 
       const terminalMutationStarted = createDeferred();
-      const terminalMutation = runExclusiveSessionLifecycleMutation("patch", {
+      const terminalMutation = runSessionMutation({
         scope: storePath,
         identities: ["sess-main"],
         run: async () => {
@@ -3033,8 +3013,6 @@ describe("gateway server chat", () => {
           .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
           .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
       });
-      const pngB64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
       let captured: { ctx?: Record<string, unknown>; replyOptions?: GetReplyOptions } | undefined;
       dispatchInboundMessageMock.mockImplementation(async (...args: unknown[]) => {
         const [params] = args as [
@@ -3062,7 +3040,7 @@ describe("gateway server chat", () => {
               type: "image",
               mimeType: "image/png",
               fileName: "dot.png",
-              content: pngB64,
+              content: CHAT_DOT_PNG_BASE64,
             },
           ],
         }),
@@ -3072,9 +3050,7 @@ describe("gateway server chat", () => {
 
       expect(responses[0]?.ok).toBe(true);
       await waitForFast(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
-      expect(captured?.replyOptions?.images).toEqual([
-        { type: "image", data: pngB64, mimeType: "image/png", sourceIndex: 0, fileName: "dot.png" },
-      ]);
+      expect(captured?.replyOptions?.images).toEqual([INLINE_DOT_PNG_IMAGE]);
       expect(captured?.ctx?.media).toEqual([
         expect.objectContaining({
           path: expect.any(String),
@@ -3087,7 +3063,6 @@ describe("gateway server chat", () => {
     } finally {
       dispatchInboundMessageMock.mockReset();
       testState.agentConfig = undefined;
-      testState.sessionStorePath = undefined;
     }
   });
 
@@ -3142,8 +3117,6 @@ describe("gateway server chat", () => {
             ],
           ),
         });
-        const pngB64 =
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
         let captured: { ctx?: Record<string, unknown>; replyOptions?: GetReplyOptions } | undefined;
         dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
           const [params] = args as [
@@ -3169,7 +3142,7 @@ describe("gateway server chat", () => {
                 type: "image",
                 mimeType: "image/png",
                 fileName: "dot.png",
-                content: pngB64,
+                content: CHAT_DOT_PNG_BASE64,
               },
             ],
           }),
@@ -3192,7 +3165,6 @@ describe("gateway server chat", () => {
       } finally {
         dispatchInboundMessageMock.mockReset();
         testState.agentConfig = undefined;
-        testState.sessionStorePath = undefined;
       }
     },
   );
@@ -3232,7 +3204,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
       let snapshotAtAck: ReturnType<typeof loadSessionEntry>;
       const freshAdmission = vi.fn(async () => {
-        expect(context.chatAbortControllers.get(nextRunId)?.controlUiVisible).not.toBe(false);
+        expect(rpcSourceTesting.get(nextRunId)?.adapter.controlUiVisible).not.toBe(false);
         return true;
       });
 
@@ -3243,22 +3215,20 @@ describe("gateway server chat", () => {
         onAdmissionOwned: freshAdmission,
         respond: ((ok, payload) => {
           if (ok && (payload as { status?: unknown } | undefined)?.status === "started") {
-            snapshotAtAck = loadSessionEntry({
-              sessionKey: "agent:main:main",
-              storePath,
-            });
+            snapshotAtAck = loadSessionEntry(makeMainSessionScope(storePath));
           }
         }) as RespondFn,
       });
 
       expect(freshAdmission).toHaveBeenCalledTimes(1);
-      expect(context.chatAbortControllers.get(nextRunId)?.controlUiVisible).toBeUndefined();
+      expect(rpcSourceTesting.get(nextRunId)?.adapter.controlUiVisible).toBeUndefined();
       expect(snapshotAtAck).toMatchObject({
         restartRecoveryDeliveryRunId: nextRunId,
         restartRecoveryDeliverySourceRunId: nextRunId,
         restartRecoveryTerminalRunIds: ["idem-older-terminal-claim", priorRunId],
-        status: "running",
+        lifecycleRunId: nextRunId,
       });
+      expect(snapshotAtAck?.status).toBeUndefined();
 
       const retryResponses: Array<{ ok: boolean; payload?: unknown; meta?: unknown }> = [];
       const replayAdmission = vi.fn(async () => true);
@@ -3313,7 +3283,6 @@ describe("gateway server chat", () => {
       await Promise.all([send(firstAdmission), send(secondAdmission)]);
 
       expect(firstAdmission.mock.calls.length + secondAdmission.mock.calls.length).toBe(1);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(responses).toHaveLength(2);
       expect(responses.every((response) => response.ok)).toBe(true);
       expect(
@@ -3325,6 +3294,7 @@ describe("gateway server chat", () => {
 
       dispatchRelease.resolve(undefined);
       await getDirectChatSessionWorkRelease();
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
       dispatchRelease.resolve(undefined);
@@ -3339,7 +3309,7 @@ describe("gateway server chat", () => {
     const runId = "idem-visible-during-admission-callback";
     try {
       await writeStoredMainSession(makeDoneSessionEntry());
-      const context = createDirectChatContext({ chatQueuedTurns: new Map() });
+      const context = createDirectChatContext();
       const sendResponses: Array<{ ok: boolean; payload?: unknown }> = [];
       const sendPromise = sendControlUiChat({
         context,
@@ -3353,7 +3323,7 @@ describe("gateway server chat", () => {
         respond: captureChatResult(sendResponses),
       });
       await callbackEntered.promise;
-      expect(context.chatAbortControllers.get(runId)?.controlUiVisible).not.toBe(false);
+      expect(rpcSourceTesting.get(runId)?.adapter.controlUiVisible).not.toBe(false);
 
       const abortResponses: Array<{ ok: boolean; payload?: unknown }> = [];
       await callDirectChat("chat.abort", {
@@ -3392,151 +3362,14 @@ describe("gateway server chat", () => {
     }
   });
 
-  test.each([
-    { caseName: "tombstones an explicit abort", retryable: false, stopReason: "rpc" },
-    { caseName: "retains a restart interruption", retryable: true, stopReason: "restart" },
-  ])("chat.send $caseName after SQLite admission commits", async ({ retryable, stopReason }) => {
-    const { storePath } = openDirectChatSession();
-    const runId = `idem-restart-safe-abort-${stopReason}`;
-    let stopListening: (() => void) | undefined;
-    try {
-      await writeStoredMainSession(makeDoneSessionEntry());
-      const scope = makeMainSessionScope(storePath);
-      const context = createDirectChatContext();
-      const abortCommittedTurn = vi.fn(() => {
-        const activeRun = expectDefined(
-          context.chatAbortControllers.get(runId),
-          "expected admitted chat run",
-        );
-        activeRun.abortStopReason = stopReason;
-        activeRun.controller.abort();
-      });
-      // The transcript notification follows the atomic user-turn and recovery-claim commit.
-      stopListening = onSessionTranscriptUpdate((update) => {
-        if (
-          update.target.sessionKey === scope.sessionKey &&
-          update.target.sessionId === scope.sessionId &&
-          isRecord(update.message) &&
-          update.message.role === "user" &&
-          update.message.idempotencyKey === `${runId}:user`
-        ) {
-          abortCommittedTurn();
-        }
-      });
-      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-      await sendControlUiChat({
-        context,
-        idempotencyKey: runId,
-        message: "persist, then stop",
-        respond: captureChatResult(responses),
-      });
-      stopListening();
-      expect(abortCommittedTurn).toHaveBeenCalledOnce();
-      expect(responses).toEqual([
-        {
-          ok: true,
-          payload: expect.objectContaining({
-            runId,
-            status: "timeout",
-            summary: "aborted",
-            stopReason,
-          }),
-        },
-      ]);
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      const stored = loadSessionEntry(scope);
-      expect(stored).toMatchObject({
-        abortedLastRun: !retryable,
-        lastRunId: runId,
-        sessionId: "sess-main",
-        status: "killed",
-      });
-      expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
-      if (retryable) {
-        expect(stored?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
-        expect(stored?.restartRecoveryDeliveryRequestFingerprint).toEqual(
-          expect.stringMatching(/^hmac-sha256:v1:/u),
-        );
-        expect(stored?.restartRecoveryDeliveryRunId).toBe(runId);
-        expect(stored?.restartRecoveryDeliverySourceRunId).toBe(runId);
-        expect(stored?.restartRecoverySourceIngress).toBe("control-ui");
-        expect(stored?.restartRecoveryTerminalRunIds).toBeUndefined();
-      } else {
-        expect(stored?.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
-        expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
-        expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
-        expect(stored?.restartRecoverySourceIngress).toBeUndefined();
-        expect(stored?.restartRecoveryTerminalRunIds).toEqual([runId]);
-      }
-      expect(loadTranscriptEventsSync(scope)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "message",
-            message: expect.objectContaining({
-              content: "persist, then stop",
-              idempotencyKey: `${runId}:user`,
-              role: "user",
-            }),
-          }),
-        ]),
-      );
-
-      const retryContext = createDirectChatContext();
-      const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
-      if (retryable) {
-        dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
-      }
-      await sendControlUiChat({
-        context: retryContext,
-        idempotencyKey: runId,
-        message: "persist, then stop",
-        respond: captureChatResult(retryResponses),
-      });
-      expect(retryResponses).toEqual([
-        {
-          ok: true,
-          payload: retryable
-            ? expect.objectContaining({ runId, status: "started" })
-            : { runId, status: "ok" },
-        },
-      ]);
-      if (retryable) {
-        await getDirectChatSessionWorkRelease();
-        expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1);
-        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-        const retryOptions = (
-          dispatchInboundMessageMock.mock.calls[0]?.[0] as
-            | { replyOptions?: GetReplyOptions }
-            | undefined
-        )?.replyOptions;
-        expect(retryOptions?.suppressNextUserMessagePersistence).toBe(true);
-      } else {
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      }
-      expect(
-        loadTranscriptEventsSync(scope).filter((event) => {
-          if (
-            typeof event !== "object" ||
-            event === null ||
-            !("type" in event) ||
-            event.type !== "message" ||
-            !("message" in event)
-          ) {
-            return false;
-          }
-          const message = event.message;
-          return (
-            typeof message === "object" &&
-            message !== null &&
-            "idempotencyKey" in message &&
-            message.idempotencyKey === `${runId}:user`
-          );
-        }),
-      ).toHaveLength(1);
-    } finally {
-      stopListening?.();
-      await resetDirectChatSession();
-    }
+  registerChatAbortAdmissionRetryTests({
+    withCommittedChatSession: (run) =>
+      withDirectChatSession(async (_sessionDir, storePath) => {
+        await writeStoredMainSession(makeDoneSessionEntry());
+        await run({ ...makeMainSessionScope(storePath), storePath });
+      }),
+    waitForSessionWork: getDirectChatSessionWorkRelease,
+    sendControlUiChat,
   });
 
   test("chat.send keeps a durable Control UI retry pending when recovery remains abandoned", async () => {
@@ -3548,7 +3381,7 @@ describe("gateway server chat", () => {
         { sessionKey: "main", storePath },
         {
           sessionId: "sess-main",
-          status: "running",
+          status: "interrupted",
           abortedLastRun: true,
           restartRecoveryDeliveryRunId: "recovery-run",
           restartRecoveryDeliverySourceRunId: idempotencyKey,
@@ -3584,7 +3417,6 @@ describe("gateway server chat", () => {
         {
           error: expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
           ok: false,
-          payload: undefined,
         },
       ]);
       expect(restartRecoveryMocks.retryRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
@@ -3593,6 +3425,7 @@ describe("gateway server chat", () => {
         expectedRecoveryRunId: "recovery-run",
         expectedRecoverySourceRunId: idempotencyKey,
         expectedSessionId: "sess-main",
+        lane: "main",
         sessionKey: "agent:main:main",
         storePath,
         gatewayRuntime: expect.any(Object),
@@ -3605,9 +3438,10 @@ describe("gateway server chat", () => {
         restartRecoveryDeliveryRunId: "recovery-run",
         restartRecoveryDeliverySourceRunId: idempotencyKey,
         sessionId: "sess-main",
-        status: "running",
+        status: "interrupted",
       });
     } finally {
+      await getDirectChatSessionWorkRelease();
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
       await resetDirectChatSession();
     }
@@ -3618,7 +3452,7 @@ describe("gateway server chat", () => {
     const idempotencyKey = "idem-restart-safe-recovered-retry";
     try {
       await writeStoredMainSession({
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         restartRecoveryDeliveryRunId: "recovery-run",
         restartRecoveryDeliverySourceRunId: idempotencyKey,
@@ -3627,6 +3461,7 @@ describe("gateway server chat", () => {
         async ({ sessionKey, storePath: recoveryStorePath }) => {
           await patchSessionEntryCore({ sessionKey, storePath: recoveryStorePath }, () => ({
             abortedLastRun: false,
+            status: undefined,
             updatedAt: Date.now(),
           }));
           return { started: 1, settled: 0, failed: 0, skipped: 0 };
@@ -3649,12 +3484,13 @@ describe("gateway server chat", () => {
         },
       ]);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      const recoveredSession = loadSessionEntry(makeMainSessionScope(storePath));
+      expect(recoveredSession).toMatchObject({
         abortedLastRun: false,
         restartRecoveryDeliveryRunId: "recovery-run",
         restartRecoveryDeliverySourceRunId: idempotencyKey,
-        status: "running",
       });
+      expect(recoveredSession?.status).toBeUndefined();
     } finally {
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
       await resetDirectChatSession();
@@ -3669,7 +3505,7 @@ describe("gateway server chat", () => {
     try {
       await writeStoredMainSession(makeDoneSessionEntry());
       const mutationStarted = createDeferred();
-      mutation = runExclusiveSessionLifecycleMutation("patch", {
+      mutation = runSessionMutation({
         scope: storePath,
         identities: ["agent:main:main", "sess-main"],
         run: async () => {
@@ -3707,7 +3543,7 @@ describe("gateway server chat", () => {
         },
       ]);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(context.chatAbortControllers.has(idempotencyKey)).toBe(false);
+      expect(rpcSourceTesting.has(idempotencyKey)).toBe(false);
     } finally {
       releaseMutation.resolve();
       await Promise.allSettled(mutation ? [mutation] : []);
@@ -3721,7 +3557,7 @@ describe("gateway server chat", () => {
     try {
       await writeStoredMainSession({
         archivedAt: Date.now(),
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         restartRecoveryDeliveryRunId: "recovery-run",
         restartRecoveryDeliverySourceRunId: idempotencyKey,
@@ -3756,7 +3592,7 @@ describe("gateway server chat", () => {
     const idempotencyKey = "idem-restart-safe-replaced-retry";
     try {
       await writeStoredMainSession({
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         restartRecoveryDeliveryRunId: "recovery-run",
         restartRecoveryDeliverySourceRunId: idempotencyKey,
@@ -4170,199 +4006,172 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.send terminalizes the client run when a followup is queued", async () => {
-    await withDirectChatSession(async (_sessionDir, storePath) => {
-      await writeStoredMainSession({});
-
-      const broadcast = vi.fn((_event: string, _payload: unknown) => undefined);
-      const context = createDirectChatContext({
-        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
-        chatQueuedTurns: new Map(),
-        broadcast,
-      });
-      let turnAdoptionLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
-      let onQueueDisposition: InternalGetReplyOptions["onFollowupQueueDisposition"];
-      let onQueuedFollowupReplyBatch: InternalGetReplyOptions["onQueuedFollowupReplyBatch"];
-      const dispatchRelease = createDeferred();
-      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-        const replyOptions = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
-        turnAdoptionLifecycle = replyOptions?.turnAdoptionLifecycle;
-        onQueueDisposition = replyOptions?.onFollowupQueueDisposition;
-        onQueuedFollowupReplyBatch = replyOptions?.onQueuedFollowupReplyBatch;
-        turnAdoptionLifecycle?.onDeferred?.();
-        await dispatchRelease.promise;
-        return {};
-      });
-
-      await callDirectChat("chat.send", {
-        id: "queued-followup",
-        params: makeChatSendParams({
-          message: "queued prompt",
-          idempotencyKey: "idem-queued-followup",
-        }),
-        client: makeTuiClient(),
-        isWebchatConnect: () => true,
-        respond: vi.fn() as RespondFn,
-        context,
-      });
-
-      await waitForFast(() => expect(turnAdoptionLifecycle).toBeDefined(), FAST_WAIT_OPTS);
-      expect(turnAdoptionLifecycle?.ownerKey).toBe("connection:conn-tui");
-      expect(broadcast).not.toHaveBeenCalledWith(
-        "chat",
-        expect.objectContaining({ runId: "idem-queued-followup", state: "final" }),
-        expect.anything(),
-      );
-      dispatchRelease.resolve();
-      await waitForFast(() => {
-        expect(broadcast).toHaveBeenCalledWith(
-          "chat",
-          expect.objectContaining({
-            runId: "idem-queued-followup",
-            sessionKey: "agent:main:main",
-            state: "final",
+  test.for(["fulfilled", "rejected", "dropped"] as const)(
+    "chat.send keeps a queued input open through %s dispatch until its owner terminates",
+    async (settlement, { signal }) => {
+      await withDirectChatSession(async (_sessionDir, storePath) => {
+        await writeStoredMainSession({});
+        const runId = `idem-queued-followup-${settlement}`;
+        const dispatchRelease = createDeferred();
+        const dispatchStarted = createDeferred();
+        const dispatchSettled = createDeferred();
+        const terminal = createDeferred();
+        const broadcast = vi.fn((_event: string, payload: unknown) => {
+          if (_event === "chat" && (payload as { runId?: string }).runId === runId) {
+            terminal.resolve();
+          }
+        });
+        const context = createDirectChatContext({
+          loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+          broadcast,
+          removeChatRun: vi.fn(() => {
+            dispatchSettled.resolve();
+            return undefined;
           }),
-          { sessionKeys: ["agent:main:main"] },
-        );
-      }, FAST_WAIT_OPTS);
-      const finalEvents = broadcast.mock.calls.filter(
-        ([event, payload]) =>
-          event === "chat" &&
-          (payload as { runId?: string; state?: string }).runId === "idem-queued-followup" &&
-          (payload as { state?: string }).state === "final",
-      );
-      expect(finalEvents).toHaveLength(1);
-      expect(onQueuedFollowupReplyBatch).toBeTypeOf("function");
-      await onQueuedFollowupReplyBatch?.({
-        kind: "queued-followup",
-        completion: { kind: "completed" },
-        runId: "queued-followup-agent-run",
-        originatingChannel: "webchat",
-        payloads: [{ text: "queued follow-up answer" }],
-      });
-      expect(broadcast).toHaveBeenCalledWith(
-        "chat",
-        expect.objectContaining({
-          runId: "queued-followup-agent-run",
-          state: "final",
-          message: expect.objectContaining({
-            content: [{ type: "text", text: "queued follow-up answer" }],
-          }),
-        }),
-        { sessionKeys: ["agent:main:main"] },
-      );
-      expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(true);
-      expect(isSessionWorkAdmissionActive(storePath, ["agent:main:main", "sess-main"])).toBe(true);
-      const { createAgentTurnService } = await import("./agent-turn/agent-turn-service.js");
-      const service = createAgentTurnService({ context, isWebchatConnect: () => true });
-      const { result: waitResult } = await service.waitForTurn({
-        runId: "idem-queued-followup",
-        timeoutMs: 10,
-      });
-      expect(waitResult).toMatchObject({
-        runId: "idem-queued-followup",
-        status: "pending",
-        timeoutPhase: "queue",
-        providerStarted: false,
-      });
+        });
+        const followup = createQueuedFollowupFixtureForTest(storePath);
+        let queuedRun: ReturnType<typeof followup.bind> | undefined;
+        let options: InternalGetReplyOptions | undefined;
+        dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+          options = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
+          queuedRun = followup.bind(options?.turnAdoptionLifecycle, "queued prompt");
+          dispatchStarted.resolve();
+          await dispatchRelease.promise;
+          if (settlement === "rejected") {
+            throw new Error("post-enqueue bookkeeping failed");
+          }
+          return {};
+        });
+        const { createAgentTurnService } = await import("./agent-turn/agent-turn-service.js");
+        const service = createAgentTurnService({ context, isWebchatConnect: () => true });
+        const chatEvents = () =>
+          broadcast.mock.calls.flatMap(([event, payload]) =>
+            event === "chat" && (payload as { runId?: string }).runId === runId ? [payload] : [],
+          );
+        try {
+          await callDirectChat("chat.send", {
+            id: "queued-followup",
+            params: makeChatSendParams({ message: "queued prompt", idempotencyKey: runId }),
+            client: makeTuiClient(),
+            isWebchatConnect: () => true,
+            respond: vi.fn() as RespondFn,
+            context,
+          });
+          await withinTest(dispatchStarted.promise, signal);
+          expect(options?.turnAdoptionLifecycle?.ownerKey).toBe("connection:conn-tui");
+          expect(chatEvents()).toEqual([]);
+          dispatchRelease.resolve();
+          await withinTest(dispatchSettled.promise, signal);
+          expect(chatEvents()).toEqual([]);
+          expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
+            ok: true,
+            payload: { status: "accepted" },
+          });
+          await expect(service.waitForTurn({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+            result: { runId, status: "pending", timeoutPhase: "queue", providerStarted: false },
+          });
+          expect(isRpcSourceQueued(rpcSourceTesting.get(runId))).toBe(true);
+          expect(followup.isWorkActive()).toBe(true);
 
-      onQueueDisposition?.("queue-cap-old");
-      expect(context.logGateway.info).toHaveBeenCalledWith(
-        "chat queue turn intentionally skipped",
-        {
-          runId: "idem-queued-followup",
-          sessionKey: "agent:main:main",
-          outcome: "skipped",
-          reason: "queue-cap-old",
-        },
-      );
+          // Live queued identity still fences replay if its receipt has been evicted.
+          context.dedupe.delete(`chat:${runId}`);
+          const replayRespond = vi.fn() as RespondFn;
+          await callDirectChat("chat.send", {
+            id: "queued-followup-replay",
+            params: makeChatSendParams({ message: "queued prompt", idempotencyKey: runId }),
+            client: makeTuiClient(),
+            isWebchatConnect: () => true,
+            respond: replayRespond,
+            context,
+          });
+          expect(replayRespond).toHaveBeenCalledWith(
+            true,
+            { runId, status: "in_flight" },
+            undefined,
+            { cached: true, runId },
+          );
+          expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
 
-      context.dedupe.delete("chat:idem-queued-followup");
-      const replayRespond = vi.fn() as RespondFn;
-      await callDirectChat("chat.send", {
-        id: "queued-followup-replay",
-        params: makeChatSendParams({
-          message: "queued prompt",
-          idempotencyKey: "idem-queued-followup",
-        }),
-        client: makeTuiClient(),
-        isWebchatConnect: () => true,
-        respond: replayRespond,
-        context,
+          if (settlement === "dropped") {
+            options?.onFollowupQueueDisposition?.("queue-cap-old");
+            expect(context.logGateway.info).toHaveBeenCalledWith(
+              "chat queue turn intentionally skipped",
+              { runId, sessionKey: "agent:main:main", outcome: "skipped", reason: "queue-cap-old" },
+            );
+          } else {
+            const deliver = expectDefined(
+              options?.onQueuedFollowupReplyBatch,
+              "missing queued reply delivery",
+            );
+            const run = expectDefined(queuedRun, "missing queued follow-up");
+            await withSessionTurn(
+              {
+                ...makeMainSessionScope(storePath),
+                controllerInput: run.controllerInput,
+              },
+              async () => {
+                await admitFollowupRunLifecycle(run);
+                options?.onAgentRunStart?.("queued-followup-agent-run");
+                await withinTest(
+                  Promise.resolve(
+                    deliver({
+                      kind: "queued-followup",
+                      completion: { kind: "completed" },
+                      runId: "queued-followup-agent-run",
+                      originatingChannel: "webchat",
+                      payloads: [{ text: "queued follow-up answer" }],
+                    }),
+                  ),
+                  signal,
+                );
+              },
+            );
+          }
+          await withinTest(terminal.promise, signal);
+          await settleQueuedFollowupRunForTest(queuedRun);
+          await getDirectChatSessionWorkRelease();
+          expect(chatEvents()).toEqual([
+            expect.objectContaining({
+              runId,
+              ...(settlement === "dropped"
+                ? { state: "error", errorMessage: "Queued input was dropped (queue-cap-old)." }
+                : {
+                    state: "final",
+                    message: expect.objectContaining({
+                      content: [{ type: "text", text: "queued follow-up answer" }],
+                    }),
+                  }),
+            }),
+          ]);
+          await expect(service.waitForTurn({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+            result: {
+              runId,
+              status: settlement === "dropped" ? "error" : "ok",
+              endedAt: expect.any(Number),
+            },
+          });
+          expect(isRpcSourceQueued(rpcSourceTesting.get(runId))).toBe(false);
+          expect(followup.isWorkActive()).toBe(false);
+          if (settlement !== "dropped") {
+            expect(context.removeChatRun).toHaveBeenCalledWith(
+              "queued-followup-agent-run",
+              runId,
+              "agent:main:main",
+            );
+          }
+        } finally {
+          dispatchRelease.resolve();
+          if (rpcSourceTesting.has(runId)) {
+            requestQueuedFollowupCancellationForTest(runId);
+          }
+          if (queuedRun) {
+            await settleQueuedFollowupRunForTest(queuedRun);
+          }
+          await getDirectChatSessionWorkRelease();
+        }
       });
-      expect(replayRespond).toHaveBeenCalledWith(
-        true,
-        { runId: "idem-queued-followup", status: "in_flight" },
-        undefined,
-        { cached: true, runId: "idem-queued-followup" },
-      );
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-
-      const queuedEntry = context.chatQueuedTurns.get("idem-queued-followup");
-      expect(queuedEntry).toBeDefined();
-      queuedEntry?.controller.abort();
-      expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
-
-      turnAdoptionLifecycle?.onSettled?.();
-      await getDirectChatSessionWorkRelease();
-      expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
-      expect(isSessionWorkAdmissionActive(storePath, ["agent:main:main", "sess-main"])).toBe(false);
-      expect(context.removeChatRun).toHaveBeenCalledTimes(2);
-      expect(context.removeChatRun).toHaveBeenCalledWith(
-        "idem-queued-followup",
-        "idem-queued-followup",
-        "agent:main:main",
-      );
-      expect(context.removeChatRun).toHaveBeenCalledWith(
-        "queued-followup-agent-run",
-        "queued-followup-agent-run",
-        "agent:main:main",
-      );
-
-      let failedDispatchLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
-      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-        failedDispatchLifecycle = (args as { replyOptions?: GetReplyOptions }).replyOptions
-          ?.turnAdoptionLifecycle;
-        failedDispatchLifecycle?.onDeferred?.();
-        throw new Error("post-enqueue bookkeeping failed");
-      });
-      await callDirectChat("chat.send", {
-        id: "queued-followup-post-error",
-        params: makeChatSendParams({
-          message: "accepted before dispatch error",
-          idempotencyKey: "idem-queued-followup-post-error",
-        }),
-        client: makeTuiClient(),
-        isWebchatConnect: () => true,
-        respond: vi.fn() as RespondFn,
-        context,
-      });
-
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(3);
-        expect(context.removeChatRun).toHaveBeenCalledWith(
-          "idem-queued-followup-post-error",
-          "idem-queued-followup-post-error",
-          "agent:main:main",
-        );
-      }, FAST_WAIT_OPTS);
-      const acceptedErrorEvents = broadcast.mock.calls.filter(
-        ([event, payload]) =>
-          event === "chat" &&
-          (payload as { runId?: string }).runId === "idem-queued-followup-post-error",
-      );
-      expect(acceptedErrorEvents).toHaveLength(1);
-      expect(acceptedErrorEvents[0]?.[1]).toMatchObject({ state: "final" });
-      expect(context.dedupe.get("chat:idem-queued-followup-post-error")).toMatchObject({
-        ok: true,
-        payload: { status: "ok" },
-      });
-      expect(context.chatQueuedTurns.has("idem-queued-followup-post-error")).toBe(true);
-      failedDispatchLifecycle?.onSettled?.();
-      await getDirectChatSessionWorkRelease();
-      expect(context.chatQueuedTurns.has("idem-queued-followup-post-error")).toBe(false);
-    });
-  });
+    },
+  );
 
   test("chat.send emits operator-only post-ACK server timing milestones", async () => {
     await withDirectChatSession(async () => {
@@ -4560,59 +4369,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history does not surface an older stale assistant when overreading for pair context", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await connectOk(ws);
-      await createSessionDir();
-      const sessionStartedAt = Date.parse("2026-05-23T04:02:30.000Z");
-      await writeStoredMainSession({
-        sessionStartedAt,
-      });
-      const announce = {
-        kind: "inter_session",
-        sourceSessionKey: "agent:main:subagent:child",
-        sourceTool: "subagent_announce",
-      };
-      await writeMainSessionTranscript([
-        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-        JSON.stringify({
-          timestamp: "2026-05-16T16:00:29.000Z",
-          message: {
-            role: "user",
-            content:
-              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
-            provenance: announce,
-          },
-        }),
-        makeTranscriptTextEvent("older stale announce reply", {
-          timestamp: "2026-05-16T16:00:30.000Z",
-        }),
-        JSON.stringify({
-          timestamp: "2026-05-16T16:00:31.000Z",
-          message: {
-            role: "user",
-            content:
-              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
-            provenance: announce,
-          },
-        }),
-        makeTranscriptTextEvent("newer stale announce reply", {
-          timestamp: "2026-05-16T16:00:33.000Z",
-        }),
-        makeTranscriptTextEvent("fresh turn", {
-          role: "user",
-          timestamp: "2026-05-23T04:03:10.000Z",
-        }),
-      ]);
-
-      const messages = await fetchHistoryMessages(ws, { limit: 3 });
-      const serialized = JSON.stringify(messages);
-      expect(serialized).not.toContain("older stale announce reply");
-      expect(serialized).not.toContain("newer stale announce reply");
-      expect(serialized).toContain("fresh turn");
-    });
-  });
-
   test("chat.history offset pages backfill after filtering stale announce replies", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
@@ -4648,11 +4404,7 @@ describe("gateway server chat", () => {
         }),
       ]);
 
-      const page = await rpcReq<{
-        messages?: Array<{ __openclaw?: { seq?: number } }>;
-        nextOffset?: number;
-        hasMore?: boolean;
-      }>(
+      const page = await rpcReq<HistoryPage>(
         ws,
         "chat.history",
         makeMainSessionParams({
@@ -4940,43 +4692,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history keeps recent messages within the production byte budget", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await prepareMainHistoryHarness({ ws, createSessionDir });
-      const historyMaxBytes = getMaxChatHistoryMessagesBytes();
-      const baseText = "s".repeat(100_000);
-      const lines: unknown[] = Array.from({ length: 70 }, (_, index) =>
-        createTextTranscriptEvent("user", `small-${index}:${baseText}`, {
-          timestamp: Date.now() + index,
-        }),
-      );
-      lines.push(
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            timestamp: Date.now() + 1_000,
-            content: [
-              {
-                type: "tool_result",
-                toolUseId: "tool-1",
-                output: { nested: { payload: "z".repeat(300_000) } },
-              },
-            ],
-          },
-        }),
-      );
-
-      await writeMainSessionTranscript(lines);
-      const messages = await fetchHistoryMessages(ws, { maxChars: 100_000 });
-      const serialized = JSON.stringify(messages);
-
-      expect(Buffer.byteLength(serialized, "utf8")).toBeLessThanOrEqual(historyMaxBytes);
-      expect(serialized).toContain("small-69:");
-      expect(serialized).toContain("[chat.history omitted: message too large]");
-      expect(serialized).not.toContain("small-0:");
-    });
-  });
-
   test("chat.history serves older history past an oversized newest record", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
@@ -4985,7 +4700,8 @@ describe("gateway server chat", () => {
         createTextTranscriptEvent("user", "reachable older message", { timestamp: Date.now() }),
         makeTranscriptTextEvent("NO_REPLY", {
           message: {
-            padding: "x".repeat(historyMaxBytes * 2 + 1024),
+            // Exceed the response budget while staying below raw-page admission.
+            padding: "x".repeat(historyMaxBytes + 1024),
             timestamp: Date.now() + 1,
           },
         }),
@@ -5289,7 +5005,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history returns retryable unavailable while a dirty projection rebuilds", async () => {
+  test("chat.history waits for a dirty projection to rebuild", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
       await writeMainSessionTranscript([
@@ -5299,7 +5015,7 @@ describe("gateway server chat", () => {
         resolveSqliteTranscriptScope(makeMainSessionScope(testState.sessionStorePath)),
       );
       const database = openOpenClawAgentDatabase(databaseOptions);
-      // Keep the writer-held rebuild pending until the real RPC observes its dirty state.
+      // Release the writer so the history worker can rebuild the marked projection.
       await runExclusiveSqliteSessionWrite(
         databaseOptions,
         async () => {
@@ -5309,14 +5025,10 @@ describe("gateway server chat", () => {
             )
             .run("sess-main");
           expect(marked.changes).toBe(1);
-          const rebuilding = await rpcReq(ws, "chat.history", makeMainSessionParams({ limit: 1 }));
-          expect(rebuilding.ok).toBe(false);
-          expect(rebuilding.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
         },
         "sessions.transcript-index.preflight",
       );
 
-      await waitForSessionTranscriptIndexReconcile(databaseOptions);
       const ready = await rpcReq<{ messages?: unknown[] }>(
         ws,
         "chat.history",
@@ -5348,11 +5060,6 @@ describe("gateway server chat", () => {
         }),
       ]);
 
-      type HistoryPage = {
-        messages?: Array<{ __openclaw?: { seq?: number } }>;
-        nextOffset?: number;
-        hasMore?: boolean;
-      };
       const firstPage = await rpcReq<HistoryPage>(
         ws,
         "chat.history",
@@ -5471,12 +5178,6 @@ describe("gateway server chat", () => {
         }
         await writeMainSessionTranscript(events);
 
-        type HistoryPage = {
-          messages?: Array<{ __openclaw?: { seq?: number } }>;
-          nextOffset?: number;
-          hasMore?: boolean;
-          totalMessages?: number;
-        };
         const first = await rpcReq<HistoryPage>(
           ws,
           "chat.history",
@@ -5643,30 +5344,13 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history rejects an anchored session id from another session key", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await prepareMainHistoryHarness({ ws, createSessionDir });
-
-      const history = await rpcReq(
-        ws,
-        "chat.history",
-        makeMainSessionParams({
-          messageId: "message-1",
-          sessionId: "unknown-session",
-        }),
-      );
-
-      expect(history.ok).toBe(false);
-      expect((history.error as { message?: string } | undefined)?.message).toContain(
-        "sessionId does not belong to sessionKey",
-      );
-    });
-  });
-
-  test("chat.history advances past a replay boundary that cannot fit all projected siblings", async () => {
+  test("chat.history keeps older messages reachable past an oversized projected source row", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
       const projectedSiblingCount = 70;
+      const projectedMessageId = "oversized-history-source";
+      const olderMessageId = "history-older-message";
+      const maxBytes = 512 * 1024;
       const captured: Extract<DiagnosticEventPayload, { type: "payload.large" }>[] = [];
       const unsubscribe = onDiagnosticEvent((event) => {
         if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
@@ -5675,71 +5359,83 @@ describe("gateway server chat", () => {
       });
       try {
         await writeMainSessionTranscript([
-          createTextTranscriptEvent("user", "reachable older message", { timestamp: Date.now() }),
-          JSON.stringify({
-            message: {
-              role: "assistant",
-              // Replay metadata repeats the text; keep each row below the per-message byte cap.
-              content: Array.from({ length: projectedSiblingCount }, (_, index) => ({
-                type: "text",
-                text: `projected sibling ${index + 1} ${"x".repeat(50_000)}`,
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: `history-progress-${index}`,
-                  phase: "commentary",
-                }),
-              })),
-              timestamp: Date.now() + 1,
-            },
+          {
+            type: "message",
+            ...createTextTranscriptEvent("user", "reachable older message", {
+              id: olderMessageId,
+              parentId: null,
+              timestamp: Date.now(),
+            }),
+          },
+          createOversizedReplayTranscriptEvent({
+            id: projectedMessageId,
+            parentId: olderMessageId,
+            siblingCount: projectedSiblingCount,
           }),
         ]);
 
-        type HistoryPage = {
-          messages?: Array<{ __openclaw?: { seq?: number } }>;
-          nextOffset?: number;
-          hasMore?: boolean;
-        };
         const firstPage = await rpcReq<HistoryPage>(
           ws,
           "chat.history",
           makeMainSessionParams({
-            limit: projectedSiblingCount + 1,
+            // Keep the older row for paging while selecting every oversized sibling.
+            limit: projectedSiblingCount,
             offset: 0,
             maxChars: 100_000,
+            maxBytes,
           }),
         );
         expect(firstPage.ok).toBe(true);
-        const firstPageSequences = firstPage.payload?.messages?.map(readOpenClawSeq) ?? [];
-        expect(firstPageSequences.length).toBeGreaterThan(0);
-        expect(firstPageSequences.every((seq) => seq === 2)).toBe(true);
+        const firstMessages = firstPage.payload?.messages;
+        expect(firstMessages).toHaveLength(1);
+        expect(firstPage.payload?.messages).toMatchObject([
+          {
+            __openclaw: {
+              id: projectedMessageId,
+              truncated: true,
+              reason: "oversized",
+            },
+          },
+        ]);
         expect(firstPage.payload?.hasMore).toBe(true);
         expect(firstPage.payload?.nextOffset).toBeGreaterThan(0);
         expect(
           captured.some((event) => event.action === "truncated" && (event.count ?? 0) > 0),
         ).toBe(true);
 
-        let offset = expectDefined(firstPage.payload?.nextOffset, "second page offset");
-        const olderMessages: unknown[] = [];
+        let page = firstPage;
+        let offset = 0;
+        let complete = false;
+        const messages: NonNullable<HistoryPage["messages"]> = [];
         for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
-          const page = await rpcReq<HistoryPage>(
-            ws,
-            "chat.history",
-            makeMainSessionParams({
-              limit: 2,
-              offset,
-            }),
-          );
           expect(page.ok).toBe(true);
-          olderMessages.push(...(page.payload?.messages ?? []));
+          const pageMessages = page.payload?.messages ?? [];
+          expect(Buffer.byteLength(JSON.stringify(pageMessages))).toBeLessThanOrEqual(maxBytes);
+          messages.push(...pageMessages);
           const nextOffset = page.payload?.nextOffset;
           if (nextOffset === undefined) {
             expect(page.payload?.hasMore).toBe(false);
+            complete = true;
             break;
           }
+          expect(page.payload?.hasMore).toBe(true);
           expect(nextOffset).toBeGreaterThan(offset);
           offset = nextOffset;
+          page = await rpcReq<HistoryPage>(
+            ws,
+            "chat.history",
+            makeMainSessionParams({ limit: 2, offset, maxBytes }),
+          );
         }
+        expect(complete).toBe(true);
+        const olderMessages = messages.filter(
+          (message) => message["__openclaw"]?.id === olderMessageId,
+        );
+        expect(olderMessages).toHaveLength(1);
         expect(JSON.stringify(olderMessages)).toContain("reachable older message");
+        expect(
+          messages.filter((message) => message["__openclaw"]?.id === projectedMessageId),
+        ).toHaveLength(1);
       } finally {
         unsubscribe();
       }

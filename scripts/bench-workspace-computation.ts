@@ -21,9 +21,11 @@ import {
   runBenchmarkEntrypoint,
 } from "./lib/benchmark-harness.mts";
 import { startBenchmarkIntervalDelay } from "./lib/benchmark-interval-delay.ts";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { stopChild } from "./lib/gateway-bench-child.ts";
 
 const exec = promisify(execFile);
+const diagnostics = channel("openclaw.worker.task");
 const scenarios = ["inventory", "manifest", "delta", "unchanged", "compare"] as const;
 type Scenario = (typeof scenarios)[number];
 type Options = {
@@ -41,18 +43,7 @@ type Options = {
   json: boolean;
   help: boolean;
 };
-type Fixture = {
-  root: string;
-  source: string;
-  scenario: Scenario;
-  size: number;
-  concurrency: number;
-  timeoutMs: number;
-  baseRef: string;
-  currentRef: string;
-  inventorySha256: string;
-  changedEntries: WorkerWorkspaceManifestEntry[];
-};
+type Fixture = Awaited<ReturnType<typeof createFixture>>;
 type Measurement = {
   wallMs: number;
   cpuMs: number;
@@ -66,7 +57,7 @@ type Measurement = {
   processMaxRssBytes: number;
   workerTasks: Array<Record<string, unknown>>;
 };
-type Summary = { count: number; min: number; p50: number; p95: number; p99: number; max: number };
+type Summary = ReturnType<typeof summarize>;
 type Sample = Measurement & {
   phase: "cold" | "warmup" | "warm";
   requestLatencyMs: Summary;
@@ -83,7 +74,7 @@ type ChildMessage =
 const digest = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const nameAt = (index: number) => `file-${String(index).padStart(6, "0")}.txt`;
 
-function summarize(values: number[]): Summary {
+function summarize(values: number[]) {
   assert(values.length > 0, "measurement has no samples");
   const ordered = values.toSorted((a, b) => a - b);
   const percentile = (fraction: number) => ordered[Math.ceil(ordered.length * fraction) - 1]!;
@@ -164,7 +155,7 @@ async function createFixture(params: {
   size: number;
   concurrency: number;
   options: Options;
-}): Promise<Fixture> {
+}) {
   const { root, source, scenario, size, concurrency, options } = params;
   assert(
     size * options.fileBytes <= 4 * 1024 ** 3,
@@ -255,9 +246,7 @@ function isolatedEnv(root: string): NodeJS.ProcessEnv {
     TMPDIR: process.env.TMPDIR,
     TEMP: process.env.TEMP,
     TMP: process.env.TMP,
-    HOME: path.join(root, "home"),
-    USERPROFILE: path.join(root, "home"),
-    OPENCLAW_HOME: path.join(root, "home"),
+    ...createBuildSmokeEnv(path.join(root, "home"), {}),
     OPENCLAW_STATE_DIR: path.join(root, "state"),
     OPENCLAW_CONFIG_PATH: path.join(root, "config.json"),
     NODE_ENV: "test",
@@ -331,7 +320,6 @@ async function childMain(fixturePath: string): Promise<void> {
   process.send?.({ type: "ready", port: address.port, moduleLoadMs });
   let sequence = 0;
   const taskEvents: Array<Record<string, unknown>> = [];
-  const diagnostics = channel("openclaw.worker.task");
   const observe = (event: unknown) => {
     taskEvents.push(event as Record<string, unknown>);
   };

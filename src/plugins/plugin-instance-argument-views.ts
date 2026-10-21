@@ -1,18 +1,5 @@
 import { types } from "node:util";
-import { PluginHostObject } from "./plugin-instance-owned-values.js";
-
-class CallbackView extends PluginHostObject {
-  #factory: object;
-
-  constructor(value: Function, factory: object) {
-    super(value);
-    this.#factory = factory;
-  }
-
-  static belongsTo(value: Function, factory: object): boolean {
-    return #factory in value && value.#factory === factory;
-  }
-}
+import { PluginFactoryBinding } from "./plugin-instance-owned-values.js";
 
 const arrayCallbacks = new Set([
   "every",
@@ -121,7 +108,7 @@ export function createPluginArgumentView(bindings: {
       }
       let callback = callerData
         ? undefined
-        : CallbackView.belongsTo(value, factory)
+        : PluginFactoryBinding.belongsTo(value, factory)
           ? value
           : callbacks.get(value);
       if (!callback) {
@@ -143,7 +130,7 @@ export function createPluginArgumentView(bindings: {
         bindings.setOriginal(callback, value);
         if (!callerData) {
           callbacks.set(value, callback);
-          void new CallbackView(callback, factory);
+          void new PluginFactoryBinding(callback, factory);
         }
       }
       return callback;

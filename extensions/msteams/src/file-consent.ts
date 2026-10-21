@@ -1,5 +1,4 @@
 import { lookup } from "node:dns/promises";
-import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -26,13 +25,7 @@ const CONSENT_UPLOAD_HOST_ALLOWLIST = [
   "graph.microsoft.cn",
 ] as const;
 
-async function validateConsentUploadUrl(
-  url: string,
-  opts?: {
-    allowlist?: readonly string[];
-    resolveFn?: (hostname: string) => Promise<{ address: string } | { address: string }[]>;
-  },
-): Promise<void> {
+async function validateConsentUploadUrl(url: string): Promise<void> {
   const parsed = URL.parse(url);
   if (!parsed) {
     throw new Error("Consent upload URL is not a valid URL");
@@ -43,8 +36,7 @@ async function validateConsentUploadUrl(
   }
 
   const hostname = normalizeLowercaseStringOrEmpty(parsed.hostname);
-  const allowlist = opts?.allowlist ?? CONSENT_UPLOAD_HOST_ALLOWLIST;
-  const hostAllowed = allowlist.some(
+  const hostAllowed = CONSENT_UPLOAD_HOST_ALLOWLIST.some(
     (entry) => hostname === entry || hostname.endsWith(`.${entry}`),
   );
   if (!hostAllowed) {
@@ -52,11 +44,9 @@ async function validateConsentUploadUrl(
   }
 
   // Check all resolved addresses to avoid SSRF bypass via mixed public/private answers.
-  const resolveFn = opts?.resolveFn ?? ((name: string) => lookup(name, { all: true }));
   let resolved: { address: string }[];
   try {
-    const result = await resolveFn(hostname);
-    resolved = Array.isArray(result) ? result : [result];
+    resolved = await lookup(hostname, { all: true });
   } catch {
     throw new Error(`Failed to resolve consent upload URL hostname "${hostname}"`);
   }
@@ -164,17 +154,9 @@ export async function uploadToConsentUrl(params: {
   url: string;
   buffer: Buffer;
   contentType?: string;
-  fetchFn?: typeof fetch;
-  timeoutMs?: number;
-  /** Override for testing — custom allowlist and DNS resolver */
-  validationOpts?: {
-    allowlist?: readonly string[];
-    resolveFn?: (hostname: string) => Promise<{ address: string } | { address: string }[]>;
-  };
 }): Promise<void> {
-  await validateConsentUploadUrl(params.url, params.validationOpts);
+  await validateConsentUploadUrl(params.url);
 
-  const fetchFn = params.fetchFn ?? fetch;
   const res = await fetchWithTimeout(
     params.url,
     {
@@ -184,10 +166,10 @@ export async function uploadToConsentUrl(params: {
         "Content-Type": params.contentType ?? "application/octet-stream",
         "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
       },
-      body: new Blob([bufferToBlobPart(params.buffer)]),
+      // Snapshot the slice without a Blob stream, which retains async context on Node 24.16–24.19.
+      body: Uint8Array.from(params.buffer),
     },
-    params.timeoutMs ?? resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
-    fetchFn,
+    resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
   );
 
   // Consent uploads never consume the response payload. Cancel it on every

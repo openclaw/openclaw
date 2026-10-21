@@ -12,7 +12,11 @@ import {
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { classifyFailoverReasonFromCode } from "./classification-rules.js";
-import { INCOMPLETE_ASSISTANT_STREAM_RE } from "./message-patterns.js";
+import {
+  INCOMPLETE_ASSISTANT_STREAM_RE,
+  MALFORMED_SSE_MESSAGE_RE,
+  isPeriodicUsageLimitErrorMessage,
+} from "./message-patterns.js";
 import type { FailoverClassification, FailoverSignal } from "./signal.js";
 
 type RateLimitWindow =
@@ -26,7 +30,7 @@ const RATE_LIMIT_RETRY_CONTEXT_RE =
 const TRANSIENT_RETRY_EVIDENCE_RE =
   /overloaded|rate.?limit|too many requests|service.?unavailable|server.?error|internal.?error|provider.?returned.?error|network.?error|connection.?error|connection.?refused|connection.?lost|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|socket connection was closed|timed? out|timeout|terminated|websocket.?closed|websocket.?error|ended without|http2 request did not get a response|retry delay|you can retry your request|try your request again|please retry your request|resource[_ -]?exhausted/i;
 const LONG_WINDOW_RATE_LIMIT_RE =
-  /\b(?:daily|weekly|monthly|tokens per day|requests per day|per[- ](?:day|week|month)|usage limit|subscription|insufficient[_ -]?quota|current quota|quota[_ -]?exceeded|(?:go|free)usagelimiterror|available balance|out of budget)\b/i;
+  /\b(?:daily|weekly|monthly|tokens per day|requests per day|per[- ](?:day|week|month)|usage limits?|subscription|insufficient[_ -]?quota|current quota|quota[_ -]?exceeded|(?:go|free)usagelimiterror|available balance|out of budget)\b/i;
 const SHORT_RATE_LIMIT_UNIT_RE =
   /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm)\b/i;
 const SHORT_WINDOW_RATE_LIMIT_RE =
@@ -34,31 +38,19 @@ const SHORT_WINDOW_RATE_LIMIT_RE =
 const RETRY_AFTER_VALUE_RE =
   /\b(?:retry[- ]after\b\s*:?\s*(?:in\b\s*)?|(?:please\s+)?try again in\s+)([^\r\n;]+)/i;
 const RETRY_AFTER_NUMBER_RE = /^(\d+(?:\.\d+)?|Infinity)\s*([a-z]+)?\b/i;
-const RETRY_AFTER_UNIT_MS = new Map<string, number>([
-  ["milliseconds", durationUnitMs.millisecond],
-  ["millisecond", durationUnitMs.millisecond],
-  ["msecs", durationUnitMs.millisecond],
-  ["msec", durationUnitMs.millisecond],
-  ["ms", durationUnitMs.millisecond],
-  ["seconds", durationUnitMs.second],
-  ["second", durationUnitMs.second],
-  ["secs", durationUnitMs.second],
-  ["sec", durationUnitMs.second],
-  ["s", durationUnitMs.second],
-  ["minutes", durationUnitMs.minute],
-  ["minute", durationUnitMs.minute],
-  ["mins", durationUnitMs.minute],
-  ["min", durationUnitMs.minute],
-  ["m", durationUnitMs.minute],
-  ["hours", durationUnitMs.hour],
-  ["hour", durationUnitMs.hour],
-  ["hrs", durationUnitMs.hour],
-  ["hr", durationUnitMs.hour],
-  ["h", durationUnitMs.hour],
-  ["days", durationUnitMs.day],
-  ["day", durationUnitMs.day],
-  ["d", durationUnitMs.day],
-]);
+const RETRY_AFTER_UNIT_MS = new Map<string, number>(
+  (
+    [
+      ["milliseconds millisecond msecs msec ms", durationUnitMs.millisecond],
+      ["seconds second secs sec s", durationUnitMs.second],
+      ["minutes minute mins min m", durationUnitMs.minute],
+      ["hours hour hrs hr h", durationUnitMs.hour],
+      ["days day d", durationUnitMs.day],
+    ] as const
+  ).flatMap(([aliases, milliseconds]) =>
+    aliases.split(" ").map((alias) => [alias, milliseconds] as const),
+  ),
+);
 const MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS = 60;
 
 /** HTTP statuses the provider SDK transport permits retrying. */
@@ -93,6 +85,7 @@ function hasTransientRetryEvidence(
   return (
     (status !== undefined && RETRYABLE_HTTP_STATUS_CODES.has(status)) ||
     INCOMPLETE_ASSISTANT_STREAM_RE.test(signal.message ?? "") ||
+    MALFORMED_SSE_MESSAGE_RE.test(signal.message ?? "") ||
     TRANSIENT_RETRY_EVIDENCE_RE.test(signal.message ?? "") ||
     isTransientNetworkError({ code: signal.code })
   );
@@ -153,8 +146,18 @@ export function resolveRetryAfterMs(
 /** Usage-window evidence is distinct from a temporary throttle's retry floor. */
 export function hasLongWindowRateLimitEvidence(message: string | undefined): boolean {
   return Boolean(
-    message && LONG_WINDOW_RATE_LIMIT_RE.test(message) && !SHORT_RATE_LIMIT_UNIT_RE.test(message),
+    message &&
+    (LONG_WINDOW_RATE_LIMIT_RE.test(message) || isPeriodicUsageLimitErrorMessage(message)) &&
+    !SHORT_RATE_LIMIT_UNIT_RE.test(message),
   );
+}
+
+/** Explicit shared token-bucket exhaustion, distinct from per-request throttling. */
+export function hasOrganizationTpmRateLimitEvidence(message: string | undefined): boolean {
+  const unit = message?.match(
+    /\brate limit reached\b[^\r\n]*?\bin organization\b[^:\r\n]*?\bon (tokens|requests) per min(?:ute)?\b/i,
+  )?.[1];
+  return unit?.toLowerCase() === "tokens";
 }
 
 /** Classify provider rate-limit text without deciding a caller's retry policy. */
@@ -209,11 +212,8 @@ export function shouldRetryFailoverSignal(params: {
     return false;
   }
   const hasLongLimitWindow = classifyRateLimitWindow(params.signal.message).kind === "long";
-  if (
+  return !(
     hasLongLimitWindow &&
     (reason === "billing" || reason === "rate_limit" || hasRateLimitRetryContext(params.signal))
-  ) {
-    return false;
-  }
-  return true;
+  );
 }

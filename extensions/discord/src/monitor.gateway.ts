@@ -6,8 +6,6 @@ import type {
   DiscordGatewaySupervisor,
 } from "./monitor/gateway-supervisor.js";
 
-export { getDiscordGatewayEmitter } from "./monitor/gateway-supervisor.js";
-
 type WaitForDiscordGatewayStopParams = {
   gateway?: DiscordGatewayHandle;
   abortSignal?: AbortSignal;
@@ -22,10 +20,6 @@ export async function waitForDiscordGatewayStop(
   const { gateway, abortSignal } = params;
   return await new Promise<void>((resolve, reject) => {
     let settled = false;
-    const cleanup = () => {
-      abortSignal?.removeEventListener("abort", onAbort);
-      params.gatewaySupervisor?.detachLifecycle();
-    };
     const finish = (settle: () => void) => {
       if (settled) {
         return;
@@ -36,7 +30,8 @@ export async function waitForDiscordGatewayStop(
       } finally {
         // remove listeners after disconnect so late "error" events emitted
         // during disconnect are still handled instead of becoming uncaught
-        cleanup();
+        abortSignal?.removeEventListener("abort", onAbort);
+        params.gatewaySupervisor?.detachLifecycle();
         settle();
       }
     };

@@ -92,8 +92,7 @@ export async function loadModelProvidersData(
     catalogRefresh ?? Promise.resolve(undefined),
   ]);
   return {
-    authStatus:
-      authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
+    authStatus: authStatus.ok ? authStatus.result : null,
     providerOutcomes: catalog.ok ? (catalog.result.providerOutcomes ?? []) : [],
     catalogError:
       refreshResult && !refreshResult.ok
@@ -124,7 +123,7 @@ export function loadModelProviderCost(
       scope: "family",
       timeZone: "local",
     },
-    { signal },
+    { signal, projection: "overview" },
   )
     .then((result) => result?.aggregates?.byProvider ?? null)
     .catch((error: unknown) => {

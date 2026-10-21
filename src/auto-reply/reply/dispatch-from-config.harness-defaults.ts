@@ -9,13 +9,22 @@ import {
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readPreparedSessionEntryChange } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
-import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import {
+  prepareSessionRowPublicationScope,
+  sessionChangeAffectsStoredRow,
+} from "../../sessions/session-row-facts.js";
+import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
@@ -38,48 +47,61 @@ export function createShouldEmitVerboseProgress(params: {
   storePath?: string;
   initialExplicitLevel?: string;
   fallbackLevel: string;
+  assertCurrent?: () => void;
 }) {
   let runVerbosity: ReplyRunVerbosity | undefined;
-  const resolveCurrentExplicitLevel = () => {
-    if (params.sessionKey && params.storePath) {
-      try {
-        const entry = loadSessionEntryReadOnly({
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          readConsistency: "latest",
-          clone: false,
-        });
-        return normalizeVerboseLevel(entry?.verboseLevel ?? "");
-      } catch {
-        // Ignore transient store read failures and fall back to the current dispatch snapshot.
+  let explicitLevel = normalizeVerboseLevel(params.initialExplicitLevel ?? "");
+  let release = () => {};
+  if (params.agentId && params.storePath && params.sessionKey) {
+    const sessionKey = resolveSqliteSessionKey(params.sessionKey, params.agentId);
+    const scope = {
+      ...prepareSessionRowPublicationScope([params.storePath]),
+      agentId: params.agentId,
+      sessionKeys: [sessionKey],
+    };
+    release = sessionChanges.subscribeFacts((change) => {
+      if (!sessionChangeAffectsStoredRow(change, scope)) {
+        return;
       }
-    }
-    return normalizeVerboseLevel(params.initialExplicitLevel ?? "");
-  };
+      const committed = readPreparedSessionEntryChange(change, sessionKey);
+      if (committed?.entry) {
+        explicitLevel = normalizeVerboseLevel(committed.entry.verboseLevel ?? "");
+      } else if ("facts" in change && change.facts?.kind === "removed") {
+        explicitLevel = undefined;
+      }
+      // Unknown publications retain this dispatch's last acknowledged preference.
+    });
+  }
   const resolveLevel = () =>
     runVerbosity?.verboseLevelOverride ??
-    resolveCurrentExplicitLevel() ??
+    explicitLevel ??
     runVerbosity?.resolvedVerboseLevel ??
     normalizeVerboseLevel(params.fallbackLevel) ??
     "off";
+  const shouldEmitAsync = async (full: boolean) => {
+    params.assertCurrent?.();
+    const level = resolveLevel();
+    return full ? level === "full" : level !== "off";
+  };
   return {
+    release,
     noteRunVerbosity: (settings: ReplyRunVerbosity) => {
       // A reused queued dispatcher must clear the previous turn's explicit choice.
       runVerbosity = settings;
     },
     shouldEmit: () => resolveLevel() !== "off",
     shouldEmitFull: () => resolveLevel() === "full",
+    shouldEmitAsync: () => shouldEmitAsync(false),
+    shouldEmitFullAsync: () => shouldEmitAsync(true),
   };
 }
 
 export function resolveTurnModelOverride(
   replyOptions: { isHeartbeat?: boolean; heartbeatModelOverride?: string } | undefined,
 ): string | undefined {
-  if (replyOptions?.isHeartbeat !== true) {
-    return undefined;
-  }
-  return normalizeOptionalString(replyOptions.heartbeatModelOverride);
+  return replyOptions?.isHeartbeat === true
+    ? normalizeOptionalString(replyOptions.heartbeatModelOverride)
+    : undefined;
 }
 
 /**
@@ -88,7 +110,7 @@ export function resolveTurnModelOverride(
  * derive the same session-stable delivery mode or CLI session bindings
  * ping-pong across turn kinds (#121485).
  */
-export function resolveVisibleRepliesPolicy(params: {
+export async function resolveVisibleRepliesPolicy(params: {
   cfg: OpenClawConfig;
   chatType?: string;
   ctx: FinalizedMsgContext;
@@ -97,32 +119,23 @@ export function resolveVisibleRepliesPolicy(params: {
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   turnModelOverride?: string;
-}): {
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): Promise<{
   configuredVisibleReplies?: "automatic" | "message_tool";
   harnessDefaultVisibleReplies?: "automatic" | "message_tool";
-} {
-  const configuredVisibleReplies =
-    params.chatType === "group" || params.chatType === "channel"
-      ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
-      : params.cfg.messages?.visibleReplies;
+}> {
+  const isGroup = params.chatType === "group" || params.chatType === "channel";
+  const configuredVisibleReplies = isGroup
+    ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
+    : params.cfg.messages?.visibleReplies;
   const harnessDefaultVisibleReplies =
-    configuredVisibleReplies === undefined &&
-    params.chatType !== "group" &&
-    params.chatType !== "channel"
-      ? resolveHarnessSourceVisibleRepliesDefault({
-          cfg: params.cfg,
-          ctx: params.ctx,
-          entry: params.entry,
-          sessionAgentId: params.sessionAgentId,
-          sessionKey: params.sessionKey,
-          sessionStore: params.sessionStore,
-          turnModelOverride: params.turnModelOverride,
-        })
+    configuredVisibleReplies === undefined && !isGroup
+      ? await resolveHarnessSourceVisibleRepliesDefault(params)
       : undefined;
   return { configuredVisibleReplies, harnessDefaultVisibleReplies };
 }
 
-function resolveHarnessSourceVisibleRepliesDefault(params: {
+async function resolveHarnessSourceVisibleRepliesDefault(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
   entry?: SessionEntry;
@@ -130,23 +143,31 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
   sessionKey?: string;
   sessionStore?: Record<string, SessionEntry>;
   turnModelOverride?: string;
-}): HarnessSourceVisibleRepliesDefault | undefined {
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): Promise<HarnessSourceVisibleRepliesDefault | undefined> {
   if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
     return undefined;
   }
   try {
     const allowPluginNormalization = params.cfg.plugins?.enabled !== false;
-    const defaultModelRef = resolveDefaultModelForAgent({
+    const metadataSnapshot = allowPluginNormalization
+      ? (params.metadataSnapshot ??
+        (await resolvePluginMetadataSnapshotAsync({
+          config: params.cfg,
+          allowWorkspaceScopedCurrent: true,
+        })))
+      : null;
+    const modelContext = {
       cfg: params.cfg,
       agentId: params.sessionAgentId,
       allowPluginNormalization,
-    });
-    const aliasIndex = buildModelAliasIndex({
-      cfg: params.cfg,
-      agentId: params.sessionAgentId,
-      defaultProvider: defaultModelRef.provider,
-      allowPluginNormalization,
-    });
+      manifestPlugins: metadataSnapshot ?? [],
+    };
+    const defaultModelRef = resolveDefaultModelForAgent(modelContext);
+    const selectionContext = { ...modelContext, defaultProvider: defaultModelRef.provider };
+    const aliasIndex = buildModelAliasIndex(selectionContext);
+    const resolveModelCandidate = (raw: string) =>
+      resolveModelRefFromString({ ...selectionContext, raw, aliasIndex })?.ref;
     const parentSessionKey =
       params.entry?.parentSessionKey ??
       params.ctx.ModelParentSessionKey ??
@@ -175,16 +196,9 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
         })
       : undefined;
     const channelModelCandidate = channelModelOverride
-      ? resolveModelRefFromString({
-          raw: channelModelOverride.model,
-          cfg: params.cfg,
-          agentId: params.sessionAgentId,
-          defaultProvider: defaultModelRef.provider,
-          allowPluginNormalization,
-          aliasIndex,
-        })?.ref
+      ? resolveModelCandidate(channelModelOverride.model)
       : undefined;
-    const storedModelRef = resolveStoredModelOverride({
+    const storedModelRef = await resolveStoredModelOverrideAsync({
       loadSessionEntry: (sessionKey) => {
         const agentId = resolveSessionAgentId({
           sessionKey,
@@ -192,12 +206,11 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
           fallbackAgentId: params.sessionAgentId,
         });
         const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-        return loadSessionEntryReadOnly({
+        return readSessionEntryReadOnlyInWorker({
           agentId,
           storePath,
           sessionKey,
           readConsistency: "latest",
-          clone: false,
         });
       },
       sessionEntry: params.entry,
@@ -213,14 +226,7 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
         }
       : undefined;
     const turnModelCandidate = params.turnModelOverride
-      ? resolveModelRefFromString({
-          raw: params.turnModelOverride,
-          cfg: params.cfg,
-          agentId: params.sessionAgentId,
-          defaultProvider: defaultModelRef.provider,
-          allowPluginNormalization,
-          aliasIndex,
-        })?.ref
+      ? resolveModelCandidate(params.turnModelOverride)
       : undefined;
     const resolveCandidateDefault = (candidate: HarnessDefaultCandidate) => {
       const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({

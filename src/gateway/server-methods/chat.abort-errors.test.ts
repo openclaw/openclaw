@@ -7,16 +7,17 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import * as subagentControlSession from "../../agents/subagents/registry/subagent-control-session.js";
 import { killSubagentRunAdmin } from "../../agents/subagents/registry/subagent-control.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../agents/subagents/registry/subagent-control.types.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
@@ -24,7 +25,6 @@ import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry
 import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "../../auto-reply/reply/abort.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { initSessionState } from "../../auto-reply/reply/session.js";
 import { buildTestCtx } from "../../auto-reply/reply/test-ctx.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -35,8 +35,22 @@ import {
   readSessionTranscriptWatermark,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import { createGatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
+import {
+  claimSessionControllerTask,
+  releaseSessionControllerClaim,
+} from "../../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import {
+  registerRpcSource,
+  requestRpcSourceCancellation,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
@@ -44,7 +58,11 @@ import {
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import { handleSessionKillHttpRequest } from "../session-kill-http.js";
-import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
+import * as sessionUtils from "../session-utils.js";
+import {
+  handleChatAbortRequest,
+  handleChatAbortRequestWithLifecycle,
+} from "./chat-abort-handler.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import {
   createActiveRun,
@@ -56,6 +74,7 @@ import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 
 const fixture = useChatAbortRegistryFixture();
+afterEach(() => vi.restoreAllMocks());
 
 async function corruptChildDatabase(storePath: string, sessionKey: string) {
   const database = listOpenClawAgentDatabasesForTest().find(
@@ -73,7 +92,7 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
     const sessionKey = "agent:main:main";
     const badKey = "agent:broken:subagent:bad";
     const healthyKey = "agent:main:subagent:healthy";
-    await writeSubagentSessionEntry({
+    const parentStore = await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       agentId: "main",
       sessionKey,
@@ -93,9 +112,20 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
       ["bad", badKey],
       ["healthy", healthyKey],
     ] as const) {
+      const childAgentId = runId === "bad" || runId === "second-bad" ? "broken" : "main";
+      const storePath = await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: childAgentId,
+        sessionKey: childSessionKey,
+        defaultSessionId: `${runId}-session`,
+        lifecycleRevision: "original-child",
+      });
       await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId,
+        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
+          ?.entry,
         requesterSessionKey: runId !== "root" ? rootKey : sessionKey,
         requesterAgentId: "main",
         requesterDisplayKey: "main",
@@ -127,7 +157,9 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
     }
     const cfg = getRuntimeConfig();
     const parent = createActiveRun(sessionKey, {
+      runId: "parent",
       sessionId: "parent-session",
+      storeScope: parentStore,
       agentId: "main",
       owner: { connId: "owner" },
     });
@@ -136,27 +168,29 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
       expect(badDispatch).not.toHaveBeenCalled();
       expect(healthyDispatch).not.toHaveBeenCalled();
     });
-    parent.controller.signal.addEventListener("abort", signal);
-    const operation = createReplyOperation({
-      sessionKey,
-      sessionId: "parent-session",
-      resetTriggered: false,
-    });
+    parent.input.abortSignal.addEventListener("abort", signal);
+    const operation = parent.input.claim?.operation;
+    if (!operation) {
+      throw new Error("Expected the parent fixture operation");
+    }
     operation.attachBackend({
       kind: "embedded",
       isStreaming: () => true,
-      cancel: () => parent.controller.abort(),
+      cancel: () => requestRpcSourceCancellation(parent),
     });
     const context = createChatAbortContext({ getRuntimeConfig: () => cfg });
     const embedded = createEmbeddedRunHandle({
       runId: "parent",
-      abort: () => parent.controller.abort(),
+      abort: () => {
+        requestRpcSourceCancellation(parent);
+        clearActiveEmbeddedRun("parent-session", embedded, sessionKey);
+      },
     });
     if (boundary === "embedded stop") {
       setActiveEmbeddedRun("parent-session", embedded, sessionKey);
       context.getSessionEventSubscriberConnIds = () => new Set();
     } else {
-      context.chatAbortControllers.set("parent", parent);
+      registerRpcSource("parent", parent);
     }
     try {
       const result =
@@ -218,16 +252,15 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
           formatAbortReplyText(result.stoppedSubagents, undefined, result.failedSubagents),
         ).toContain("Cancellation was incomplete for 2 sub-agents");
       }
-      expect(getSubagentRunByChildSessionKey(healthyKey)).toMatchObject({
+      expect(await getSubagentRunByChildSessionKey(healthyKey)).toMatchObject({
         endedReason: "subagent-killed",
       });
       expect(healthyDispatch).not.toHaveBeenCalled();
-      expect(getSubagentRunByChildSessionKey(badKey)?.killIntent).toBeUndefined();
+      expect((await getSubagentRunByChildSessionKey(badKey))?.killIntent).toBeUndefined();
       await vi.waitFor(() => expect(badDispatch).toHaveBeenCalledOnce());
       releaseSwarmRun("bad");
       await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
     } finally {
-      operation.complete();
       clearActiveEmbeddedRun("parent-session", embedded, sessionKey);
       releaseSwarmRun("capacity");
     }
@@ -248,15 +281,19 @@ it.each([
       ["bad", badKey, sessionKey],
       ["healthy", healthyKey, sessionKey],
     ] as const) {
-      await writeSubagentSessionEntry({
+      const storePath = await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: runId === "bad" ? "broken" : "main",
         sessionKey: childSessionKey,
         defaultSessionId: `${runId}-session`,
+        lifecycleRevision: "original-child",
       });
       await registerSubagentRun({
         runId,
         childSessionKey,
+        childAgentId: runId === "bad" ? "broken" : "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
+          ?.entry,
         requesterSessionKey,
         requesterAgentId: "main",
         requesterDisplayKey: requesterSessionKey,
@@ -288,6 +325,7 @@ it.each([
     }
     const parentAbort = vi.fn(() => {
       expect(releaseSwarmRun("parent")).toBe(true);
+      clearActiveEmbeddedRun("parent-session", parentHandle, sessionKey);
     });
     const badAbort = vi.fn();
     const parentHandle = createEmbeddedRunHandle({ runId: "parent", abort: parentAbort });
@@ -352,11 +390,15 @@ it.each([
         result = await killSubagentRunAdmin({ cfg, sessionKey });
       }
       expect(parentAbort, JSON.stringify(result)).toHaveBeenCalledOnce();
-      expect(getSubagentRunByChildSessionKey(sessionKey)?.endedReason).toBe("subagent-killed");
-      expect(getSubagentRunByChildSessionKey(healthyKey)?.endedReason).toBe("subagent-killed");
+      expect((await getSubagentRunByChildSessionKey(sessionKey))?.endedReason).toBe(
+        "subagent-killed",
+      );
+      expect((await getSubagentRunByChildSessionKey(healthyKey))?.endedReason).toBe(
+        "subagent-killed",
+      );
       expect(healthyDispatch).not.toHaveBeenCalled();
       expect(badAbort).not.toHaveBeenCalled();
-      expect(getSubagentRunByChildSessionKey(badKey)?.killIntent).toBeUndefined();
+      expect((await getSubagentRunByChildSessionKey(badKey))?.killIntent).toBeUndefined();
       if (queued) {
         await vi.waitFor(() => expect(badDispatch).toHaveBeenCalledOnce());
         releaseSwarmRun("bad");
@@ -418,6 +460,7 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
       { storePath: childStore, sessionKey: childKey },
       {
         sessionId: "incarnation-child",
+        lifecycleRevision: "original-child",
         updatedAt: Date.now(),
       },
     );
@@ -436,6 +479,11 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
     await registerSubagentRun({
       runId: "child",
       childSessionKey: childKey,
+      childAgentId: "child",
+      sessionEntry: loadExactSessionEntryReadOnly({
+        storePath: childStore,
+        sessionKey: childKey,
+      })?.entry,
       requesterSessionKey: sessionKey,
       requesterAgentId: "main",
       requesterDisplayKey: sessionKey,
@@ -447,18 +495,37 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
     });
     const entered = createDeferred();
     const release = createDeferred();
-    const child = getSubagentRunByChildSessionKey(childKey)!;
+    const child = (await getSubagentRunByChildSessionKey(childKey))!;
     const childTerminated = createDeferred();
     const stopObservingChild = subscribeSubagentRunChanges("persistence", () => {
-      const current = getSubagentRunByChildSessionKey(childKey);
+      const current = subagentRuns.get(child.runId);
       if (isSameSubagentRunOwner(current, child) && current?.endedReason === "subagent-killed") {
         childTerminated.resolve();
       }
     });
     const native = boundary.endsWith("native new");
     const childHandle = createEmbeddedRunHandle();
-    setActiveEmbeddedRun("incarnation-child", childHandle, childKey);
-    const parentAdmission = await beginSessionWorkAdmission({
+    const childOperation = createReplyOperation({
+      sessionKey: childKey,
+      sessionId: "incarnation-child",
+      agentId: "child",
+      resetTriggered: false,
+      target: captureSessionTarget({
+        storeScope: childStore,
+        sessionKey: childKey,
+        incarnation: "incarnation-child",
+        agentId: "child",
+      }),
+    });
+    setActiveEmbeddedRun(
+      "incarnation-child",
+      childHandle,
+      childKey,
+      undefined,
+      "child",
+      childOperation,
+    );
+    const parentAdmission = await beginSessionEffect({
       scope: storePath,
       identities: [sessionKey, sessionId],
       assertAllowed: () => {},
@@ -466,11 +533,12 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
     const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
     const cfg = getRuntimeConfig();
     const parent = createActiveRun(sessionKey, {
+      runId: "parent",
       sessionId,
       agentId: "main",
       owner: { connId: "owner" },
     });
-    parent.controller.signal.addEventListener("abort", () => {
+    parent.input.abortSignal.addEventListener("abort", () => {
       parentAdmission.release();
       operation.complete();
     });
@@ -478,7 +546,7 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
       getRuntimeConfig: () => cfg,
       getSessionEventSubscriberConnIds: () => new Set(),
     });
-    context.chatAbortControllers.set("parent", parent);
+    registerRpcSource("parent", parent);
     context.chatRunState.getOrCreate("parent").buffer = "old delayed partial";
     // Hold only the original marker after termination, without occupying the child writer FIFO.
     const persistMarker = subagentControlSession.persistSubagentAbortedLastRun;
@@ -516,12 +584,15 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
         ]),
         signal,
       );
-      expect(parent.controller.signal.aborted).toBe(true);
-      expect(context.chatAbortControllers.has("parent")).toBe(false);
-      expect(getSubagentRunByChildSessionKey(childKey)?.endedReason).toBe("subagent-killed");
+      expect(parent.input.abortSignal.aborted).toBe(true);
+      expect(rpcSourceTesting.has("parent")).toBe(false);
+      expect((await getSubagentRunByChildSessionKey(childKey))?.endedReason).toBe(
+        "subagent-killed",
+      );
       // Explicit reset drains children, including native /new. Keep the original
       // abort pending on its marker publication, not on work the reset must stop.
       clearActiveEmbeddedRun("incarnation-child", childHandle, childKey);
+      childOperation.complete();
       if (native) {
         const reset = await initSessionState({
           cfg,
@@ -579,7 +650,9 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
       release.resolve();
       const response = await abort;
       expect(response).toHaveBeenCalledWith(true, expect.objectContaining({ aborted: true }));
-      expect(getSubagentRunByChildSessionKey(childKey)?.endedReason).toBe("subagent-killed");
+      expect((await getSubagentRunByChildSessionKey(childKey))?.endedReason).toBe(
+        "subagent-killed",
+      );
       expect(
         await loadTranscriptEvents(scope),
         "old partial must not cross the committed lifecycle boundary",
@@ -594,11 +667,139 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
       operation.complete();
       release.resolve();
       markerWriter.mockRestore();
+      clearActiveEmbeddedRun("incarnation-child", childHandle, childKey);
+      childOperation.complete();
+      await abort;
+    }
+  },
+);
+
+it("reports typed contention without replaying or denying an already applied Stop", async () => {
+  const failure = Object.assign(new Error("database is locked"), {
+    code: "ERR_SQLITE_ERROR",
+    errcode: 5,
+  });
+  vi.spyOn(sessionUtils, "loadGatewaySessionEntryReadOnlyInWorker").mockImplementation(async () => {
+    throw failure;
+  });
+  const sessionKey = "agent:main:main";
+  const active = createActiveRun(sessionKey, { agentId: "main" });
+  const context = createChatAbortContext({ sources: new Map([["run-1", active]]) });
+  const respond = await invokeChatAbortHandler({
+    handler: handleChatAbortRequest,
+    context,
+    request: { sessionKey, runId: "run-1" },
+    client: { connect: { scopes: ["operator.admin"] } },
+  });
+  expect(active.input.abortSignal.aborted).toBe(true);
+  expect(respond).toHaveBeenCalledOnce();
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code: "UNAVAILABLE",
+      message:
+        "The server is busy. Check this turn's status before trying Stop again.\n\nSQLite transaction admission remained busy. Stopping may already have taken effect.",
+      details: { errorKind: "state_contention" },
+    }),
+  );
+});
+
+it.each([
+  new Error("database is locked: private detail"),
+  new AggregateError(
+    [Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 })],
+    "cleanup failed",
+  ),
+])("does not certify strings or uncertain cleanup aggregates", async (error) => {
+  const context = createChatAbortContext({
+    getRuntimeConfig: () => {
+      throw error;
+    },
+  });
+  await expect(
+    invokeChatAbortHandler({
+      handler: handleChatAbortRequest,
+      context,
+      request: { sessionKey: "agent:main:main", runId: "run-1" },
+    }),
+  ).rejects.toBe(error);
+});
+
+it.each([
+  { scope: "session-wide", runId: undefined },
+  { scope: "exact-run", runId: "retained-run" },
+] as const)(
+  "$scope Stop acknowledges cancellation while preserving raw source custody",
+  async ({ runId }) => {
+    vi.useFakeTimers();
+    const raw = createDeferred();
+    const cancelled = createDeferred();
+    const source = createActiveRun("main", {
+      sessionId: "main-session",
+      agentId: "main",
+      queued: true,
+    });
+    const claim = await claimSessionControllerTask(source.input, (selected) => {
+      createReplyOperation({
+        sessionKey: "main",
+        sessionId: "main-session",
+        agentId: "main",
+        resetTriggered: false,
+        mailboxClaim: selected,
+      });
+    });
+    const producer = (async () => {
       try {
-        await abort;
+        await raw.promise;
       } finally {
-        clearActiveEmbeddedRun("incarnation-child", childHandle, childKey);
+        claim.operation?.complete();
+        releaseSessionControllerClaim(claim);
       }
+    })();
+    source.input.abortSignal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+    const context = createChatAbortContext({ sources: new Map([["retained-run", source]]) });
+    const stopping = invokeChatAbortHandler({
+      handler: handleChatAbortRequestWithLifecycle,
+      context,
+      request: { sessionKey: "main", ...(runId ? { runId } : {}) },
+      client: { connect: { scopes: ["operator.admin"] } },
+    }).then(
+      (respond) => ({ respond, error: undefined }),
+      (error: unknown) => ({ respond: undefined, error }),
+    );
+    try {
+      await cancelled.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+      const outcome = await stopping;
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ aborted: true, runIds: ["retained-run"] }),
+      );
+      expect(claim.released).toBe(false);
+      expect(source.input.phase).toBe("claimed");
+      const snapshot = createGatewayActiveWorkSnapshot({
+        getChatRuns: () => 0,
+        getQueuedTurns: () => 0,
+        getTerminalPersistence: () => 0,
+      });
+      expect(snapshot.idle).toBe(false);
+      expect(snapshot.counts.sessionAdmissions).toBe(1);
+      expect(() =>
+        createReplyOperation({
+          sessionKey: "main",
+          sessionId: "successor",
+          resetTriggered: false,
+          target: source.input.target,
+        }),
+      ).toThrow("already active");
+    } finally {
+      raw.resolve();
+      await producer;
+      await claim.settlement.promise;
+      await stopping;
+      vi.useRealTimers();
     }
   },
 );

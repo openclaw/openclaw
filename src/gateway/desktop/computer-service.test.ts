@@ -8,16 +8,35 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { startComputerHostProcess, type ComputerHostProcess } from "./computer-process.js";
 import { ComputerHostFinalizationError } from "./computer-protocol.js";
 import { createGatewayComputerService, type GatewayComputerService } from "./computer-service.js";
+import { computerCapabilities, observeSettlement, whileHeld } from "./computer.test-support.js";
 import type { HostDesktopService } from "./host-source.js";
 import type { DesktopComputerLease } from "./managed-linux.js";
 
 vi.mock("./computer-process.js", () => ({ startComputerHostProcess: vi.fn() }));
 
 const logicalId = "123e4567-e89b-42d3-a456-426614174000";
+const screenshot = { format: "png", base64: "cGl4ZWxz" };
+const startHost = vi.mocked(startComputerHostProcess);
 const cleanups: Array<() => Promise<void>> = [];
 
+function delayReadiness() {
+  const started = createDeferredCore();
+  const ready = createDeferredCore();
+  const startProcess = startHost.getMockImplementation()!;
+  const close = vi.fn<ComputerHostProcess["close"]>();
+  startHost.mockImplementationOnce((options) => {
+    const child = startProcess(options);
+    close.mockImplementation((execution) => child.close(execution));
+    started.resolve();
+    return { ...child, close, ready: ready.promise.then(() => child.ready) };
+  });
+  return { started: started.promise, ready, close };
+}
+
+let f: ReturnType<typeof createFixture>;
 beforeEach(() => {
-  vi.mocked(startComputerHostProcess).mockReset();
+  startHost.mockReset();
+  f = createFixture();
 });
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) {
@@ -40,9 +59,7 @@ function createFixture() {
       configSchema: false,
     }),
   );
-  const snapshot = vi.fn(async (_paramsJSON?: string | null) =>
-    JSON.stringify({ format: "png", base64: "cGl4ZWxz" }),
-  );
+  const snapshot = vi.fn(async (_paramsJSON?: string | null) => JSON.stringify(screenshot));
   const act = vi.fn(async (_paramsJSON?: string | null) => JSON.stringify({ ok: true }));
   const physicalClose = vi.fn(async (_reason: string) => {});
   const openExecution = vi.fn(async (_context: { executionId: string }) => ({
@@ -51,15 +68,12 @@ function createFixture() {
     close: physicalClose,
   }));
   let generation = 0;
-  const capabilities = (): ComputerUseCapabilityDescriptor => ({
-    contractVersion: 2,
-    provider: { id: "fixture", label: "Fixture computer", generation: `generation-${generation}` },
-    actions: ["screenshot", "left_click"],
-    targets: ["screen"],
-    deliveryModes: ["foreground"],
-    observations: ["image"],
-    features: { recording: false, agentCursor: false, multiDisplay: false },
-  });
+  const capabilities = () =>
+    computerCapabilities({
+      id: "fixture",
+      label: "Fixture computer",
+      generation: `generation-${generation}`,
+    });
   registerComputerUseProvider(
     {
       registerNodeHostCommand: (command) =>
@@ -112,7 +126,7 @@ function createFixture() {
     },
   };
   const children: ComputerHostProcess[] = [];
-  vi.mocked(startComputerHostProcess).mockImplementation((options) => {
+  startHost.mockImplementation((options) => {
     options.assertCurrent();
     generation += 1;
     let active = true;
@@ -159,7 +173,23 @@ function createFixture() {
     idempotencyKey: "observe-1",
     ...overrides,
   });
+  const click = (idempotencyKey: string) =>
+    request({
+      command: "computer.act",
+      params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
+      idempotencyKey,
+    });
+  const mocks = { start: startHost, snapshot, act, open: openExecution, close: physicalClose };
+  const calls = (expected: Partial<Record<keyof typeof mocks | "release" | "leases", number>>) =>
+    expect({
+      ...Object.fromEntries(
+        Object.entries(mocks).map(([key, mock]) => [key, mock.mock.calls.length]),
+      ),
+      release: leases[0]?.release.mock.calls.length,
+      leases: leases.length,
+    }).toMatchObject(expected);
   return {
+    calls,
     service,
     config,
     registry,
@@ -172,19 +202,121 @@ function createFixture() {
     leases,
     stops,
     request,
+    click,
+    declared: () => service.status({ probe: false }),
+    holdCleanup: () => {
+      const gate = createDeferredCore();
+      physicalClose.mockImplementationOnce(() => gate.promise);
+      return gate;
+    },
+    invoke: (overrides?: Parameters<typeof request>[0]) => service.invoke(request(overrides)),
   };
 }
 
+async function expectCleanupHeld<T>(
+  gate: ReturnType<typeof createDeferredCore<void>>,
+  pending: Promise<T>,
+  check: () => void | Promise<void>,
+  close: (...args: never[]) => Promise<void> = f.physicalClose,
+  count = 1,
+) {
+  const observed = observeSettlement(pending);
+  await whileHeld(gate, async () => {
+    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(count));
+    await check();
+    expect(close).toHaveBeenCalledTimes(count);
+    expect(observed.settled).not.toHaveBeenCalled();
+  });
+  return await pending;
+}
+
 describe("Gateway computer service", () => {
+  it("reads declared and recorded capabilities without starting or waiting for a computer", async () => {
+    const cold = await f.declared();
+    expect(cold).toMatchObject({
+      configured: true,
+      available: false,
+      computerUse: { provider: { generation: "generation-0" } },
+    });
+    f.calls({ start: 0, leases: 0 });
+
+    const delayed = delayReadiness();
+    const probing = f.service.status({ probe: true });
+    await whileHeld(delayed.ready, async () => {
+      await delayed.started;
+      expect(await f.declared()).toEqual(cold);
+    });
+    const live = await probing;
+    expect(live).toMatchObject({
+      available: true,
+      computerUse: { provider: { generation: "generation-1" } },
+    });
+    expect(await f.declared()).toEqual(live);
+    f.leases[0]!.valid = false;
+    expect(await f.declared()).toMatchObject({
+      available: false,
+      computerUse: cold.computerUse,
+    });
+    f.calls({ start: 1, release: 0 });
+  });
+
+  it("does not renew or restart an idle computer when reading its status", async () => {
+    vi.useFakeTimers();
+    try {
+      const live = await f.service.status();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await f.declared()).toEqual(live);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await f.declared()).toMatchObject({
+        configured: true,
+        available: false,
+        computerUse: { actions: ["screenshot", "left_click"] },
+      });
+      f.calls({ start: 1, release: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps native readiness authoritative when an unprepared declaration fails", async () => {
+    const entry = f.registry.nodeHostCommands.find((candidate) => candidate.command.computerUse)!;
+    entry.command.computerUse = () => {
+      throw new Error("Declaration needs a native desktop");
+    };
+    expect(await f.declared()).toMatchObject({
+      configured: true,
+      available: false,
+      error: "Declaration needs a native desktop",
+    });
+    expect(startComputerHostProcess).not.toHaveBeenCalled();
+    expect(await f.service.status({ probe: true })).toMatchObject({ available: true });
+    expect(await f.declared()).toMatchObject({ available: true });
+  });
+
+  it("invalidates declared capabilities on provider replacement and disablement", async () => {
+    const entry = f.registry.nodeHostCommands.find((candidate) => candidate.command.computerUse)!;
+    const descriptor = (await f.declared()).computerUse!;
+    const computerUse = vi.fn(() => ({ ...descriptor, actions: ["screenshot", "list_windows"] }));
+    entry.command = { ...entry.command, computerUse };
+    expect((await f.declared()).computerUse?.actions).toContain("list_windows");
+    await f.declared();
+    expect(computerUse).toHaveBeenCalledOnce();
+    f.config.plugins!.entries!.fixture!.enabled = false;
+    expect(await f.declared()).toEqual({ configured: false, available: false });
+    f.config.plugins!.entries!.fixture!.enabled = true;
+    expect((await f.declared()).computerUse?.actions).toContain("list_windows");
+    expect(computerUse).toHaveBeenCalledTimes(2);
+    expect(startComputerHostProcess).not.toHaveBeenCalled();
+  });
+
   it.each(["native target", "managed target", "desktop", "helper"] as const)(
     "fences stale %s input and joins cleanup before concurrent discovery",
     async (source) => {
-      const f = createFixture();
       const initiallyManaged = source !== "native target";
       f.config.desktop!.host!.enabled = initiallyManaged;
       const original = await f.service.status();
       expect(original.available).toBe(true);
-      await f.service.invoke(f.request());
+      await f.invoke();
       const originalGeneration = original.computerUse!.provider.generation;
 
       if (source === "desktop") {
@@ -195,186 +327,118 @@ describe("Gateway computer service", () => {
         f.config.desktop!.host!.enabled = !initiallyManaged;
       }
       await expect(
-        f.service.invoke({
-          ...f.request({
-            command: "computer.act",
-            params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
-            idempotencyKey: "stale-target-click",
-          }),
-          generation: originalGeneration,
-        }),
+        f.service.invoke({ ...f.click("stale-target-click"), generation: originalGeneration }),
       ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
-      expect(f.act).not.toHaveBeenCalled();
-      expect(startComputerHostProcess).toHaveBeenCalledOnce();
+      f.calls({ act: 0, start: 1 });
 
-      const cleanup = createDeferredCore();
-      f.physicalClose.mockImplementationOnce(() => cleanup.promise);
-      const discovered = vi.fn();
-      const discovery = Promise.all([
-        f.service.status(),
-        f.service.status(),
-        f.service.status(),
-      ]).then((results) => {
-        discovered();
-        return results;
-      });
-      try {
-        await vi.waitFor(() => expect(f.physicalClose).toHaveBeenCalledOnce());
-        expect(discovered).not.toHaveBeenCalled();
-        expect(startComputerHostProcess).toHaveBeenCalledOnce();
-        expect(f.leases).toHaveLength(initiallyManaged ? 1 : 0);
+      const cleanup = f.holdCleanup();
+      const discovery = Promise.all([f.service.status(), f.service.status(), f.service.status()]);
+      const results = await expectCleanupHeld(cleanup, discovery, () => {
+        f.calls({ start: 1, leases: initiallyManaged ? 1 : 0 });
         if (initiallyManaged) {
           expect(f.leases[0]!.release).not.toHaveBeenCalled();
         }
-      } finally {
-        cleanup.resolve();
-      }
+      });
 
-      const results = await discovery;
       expect(results.every((result) => result.available)).toBe(true);
       const generations = results.map((result) => result.computerUse?.provider.generation);
       expect(new Set(generations).size).toBe(1);
       expect(generations[0]).not.toBe(originalGeneration);
       expect(startComputerHostProcess).toHaveBeenCalledTimes(2);
-      const nextEnvironment = vi.mocked(startComputerHostProcess).mock.calls[1]![0].env;
+      const nextEnvironment = startHost.mock.calls[1]![0].env;
       expect(nextEnvironment).toBe(
         source === "managed target" ? process.env : f.leases.at(-1)!.env,
       );
       if (initiallyManaged) {
         expect(f.leases[0]!.release).toHaveBeenCalledOnce();
       }
-      await expect(f.service.invoke(f.request({ generation: originalGeneration }))).rejects.toThrow(
+      await expect(f.invoke({ generation: originalGeneration })).rejects.toThrow(
         "COMPUTER_STALE_OBSERVATION",
       );
-      expect(f.act).not.toHaveBeenCalled();
-      expect(f.snapshot).toHaveBeenCalledOnce();
-      expect(f.openExecution).toHaveBeenCalledOnce();
+      f.calls({ act: 0, snapshot: 1, open: 1 });
     },
   );
 
   it("does not publish a native computer whose desktop target changes during readiness", async () => {
-    const f = createFixture();
     f.config.desktop!.host!.enabled = false;
-    const started = createDeferredCore();
-    const ready = createDeferredCore();
-    const close = vi.fn<ComputerHostProcess["close"]>();
-    const startProcess = vi.mocked(startComputerHostProcess).getMockImplementation()!;
-    vi.mocked(startComputerHostProcess).mockImplementationOnce((options) => {
-      const child = startProcess(options);
-      close.mockImplementation((execution) => child.close(execution));
-      started.resolve();
-      return { ...child, close, ready: ready.promise.then(() => child.ready) };
-    });
+    const delayed = delayReadiness();
     const discovering = f.service.status();
-    try {
-      await started.promise;
+    await whileHeld(delayed.ready, async () => {
+      await delayed.started;
       f.config.desktop!.host!.enabled = true;
-    } finally {
-      ready.resolve();
-    }
+    });
     expect(await discovering).toMatchObject({ available: false });
-    expect(close).toHaveBeenCalledOnce();
+    expect(delayed.close).toHaveBeenCalledOnce();
     expect(await f.service.status()).toMatchObject({ available: true });
-    expect(startComputerHostProcess).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(startComputerHostProcess).mock.calls[1]![0].env === f.leases[0]!.env).toBe(
-      true,
-    );
-    expect(f.openExecution).not.toHaveBeenCalled();
+    expect(startHost.mock.calls[1]![0].env).toBe(f.leases[0]!.env);
+    f.calls({ start: 2, open: 0 });
   });
 
   it.each(["policy change", "operator disconnect"] as const)(
     "joins native cleanup on %s before another discovery",
     async (cause) => {
-      const f = createFixture();
       const disconnect = cause === "operator disconnect";
       f.config.desktop!.host!.enabled = disconnect;
       const owner = new AbortController();
       await f.service.status();
-      await f.service.invoke(f.request(disconnect ? { ownerSignal: owner.signal } : {}));
+      await f.invoke(disconnect ? { ownerSignal: owner.signal } : {});
       if (disconnect) {
-        await f.service.invoke(
-          f.request({
-            command: "computer.act",
-            params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
-            idempotencyKey: "click-1",
-          }),
-        );
+        await f.service.invoke(f.click("click-1"));
       }
-      const cleanup = createDeferredCore();
-      f.physicalClose.mockImplementationOnce(() => cleanup.promise);
+      const cleanup = f.holdCleanup();
       if (disconnect) {
         owner.abort();
       } else {
         f.config.desktop!.host!.enabled = true;
       }
-      const settled = vi.fn();
-      const pending = (disconnect ? f.service.status() : f.service.reconcileRuntimePolicy()).then(
-        (result) => {
-          settled();
-          return result;
+      const pending = disconnect ? f.service.status() : f.service.reconcileRuntimePolicy();
+      const result = await expectCleanupHeld<Awaited<typeof pending>>(
+        cleanup,
+        pending,
+        async () => {
+          if (!disconnect) {
+            await expect(f.invoke({ idempotencyKey: "after-reload" })).rejects.toThrow(
+              "COMPUTER_STALE_OBSERVATION",
+            );
+          }
+          expect(startComputerHostProcess).toHaveBeenCalledOnce();
+          if (disconnect) {
+            expect(f.leases[0]!.release).not.toHaveBeenCalled();
+          }
         },
       );
-      try {
-        if (!disconnect) {
-          await expect(
-            f.service.invoke(f.request({ idempotencyKey: "after-reload" })),
-          ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
-        }
-        await vi.waitFor(() => expect(f.physicalClose).toHaveBeenCalledOnce());
-        expect(settled).not.toHaveBeenCalled();
-        expect(startComputerHostProcess).toHaveBeenCalledOnce();
-        if (disconnect) {
-          expect(f.leases[0]!.release).not.toHaveBeenCalled();
-        }
-      } finally {
-        cleanup.resolve();
-      }
-      const result = await pending;
       if (disconnect) {
         expect(result).toMatchObject({ available: true });
-        expect(f.leases[0]!.release).toHaveBeenCalledOnce();
-        expect(f.act).toHaveBeenCalledOnce();
+        f.calls({ release: 1, act: 1 });
       } else {
-        expect(startComputerHostProcess).toHaveBeenCalledOnce();
-        expect(f.leases).toHaveLength(0);
+        f.calls({ start: 1, leases: 0 });
         expect(await f.service.status()).toMatchObject({ available: true });
-        expect(vi.mocked(startComputerHostProcess).mock.calls[1]![0].env).toBe(f.leases[0]!.env);
+        expect(startHost.mock.calls[1]![0].env).toBe(f.leases[0]!.env);
       }
       expect(startComputerHostProcess).toHaveBeenCalledTimes(2);
     },
   );
 
   it.each(["commit", "rollback"])("joins provider revocation before reload %s", async (outcome) => {
-    const f = createFixture();
     const original = await f.service.status();
-    await f.service.invoke(f.request());
+    await f.invoke();
     const unrelated = f.service.preparePluginReload({ changedPluginIds: new Set(["other"]) });
     await unrelated.drain();
     unrelated.resume();
     expect(f.physicalClose).not.toHaveBeenCalled();
     expect(await f.service.status()).toEqual(original);
 
-    const cleanup = createDeferredCore();
-    f.physicalClose.mockImplementationOnce(() => cleanup.promise);
+    const cleanup = f.holdCleanup();
     const reload = f.service.preparePluginReload({ changedPluginIds: new Set(["fixture"]) });
     expect(await f.service.status()).toMatchObject({
       available: false,
       error: expect.stringContaining("reloading"),
     });
-    await expect(f.service.invoke(f.request({ idempotencyKey: "during-reload" }))).rejects.toThrow(
-      "closed",
-    );
-    const drained = vi.fn();
-    const draining = reload.drain().then(drained);
-    try {
-      await vi.waitFor(() => expect(f.physicalClose).toHaveBeenCalledTimes(1));
-      expect(drained).not.toHaveBeenCalled();
+    await expect(f.invoke({ idempotencyKey: "during-reload" })).rejects.toThrow("closed");
+    await expectCleanupHeld(cleanup, reload.drain(), () => {
       expect(f.leases[0]!.release).not.toHaveBeenCalled();
-    } finally {
-      cleanup.resolve();
-    }
-    await draining;
-    expect(f.leases[0]!.release).toHaveBeenCalledTimes(1);
+    });
+    f.calls({ release: 1 });
     if (outcome === "commit") {
       f.config.plugins!.entries!.fixture!.enabled = false;
     }
@@ -392,7 +456,6 @@ describe("Gateway computer service", () => {
   });
 
   it("releases a late desktop lease without launching the retired preparation after reload resumes", async () => {
-    const f = createFixture();
     const acquired = createDeferredCore<DesktopComputerLease>();
     vi.spyOn(f.desktop, "acquireComputer").mockReturnValueOnce(acquired.promise);
     const discovering = f.service.status();
@@ -409,7 +472,6 @@ describe("Gateway computer service", () => {
   });
 
   it("discovers its managed computer without pairing and binds native executions to the requesting owner", async () => {
-    const f = createFixture();
     expect(await f.service.status()).toMatchObject({ configured: true, available: true });
     expect(startComputerHostProcess).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -417,19 +479,10 @@ describe("Gateway computer service", () => {
         pluginIds: ["fixture"],
       }),
     );
-    await expect(f.service.invoke(f.request())).resolves.toEqual({
-      format: "png",
-      base64: "cGl4ZWxz",
-    });
+    await expect(f.invoke()).resolves.toEqual(screenshot);
     const physicalId = f.openExecution.mock.calls[0]![0].executionId;
     expect(physicalId).not.toBe(logicalId);
-    await f.service.invoke(
-      f.request({
-        command: "computer.act",
-        params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
-        idempotencyKey: "click-1",
-      }),
-    );
+    await f.service.invoke(f.click("click-1"));
     expect(JSON.parse(f.act.mock.calls[0]![0] ?? "{}")).toMatchObject({
       executionId: physicalId,
       action: "left_click",
@@ -443,37 +496,33 @@ describe("Gateway computer service", () => {
         params: { executionId: logicalId, action: "__close_execution" },
       },
     ]) {
-      await expect(f.service.invoke(f.request(overrides))).rejects.toThrow("COMPUTER_HOST_BUSY");
+      await expect(f.invoke(overrides)).rejects.toThrow("COMPUTER_HOST_BUSY");
     }
-    expect(f.openExecution).toHaveBeenCalledTimes(1);
-    expect(f.physicalClose).not.toHaveBeenCalled();
+    f.calls({ open: 1, close: 0 });
     await f.service.close();
-    expect(f.physicalClose).toHaveBeenCalledTimes(1);
-    expect(f.leases[0]!.release).toHaveBeenCalledTimes(1);
+    f.calls({ close: 1, release: 1 });
   });
 
   it("joins duplicate pending input and prevents replay after settlement", async () => {
-    const f = createFixture();
     const result = createDeferredCore<string>();
     f.snapshot.mockReturnValueOnce(result.promise);
     await f.service.status();
-    const first = f.service.invoke(f.request());
-    const duplicate = f.service.invoke(f.request());
+    const first = f.invoke();
+    const duplicate = f.invoke();
     const joined = Promise.all([first, duplicate]);
     try {
-      await expect(
-        f.service.invoke(f.request({ params: { executionId: logicalId, maxWidth: 300 } })),
-      ).rejects.toThrow("different input");
+      await expect(f.invoke({ params: { executionId: logicalId, maxWidth: 300 } })).rejects.toThrow(
+        "different input",
+      );
     } finally {
-      result.resolve(JSON.stringify({ format: "png", base64: "cGl4ZWxz" }));
+      result.resolve(JSON.stringify(screenshot));
     }
     await joined;
     expect(f.snapshot).toHaveBeenCalledTimes(1);
-    await expect(f.service.invoke(f.request())).rejects.toThrow("already settled");
+    await expect(f.invoke()).rejects.toThrow("already settled");
   });
 
   it("joins native preparation on shutdown and releases the acquired desktop after the child closes", async () => {
-    const f = createFixture();
     const nativeReady = createDeferredCore<ComputerUseCapabilityDescriptor>();
     const launchStarted = createDeferredCore();
     const closed = createDeferredCore();
@@ -481,7 +530,7 @@ describe("Gateway computer service", () => {
       nativeReady.reject(new Error("Native preparation was closed"));
       return closed.promise;
     });
-    vi.mocked(startComputerHostProcess).mockImplementationOnce(() => {
+    startHost.mockImplementationOnce(() => {
       launchStarted.resolve();
       return {
         ready: nativeReady.promise,
@@ -492,16 +541,14 @@ describe("Gateway computer service", () => {
     });
     const discovering = f.service.status();
     await launchStarted.promise;
-    const stopped = vi.fn();
-    const stopping = f.service.close().then(stopped);
-    try {
-      await vi.waitFor(() => expect(childClose).toHaveBeenCalled());
-      expect(stopped).not.toHaveBeenCalled();
-      expect(f.leases[0]!.release).not.toHaveBeenCalled();
-    } finally {
-      closed.resolve();
-    }
-    await stopping;
+    await expectCleanupHeld(
+      closed,
+      f.service.close(),
+      () => {
+        expect(f.leases[0]!.release).not.toHaveBeenCalled();
+      },
+      childClose,
+    );
     expect(await discovering).toMatchObject({ available: false });
     expect(f.leases[0]!.release).toHaveBeenCalled();
     expect(f.openExecution).not.toHaveBeenCalled();
@@ -510,13 +557,12 @@ describe("Gateway computer service", () => {
   it.each(["preparation", "execution"] as const)(
     "retains custody after failed %s cleanup and retries before discovery",
     async (stage) => {
-      const f = createFixture();
       const cleanup = createDeferredCore();
       const message =
         stage === "preparation" ? "Native process could not be joined" : "native cleanup failed";
       const childClose = vi.fn(() => cleanup.promise).mockRejectedValueOnce(new Error(message));
       if (stage === "preparation") {
-        vi.mocked(startComputerHostProcess).mockImplementationOnce(() => ({
+        startHost.mockImplementationOnce(() => ({
           ready: Promise.reject(new Error("Native preparation failed")),
           isCurrent: () => false,
           invoke: async () => {},
@@ -524,48 +570,35 @@ describe("Gateway computer service", () => {
         }));
       } else {
         await f.service.status();
-        await f.service.invoke(f.request());
+        await f.invoke();
         f.physicalClose.mockRejectedValue(new Error(message));
         await expect(f.stops[0]!()).rejects.toThrow(message);
         expect(f.leases[0]!.release).not.toHaveBeenCalled();
       }
       expect(await f.service.status()).toMatchObject({ available: false, error: message });
-      expect(f.leases[0]!.release).not.toHaveBeenCalled();
-      expect(startComputerHostProcess).toHaveBeenCalledOnce();
+      f.calls({ release: 0, start: 1 });
       if (stage === "execution") {
-        await expect(
-          f.service.invoke(f.request({ idempotencyKey: "after-failure" })),
-        ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
+        await expect(f.invoke({ idempotencyKey: "after-failure" })).rejects.toThrow(
+          "COMPUTER_STALE_OBSERVATION",
+        );
         expect(f.snapshot).toHaveBeenCalledOnce();
         f.physicalClose.mockImplementation(() => cleanup.promise);
       }
-      const discovered = vi.fn();
-      const retry = f.service.status().then((result) => {
-        discovered(result);
-        return result;
-      });
-      try {
-        await vi.waitFor(() =>
-          expect(stage === "preparation" ? childClose : f.physicalClose).toHaveBeenCalledTimes(
-            stage === "preparation" ? 2 : 3,
-          ),
-        );
-        expect(discovered).not.toHaveBeenCalled();
-        expect(f.leases[0]!.release).not.toHaveBeenCalled();
-        expect(startComputerHostProcess).toHaveBeenCalledOnce();
-      } finally {
-        cleanup.resolve();
-      }
-      expect(await retry).toMatchObject({ available: true });
-      expect(f.leases[0]!.release).toHaveBeenCalledOnce();
-      expect(startComputerHostProcess).toHaveBeenCalledTimes(2);
+      const retry = await expectCleanupHeld(
+        cleanup,
+        f.service.status(),
+        () => f.calls({ release: 0, start: 1 }),
+        stage === "preparation" ? childClose : f.physicalClose,
+        stage === "preparation" ? 2 : 3,
+      );
+      expect(retry).toMatchObject({ available: true });
+      f.calls({ release: 1, start: 2 });
     },
   );
 
   it("reports a terminated helper's finalization failure while releasing its proven physical custody", async () => {
-    const f = createFixture();
     await f.service.status();
-    await f.service.invoke(f.request());
+    await f.invoke();
     const child = f.children[0]!;
     await child.close();
     const failure = new ComputerHostFinalizationError(
@@ -573,27 +606,21 @@ describe("Gateway computer service", () => {
     );
     vi.spyOn(child, "close").mockRejectedValue(failure);
     await expect(
-      f.service.invoke(
-        f.request({
-          command: "computer.act",
-          params: { executionId: logicalId, action: "__close_execution", reason: "completion" },
-        }),
-      ),
+      f.invoke({
+        command: "computer.act",
+        params: { executionId: logicalId, action: "__close_execution", reason: "completion" },
+      }),
     ).rejects.toBe(failure);
     expect(f.leases[0]!.release).toHaveBeenCalledTimes(1);
     expect(await f.service.status()).toMatchObject({ available: true });
-    expect(startComputerHostProcess).toHaveBeenCalledTimes(2);
-    expect(f.snapshot).toHaveBeenCalledTimes(1);
-    expect(f.openExecution).toHaveBeenCalledTimes(1);
+    f.calls({ start: 2, snapshot: 1, open: 1 });
   });
 
   it("joins repeated execution close through failure and retries cleanup before releasing ownership", async () => {
-    const f = createFixture();
     await f.service.status();
-    await f.service.invoke(f.request());
-    const cleanup = createDeferredCore();
+    await f.invoke();
+    const cleanup = f.holdCleanup();
     const failure = new Error("native cleanup failed");
-    f.physicalClose.mockImplementationOnce(() => cleanup.promise);
     const closeRequest = f.request({
       command: "computer.act",
       params: { executionId: logicalId, action: "__close_execution" },
@@ -624,9 +651,8 @@ describe("Gateway computer service", () => {
     await firstObserved;
     await duplicateObserved;
     await expect(f.service.invoke(closeRequest)).resolves.toEqual({ ok: true });
-    expect(f.physicalClose).toHaveBeenCalledTimes(2);
     expect(f.physicalClose).toHaveBeenLastCalledWith("completion");
-    expect(f.leases[0]!.release).toHaveBeenCalledTimes(1);
+    f.calls({ close: 2, release: 1 });
     expect(await f.service.status()).toMatchObject({ available: true });
     expect(startComputerHostProcess).toHaveBeenCalledTimes(2);
   });
@@ -634,7 +660,6 @@ describe("Gateway computer service", () => {
   it.each(["plugins-disabled", "provider-disabled", "provider-default", "provider-unloaded"])(
     "does not start a computer when %s",
     async (mode) => {
-      const f = createFixture();
       if (mode === "plugins-disabled") {
         f.config.plugins!.enabled = false;
       }
@@ -648,8 +673,7 @@ describe("Gateway computer service", () => {
         f.registry.plugins[0]!.status = "error";
       }
       expect(await f.service.status()).toEqual({ configured: false, available: false });
-      expect(startComputerHostProcess).not.toHaveBeenCalled();
-      expect(f.leases).toHaveLength(0);
+      f.calls({ start: 0, leases: 0 });
     },
   );
 });

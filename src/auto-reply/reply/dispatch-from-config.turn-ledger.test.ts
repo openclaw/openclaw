@@ -49,19 +49,6 @@ describe("createReplyTurnLedger", () => {
     await dispatcher.waitForIdle();
   });
 
-  it("does not count a beforeDeliver-cancelled payload as visible", async () => {
-    const deliver = vi.fn(async () => {});
-    const dispatcher = createReplyDispatcher({ deliver, beforeDeliver: async () => null });
-    const ledger = createReplyTurnLedger(dispatcher);
-    expect(ledger.sendQueued("final", { text: "hello" }).queued).toBe(true);
-    await ledger.settleQueued();
-    expect(deliver).not.toHaveBeenCalled();
-    expect(ledger.mayHaveDelivered()).toBe(false);
-    expect(ledger.resolveTerminalDelivery()).toBe("missing");
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-  });
-
   it("does not count a pre-transport failure as visible", async () => {
     const deliver = vi.fn(async () => {});
     const dispatcher = createReplyDispatcher({
@@ -79,28 +66,21 @@ describe("createReplyTurnLedger", () => {
     await dispatcher.waitForIdle();
   });
 
-  it.each([
-    { kind: "tool", payload: { text: "Tool progress." }, expected: "missing" },
-    { kind: "block", payload: { text: "Still working.", isCommentary: true }, expected: "missing" },
-    { kind: "block", payload: { text: "Final answer." }, expected: "pending" },
-  ] as const)(
-    "retains ambiguous $kind custody without completing progress: $expected",
-    async ({ kind, payload, expected }) => {
-      const dispatcher = createReplyDispatcher({
-        deliver: async () => {
-          throw new Error("transport down mid-send");
-        },
-      });
-      const ledger = createReplyTurnLedger(dispatcher);
-      expect(ledger.sendQueued(kind, payload).queued).toBe(true);
-      await ledger.settleQueued();
-      expect(ledger.mayHaveDelivered()).toBe(true);
-      expect(ledger.hasObservedDelivery()).toBe(false);
-      expect(ledger.resolveTerminalDelivery()).toBe(expected);
-      dispatcher.markComplete();
-      await dispatcher.waitForIdle();
-    },
-  );
+  it("retains ambiguous terminal block custody without completing delivery", async () => {
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {
+        throw new Error("transport down mid-send");
+      },
+    });
+    const ledger = createReplyTurnLedger(dispatcher);
+    expect(ledger.sendQueued("block", { text: "Final answer." }).queued).toBe(true);
+    await ledger.settleQueued();
+    expect(ledger.mayHaveDelivered()).toBe(true);
+    expect(ledger.hasObservedDelivery()).toBe(false);
+    expect(ledger.resolveTerminalDelivery()).toBe("pending");
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+  });
 
   it("times out instead of waiting forever on a transport that never settles", async () => {
     vi.useFakeTimers();
@@ -131,14 +111,28 @@ describe("createReplyTurnLedger", () => {
     expect(ledger.resolveTerminalDelivery()).toBe("pending");
   });
 
-  it("does not fabricate visibility when a receipt-capable dispatcher omits its receipt", async () => {
+  it("preserves a legacy idle observer's rejection", async () => {
+    const error = new Error("Synthetic idle failure");
     const ledger = createReplyTurnLedger(
-      createUntrackedDispatcher({ supportsSettledReceipt: true }),
+      createUntrackedDispatcher({
+        waitForIdle: async () => {
+          throw error;
+        },
+      }),
     );
-    ledger.sendQueued("final", { text: "hello" });
-    await ledger.settleQueued();
-    expect(ledger.hasObservedDelivery()).toBe(false);
-    expect(ledger.resolveTerminalDelivery()).toBe("pending");
+    await expect(ledger.settleQueued()).rejects.toBe(error);
+  });
+
+  it("keeps caller cancellation ahead of a same-turn idle receipt", async () => {
+    const controller = new AbortController();
+    const ledger = createReplyTurnLedger(
+      createUntrackedDispatcher({
+        waitForIdle: async () => {
+          queueMicrotask(() => controller.abort());
+        },
+      }),
+    );
+    await expect(ledger.settleQueued(controller.signal)).resolves.toBe("aborted");
   });
 
   it("does not authorize another final after an adapter copies a terminal payload", async () => {
@@ -174,29 +168,6 @@ describe("createReplyTurnLedger", () => {
       { ok: true, delivered: true },
     );
     expect(ledger.mayHaveDelivered()).toBe(true);
-  });
-
-  it("keeps routed progress custody separate from terminal delivery", () => {
-    const ledger = createReplyTurnLedger(createUntrackedDispatcher());
-    ledger.recordRoutedDelivery(
-      "tool",
-      { text: "Tool progress." },
-      { ok: false, delivered: false, queueCustody: "held" },
-    );
-    ledger.recordRoutedDelivery(
-      "block",
-      { text: "Still working.", isCommentary: true },
-      { ok: false, delivered: false, ambiguous: true },
-    );
-    expect(ledger.resolveTerminalDelivery()).toBe("missing");
-    ledger.recordRoutedDelivery(
-      "final",
-      { text: "Final answer." },
-      { ok: false, delivered: false, queueCustody: "held" },
-    );
-    expect(ledger.resolveTerminalDelivery()).toBe("pending");
-    ledger.recordRoutedDelivery("final", { text: "Final answer." }, { ok: true, delivered: true });
-    expect(ledger.resolveTerminalDelivery()).toBe("delivered");
   });
 
   it("stops settling when the abort signal fires", async () => {

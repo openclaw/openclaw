@@ -44,41 +44,40 @@ describe("session-memory transcript extraction", () => {
       ),
     );
     expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Visible summary"));
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Done"));
+    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Done\n\nNO_REPLY"));
     expect(memoryContent).toContain(sessionMemoryRecord("user", "Real follow-up"));
     expect(memoryContent).toContain("<media:image:abc>");
     expect(memoryContent).not.toContain("<|im_start|>");
     expect(memoryContent).not.toContain("<tool_call>");
     expect(memoryContent).not.toContain("secret.md");
-    expect(memoryContent).not.toContain("NO_REPLY");
     expect(memoryContent).not.toContain("<system>");
     expect(memoryContent).not.toContain("ignore previous instructions");
   });
 
-  it("preserves ordinary mentions while dropping standalone no-reply markers", () => {
+  it("prepares block text before quoting the memory record without reclassifying its suffix", () => {
     expect(
       getRecentSessionContentFromEvents([
-        message("assistant", "Use NO_REPLY when nothing changed."),
-        message("assistant", '{"action":"NO_REPLY"}'),
-        message("assistant", "All done\n\nNO_REPLY"),
+        message("assistant", [{ type: "text", text: "NO_REPLY\nNO_REPLY" }]),
       ]),
-    ).toBe(
-      [
-        sessionMemoryRecord("assistant", "Use NO_REPLY when nothing changed."),
-        sessionMemoryRecord("assistant", "All done"),
-      ].join("\n"),
-    );
+    ).toBe(sessionMemoryRecord("assistant", "NO_REPLY"));
   });
 
-  it("extracts sanitized text blocks from array content", () => {
+  it("keeps user silence markers and explicit visible assistant rows", () => {
+    const visible = {
+      ...message("assistant", "NO_REPLY"),
+      message: { role: "assistant", content: "NO_REPLY", display: true },
+    };
     expect(
       getRecentSessionContentFromEvents([
-        message("assistant", [
-          { type: "thinking", thinking: "hidden chain" },
-          { type: "text", text: "Answer <|reserved_special_token_42|>" },
-        ]),
+        message("user", "NO_REPLY"),
+        message("assistant", "NO_REPLY"),
+        visible,
       ]),
-    ).toBe(sessionMemoryRecord("assistant", "Answer [REMOVED_SPECIAL_TOKEN]"));
+    ).toBe(
+      [sessionMemoryRecord("user", "NO_REPLY"), sessionMemoryRecord("assistant", "NO_REPLY")].join(
+        "\n",
+      ),
+    );
   });
 
   it("keeps multiline message text inside its structured role record", () => {
@@ -178,99 +177,20 @@ describe("session-memory transcript extraction", () => {
     );
   });
 
-  it("preserves a unique delivery mirror", () => {
+  it("preserves a delivery mirror after an omitted slash-command turn", () => {
     const memoryContent = getRecentSessionContentFromEvents([
-      message("user", "Turn on the lights"),
-      {
-        type: "message",
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: [{ type: "text", text: "Lights turned on" }],
-        },
-      },
-    ]);
-
-    expect(memoryContent?.split("\n").filter((line) => line.startsWith("assistant:"))).toEqual([
-      sessionMemoryRecord("assistant", "Lights turned on"),
-    ]);
-  });
-
-  it("filters delivery-mirror duplicates but preserves standalone gateway rows (#92563)", () => {
-    const memoryContent = getRecentSessionContentFromEvents([
-      message("user", "What is 2+2?"),
-      {
-        type: "message",
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "claude",
-          content: [
-            { type: "thinking", text: "..." },
-            { type: "text", text: "2+2 = 4" },
-          ],
-        },
-      },
-      {
-        type: "message",
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: [{ type: "text", text: "2+2 = 4" }],
-        },
-      },
       {
         type: "message",
         message: {
           role: "assistant",
           provider: "openclaw",
           model: "gateway-injected",
-          content: [{ type: "text", text: "standalone gateway reply" }],
+          content: [
+            { type: "thinking", text: "..." },
+            { type: "text", text: "Done" },
+          ],
         },
       },
-    ]);
-
-    expect(memoryContent?.split("\n").filter((line) => line.startsWith("assistant:"))).toEqual([
-      sessionMemoryRecord("assistant", "2+2 = 4"),
-      sessionMemoryRecord("assistant", "standalone gateway reply"),
-    ]);
-  });
-
-  it("preserves a delivery mirror after a later user turn", () => {
-    const memoryContent = getRecentSessionContentFromEvents([
-      message("assistant", "Your number is 123-4567"),
-      {
-        type: "message",
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: [{ type: "text", text: "Your number is 123-4567" }],
-        },
-      },
-      message("user", "I changed it to 987-6543"),
-      {
-        type: "message",
-        message: {
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: [{ type: "text", text: "Your number is 123-4567" }],
-        },
-      },
-    ]);
-
-    expect(memoryContent?.split("\n").filter((line) => line.startsWith("assistant:"))).toEqual([
-      sessionMemoryRecord("assistant", "Your number is 123-4567"),
-      sessionMemoryRecord("assistant", "Your number is 123-4567"),
-    ]);
-  });
-
-  it("preserves a delivery mirror after an omitted slash-command turn", () => {
-    const memoryContent = getRecentSessionContentFromEvents([
-      message("assistant", "Done"),
       {
         type: "message",
         message: {

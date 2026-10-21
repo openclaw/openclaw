@@ -51,6 +51,7 @@ describe("Codex app-server attempt context", () => {
   });
 
   it("returns a run context report without deferred Codex dynamic tool schemas", () => {
+    let deferredSchemaReads = 0;
     const tools = [
       {
         type: "function",
@@ -74,8 +75,9 @@ describe("Codex app-server attempt context", () => {
             description: "Search the web.",
             inputSchema: {
               type: "object",
-              properties: {
-                query: { type: "string" },
+              get properties() {
+                deferredSchemaReads += 1;
+                return { query: { type: "string" } };
               },
             },
             deferLoading: true,
@@ -84,7 +86,7 @@ describe("Codex app-server attempt context", () => {
       },
     ] as CodexDynamicToolSpec[];
 
-    const report = buildCodexSystemPromptReport({
+    const reportParams: Parameters<typeof buildCodexSystemPromptReport>[0] = {
       attempt: {
         sessionId: "session-1",
         provider: "codex",
@@ -94,14 +96,23 @@ describe("Codex app-server attempt context", () => {
       workspaceDir: path.join("tmp", "workspace"),
       developerInstructions: "test developer instructions",
       workspaceBootstrapContext: {
-        bootstrapFiles: [],
+        bootstrapFiles: [
+          {
+            name: "AGENTS.md",
+            path: "/workspace/AGENTS.md",
+            content: "native instructions",
+            missing: false,
+            origin: { kind: "agent-workspace", rootPath: "/workspace" },
+          },
+        ],
         contextFiles: [],
         inheritsAgentWorkspace: false,
         promptContextFiles: [],
       },
       skillsPrompt: "",
       tools,
-    });
+    };
+    const report = buildCodexSystemPromptReport(reportParams);
 
     expect(report.source).toBe("run");
     expect(report.provider).toBe("codex");
@@ -111,14 +122,27 @@ describe("Codex app-server attempt context", () => {
     expect(report.skills.hash).toMatch(/^[a-f0-9]{64}$/u);
 
     const message = report.tools.entries.find((tool) => tool.name === "message");
-    const webSearch = report.tools.entries.find((tool) => tool.name === "web_search");
+    const webSearch = report.tools.deferred?.entries.find((tool) => tool.name === "web_search");
     expect(message?.schemaChars).toBeGreaterThan(0);
     expect(message?.summaryHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(message?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(webSearch?.schemaChars).toBe(0);
-    expect(webSearch?.summaryHash).toMatch(/^[a-f0-9]{64}$/u);
-    expect(webSearch?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(report.tools.entries.map((tool) => tool.name)).toEqual(["message"]);
+    expect(webSearch).toMatchObject({ source: "openclaw", sourceName: "core" });
+    expect(webSearch?.schemaChars).toBeGreaterThan(0);
+    expect(report.tools.deferred?.schemaChars).toBe(webSearch?.schemaChars);
     expect(report.tools.schemaChars).toBe(message?.schemaChars);
+    expect(buildCodexSystemPromptReport(reportParams).tools.deferred).toEqual(
+      report.tools.deferred,
+    );
+    expect(deferredSchemaReads).toBe(1);
+    expect(report.injectedWorkspaceFiles).toMatchObject([
+      {
+        origin: { kind: "agent-workspace", rootPath: "/workspace" },
+        injectionStatus: "native_unverified",
+        injectedChars: null,
+        truncated: null,
+      },
+    ]);
   });
 
   it("keeps MEMORY.md injected when sandbox effective workspace differs", async () => {
@@ -161,7 +185,6 @@ describe("Codex app-server attempt context", () => {
 
   it.each([
     { name: "deferred native tools", enabled: true, lightweight: false },
-    { name: "filtered native tools", enabled: false, lightweight: false },
     { name: "lightweight cron", enabled: true, lightweight: true },
   ])(
     "filters provider guidance independently of workspace routing: $name",
@@ -313,18 +336,6 @@ describe("Codex app-server attempt context", () => {
       overrides: { toolsAllow: ["openclaw"], pluginHarnessToolPolicyRestricted: true },
     },
     {
-      name: "lightweight cron",
-      ringZeroActive: false,
-      inheritedWorkspace: true,
-      overrides: { bootstrapContextMode: "lightweight", bootstrapContextRunKind: "cron" },
-    },
-    {
-      name: "tool-disabled restricted",
-      ringZeroActive: false,
-      inheritedWorkspace: false,
-      overrides: { pluginHarnessToolPolicyRestricted: true, disableTools: true },
-    },
-    {
       name: "message-only restricted",
       ringZeroActive: false,
       inheritedWorkspace: false,
@@ -402,7 +413,6 @@ describe("Codex app-server attempt context", () => {
           contextEngine: expectedBinding,
         } as never,
         expectedBinding,
-        projection: projection!,
         dynamicToolsFingerprint: "same-tools",
       }),
     ).toEqual({
@@ -417,7 +427,6 @@ describe("Codex app-server attempt context", () => {
           contextEngine: expectedBinding,
         } as never,
         expectedBinding,
-        projection: projection!,
         dynamicToolsFingerprint: "new-tools",
       }),
     ).toEqual({

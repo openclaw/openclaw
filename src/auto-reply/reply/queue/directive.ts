@@ -15,10 +15,7 @@ function parseQueueDebounce(raw?: string): number | undefined {
   }
   try {
     const parsed = parseDurationMs(raw.trim(), { defaultUnit: "ms" });
-    if (!parsed || parsed < 0) {
-      return undefined;
-    }
-    return Math.round(parsed);
+    return parsed > 0 ? Math.round(parsed) : undefined;
   } catch {
     return undefined;
   }
@@ -83,36 +80,28 @@ export function extractQueueDirective(rawBody?: string): {
     if (lowered.startsWith("debounce:") || lowered.startsWith("debounce=")) {
       parsed.rawDebounce = token.split(/[:=]/)[1] ?? "";
       parsed.debounceMs = parseQueueDebounce(parsed.rawDebounce);
-      parsed.hasOptions = true;
-      consumed = i;
-      continue;
-    }
-    if (lowered.startsWith("cap:") || lowered.startsWith("cap=")) {
+    } else if (lowered.startsWith("cap:") || lowered.startsWith("cap=")) {
       parsed.rawCap = token.split(/[:=]/)[1] ?? "";
       parsed.cap = parseStrictPositiveInteger(parsed.rawCap);
-      parsed.hasOptions = true;
-      consumed = i;
-      continue;
-    }
-    if (lowered.startsWith("drop:") || lowered.startsWith("drop=")) {
+    } else if (lowered.startsWith("drop:") || lowered.startsWith("drop=")) {
       parsed.rawDrop = token.split(/[:=]/)[1] ?? "";
       parsed.dropPolicy = normalizeQueueDropPolicy(parsed.rawDrop);
-      parsed.hasOptions = true;
-      consumed = i;
-      continue;
+    } else {
+      const mode = normalizeQueueMode(token);
+      if (mode) {
+        parsed.queueMode = mode;
+        parsed.rawMode = token;
+        consumed = i;
+        continue;
+      }
+      if (consumed === firstToken && !parsed.queueReset && !parsed.hasOptions) {
+        parsed.rawMode = token;
+        consumed = i;
+      }
+      break;
     }
-    const mode = normalizeQueueMode(token);
-    if (mode) {
-      parsed.queueMode = mode;
-      parsed.rawMode = token;
-      consumed = i;
-      continue;
-    }
-    if (consumed === firstToken && !parsed.queueReset && !parsed.hasOptions) {
-      parsed.rawMode = token;
-      consumed = i;
-    }
-    break;
+    parsed.hasOptions = true;
+    consumed = i;
   }
   // Remove only the directive and consumed options; leave the rest as agent input.
   parsed.cleaned = removeDirectiveSpan(body, match.index, argsStart + consumed);

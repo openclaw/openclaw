@@ -8,7 +8,6 @@ import {
   readRequiredClawHubBooleanField,
   readRequiredClawHubNumberField,
   readRequiredClawHubStringField,
-  type ClawHubFetch,
 } from "./clawhub-client.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 
@@ -134,15 +133,8 @@ function parseClawHubPromotion(value: unknown): ClawHubPromotion {
   };
 }
 
-export async function fetchClawHubPromotions(
-  params: {
-    baseUrl?: string;
-    timeoutMs?: number;
-    fetchImpl?: ClawHubFetch;
-  } = {},
-): Promise<ClawHubPromotion[]> {
+export async function fetchClawHubPromotions(): Promise<ClawHubPromotion[]> {
   const response = await fetchClawHubJson<unknown>({
-    ...params,
     path: "/api/v1/promotions",
   });
   if (!isJsonObject(response) || !Array.isArray(response.promotions)) {
@@ -155,7 +147,6 @@ export async function fetchClawHubPromotion(params: {
   slug: string;
   baseUrl?: string;
   timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
 }): Promise<ClawHubPromotion> {
   const response = await fetchClawHubJson<unknown>({
     ...params,

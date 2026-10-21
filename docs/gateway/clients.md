@@ -205,7 +205,7 @@ assistant, plan, tool, and other stream events.
 
 ## Render generated image artifacts
 
-Assistant-generated images arrive as canonical `type: "image"` content blocks.
+Assistant-generated images arrive as standard `type: "image"` content blocks.
 Managed blocks include a stable `artifactId`, a Gateway-relative `url`, MIME
 type, dimensions, size, and accessible alt text. Keep that reference in the
 transcript cache; do not persist downloaded bytes or temporary download URLs.
@@ -338,7 +338,7 @@ transition racing the list request is neither lost nor resurrected.
 
 The current wire version is `4`. General operator and WebChat clients must
 negotiate the exact current version with `minProtocol: 4` and `maxProtocol: 4`.
-Only authenticated node clients and lightweight probes have the N-1 acceptance
+Only authenticated node clients and lightweight checks have the N-1 acceptance
 window, currently protocol `3` through `4`.
 
 Protocol changes are additive first. `protocol.schema.json` includes `since`

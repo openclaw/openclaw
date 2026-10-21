@@ -185,46 +185,22 @@ const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
   "talk-voice",
 ];
 
-function buildCrossOsReleaseSmokePluginAllowlist(
-  providerMeta: Pick<ProviderConfig, "extensionId">,
-) {
-  return [...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE])];
-}
-
-function buildCrossOsReleaseSmokeMemorySlotConfigArgs() {
-  return ["config", "set", "plugins.slots.memory", JSON.stringify("none"), "--strict-json"];
-}
-
-function shouldSeedProviderConfigModels(providerMeta: ProviderConfig) {
-  return (
-    typeof providerMeta.baseUrl === "string" || typeof providerMeta.timeoutSeconds === "number"
-  );
-}
-
-function buildReleaseProviderConfigOverride(providerMeta: ProviderConfig) {
-  if (!shouldSeedProviderConfigModels(providerMeta)) {
-    return null;
-  }
-  return {
-    ...(typeof providerMeta.baseUrl === "string" ? { baseUrl: providerMeta.baseUrl } : {}),
-    ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "openclaw" } } : {}),
-    models: [],
-    ...(typeof providerMeta.timeoutSeconds === "number"
-      ? { timeoutSeconds: providerMeta.timeoutSeconds }
-      : {}),
-  };
-}
-
 // Yield between awaited commands so failed setup does not inspect later configuration.
 export function* buildReleaseModelConfigCommands(providerMeta: ProviderConfig) {
   yield ["models", "set", providerMeta.model];
-  const providerConfigOverride = buildReleaseProviderConfigOverride(providerMeta);
-  if (providerConfigOverride) {
+  if (typeof providerMeta.baseUrl === "string" || typeof providerMeta.timeoutSeconds === "number") {
     yield [
       "config",
       "set",
       `models.providers.${providerMeta.extensionId}`,
-      JSON.stringify(providerConfigOverride),
+      JSON.stringify({
+        ...(typeof providerMeta.baseUrl === "string" ? { baseUrl: providerMeta.baseUrl } : {}),
+        ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "openclaw" } } : {}),
+        models: [],
+        ...(typeof providerMeta.timeoutSeconds === "number"
+          ? { timeoutSeconds: providerMeta.timeoutSeconds }
+          : {}),
+      }),
       "--strict-json",
       "--merge",
     ];
@@ -233,10 +209,12 @@ export function* buildReleaseModelConfigCommands(providerMeta: ProviderConfig) {
     "config",
     "set",
     "plugins.allow",
-    JSON.stringify(buildCrossOsReleaseSmokePluginAllowlist(providerMeta)),
+    JSON.stringify([
+      ...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE]),
+    ]),
     "--strict-json",
   ];
-  yield buildCrossOsReleaseSmokeMemorySlotConfigArgs();
+  yield ["config", "set", "plugins.slots.memory", JSON.stringify("none"), "--strict-json"];
   yield ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"];
   yield ["config", "set", "tools.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE];
 }
@@ -253,9 +231,9 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
-export function managedGatewayRestartCommandTimeoutMs(platform = process.platform) {
-  // The CLI performs its own restart health loop. Keep the outer release
-  // harness alive long enough to receive that result plus service-manager overhead.
+export function managedGatewayStartupCommandTimeoutMs(platform = process.platform) {
+  // Start and restart both wait for readiness. Share the existing bounded release
+  // startup allowance, including service-manager overhead, across both commands.
   return gatewayReadyDeadlineMs(platform) + 60_000;
 }
 const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
@@ -402,7 +380,7 @@ export function resolveRunnerMatrix(params: {
     {
       os_id: "macos",
       display_name: "macOS",
-      runner: pick(params.macosRunner, params.varMacosRunner, "blacksmith-6vcpu-macos-15"),
+      runner: pick(params.macosRunner, params.varMacosRunner, "xcode-27"),
       artifact_name: "macos",
     },
   ];
@@ -445,14 +423,8 @@ export function resolveRunnerMatrix(params: {
 }
 
 export function readRunnerOverrideEnv(env = process.env) {
-  const preferNonEmptyEnv = (primary: string | undefined, legacy: string | undefined) => {
-    const primaryValue = primary?.trim();
-    if (primaryValue) {
-      return primaryValue;
-    }
-    const legacyValue = legacy?.trim();
-    return legacyValue || "";
-  };
+  const preferNonEmptyEnv = (primary: string | undefined, legacy: string | undefined) =>
+    primary?.trim() || legacy?.trim() || "";
 
   return {
     varUbuntuRunner: preferNonEmptyEnv(

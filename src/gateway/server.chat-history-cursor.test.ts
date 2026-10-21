@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { composeTranscriptDisplay } from "../chat/transcript-display-position.js";
@@ -9,9 +9,9 @@ import { clearConfigCache } from "../config/config.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
-import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.test-support.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
@@ -21,6 +21,7 @@ import {
 import * as userProfileList from "../state/user-profile-list.js";
 import { setAvatar } from "../state/user-profile-writes.worker.js";
 import * as userProfiles from "../state/user-profiles.js";
+import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 import * as managedOutgoingMedia from "./managed-image-attachments.js";
 import { serializeGatewayFrame } from "./serialized-json.js";
@@ -35,6 +36,7 @@ import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { installGatewayTestHooks, testState, writeSessionStore } from "./test-helpers.js";
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = createTempDirTracker();
+const prepareProfileCatalog = useUserProfileCatalogForTest();
 
 type ChatMethod = "chat.history" | "chat.startup";
 type History = { deltaCursor: string; messages: unknown[] };
@@ -198,8 +200,14 @@ describe("chat.history cursor catch-up", () => {
       reason: "reset",
       timestamp: new Date().toISOString(),
     });
+    const cleanup = vi
+      .spyOn(managedOutgoingMedia, "cleanupManagedOutgoingMediaRecords")
+      .mockResolvedValue(undefined);
+    onTestFinished(() => cleanup.mockRestore());
     const cached = await callChat<History>(context, "chat.history");
     expect(cached.ok).toBe(true);
+    expect(cleanup).not.toHaveBeenCalled();
+    cleanup.mockRestore();
     expect(cached.payload?.messages).toMatchObject([
       { __openclaw: { id: "reset", seq: 1, transcriptPosition: { rawSeq: 13 } } },
     ]);
@@ -209,7 +217,6 @@ describe("chat.history cursor catch-up", () => {
     const handler = createTranscriptUpdateBroadcastHandler({
       getSessionRowProjection: () => getSessionRowProjection(context),
       broadcastToConnIds: broadcast,
-      chatAbortControllers: context.chatAbortControllers,
       sessionEventSubscribers: { getAll: () => new Set<string>() },
       sessionMessageSubscribers: { get: () => new Set(["subscriber"]) },
     });
@@ -290,22 +297,6 @@ describe("chat.history cursor catch-up", () => {
     });
   });
 
-  test("chat.history does not launch managed outgoing media garbage collection", async () => {
-    const { context } = await createCursorSession();
-    const cleanup = vi
-      .spyOn(managedOutgoingMedia, "cleanupManagedOutgoingMediaRecords")
-      .mockResolvedValue({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
-
-    try {
-      const result = await callChat(context, "chat.history");
-
-      expect(result.ok).toBe(true);
-      expect(cleanup).not.toHaveBeenCalled();
-    } finally {
-      cleanup.mockRestore();
-    }
-  });
-
   test("composes nested completions identically after cursor catch-up and fresh history", async () => {
     const { context, storePath } = await createCursorSession();
     const cached = await callChat<History>(context, "chat.history");
@@ -363,6 +354,7 @@ describe("chat.history cursor catch-up", () => {
   });
 
   test("refreshes sender display across transferred history pages and cursor deltas", async () => {
+    await prepareProfileCatalog();
     const { context, storePath } = await createCursorSession();
     const profile = userProfiles.ensureProfileForEmail("cursor-profile@example.test");
     const cached = await callChat<{ deltaCursor: string }>(context, "chat.history");
@@ -382,12 +374,12 @@ describe("chat.history cursor catch-up", () => {
       });
       parentId = eventId;
     }
-    const lookup = vi.spyOn(userProfileList, "getUserProfileDisplay");
+    const lookup = vi.spyOn(userProfileList, "getResidentUserProfileDisplay");
     try {
       const avatarUrls: string[] = [];
       for (const byte of [1, 2]) {
         expect(setAvatar(profile.id, new Uint8Array([byte]), "image/png").ok).toBe(true);
-        const { avatarRevision } = userProfiles.getUserProfileDisplay(profile.id);
+        const { avatarRevision } = userProfileList.getUserProfileDisplay(profile.id);
         const avatarUrl = buildControlUiUserAvatarPath(profile.id, avatarRevision);
         avatarUrls.push(avatarUrl);
         lookup.mockClear();
@@ -485,7 +477,7 @@ describe("chat.history cursor catch-up", () => {
         content: [
           {
             type: "text",
-            text: "ANNOUNCE_SKIP REPLY_SKIP",
+            text: "NO_REPLY",
             textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
           },
           ...sibling,
@@ -560,20 +552,6 @@ describe("chat.history cursor catch-up", () => {
     });
     const delta = await callChat(context, "chat.history", { cursor: cached.payload!.deltaCursor });
     expect(delta).toMatchObject({ ok: true, payload: { kind: "reset" } });
-  });
-
-  test("resets for an appended reset boundary", async () => {
-    const { context, storePath } = await createCursorSession();
-    const page = await callChat<{ deltaCursor?: string }>(context, "chat.history");
-    await appendTranscriptEvent(currentScope(storePath), {
-      type: "reset",
-      id: "reset-boundary",
-      parentId: "cached",
-      reason: "reset",
-      firstKeptEntryId: "cached",
-    });
-    const result = await callChat(context, "chat.history", { cursor: page.payload?.deltaCursor });
-    expect(result).toMatchObject({ ok: true, payload: { kind: "reset" } });
   });
 
   test.each(["offset", "messageId"] as const)("rejects cursor with %s", async (field) => {

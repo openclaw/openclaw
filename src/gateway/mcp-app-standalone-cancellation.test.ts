@@ -39,7 +39,6 @@ describe("MCP App standalone request cancellation", () => {
       void handleMcpAppStandaloneHttpRequest(req, res, {
         gatewayPort: 18_789,
         sandboxPort: 18_790,
-        nowMs,
       }).finally(() => handled.resolve());
     });
     await new Promise<void>((resolve) => {
@@ -106,7 +105,6 @@ describe("MCP App standalone request cancellation", () => {
         void handleMcpAppStandaloneHttpRequest(req, res, {
           gatewayPort: 18_789,
           sandboxPort: 18_790,
-          nowMs,
         })
           .catch((error: unknown) => {
             handlerError = error;

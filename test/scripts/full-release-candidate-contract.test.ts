@@ -28,8 +28,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // Golden v3 request bytes bind the selected baseline and complete effective inventory.
 const CANONICAL_REQUEST_JSON =
-  '{"allowFrozenTargetScenarioOmissions":false,"allowUnreleasedChangelog":false,"contractVersions":{"package":1,"prepublishPluginRegistry":1,"sharedImage":1},"packagePublished":false,"releaseProfile":"stable","releaseSoak":true,"repository":"openclaw/openclaw","schema":"openclaw.full-release-candidate-request/v3","sharedImagePolicy":"no-push-artifact","targetSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","toolingSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","upgradeBaseline":"openclaw@latest","upgradeSurvivorBaselines":["openclaw@latest"],"upgradeSurvivorScenarios":["acpx-openclaw-tools-bridge","base","bootstrap-persona","channel-post-core-restore","configured-plugin-installs","cron-scheduled-authority","custom-plugin-siblings","feishu-channel","legacy-operator-state","meeting-transcripts-sqlite","plugin-deps-cleanup","stale-source-plugin-shadow","tilde-log-path","versioned-runtime-deps"]}\n';
-const CANONICAL_REQUEST_SHA256 = "58a45e9e0b13c2417f50c5cf4abb421cb50bdfa02af4aef958dfd6b511d09b26";
+  '{"allowFrozenTargetScenarioOmissions":false,"allowUnreleasedChangelog":false,"contractVersions":{"package":1,"prepublishPluginRegistry":1,"sharedImage":1},"packagePublished":false,"releaseProfile":"stable","releaseSoak":true,"repository":"openclaw/openclaw","schema":"openclaw.full-release-candidate-request/v3","sharedImagePolicy":"no-push-artifact","targetSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","toolingSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","upgradeBaseline":"openclaw@latest","upgradeSurvivorBaselines":["openclaw@latest"],"upgradeSurvivorScenarios":["acpx-openclaw-tools-bridge","base","bootstrap-persona","channel-post-core-restore","configured-plugin-installs","cron-scheduled-authority","custom-plugin-siblings","feishu-channel","legacy-operator-state","meeting-transcripts-sqlite","package-publication-recovery","package-stranded-first-hop","package-verification-recovery","plugin-deps-cleanup","stale-source-plugin-shadow","tilde-log-path","versioned-runtime-deps"]}\n';
+const CANONICAL_REQUEST_SHA256 = "bfba3b9d365762629f86c676486a21c65d8de2dc8e0e56238051685e5ddf6b82";
 
 function manifest(overrides: Record<string, unknown> = {}) {
   return {
@@ -46,11 +46,15 @@ function runContract(args: string[]) {
 }
 
 function runManifestContract(value: unknown) {
+  return runJsonContract("manifest", value).result;
+}
+
+function runJsonContract(command: string, value: unknown) {
   const root = tempDirs.make("full-release-candidate-manifest-");
   const input = join(root, "input.json");
   const output = join(root, "output.json");
   writeFileSync(input, JSON.stringify(value));
-  return runContract(["manifest", "--input", input, "--output", output]);
+  return { result: runContract([command, "--input", input, "--output", output]), output };
 }
 
 type CandidateBindingFixture = ReturnType<typeof fullReleaseCandidateBindingFixture>;
@@ -204,53 +208,27 @@ describe("full release candidate contract", () => {
 
   it("rejects malformed or noncanonical request policy", () => {
     const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
-    expect(() => validateFullReleaseCandidateRequest({ ...request, ignored: true })).toThrow(
-      "keys must be exactly",
+    const rejects = (fields: Record<string, unknown>, error: string) =>
+      expect(() => validateFullReleaseCandidateRequest({ ...request, ...fields })).toThrow(error);
+    rejects({ ignored: true }, "keys must be exactly");
+    rejects({ packagePublished: "true" }, "packagePublished must be boolean");
+    rejects({ upgradeSurvivorBaselines: ["latest"] }, "not normalized");
+    rejects(
+      { upgradeSurvivorBaselines: ["openclaw@latest", "openclaw@beta"] },
+      "ascending ASCII order",
     );
-    expect(() =>
-      validateFullReleaseCandidateRequest({
-        ...request,
-        packagePublished: "true",
-      }),
-    ).toThrow("packagePublished must be boolean");
-    expect(() =>
-      validateFullReleaseCandidateRequest({
-        ...request,
-        upgradeSurvivorBaselines: ["latest"],
-      }),
-    ).toThrow("not normalized");
-    expect(() =>
-      validateFullReleaseCandidateRequest({
-        ...request,
-        upgradeSurvivorBaselines: ["openclaw@latest", "openclaw@beta"],
-      }),
-    ).toThrow("ascending ASCII order");
-    expect(() =>
-      validateFullReleaseCandidateRequest({
-        ...request,
-        upgradeSurvivorScenarios: ["feishu-channel", "base"],
-      }),
-    ).toThrow("not normalized");
-    expect(() =>
-      validateFullReleaseCandidateRequest({
-        ...request,
-        contractVersions: { ...request.contractVersions, sharedImage: 2 },
-      }),
-    ).toThrow("contract versions are invalid");
+    rejects({ upgradeSurvivorScenarios: ["feishu-channel", "base"] }, "not normalized");
+    rejects(
+      { contractVersions: { ...request.contractVersions, sharedImage: 2 } },
+      "contract versions are invalid",
+    );
   });
 
   it("runs request, manifest, and binding commands through their subprocess boundary", () => {
-    const root = tempDirs.make("full-release-candidate-cli-");
-    const requestInputPath = join(root, "request-input.json");
-    const requestOutputPath = join(root, "request.json");
-    writeFileSync(requestInputPath, JSON.stringify(fullReleaseCandidateRequestInput()));
-    const requestResult = runContract([
+    const { result: requestResult, output: requestOutputPath } = runJsonContract(
       "request",
-      "--input",
-      requestInputPath,
-      "--output",
-      requestOutputPath,
-    ]);
+      fullReleaseCandidateRequestInput(),
+    );
     expect(requestResult.status, requestResult.stderr).toBe(0);
     expect(readFileSync(requestOutputPath, "utf8")).toBe(CANONICAL_REQUEST_JSON);
     expect(JSON.parse(requestResult.stdout)).toEqual({
@@ -258,16 +236,10 @@ describe("full release candidate contract", () => {
       requestSha256: CANONICAL_REQUEST_SHA256,
     });
 
-    const manifestInputPath = join(root, "manifest-input.json");
-    const manifestOutputPath = join(root, "manifest.json");
-    writeFileSync(manifestInputPath, JSON.stringify(manifest()));
-    const manifestResult = runContract([
+    const { result: manifestResult, output: manifestOutputPath } = runJsonContract(
       "manifest",
-      "--input",
-      manifestInputPath,
-      "--output",
-      manifestOutputPath,
-    ]);
+      manifest(),
+    );
     expect(manifestResult.status, manifestResult.stderr).toBe(0);
     const manifestValue = JSON.parse(readFileSync(manifestOutputPath, "utf8"));
     expect(JSON.parse(manifestResult.stdout)).toEqual({
@@ -351,45 +323,26 @@ describe("full release candidate contract", () => {
 
   it("fails closed on cross-request, cross-package, and cross-attempt evidence", () => {
     const value = manifest();
-    expect(
-      runManifestContract({
-        ...value,
-        schema: "openclaw.full-release-candidate/v1",
-      }).stderr,
-    ).toContain("manifest schema is invalid");
-    expect(
-      runManifestContract({
-        ...value,
-        requestSha256: "9".repeat(64),
-      }).stderr,
-    ).toContain("does not match the request");
-    expect(
-      runManifestContract({
-        ...value,
-        sharedImage: { ...value.sharedImage, packageSha256: "8".repeat(64) },
-      }).stderr,
-    ).toContain("does not match the package");
-    expect(
-      runManifestContract({
-        ...value,
-        package: {
-          ...value.package,
-          artifact: { ...value.package.artifact, runAttempt: "2" },
-        },
-      }).stderr,
-    ).toContain("was not produced by the declared attempt");
-    expect(
-      runManifestContract({
-        ...value,
-        publisher: { ...value.publisher, runAttempt: "2" },
-      }).stderr,
-    ).toContain("publisher was not bound to the declared producer attempt");
-    expect(
-      runManifestContract({
-        ...value,
-        producer: { ...value.producer, jobId: "prepare_docker_e2e_image" },
-      }).stderr,
-    ).toContain("positive decimal string");
+    const rejects = (fields: Record<string, unknown>, error: string) =>
+      expect(runManifestContract({ ...value, ...fields }).stderr).toContain(error);
+    rejects({ schema: "openclaw.full-release-candidate/v1" }, "manifest schema is invalid");
+    rejects({ requestSha256: "9".repeat(64) }, "does not match the request");
+    rejects(
+      { sharedImage: { ...value.sharedImage, packageSha256: "8".repeat(64) } },
+      "does not match the package",
+    );
+    rejects(
+      { package: { ...value.package, artifact: { ...value.package.artifact, runAttempt: "2" } } },
+      "was not produced by the declared attempt",
+    );
+    rejects(
+      { publisher: { ...value.publisher, runAttempt: "2" } },
+      "publisher was not bound to the declared producer attempt",
+    );
+    rejects(
+      { producer: { ...value.producer, jobId: "prepare_docker_e2e_image" } },
+      "positive decimal string",
+    );
   });
 
   it.each([
@@ -568,23 +521,14 @@ describe("full release candidate contract", () => {
 
   it("rejects unsorted or empty producer package evidence", () => {
     const value = manifest();
-    expect(
-      runManifestContract({
-        ...value,
-        preparation: {
-          ...value.preparation,
-          requiredPrepublishPluginPackages: ["openclaw", "@openclaw/codex"],
-        },
-      }).stderr,
-    ).toContain("ascending ASCII order");
-    expect(
-      runManifestContract({
-        ...value,
-        preparation: {
-          ...value.preparation,
-          requiredPrepublishPluginPackages: [],
-        },
-      }).stderr,
-    ).toContain("does not match the request");
+    const rejects = (requiredPrepublishPluginPackages: string[], error: string) =>
+      expect(
+        runManifestContract({
+          ...value,
+          preparation: { ...value.preparation, requiredPrepublishPluginPackages },
+        }).stderr,
+      ).toContain(error);
+    rejects(["openclaw", "@openclaw/codex"], "ascending ASCII order");
+    rejects([], "does not match the request");
   });
 });

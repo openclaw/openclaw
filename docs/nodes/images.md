@@ -110,7 +110,7 @@ setting and does not change media-understanding preparation.
 
 - Cover send and reply flows for image/audio/document cases.
 - Validate size bounds after image optimization and the voice-note flag for audio.
-- Ensure multi-media replies fan out as sequential sends.
+- Send multi-media replies one item at a time.
 
 ## Related
 

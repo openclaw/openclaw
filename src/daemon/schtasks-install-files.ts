@@ -9,7 +9,7 @@ import {
   setScheduledTaskXmlEnabled,
   suspendScheduledTaskAutoStartForUpdate,
 } from "./schtasks-control.js";
-import { execSchtasks } from "./schtasks-exec.js";
+import { execScheduledTaskEnabledChange, execSchtasks } from "./schtasks-exec.js";
 import { resolveTaskName } from "./schtasks-layout.js";
 import {
   shouldManageGatewayListenerPort,
@@ -106,6 +106,7 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
   };
   return {
     registered: original !== null,
+    xml: original,
     assertCurrent: assertReceipt,
     recordStoppedProcess: () => {
       stoppedProcess = true;
@@ -126,7 +127,7 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
       await files.assertPublished();
       await assertReceipt();
       if (changed || activated) {
-        const disabled = await execSchtasks(["/Change", "/TN", taskName, "/DISABLE"]);
+        const disabled = await execScheduledTaskEnabledChange(taskName, false);
         if (disabled.code !== 0) {
           throw new Error(`Could not disable Scheduled Task ${taskName} before restoring it.`);
         }
@@ -167,12 +168,14 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
           throw new Error(`Could not remove replacement Scheduled Task ${taskName}.`);
         }
       } else {
-        await restoreScheduledTaskDefinition({
-          env,
-          xml: original,
-          beforeWrite: () => assertReceipt(true),
-          assertCurrent: assertGatewayServiceUpdateCurrent,
-        });
+        if (changed) {
+          await restoreScheduledTaskDefinition({
+            env,
+            xml: original,
+            beforeWrite: () => assertReceipt(true),
+            assertCurrent: assertGatewayServiceUpdateCurrent,
+          });
+        }
         receipt = setScheduledTaskXmlEnabled(original, false);
         await assertReceipt();
         // Definition restoration preserves settlement's disabled state; policy is owned here.

@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { getMarkdownTableSource } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
+  applyMarkdownTextEdits,
   convertMarkdownTables,
   FormatCapabilityProfile,
   type MarkdownIR,
+  type MarkdownTextEdit,
   markdownToIR,
   markdownToIRWithMeta,
   renderMarkdownWithMarkers,
@@ -37,18 +39,6 @@ const MSTEAMS_MARKERS = {
   strikethrough: { open: "~~", close: "~~" },
 } as const;
 
-function createTokenPrefix(text: string, label: string): string {
-  // With these parser options, the leading marker must be literal or entity-decoded.
-  const normalized = /[\u{E000}&]/u.test(text)
-    ? markdownToIR(text, { autolink: false, linkify: false }).text
-    : "";
-  let prefix: string;
-  do {
-    prefix = `\u{E000}${label}-${randomUUID()}\u{E001}`;
-  } while (text.includes(prefix) || normalized.includes(prefix));
-  return prefix;
-}
-
 function restoreTokens(text: string, prefix: string, values: readonly string[]): string {
   // Empty value tables can still have matching markers after normalization.
   if (!text.includes(prefix)) {
@@ -61,36 +51,9 @@ function restoreTokens(text: string, prefix: string, values: readonly string[]):
   );
 }
 
-type TextEdit = { start: number; end: number; text: string };
-
-function rewriteMarkdownIR(ir: MarkdownIR, edits: readonly TextEdit[]): MarkdownIR {
-  const ordered = edits.toSorted((a, b) => a.start - b.start);
-  const cumulativeDeltas: number[] = [];
-  const exactEdits = new Map<string, TextEdit>();
-  let text = "";
-  let cursor = 0;
-  let delta = 0;
-  for (const edit of ordered) {
-    text += ir.text.slice(cursor, edit.start) + edit.text;
-    cursor = edit.end;
-    delta += edit.text.length - (edit.end - edit.start);
-    cumulativeDeltas.push(delta);
-    exactEdits.set(`${edit.start}:${edit.end}`, edit);
-  }
-  text += ir.text.slice(cursor);
-  const mapOffset = (offset: number): number => {
-    let low = 0;
-    let high = ordered.length;
-    while (low < high) {
-      const middle = low + Math.floor((high - low) / 2);
-      if ((ordered[middle]?.end ?? Number.POSITIVE_INFINITY) <= offset) {
-        low = middle + 1;
-      } else {
-        high = middle;
-      }
-    }
-    return offset + (low > 0 ? (cumulativeDeltas[low - 1] ?? 0) : 0);
-  };
+function rewriteMarkdownIR(ir: MarkdownIR, edits: readonly MarkdownTextEdit[]): MarkdownIR {
+  const { text, mapOffset } = applyMarkdownTextEdits(ir.text, edits);
+  const exactEdits = new Map(edits.map((edit) => [`${edit.start}:${edit.end}`, edit]));
   const mapRange = <T extends { start: number; end: number }>(range: T): T => {
     const exact = exactEdits.get(`${range.start}:${range.end}`);
     const start = mapOffset(range.start);
@@ -306,28 +269,23 @@ function protectMSTeamsCode(
         (text, protectedValue) => restoreTokens(text, protectedValue.prefix, protectedValue.values),
         ir.text.slice(span.start, span.end),
       );
-      const quoteDepth =
-        codeStyle === "code_block"
-          ? ir.styles.filter(
-              (candidate) =>
-                candidate.style === "blockquote" &&
-                span.start >= candidate.start &&
-                span.start < candidate.end,
-            ).length
-          : 0;
+      let quoteDepth = 0;
+      let hasTrailingQuotedText = false;
+      if (codeStyle === "code_block") {
+        for (const candidate of ir.styles) {
+          if (candidate.style === "blockquote" && span.start >= candidate.start) {
+            if (span.start < candidate.end) {
+              quoteDepth += 1;
+            }
+            hasTrailingQuotedText ||= candidate.end > span.end;
+          }
+        }
+      }
       const rendered = renderMSTeamsCode(codeStyle, source);
       let quoted =
         quoteDepth > 0
           ? `${"> ".repeat(quoteDepth)}${rendered.replaceAll("\n", `\n${"> ".repeat(quoteDepth)}`)}`
           : rendered;
-      const hasTrailingQuotedText =
-        codeStyle === "code_block" &&
-        ir.styles.some(
-          (candidate) =>
-            candidate.style === "blockquote" &&
-            span.start >= candidate.start &&
-            candidate.end > span.end,
-        );
       if (hasTrailingQuotedText && !quoted.endsWith("\n")) {
         quoted += "\n";
       }
@@ -351,7 +309,8 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
   const images: string[] = [];
   const mentions: string[] = [];
   const entities: string[] = [];
-  const tokenPrefix = createTokenPrefix(markdown, "msteamsformat");
+  // A fresh UUID makes authored-placeholder collisions best-effort, without a second parse.
+  const tokenPrefix = `\u{E000}msteamsformat-${randomUUID()}\u{E001}`;
   const entitiesProtected = markdown.replace(MARKDOWN_ENTITY_RE, (entity) => {
     const index = entities.push(entity) - 1;
     return `${tokenPrefix}h${index}${TOKEN_END}`;

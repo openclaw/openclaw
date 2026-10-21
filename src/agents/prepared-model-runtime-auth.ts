@@ -89,6 +89,15 @@ export function hasSamePreparedModelCatalogAuth(
   );
 }
 
+export type ModelServiceTierObservation = {
+  modelId: string;
+  runtimeId: string;
+  api: string;
+  baseUrl: string;
+  requestedTier: string;
+  responseTier?: string;
+};
+
 /** Selected-account inventory belongs to the prepared generation, not an RPC projector. */
 export type PreparedAccountCatalogAccess = {
   reconcileAuth: (
@@ -96,17 +105,17 @@ export type PreparedAccountCatalogAccess = {
     includesProvider: (provider: string) => boolean,
     profileIds?: readonly string[],
   ) => void;
-  readServiceTiers: (params: {
+  readServiceTierObservation: (params: {
     identityKey: string;
     modelId: string;
     runtimeId: string;
     api: string;
     baseUrl: string;
-  }) => readonly string[] | undefined;
+  }) => Pick<ModelServiceTierObservation, "requestedTier" | "responseTier"> | undefined;
   prepareServiceTierObserver: (params: {
     selectedCredential: SelectedModelCredential;
     credential?: AuthProfileCredential;
-  }) => (observation: NonNullable<ProviderCatalogOutcome["modelServiceTiers"]>[number]) => boolean;
+  }) => (observation: ModelServiceTierObservation) => boolean;
   acquire: (params: {
     profileId: string;
     credential: AuthProfileCredential;
@@ -147,6 +156,14 @@ export function getPreparedModelRuntimeAuthLabels(snapshot: object): ModelCatalo
     throw new Error("Prepared model runtime omitted auth display labels");
   }
   return labels;
+}
+
+// Auth bindings can outlive publication; do not retain the catalog access scope.
+export function createPreparedModelCatalogUsageReader(
+  isCurrent: () => boolean,
+  readUsage: (store: AuthProfileStore) => AuthProfileStore,
+) {
+  return (store: AuthProfileStore) => (isCurrent() ? readUsage(store) : store);
 }
 
 export function setPreparedModelFullCatalogAuth(

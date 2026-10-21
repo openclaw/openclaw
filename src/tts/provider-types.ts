@@ -1,6 +1,6 @@
 import type { TalkProviderConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.js";
-import type { ResolvedTtsPersona } from "../config/types.tts.js";
+import type { ResolvedTtsPersona, TtsModelOverrideConfig } from "../config/types.tts.js";
 
 /** Canonical speech provider identifier after provider registry normalization. */
 export type SpeechProviderId = string;
@@ -16,14 +16,7 @@ export type SpeechProviderOverrides = Record<string, unknown>;
 
 /** Policy controlling which [[tts:*]] directive fields can affect synthesis. */
 export type SpeechModelOverridePolicy = {
-  enabled: boolean;
-  allowText: boolean;
-  allowProvider: boolean;
-  allowVoice: boolean;
-  allowModelId: boolean;
-  allowVoiceSettings: boolean;
-  allowNormalization: boolean;
-  allowSeed: boolean;
+  [Key in keyof TtsModelOverrideConfig]-?: Exclude<TtsModelOverrideConfig[Key], undefined>;
 };
 
 /** Parsed directive overrides grouped by provider. */

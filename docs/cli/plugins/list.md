@@ -29,7 +29,7 @@ openclaw plugins list --json
 </ParamField>
 
 <Note>
-`plugins list` reads the persisted local plugin registry first, with a manifest-only derived fallback when the registry is missing or invalid. It is useful for checking whether a plugin is installed, enabled, and visible to cold startup planning, but it is not a live runtime probe of an already-running Gateway process. After editing plugin code, run [`plugins reload <id>`](/cli/plugins/uninstall-and-update#reload) against the Gateway that serves the channel before expecting new `register(api)` code or hooks to run. The default hybrid reload mode also applies plugin config and discovery-path changes; the admin `plugins.refresh` RPC explicitly refreshes the inventory when passive reload is disabled.
+`plugins list` reads the persisted local plugin registry first, with a manifest-only derived fallback when the registry is missing or invalid. It is useful for checking whether a plugin is installed, enabled, and visible to cold startup planning, but it is not a live runtime check of an already-running Gateway process. After editing plugin code, run [`plugins reload <id>`](/cli/plugins/uninstall-and-update#reload) against the Gateway that serves the channel before expecting new `register(api)` code or hooks to run. The default hybrid reload mode also applies plugin config and discovery-path changes; the admin `plugins.refresh` RPC explicitly refreshes the inventory when passive reload is disabled.
 
 `plugins list --json` includes each plugin's `dependencyStatus` from `package.json`
 `dependencies` and `optionalDependencies`. OpenClaw checks whether those package

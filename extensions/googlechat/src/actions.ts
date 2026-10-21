@@ -70,7 +70,7 @@ export async function handleGoogleChatAction({
       account,
       space,
       text: content,
-      thread: threadId ?? undefined,
+      thread: threadId,
       assertDirectAdapterHandoff,
       onPlatformSendDispatch,
     });

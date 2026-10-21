@@ -4,7 +4,6 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
@@ -19,6 +18,7 @@ import {
   resolveProviderRequestPolicyConfig,
 } from "../agents/provider-request-config.js";
 import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.types.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
@@ -30,6 +30,7 @@ import {
   type ProviderOperationRetryStage,
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
+import { truncateOptionalText } from "../shared/text-truncate.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import type { AudioTranscriptionRequest } from "./types.js";
 export {
@@ -160,23 +161,20 @@ export function createProviderOperationTimeoutError(deadline: ProviderOperationD
 }
 
 /** Resolves a static or lazy request timeout with a validated fallback. */
-function resolveProviderRequestTimeoutMs(params: {
-  timeoutMs?: ProviderOperationTimeoutMs;
-  defaultTimeoutMs: number;
-}): number {
-  const resolved = typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs;
-  const fallback = resolveTimerTimeoutMs(params.defaultTimeoutMs, DEFAULT_GUARDED_HTTP_TIMEOUT_MS);
+function resolveProviderRequestTimeoutMs(
+  timeoutMs: ProviderOperationTimeoutMs | undefined,
+): number {
+  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
   if (typeof resolved !== "number" || !Number.isFinite(resolved) || resolved <= 0) {
-    return fallback;
+    return DEFAULT_GUARDED_HTTP_TIMEOUT_MS;
   }
-  return resolveTimerTimeoutMs(resolved, fallback);
+  return resolveTimerTimeoutMs(resolved, DEFAULT_GUARDED_HTTP_TIMEOUT_MS);
 }
 
 /** Returns a lazy timeout resolver for code paths that retry or poll multiple HTTP calls. */
-export function createProviderOperationTimeoutResolver(params: {
-  deadline: ProviderOperationDeadline;
-  defaultTimeoutMs: number;
-}): () => number {
+export function createProviderOperationTimeoutResolver(
+  params: Parameters<typeof resolveProviderOperationTimeoutMs>[0],
+): () => number {
   return () => resolveProviderOperationTimeoutMs(params);
 }
 
@@ -191,9 +189,7 @@ export async function waitProviderOperationPollInterval(params: {
   if (remainingMs <= 0) {
     throw createProviderOperationTimeoutError(params.deadline);
   }
-  await new Promise((resolve) => {
-    setTimeout(resolve, Math.min(pollIntervalMs, remainingMs));
-  });
+  await sleepWithAbort(Math.min(pollIntervalMs, remainingMs));
 }
 
 /** Poll a provider-owned request without changing its transport or response contract. */
@@ -276,16 +272,9 @@ export async function pollProviderOperationJson<TPayload>(
   });
 }
 
-export async function fetchProviderOperationResponse(params: {
-  stage: ProviderOperationRetryStage;
-  url: string;
-  init?: RequestInit;
-  timeoutMs?: ProviderOperationTimeoutMs;
-  fetchFn: typeof fetch;
-  provider?: string;
-  requestFailedMessage?: string;
-  retry?: TransientProviderRetryConfig;
-}): Promise<Response> {
+export async function fetchProviderOperationResponse(
+  params: Omit<Parameters<typeof fetchProviderOperation>[0], "guardedOptions">,
+): Promise<Response> {
   return (await fetchProviderOperation(params)).response;
 }
 
@@ -293,17 +282,17 @@ export async function fetchProviderOperationResponse(params: {
  * Fetches generated-asset response headers and bounded error details under an absolute deadline.
  * Successful-body readers must reuse the same deadline so header time cannot reset the budget.
  */
-export async function fetchProviderDownloadResponse(params: {
-  url: string;
-  init?: RequestInit;
-  deadline?: ProviderOperationDeadline;
-  /** @deprecated Pass `deadline` so successful-body reads can reuse the same total budget. */
-  timeoutMs?: ProviderOperationTimeoutMs;
-  fetchFn: typeof fetch;
-  provider?: string;
-  requestFailedMessage: string;
-  retry?: TransientProviderRetryConfig;
-}): Promise<Response> {
+export async function fetchProviderDownloadResponse(
+  params: Omit<
+    Parameters<typeof fetchProviderOperationResponse>[0],
+    "stage" | "requestFailedMessage" | "timeoutMs"
+  > & {
+    deadline?: ProviderOperationDeadline;
+    /** @deprecated Pass `deadline` so successful-body reads can reuse the same total budget. */
+    timeoutMs?: ProviderOperationTimeoutMs;
+    requestFailedMessage: string;
+  },
+): Promise<Response> {
   // timeoutMs is a shipped Plugin SDK contract. Normalize it at this boundary;
   // new callers pass the deadline through to their successful-body reader.
   const deadline =
@@ -335,14 +324,10 @@ function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {
 }
 
 function sanitizeAuditContext(auditContext: string | undefined): string | undefined {
-  const cleaned = auditContext
-    ?.replace(/\p{Cc}+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!cleaned) {
-    return undefined;
-  }
-  return truncateUtf16Safe(cleaned, MAX_AUDIT_CONTEXT_CHARS);
+  return truncateOptionalText(
+    auditContext?.replace(/\p{Cc}+/gu, " ").replace(/\s+/g, " "),
+    MAX_AUDIT_CONTEXT_CHARS,
+  );
 }
 
 type ResolvedProviderHttpRequestConfig = {
@@ -479,10 +464,7 @@ async function fetchProviderOperation(params: {
     stage: params.stage,
     retry: params.retry,
     operation: async () => {
-      const timeoutMs = resolveProviderRequestTimeoutMs({
-        timeoutMs: params.timeoutMs,
-        defaultTimeoutMs: DEFAULT_GUARDED_HTTP_TIMEOUT_MS,
-      });
+      const timeoutMs = resolveProviderRequestTimeoutMs(params.timeoutMs);
       const requestDeadline = createProviderOperationDeadline({
         timeoutMs,
         label: params.requestFailedMessage ?? `${params.provider ?? "provider"} ${params.stage}`,
@@ -596,13 +578,10 @@ export async function postMultipartRequest(params: GuardedPostRequestParams<Body
 // Keep the shipped transcription name on the canonical multipart transport.
 export { postMultipartRequest as postTranscriptionRequest };
 
-export function requireTranscriptionText(
-  value: string | undefined,
-  missingMessage: string,
-): string {
-  const text = value?.trim();
-  if (!text) {
+/** Empty strings represent silence; missing or non-string transcripts are malformed. */
+export function requireTranscriptionText(value: unknown, missingMessage: string): string {
+  if (typeof value !== "string") {
     throw new Error(missingMessage);
   }
-  return text;
+  return value.trim();
 }

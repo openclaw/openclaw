@@ -15,14 +15,7 @@ type DetailsToken = ReturnType<StateBlock["push"]>;
 type DetailsTokenSink = {
   push(type: string, tag: string, nesting: -1 | 0 | 1): DetailsToken;
 };
-type MarkdownRawHtmlContext =
-  | "comment"
-  | "processing_instruction"
-  | "declaration"
-  | "cdata"
-  | { element: string };
-
-type MarkdownRawHtmlState = { context: MarkdownRawHtmlContext | null };
+type MarkdownRawHtmlState = { context: string | null };
 
 type MarkdownDisclosureTag = {
   end: number;
@@ -222,38 +215,22 @@ function detailsBlockRule(
   return true;
 }
 
-function openingRawHtmlContext(line: string): MarkdownRawHtmlContext | null {
+function openingRawHtmlContext(line: string): string | null {
   const trimmed = line.trimStart();
   if (trimmed.startsWith("<!--")) {
-    return "comment";
+    return "-->";
   }
   if (trimmed.startsWith("<?")) {
-    return "processing_instruction";
+    return "?>";
   }
   if (trimmed.startsWith("<![CDATA[")) {
-    return "cdata";
+    return "]]>";
   }
   if (/^<![A-Za-z]/.test(trimmed)) {
-    return "declaration";
+    return ">";
   }
   const element = /^<(pre|script|style|textarea)(?=[\s>]|$)/i.exec(trimmed)?.[1];
-  return element ? { element: element.toLowerCase() } : null;
-}
-
-function closesRawHtmlContext(context: MarkdownRawHtmlContext, line: string): boolean {
-  if (typeof context === "object") {
-    return line.toLowerCase().includes(`</${context.element}>`);
-  }
-  if (context === "comment") {
-    return line.includes("-->");
-  }
-  if (context === "processing_instruction") {
-    return line.includes("?>");
-  }
-  if (context === "declaration") {
-    return line.includes(">");
-  }
-  return line.includes("]]>");
+  return element ? `</${element.toLowerCase()}>` : null;
 }
 
 export function consumeMarkdownRawHtmlLine(
@@ -270,7 +247,8 @@ export function consumeMarkdownRawHtmlLine(
   if (!state.context && isInsideMarkdownCode(lineOffset + start, codeSpans)) {
     return false;
   }
-  state.context = closesRawHtmlContext(context, line) ? null : context;
+  const content = context.startsWith("</") ? line.toLowerCase() : line;
+  state.context = content.includes(context) ? null : context;
   return true;
 }
 

@@ -12,10 +12,6 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Concurr
     let locationManager = CLLocationManager()
     var locationRequestContinuations: [UUID: CheckedContinuation<CLLocation, Swift.Error>] = [:]
 
-    /// Compatibility witness for the shipped single-waiter protocol; app calls use the
-    /// concurrent extension and its per-request continuation dictionary.
-    var locationRequestContinuation: CheckedContinuation<CLLocation, Swift.Error>?
-
     override init() {
         super.init()
         self.configureLocationManager()
@@ -47,11 +43,7 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Concurr
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         Task { @MainActor in
-            if let latest = locations.last {
-                self.completeLocationRequests(with: .success(latest))
-            } else {
-                self.completeLocationRequests(with: .failure(Error.unavailable))
-            }
+            self.completeLocationRequests(with: locations.last.map { .success($0) } ?? .failure(Error.unavailable))
         }
     }
 

@@ -61,11 +61,8 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
     .at(-1);
   let version = stableVersion;
   if (!stableVersion) {
-    const prereleaseVersion = semverVersions
-      .filter(isPrereleaseSemverVersion)
-      .toSorted(comparePackageUpdateVersions)
-      .at(-1);
-    if (!prereleaseVersion || !semverVersions.every(isPrereleaseSemverVersion)) {
+    const prereleaseVersion = semverVersions.toSorted(comparePackageUpdateVersions).at(-1);
+    if (!prereleaseVersion) {
       return null;
     }
     if (prereleaseVersion === params.resolvedPrereleaseVersion) {

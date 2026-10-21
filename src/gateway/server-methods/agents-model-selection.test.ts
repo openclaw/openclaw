@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { preparePublishedModelRuntimeChoice } from "../../agents/model-runtime-choice.js";
+import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 
@@ -25,6 +26,9 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
     params.writeOptions?.assertConfigPathForWrite?.();
     fixture.writes(draft);
     fixture.config = draft;
+    if (params.writeOptions) {
+      getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
+    }
   },
 }));
 vi.mock("../../agents/model-runtime-choice.js", () => ({
@@ -56,50 +60,47 @@ beforeEach(() => {
   }));
 });
 
-describe("agents.update native model selection", () => {
-  const model = "acp-opencode/fixture-model";
-  const request = { agentId: "main", model, agentRuntime: "acp-opencode" };
-  it.each([false, true])(
-    "persists the native default without inventing a roster (implicit=%s)",
-    async (implicit) => {
-      if (implicit) {
-        fixture.config = {};
-      }
-      expect(await update(request)).toHaveBeenCalledWith(
-        true,
-        { ok: true, agentId: "main" },
-        undefined,
-      );
-      expect(
-        implicit ? fixture.config.agents?.defaults : fixture.config.agents?.entries?.main,
-      ).toMatchObject({
-        model,
-        models: { [model]: { agentRuntime: { id: "acp-opencode" } } },
-      });
-      if (implicit) {
-        expect(fixture.config.agents?.entries).toBeUndefined();
-      }
-      expect(fixture.config.auth).toBeUndefined();
-      expect(fixture.config.wizard).toBeUndefined();
-    },
-  );
-  it("rechecks catalog ownership at the final config write", async () => {
-    const before = structuredClone(fixture.config);
-    let current = true;
-    fixture.choice.mockResolvedValue({
-      kind: "ready",
-      runtimeId: "acp-opencode",
-      validate: () => (current ? undefined : "Replaced"),
-    });
-    fixture.beforeWrite.mockImplementation(() => {
-      current = false;
-    });
+const model = "acp-opencode/fixture-model";
+const request = { agentId: "main", model, agentRuntime: "acp-opencode" };
+it.each([false, true])(
+  "persists the native default without inventing a roster (implicit=%s)",
+  async (implicit) => {
+    if (implicit) {
+      fixture.config = {};
+    }
     expect(await update(request)).toHaveBeenCalledWith(
-      false,
+      true,
+      { ok: true, agentId: "main" },
       undefined,
-      expect.objectContaining({ message: "Replaced" }),
     );
-    expect(fixture.writes).not.toHaveBeenCalled();
-    expect(fixture.config).toEqual(before);
+    expect(
+      implicit ? fixture.config.agents?.defaults : fixture.config.agents?.entries?.main,
+    ).toMatchObject({
+      model,
+      models: { [model]: { agentRuntime: { id: "acp-opencode" } } },
+    });
+    if (implicit) {
+      expect(fixture.config.agents?.entries).toBeUndefined();
+    }
+    expect([fixture.config.auth, fixture.config.wizard]).toEqual([undefined, undefined]);
+  },
+);
+it("rechecks catalog ownership at the final config write", async () => {
+  const before = structuredClone(fixture.config);
+  let current = true;
+  fixture.choice.mockResolvedValue({
+    kind: "ready",
+    runtimeId: "acp-opencode",
+    validate: () => (current ? undefined : "Replaced"),
   });
+  fixture.beforeWrite.mockImplementation(() => {
+    current = false;
+  });
+  expect(await update(request)).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ message: "Replaced" }),
+  );
+  expect(fixture.writes).not.toHaveBeenCalled();
+  expect(fixture.config).toEqual(before);
 });

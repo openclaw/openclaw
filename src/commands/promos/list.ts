@@ -1,9 +1,7 @@
-/** Lists active ClawHub promotional model offers. */
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { fetchClawHubPromotions, type ClawHubPromotion } from "../../infra/clawhub-promotions.js";
-import { markPromotionSlugsNotified } from "../../infra/promotions-feed.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
 function formatWindowEnd(promotion: ClawHubPromotion): string {
@@ -29,8 +27,6 @@ export async function promosListCommand(opts: { json?: boolean }, runtime: Runti
     }
     return;
   }
-  // Retain the explicit notice history without refreshing passive inventory.
-  await markPromotionSlugsNotified(promotions.map((promotion) => promotion.slug));
   if (opts.json) {
     writeRuntimeJson(runtime, { promotions });
     return;

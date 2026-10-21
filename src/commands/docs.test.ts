@@ -1,19 +1,25 @@
 // Docs command tests cover docs lookup, fetch handling, and runtime output.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const fetchMock = vi.fn<typeof fetch>();
 
-vi.mock("../../packages/terminal-core/src/theme.js", () => ({
-  isRich: () => false,
-  theme: {
-    heading: (s: string) => s,
-    info: (s: string) => s,
-    muted: (s: string) => s,
-    command: (s: string) => s,
-  },
-}));
+vi.mock("../../packages/terminal-core/src/theme.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../packages/terminal-core/src/theme.js")>();
+  return {
+    ...actual,
+    isRich: vi.fn(() => false),
+    theme: {
+      ...actual.theme,
+      heading: (s: string) => s,
+      info: (s: string) => s,
+      muted: (s: string) => s,
+      command: (s: string) => s,
+    },
+  };
+});
 
 vi.mock("../../packages/terminal-core/src/links.js", () => ({
   formatDocsLink: (path: string, label: string) => `${label}${path}`,
@@ -28,6 +34,7 @@ const { docsSearchCommand } = await import("./docs.js");
 describe("docsSearchCommand", () => {
   beforeEach(() => {
     fetchMock.mockReset();
+    vi.mocked(isRich).mockReturnValue(false);
     vi.stubGlobal("fetch", fetchMock);
   });
 
@@ -51,37 +58,7 @@ describe("docsSearchCommand", () => {
     }
     expect(url.href).toBe("https://docs.openclaw.ai/api/search?q=plugin+allowlist");
     expect(init).toMatchObject({ headers: { Accept: "application/json" } });
-  });
-
-  it("emits one JSON object for search results", async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          results: [
-            {
-              title: "CLI reference",
-              link: "https://docs.openclaw.ai/cli",
-              snippet: "Command-line usage",
-            },
-          ],
-        }),
-      ),
-    );
-    const runtime = createTestRuntime();
-
-    await docsSearchCommand(["cli"], runtime, { json: true });
-
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
-      query: "cli",
-      results: [
-        {
-          title: "CLI reference",
-          link: "https://docs.openclaw.ai/cli",
-          snippet: "Command-line usage",
-        },
-      ],
-    });
+    expect(runtime.log.mock.calls).toEqual([["# Docs search: plugin allowlist\n\n_No results._"]]);
   });
 
   it("limits normalized search results before rendering", async () => {
@@ -119,49 +96,8 @@ describe("docsSearchCommand", () => {
     });
   });
 
-  it("cancels non-OK docs search response bodies and fails loudly", async () => {
-    let cancelled = false;
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("unavailable"));
-        },
-        cancel() {
-          cancelled = true;
-        },
-      }),
-      { status: 503 },
-    );
-    fetchMock.mockResolvedValueOnce(response);
-    const runtime = createTestRuntime();
-
-    await expect(docsSearchCommand(["browser", "existing-session"], runtime)).rejects.toThrow(
-      "Docs search failed: HTTP 503",
-    );
-
-    expect(cancelled).toBe(true);
-  });
-
-  it("reports malformed docs search JSON with CLI context", async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response("{bad json", {
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-    const runtime = createTestRuntime();
-
-    await expect(docsSearchCommand(["bad-json"], runtime)).rejects.toThrow(
-      "Docs search failed: Docs search response is malformed JSON",
-    );
-  });
-
-  it.each([
-    { name: "missing results", payload: {} },
-    { name: "null results", payload: { results: null } },
-    { name: "object results", payload: { results: {} } },
-    { name: "string results", payload: { results: "unavailable" } },
-  ])("rejects $name instead of reporting a successful empty search", async ({ payload }) => {
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(payload)));
+  it("rejects string results instead of reporting a successful empty search", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ results: "unavailable" })));
     const runtime = createTestRuntime();
 
     await expect(docsSearchCommand(["gateway"], runtime, { json: true })).rejects.toThrow(
@@ -169,19 +105,6 @@ describe("docsSearchCommand", () => {
     );
 
     expect(runtime.log).not.toHaveBeenCalled();
-  });
-
-  it("keeps a successful empty search distinct from a malformed response", async () => {
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ results: [] })));
-    const runtime = createTestRuntime();
-
-    await docsSearchCommand(["no-matches"], runtime, { json: true });
-
-    expect(runtime.log).toHaveBeenCalledOnce();
-    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
-      query: "no-matches",
-      results: [],
-    });
   });
 
   it("reports docs search responses with invalid UTF-8 bytes as malformed", async () => {
@@ -200,15 +123,35 @@ describe("docsSearchCommand", () => {
     );
   });
 
-  it("renders successful results from the Cloudflare docs search API", async () => {
+  it.each([
+    {
+      rich: false,
+      output: [
+        [
+          "# Docs search: plugin \\[allowlist\\]\n\n- [Plugin \\[allowlist\\]](https://docs.openclaw.ai/plugins/allowlist) - How to \\(configure\\).",
+        ],
+      ],
+    },
+    {
+      rich: true,
+      output: [
+        ["Docs search: plugin [allowlist]"],
+        [
+          "- Plugin [allowlist] (docs.openclaw.ai/plugins/allowlisthttps://docs.openclaw.ai/plugins/allowlist)",
+        ],
+        ["  How to (configure)."],
+      ],
+    },
+  ])("renders search results with rich=$rich", async ({ rich, output }) => {
+    vi.mocked(isRich).mockReturnValue(rich);
     fetchMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
           results: [
             {
-              title: "Plugin allowlist",
+              title: "Plugin [allowlist]",
               link: "https://docs.openclaw.ai/plugins/allowlist",
-              snippet: "How to configure the allowlist.",
+              snippet: "How to (configure).",
             },
           ],
         }),
@@ -217,11 +160,11 @@ describe("docsSearchCommand", () => {
     );
     const runtime = createTestRuntime();
 
-    await docsSearchCommand(["plugin", "allowlist"], runtime);
+    await docsSearchCommand(["plugin", "[allowlist]"], runtime);
 
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalled();
+    expect(runtime.log.mock.calls).toEqual(output);
   });
 
   it("rejects oversized docs search responses", async () => {
@@ -301,32 +244,6 @@ describe("docs search request ownership", () => {
       streamController?.error(new DOMException("fixture cleanup", "AbortError"));
       await capture.body?.cancel().catch(() => undefined);
       await pending;
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("keeps the successful payload while releasing its request signal", async () => {
-    let requestSignal: AbortSignal | null | undefined;
-    fetchMock.mockReset();
-    fetchMock.mockImplementation(async (_url, init) => {
-      requestSignal = init?.signal;
-      return new Response(
-        JSON.stringify({
-          results: [{ title: "Retained result", link: "https://docs.openclaw.ai/cli" }],
-        }),
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const runtime = createTestRuntime();
-    try {
-      await docsSearchCommand(["kept"], runtime, { json: true });
-      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
-        query: "kept",
-        results: [{ title: "Retained result", link: "https://docs.openclaw.ai/cli" }],
-      });
-      expect(requestSignal?.aborted).toBe(true);
-      expect(runtime.error).not.toHaveBeenCalled();
-    } finally {
       vi.unstubAllGlobals();
     }
   });

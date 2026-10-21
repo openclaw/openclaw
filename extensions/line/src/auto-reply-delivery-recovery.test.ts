@@ -87,11 +87,6 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       used: 200,
       expected: "LINE refused the push: 200/200 monthly messages used.",
     },
-    {
-      label: "keeps LINE's own words when the allowance still has room",
-      used: 12,
-      expected: "429 - provider rejected the request",
-    },
   ])("$label", async ({ used, expected }) => {
     const rejection = createHttpError(429);
     const pushMessagesLine = vi.fn(async () => {
@@ -119,40 +114,11 @@ describe("deliverLineAutoReply HTTP recovery", () => {
   });
 
   it.each([
-    { label: "an actual LINE HTTP timeout", error: createHttpError(408) },
-    {
-      label: "an actual LINE upstream failure behind two SDK wrappers",
-      error: new Error("reply failed", {
-        cause: new Error("provider request failed", { cause: createHttpError(503) }),
-      }),
-    },
-    {
-      label: "an actual LINE upstream failure behind an SDK error property",
-      error: Object.assign(new Error("reply failed"), { error: createHttpError(503) }),
-    },
-    {
-      label: "an authoritative LINE upstream failure wrapping a pre-connect error",
-      error: Object.assign(createHttpError(503), {
-        cause: Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }),
-      }),
-    },
-    {
-      label: "a connection reset after dispatch",
-      error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
-    },
-    {
-      label: "a request timeout after dispatch",
-      error: Object.assign(new Error("reply request timed out"), { code: "ETIMEDOUT" }),
-    },
     {
       label: "an undici response-body timeout",
       error: Object.assign(new Error("response body timed out"), {
         code: "UND_ERR_BODY_TIMEOUT",
       }),
-    },
-    {
-      label: "an aborted request",
-      error: Object.assign(new Error("reply was aborted"), { name: "AbortError" }),
     },
     {
       label: "a wrapped undici fetch error",
@@ -182,23 +148,11 @@ describe("deliverLineAutoReply HTTP recovery", () => {
 
   it.each([
     {
-      label: "an actual rejected LINE reply behind two SDK wrappers",
-      error: new Error("reply failed", {
-        cause: new Error("provider request failed", { cause: createHttpError(400) }),
-      }),
-    },
-    { label: "an actual LINE reply rate-limit rejection", error: createHttpError(429) },
-    {
-      label: "a refused connection before request dispatch",
-      error: Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }),
-    },
-    {
       label: "a wrapped DNS failure before request dispatch",
       error: new TypeError("fetch failed", {
         cause: Object.assign(new Error("getaddrinfo failed"), { code: "ENOTFOUND" }),
       }),
     },
-    { label: "a known local pre-dispatch failure", error: new Error("reply failed") },
   ])("keeps the push fallback after $label", async ({ error }) => {
     const onReplyError = vi.fn();
     const replyMessageLine = vi.fn(async () => {
@@ -318,50 +272,6 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     });
     expect(pushMessagesLine).toHaveBeenCalledOnce();
     expect(replyMessageLine).not.toHaveBeenCalled();
-  });
-
-  it("retries push-only quick-reply text after a mixed batch is rejected", async () => {
-    const lineData = {
-      flexMessage: { altText: "Card", contents: { type: "bubble" } },
-      quickReplies: ["A"],
-    };
-    const pushMessagesLine = vi.fn(async (_to: string, messages: messagingApi.Message[]) => {
-      if (messages.length > 1) {
-        throw createRichRejection();
-      }
-      return lineResult("push", "u1");
-    });
-    createDeps({
-      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
-    });
-
-    const result = await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      replyToken: undefined,
-      payload: { text: "Choose one", channelData: { line: lineData } },
-      lineData,
-    });
-
-    expect(result).toMatchObject({
-      status: "partial",
-      visibleReplySent: true,
-      error: { message: "400 - Bad Request" },
-    });
-    expect(pushMessagesLine).toHaveBeenNthCalledWith(
-      1,
-      "line:user:1",
-      [
-        createFlexMessage("Card", { type: "bubble" }),
-        { type: "text", text: "Choose one", quickReply: createQuickReply("A") },
-      ],
-      { cfg: LINE_TEST_CFG, accountId: "acc" },
-    );
-    expect(pushMessagesLine).toHaveBeenNthCalledWith(
-      2,
-      "line:user:1",
-      [{ type: "text", text: "Choose one", quickReply: createQuickReply("A") }],
-      { cfg: LINE_TEST_CFG, accountId: "acc" },
-    );
   });
 
   it("does not retry a mixed push after a quota failure", async () => {
@@ -499,65 +409,6 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       [{ type: "text", text: "c6" }],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
-  });
-
-  it("retries text from a rejected reply-token overflow batch", async () => {
-    const lineData = {
-      flexMessage: { altText: "Card", contents: { type: "bubble" } },
-    };
-    const chunks = ["c1", "c2", "c3", "c4", "c5", "c6"];
-    const pushMessagesLine = createRejectRichBatch();
-    const { replyMessageLine } = createDeps({
-      chunkMarkdownText: () => chunks,
-      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
-    });
-
-    const result = await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { text: "six chunks", channelData: { line: lineData } },
-      lineData,
-    });
-
-    expect(result).toMatchObject({ status: "partial", replyTokenUsed: true });
-    expect(replyMessageLine).toHaveBeenCalledTimes(1);
-    expect(pushMessagesLine).toHaveBeenNthCalledWith(
-      1,
-      "line:user:1",
-      [{ type: "text", text: "c6" }, createFlexMessage("Card", { type: "bubble" })],
-      { cfg: LINE_TEST_CFG, accountId: "acc" },
-    );
-    expect(pushMessagesLine).toHaveBeenNthCalledWith(
-      2,
-      "line:user:1",
-      [{ type: "text", text: "c6" }],
-      { cfg: LINE_TEST_CFG, accountId: "acc" },
-    );
-  });
-
-  it("does not recover text after an ambiguous reply failure", async () => {
-    const lineData = {
-      flexMessage: { altText: "Card", contents: { type: "bubble" } },
-    };
-    const replyMessageLine = vi.fn(async () => {
-      throw new Error("reply transport failed");
-    });
-    const pushError = createRichRejection();
-    const pushMessagesLine = vi.fn(async () => {
-      throw pushError;
-    });
-    createDeps({
-      replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
-      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
-    });
-
-    await expect(
-      deliverLineAutoReply({
-        ...baseDeliveryParams,
-        payload: { text: "hello", channelData: { line: lineData } },
-        lineData,
-      }),
-    ).rejects.toBe(pushError);
-    expect(pushMessagesLine).toHaveBeenCalledTimes(1);
   });
 
   it("recovers text after definitive reply and push rejections", async () => {

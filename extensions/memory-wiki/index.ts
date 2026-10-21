@@ -6,7 +6,6 @@ import {
   configureMemoryWikiCompiledCacheStore,
   createMemoryWikiCompiledCacheStore,
   deactivateMemoryWikiCompiledCacheOwnersExcept,
-  reconcileMemoryWikiCompiledCacheOwner,
   resolveMemoryWikiCompiledCacheOwnerId,
 } from "./src/compiled-cache.js";
 import { memoryWikiConfigSchema } from "./src/config-schema.js";
@@ -30,6 +29,7 @@ import {
   createWikiPromptSectionBuilder,
   createWikiPromptSectionPreparer,
 } from "./src/prompt-section.js";
+import { closeMemoryWikiQueryReader } from "./src/query-reader.js";
 import {
   configureMemoryWikiSourceSyncStateStore,
   createMemoryWikiSourceSyncStateStore,
@@ -80,8 +80,7 @@ export default definePluginEntry({
   configSchema: memoryWikiConfigSchema,
   register(api) {
     const config = resolveMemoryWikiConfig(api.pluginConfig);
-    const getAppConfig = () =>
-      (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig | undefined;
+    const getAppConfig = () => api.runtime.config.current() as OpenClawConfig;
     const resolveConfig: MemoryWikiConfigResolver = (agentId, appConfig = getAppConfig()) =>
       resolveMemoryWikiAgentConfig({ config, appConfig, agentId });
     const resolveToolContext = (agentId?: string) => {
@@ -150,9 +149,6 @@ export default definePluginEntry({
               identity.vaultGeneration,
               identity.compiledCachePublicationId,
             );
-            await reconcileMemoryWikiCompiledCacheOwner(activeConfig, () =>
-              loadMemoryWikiValidatedVaultIdentity(activeConfig.vault.path),
-            );
             activeOwnerIds.add(resolveMemoryWikiCompiledCacheOwnerId(activeConfig));
           }
           deactivateMemoryWikiCompiledCacheOwnersExcept(activeOwnerIds);
@@ -172,6 +168,7 @@ export default definePluginEntry({
         deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
         await waitForMemoryWikiImportedSourceSyncs();
         deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+        await closeMemoryWikiQueryReader();
       },
     });
 
@@ -181,7 +178,6 @@ export default definePluginEntry({
     registerMemoryWikiGatewayMethods({
       api,
       config,
-      appConfig: api.config,
       getAppConfig,
       resolveConfig,
       resolveSourceSyncSignal: () => sourceSyncAbortController?.signal,

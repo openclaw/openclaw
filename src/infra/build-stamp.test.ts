@@ -8,7 +8,7 @@ import {
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "../../scripts/lib/local-build-metadata.mts";
-import { captureRunNodeInputState } from "../../scripts/lib/run-node-input-state.mts";
+import { resolveRunNodeInputSignature } from "../../scripts/lib/run-node-input-state.mts";
 import { resolveBuildRequirement, resolveRunNodePreparation } from "../../scripts/run-node.mts";
 import {
   setupStampedProject,
@@ -37,7 +37,6 @@ describe("build-stamp script", () => {
         },
       });
       expect(stampPath.endsWith(`/dist/${BUILD_STAMP_FILE}`)).toBe(true);
-
       expect(JSON.parse(await fs.readFile(stampPath, "utf8"))).toEqual({
         builtAt: 1_700_000_000_000,
         head: "abc123",
@@ -49,15 +48,20 @@ describe("build-stamp script", () => {
 
 it("reuses built dirty inputs but rejects changed production, dependencies and missing output", async () => {
   await withTestDir({ prefix: "openclaw-dirty-build-" }, async (cwd) => {
+    const at = (file: string) => path.join(cwd, file);
     const write = async (file: string, value: string) => {
-      await fs.mkdir(path.dirname(path.join(cwd, file)), { recursive: true });
-      await fs.writeFile(path.join(cwd, file), value);
+      await fs.mkdir(path.dirname(at(file)), { recursive: true });
+      await fs.writeFile(at(file), value);
     };
+    const writeJson = (file: string, value: unknown) => write(file, JSON.stringify(value));
     await write(".gitignore", "dist/\n");
     await write("package.json", '{"name":"openclaw"}');
     await write("src/index.ts", "export const value = 1;\n");
-    await write("src/index.test.ts", "original fixture\n");
-    const testUtilities = ["src/index.test-utils.ts", "src/index.test-utils.tsx"];
+    const testUtilities = [
+      "src/index.test.ts",
+      "src/index.test-utils.ts",
+      "src/index.test-utils.tsx",
+    ];
     for (const file of testUtilities) {
       await write(file, "original fixture\n");
     }
@@ -79,19 +83,18 @@ it("reuses built dirty inputs but rejects changed production, dependencies and m
     for (const args of [
       ["init", "-q"],
       ["add", "."],
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.test",
-        "commit",
-        "-qm",
-        "fixture",
-      ],
+      ["commit", "-qm", "fixture"],
     ]) {
       execFileSync(
         "git",
-        ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args],
+        [
+          "commit.gpgsign=false",
+          "core.hooksPath=/dev/null",
+          "user.name=Fixture",
+          "user.email=fixture@example.test",
+        ]
+          .flatMap((setting) => ["-c", setting])
+          .concat(args),
         { cwd },
       );
     }
@@ -106,19 +109,20 @@ it("reuses built dirty inputs but rejects changed production, dependencies and m
       sourceRoots: [],
       configFiles: [],
     };
+    const requirement = () => resolveBuildRequirement(deps, { allowEquivalentInputs: true });
+    const change = async (file: string, content: string, expected: boolean | string) => {
+      await write(file, content);
+      const result = requirement();
+      expect(typeof expected === "boolean" ? result.shouldBuild : result.reason).toBe(expected);
+    };
     await write("src/index.ts", "export const value = 2;\n");
-    const inputState = captureRunNodeInputState(deps, "build");
-    expect(inputState?.signature).toMatch(/^[a-f0-9]{64}$/u);
+    const inputSignature = resolveRunNodeInputSignature(deps, "build");
+    expect(inputSignature).toMatch(/^[a-f0-9]{64}$/u);
     await write("dist/entry.js", "export const value = 2;\n");
     writeBuildStamp({ cwd });
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).reason).toBe(
-      "dirty_watched_tree",
-    );
-    writeBuildStamp({ cwd, inputState });
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(false);
-    await write("src/stable.ts", "export const stable = 2;\n");
-    await write("src/stable.ts", "export const stable = 1;\n");
-    expect(() => writeBuildStamp({ cwd, inputState })).toThrow("Build inputs changed");
+    expect(requirement().reason).toBe("dirty_watched_tree");
+    writeBuildStamp({ cwd, inputSignature });
+    expect(requirement().shouldBuild).toBe(false);
     expect(
       resolveBuildRequirement({
         ...deps,
@@ -127,107 +131,68 @@ it("reuses built dirty inputs but rejects changed production, dependencies and m
     ).toBe(true);
     const validStamp = await fs.readFile(deps.buildStampPath, "utf8");
     for (const malformed of ["", null, false]) {
-      await fs.writeFile(
-        deps.buildStampPath,
-        JSON.stringify({
-          ...JSON.parse(validStamp),
-          inputSignature: malformed,
-        }),
-      );
-      expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(true);
+      await writeJson("dist/.buildstamp", { ...JSON.parse(validStamp), inputSignature: malformed });
+      expect(requirement().shouldBuild).toBe(true);
     }
     await fs.writeFile(deps.buildStampPath, validStamp);
-    await write(
-      "deployment.json",
-      JSON.stringify({ kind: "git", sourceHead: JSON.parse(validStamp).head }),
-    );
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(true);
+    await writeJson("deployment.json", { kind: "git", sourceHead: JSON.parse(validStamp).head });
+    expect(requirement().shouldBuild).toBe(true);
     await fs.unlink(path.join(cwd, "deployment.json"));
-    await write("src/index.test.ts", "corrected fixture\n");
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(false);
     for (const file of testUtilities) {
-      await write(file, "corrected fixture\n");
-      expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(
-        false,
-      );
+      await change(file, "corrected fixture\n", false);
     }
     for (const file of runtimeSupport) {
-      await write(file, "export const value = 2;\n");
-      expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).reason).toBe(
-        "build_inputs_changed",
-      );
-      await write(file, "export const value = 1;\n");
-      expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(
-        false,
-      );
+      await change(file, "export const value = 2;\n", "build_inputs_changed");
+      await change(file, "export const value = 1;\n", false);
     }
-    await fs.rename(path.join(cwd, "src/index.ts"), path.join(cwd, "src/renamed.ts"));
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(true);
-    await fs.rename(path.join(cwd, "src/renamed.ts"), path.join(cwd, "src/index.ts"));
-    await fs.unlink(path.join(cwd, "src/index.ts"));
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(true);
+    await fs.rename(at("src/index.ts"), at("src/renamed.ts"));
+    expect(requirement().shouldBuild).toBe(true);
+    await fs.rename(at("src/renamed.ts"), at("src/index.ts"));
+    await fs.unlink(at("src/index.ts"));
+    expect(requirement().shouldBuild).toBe(true);
     await write("src/index.ts", "export const value = 3;\n");
-    await fs.utimes(path.join(cwd, "src/index.ts"), new Date(0), new Date(0));
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).reason).toBe(
-      "build_inputs_changed",
-    );
-    expect(() => writeBuildStamp({ cwd, inputState })).toThrow("Build inputs changed");
+    await fs.utimes(at("src/index.ts"), new Date(0), new Date(0));
+    expect(requirement().reason).toBe("build_inputs_changed");
+    await change("src/index.ts", "export const value = 1;\n", true);
     await write("src/index.ts", "export const value = 2;\n");
-    expect(() => writeBuildStamp({ cwd, inputState })).toThrow("Build inputs changed");
-    await write("src/index.ts", "export const value = 1;\n");
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(true);
-    await write("src/index.ts", "export const value = 2;\n");
-    await write("pnpm-lock.yaml", "changed dependency\n");
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(true);
-    await write("pnpm-lock.yaml", "original lockfile\n");
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(false);
+    await change("pnpm-lock.yaml", "changed dependency\n", true);
+    await change("pnpm-lock.yaml", "original lockfile\n", false);
     await write("src/index.ts", "export const value = 1;\n");
     await write("config/tsconfig/base.json", "{}\n");
     await write("dist/entry.js", "export const value = 1;\n");
-    writeBuildStamp({ cwd, inputState: captureRunNodeInputState(deps, "build") });
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(false);
+    writeBuildStamp({ cwd, inputSignature: resolveRunNodeInputSignature(deps, "build") });
+    expect(requirement().shouldBuild).toBe(false);
     await fs.rm(path.join(cwd, "config"), { recursive: true });
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).shouldBuild).toBe(true);
-    await write(
-      "extensions/example/package.json",
-      JSON.stringify({
-        openclaw: {
-          controlUi: "./browser/index.ts",
-          assetScripts: { build: "build-ui", buildOutputs: ["openclaw.plugin.json"] },
-        },
-      }),
-    );
+    expect(requirement().shouldBuild).toBe(true);
+    await writeJson("extensions/example/package.json", {
+      openclaw: {
+        controlUi: "./browser/index.ts",
+        assetScripts: { build: "build-ui", buildOutputs: ["openclaw.plugin.json"] },
+      },
+    });
     const manifest = (entry: string, enabled = true) =>
       JSON.stringify({ id: "example", configSchema: { enabled }, controlUi: { entry } });
     await write("extensions/example/openclaw.plugin.json", manifest("old.js"));
     await write("extensions/example/browser/index.css", "body { color: red; }");
-    const assetsBefore = captureRunNodeInputState(deps, "build", { assetPhase: true });
-    const compilerBefore = captureRunNodeInputState(deps, "build");
+    const assetsBefore = resolveRunNodeInputSignature(deps, "build");
     await write("extensions/example/openclaw.plugin.json", manifest("new.js"));
-    expect(captureRunNodeInputState(deps, "build", { assetPhase: true })).toEqual(assetsBefore);
-    expect(captureRunNodeInputState(deps, "build")?.generation).not.toBe(
-      compilerBefore?.generation,
-    );
+    expect(resolveRunNodeInputSignature(deps, "build")).toEqual(assetsBefore);
     await write("extensions/example/browser/index.test.ts", "fixture correction");
-    expect(captureRunNodeInputState(deps, "build", { assetPhase: true })).toEqual(assetsBefore);
+    expect(resolveRunNodeInputSignature(deps, "build")).toEqual(assetsBefore);
     await write("extensions/example/openclaw.plugin.json", manifest("new.js", false));
-    expect(captureRunNodeInputState(deps, "build", { assetPhase: true })?.signature).not.toBe(
-      assetsBefore?.signature,
-    );
+    expect(resolveRunNodeInputSignature(deps, "build")).not.toBe(assetsBefore);
     await write("extensions/example/openclaw.plugin.json", manifest("new.js"));
     await write("extensions/example/browser/index.css", "body { color: blue; }");
-    expect(captureRunNodeInputState(deps, "build", { assetPhase: true })?.signature).not.toBe(
-      assetsBefore?.signature,
-    );
+    expect(resolveRunNodeInputSignature(deps, "build")).not.toBe(assetsBefore);
     await fs.unlink(deps.distEntry);
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).reason).toBe(
-      "missing_dist_entry",
-    );
+    expect(requirement().reason).toBe("missing_dist_entry");
   });
 });
 
 it("reuses clean test capsules across carrier commits but preserves strict CLI and deployment heads", async () => {
   await withTestDir({ prefix: "openclaw-carrier-build-" }, async (cwd) => {
+    const at = (file: string) => path.join(cwd, file);
+    const write = (file: string, value: string) => fs.writeFile(at(file), value);
     await setupStampedProject(cwd, {
       files: {
         "src/entry.test.ts": "original fixture\n",
@@ -235,59 +200,42 @@ it("reuses clean test capsules across carrier commits but preserves strict CLI a
       },
     });
     const { git, deps } = await trackProjectWithGit(cwd);
+    const requirement = () => resolveBuildRequirement(deps, { allowEquivalentInputs: true });
+    const preparation = () => resolveRunNodePreparation(cwd, {}, { allowEquivalentInputs: true });
+    git("config", "user.name", "Fixture");
+    git("config", "user.email", "fixture@example.test");
     const commit = () =>
-      git(
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.test",
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "--allow-empty",
-        "-qm",
-        "carrier",
-      );
-    writeBuildStamp({ cwd, inputState: captureRunNodeInputState(deps, "build") });
-    writeRuntimePostBuildStamp({ cwd, inputState: captureRunNodeInputState(deps, "runtime") });
+      git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "carrier");
+    writeBuildStamp({ cwd, inputSignature: resolveRunNodeInputSignature(deps, "build") });
+    writeRuntimePostBuildStamp({
+      cwd,
+      inputSignature: resolveRunNodeInputSignature(deps, "runtime"),
+    });
     commit();
     expect(resolveBuildRequirement(deps).reason).toBe("git_head_changed");
-    expect(resolveRunNodePreparation(cwd, {}, { allowEquivalentInputs: true })).toEqual({
-      build: false,
-      runtime: false,
-      immutable: false,
-    });
+    expect(preparation()).toEqual({ build: false, runtime: false, immutable: false });
     const stampFile = deps.buildStampPath;
     const validStamp = await fs.readFile(stampFile, "utf8");
     const validStampTime = await fs.stat(stampFile);
     const legacy = JSON.parse(validStamp);
     delete legacy.inputSignature;
     await fs.writeFile(stampFile, JSON.stringify(legacy));
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).reason).toBe(
-      "git_head_changed",
-    );
+    expect(requirement().reason).toBe("git_head_changed");
     await fs.writeFile(stampFile, validStamp);
     await fs.utimes(stampFile, validStampTime.atime, validStampTime.mtime);
-    await fs.writeFile(path.join(cwd, "src/entry.test.ts"), "corrected fixture\n");
+    await write("src/entry.test.ts", "corrected fixture\n");
     git("add", "src/entry.test.ts");
     commit();
-    expect(resolveRunNodePreparation(cwd, {}, { allowEquivalentInputs: true }).build).toBe(false);
-    await fs.writeFile(
-      path.join(cwd, "deployment.json"),
+    expect(preparation().build).toBe(false);
+    await write(
+      "deployment.json",
       JSON.stringify({ kind: "git", sourceHead: git("rev-parse", "HEAD") }),
     );
-    expect(resolveRunNodePreparation(cwd, {}, { allowEquivalentInputs: true }).immutable).toBe(
-      true,
-    );
-    await fs.unlink(path.join(cwd, "deployment.json"));
-    await fs.writeFile(
-      path.join(cwd, "packages/session-url-contract/src/index.ts"),
-      "export const value = 2;\n",
-    );
+    expect(preparation().immutable).toBe(true);
+    await fs.unlink(at("deployment.json"));
+    await write("packages/session-url-contract/src/index.ts", "export const value = 2;\n");
     git("add", "packages/session-url-contract/src/index.ts");
     commit();
-    expect(resolveBuildRequirement(deps, { allowEquivalentInputs: true }).reason).toBe(
-      "build_inputs_changed",
-    );
+    expect(requirement().reason).toBe("build_inputs_changed");
   });
 });

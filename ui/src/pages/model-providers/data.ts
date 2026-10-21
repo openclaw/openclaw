@@ -1,12 +1,14 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
+import type { AgentModelConfig } from "../../../../src/config/types.agents-shared.js";
 import type {
   ProviderUsageSnapshot,
   UsageSummary,
 } from "../../../../src/infra/provider-usage.types.js";
 import type { SessionModelUsage } from "../../../../src/infra/session-cost-usage.types.js";
 import type {
+  AgentsListResult,
   FastMode,
   ModelAuthStatusProvider,
   ModelAuthStatusProfile,
@@ -15,12 +17,20 @@ import type {
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import {
   canonicalModelAuthProviderId,
   isMonitoredAuthProvider,
   listEffectiveModelAuthProviders,
 } from "../../lib/model-auth.ts";
 import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
+import {
+  modelSettingFallbacks,
+  modelSettingPrimary,
+  readModelSetting,
+} from "../../lib/model-setting.ts";
+import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 
 export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | "api-key";
 
@@ -30,6 +40,7 @@ type ModelProviderAuthSummary = {
 };
 
 type ModelProviderLocalCost = {
+  usageReport?: SessionModelUsage["totals"]["usageReport"];
   totalCost: number;
   totalTokens: number;
   messageCount: number;
@@ -46,9 +57,7 @@ export type ModelProviderPendingLogout = {
   target: ModelProviderLogoutTarget;
 };
 
-export type ModelProviderProfileOrderLock = NonNullable<
-  ModelAuthStatusProvider["profileOrderLocked"]
->;
+type ModelProviderProfileOrderLock = NonNullable<ModelAuthStatusProvider["profileOrderLocked"]>;
 
 export type ModelProviderCard = {
   /** Canonical provider id used for icon + label lookup. */
@@ -86,14 +95,14 @@ export type ModelProviderCard = {
   localCost?: ModelProviderLocalCost;
 };
 
+type ConfiguredModelProvider = { key: string; hasApiKey: boolean; authMode?: string };
+
 type ModelProviderCardsInput = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
   providerOutcomes?: ModelCatalogProviderOutcome[];
   pendingProviders?: readonly string[];
-  configProviderIds?: string[] | null;
-  configApiKeyProviderIds?: string[] | null;
-  configProviderAuthModes?: Record<string, string> | null;
+  configProviders?: ConfiguredModelProvider[];
   providerUsage: UsageSummary | null;
   costByProvider: SessionModelUsage[] | null;
 };
@@ -178,6 +187,10 @@ function addLogoutTarget(
  */
 export function buildModelProviderCards(input: ModelProviderCardsInput): ModelProviderCard[] {
   const drafts: CardDraft[] = [];
+  const providerDraft = (provider: string, displayName?: string) => {
+    const id = canonicalModelAuthProviderId(provider);
+    return id ? ensureDraft(drafts, id, displayName || providerDisplayLabel(id)) : undefined;
+  };
   const apiKeyCapabilities = new Map<string, boolean>();
   const profileOrdersByAuthProvider = new Map<string, string[]>();
   const explicitOrderProviders = new Set<string>();
@@ -189,41 +202,34 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     apiKeyCapabilities.set(id, apiKeyCapabilities.get(id) === true || capability.apiKeySupported);
   }
 
-  for (const provider of input.configProviderIds ?? []) {
-    const id = canonicalModelAuthProviderId(provider);
-    if (id) {
-      ensureDraft(drafts, id, providerDisplayLabel(id)).card.configKey ??= provider;
+  for (const provider of input.configProviders ?? []) {
+    const card = providerDraft(provider.key)?.card;
+    if (!card) {
+      continue;
     }
-  }
-  for (const provider of input.configApiKeyProviderIds ?? []) {
-    const id = canonicalModelAuthProviderId(provider);
-    if (id) {
-      const card = ensureDraft(drafts, id, providerDisplayLabel(id)).card;
-      card.configKey = provider;
+    card.configKey ??= provider.key;
+    if (provider.hasApiKey) {
+      card.configKey = provider.key;
       card.hasConfigApiKey = true;
-      addProviderId(card.credentialProviderIds, provider);
+      addProviderId(card.credentialProviderIds, provider.key);
     }
-  }
-  for (const [provider, authMode] of Object.entries(input.configProviderAuthModes ?? {})) {
-    const id = canonicalModelAuthProviderId(provider);
-    if (id) {
-      ensureDraft(drafts, id, providerDisplayLabel(id)).card.configAuthMode = authMode;
+    if (provider.authMode !== undefined) {
+      card.configAuthMode = provider.authMode;
     }
   }
 
   for (const provider of input.pendingProviders ?? []) {
-    const id = canonicalModelAuthProviderId(provider);
-    if (id) {
-      ensureDraft(drafts, id, providerDisplayLabel(id)).card.checkingModels = true;
+    const draft = providerDraft(provider);
+    if (draft) {
+      draft.card.checkingModels = true;
     }
   }
 
   for (const outcome of input.providerOutcomes ?? []) {
-    const id = canonicalModelAuthProviderId(outcome.provider);
-    if (!id) {
+    const draft = providerDraft(outcome.provider);
+    if (!draft) {
       continue;
     }
-    const draft = ensureDraft(drafts, id, providerDisplayLabel(id));
     const current = draft.catalogOutcome;
     const providerWide = outcome.profileId === undefined;
     const priority = CATALOG_OUTCOME_PRIORITY[providerWide ? "provider" : "profile"];
@@ -240,11 +246,10 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   }
 
   for (const entry of input.models ?? []) {
-    const id = canonicalModelAuthProviderId(entry.provider);
-    if (!id) {
+    const draft = providerDraft(entry.provider);
+    if (!draft) {
       continue;
     }
-    const draft = ensureDraft(drafts, id, providerDisplayLabel(id));
     draft.card.modelCount += 1;
     if (entry.available === true) {
       draft.card.availableModelCount += 1;
@@ -343,43 +348,42 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   }
 
   for (const snapshot of input.providerUsage?.providers ?? []) {
-    const id = canonicalModelAuthProviderId(snapshot.provider);
-    if (!id) {
+    const draft = providerDraft(snapshot.provider, snapshot.displayName);
+    if (!draft) {
       continue;
     }
-    const draft =
-      findDraft(drafts, [id]) ??
-      ensureDraft(drafts, id, snapshot.displayName || providerDisplayLabel(id));
-    draft.ids.add(id);
     // usage.status snapshots carry cost history and errors that the
     // auth-status embed drops, so they win when both are present.
     draft.card.usage = snapshot;
   }
 
   for (const entry of input.costByProvider ?? []) {
-    const id = canonicalModelAuthProviderId(entry.provider ?? "");
-    if (!id) {
+    const draft = providerDraft(entry.provider ?? "");
+    if (!draft) {
       continue;
     }
-    const draft = ensureDraft(drafts, id, providerDisplayLabel(id));
     const cost = (draft.card.localCost ??= { totalCost: 0, totalTokens: 0, messageCount: 0 });
     cost.totalCost += entry.totals.totalCost;
     cost.totalTokens += entry.totals.totalTokens;
     cost.messageCount += entry.count;
+    if (entry.totals.usageReport?.state === "unavailable") {
+      cost.usageReport = entry.totals.usageReport;
+    }
   }
 
   return drafts
     .filter(
       (draft) =>
         draft.hasModelAuth ||
-        (input.configProviderIds ?? []).some(
-          (id) => canonicalModelAuthProviderId(id) === draft.card.id,
+        (input.configProviders ?? []).some(
+          ({ key }) => canonicalModelAuthProviderId(key) === draft.card.id,
         ) ||
         Boolean(draft.card.usage) ||
         draft.card.modelCount > 0 ||
         Boolean(draft.catalogOutcome) ||
         draft.card.checkingModels ||
-        (draft.card.localCost?.totalTokens ?? 0) > 0,
+        (draft.card.localCost?.totalTokens ?? 0) > 0 ||
+        draft.card.localCost?.usageReport?.state === "unavailable",
     )
     .map((draft) => {
       const apiKeySupported = apiKeyCapabilities.get(draft.card.id);
@@ -397,7 +401,7 @@ export type DefaultModelSelection = {
   primary: string;
   fallbacks: string[];
   /** null = automatic/unset; empty string = explicitly disabled. */
-  utilityModel: string | null;
+  utilityModel: AgentModelConfig | null;
   /** Unset or null disables decisions globally. */
   decisionModel?: string | null;
 };
@@ -416,7 +420,8 @@ export function resolveDefaultModelPresentation(
   configured: DefaultsDraft,
   draft: DefaultsDraft | null,
 ): { defaults: DefaultsDraft; configuredModels: ModelPickerEntry[] } {
-  if (catalog.retired || catalog.modelSelectionPolicy?.restricted) {
+  // The page retires drafts on identity/access loss, not on catalog invalidation.
+  if ((catalog.retired && !draft) || catalog.modelSelectionPolicy?.restricted) {
     return {
       defaults: {
         ...configured,
@@ -450,9 +455,12 @@ function buildSelectableDefaultModels(
   selection: DefaultModelSelection,
 ): ModelPickerEntry[] {
   const selected = new Set<string>(
-    [selection.primary, ...selection.fallbacks, selection.utilityModel].filter(
-      (value): value is string => typeof value === "string" && value.length > 0,
-    ),
+    [
+      selection.primary,
+      ...selection.fallbacks,
+      modelSettingPrimary(selection.utilityModel),
+      ...modelSettingFallbacks(selection.utilityModel),
+    ].filter((value): value is string => typeof value === "string" && value.length > 0),
   );
   const selectable: ModelPickerEntry[] = (models ?? []).filter(
     (model) => model.available !== false || selected.has(modelCatalogRef(model)),
@@ -468,7 +476,20 @@ function buildSelectableDefaultModels(
     if (profile) {
       const match = (models ?? []).find((model) => modelCatalogRef(model) === modelRef);
       if (match) {
-        selectable.push({ ...match, selectionRef: ref });
+        // The agent-scoped catalog does not establish readiness or speed tiers for
+        // a saved account pin. Keep model metadata, not another account's evidence.
+        const {
+          available: _available,
+          unavailableReason: _reason,
+          unavailableUntil: _until,
+          supportsFastMode: _fastMode,
+          supportsServiceTierRecovery: _recovery,
+          serviceTiers: _tiers,
+          serviceTierObservation: _observation,
+          runtimeChoices: _runtimes,
+          ...unscoped
+        } = match;
+        selectable.push({ ...unscoped, selectionRef: ref });
         continue;
       }
     }
@@ -496,44 +517,30 @@ function buildSelectableDefaultModels(
 }
 
 export function readModelProviderConfig(config: Record<string, unknown> | null): {
-  providerIds: string[];
-  apiKeyProviderIds: string[];
-  providerAuthModes: Record<string, string>;
+  providers: ConfiguredModelProvider[];
   defaults: DefaultModelSelection;
 } {
   const models = asRecord(config?.models);
   const providers = asRecord(models?.providers);
   const agents = asRecord(config?.agents);
   const defaults = asRecord(agents?.defaults);
-  const model = defaults?.model;
-  const modelObject = asRecord(model);
-  const primary =
-    typeof model === "string"
-      ? model
-      : typeof modelObject?.primary === "string"
-        ? modelObject.primary
-        : "";
-  const fallbacks = Array.isArray(modelObject?.fallbacks)
-    ? modelObject.fallbacks.filter((entry): entry is string => typeof entry === "string")
-    : [];
+  const model = readModelSetting(defaults?.model);
   return {
-    providerIds: Object.keys(providers ?? {}),
-    apiKeyProviderIds: Object.entries(providers ?? {})
-      .filter(([, value]) => {
-        const provider = asRecord(value);
-        return provider ? Object.hasOwn(provider, "apiKey") && provider.apiKey != null : false;
-      })
-      .map(([id]) => id),
-    providerAuthModes: Object.fromEntries(
-      Object.entries(providers ?? {}).flatMap(([id, value]) => {
-        const auth = asRecord(value)?.auth;
-        return typeof auth === "string" ? [[id, auth]] : [];
-      }),
-    ),
+    providers: Object.entries(providers ?? {}).map(([key, value]) => {
+      const provider = asRecord(value);
+      const entry: ConfiguredModelProvider = {
+        key,
+        hasApiKey: provider ? Object.hasOwn(provider, "apiKey") && provider.apiKey != null : false,
+      };
+      if (typeof provider?.auth === "string") {
+        entry.authMode = provider.auth;
+      }
+      return entry;
+    }),
     defaults: {
-      primary,
-      fallbacks,
-      utilityModel: typeof defaults?.utilityModel === "string" ? defaults.utilityModel : null,
+      primary: modelSettingPrimary(model) ?? "",
+      fallbacks: modelSettingFallbacks(model),
+      utilityModel: readModelSetting(defaults?.utilityModel),
       ...(typeof defaults?.decisionModel === "string"
         ? { decisionModel: defaults.decisionModel }
         : {}),
@@ -558,4 +565,73 @@ export function buildUnconfiguredProviderOptions(
     }
   }
   return [...options.values()].toSorted((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+/** Assembles admitted snapshots for the Models page without owning state or effects. */
+export function buildModelProviderPresentation(params: {
+  configObject: Record<string, unknown> | null;
+  behavior: ModelBehaviorConfig;
+  catalog: ModelCatalogPresentation;
+  data: Omit<
+    ModelProviderCardsInput,
+    "models" | "configProviders" | "pendingProviders" | "providerUsage"
+  > & {
+    providerUsage: ProviderUsageRequestResult | null;
+  };
+  agentsState: { agentsList: AgentsListResult | null; agentsError: string | null };
+  agentId: string;
+  defaultsDraft: DefaultsDraft | null;
+}) {
+  const { catalog, data, agentsState, agentId } = params;
+  const agents = agentsState.agentsList?.agents ?? [];
+  const noSelectableAgents =
+    agentsState.agentsList !== null && listSelectableAgents(agents).length === 0;
+  const rosterError = agentsState.agentsList ? null : agentsState.agentsError;
+  const selected = agents.find((agent) => normalizeAgentId(agent.id) === agentId);
+  const config = readModelProviderConfig(params.configObject);
+  const configuredDefaults = { ...config.defaults, ...params.behavior };
+  const { defaults, configuredModels } = resolveDefaultModelPresentation(
+    catalog,
+    configuredDefaults,
+    params.defaultsDraft,
+  );
+  const cards = buildModelProviderCards({
+    ...data,
+    models: catalog.models,
+    providerOutcomes: catalog.hasSnapshot
+      ? (catalog.providerOutcomes ?? [])
+      : data.providerOutcomes,
+    pendingProviders: catalog.pendingProviders,
+    providerUsage: data.providerUsage?.ok ? data.providerUsage.value : null,
+    configProviders: config.providers,
+  });
+  const configuredProviderIds = new Set([
+    ...config.providers.map(({ key }) => key),
+    ...(data.authStatus?.providers
+      .filter((provider) => Boolean(provider.apiKey) || provider.profiles.length > 0)
+      .map((provider) => provider.provider) ?? []),
+  ]);
+  return {
+    configuredDefaults,
+    cards,
+    noSelectableAgents,
+    rosterError,
+    agentLabel: selected ? normalizeAgentLabel(selected) : agentId,
+    values: {
+      configuredModels,
+      defaultModels: defaults,
+      decisionModels: catalog.decisionModels ?? [],
+      authStatus: data.authStatus,
+      automaticUtilityModel: catalog.defaultModels?.automaticUtilityModel,
+      utilityRuntime: catalog.defaultModels?.utilityRuntime,
+      thinkingLevel: defaults.thinkingLevel,
+      thinkingOverridden: defaults.thinkingOverridden,
+      fastMode: defaults.fastMode,
+      fastModeOverridden: defaults.fastModeOverridden,
+      unconfiguredProviders: buildUnconfiguredProviderOptions(
+        data.authStatus?.providerCapabilities,
+        configuredProviderIds,
+      ),
+    },
+  };
 }

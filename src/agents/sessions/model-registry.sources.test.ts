@@ -2,11 +2,19 @@ import { describe, expect, it } from "vitest";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
 import { ModelRegistry } from "./model-registry.js";
+import { pluginOwnerSnapshot } from "./model-registry.test-support.js";
 
 const provider = "registry-source-example";
 const pluginId = "registry-source-owner";
 const rootUrl = "https://authored.example.test/v1";
 const catalogUrl = "https://catalog.example.test/v1";
+const authoredCompat = { maxTokensField: "max_tokens", supportsDeveloperRole: false };
+const generatedCompat = {
+  maxTokensField: "max_completion_tokens",
+  openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
+  vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
+};
+const authoredHeaders = { "X-Authored-Provider": "root", "X-Authored-Model": "root" };
 const authored = {
   api: "openai-completions",
   baseUrl: rootUrl,
@@ -21,6 +29,7 @@ const generated = {
   api: "openai-completions",
   baseUrl: catalogUrl,
   apiKey: "cached-fixture-key",
+  auth: "aws-sdk",
   authHeader: true,
   headers: { "X-Cached-Provider": "cache" },
   models: [
@@ -34,16 +43,32 @@ const generated = {
     { id: "generated-only", maxTokens: 4096 },
   ],
 };
+const authResult = (apiKey?: string, headers?: Record<string, string>) => ({
+  ok: true,
+  apiKey,
+  headers,
+});
+const getAuth = (registry: ModelRegistry, id = "shared", owner = provider) =>
+  registry.getApiKeyAndHeaders(registry.find(owner, id)!);
 
 function createRegistry(
   options: {
     authoredProvider?: string;
     authored?: Record<string, unknown> | null;
     generated?: Record<string, unknown>;
+    authoredModels?: unknown[];
+    generatedModels?: unknown[];
     credentials?: Parameters<typeof AuthStorage.inMemory>[0];
   } = {},
 ) {
-  const root = options.authored === undefined ? authored : options.authored;
+  const root = options.authoredModels
+    ? { ...authored, models: options.authoredModels }
+    : options.authored === undefined
+      ? authored
+      : options.authored;
+  const cached = options.generatedModels
+    ? { ...generated, models: options.generatedModels }
+    : (options.generated ?? generated);
   return ModelRegistry.create(
     AuthStorage.inMemory(options.credentials ?? {}),
     "captured:models.json",
@@ -57,73 +82,35 @@ function createRegistry(
           pluginId,
           contents: JSON.stringify({
             generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-            providers: { [provider]: options.generated ?? generated },
+            providers: { [provider]: cached },
           }),
         },
       ],
-      pluginMetadataSnapshot: {
-        index: { plugins: [{ pluginId, enabled: true }] },
-        owners: {
-          channels: new Map(),
-          channelConfigs: new Map(),
-          providers: new Map([[provider, [pluginId]]]),
-          modelCatalogProviders: new Map([[provider, [pluginId]]]),
-          cliBackends: new Map(),
-          setupProviders: new Map(),
-          commandAliases: new Map(),
-          contracts: new Map(),
-          providerAuthContributions: [],
-          modelIdNormalizationPolicies: new Map(),
-        },
-      },
+      pluginMetadataSnapshot: pluginOwnerSnapshot(provider, pluginId),
     },
   );
 }
 
 describe("ModelRegistry source composition", () => {
   it.each([rootUrl, catalogUrl])(
-    "keeps context choices on their catalog route at %s",
+    "preserves source-route compatibility and context choices at %s",
     (baseUrl) => {
       const contextWindows = [
         { id: "200k", label: "200K", contextWindow: 200000 },
         { id: "1m", label: "1M", contextWindow: 1000000 },
       ];
       const registry = createRegistry({
-        authored: { ...authored, baseUrl },
-        generated: {
-          ...generated,
-          models: [{ id: "shared", contextWindows, contextWindowDefault: "1m" }],
-        },
-      });
-      const model = registry.find(provider, "shared");
-      if (baseUrl === catalogUrl) {
-        expect(model).toMatchObject({ contextWindows, contextWindowDefault: "1m" });
-      } else {
-        expect(model).toHaveProperty("contextWindows", undefined);
-        expect(model).toHaveProperty("contextWindowDefault", undefined);
-      }
-    },
-  );
-
-  it.each([rootUrl, catalogUrl])(
-    "preserves source compatibility without mixing provider defaults at %s",
-    (baseUrl) => {
-      const registry = createRegistry({
         authored: {
           ...authored,
-          compat: { maxTokensField: "max_tokens", supportsDeveloperRole: false },
+          compat: authoredCompat,
           models: [{ id: "shared" }, { id: "authored-only" }],
         },
         generated: {
           ...generated,
           baseUrl,
-          compat: {
-            maxTokensField: "max_completion_tokens",
-            openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
-            vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
-          },
+          compat: generatedCompat,
           models: [
-            { id: "shared" },
+            { id: "shared", contextWindows, contextWindowDefault: "1m" },
             { id: "generated-only" },
             {
               id: "model-override",
@@ -136,28 +123,22 @@ describe("ModelRegistry source composition", () => {
           ],
         },
       });
-      expect(registry.find(provider, "generated-only")?.compat).toEqual({
-        maxTokensField: "max_completion_tokens",
-        openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
-        vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
-      });
+      expect(registry.find(provider, "generated-only")?.compat).toEqual(generatedCompat);
       expect(registry.find(provider, "model-override")?.compat).toEqual({
         maxTokensField: "max_tokens",
         openRouterRouting: { order: ["model-route"], allow_fallbacks: false },
         vercelGatewayRouting: { order: ["model-route"], only: ["shared-route"] },
       });
-      expect(registry.find(provider, "authored-only")?.compat).toEqual({
-        maxTokensField: "max_tokens",
-        supportsDeveloperRole: false,
-      });
+      expect(registry.find(provider, "authored-only")?.compat).toEqual(authoredCompat);
+      const model = registry.find(provider, "shared");
+      if (baseUrl === rootUrl) {
+        expect(model).toMatchObject({ contextWindows, contextWindowDefault: "1m" });
+      } else {
+        expect(model).toHaveProperty("contextWindows", undefined);
+        expect(model).toHaveProperty("contextWindowDefault", undefined);
+      }
       expect(registry.find(provider, "shared")?.compat).toEqual(
-        baseUrl === rootUrl
-          ? {
-              maxTokensField: "max_completion_tokens",
-              openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
-              vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
-            }
-          : { maxTokensField: "max_tokens", supportsDeveloperRole: false },
+        baseUrl === rootUrl ? generatedCompat : authoredCompat,
       );
     },
   );
@@ -166,23 +147,20 @@ describe("ModelRegistry source composition", () => {
     const authoredProvider = `${provider}:variant`;
     const registry = createRegistry({
       authoredProvider,
-      authored: {
-        ...authored,
-        models: [{ id: "shared", headers: { "X-Authored-Model": "private" } }],
-      },
-      generated: { ...generated, models: [{ id: "variant:shared" }] },
+      authoredModels: [{ id: "shared", headers: { "X-Authored-Model": "private" } }],
+      generatedModels: [{ id: "variant:shared" }],
       credentials: { [provider]: { type: "api_key", key: "current-store-key" } },
     });
-    await expect(
-      registry.getApiKeyAndHeaders(registry.find(provider, "variant:shared")!),
-    ).resolves.toEqual({ ok: true, apiKey: "current-store-key", headers: undefined });
-    await expect(
-      registry.getApiKeyAndHeaders(registry.find(authoredProvider, "shared")!),
-    ).resolves.toMatchObject({ headers: { "X-Authored-Model": "private" } });
+    await expect(getAuth(registry, "variant:shared")).resolves.toEqual(
+      authResult("current-store-key"),
+    );
+    await expect(getAuth(registry, "shared", authoredProvider)).resolves.toMatchObject({
+      headers: { "X-Authored-Model": "private" },
+    });
   });
 
   it.each([rootUrl, catalogUrl])(
-    "limits authored request settings to authored endpoints for generated-only rows at %s",
+    "scopes generated-only request settings to authored endpoints at %s",
     async (baseUrl) => {
       const registry = createRegistry({
         generated: { ...generated, baseUrl, models: [{ id: "generated-only" }] },
@@ -193,49 +171,31 @@ describe("ModelRegistry source composition", () => {
       expect(registry.getAvailable().some((entry) => entry.id === "generated-only")).toBe(
         baseUrl === rootUrl,
       );
-      await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual({
-        ok: true,
-        apiKey: baseUrl === rootUrl ? "authored-fixture-key" : undefined,
-        headers: baseUrl === rootUrl ? { "X-Authored-Provider": "root" } : undefined,
-      });
+      await expect(getAuth(registry, "generated-only")).resolves.toEqual(
+        authResult(
+          baseUrl === rootUrl ? "authored-fixture-key" : undefined,
+          baseUrl === rootUrl ? { "X-Authored-Provider": "root" } : undefined,
+        ),
+      );
     },
   );
 
-  it("keeps authored model endpoint pins eligible for provider request settings", async () => {
-    const registry = createRegistry({
-      authored: { ...authored, models: [{ id: "shared", baseUrl: catalogUrl }] },
-    });
-    const model = registry.find(provider, "shared");
-    expect(model?.baseUrl).toBe(catalogUrl);
-    await expect(registry.getApiKeyAndHeaders(model!)).resolves.toMatchObject({
-      ok: true,
-      apiKey: "authored-fixture-key",
-      headers: { "X-Authored-Provider": "root" },
-    });
-  });
-
   it.each([false, true])(
-    "keeps the authored request route when generated model routing conflicts (model pin: %s)",
+    "keeps authored routes on generated conflicts (model pin: %s)",
     (modelPin) => {
       const expectedApi = modelPin ? "openai-responses" : "openai-completions";
       const expectedUrl = modelPin ? "https://model-pin.example.test/v1" : rootUrl;
       const registry = createRegistry({
-        authored: {
-          ...authored,
-          models: [
-            { id: "shared", ...(modelPin ? { api: expectedApi, baseUrl: expectedUrl } : {}) },
-          ],
-        },
-        generated: {
-          ...generated,
-          models: [
-            {
-              id: "shared",
-              api: "anthropic-messages",
-              baseUrl: "https://conflicting.example.test/v1",
-            },
-          ],
-        },
+        authoredModels: [
+          { id: "shared", ...(modelPin ? { api: expectedApi, baseUrl: expectedUrl } : {}) },
+        ],
+        generatedModels: [
+          {
+            id: "shared",
+            api: "anthropic-messages",
+            baseUrl: "https://conflicting.example.test/v1",
+          },
+        ],
       });
       expect(registry.find(provider, "shared")).toMatchObject({
         api: expectedApi,
@@ -244,14 +204,55 @@ describe("ModelRegistry source composition", () => {
     },
   );
 
-  it("composes exact root and generated identities before filling runtime defaults", () => {
+  it("keeps distinct literal SDK model IDs when their trimmed spelling matches", () => {
+    const registry = createRegistry({
+      authoredModels: [{ id: "shared", name: "Authored" }],
+      generatedModels: [{ id: " shared ", name: "Distinct generated model" }],
+    });
+    expect(registry.getAll().map((model) => model.id)).toEqual(["shared", " shared "]);
+    expect(registry.find(provider, "shared")?.name).toBe("Authored");
+    expect(registry.find(provider, " shared ")?.name).toBe("Distinct generated model");
+  });
+
+  it("keeps generated-only inventory without adopting its credential or bearer headers", async () => {
+    const registry = createRegistry({ authored: null });
+    const model = registry.find(provider, "shared");
+    expect(model).toBeDefined();
+    expect(registry.hasConfiguredAuth(model!)).toBe(false);
+    expect(registry.getAvailable()).toEqual([]);
+    expect(registry.getProviderAuthStatus(provider).configured).toBe(false);
+    await expect(registry.getApiKeyForProvider(provider)).resolves.toBeUndefined();
+    await expect(getAuth(registry)).resolves.toEqual(authResult());
+  });
+
+  it("preserves raw SDK authored request authority for custom APIs", async () => {
+    const api = "operator-custom-api";
+    const registry = createRegistry({
+      authored: {
+        ...authored,
+        api,
+        authHeader: true,
+        models: [{ ...authored.models[0], baseUrl: catalogUrl }],
+      },
+      generated: {
+        api: "openai-completions",
+        baseUrl: catalogUrl,
+        models: [{ id: "generated-only" }],
+      },
+    });
+    const model = registry.find(provider, "shared");
+    expect(model).toMatchObject({ api, baseUrl: catalogUrl });
+    await expect(getAuth(registry)).resolves.toEqual(
+      authResult("authored-fixture-key", {
+        ...authoredHeaders,
+        Authorization: "Bearer authored-fixture-key",
+      }),
+    );
+  });
+
+  it("forks the composed inventory and request headers while isolating current credentials", async () => {
     const registry = createRegistry();
     expect(registry.getError()).toBeUndefined();
-    expect(registry.getAll().map((model) => model.id)).toEqual([
-      "shared",
-      "Shared",
-      "generated-only",
-    ]);
     expect(registry.find(provider, "shared")).toMatchObject({
       name: "Authored",
       input: ["text", "image"],
@@ -263,160 +264,15 @@ describe("ModelRegistry source composition", () => {
       maxTokens: 4096,
       maxTokensSource: "discovered",
     });
-  });
-
-  it("retains discovered output-limit provenance when the authored definition omits the limit", () => {
-    const registry = createRegistry({
-      authored: { ...authored, models: [{ id: "shared", name: "Sparse" }] },
-    });
-    expect(registry.find(provider, "shared")).toMatchObject({
-      name: "Sparse",
-      input: ["text", "image"],
-      maxTokens: 8192,
-      maxTokensSource: "discovered",
-    });
-  });
-
-  it("preserves generated optional metadata omitted by an authored row", () => {
-    const registry = createRegistry({
-      authored: { ...authored, models: [{ id: "shared" }] },
-      generated: {
-        ...generated,
-        models: [
-          {
-            id: "shared",
-            name: "Discovered name",
-            params: { canonicalModelId: "canonical-example" },
-            thinkingLevelMap: { high: "provider-high" },
-          },
-        ],
-      },
-    });
-    expect(registry.find(provider, "shared")).toMatchObject({
-      name: "Discovered name",
-      params: { canonicalModelId: "canonical-example" },
-      thinkingLevelMap: { high: "provider-high" },
-    });
-  });
-
-  it("keeps distinct literal SDK model IDs when their trimmed spelling matches", () => {
-    const registry = createRegistry({
-      authored: { ...authored, models: [{ id: "shared", name: "Authored" }] },
-      generated: { ...generated, models: [{ id: " shared ", name: "Distinct generated model" }] },
-    });
-    expect(registry.getAll().map((model) => model.id)).toEqual(["shared", " shared "]);
-    expect(registry.find(provider, "shared")?.name).toBe("Authored");
-    expect(registry.find(provider, " shared ")?.name).toBe("Distinct generated model");
-  });
-
-  it("does not let generated model headers replace authored request headers", async () => {
-    const registry = createRegistry({
-      generated: {
-        ...generated,
-        models: [{ id: "shared", headers: { "X-Cached-Model": "cache" } }],
-      },
-    });
-    const model = registry.find(provider, "shared");
-    expect(model).toBeDefined();
-    await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual({
-      ok: true,
-      apiKey: "authored-fixture-key",
-      headers: { "X-Authored-Provider": "root", "X-Authored-Model": "root" },
-    });
-  });
-
-  it("keeps generated-only inventory without adopting its credential or bearer headers", async () => {
-    const registry = createRegistry({ authored: null });
-    const model = registry.find(provider, "shared");
-    expect(model).toBeDefined();
-    expect(registry.hasConfiguredAuth(model!)).toBe(false);
-    expect(registry.getAvailable()).toEqual([]);
-    expect(registry.getProviderAuthStatus(provider).configured).toBe(false);
-    await expect(registry.getApiKeyForProvider(provider)).resolves.toBeUndefined();
-    await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual({
-      ok: true,
-      apiKey: undefined,
-      headers: undefined,
-    });
-  });
-
-  it("uses current request-store credentials without restoring generated request headers", async () => {
-    const registry = createRegistry({
-      authored: null,
-      credentials: {
-        [provider]: { type: "api_key", key: "current-store-fixture-key" },
-      },
-    });
-    const model = registry.find(provider, "shared");
-    expect(model).toBeDefined();
-    expect(registry.hasConfiguredAuth(model!)).toBe(true);
-    await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual({
-      ok: true,
-      apiKey: "current-store-fixture-key",
-      headers: undefined,
-    });
-  });
-
-  it("does not adopt the generated provider's AWS SDK auth mode", () => {
-    const registry = createRegistry({
-      authored: null,
-      generated: {
-        api: "bedrock-converse-stream",
-        baseUrl: catalogUrl,
-        auth: "aws-sdk",
-        models: [{ id: "shared" }],
-      },
-    });
-    expect(registry.find(provider, "shared")).toBeDefined();
-    expect(registry.getProviderAuthStatus(provider).configured).toBe(false);
-  });
-
-  it("preserves raw SDK authored request authority for custom APIs", async () => {
-    const api = "operator-custom-api";
-    const registry = createRegistry({
-      authored: { ...authored, api, authHeader: true },
-      generated: {
-        api: "openai-completions",
-        baseUrl: catalogUrl,
-        models: [{ id: "generated-only" }],
-      },
-    });
-    const model = registry.find(provider, "shared");
-    expect(model?.api).toBe(api);
-    await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual({
-      ok: true,
-      apiKey: "authored-fixture-key",
-      headers: {
-        "X-Authored-Provider": "root",
-        "X-Authored-Model": "root",
-        Authorization: "Bearer authored-fixture-key",
-      },
-    });
-  });
-
-  it("forks the composed inventory and request headers while isolating current credentials", async () => {
-    const registry = createRegistry();
-    const first = registry.fork(
-      AuthStorage.inMemory({
-        [provider]: { type: "api_key", key: "first-request-key" },
-      }),
-    );
-    const second = registry.fork(
-      AuthStorage.inMemory({
-        [provider]: { type: "api_key", key: "second-request-key" },
-      }),
-    );
+    const fork = (key: string) =>
+      registry.fork(AuthStorage.inMemory({ [provider]: { type: "api_key", key } }));
+    const first = fork("first-request-key");
+    const second = fork("second-request-key");
     first.refresh();
     expect(first.getAll().map((model) => model.id)).toEqual(["shared", "Shared", "generated-only"]);
-    await expect(first.getApiKeyAndHeaders(first.find(provider, "shared")!)).resolves.toEqual({
-      ok: true,
-      apiKey: "first-request-key",
-      headers: { "X-Authored-Provider": "root", "X-Authored-Model": "root" },
-    });
-    await expect(second.getApiKeyAndHeaders(second.find(provider, "shared")!)).resolves.toEqual({
-      ok: true,
-      apiKey: "second-request-key",
-      headers: { "X-Authored-Provider": "root", "X-Authored-Model": "root" },
-    });
+    await expect(getAuth(first)).resolves.toEqual(authResult("first-request-key", authoredHeaders));
+    await expect(getAuth(second)).resolves.toEqual(
+      authResult("second-request-key", authoredHeaders),
+    );
   });
 });

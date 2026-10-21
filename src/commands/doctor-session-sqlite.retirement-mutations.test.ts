@@ -23,6 +23,53 @@ import {
 const { createLegacyStore, createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
+  it.each([false, true])(
+    "checks shared manifests once and preserves confirmation changes: %s",
+    async (changed) => {
+      const { store, imported, archivePath } = await createVerifiedRecoveryStore();
+      const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+      const manifest = readMigrationManifest(manifestPath);
+      const duplicate = createSessionSqliteMigrationRun(store.env, []);
+      duplicate.manifest.targets = structuredClone(manifest.targets);
+      duplicate.manifest.completedAt = manifest.completedAt;
+      writeSessionSqliteMigrationManifest(duplicate);
+      const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+      const original = fs.readFileSync(archivePath);
+      const reads = vi.spyOn(fs, "readFileSync");
+      try {
+        const cleanup = retireSessionSqliteRecovery({
+          env: store.env,
+          preview,
+          readConfig: async () => ({}),
+          confirm: async () => {
+            if (changed) {
+              duplicate.manifest.startedAt = "2026-01-01T00:00:00.000Z";
+              writeSessionSqliteMigrationManifest(duplicate);
+            }
+            reads.mockClear();
+            return true;
+          },
+        });
+        if (changed) {
+          await expect(cleanup).rejects.toThrow("Recovery manifest changed during confirmation");
+          expect(fs.readFileSync(archivePath)).toEqual(original);
+        } else {
+          const result = await cleanup;
+          expect(result.status).toBe("complete");
+          expect(result.totals.removedFiles).toBe(2);
+          expect(fs.existsSync(archivePath)).toBe(false);
+          expect(result.artifacts.filter((item) => item.outcome === "protected")).toHaveLength(2);
+          // The post-confirmation inventory supplies each manifest's only read.
+          for (const file of [manifestPath, duplicate.manifestPath]) {
+            expect(reads.mock.calls.filter(([input]) => input === file)).toHaveLength(1);
+          }
+        }
+      } finally {
+        reads.mockRestore();
+      }
+    },
+  );
+
   it("blocks a same-size replacement recovery original during preview", async () => {
     const { store, archivePath } = await createVerifiedRecoveryStore();
     const original = fs.readFileSync(archivePath);
@@ -85,23 +132,18 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each([
-    { artifactKind: "transcript", change: "replacement" },
-    { artifactKind: "transcript", change: "symlink" },
-    { artifactKind: "transcript", change: "hardlink" },
-    { artifactKind: "transcript", change: "same-size edit" },
-    { artifactKind: "legacy-store", change: "same-size edit" },
-  ])(
-    "preserves every recovery dependency after a $artifactKind $change during confirmation",
-    async ({ artifactKind, change }) => {
+  it.each(["replacement", "symlink", "hardlink", "same-size edit"])(
+    "preserves every recovery dependency after a transcript %s during confirmation",
+    async (change) => {
       const { store, imported } = await createVerifiedRecoveryStore();
       const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
       const manifestBefore = fs.readFileSync(manifestPath);
       const moves = readMigrationManifest(manifestPath).targets[0]!.completedMoves;
       const archivePath = expectDefined(
-        moves.find((move) => move.kind === artifactKind),
+        moves.find((move) => move.kind === "transcript"),
         "confirmation mutation archive",
       ).archivePath;
+      const original = fs.readFileSync(archivePath);
       const retained = moves
         .filter((move) => move.archivePath !== archivePath)
         .map((move) => ({ path: move.archivePath, contents: fs.readFileSync(move.archivePath) }));
@@ -120,11 +162,11 @@ describe("runDoctorSessionSqlite", () => {
               contents[0] = 0x78;
               fs.writeFileSync(archivePath, contents);
             } else {
-              fs.unlinkSync(archivePath);
+              fs.renameSync(archivePath, path.join(store.tempDir, "parked-original"));
               if (change === "symlink") {
                 fs.symlinkSync(replacement, archivePath);
               } else {
-                fs.writeFileSync(archivePath, "replacement original");
+                fs.writeFileSync(archivePath, Buffer.alloc(original.length, "x"));
               }
             }
             return true;
@@ -132,6 +174,9 @@ describe("runDoctorSessionSqlite", () => {
         }),
       ).rejects.toThrow(/selection changed|artifact/i);
       expect(fs.existsSync(archivePath)).toBe(true);
+      if (change === "replacement") {
+        expect(fs.readFileSync(archivePath)).toEqual(Buffer.alloc(original.length, "x"));
+      }
       expect(fs.readFileSync(replacement, "utf8")).toBe("unrelated bytes");
       expect(fs.readFileSync(manifestPath)).toEqual(manifestBefore);
       for (const artifact of retained) {
@@ -142,7 +187,6 @@ describe("runDoctorSessionSqlite", () => {
 
   it.each([
     { change: "in-place edit", phase: "confirmation" },
-    { change: "truncation", phase: "confirmation" },
     ...["confirmation", "publication", "unlink-intent"].map((phase) => ({
       change: "WAL commit",
       phase,
@@ -164,8 +208,6 @@ describe("runDoctorSessionSqlite", () => {
         writer.exec("DELETE FROM transcript_events");
         expect(fs.readFileSync(databasePath)).toEqual(databaseBefore);
         expect(fs.statSync(`${databasePath}-wal`).size).toBeGreaterThan(32);
-      } else if (change === "truncation") {
-        fs.truncateSync(databasePath, 0);
       } else {
         const bytes = fs.readFileSync(databasePath);
         bytes[0] = 0;

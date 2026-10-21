@@ -105,6 +105,14 @@ export type DeliveryQueueEntryState = {
   recoveryState?: string;
 };
 
+export function resolveDeliveryQueueAttemptCount(
+  entry: Pick<DeliveryQueueEntryState, "attemptCount" | "retryCount">,
+): number {
+  const count = entry.attemptCount;
+  const persisted = typeof count === "number" && Number.isInteger(count) && count >= 0 ? count : 0;
+  return Math.max(persisted, entry.retryCount);
+}
+
 /** Additional work needs a live claim; settling an observed outcome only needs exact ownership. */
 export function hasLiveDeliveryQueueClaim(
   entry: DeliveryQueueEntryState,

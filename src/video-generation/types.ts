@@ -58,14 +58,10 @@ export type VideoGenerationProviderConfiguredContext = {
 };
 
 /** Context passed when resolving model-specific video generation capabilities. */
-export type VideoGenerationModelCapabilitiesContext = {
-  provider: string;
-  model: string;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  timeoutMs?: number;
-};
+export type VideoGenerationModelCapabilitiesContext = Pick<
+  VideoGenerationRequest,
+  "provider" | "model" | "cfg" | "agentDir" | "authStore" | "timeoutMs"
+>;
 
 /** Normalized request object passed to a selected video generation provider. */
 export type VideoGenerationRequest = {
@@ -105,7 +101,7 @@ export type VideoGenerationMode = "generate" | "imageToVideo" | "videoToVideo";
  * plugins that need richer shapes should leave them out of the typed contract
  * and interpret the forwarded opaque value inside their own provider code.
  */
-export type VideoGenerationProviderOptionType = "number" | "boolean" | "string";
+type VideoGenerationProviderOptionType = "number" | "boolean" | "string";
 
 /** Capability limits and supported options for one video generation mode. */
 export type VideoGenerationModeCapabilities = {
@@ -167,7 +163,9 @@ export type VideoGenerationProvider = {
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
   catalogByModel?: Readonly<Record<string, VideoGenerationCatalogModelEntry>>;
+  /** @deprecated Use isConfiguredAsync so credential reads run in the database worker. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
+  isConfiguredAsync?: (ctx: VideoGenerationProviderConfiguredContext) => Promise<boolean>;
   resolveModelCapabilities?: (
     ctx: VideoGenerationModelCapabilitiesContext,
   ) =>

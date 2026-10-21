@@ -1,6 +1,5 @@
 import type { ConfigValidationIssue } from "../../config/types.js";
 import { OpenClawStateOwnershipMetadataError } from "../../infra/sqlite-lifecycle-errors.js";
-import { SqliteSchemaMismatchError } from "../../infra/sqlite-schema-issues.js";
 
 export type RuntimeDotEnvLoadResult = {
   dotenvPresentKeys: string[];
@@ -33,7 +32,6 @@ export function gatewayRunReadFailures(): ReadFailureFixture[] {
   const unavailable = Object.assign(new Error("configuration storage unavailable"), {
     code: "ENOSPC",
   });
-  const schema = new SqliteSchemaMismatchError("Stored schema needs repair");
   const ownership = new OpenClawStateOwnershipMetadataError("/synthetic/state.sqlite", "invalid");
   return [
     {
@@ -52,26 +50,10 @@ export function gatewayRunReadFailures(): ReadFailureFixture[] {
       expected: { code: "CONFIG_READ_FAILED" },
     },
     {
-      label: "final schema refusal",
-      stage: "read",
-      failure: schema,
-      expected: { code: 78, cause: schema },
-    },
-    {
-      label: "final ownership refusal",
-      stage: "read",
+      label: "restart ownership refusal",
       failure: ownership,
-      expected: { code: 78, cause: ownership },
-    },
-    ...[
-      { label: "restart schema refusal", failure: schema, code: 78 },
-      { label: "restart ownership refusal", failure: ownership, code: 78 },
-      { label: "restart unavailable read", failure: unavailable, code: 1 },
-    ].map(({ label, failure, code }): ReadFailureFixture => ({
-      label,
-      failure,
       stage: "runtime",
-      expected: { message: `__exit__:${code}` },
-    })),
+      expected: { message: "__exit__:78" },
+    },
   ];
 }

@@ -1,4 +1,3 @@
-// Assertions for release user-journey E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -351,10 +350,8 @@ export async function waitForClickClackSocket({
         timeoutMs: Math.min(clickClackHttpTimeoutMs(), remainingMs),
       },
     ).catch(() => undefined);
-    if (state) {
-      if (Number(state.socketGeneration ?? 0) >= minimumSocketGeneration) {
-        return;
-      }
+    if (state && Number(state.socketGeneration ?? 0) >= minimumSocketGeneration) {
+      return;
     }
     await new Promise((resolve) => {
       setTimeout(resolve, Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));

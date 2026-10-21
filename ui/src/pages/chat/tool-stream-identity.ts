@@ -1,4 +1,5 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asToolRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -23,6 +24,16 @@ const TOOL_NAME_FIELDS = ["toolName", "tool_name"] as const;
 /** Tool call ids belong to one run; sibling runs may legitimately reuse them. */
 export function buildToolStreamIdentity(runId: string, toolCallId: string): string {
   return JSON.stringify([runId, toolCallId]);
+}
+
+export function toolStreamIdentityRunId(identity: string): string | undefined {
+  const parts = safeParseJson(identity);
+  return Array.isArray(parts) &&
+    parts.length === 2 &&
+    typeof parts[0] === "string" &&
+    typeof parts[1] === "string"
+    ? parts[0]
+    : undefined;
 }
 
 function addToolMessageRef(
@@ -89,8 +100,8 @@ export function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
 }
 
 export function resolveLiveToolStreamRefs(state: LiveToolStreamState): LiveToolStreamRef[] {
-  return (state.toolStreamOrder ?? []).map((identity) => {
-    const entry = state.toolStreamById?.get(identity);
+  return state.toolStreamOrder.map((identity) => {
+    const entry = state.toolStreamById.get(identity);
     const id = normalizeOptionalString(entry?.toolCallId) ?? identity;
     const runId = normalizeOptionalString(entry?.runId);
     return runId ? { identity, id, runId } : { identity, id };

@@ -12,6 +12,11 @@ export {
   resolveCanonicalRootMemoryFile,
   shouldSkipRootMemoryAuxiliaryPath,
 } from "../../../../src/memory/root-memory-files.js";
+export {
+  DREAMING_NARRATIVE_RUN_PREFIX,
+  isCronRunSessionKey,
+  isDreamingNarrativeSessionStoreKey,
+} from "../../../../src/sessions/session-key-utils.js";
 export { resolveUserPath };
 
 /** Keep effective-home expansion at the memory-host boundary, before state selection. */

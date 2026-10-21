@@ -3,9 +3,9 @@ import { createSubagentSessionListReadView } from "../agents/subagents/registry/
 import type { SessionEntry } from "../config/sessions.js";
 import { runSynchronousWork } from "../shared/synchronous-work.js";
 import { filterSessionEntries } from "./session-list-filters.js";
-import type { SessionEntryPair } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
+import { createSessionRowSelection } from "./session-row-selection.js";
 
 it("benchmarks warm identity filtering across viewers", () => {
   const cfg = { agents: { entries: { main: {} } } };
@@ -25,25 +25,43 @@ it("benchmarks warm identity filtering across viewers", () => {
       hasUploadedAvatar: true,
     });
   }
-  const entries: SessionEntryPair[] = Array.from({ length: 4_428 }, (_, index) => {
+  const configuredAgentIds = new Set(["main"]);
+  const storePath = "/tmp/identity-selection-benchmark";
+  const selection = createSessionRowSelection(
+    cfg,
+    {
+      path: storePath,
+      paths: new Map([[storePath, 0]]),
+      agentId: "main",
+      configuredAgentIds,
+      ownerAgentIds: configuredAgentIds,
+    },
+    false,
+    () => context,
+  );
+  const rows = 4_428;
+  for (let index = 0; index < rows; index++) {
+    const key = `agent:main:session-${index}`;
     const entry: SessionEntry = {
       sessionId: `session-${index}`,
       updatedAt: index + 1,
       createdActor: { type: "human", source: "profile", id: `profile-${index % 50}` },
-      participants: Array.from({ length: 3 }, (_participant, offset) => ({
+      participants: Array.from({ length: 3 }, (_, offset) => ({
         identity: { type: "profile", id: `profile-${(index + offset) % 50}` },
       })),
       ...(index >= 2_300 ? { archivedAt: 1 } : {}),
     };
-    return [`agent:main:session-${index}`, entry];
-  });
-  const targets = new Map(
-    entries.map(([key, entry]) => [
+    selection.add({
       key,
-      { agentId: "main", selection: readSessionListSelectionFacts(key, entry) },
-    ]),
-  );
-  const configuredAgentIds = new Set(["main"]);
+      entry,
+      agentId: "main",
+      storeTarget: { agentId: "main", storePath },
+      selection: readSessionListSelectionFacts(key, entry),
+      generation: Symbol(key),
+      hasBoard: false,
+    });
+  }
+  const selected = selection.read();
   for (const involving of [false, true]) {
     const samples: number[] = [];
     for (let index = 0; index < 70; index++) {
@@ -51,8 +69,9 @@ it("benchmarks warm identity filtering across viewers", () => {
       const result = runSynchronousWork(
         filterSessionEntries({
           cfg,
-          entries,
-          getTarget: (key) => targets.get(key),
+          entries: selected.entries,
+          getTarget: selected.get,
+          involvementKeys: selected.involvementKeys,
           getRowContext: () => context,
           userProfileIdentityById: identities,
           configuredAgentIds,
@@ -71,7 +90,7 @@ it("benchmarks warm identity filtering across viewers", () => {
     samples.sort((a, b) => a - b);
     console.log(
       JSON.stringify({
-        rows: entries.length,
+        rows,
         liveRows: 2_300,
         viewers: 50,
         involving,

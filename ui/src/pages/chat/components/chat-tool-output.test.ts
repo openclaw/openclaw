@@ -1,27 +1,19 @@
 /* @vitest-environment jsdom */
 import { Blob as NodeBlob } from "node:buffer";
-import { render } from "lit";
+import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid as mountComponent } from "../../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createSidebarFullMessageLoader } from "../chat-pane-sidebar-layout.ts";
 import { createTestChatPane } from "../chat-pane.test-support.ts";
-import "./chat-detail-slot.ts";
-import type {
-  SidebarContent,
-  SidebarFullMessageLoader,
-  ToolOutputSidebarContent,
-} from "./chat-sidebar-content-types.ts";
-import { renderToolCard } from "./chat-tool-cards.ts";
-
-type Panel = HTMLElement & {
-  content: ToolOutputSidebarContent;
-  loadFullMessage: SidebarFullMessageLoader | null;
-  connectionEpoch?: number;
-  updateComplete: Promise<unknown>;
-};
+import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
+import { mountCard } from "./chat-tool-cards.test-support.tsx";
+import { ChatToolOutput } from "./chat-tool-output-view.tsx";
 
 type NativeOutputCase = [
   name: string,
@@ -55,12 +47,15 @@ function outputCard(overrides: Partial<ToolCard> = {}): ToolCard {
   };
 }
 
-function mount(card: ToolCard, load: SidebarFullMessageLoader): Panel {
-  const panel = document.createElement("openclaw-chat-tool-output") as Panel;
-  panel.content = { kind: "tool-output", card, sessionKey: "global", agentId: "work" };
-  panel.loadFullMessage = load;
-  document.body.append(panel);
-  return panel;
+function mount(card: ToolCard, load: SidebarFullMessageLoader) {
+  const props: Parameters<typeof ChatToolOutput>[0] = {
+    content: { kind: "tool-output", card, sessionKey: "global", agentId: "work" },
+    loadFullMessage: load,
+    connectionEpoch: undefined,
+  };
+  const view = mountComponent(ChatToolOutput, props);
+  document.body.append(view.container);
+  return { ...view, props };
 }
 
 function result(text: string) {
@@ -107,11 +102,14 @@ describe("tool output inspection", () => {
     "keeps content-shaped data literal without native Code Mode input: %o",
     async ({ name, args }) => {
       const text = '[{"type":"input_text","text":"literal value"}]';
-      const panel = document.createElement("openclaw-chat-tool-output") as Panel;
-      panel.content = { kind: "tool-output", card: outputCard({ name, args, outputText: text }) };
-      document.body.append(panel);
-      await panel.updateComplete;
-      expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe(text);
+      const view = mountSolid(() =>
+        createComponent(ChatToolOutput, {
+          content: { kind: "tool-output", card: outputCard({ name, args, outputText: text }) },
+        }),
+      );
+      await waitForSolid(() =>
+        expect(view.container.querySelector(".chat-tool-output__text")?.textContent).toBe(text),
+      );
     },
   );
 
@@ -182,9 +180,9 @@ describe("tool output inspection", () => {
       vi.fn<SidebarFullMessageLoader>().mockResolvedValue(result(raw)),
     );
     await vi.waitFor(() =>
-      expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false"),
+      expect(panel.container.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false"),
     );
-    const shown = panel.querySelector(".chat-tool-output__text")?.textContent ?? "";
+    const shown = panel.container.querySelector(".chat-tool-output__text")?.textContent ?? "";
     if ("literal" in testCase) {
       expect(shown).toBe(raw);
       return;
@@ -196,7 +194,7 @@ describe("tool output inspection", () => {
     const { output, exitCode } = testCase;
     expect(shown).not.toContain("chunk_id");
     expect(shown).not.toContain("input_text");
-    expect(panel.querySelector("script, strong")).toBeNull();
+    expect(panel.container.querySelector("script, strong")).toBeNull();
     if (output.startsWith("{")) {
       expect(shown).toContain('"id": 9007199254740993');
       expect(shown).toContain('"overflow": 1e400');
@@ -209,32 +207,33 @@ describe("tool output inspection", () => {
     if (exitCode !== 0) {
       expect(shown).toContain("Exit code 1");
     }
-    const rawBody = panel.querySelector<HTMLElement>(".chat-tool-card__raw-body")!;
+    const rawBody = panel.container.querySelector<HTMLElement>(".chat-tool-card__raw-body")!;
     expect(rawBody.hidden).toBe(true);
-    button(panel, t("chat.toolCards.rawDetails")).click();
-    expect(rawBody.hidden).toBe(false);
+    button(panel.container, t("chat.toolCards.rawDetails")).click();
+    await waitForSolid(() => expect(rawBody.hidden).toBe(false));
     expect(rawBody.querySelector("code")?.textContent).toBe(raw);
     const copy = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
-    button(panel, t("chat.toolCards.copyOutput")).click();
+    button(panel.container, t("chat.toolCards.copyOutput")).click();
     expect(copy).toHaveBeenCalledWith(raw);
   });
 
-  it.each(["plain", "native"])("opens long %s output as an inspectable result", (shape) => {
+  it.each(["plain", "native"])("opens long %s output as an inspectable result", async (shape) => {
     const text = "  " + "x".repeat(150_000) + "\r\nTAIL";
     const output = shape === "native" ? JSON.stringify([{ type: "input_text", text }]) : text;
     const card = outputCard({ outputText: output });
     const open = vi.fn<(content: SidebarContent) => void>();
     const root = document.createElement("div");
-    render(
-      renderToolCard(card, {
+    await mountCard(
+      card,
+      {
         messageKey: "calls",
         sessionKey: "global",
         agentId: "work",
         expanded: true,
         onToggleExpanded: vi.fn(),
         onOpenSidebar: open,
-      }),
+      },
       root,
     );
     expect(root.textContent).not.toContain("TAIL");
@@ -249,94 +248,106 @@ describe("tool output inspection", () => {
     expect(card.outputText).toBe(output);
   });
 
-  it("defers detached selection changes and retrieves the new result when reattached", async () => {
+  it("retrieves the current selection after its Solid owner remounts", async () => {
     const load = vi
       .fn<SidebarFullMessageLoader>()
       .mockResolvedValueOnce(result("first output"))
       .mockResolvedValueOnce(result("reattached output"));
     const panel = mount(outputCard(), load);
-    await vi.waitFor(() =>
-      expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe("first output"),
+    await waitForSolid(() =>
+      expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe(
+        "first output",
+      ),
     );
-    panel.remove();
-    panel.content = { ...panel.content, card: outputCard({ outputText: "new preview" }) };
-    await panel.updateComplete;
+    panel.dispose();
     expect(load).toHaveBeenCalledTimes(1);
-    document.body.append(panel);
-    await vi.waitFor(() =>
-      expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe("reattached output"),
+    const reattached = mount(outputCard({ outputText: "new preview" }), load);
+    await waitForSolid(() =>
+      expect(reattached.container.querySelector(".chat-tool-output__text")?.textContent).toBe(
+        "reattached output",
+      ),
     );
     expect(load).toHaveBeenCalledTimes(2);
   });
 
-  it("retrieves and exports exact text beyond the inherited detail and Markdown caps", async () => {
-    const text =
-      "  \r\n" + "x".repeat(600_000) + "\r\n\x60\x60\x60\n<strong>literal</strong> 🦞 TAIL\r\n";
-    const pending = createDeferred();
-    const request = vi.fn(async (_method: string, params: { maxChars: number }) => {
-      await pending.promise;
-      const response = result(text.slice(0, params.maxChars));
-      return {
-        ...response,
-        message: {
-          ...response.message,
-          __openclaw: {
-            ...response.message["__openclaw"],
-            truncated: text.length > params.maxChars,
+  it.each([
+    { name: "inline output", length: 600_000, outputTruncated: false, maxChars: 2_000_000 },
+    { name: "referenced output", length: 5_000_000, outputTruncated: true, maxChars: 8_000_000 },
+  ])(
+    "retrieves and exports exact $name beyond the detail and Markdown caps",
+    async ({ length, outputTruncated, maxChars }) => {
+      const text =
+        "  \r\n" + "x".repeat(length) + "\r\n\x60\x60\x60\n<strong>literal</strong> 🦞 TAIL\r\n";
+      const pending = createDeferred();
+      const request = vi.fn(async (_method: string, params: { maxChars: number }) => {
+        await pending.promise;
+        const response = result(text.slice(0, params.maxChars));
+        return {
+          ...response,
+          message: {
+            ...response.message,
+            __openclaw: {
+              ...response.message["__openclaw"],
+              truncated: text.length > params.maxChars,
+            },
           },
-        },
-      };
-    });
-    const { state, pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-    });
-    const loader = createSidebarFullMessageLoader(state, pane.context.gateway)!;
-    const panel = mount(outputCard(), loader);
-    try {
-      await expect(panel.updateComplete).resolves.toBe(true);
-      expect(panel.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("true");
-      expect(panel.querySelector(".chat-tool-output__actions")).toBeNull();
-    } finally {
-      pending.resolve();
-    }
-    await vi.waitFor(() =>
-      expect(panel.querySelector(".chat-tool-output__text")?.textContent?.length).toBe(text.length),
-    );
-    expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe(text);
-    expect(button(panel, t("chat.toolCards.copyOutput"))).toBeDefined();
-    expect(button(panel, t("chat.toolCards.downloadOutput"))).toBeDefined();
-    expect(request).toHaveBeenCalledWith("chat.message.get", {
-      sessionKey: "global",
-      agentId: "work",
-      messageId: "result-b",
-      maxChars: 2_000_000,
-    });
-    expect(panel.textContent).not.toContain("wrong sibling");
-    expect(panel.querySelector("strong")).toBeNull();
-    expect(panel.textContent).not.toContain("Captured before context processing");
+        };
+      });
+      const { state, pane } = createTestChatPane({
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+      const loader = createSidebarFullMessageLoader(state, pane.context.gateway)!;
+      const panel = mount(outputCard({ outputTruncated }), loader);
+      try {
+        flush();
+        expect(panel.container.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe(
+          "true",
+        );
+        expect(panel.container.querySelector(".chat-tool-output__actions")).toBeNull();
+      } finally {
+        pending.resolve();
+      }
+      await vi.waitFor(() =>
+        expect(panel.container.querySelector(".chat-tool-output__text")?.textContent?.length).toBe(
+          text.length,
+        ),
+      );
+      expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe(text);
+      expect(button(panel.container, t("chat.toolCards.copyOutput"))).toBeDefined();
+      expect(button(panel.container, t("chat.toolCards.downloadOutput"))).toBeDefined();
+      expect(request).toHaveBeenCalledWith("chat.message.get", {
+        sessionKey: "global",
+        agentId: "work",
+        messageId: "result-b",
+        maxChars,
+      });
+      expect(panel.container.textContent).not.toContain("wrong sibling");
+      expect(panel.container.querySelector("strong")).toBeNull();
+      expect(panel.container.textContent).not.toContain("Captured before context processing");
 
-    const copy = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
-    button(panel, t("chat.toolCards.copyOutput")).click();
-    await vi.waitFor(() => expect(copy).toHaveBeenCalledWith(text));
-    // Use the same native Blob fixture as outbox tests; E2E covers browser downloads.
-    vi.stubGlobal("Blob", NodeBlob);
-    const create = vi.fn((_blob: Blob) => "blob:output-fixture");
-    const revoke = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = create;
-        static override revokeObjectURL = revoke;
-      },
-    );
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-    button(panel, t("chat.toolCards.downloadOutput")).click();
-    const blob = create.mock.calls[0]?.[0];
-    expect(blob).toBeInstanceOf(Blob);
-    expect(await blob!.text()).toBe(text);
-    expect(revoke).toHaveBeenCalledWith("blob:output-fixture");
-  });
+      const copy = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
+      button(panel.container, t("chat.toolCards.copyOutput")).click();
+      await vi.waitFor(() => expect(copy).toHaveBeenCalledWith(text));
+      // Use the same native Blob fixture as outbox tests; E2E covers browser downloads.
+      vi.stubGlobal("Blob", NodeBlob);
+      const create = vi.fn((_blob: Blob) => "blob:output-fixture");
+      const revoke = vi.fn();
+      vi.stubGlobal(
+        "URL",
+        class extends URL {
+          static override createObjectURL = create;
+          static override revokeObjectURL = revoke;
+        },
+      );
+      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+      button(panel.container, t("chat.toolCards.downloadOutput")).click();
+      const blob = create.mock.calls[0]?.[0];
+      expect(blob).toBeInstanceOf(Blob);
+      expect(await blob!.text()).toBe(text);
+      expect(revoke).toHaveBeenCalledWith("blob:output-fixture");
+    },
+  );
 
   it.each(["legacy capture", "recorded capture", "oversized", "not_found"] as const)(
     "keeps available output when full output is unavailable: %s",
@@ -362,12 +373,14 @@ describe("tool output inspection", () => {
           });
       const panel = mount(card, load);
       await vi.waitFor(() =>
-        expect(panel.textContent).toContain(t("chat.toolCards.fullOutputUnavailable")),
+        expect(panel.container.textContent).toContain(t("chat.toolCards.fullOutputUnavailable")),
       );
       if (!retrieved) {
         expect(load).not.toHaveBeenCalled();
       }
-      expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe(card.outputText);
+      expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe(
+        card.outputText,
+      );
     },
   );
 
@@ -392,12 +405,12 @@ describe("tool output inspection", () => {
       await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
       await vi.waitFor(() =>
         expect(
-          panel.getAttribute("aria-busy") ??
-            panel.querySelector("[aria-busy]")?.getAttribute("aria-busy"),
+          panel.container.getAttribute("aria-busy") ??
+            panel.container.querySelector("[aria-busy]")?.getAttribute("aria-busy"),
         ).toBe("false"),
       );
-      expect(panel.textContent).not.toContain(t("chat.toolCards.fullOutputUnavailable"));
-      expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe(marker);
+      expect(panel.container.textContent).not.toContain(t("chat.toolCards.fullOutputUnavailable"));
+      expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe(marker);
     },
   );
 
@@ -417,22 +430,60 @@ describe("tool output inspection", () => {
       const panel = mount(outputCard(), load);
       await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
       if (change === "selection") {
-        panel.content = {
-          kind: "tool-output",
-          card: outputCard(),
-          sessionKey: "agent:other:main",
-          agentId: "other",
-        };
+        panel.update({
+          ...panel.props,
+          content: {
+            kind: "tool-output",
+            card: outputCard(),
+            sessionKey: "agent:other:main",
+            agentId: "other",
+          },
+        });
       } else {
-        panel.connectionEpoch = 2;
+        panel.update({ ...panel.props, connectionEpoch: 2 });
       }
       await vi.waitFor(() =>
-        expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe("new selection"),
+        expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe(
+          "new selection",
+        ),
       );
       complete(result("stale response"));
       await Promise.resolve();
-      await panel.updateComplete;
-      expect(panel.querySelector(".chat-tool-output__text")?.textContent).toBe("new selection");
+      flush();
+      expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe(
+        "new selection",
+      );
     },
   );
+
+  it("keeps the preview visible while retrying a failed full-output read", async () => {
+    const retried = createDeferred<ReturnType<typeof result>>();
+    const load = vi
+      .fn<SidebarFullMessageLoader>()
+      .mockRejectedValueOnce(new Error("Read failed"))
+      .mockImplementationOnce(() => retried.promise);
+    const panel = mount(outputCard(), load);
+    await waitForSolid(() =>
+      expect(panel.container.querySelector('[role="alert"]')?.textContent).toContain(
+        t("chat.toolCards.outputLoadFailed"),
+      ),
+    );
+
+    button(panel.container, t("common.retry")).click();
+    await waitForSolid(() =>
+      expect(panel.container.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("true"),
+    );
+    expect(panel.container.querySelector('[role="alert"]')).toBeNull();
+    expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe("preview");
+    expect(panel.container.querySelector(".chat-tool-output__actions")).toBeNull();
+
+    retried.resolve(result("complete output"));
+    await waitForSolid(() =>
+      expect(panel.container.querySelector(".chat-tool-output__text")?.textContent).toBe(
+        "complete output",
+      ),
+    );
+    expect(panel.container.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("false");
+    expect(panel.container.querySelector(".chat-tool-output__actions")).not.toBeNull();
+  });
 });

@@ -103,28 +103,27 @@ export type RepairShortTermPromotionArtifactsResult = Omit<
   "removedOverflowEntries"
 > & { removedOverflowEntries: number };
 
-export type RankShortTermPromotionOptions = {
-  workspaceDir: string;
-  limit?: number;
+export type PromotionThresholdOptions = {
   minScore?: number;
   minRecallCount?: number;
   minUniqueQueries?: number;
   maxAgeDays?: number;
+};
+
+export type RankShortTermPromotionOptions = PromotionThresholdOptions & {
+  workspaceDir: string;
+  limit?: number;
   includePromoted?: boolean;
   recencyHalfLifeDays?: number;
   nowMs?: number;
 };
 
-export type ApplyShortTermPromotionsOptions = {
+export type ApplyShortTermPromotionsOptions = PromotionThresholdOptions & {
   agentId?: string;
   workspaceAgentIds?: readonly string[];
   workspaceDir: string;
   candidates: PromotionCandidate[];
   limit?: number;
-  minScore?: number;
-  minRecallCount?: number;
-  minUniqueQueries?: number;
-  maxAgeDays?: number;
   nowMs?: number;
   timezone?: string;
   /**

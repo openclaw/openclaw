@@ -56,21 +56,14 @@ final class ShareViewController: UIViewController {
     }
 
     private func prepareDraft() async {
-        let traceId = UUID().uuidString
         ShareGatewayRelaySettings.saveLastEvent("Share opened.")
         self.composeView.apply(.preparing)
-        self.logger.info("share begin trace=\(traceId, privacy: .public)")
         let extracted = await self.extractSharedContent()
         let payload = extracted.payload
         self.pendingAttachments = extracted.attachments.map(\.payload)
         self.attachmentBlockReason = ShareAttachmentBlockReason.resolve(
             hasImageProcessingError: extracted.attachmentError != nil,
             summary: extracted.attachmentSummary)
-        self.logger.info("share payload trace=\(traceId, privacy: .public)")
-        self.logger.info(
-            "share payload title=\(payload.title?.count ?? 0) text=\(payload.text?.count ?? 0)")
-        self.logger.info(
-            "share attachments hasURL=\(payload.url != nil) images=\(self.pendingAttachments.count)")
         let message = ShareDraftComposer.compose(from: payload)
         self.composeView.setDraft(message)
         self.composeView.setAttachmentPreviews(extracted.attachments.map(\.preview))
@@ -129,24 +122,22 @@ final class ShareViewController: UIViewController {
 
     private func sendMessageToGateway(_ message: String, attachments: [ShareAttachment]) async throws {
         guard let config = ShareGatewayRelaySettings.loadConfigDiscardingUnscopedDeviceAuth() else {
+            throw Self.gatewayError(10, message: NSLocalizedString(
+                "OpenClaw is not connected to a gateway yet.",
+                comment: "Share extension missing gateway error"))
+        }
+        guard config.requiresForegroundSignIn != true else {
             throw NSError(
                 domain: "OpenClawShare",
-                code: 10,
-                userInfo: [
-                    NSLocalizedDescriptionKey: NSLocalizedString(
-                        "OpenClaw is not connected to a gateway yet.",
-                        comment: "Share extension missing gateway error"),
-                ])
+                code: 12,
+                userInfo: [NSLocalizedDescriptionKey: NSLocalizedString(
+                    "This gateway uses Cloudflare Access. Open OpenClaw and send from the app; your share stays here.",
+                    comment: "Share extension foreground browser sign-in requirement")])
         }
         guard let url = URL(string: config.gatewayURLString) else {
-            throw NSError(
-                domain: "OpenClawShare",
-                code: 11,
-                userInfo: [
-                    NSLocalizedDescriptionKey: NSLocalizedString(
-                        "Invalid saved gateway URL.",
-                        comment: "Share extension invalid gateway error"),
-                ])
+            throw Self.gatewayError(11, message: NSLocalizedString(
+                "Invalid saved gateway URL.",
+                comment: "Share extension invalid gateway error"))
         }
 
         let gateway = GatewayNodeSession()
@@ -220,6 +211,10 @@ final class ShareViewController: UIViewController {
         _ = try await gateway.request(method: "node.event", paramsJSON: nodeEventParams, timeoutSeconds: 25)
     }
 
+    private static func gatewayError(_ code: Int, message: String) -> NSError {
+        NSError(domain: "OpenClawShare", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
     private func extractSharedContent() async -> ExtractedShareContent {
         guard let items = self.extensionContext?.inputItems as? [NSExtensionItem] else {
             return ExtractedShareContent(
@@ -242,10 +237,8 @@ final class ShareViewController: UIViewController {
                     from: provider,
                     index: attachments.count)
                 attachments.append(attachment)
-            } catch let error as ShareImageProcessor.ProcessError {
-                attachmentError = error
             } catch {
-                attachmentError = .encodeFailed
+                attachmentError = error as? ShareImageProcessor.ProcessError ?? .encodeFailed
             }
         }
         attachmentSummary.acceptedImageCount = attachments.count

@@ -1,10 +1,14 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createUpdateProgress } from "../cli/update-cli/progress.js";
+import { resolveUpdateResultNextAction } from "../cli/update-cli/update-recovery-guidance.js";
 import type { SpawnResult } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
+import * as diskSpace from "./disk-space.js";
+import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
+import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 export class FakeChild extends EventEmitter {
@@ -66,28 +70,23 @@ export function completeCanaryCommand(
   queueMicrotask(() => {
     const { pluginInventory, pluginErrors, runtimeContract, runtimeError, lintReport } =
       readFixture();
-    if (args.includes("plugins")) {
-      child.stdout.write(
-        JSON.stringify(
-          pluginInventory ?? {
-            plugins: [],
-            diagnostics: pluginErrors ? [{ level: "error", message: "incompatible plugin" }] : [],
-          },
-        ),
-      );
-    }
-    if (args.includes("--check")) {
-      child.stdout.write(JSON.stringify(runtimeContract));
-    }
-    if (args.includes("--lint")) {
-      child.stdout.write(JSON.stringify(lintReport));
-    }
-    child.emit(
-      "close",
-      (runtimeError && args.includes("--check")) || (!lintReport.ok && args.includes("--lint"))
-        ? 1
-        : 0,
+    const writeIf = (flag: string, output: unknown) => {
+      if (args.includes(flag)) {
+        child.stdout.write(JSON.stringify(output));
+      }
+    };
+    writeIf(
+      "plugins",
+      pluginInventory ?? {
+        plugins: [],
+        diagnostics: pluginErrors ? [{ level: "error", message: "incompatible plugin" }] : [],
+      },
     );
+    writeIf("--check", runtimeContract);
+    writeIf("--lint", lintReport);
+    const failed =
+      (runtimeError && args.includes("--check")) || (!lintReport.ok && args.includes("--lint"));
+    child.emit("close", failed ? 1 : 0);
   });
 }
 
@@ -96,6 +95,11 @@ export function stubHealthyGateway() {
     "fetch",
     vi.fn(async () => Response.json({ status: "started", ready: true })),
   );
+}
+
+/** The last canary check; verified temporary-copy removal is recorded after it. */
+export function canaryOutcomeStep(steps: UpdateStepResult[]) {
+  return steps.findLast((step) => !(step.name.endsWith("-cleanup") && step.exitCode === 0));
 }
 
 export function renderSteps(steps: UpdateStepResult[]) {
@@ -109,4 +113,55 @@ export function renderSteps(steps: UpdateStepResult[]) {
     presentation.progress.onStepComplete?.({ ...step, index, total: steps.length });
   }
   return log.mock.calls.flat().join("\n");
+}
+
+export function registerCanarySnapshotCapacityTests(fixture: {
+  canaryStateOptions: () => Parameters<typeof validateUpdateCandidateCanary>[0];
+  getRoot: () => string;
+  mocks: { snapshot: ReturnType<typeof vi.fn>; spawn: ReturnType<typeof vi.fn> };
+}) {
+  const { canaryStateOptions, getRoot, mocks } = fixture;
+  it("records a typed capacity refusal before notifying the snapshot failure", async () => {
+    const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+      targetPath,
+      checkedPath: targetPath,
+      availableBytes: 0,
+      totalBytes: 1024,
+    }));
+    const onStep = vi.fn();
+    try {
+      const env = { TMPDIR: "/synthetic/tmp" };
+      const reason = "candidate-snapshot-failed";
+      const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), env, onStep });
+      expect(result).toMatchObject({ status: "error", phase: "snapshot", reason });
+      const updateResult = { ...result, mode: "git" as const, root: getRoot() };
+      const nextAction = resolveUpdateResultNextAction({
+        result: updateResult,
+        verifiedServingVersion: "2026.10.5-beta.2",
+        env,
+      });
+      const report = renderUpdateRunReport(updateRunReportInputFromResult(updateResult), {
+        nextAction,
+      });
+      expect(report).toMatchObject({
+        headline: expect.stringContaining(`OpenClaw update failed: ${reason}`),
+        markdown: expect.stringContaining(`Fix ${reason} then run \`openclaw update\` again.`),
+      });
+      const failed = canaryOutcomeStep(result.steps);
+      expect(failed).toMatchObject({
+        name: "candidate-state-snapshot",
+        exitCode: 1,
+        snapshotCapacity: {
+          reason: "snapshot-capacity-insufficient",
+          selection: null,
+          candidates: [{ availableBytes: 0 }, { availableBytes: 0 }, { availableBytes: 0 }],
+        },
+      });
+      expect(onStep).toHaveBeenCalledExactlyOnceWith(failed);
+      expect(mocks.snapshot).not.toHaveBeenCalled();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    } finally {
+      capacity.mockRestore();
+    }
+  });
 }

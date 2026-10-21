@@ -41,7 +41,7 @@ export function loadLocalAssistantIdentity(opts?: {
       return { avatar: null };
     }
     const avatars = parseLocalAssistantAvatarMap(raw);
-    return { avatar: Object.hasOwn(avatars, agentId) ? (avatars[agentId] ?? null) : null };
+    return { avatar: avatars[agentId] ?? null };
   } catch {
     return { avatar: null };
   }
@@ -61,7 +61,6 @@ export async function fetchAssistantIdentity(
     ? {
         ...identity,
         avatar: localAvatar,
-        avatarSource: localAvatar,
         avatarStatus: "data",
         avatarReason: null,
       }

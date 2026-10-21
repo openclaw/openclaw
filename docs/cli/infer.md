@@ -6,7 +6,7 @@ read_when:
 title: "Inference CLI"
 ---
 
-`openclaw infer` is the canonical headless surface for provider-backed inference. It exposes capability families (`model`, `image`, `audio`, `tts`, `video`, `web`, `embedding`), not raw gateway RPC names or agent tool ids. `openclaw capability ...` is an alias for the same command tree.
+`openclaw infer` is the main headless command for provider-backed inference. It exposes capability families (`model`, `image`, `audio`, `tts`, `video`, `web`, `embedding`), not raw gateway RPC names or agent tool ids. `openclaw capability ...` is an alias for the same command tree.
 
 Reasons to prefer it over a one-off provider wrapper:
 
@@ -112,8 +112,10 @@ shell-completion metadata.
   an explicit id first, then `agents.defaults.systemAgent.agentId`, then the sole configured agent.
 - Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
+- Model runs load the catalog for case correction only when an explicit model override contains uppercase characters. Runs using the configured default or a lowercase model ref skip that catalog lookup.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
-- `model run --gateway` exercises Gateway routing, saved auth, provider selection, and the embedded runtime, but stays a raw model probe: no prior session transcript, bootstrap/AGENTS context, tools, or bundled MCP servers.
+- Local `model run --file` requires an image-capable model and fails before the provider call when the model's catalog input is text-only. `model run --gateway --file` instead offloads images for text-only models and describes them through the Gateway's media understanding.
+- `model run --gateway` exercises Gateway routing, saved auth, provider selection, and the embedded runtime, but stays a raw model check: no prior session transcript, bootstrap/AGENTS context, tools, or bundled MCP servers.
 - `model run --gateway --model <provider/model>` requires a trusted-operator gateway credential, because it asks the Gateway to run a one-off provider/model override.
 
 ## Model
@@ -135,9 +137,9 @@ Use full `<provider/model>` refs with `--local` to smoke-test one provider witho
 
 ```bash
 openclaw infer model run --local --model anthropic/claude-sonnet-4-6 --prompt "Reply with exactly: pong" --json
-openclaw infer model run --local --model cerebras/zai-glm-4.7 --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model cerebras/gpt-oss-120b --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model google/gemini-2.5-flash --prompt "Reply with exactly: pong" --json
-openclaw infer model run --local --model groq/llama-3.1-8b-instant --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model groq/openai/gpt-oss-120b --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model llmman/qwen3.8 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model llmman/gemma4:e4b --prompt "Describe this image." --file ./photo.jpg --json
 openclaw infer model run --local --model mistral/mistral-medium-3-5 --prompt "Reply with exactly: pong" --json
@@ -150,12 +152,14 @@ Notes:
 
 - Local `model run` is the narrowest CLI smoke for provider/model/auth health: for non-ChatGPT-Codex providers it sends only the supplied prompt.
 - Local `model run --model <provider/model>` can resolve exact bundled static-catalog rows (the same rows [`openclaw models list --all`](/cli/models) shows) before that provider is written to config. Provider auth is still required; missing credentials fail as auth errors, not `Unknown model`.
-- For Mistral Medium 3.5 reasoning probes, leave temperature unset/default. Mistral rejects `reasoning_effort="high"` with `temperature: 0`; use default temperature or a non-zero value such as `0.7`.
-- OpenAI ChatGPT/Codex OAuth (`openai-chatgpt-responses` API) local probes add a minimal system instruction so the transport can populate its required `instructions` field — no full agent context, tools, memory, or session transcript.
-- `model run --file` attaches image content directly to the single user message. Common formats (PNG, JPEG, WebP) work when MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called. Use `infer image describe` instead when you want OpenClaw's image-model routing and fallbacks rather than a direct multimodal-model probe.
+- For Mistral Medium 3.5 reasoning checks, leave temperature unset/default. Mistral rejects `reasoning_effort="high"` with `temperature: 0`; use default temperature or a non-zero value such as `0.7`.
+- OpenAI ChatGPT/Codex OAuth (`openai-chatgpt-responses` API) local checks add a minimal system instruction so the transport can populate its required `instructions` field — no full agent context, tools, memory, or session transcript.
+- `model run --file` attaches image content directly to the single user message. Common formats (PNG, JPEG, WebP) work when MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called. Use `infer image describe` instead when you want OpenClaw's image-model routing and fallbacks rather than a direct multimodal-model check.
 - The selected model must support image input; text-only models may reject the request at the provider layer.
 - `model run --prompt` must contain non-whitespace text; empty prompts are rejected before any provider or Gateway call.
-- Local `model run` exits non-zero when the provider returns no text output, so unreachable providers and empty completions do not look like successful probes.
+- Local `model run` exits non-zero for empty output or a failed/aborted response, even when partial text was received. These runs do not emit a successful JSON envelope.
+- `model run --gateway` also exits non-zero when the Gateway reports a failed, timed-out, or cancelled run, preserving its error detail instead of wrapping the reply in a successful JSON envelope.
+- When a completed response contains only reasoning and no final text, local `model run` reports that it returned reasoning but no text output, and notes when it stopped at the output token limit. Failed or aborted responses keep the generic no-text error with any provider error detail. Reasoning content is not printed as the answer.
 - Use `model run --gateway` to test Gateway routing or agent-runtime setup while keeping the model input raw. Use [`openclaw agent`](/cli/agent) or a chat surface for full agent context, tools, memory, and session transcript.
 - `--thinking adaptive` maps to the completion-runtime level `medium`; `--thinking max` maps to `max` for OpenAI models that support the native max effort, otherwise `xhigh`.
 - `model auth login`, `model auth logout`, and `model auth status` manage saved provider auth state.
@@ -259,6 +263,7 @@ openclaw infer video describe --file ./clip.mp4 --model openai/gpt-5.4-mini --js
 Notes:
 
 - `video generate` accepts `--size`, `--aspect-ratio`, `--resolution`, `--duration`, `--audio`, `--watermark`, and `--timeout-ms`, forwarded to the video-generation runtime.
+- `--duration` is a number of seconds that must round to 1–9007199254740991 seconds. Zero, negative, nonnumeric, and smaller values that round to zero fail before provider dispatch. Valid fractions such as `2.5` retain normal provider-supported rounding; omitting the flag keeps the provider default.
 - Provider-hosted video downloads reject empty, text, and JSON responses instead of reporting an unusable file as successful output.
 - With `--output`, URL-backed video streams to a sibling temporary file and replaces the destination only after the complete non-empty download succeeds; a failed stream leaves an existing destination unchanged.
 - `--model` must be `<provider/model>` for `video describe`.
@@ -285,6 +290,10 @@ openclaw infer embedding create --text "friendly lobster" --json
 openclaw infer embedding create --text "customer support ticket: delayed shipment" --model openai/text-embedding-3-large --json
 openclaw infer embedding providers --agent <id> --json
 ```
+
+`--model` takes `<provider/model>`. When you also pass `--provider`, it must match
+that prefix; model ids that contain a slash keep the provider prefix, for example
+`--model deepinfra/Qwen/Qwen3-Embedding-8B`.
 
 Without `--json`, `embedding create` shows the provider and model, followed by
 each input, its dimension count, and a preview of the first eight vector values.
@@ -348,7 +357,7 @@ Read https://docs.openclaw.ai/cli/infer, then create a skill that routes my comm
 Focus on model runs, image generation, video generation, audio transcription, TTS, web search, and embeddings.
 ```
 
-A good infer-based skill maps common user intents to the right subcommand, includes a few canonical examples per workflow, prefers `openclaw infer ...` over lower-level alternatives, and does not re-document the entire infer surface in the skill body.
+A good infer-based skill maps common user intents to the right subcommand, includes a few standard examples per workflow, prefers `openclaw infer ...` over lower-level alternatives, and does not re-document the entire infer surface in the skill body.
 
 ## Related
 

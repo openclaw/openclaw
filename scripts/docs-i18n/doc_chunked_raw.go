@@ -56,34 +56,32 @@ func translateDocBodyChunked(ctx context.Context, translator docsTranslator, rel
 	if strings.TrimSpace(body) == "" {
 		return body, nil
 	}
-	placeholderState := NewPlaceholderState(body)
-	placeholders := make([]string, 0, 8)
-	mapping := map[string]string{}
-	maskedBody := maskMarkdownFencedLiterals(body, placeholderState.Next, &placeholders, mapping)
-	maskedBody = maskMarkdownDocSyntax(maskedBody, placeholderState.Next, &placeholders, mapping)
-	listPlaceholders := maskedListMarkerPlaceholders(mapping)
+	state := NewPlaceholderState(body)
+	maskedBody := maskMarkdownFencedLiterals(body, state)
+	maskedBody = maskMarkdownDocSyntax(maskedBody, state)
+	listPlaceholders := maskedListMarkerPlaceholders(state.mapping)
 	blocks := splitDocBodyIntoBlocks(maskedBody)
 	groups := groupDocBlocks(blocks, docsI18nDocChunkMaxBytes())
 	logDocChunkPlan(relPath, blocks, groups)
 	out := strings.Builder{}
 	for index, group := range groups {
 		chunkID := fmt.Sprintf("%s.chunk-%03d", relPath, index+1)
-		translated, err := translateDocBlockGroup(ctx, translator, chunkID, group, placeholders, listPlaceholders, srcLang, tgtLang)
+		translated, err := translateDocBlockGroup(ctx, translator, chunkID, group, state.placeholders, listPlaceholders, srcLang, tgtLang)
 		if err != nil {
 			return "", err
 		}
 		out.WriteString(translated)
 	}
 	translatedBody := out.String()
-	translatedBody = normalizeMaskedListMarkerPlaceholders(translatedBody, mapping)
+	translatedBody = normalizeMaskedListMarkerPlaceholders(translatedBody, state.mapping)
 	translatedBody = normalizeMaskedListMarkerSpacing(maskedBody, translatedBody, listPlaceholders)
 	translatedBody = escapeUnexpectedListItemBodyMarkers(maskedBody, translatedBody, listPlaceholders)
 	translatedBody = escapeUnexpectedMarkdownListMarkers(translatedBody, listPlaceholders)
-	if err := validatePlaceholders(translatedBody, placeholders); err != nil {
+	if err := validatePlaceholders(translatedBody, state.placeholders); err != nil {
 		return "", fmt.Errorf("%s: restore fenced literals: %w", relPath, err)
 	}
 	maskedListMarkers := extractMarkdownListMarkerPrefixes(translatedBody)
-	translatedBody = unmaskMarkdown(translatedBody, placeholders, mapping)
+	translatedBody = unmaskMarkdown(translatedBody, state.placeholders, state.mapping)
 	if err := validateDocBodyFencedLiterals(body, translatedBody); err != nil {
 		log.Printf(
 			"docs-i18n: final list diagnostics %s source=%q masked=%q translated=%q",

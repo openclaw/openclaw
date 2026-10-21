@@ -6,9 +6,9 @@ import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { listChatOutboxAttention } from "./chat-outbox-owner.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
-import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { UNCONFIRMED_CHAT_SEND_ERROR } from "./chat-send-support.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
@@ -46,6 +46,113 @@ afterEach(() => {
 });
 
 describe("accepted input restart handoff", () => {
+  it("keeps local commands behind accepted input until transcript consumption", async () => {
+    let consumed = false;
+    const host = makeChatHost({
+      sessionKey,
+      currentSessionId: sessionId,
+      requestHandlers: {
+        "chat.history": () => ({
+          sessionId,
+          messages: [],
+          pendingInputs: consumed ? { items: [], total: 0 } : pending("interrupted"),
+          inputReceipts: [
+            consumed
+              ? { runId: item.sendRunId, state: "consumed", consumedByEventId: "saved-input" }
+              : { runId: item.sendRunId, state: "pending" },
+          ],
+          sessionInfo: { key: sessionKey, sessionId, status: "done", hasActiveRun: false },
+        }),
+        "sessions.compact": { ok: true, compacted: true },
+      },
+    });
+    for (const queued of [
+      item,
+      {
+        id: "queued-compact",
+        text: "/compact",
+        localCommandName: "compact",
+        createdAt: 200,
+        sendAttempts: 0,
+        sendState: "waiting-reconnect" as const,
+      },
+    ]) {
+      expect(
+        admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, sessionKey), {
+          ...queued,
+          sessionId,
+        }),
+      ).toBe(true);
+    }
+    await resumeStoredChatOutboxes(host);
+    expect(host.request.mock.calls.filter(([method]) => method === "sessions.compact")).toEqual([]);
+    consumed = true;
+    await resumeStoredChatOutboxes(host);
+    await resumeStoredChatOutboxes(host);
+    expect(
+      host.request.mock.calls.filter(([method]) => method === "sessions.compact"),
+    ).toHaveLength(1);
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toEqual([]);
+    expect(listStoredChatOutboxes(host)).toEqual([]);
+  });
+
+  it("retains expired server custody without blocking a later queued input", async () => {
+    let known = false;
+    const successor = {
+      ...item,
+      id: "later-browser-input",
+      sendRunId: "later-input",
+      text: "A new independent input",
+      createdAt: 200,
+      sendAttempts: 0,
+      sendState: "waiting-reconnect" as const,
+    };
+    const host = makeChatHost({
+      sessionKey,
+      currentSessionId: sessionId,
+      requestHandlers: {
+        "chat.history": () => ({
+          sessionId,
+          messages: [],
+          pendingInputs: known ? pending("interrupted") : { items: [], total: 0 },
+          inputReceipts: known ? [{ runId: item.sendRunId, state: "pending" }] : [],
+          sessionInfo: { key: sessionKey, sessionId, status: "done", hasActiveRun: false },
+        }),
+        "chat.send": { runId: successor.sendRunId, status: "started", messageSeq: 10 },
+      },
+    });
+    for (const queued of [item, successor]) {
+      expect(
+        admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, sessionKey), {
+          ...queued,
+          sessionId,
+        }),
+      ).toBe(true);
+    }
+    // Without a fresh receipt, an uncertain predecessor remains a FIFO barrier.
+    await resumeStoredChatOutboxes(host);
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toEqual([]);
+    known = true;
+    await resumeStoredChatOutboxes(host);
+    await resumeStoredChatOutboxes(host);
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toEqual([
+      [
+        "chat.send",
+        expect.objectContaining({ idempotencyKey: successor.sendRunId }),
+        expect.anything(),
+      ],
+    ]);
+    expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([
+      expect.objectContaining({
+        id: item.id,
+        text: item.text,
+        sessionId,
+        sendRunId: item.sendRunId,
+        sendAttempts: 1,
+      }),
+    ]);
+  });
+
   it.each(
     (["foreground history", "background reconciliation"] as const).flatMap((delivery) =>
       (["consumed", "cancelled"] as const).map((outcome) => ({ delivery, outcome })),
@@ -165,15 +272,15 @@ describe("accepted input restart handoff", () => {
   );
 
   it.each([
-    { queueMode: undefined, status: "running", hasActiveRun: false, immediate: false },
-    { queueMode: "followup", status: "running", hasActiveRun: false, immediate: false },
-    { queueMode: "collect", status: "queued", hasActiveRun: false, immediate: false },
-    { queueMode: "followup", status: "running", hasActiveRun: true, immediate: false },
-    { queueMode: "steer", status: "running", hasActiveRun: true, immediate: true },
-    { queueMode: "interrupt", status: "running", hasActiveRun: true, immediate: true },
+    { queueMode: undefined, status: "running", hasActiveRun: false },
+    { queueMode: "followup", status: "running", hasActiveRun: false },
+    { queueMode: "collect", status: "queued", hasActiveRun: false },
+    { queueMode: "followup", status: "running", hasActiveRun: true },
+    { queueMode: "steer", status: "running", hasActiveRun: true },
+    { queueMode: "interrupt", status: "running", hasActiveRun: true },
   ] as const)(
-    "preserves recovered-turn ordering for $queueMode ($status, active: $hasActiveRun)",
-    async ({ queueMode, status, hasActiveRun, immediate }) => {
+    "leaves server recovery in charge for $queueMode ($status, active: $hasActiveRun)",
+    async ({ queueMode, status, hasActiveRun }) => {
       let recoveryFinished = false;
       const host = makeChatHost({
         sessionKey,
@@ -182,8 +289,14 @@ describe("accepted input restart handoff", () => {
           "chat.history": () => ({
             sessionId,
             messages: [],
-            pendingInputs: pending("interrupted"),
-            inputReceipts: [{ runId: item.sendRunId, state: "pending" }],
+            pendingInputs: recoveryFinished ? { items: [], total: 0 } : pending("interrupted"),
+            inputReceipts: [
+              {
+                runId: item.sendRunId,
+                state: recoveryFinished ? "consumed" : "pending",
+                ...(recoveryFinished ? { consumedByEventId: "server-recovered-input" } : {}),
+              },
+            ],
             sessionInfo: {
               key: sessionKey,
               sessionId,
@@ -202,23 +315,11 @@ describe("accepted input restart handoff", () => {
         }),
       ).toBe(true);
       await resumeStoredChatOutboxes(host);
-      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(
-        immediate ? 1 : 0,
-      );
-      if (!immediate) {
-        expect(listStoredChatOutboxes(host)[0]?.queue[0]?.sendRunId).toBe(item.sendRunId);
-      }
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+      expect(listStoredChatOutboxes(host)[0]?.queue[0]?.sendRunId).toBe(item.sendRunId);
       recoveryFinished = true;
       await resumeStoredChatOutboxes(host);
-      const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
-      expect(sends).toHaveLength(1);
-      expect(sends[0]?.[1]).toMatchObject({
-        sessionKey,
-        sessionId,
-        idempotencyKey: item.sendRunId,
-        message: item.text,
-        ...(queueMode ? { queueMode } : {}),
-      });
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
       expect(listStoredChatOutboxes(host)).toEqual([]);
     },
   );
@@ -266,7 +367,7 @@ describe("accepted input restart handoff", () => {
     });
     expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
   });
-  it("finds interrupted custody behind a newer pending-input page", async () => {
+  it("reconciles interrupted custody behind a newer page without resending", async () => {
     const older = pending("interrupted");
     const host = makeChatHost({
       sessionKey,
@@ -307,7 +408,7 @@ describe("accepted input restart handoff", () => {
       expect.objectContaining({ pendingBefore: 21 }),
       { timeoutMs: 30_000 },
     );
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
   });
   it("retains browser custody until transcript consumption, then retires it", () => {
     const host = makeChatHost({ sessionKey, currentSessionId: sessionId, requestHandlers: {} });
@@ -330,7 +431,7 @@ describe("accepted input restart handoff", () => {
   });
 
   it.each(["interrupted", "queued", "cancelled", "unknown"] as const)(
-    "only re-admits positively interrupted input after reconnect (%s)",
+    "does not automatically resend accepted or uncertain input after reconnect (%s)",
     async (disposition) => {
       const page = disposition === "unknown" ? { items: [], total: 0 } : pending(disposition);
       const host = makeChatHost({
@@ -353,15 +454,7 @@ describe("accepted input restart handoff", () => {
       ).toBe(true);
       await resumeStoredChatOutboxes(host);
       const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
-      expect(sends).toHaveLength(disposition === "interrupted" ? 1 : 0);
-      if (disposition === "interrupted") {
-        expect(sends[0]?.[1]).toMatchObject({
-          message: item.text,
-          sessionKey,
-          sessionId,
-          idempotencyKey: item.sendRunId,
-        });
-      }
+      expect(sends).toHaveLength(0);
     },
   );
 });

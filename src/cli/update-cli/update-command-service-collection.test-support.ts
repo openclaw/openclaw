@@ -24,9 +24,9 @@ import * as verification from "./update-command-verification.js";
 const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 export function registerServiceCollectionTests() {
-  it.each(["unchanged", "definition changed", "authority revoked"] as const)(
-    "revalidates a collected systemd user unit before publication: %s",
-    (scenario) =>
+  it.each([false, true])(
+    "checks publication authority after stopping a collected unit (revoked=%s)",
+    (revoked) =>
       withServiceHome(async (home) => {
         expect(getFileLockProcessStartTime(process.pid)).not.toBeNull();
         mockProcessPlatform("linux");
@@ -36,7 +36,9 @@ export function registerServiceCollectionTests() {
           pids: new Set([process.pid, process.ppid, 1]),
           complete: true,
         });
-        vi.spyOn(maintenance, "prepareSystemdGatewayMaintenance").mockResolvedValue(false);
+        vi.spyOn(maintenance, "prepareSystemdGatewayMaintenance").mockResolvedValue({
+          kind: "unchanged",
+        });
         vi.spyOn(drain, "withGatewayMaintenanceDrain").mockImplementation(
           async ({ assertCurrent }, stop) =>
             stop({
@@ -66,7 +68,6 @@ export function registerServiceCollectionTests() {
         const runId = createUpdateRun({ trigger: "cli" }).runId;
         params.opts.run = { runId, env: process.env };
         let running = true;
-        let metadataLoads = 0;
         let inspections = 0;
         const service = createMockGatewayService({
           label: "systemd",
@@ -77,35 +78,29 @@ export function registerServiceCollectionTests() {
             }
             return structuredClone(command);
           },
-          readRuntime: async (_env, options) => {
-            if (!running) {
-              // systemd can collect the stopped unit between its command and runtime reads.
-              const inspection = options?.loadForInspection;
-              if (!inspection) {
-                return { status: "unknown" };
-              }
-              if (scenario === "authority revoked") {
-                params.opts.run!.interrupted = true;
-              }
-              inspection.assertCurrent();
-              expect(inspection.managerUid).toBe(2001);
-              metadataLoads++;
-            }
-            return {
-              status: running ? "running" : "stopped",
-              ...(running ? { pid: Math.max(process.pid, process.ppid) + 1 } : {}),
-              systemd: { managerUid: 2001, tasksCurrent: running ? 1 : 0 },
-            };
-          },
+          // systemd can collect the stopped unit between command and runtime reads.
+          readRuntime: async () =>
+            running
+              ? {
+                  status: "running",
+                  pid: Math.max(process.pid, process.ppid) + 1,
+                  systemd: { managerUid: 2001, tasksCurrent: 1 },
+                }
+              : { status: "unknown" },
           stop: vi.fn(async () => {
             running = false;
-            if (scenario === "definition changed") {
-              command.programArguments.push("--port", "18790");
-            }
           }),
         });
         vi.spyOn(services, "resolveGatewayService").mockReturnValue(service);
-        mocks.maybeStopService.mockImplementation(maybeStopManagedServiceBeforeMutableUpdate);
+        mocks.maybeStopService.mockImplementation(
+          async (...args: Parameters<typeof maybeStopManagedServiceBeforeMutableUpdate>) => {
+            const stopped = await maybeStopManagedServiceBeforeMutableUpdate(...args);
+            if (revoked && stopped.stopped) {
+              params.opts.run!.interrupted = true;
+            }
+            return stopped;
+          },
+        );
         vi.spyOn(verification, "verifyPreviousManagedGatewayForUpdate").mockImplementation(
           async (options) => {
             options.assertCurrent?.();
@@ -126,34 +121,17 @@ export function registerServiceCollectionTests() {
             return executeMutableUpdate(await bindExecutionGuards(params));
           });
           expect(service.stop, JSON.stringify(execution?.result)).toHaveBeenCalledOnce();
-          expect(execution?.preManagedServiceStop).toMatchObject({ stopped: true, running: true });
-          if (scenario === "unchanged") {
-            expect(execution?.result.status).toBe("ok");
-            expect(execution?.mutationStarted).toBe(true);
-            expect(metadataLoads).toBeGreaterThan(0);
-            expect(published).toHaveBeenCalledOnce();
-            expect(command).toEqual(originalCommand);
-          } else {
-            expect(execution?.mutationStarted).toBe(false);
-            expect(execution?.result).toMatchObject({
-              status: "error",
-              reason:
-                scenario === "authority revoked"
-                  ? "requester-revoked"
-                  : "managed-service-preflight",
-            });
-            expect(published).not.toHaveBeenCalled();
-            if (scenario === "authority revoked") {
-              expect(metadataLoads).toBe(0);
-            } else {
-              expect(execution?.result.steps.at(-1)?.failureFacts).toEqual([
-                expect.objectContaining({ code: "service-definition-changed" }),
-              ]);
-            }
+          expect(running).toBe(false);
+          expect(execution).toMatchObject({
+            preManagedServiceStop: { stopped: true, running: true },
+            result: revoked ? { status: "error", reason: "requester-revoked" } : { status: "ok" },
+            mutationStarted: !revoked,
+          });
+          expect(published).toHaveBeenCalledTimes(revoked ? 0 : 1);
+          expect(command).toEqual(originalCommand);
+          for (const operation of [service.install, service.start, service.restart]) {
+            expect(operation).not.toHaveBeenCalled();
           }
-          expect(service.install).not.toHaveBeenCalled();
-          expect(service.start).not.toHaveBeenCalled();
-          expect(service.restart).not.toHaveBeenCalled();
         } finally {
           await closeStateDatabaseForTest();
         }

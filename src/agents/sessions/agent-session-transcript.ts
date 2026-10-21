@@ -1,23 +1,24 @@
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import { withOwnedSessionRestartAbortWrite } from "../../config/sessions/transcript-write-context.js";
 import type { Message } from "../../llm/types.js";
-import {
-  prepareCodeModeSourceAppend,
-  type CodeModeSourceAppend,
-} from "../transcript-code-mode-source.js";
+import { AGENT_RUN_RESTART_ABORT_ERROR_CODE } from "../run-termination.js";
 import type { SessionManager } from "./session-manager.js";
 
 /** Persist completed model messages through their existing custody owner. */
 export async function persistAgentSessionMessage(
   manager: SessionManager,
   message: Message,
-  options: { invalidateSerializedPrefixCache: boolean; sourceAppend?: CodeModeSourceAppend },
+  options: { invalidateSerializedPrefixCache: boolean },
 ): Promise<string | undefined> {
-  // Normalize live delivery facts before persistence makes its redacted copy.
-  // Stored arguments must never replace the values used for tool execution.
+  // Normalize delivery facts before persistence.
   applyAssistantDeliveryDirectives(message);
   const appendOptions = {
     invalidateSerializedPrefixCache: options.invalidateSerializedPrefixCache,
   };
-  prepareCodeModeSourceAppend(appendOptions, message, options.sourceAppend);
-  return await manager.appendMessageAsync(message, appendOptions);
+  const append = () => manager.appendMessageAsync(message, appendOptions);
+  return message.role === "assistant" &&
+    (message.stopReason === "aborted" || message.stopReason === "error") &&
+    message.errorCode === AGENT_RUN_RESTART_ABORT_ERROR_CODE
+    ? await withOwnedSessionRestartAbortWrite(manager.getSessionTarget(), append)
+    : await append();
 }

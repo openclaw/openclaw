@@ -5,6 +5,7 @@ import {
 import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+import { createCronToolSchema } from "./cron-tool-schema.js";
 import { createCronTool } from "./cron-tool.js";
 
 function propertyAt(schema: unknown, path: string): Record<string, unknown> | undefined {
@@ -22,6 +23,37 @@ const tool = createCronTool();
 const schema = tool.parameters;
 
 describe("cron model schema regressions", () => {
+  it("reuses policy-equivalent schemas across sessions and refreshes changed policy", () => {
+    const first = createCronToolSchema({ agentSessionKey: "agent:one:main" });
+    expect(createCronToolSchema({ agentSessionKey: "agent:two:main" })).toBe(first);
+    expect(propertyAt(first, "job.agentId")).toBeUndefined();
+    const unscoped = createCronToolSchema();
+    expect(unscoped).not.toBe(first);
+    expect(propertyAt(unscoped, "job.agentId")).toBeDefined();
+    for (const options of [
+      { triggersEnabled: false },
+      { management: "only" as const },
+      { management: "also" as const },
+      { selfRemoveOnly: true },
+      { readOnly: true },
+    ]) {
+      const changed = createCronToolSchema(options);
+      expect(changed).not.toBe(unscoped);
+      expect(changed).not.toEqual(unscoped);
+      expect(createCronToolSchema({ ...options })).toBe(changed);
+    }
+    const recovery = createCronToolSchema({ readOnly: true });
+    expect(Value.Check(unscoped, { action: "remove", jobId: "saved-job" })).toBe(true);
+    for (const [action, accepted] of [
+      ["list", true],
+      ["get", true],
+      ["status", false],
+      ["remove", false],
+    ] as const) {
+      expect(Value.Check(recovery, { action, jobId: "saved-job" })).toBe(accepted);
+    }
+  });
+
   it("does not advertise forbidden automation management inside a scheduled run", () => {
     const restricted = createCronTool({ selfRemoveOnlyJobId: "current", runId: "run-current" });
     expect(restricted.parameters).toHaveProperty("properties.action.enum", [
@@ -173,7 +205,16 @@ describe("cron model schema regressions", () => {
       "systemEvent",
       "agentTurn",
     ]);
-    for (const key of ["command", "cwd", "mode", "match", "batchMs", "maxBatchBytes"]) {
+    for (const key of [
+      "command",
+      "cwd",
+      "mode",
+      "match",
+      "batchMs",
+      "maxBatchBytes",
+      "source",
+      "options",
+    ]) {
       expect(propertyAt(disabled.parameters, `job.schedule.${key}`)).toBeUndefined();
     }
     for (const key of ["script", "toolBudget"]) {
@@ -183,13 +224,23 @@ describe("cron model schema regressions", () => {
     expect(disabled.description).toContain("say it is unsupported");
     expect(disabled.description).not.toContain("TRIGGER (condition watcher");
     expect(disabled.description).not.toContain('kind:"stream"');
+    expect(disabled.description).not.toContain('kind:"event"');
     expect(disabled.description).not.toContain('kind:"script"');
   });
 
-  it("keeps the full surface when config omits cron.triggers", () => {
-    const defaults = createCronTool({ config: { cron: { enabled: true } } }).parameters;
-    expect(propertyAt(defaults, "job.trigger.script")).toMatchObject({ type: "string" });
-    expect(propertyAt(defaults, "job.schedule.kind")?.enum).toContain("stream");
-    expect(propertyAt(defaults, "job.payload.kind")?.enum).toContain("script");
+  it("keeps the full trigger surface and approval guidance when config omits cron.triggers", () => {
+    const defaults = createCronTool({ config: { cron: { enabled: true } } });
+    expect(propertyAt(defaults.parameters, "job.trigger.script")).toMatchObject({ type: "string" });
+    expect(propertyAt(defaults.parameters, "job.schedule.kind")?.enum).toContain("stream");
+    expect(propertyAt(defaults.parameters, "job.payload.kind")?.enum).toContain("script");
+    expect(defaults.description).toContain(
+      "add/update waits for user approval through the native client",
+    );
+    expect(defaults.description).toContain(
+      "A saved add/update result means any required approval has already completed",
+    );
+    expect(defaults.description).toContain(
+      "Do not ask again or disable the saved stream solely because no user approval reply is visible in chat",
+    );
   });
 });

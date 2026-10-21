@@ -427,7 +427,6 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       if (closed) {
         return;
       }
-      const flushGeneration = outputFlushGeneration;
       // Record admitted audio before observers can clear it and its echo window.
       let audioMs = activity.audioMs;
       if (params.echoSuppression) {
@@ -450,16 +449,10 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       });
       lastOutputAt = new Date().toISOString();
       const turnId = ensureTurn();
-      if (closed || flushGeneration !== outputFlushGeneration) {
-        return;
-      }
       talk.startOutputAudio({
         turnId,
         payload: params.talkPayloads.outputAudioStarted(),
       });
-      if (closed || flushGeneration !== outputFlushGeneration) {
-        return;
-      }
       harness.emit({
         type: "output.audio.delta",
         turnId,

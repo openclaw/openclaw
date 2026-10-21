@@ -1,9 +1,10 @@
 ---
-summary: "Routine local test order, the core test commands, and the local PR gate"
+summary: "Focused local proof, core test commands, and optional full local runs"
 title: "Run tests locally"
 read_when:
   - You are running or fixing tests on your own machine
-  - You need the local land and gate command list
+  - You need focused local proof or an explicitly needed full local run
+  - You need to select the runtime, formatter, or linter for source development
 ---
 
 ## Routine local order
@@ -91,35 +92,135 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
-Run the test toolchain on Node 24.16+ or Node 26.1+, matching the packaged
-runtime floor. Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
+Node 24.16+ or Node 26.1+ is required for orchestration and build preparation.
+Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 
-To compare the same Vitest selection on Node and Bun, use the existing wrapper:
+### OpenClaw Bun fork
+
+Local source development uses the [OpenClaw Bun fork](https://github.com/openclaw/bun)
+for tests, `pnpm dev`, and local formatting, with a linter opt-in described below.
+The exact release, revision, and checksums are pinned in
+`scripts/lib/openclaw-bun.json`. Use this fork for the Bun development path:
+its runtime and built-in formatter and linter are the versions validated against
+this repository. These defaults do not change an installed Gateway's runtime;
+see [Bun compatibility](/install/bun-compatibility).
+
+`scripts/lib/pinned-bun.mts` owns resolution for tests, `pnpm dev`, formatting,
+and opt-in Bun linting. On first use it downloads the pinned release through
+`scripts/stage-openclaw-bun.sh`, verifies the archive and executable checksums
+and release identity, and caches the executable at
+`~/.cache/openclaw/bun/<tag>/<platform>-<arch>/bin/bun`. `XDG_CACHE_HOME` replaces
+`~/.cache` when set. Later runs reuse the verified cache; no global Bun installation
+or manual `PATH` change is required.
+
+Automatic local staging supports macOS and Linux on `arm64` and `x64`. Windows,
+other platforms, and machines that cannot obtain a usable pinned executable use
+the command's fallback. Windows artifacts in the shared pin serve other consumers;
+they do not enable automatic staging in this development resolver.
+
+Local tests and `pnpm dev` default to the pinned fork. If it is unavailable, they
+fall back to Node with one notice explaining why. `pnpm format` and
+`pnpm format:check` also default locally to the pinned fork, falling back to
+oxfmt with one notice if it is unavailable. `pnpm lint` defaults to oxlint;
+Bun lint is opt-in until the required upstream fix and exact diagnostic parity
+are verified. The oxlint default needs no Bun download and prints no fallback notice.
+Explicit Bun formatting or linting fails if the fork is unavailable.
+
+The October 18, 2026 comparison used pinned Bun `1.4.4-canary.1+7bd4fdff3`
+and oxfmt 0.72.0 on the same clean tree. These are median wall times from three
+interleaved runs after a warm-up, with native default thread counts:
+
+| Host and command                       | Bun     | oxfmt   |
+| -------------------------------------- | ------- | ------- |
+| AWS `c7a.8xlarge`, `pnpm format`       | 0.62 s  | 1.41 s  |
+| AWS `c7a.8xlarge`, `pnpm format:check` | 0.62 s  | 1.38 s  |
+| Loaded Mac, `pnpm format`              | 15.65 s | 14.74 s |
+| Loaded Mac, `pnpm format:check`        | 14.31 s | 16.40 s |
+
+On AWS, native write/check medians were 0.52/0.52 s for Bun and 1.30/1.33 s
+for oxfmt. The wrappers add about 0.10 s to Bun, without thread caps, batching,
+or an extra local formatting pass. Every run preserved the tracked bytes.
+The Mac run held the shared build lock but had substantial background load
+(about 65); it does not establish a write-speed gain there. Use the oxfmt
+override below when it performs better on your machine.
+
+Formatting reads `.oxfmtrc.jsonc`, including the 100-column print width and ignore
+patterns. Selecting Bun lint retains the existing pipeline, configuration,
+type-aware checks, shards, and resource policy. Other phases, such as stylesheet
+linting, retain their own tools. Dedicated generated-artifact and docs formatters
+keep their existing oxfmt contracts; see the
+[formatter caller inventory](https://github.com/openclaw/openclaw/blob/main/scripts/README.md#formatting-and-lint-selection).
+
+Use the selectors to compare tools or force a fallback:
 
 ```sh
 OPENCLAW_VITEST_RUNTIME=node pnpm test <path-or-filter>
 OPENCLAW_VITEST_RUNTIME=bun pnpm test <path-or-filter>
+OPENCLAW_VITEST_RUNTIME=node pnpm dev
+OPENCLAW_FORMAT_TOOL=oxfmt pnpm format
+OPENCLAW_FORMAT_TOOL=bun pnpm format:check
+OPENCLAW_LINT_TOOL=oxlint pnpm lint
+OPENCLAW_LINT_TOOL=bun pnpm lint
 ```
 
-Install the exact Bun fork build pinned by `.github/actions/setup-test-bun/action.yml`
-for comparable results. This selects the
-actual Vitest process and workers while retaining Node for orchestration and
-compiler preparation. Source-runner CLI fixtures also use the selected runtime
-after Node completes build preparation. This does not use Bun's native test runner.
-`bun run` alone does not select Bun for tests. Node remains the local default.
+Explicit `bun` selection fails if the executable is unavailable instead of
+silently using another tool. Explicit Node or oxfmt selection suppresses the
+fallback notice. `OPENCLAW_BUN_PATH=/absolute/path/to/bun` overrides the executable
+for every Bun-selected command. This custom binary must be executable, but does
+not receive the pinned cache's checksum validation. An invalid path follows the
+command's explicit-selection or fallback behavior above. To verify a custom
+binary, compare its `--revision` output with the `revision` in
+`scripts/lib/openclaw-bun.json`.
+
+To identify the selected formatter and linter locally, use the same environment
+as the real command and request their versions:
+
+```sh
+pnpm format --version
+node scripts/run-oxlint.mjs --version
+```
+
+Bun prints its runtime version; oxfmt and oxlint print their tool versions.
+These probes use the same selector without formatting files or running lint
+preparation. They may perform the first-use download. Avoid `pnpm lint --version`
+for this check because other lint phases still run.
+
+The test selection applies to the actual Vitest process and workers. Node retains
+orchestration and compiler preparation. Source-runner CLI fixtures use the selected
+runtime after preparation. Ordinary Vitest suites do not switch to Bun's native
+test runner.
+
+CI is an explicit policy boundary. The daily workflow selects the pinned fork for
+eligible tests; Full Release Validation runs Node and Bun. Named Node-only
+contracts and direct-entrypoint lanes retain their declared runtime. A standalone
+wrapper with `CI` set to a nonempty value other than `false` defaults tests to Node
+unless runtime policy selects Bun. CI Bun tests use the workflow-provisioned
+`bun` on `PATH` and verify its revision, unless `OPENCLAW_BUN_PATH` supplies it.
+See [CI runtime selection](/ci/pipeline#test-runtime-selection).
+
+CI formatting always gates on oxfmt and checks that pinned Bun identifies the same
+files needing formatting, even when a format override is set. CI lint continues
+to gate on oxlint. Bun lint becomes the default only after the required upstream
+fix is included in the pin and exact diagnostic parity is verified.
+
+On macOS, Bun test runs select SQLite like a standalone Bun install and refuse
+Apple's system library; see [SQLite library selection](/install/bun-compatibility#sqlite-library-selection).
+For an x64 Bun under Rosetta, build the pinned library with
+`scripts/build-mac-sqlite.sh universal <dir>` and set
+`OPENCLAW_SQLITE_LIBRARY=<dir>/lib/libsqlite3.dylib`.
 
 For the CI Control UI comparison, run the full selection on Node followed by Bun:
 
 ```sh
 OPENCLAW_NODE_TEST_CONFIGS_JSON='["ui/vitest.config.ts"]' \
 OPENCLAW_NODE_TEST_VITEST_ARGS_JSON='["--maxWorkers", "3"]' \
-OPENCLAW_CI_TEST_RUNTIME_POLICY=dual \
+OPENCLAW_CI_TEST_RUNTIME_POLICY=dual-all \
 node --import tsx scripts/ci-run-node-test-shard.mts
 ```
 
-Both passes include the retention assertions, which use runtime-neutral garbage
-collection and WeakRef checks. Run the complete UI selection only on Bun with
-`OPENCLAW_VITEST_RUNTIME=bun`.
+The Node pass covers the complete selection; exact Node-only retention contracts
+stay on Node. To run the CI Bun selection with its named Node companions, use
+`OPENCLAW_CI_TEST_RUNTIME_POLICY=bun-all` in the same command.
 
 Test processes and their CLI fixtures keep Sparkplug baseline compilation enabled
 but run it synchronously. This avoids a Node 24 shutdown deadlock where a
@@ -140,7 +241,7 @@ Isolated native worker and subprocess fixtures use `mockNativeModuleExports` fro
 The mocks live until that child exits. Capture original call-through functions before
 registering replacements because Bun updates existing module namespace bindings.
 
-The test toolchain pins stable Vitest `5.0.1`, including its browser and coverage
+The test toolchain pins stable Vitest `5.0.3`, including its browser and coverage
 packages. Use `describe(name, { concurrent: false }, callback)` for ordered
 suites. Await asynchronous assertions, keep `vi.mock`/`vi.hoisted` at module
 scope, and perform actions whose mock calls you assert inside the test.
@@ -250,11 +351,6 @@ session-utils, and listing roots in this same generation. Each fresh
 heap-measurement child runs their JavaScript without spending its execution
 deadline on TypeScript imports.
 
-Native Bash output-lifecycle fixtures also prepare the real tool and executor
-roots in this generation. Each scenario still uses a fresh process and real
-shell, pipe, and spill file; its unchanged child deadline covers prepared
-JavaScript startup and output handling instead of repeated TypeScript compilation.
-
 Automatic-triage process fixtures share this generation for admission, failure handling, execution, process identity, and respawn checks. Compilation finishes before readiness deadlines begin, so children load prepared JavaScript. The detached helper uses the same sealed lease runtime as the installed package.
 
 Known core database-worker consumers prepare the invocation's compiled generation
@@ -349,9 +445,15 @@ Tests that discover real bundled provider runtimes declare that prerequisite in
 `scripts/lib/vitest-build-prerequisites.mts`, including Telegram sticker-model
 selection. Local runners and CI prepare those artifacts before admitting workers.
 
-## Local PR gate
+<a id="local-pr-gate" />
 
-For local PR land/gate checks, run:
+## Full local run (only when explicitly needed)
+
+PR CI is the broad gate. Before opening a ready PR, run focused tests for touched
+code and targeted typecheck, lint, and format checks. Do not run the full local
+suite to diagnose a failed PR CI run; use `pnpm test:ci-failed <pr>` instead.
+
+The full local commands remain available for an explicitly needed investigation:
 
 - `pnpm check:changed`
 - `pnpm check`
@@ -366,7 +468,14 @@ their candidate's fork from the captured main snapshot, so inherited main
 changes retain their allowance even when the shared `origin/main` ref is stale.
 Other check stages still run normally.
 
-If `pnpm test` flakes on a loaded host, rerun once before treating it as a regression, then isolate with `pnpm test <path/to/test>`. For memory-constrained hosts:
+If an explicitly requested full local run fails, isolate the failed tests with
+`pnpm test <path/to/test>` and investigate the owner; a passing replay does not
+prove a repair. For a PR CI failure, read its published classification, fix new
+failures, run `pnpm test:ci-failed <pr> --run` until those pass locally, then push
+once. Pre-existing failures follow the
+[failure-table landing rule](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/landing.md#red-main-and-inherited-failures).
+Never rerun CI just to chase green. For memory-constrained hosts explicitly
+running the full local suite:
 
 - `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`
 - `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-cache pnpm test:changed`

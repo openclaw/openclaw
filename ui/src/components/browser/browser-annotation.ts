@@ -94,8 +94,7 @@ function sanitizePageUrl(value: string): string {
   const normalized = sanitizePageText(value, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
   const parsed = URL.parse(normalized);
   if (!parsed) {
-    const withoutUserInfo = normalized.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/?#\s]*@/i, "$1");
-    return truncateUtf16Safe(withoutUserInfo, ANNOTATION_CONTEXT_URL_MAX_LENGTH);
+    return normalized.replace(/^([a-z][a-z\d+.-]*:\/\/)[^/?#\s]*@/i, "$1");
   }
   if (!parsed.username && !parsed.password) {
     return normalized;
@@ -236,17 +235,14 @@ export function paintAnnotations(
       const y = clamp01(point.y) * params.height;
       if (index === 0) {
         ctx.moveTo(x, y);
+        if (stroke.points.length === 1) {
+          // A click without movement still deserves a visible dot.
+          ctx.lineTo(x + 0.1, y);
+        }
       } else {
         ctx.lineTo(x, y);
       }
     });
-    if (stroke.points.length === 1) {
-      // A click without movement still deserves a visible dot.
-      const point = stroke.points[0];
-      if (point) {
-        ctx.lineTo(clamp01(point.x) * params.width + 0.1, clamp01(point.y) * params.height);
-      }
-    }
     ctx.stroke();
   }
   if (params.highlight) {

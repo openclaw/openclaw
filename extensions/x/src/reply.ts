@@ -1,14 +1,16 @@
-import { LinkifyIt } from "linkify-it";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import tlds from "tlds" with { type: "json" };
-import type { XApiClient, XAssertActive } from "./api.js";
-import { normalizeXReplyTarget } from "./target.js";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import type { XApiClient } from "./api.js";
+import type { XAssertActive } from "./fetch.js";
+import type { XMedia } from "./media.js";
+import { findXUrls } from "./urls.js";
 
 const DEFAULT_X_REPLY_SIGNATURE = "🤖 automated reply";
-export type XVisibleWorkSession = { sessionKey: string; url: string; label?: string };
+export type XVisibleWorkSession = Parameters<
+  NonNullable<GetReplyOptions["onVisibleWorkSessions"]>
+>[0][number];
 const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
 const emojiSequence = new RegExp("^\\p{RGI_Emoji}$", "v");
-const links = new LinkifyIt({ fuzzyLink: true, tlds });
 
 function characterWeight(value: string): number {
   // Arbitrary ZWJ runs are graphemes too, but only standardized emoji collapse to weight two.
@@ -40,10 +42,7 @@ function weightedTokens(text: string): { text: string; weight: number }[] {
       })),
     );
   };
-  for (const match of links.match(text) ?? []) {
-    if (match.schema && !["http:", "https:", "//"].includes(match.schema)) {
-      continue;
-    }
+  for (const match of findXUrls(text)) {
     appendText(text.slice(offset, match.index));
     tokens.push({ text: match.raw, weight: 23 });
     offset = match.lastIndex;
@@ -57,18 +56,27 @@ function xWeightedLength(text: string): number {
 }
 
 function appendVisibleWorkSession(text: string, sessions: XVisibleWorkSession[] = []): string {
-  const url = sessions[0]?.url;
-  return url && !text.includes(url) ? `${text.trimEnd()}\n${url}` : text;
+  const session = sessions[0];
+  const url = session?.url;
+  const prefix = session?.publicRead === true ? "" : "Work session (sign-in required): ";
+  return url && !text.includes(url) ? `${text.trimEnd()}\n${prefix}${url}` : text;
 }
 
-function chunkXReply(text: string, signature = DEFAULT_X_REPLY_SIGNATURE): string[] {
+function chunkXReply(
+  text: string,
+  signature = DEFAULT_X_REPLY_SIGNATURE,
+  hasMedia = false,
+): string[] {
   const normalized = text.normalize("NFC").trim();
   const suffix = signature.normalize("NFC").trim();
-  if (!normalized) {
-    throw new Error("X replies require nonempty text");
+  if (!normalized && !hasMedia) {
+    throw new Error("X replies require text or an attachment");
   }
   if (xWeightedLength(suffix) > 280) {
     throw new Error("X replySignature exceeds 280 weighted characters");
+  }
+  if (!normalized) {
+    return [suffix];
   }
   const tokens = weightedTokens(normalized);
   const chunks: string[] = [];
@@ -132,24 +140,19 @@ export class XPartialReplyError extends Error {
 export async function sendXReply(options: {
   api: XApiClient;
   text: string;
+  media?: readonly XMedia[];
   replyToId: string;
   signature?: string;
   visibleWorkSessions?: XVisibleWorkSession[];
   signal?: AbortSignal;
   assertActive?: XAssertActive;
 }): Promise<{ postIds: string[]; text: string }> {
-  const replyToId = normalizeXReplyTarget(options.replyToId);
-  if (!replyToId) {
-    throw new PlatformMessageNotDispatchedError(
-      "X target must be x:<postId> or an https://x.com/<handle>/status/<postId> URL",
-      { cause: undefined, retryable: false },
-    );
-  }
   let chunks: string[];
   try {
     chunks = chunkXReply(
       appendVisibleWorkSession(options.text, options.visibleWorkSessions),
       options.signature,
+      Boolean(options.media?.length),
     );
   } catch (cause) {
     throw new PlatformMessageNotDispatchedError(
@@ -158,6 +161,18 @@ export async function sendXReply(options: {
     );
   }
   const postIds: string[] = [];
+  const mediaIds: string[] = [];
+  // Failed uploads must never degrade to a caption-only post. Unattached uploads
+  // expire at X; retrying preparation cannot duplicate a visible reply.
+  for (const media of options.media ?? []) {
+    mediaIds.push(
+      await options.api.uploadMedia({
+        ...media,
+        signal: options.signal,
+        assertActive: options.assertActive,
+      }),
+    );
+  }
   try {
     for (const text of chunks) {
       if (options.signal?.aborted) {
@@ -168,7 +183,8 @@ export async function sendXReply(options: {
       }
       const id = await options.api.reply({
         text,
-        inReplyToId: postIds.at(-1) ?? replyToId,
+        ...(postIds.length === 0 && mediaIds.length ? { mediaIds } : {}),
+        inReplyToId: postIds.at(-1) ?? options.replyToId,
         signal: options.signal,
         assertActive: options.assertActive,
       });

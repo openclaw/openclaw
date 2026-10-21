@@ -14,9 +14,7 @@ import {
 } from "./app-server/managed-binary.js";
 
 export type CodexDoctorStartOptionsDependencies = {
-  resolveAgentStartOptions?: typeof resolveCodexAppServerStartOptionsForAgent;
   resolveStartOptions?: typeof resolveManagedCodexAppServerStartOptions;
-  isDesktopCommand?: typeof isManagedCodexDesktopCommand;
 };
 
 /** Selects the same local agent or passive-catalog command for both Doctor probes. */
@@ -29,7 +27,7 @@ export async function resolveCodexDoctorStartOptions(params: {
 }): Promise<
   { status: "selected"; start: CodexAppServerStartOptions } | { status: "skipped"; reason: string }
 > {
-  const pluginConfig = params.cfg.plugins?.entries?.codex?.config;
+  const pluginConfig = readCodexPluginConfig(params.cfg.plugins?.entries?.codex?.config);
   const start = resolveCodexAppServerRuntimeOptions({ pluginConfig, env: params.env }).start;
   if (start.transport !== "stdio") {
     return { status: "skipped", reason: "Codex uses a remote app-server transport." };
@@ -37,11 +35,8 @@ export async function resolveCodexDoctorStartOptions(params: {
   if (params.managedOnly && start.commandSource !== "managed") {
     return { status: "skipped", reason: "Codex uses a custom app-server command." };
   }
-  const resolveAgentStartOptions =
-    params.deps?.resolveAgentStartOptions ?? resolveCodexAppServerStartOptionsForAgent;
   const resolveStartOptions =
     params.deps?.resolveStartOptions ?? resolveManagedCodexAppServerStartOptions;
-  const isDesktopCommand = params.deps?.isDesktopCommand ?? isManagedCodexDesktopCommand;
   const candidates: CodexAppServerStartOptions[] = [];
   for (const agentId of listAgentIds(params.cfg)) {
     const model = resolveDefaultModelForAgent({ cfg: params.cfg, agentId });
@@ -56,7 +51,7 @@ export async function resolveCodexDoctorStartOptions(params: {
       continue;
     }
     candidates.push(
-      resolveAgentStartOptions({
+      resolveCodexAppServerStartOptionsForAgent({
         startOptions: start,
         agentDir: resolveAgentDir(params.cfg, agentId, params.env),
         env: params.env,
@@ -65,14 +60,19 @@ export async function resolveCodexDoctorStartOptions(params: {
   }
   if (
     params.cfg.plugins?.entries?.codex?.enabled === true &&
-    readCodexPluginConfig(pluginConfig).sessionCatalog?.enabled !== false
+    pluginConfig.sessionCatalog?.enabled !== false
   ) {
     // Passive catalogs use the package even when no agent routes turns through Codex.
     candidates.push({ ...start, managedCommandOrder: "package-only" });
   }
   for (const candidate of candidates) {
-    const resolved = await resolveStartOptions(candidate, { pluginRoot: params.pluginRoot });
-    if (!isDesktopCommand(resolved.command)) {
+    // Doctor verifies the shipped package every install falls back to, never a
+    // user-installed Codex, so update checks stay independent of PATH.
+    const resolved = await resolveStartOptions(candidate, {
+      pluginRoot: params.pluginRoot,
+      preferInstalled: false,
+    });
+    if (!isManagedCodexDesktopCommand(resolved.command)) {
       return { status: "selected", start: resolved };
     }
   }

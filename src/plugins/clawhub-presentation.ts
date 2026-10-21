@@ -20,6 +20,8 @@ function resolveClawHubPluginUrl(params: { baseUrl?: string; packageName: string
   return `${resolveClawHubBaseUrl(params.baseUrl)}/plugins/${encodeClawHubPackagePath(params.packageName)}`;
 }
 
+export { formatClawHubReleaseLabel };
+
 export function logClawHubPackageSummary(params: {
   detail: ClawHubPackageDetail;
   version: string;

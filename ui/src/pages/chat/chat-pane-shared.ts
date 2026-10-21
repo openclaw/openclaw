@@ -2,6 +2,8 @@ import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-co
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { capturePlacementStartupConnection } from "../../app/session-placement-startup.ts";
+import { menuOwnsShortcut } from "../../components/menu-shortcuts.ts";
+import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
@@ -98,14 +100,9 @@ export function clearPaneSessionHandoff(
 
 export function clearPaneSessionHandoffs(context: ApplicationContext, paneId: string): void {
   const byPane = paneSessionHandoffs.get(context);
-  if (!byPane) {
+  if (!byPane?.delete(paneId)) {
     return;
   }
-  const pending = byPane.get(paneId);
-  if (!pending) {
-    return;
-  }
-  byPane.delete(paneId);
   if (byPane.size === 0) {
     paneSessionHandoffs.delete(context);
   }
@@ -126,8 +123,6 @@ export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
 // the same distance out. Splitting them re-creates the wall at the smaller value.
 export const CHAT_HISTORY_PREFETCH_EDGE_PX = 1200;
 export const CHAT_HISTORY_INTENT_IDLE_MS = 200;
-export const CHAT_HISTORY_TOUCH_INTENT_PX = 8;
-export const CHAT_HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
 
 export function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
   const record = catalogRawRecord(raw);
@@ -144,12 +139,8 @@ export function catalogRawString(raw: unknown, keys: readonly string[]): string 
 }
 export function catalogRawResult(raw: unknown): string | null {
   const result = catalogRawRecord(raw)?.result;
-  if (result === undefined) {
-    return null;
-  }
   try {
-    const text = JSON.stringify(result);
-    return text || null;
+    return JSON.stringify(result) || null;
   } catch {
     return null;
   }
@@ -163,9 +154,6 @@ export type ChatPaneConnectionScope = {
   headerOutcomeOwner: string;
   sessions: ApplicationContext["sessions"];
 };
-const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
-export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 // Menus without typeahead own activation/navigation, not printable input.
 // Keeping those key classes separate prevents an open menu from silently dropping a letter.
 const CHAT_PRINTABLE_KEY_TARGET_SELECTOR =
@@ -181,17 +169,6 @@ const CHAT_DROPDOWN_KEYS = new Set([
   "ArrowUp",
   "Escape",
 ]);
-
-// Shortcut menus own only advertised, enabled keys; every other printable key
-// can still transfer to the composer through the normal browser input pipeline.
-function keyboardShortcutTargetOwnsKey(target: HTMLElement, key: string): boolean {
-  return (
-    /^[a-z0-9]$/iu.test(key) &&
-    target.matches("wa-dropdown, [data-chat-autotype-shortcuts][open]") &&
-    target.querySelector(`[data-shortcut="${key.toLowerCase()}"]:not([disabled])`) !== null
-  );
-}
-
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
 export const NEW_SESSION_LIST_LOADING_MESSAGE =
@@ -205,41 +182,32 @@ function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
     .some(
       (target) =>
         target instanceof HTMLElement &&
-        (target.matches(CHAT_PRINTABLE_KEY_TARGET_SELECTOR) ||
-          keyboardShortcutTargetOwnsKey(target, event.key) ||
+        (target.matches("dialog[open], [aria-modal='true']") ||
+          target.matches(CHAT_PRINTABLE_KEY_TARGET_SELECTOR) ||
+          menuOwnsShortcut(target, event.key) ||
           (event.key === " " && target.matches(CHAT_SPACE_ACTIVATION_SELECTOR))),
     );
 }
 
-function openDropdownOwnsKey(root: ParentNode, key: string): boolean {
-  const surface = root instanceof Element ? (root.closest("openclaw-app") ?? root) : root;
-  return [...surface.querySelectorAll<HTMLElement & { open?: boolean }>("wa-dropdown")].some(
-    (dropdown) =>
-      dropdown.open === true &&
-      !dropdown.closest("[inert]") &&
-      (CHAT_DROPDOWN_KEYS.has(key) || keyboardShortcutTargetOwnsKey(dropdown, key)),
+function openDropdownOwnsKey(root: HTMLElement, key: string): boolean {
+  // Portaled menus can belong to any surface in the containing app.
+  const surface = root.closest("openclaw-app, openclaw-app-shell") ?? root;
+  return [...registryFor(root.ownerDocument).members.keys()].some(
+    (overlay) =>
+      surface.contains(overlay.surface) &&
+      overlay.open &&
+      overlay.surface.matches('[role="menu"][popover]') &&
+      !overlay.surface.closest("[inert]") &&
+      (CHAT_DROPDOWN_KEYS.has(key) || menuOwnsShortcut(overlay.surface, key)),
   );
 }
 
-/** Close this pane's disclosures, except those containing the current pointer event. */
-export function closeChatPaneDetails(
-  root: ParentNode,
-  retainedPath: readonly EventTarget[] = [],
-): boolean {
-  let changed = false;
-  root.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR).forEach((details) => {
-    if (!retainedPath.includes(details)) {
-      details.open = false;
-      changed = true;
-    }
-  });
-  return changed;
-}
-
 export function focusChatComposerFromPrintableKeydown(
-  root: ParentNode,
+  root: HTMLElement,
   event: KeyboardEvent,
+  composer: HTMLTextAreaElement | null,
 ): void {
+  // Native callers cross modal and composer renderer boundaries to transfer keyboard ownership.
   if (
     event.defaultPrevented ||
     event.isComposing ||
@@ -249,12 +217,11 @@ export function focusChatComposerFromPrintableKeydown(
     openDropdownOwnsKey(root, event.key) ||
     event.key.length !== 1 ||
     keyboardEventPathHasInteractiveTarget(event) ||
-    document.openClawModalLayers?.size ||
-    document.querySelector("dialog[open], [aria-modal='true']")
+    root.closest("[inert]") ||
+    hasModalSurface(root.ownerDocument)
   ) {
     return;
   }
-  const composer = root.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
   if (!composer || composer.disabled || composer.readOnly) {
     return;
   }

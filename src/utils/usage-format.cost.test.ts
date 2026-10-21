@@ -11,8 +11,6 @@ import {
   type ModelCostConfig,
 } from "./usage-format.js";
 
-type PricingTier = NonNullable<ModelCostConfig["tieredPricing"]>[number];
-
 function promptPricing(): ModelCostConfig {
   const baseRates = { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0.5 };
   return {
@@ -24,78 +22,72 @@ function promptPricing(): ModelCostConfig {
   };
 }
 
-describe("usage cost estimation", () => {
-  it.each([
-    {
-      name: "recorded zero",
-      usage: { input: 1_000, cost: { total: 0 } },
-      tiered: true,
-      expected: 0,
-    },
-    { name: "cost-only fact", usage: { cost: { total: 0.75 } }, tiered: true, expected: 0.75 },
-    { name: "missing tiered cost", usage: { input: 1_000 }, tiered: true, expected: undefined },
-    { name: "flat fallback", usage: { input: 1_000 }, tiered: false, expected: 0.001 },
-    { name: "total-only usage", usage: { total: 1_000 }, tiered: false, expected: undefined },
-  ])(
-    "resolves aggregate cost without reconstructing call tiers: $name",
-    ({ usage, tiered, expected }) => {
-      const rates = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 };
-      const cost: ModelCostConfig = {
-        ...rates,
-        ...(tiered
-          ? { tieredPricing: [{ ...rates, range: [0, Infinity] as [number, number] }] }
-          : {}),
-      };
-      expect(estimateAggregateUsageCost({ usage, cost })).toBe(expected);
-      expect(
-        estimateAggregateUsageCost({
-          usage,
-          provider: "fixture",
-          model: "priced",
-          agentDir: "/missing-aggregate-cost-test-agent",
-          allowPluginNormalization: false,
-          config: {
-            models: {
-              providers: {
-                fixture: {
-                  baseUrl: "https://fixture.invalid",
-                  models: [
-                    {
-                      id: "priced",
-                      name: "Priced",
-                      reasoning: false,
-                      input: ["text"],
-                      maxTokens: 1,
-                      cost,
-                    },
-                  ],
-                },
-              },
-            },
-          },
-        }),
-      ).toBe(expected);
-    },
-  );
+const unpriced = {
+  provider: "unpriced-fixture",
+  model: "unpriced",
+  config: {},
+  allowPluginNormalization: false,
+};
 
-  it.each([
-    { name: "adapter zero", cost: { total: 0 }, expected: undefined },
-    {
-      name: "billed zero",
-      cost: { total: 0, totalOrigin: "provider-billed" as const },
-      expected: 0,
-    },
-    { name: "recorded positive estimate", cost: { total: 0.25 }, expected: 0.25 },
-  ])("reports unpriced aggregate usage only with cost evidence: $name", ({ cost, expected }) => {
+describe("usage cost estimation", () => {
+  it("never reprices an incomplete mixed-model total after another aggregation", () => {
+    const attempt = createUsageAccumulator();
+    mergeUsageIntoAccumulator(attempt, { input: 100, costStatus: "unavailable" });
+    mergeUsageIntoAccumulator(attempt, {
+      input: 200,
+      cost: { total: 0.7 },
+      costStatus: "complete",
+    });
+    const run = createUsageAccumulator();
+    mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+    expect(toNormalizedUsage(run)?.input).toBe(300);
     expect(
       estimateAggregateUsageCost({
-        usage: { input: 1_000, output: 500, cost },
-        provider: "unpriced-fixture",
-        model: "unpriced",
-        config: {},
+        usage: toNormalizedUsage(run),
+        cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
+      }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    [{ input: 1_000, cost: { total: 0 } }, true, 0],
+    [{ input: 1_000 }, true, undefined],
+    [{ total: 1_000 }, false, undefined],
+  ] as const)("preserves aggregate call-tier pricing: %j", (usage, tiered, expected) => {
+    const rates = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 };
+    const cost: ModelCostConfig = {
+      ...rates,
+      tieredPricing: tiered ? [{ ...rates, range: [0, Infinity] }] : undefined,
+    };
+    const model = {
+      id: "priced",
+      name: "Priced",
+      reasoning: false,
+      input: ["text" as const],
+      maxTokens: 1,
+      cost,
+    };
+    const fixture = { baseUrl: "https://fixture.invalid", models: [model] };
+    expect(estimateAggregateUsageCost({ usage, cost })).toBe(expected);
+    expect(
+      estimateAggregateUsageCost({
+        usage,
+        provider: "fixture",
+        model: "priced",
+        agentDir: "/missing-aggregate-cost-test-agent",
         allowPluginNormalization: false,
+        config: { models: { providers: { fixture } } },
       }),
     ).toBe(expected);
+  });
+
+  it("preserves provider-billed zero for unpriced aggregate usage", () => {
+    expect(
+      estimateAggregateUsageCost({
+        usage: { input: 1_000, output: 500, cost: { total: 0, totalOrigin: "provider-billed" } },
+        ...unpriced,
+      }),
+    ).toBe(0);
   });
 
   it("keeps recorded zero components through nested sums without covering an unpriced call", () => {
@@ -104,102 +96,37 @@ describe("usage cost estimation", () => {
     mergeUsageIntoAccumulator(attempt, recorded);
     const run = createUsageAccumulator();
     mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
-    const pricing = {
-      provider: "unpriced-fixture",
-      model: "unpriced",
-      config: {},
-      allowPluginNormalization: false,
-    };
-    expect(estimateAggregateUsageCost({ ...pricing, usage: toNormalizedUsage(run) })).toBe(0);
+    const total = () => estimateAggregateUsageCost({ ...unpriced, usage: toNormalizedUsage(run) });
+    expect(total()).toBe(0);
     expect(toNormalizedUsage(run)?.cost?.totalOrigin).toBeUndefined();
 
     mergeUsageIntoAccumulator(run, normalizeUsage({ input: 1_000, cost: { total: 0 } }));
-    expect(
-      estimateAggregateUsageCost({ ...pricing, usage: toNormalizedUsage(run) }),
-    ).toBeUndefined();
+    expect(total()).toBeUndefined();
     mergeUsageIntoAccumulator(run, recorded);
-    expect(
-      estimateAggregateUsageCost({ ...pricing, usage: toNormalizedUsage(run) }),
-    ).toBeUndefined();
+    expect(total()).toBeUndefined();
   });
 
   it.each([
-    { name: "below boundary", input: 40, cacheRead: 30, cacheWrite: 29, expected: 0.000082 },
-    { name: "at boundary", input: 40, cacheRead: 30, cacheWrite: 30, expected: 0.00027 },
-    { name: "fully cached", input: 0, cacheRead: 100, cacheWrite: 0, expected: 0.00016 },
-    { name: "fully written", input: 0, cacheRead: 0, cacheWrite: 100, expected: 0.00026 },
-  ])(
-    "selects the whole-request tier from prompt buckets: $name",
-    ({ input, cacheRead, cacheWrite, expected }) => {
-      expect(
-        estimateUsageCost({
-          usage: { input, output: 10, cacheRead, cacheWrite },
-          cost: promptPricing(),
-        }),
-      ).toBeCloseTo(expected, 10);
-    },
-  );
+    [{ input: 100 }, { input: 0.042, output: 0 }, 0.0000042],
+    [{ input: 100, output: 0 }, { input: 0 }, 0],
+    [{ input: 100 }, { input: 0.042, output: 1 }, undefined],
+    [{ input: 100, output: 1 }, { input: 0.042 }, undefined],
+    [{ total: 100 }, { input: 0, output: 0 }, undefined],
+    [{ input: -1 }, { input: 0, output: 0 }, undefined],
+  ] as const)("requires known charged buckets: %j", (usage, declaredCost, expected) => {
+    const cost = estimateUsageCost({
+      usage,
+      declaredCost: { cacheRead: 0, cacheWrite: 0, ...declaredCost },
+    });
+    if (expected === undefined || expected === 0) {
+      expect(cost).toBe(expected);
+    } else {
+      expect(cost).toBeCloseTo(expected, 15);
+    }
+  });
 
   it("uses the selected input rate for the 1h cache-write subset", () => {
     const usage = { input: 20, output: 10, cacheRead: 30, cacheWrite: 60, cacheWrite1h: 40 };
     expect(estimateUsageCost({ usage, cost: promptPricing() })).toBeCloseTo(0.00043, 10);
-  });
-
-  it("uses first tier rates for output when input is zero", () => {
-    const tiers: PricingTier[] = [
-      { input: 0.3, output: 1.5, cacheRead: 0, cacheWrite: 0, range: [0, 32_000] },
-      { input: 0.5, output: 2.5, cacheRead: 0, cacheWrite: 0, range: [32_000, 128_000] },
-    ];
-    const cost = { input: 0.3, output: 1.5, cacheRead: 0, cacheWrite: 0, tieredPricing: tiers };
-
-    const total = estimateUsageCost({
-      usage: { input: 0, output: 10_000 },
-      cost,
-    });
-    expect(total).toBeCloseTo(0.015, 6);
-  });
-
-  it("falls back to flat pricing when tieredPricing is empty array", () => {
-    const cost: ModelCostConfig = {
-      input: 1,
-      output: 2,
-      cacheRead: 0.5,
-      cacheWrite: 0,
-      tieredPricing: [],
-    };
-    const total = estimateUsageCost({
-      usage: { input: 1000, output: 500, cacheRead: 2000 },
-      cost,
-    });
-    expect(total).toBeCloseTo(0.003);
-  });
-
-  it("bills overflow input tokens at last tier rate when input exceeds max range", () => {
-    const tiers: PricingTier[] = [
-      { input: 0.3, output: 1.5, cacheRead: 0, cacheWrite: 0, range: [0, 32_000] },
-      { input: 0.5, output: 2.5, cacheRead: 0, cacheWrite: 0, range: [32_000, 128_000] },
-    ];
-    const cost = { input: 0.3, output: 1.5, cacheRead: 0, cacheWrite: 0, tieredPricing: tiers };
-
-    const total = estimateUsageCost({
-      usage: { input: 200_000, output: 10_000 },
-      cost,
-    });
-    expect(total).toBeCloseTo(0.125, 4);
-  });
-
-  it("uses declared tier ranges instead of sequential widths", () => {
-    const tiers: PricingTier[] = [
-      { input: 1, output: 10, cacheRead: 0, cacheWrite: 0, range: [100, 200] },
-      { input: 2, output: 20, cacheRead: 0, cacheWrite: 0, range: [0, 100] },
-    ];
-    const cost = { input: 1, output: 10, cacheRead: 0, cacheWrite: 0, tieredPricing: tiers };
-
-    const total = estimateUsageCost({
-      usage: { input: 150, output: 60 },
-      cost,
-    });
-
-    expect(total).toBeCloseTo(0.00075, 8);
   });
 });

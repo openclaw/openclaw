@@ -1,4 +1,5 @@
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type {
@@ -9,42 +10,21 @@ import type {
 
 type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
 
-type PluginCommandSessionTarget = {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-};
-
-export type PluginCommandDiagnosticsSession = {
-  /** Stable host session key when available. */
-  sessionKey?: string;
-  /** Ephemeral OpenClaw session id when available. */
-  sessionId?: string;
-  /** Canonical SQLite identity for active transcript access. */
-  sessionTarget?: PluginCommandSessionTarget;
-  /**
-   * Deprecated transcript locator for this OpenClaw session when available.
-   *
-   * SQLite-backed sessions use a `sqlite:<agentId>:<sessionId>:<storePath>`
-   * marker, not a filesystem path. Use session id/key plus transcript-runtime
-   * helpers for active transcript reads.
-   *
-   * @deprecated Use session identity fields with `plugin-sdk/session-transcript-runtime`.
-   */
-  sessionFile?: string;
+export type PluginCommandDiagnosticsSession = Pick<
+  PluginCommandContext,
+  | "sessionKey"
+  | "sessionId"
+  | "sessionTarget"
+  | "sessionFile"
+  | "channelId"
+  | "accountId"
+  | "messageThreadId"
+  | "threadParentId"
+> & {
   /** Embedded agent harness selected for this session. */
   agentHarnessId?: string;
   /** Channel/provider for this session when available. */
   channel?: string;
-  /** Provider channel id when available. */
-  channelId?: ChannelId;
-  /** Account id for multi-account channels when available. */
-  accountId?: string;
-  /** Thread/topic id when available. */
-  messageThreadId?: string | number;
-  /** Parent conversation id for thread-capable channels when available. */
-  threadParentId?: string;
 };
 
 export type PluginCommandContext = {
@@ -69,7 +49,7 @@ export type PluginCommandContext = {
   /** Ephemeral host session id for the active conversation when available. */
   sessionId?: string;
   /** Canonical SQLite identity for active transcript access. */
-  sessionTarget?: PluginCommandSessionTarget;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   /**
    * Deprecated transcript locator for the active OpenClaw session when available.
    *

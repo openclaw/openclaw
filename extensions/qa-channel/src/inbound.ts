@@ -1,9 +1,9 @@
+import { isDeepStrictEqual } from "node:util";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   buildChannelInboundEventContext,
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   formatInboundMediaUnavailableText,
-  resolveChannelInboundRouteEnvelope,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
@@ -14,7 +14,7 @@ import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import {
   buildQaTarget,
@@ -129,33 +129,6 @@ function formatQaErrorForLog(error: unknown): string {
   return escaped;
 }
 
-function normalizeQaToolCallSnapshotValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(normalizeQaToolCallSnapshotValue);
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-        .map(([key, entry]) => [key, normalizeQaToolCallSnapshotValue(entry)]),
-    );
-  }
-  return value;
-}
-
-function serializeQaToolCallSnapshot(toolCalls: QaBusToolCall[]): string {
-  // Call order is chronological trace data; nested argument keys are the
-  // unordered surface that must be canonicalized before comparison.
-  return JSON.stringify(
-    toolCalls.map((toolCall) => ({
-      name: toolCall.name,
-      ...(toolCall.arguments
-        ? { arguments: normalizeQaToolCallSnapshotValue(toolCall.arguments) }
-        : {}),
-    })),
-  );
-}
-
 function createQaReplyPreview(params: {
   config: CoreConfig;
   account: ResolvedQaChannelAccount;
@@ -168,7 +141,7 @@ function createQaReplyPreview(params: {
   let currentText = "";
   let previewStopped = false;
   let lastDurableText = "";
-  let lastDurableToolCallSnapshot = "[]";
+  let lastDurableToolCalls: QaBusToolCall[] = [];
   // Partials run concurrently with delivery callbacks. Keep edits, deletion,
   // and durable delivery in one queue without poisoning it after an error.
   const withPreviewLock = createAsyncLock();
@@ -221,7 +194,6 @@ function createQaReplyPreview(params: {
     // Media loading can yield while new tools start. Record only the trace that
     // accompanies this successful durable send, never later or failed work.
     const toolCalls = [...params.toolCalls];
-    const toolCallSnapshot = serializeQaToolCallSnapshot(toolCalls);
     const message = {
       cfg: params.config,
       accountId: params.account.accountId,
@@ -242,7 +214,7 @@ function createQaReplyPreview(params: {
       await sendQaChannelText(message);
     }
     lastDurableText = text;
-    lastDurableToolCallSnapshot = toolCallSnapshot;
+    lastDurableToolCalls = toolCalls;
   };
 
   return {
@@ -269,10 +241,8 @@ function createQaReplyPreview(params: {
         if (
           kind === "final" &&
           text === lastDurableText &&
-          serializeQaToolCallSnapshot(params.toolCalls) === lastDurableToolCallSnapshot
+          isDeepStrictEqual(params.toolCalls, lastDurableToolCalls)
         ) {
-          // Count equality is not record equality: a same-count final with changed
-          // tool records must still be delivered.
           await clear();
           return;
         }
@@ -282,7 +252,7 @@ function createQaReplyPreview(params: {
           messageId = null;
           currentText = "";
           lastDurableText = text;
-          lastDurableToolCallSnapshot = "[]";
+          lastDurableToolCalls = [];
           return;
         }
         await clear();
@@ -314,7 +284,7 @@ export async function handleQaInbound(params: {
     conversationId: inbound.conversation.id,
   });
   const toolCalls: QaBusToolCall[] = [];
-  const { route } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg: params.config,
     channel: params.channelId,
     accountId: params.account.accountId,
@@ -337,7 +307,7 @@ export async function handleQaInbound(params: {
     threadId: inbound.threadId,
     parentSessionKey: isGroup ? route.sessionKey : undefined,
   });
-  const buildEnvelope = createChannelInboundEnvelopeBuilder({
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({
     cfg: params.config,
     route: { agentId: route.agentId, sessionKey: threadKeys.sessionKey },
   });

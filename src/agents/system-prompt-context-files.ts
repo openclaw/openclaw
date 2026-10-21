@@ -75,22 +75,17 @@ export function buildProjectContextSection(files: ReturnType<typeof prepareConte
     return [];
   }
   const lines = ["# Project Context", ""];
-  const hasSoulFile = files.some((file) => file.basename === "soul.md");
-  const hasMemoryFile = files.some((file) => file.basename === "memory.md");
-  const hasUserFile = files.some((file) => file.basename === "user.md");
   lines.push("Loaded project context:");
-  if (hasSoulFile) {
-    lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
-  }
-  if (hasMemoryFile) {
-    lines.push(
+  for (const [basename, guidance] of Object.entries({
+    "soul.md": "SOUL.md: persona/tone. Follow it unless higher-priority instructions override.",
+    "memory.md":
       "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
-    );
-  }
-  if (hasUserFile) {
-    lines.push(
+    "user.md":
       "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
-    );
+  })) {
+    if (files.some((file) => file.basename === basename)) {
+      lines.push(guidance);
+    }
   }
   if (files.some(({ file }) => file.personalUser)) {
     lines.push(PERSONAL_USER_CONTEXT_INSTRUCTIONS);

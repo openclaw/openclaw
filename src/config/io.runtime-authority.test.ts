@@ -1,245 +1,160 @@
-// Exercises the real update owner across successful config runtime finalization.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  releaseUpdateCommandPreflightForHandoff,
-  withUpdateCommandExecutor,
-} from "../cli/update-cli/update-command-executor.js";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
-} from "../infra/update-managed-service-handoff-database.js";
-import {
-  activateSecretsRuntimeSnapshot,
+  activateSecretsRuntimeSnapshot as activateSecrets,
   clearSecretsRuntimeSnapshot,
-  prepareSecretsRuntimeSnapshot,
-  preflightActiveSecretsRuntimeSnapshotRefresh,
-  refreshActiveSecretsRuntimeSnapshotForConfig,
+  prepareSecretsRuntimeSnapshot as prepareSecrets,
+  preflightActiveSecretsRuntimeSnapshotRefresh as preflightSecrets,
+  refreshActiveSecretsRuntimeSnapshotForConfig as refreshSecrets,
 } from "../secrets/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import * as configFactory from "./io.factory.js";
+import { withExecutor } from "./config-executor.test-support.js";
+import * as factory from "./io.factory.js";
 import { writeConfigFile } from "./io.runtime.js";
 import {
   clearRuntimeConfigSnapshot,
-  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot as getRuntime,
   registerRuntimeConfigWriteListener,
-  registerManagedRuntimeConfigWriteOwner,
+  registerManagedRuntimeConfigWriteOwner as manageWrites,
   setRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshotRefreshHandler,
+  setRuntimeConfigSnapshotRefreshHandler as setRefreshHandler,
 } from "./runtime-snapshot.js";
 import { withTempHome } from "./test-helpers.js";
-import { withConfigWriteLock } from "./write-lock.js";
-
-async function withExecutor(
-  home: string,
-  consume: (assertCurrent: () => void, revoke: () => void) => Promise<void>,
-) {
-  const root = path.join(await fs.realpath(home), "package");
-  await fs.mkdir(root);
-  const databasePath = path.join(home, "control", "managed-update-handoffs.sqlite");
-  createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
-  await withUpdateCommandExecutor(
-    "config-finalization-fence",
-    async (executor) => {
-      const fence = await executor.enter(root, { preflight: true });
-      await consume(fence.assertCurrent, () => releaseUpdateCommandPreflightForHandoff(fence));
-    },
-    {
-      existingAuthority: {
-        ...captureManagedUpdateLeaseDatabaseIdentity(databasePath),
-        installKey: root,
-      },
-    },
-  );
-}
+import { withConfigWriteLock as withWriteLock } from "./write-lock.js";
 
 const oldConfig = { gateway: { mode: "local" as const, port: 18789 } };
 const nextConfig = { gateway: { mode: "local" as const, port: 19001 } };
-
-describe("runtime finalization retains original authority", () => {
-  const roots = createSuiteTempRootTracker({ prefix: "config-authority-coordinator-" });
-  beforeAll(async () => await roots.setup());
-  beforeEach(async () => {
-    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
-      await roots.make("coordinator"),
-    );
-  });
-  afterAll(async () => await roots.cleanup());
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    clearSecretsRuntimeSnapshot();
-    setRuntimeConfigSnapshotRefreshHandler(null);
-    clearRuntimeConfigSnapshot();
-    closeOpenClawStateDatabaseForTest();
-  });
-
-  it.each(
-    [
-      { authority: "explicit", boundary: "canonical" },
-      { authority: "explicit", boundary: "refresh" },
-      { authority: "explicit", boundary: "deferred" },
-      { authority: "explicit", boundary: "secrets" },
-      { authority: "ambient", boundary: "canonical" },
-    ].flatMap(({ authority, boundary }) =>
-      [false, true].map((revoke) => ({ authority, boundary, revoke })),
-    ),
-  )(
-    "$authority write across $boundary (revoke=$revoke)",
-    async ({ authority, boundary, revoke }) => {
-      await withTempHome(async (home) =>
-        withExecutor(home, async (assertCurrent, revokeExecutor) => {
-          const configPath = path.join(home, ".openclaw", "openclaw.json");
-          await fs.mkdir(path.dirname(configPath), { recursive: true });
-          await fs.writeFile(configPath, `${JSON.stringify(oldConfig)}\n`);
-          const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
-          const io = configFactory.createConfigIO({
-            env,
-            observe: false,
-            pluginValidation: "skip",
-          });
-          const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
-          setRuntimeConfigSnapshot(snapshot.config, snapshot.sourceConfig);
-          let reachedBoundary = 0;
-          const atBoundary = () => {
-            reachedBoundary++;
-            if (revoke) {
-              revokeExecutor();
-            }
-          };
-          const clearOnFailure = vi.fn();
-          const releaseManagedOwner =
-            boundary === "deferred" ? registerManagedRuntimeConfigWriteOwner(configPath) : () => {};
-          if (boundary === "canonical" || boundary === "deferred") {
-            const createIO = configFactory.createConfigIO;
-            vi.spyOn(configFactory, "createConfigIO").mockImplementation((options) => {
-              const realIO = createIO(options);
-              return {
-                ...realIO,
-                readConfigFileSnapshotForWrite: async (readOptions) => {
-                  const actual = await realIO.readConfigFileSnapshotForWrite(readOptions);
-                  atBoundary();
-                  return actual;
-                },
-              };
-            });
-          } else if (boundary === "secrets") {
-            activateSecretsRuntimeSnapshot(
-              await prepareSecretsRuntimeSnapshot({
-                config: snapshot.config,
-                env: {},
-                includeConfigRefs: false,
-                includeAuthStoreRefs: false,
-                loadablePluginOrigins: new Map(),
-              }),
-            );
-            setRuntimeConfigSnapshotRefreshHandler({
-              refresh: async (params) => {
-                const pending = refreshActiveSecretsRuntimeSnapshotForConfig(params);
-                atBoundary();
-                return await pending;
-              },
-              clearOnRefreshFailure: clearOnFailure,
-            });
-          } else {
-            setRuntimeConfigSnapshotRefreshHandler({
-              refresh: async () => {
-                await Promise.resolve();
-                atBoundary();
-                return false;
-              },
-              clearOnRefreshFailure: clearOnFailure,
-            });
-          }
-          const notified = vi.fn();
-          const unregister = registerRuntimeConfigWriteListener(notified);
-          try {
-            const write = () =>
-              writeConfigFile(nextConfig, {
-                ...writeOptions,
-                baseSnapshot: snapshot,
-                observe: false,
-                skipPluginValidation: true,
-                ...(authority === "explicit" ? { assertCurrent } : {}),
-              });
-            let failure: unknown;
-            try {
-              if (authority === "ambient") {
-                await withConfigWriteLock(configPath, write, env, assertCurrent);
-              } else {
-                await write();
-              }
-            } catch (error) {
-              failure = error;
-            }
-            expect(reachedBoundary).toBe(1);
-            expect(getRuntimeConfigSnapshot()?.gateway?.port).toBe(
-              revoke || boundary === "deferred" ? 18789 : 19001,
-            );
-            expect(notified).toHaveBeenCalledTimes(revoke ? 0 : 1);
-            expect(clearOnFailure).not.toHaveBeenCalled();
-            expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.port).toBe(19001);
-            if (revoke) {
-              expect(failure).toBeInstanceOf(Error);
-              expect(() => assertCurrent()).toThrow();
-            } else {
-              expect(failure).toBeUndefined();
-              assertCurrent();
-            }
-          } finally {
-            unregister();
-            releaseManagedOwner();
-          }
-        }),
-      );
-    },
+async function activate(config: Parameters<typeof prepareSecrets>[0]["config"] = oldConfig) {
+  activateSecrets(
+    await prepareSecrets({
+      config,
+      env: {},
+      includeConfigRefs: false,
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: new Map(),
+    }),
   );
+}
+const roots = createSuiteTempRootTracker({ prefix: "config-authority-coordinator-" });
+beforeAll(async () => await roots.setup());
+beforeEach(async () => {
+  vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+    await roots.make("coordinator"),
+  );
+});
+afterAll(async () => await roots.cleanup());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearSecretsRuntimeSnapshot();
+  setRefreshHandler(null);
+  clearRuntimeConfigSnapshot();
+  closeOpenClawStateDatabaseForTest();
+});
 
-  it.each([false, true].flatMap((cached) => [false, true].map((revoke) => ({ cached, revoke }))))(
-    "real secrets refresh retains owner across preparation (cached=$cached, revoke=$revoke)",
-    async ({ cached, revoke }) => {
-      await withTempHome(async (home) =>
-        withExecutor(home, async (assertCurrent, revokeExecutor) => {
-          const initial = await prepareSecretsRuntimeSnapshot({
-            config: oldConfig,
-            env: {},
-            includeConfigRefs: false,
-            includeAuthStoreRefs: false,
-            loadablePluginOrigins: new Map(),
+it.each(
+  ["canonical", "refresh", "deferred", "secrets"]
+    .map((boundary) => `explicit:${boundary}`)
+    .concat("ambient:canonical", "direct:cached", "direct:uncached")
+    .flatMap((mode) => [false, true].map((revoke) => ({ mode, revoke }))),
+)("$mode retains original authority (revoke=$revoke)", async ({ mode, revoke }) => {
+  await withTempHome((home) =>
+    withExecutor(home, "config-finalization-fence", async (assertCurrent, revokeExecutor) => {
+      const [authority, boundary] = mode.split(":");
+      if (authority === "direct") {
+        await activate();
+        const cached = boundary === "cached";
+        const preflightResult = cached
+          ? await preflightSecrets({ sourceConfig: nextConfig })
+          : undefined;
+        const params = { sourceConfig: nextConfig, preflightResult, assertCurrent };
+        if (revoke && cached) {
+          revokeExecutor();
+        }
+        const pending = refreshSecrets(params);
+        if (revoke && !cached) {
+          // Revoke during preparation, before synchronous compare-and-activate.
+          revokeExecutor();
+        }
+        if (revoke) {
+          await expect(pending).rejects.toBeInstanceOf(Error);
+        } else {
+          await expect(pending).resolves.toBe(true);
+        }
+        expect(getRuntime()?.gateway?.port).toBe(revoke ? 18789 : 19001);
+        return;
+      }
+      const file = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, JSON.stringify(oldConfig) + "\n");
+      const env = { ...process.env, OPENCLAW_CONFIG_PATH: file };
+      const io = factory.createConfigIO({ env, observe: false, pluginValidation: "skip" });
+      const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+      setRuntimeConfigSnapshot(snapshot.config, snapshot.sourceConfig);
+      const atBoundary = vi.fn(revoke ? revokeExecutor : undefined);
+      const clearOnFailure = vi.fn();
+      const releaseOwner = boundary === "deferred" ? manageWrites(file) : () => {};
+      if (boundary === "canonical" || boundary === "deferred") {
+        const createIO = factory.createConfigIO;
+        vi.spyOn(factory, "createConfigIO").mockImplementation((options) => {
+          const realIO = createIO(options);
+          return {
+            ...realIO,
+            readConfigFileSnapshotForWrite: async (readOptions) => {
+              const actual = await realIO.readConfigFileSnapshotForWrite(readOptions);
+              atBoundary();
+              return actual;
+            },
+          };
+        });
+      } else {
+        const secrets = boundary === "secrets";
+        if (secrets) {
+          await activate(snapshot.config);
+        }
+        setRefreshHandler({
+          refresh: async (params) => {
+            const pending = secrets ? refreshSecrets(params) : false;
+            if (!secrets) {
+              await Promise.resolve();
+            }
+            atBoundary();
+            return await pending;
+          },
+          clearOnRefreshFailure: clearOnFailure,
+        });
+      }
+      const notified = vi.fn();
+      const unregister = registerRuntimeConfigWriteListener(notified);
+      try {
+        const write = () =>
+          writeConfigFile(nextConfig, {
+            ...writeOptions,
+            baseSnapshot: snapshot,
+            observe: false,
+            skipPluginValidation: true,
+            ...(authority === "explicit" ? { assertCurrent } : {}),
           });
-          activateSecretsRuntimeSnapshot(initial);
-          const preflightResult = cached
-            ? await preflightActiveSecretsRuntimeSnapshotRefresh({ sourceConfig: nextConfig })
-            : undefined;
-          const params = { sourceConfig: nextConfig, preflightResult, assertCurrent };
-          if (revoke && cached) {
-            revokeExecutor();
-          }
-          const pending = refreshActiveSecretsRuntimeSnapshotForConfig(params);
-          if (revoke && !cached) {
-            // Preparation must await before the synchronous compare-and-activate effect.
-            revokeExecutor();
-          }
-          let failure: unknown;
-          let activated: boolean | undefined;
-          try {
-            activated = await pending;
-          } catch (error) {
-            failure = error;
-          }
-          expect(getRuntimeConfigSnapshot()?.gateway?.port).toBe(revoke ? 18789 : 19001);
-          if (revoke) {
-            expect(failure).toBeInstanceOf(Error);
-            expect(activated).toBeUndefined();
-          } else {
-            expect(failure).toBeUndefined();
-            expect(activated).toBe(true);
-          }
-        }),
-      );
-    },
+        const pending =
+          authority === "ambient" ? withWriteLock(file, write, env, assertCurrent) : write();
+        if (revoke) {
+          await expect(pending).rejects.toBeInstanceOf(Error);
+          expect(assertCurrent).toThrow();
+        } else {
+          await pending;
+          assertCurrent();
+        }
+        expect(atBoundary).toHaveBeenCalledTimes(1);
+        expect(getRuntime()?.gateway?.port).toBe(revoke || boundary === "deferred" ? 18789 : 19001);
+        expect(notified).toHaveBeenCalledTimes(revoke ? 0 : 1);
+        expect(clearOnFailure).not.toHaveBeenCalled();
+        expect(JSON.parse(await fs.readFile(file, "utf8")).gateway.port).toBe(19001);
+      } finally {
+        unregister();
+        releaseOwner();
+      }
+    }),
   );
 });

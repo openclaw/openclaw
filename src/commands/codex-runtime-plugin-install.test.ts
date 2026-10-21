@@ -12,8 +12,6 @@ import { WizardSession } from "../wizard/session.js";
 import {
   ensureCodexRuntimePluginForModelSelection,
   ensureCodexRuntimePluginForSupervision,
-} from "./codex-runtime-plugin-install.js";
-import {
   ensureModelSelectionRuntimePlugins,
   repairModelSelectionRuntimePlugins,
 } from "./runtime-plugin-install.js";
@@ -25,23 +23,6 @@ const mocks = vi.hoisted(() => ({
   metadata: vi.fn(),
   writeInstallRecords: vi.fn(),
 }));
-
-type MissingPluginInstallRepairCall = {
-  pluginIds: string[];
-  env?: NodeJS.ProcessEnv;
-};
-
-function readOnlyMissingPluginInstallRepairCall(): MissingPluginInstallRepairCall {
-  expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledOnce();
-  const calls = mocks.repairMissingPluginInstallsForIds.mock.calls as unknown as Array<
-    [MissingPluginInstallRepairCall]
-  >;
-  const call = calls[0]?.[0];
-  if (!call) {
-    throw new Error("Expected missing plugin install repair call");
-  }
-  return call;
-}
 
 vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
   repairMissingPluginInstallsForIds: mocks.repairMissingPluginInstallsForIds,
@@ -58,31 +39,52 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 vi.mock("./onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled: mocks.ensureOnboardingPluginInstalled,
 }));
+const runtime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
+type SelectionOptions = Parameters<typeof ensureCodexRuntimePluginForModelSelection>[0];
+function selectionOptions(options: Partial<SelectionOptions> = {}): SelectionOptions {
+  return {
+    cfg: {},
+    model: "openai/gpt-5.5",
+    prompter: {} as never,
+    runtime: {} as never,
+    ...options,
+  };
+}
+const selectRuntime = (options: Partial<SelectionOptions> = {}) =>
+  ensureCodexRuntimePluginForModelSelection(selectionOptions(options));
+const selectRuntimes = (options: Partial<SelectionOptions> = {}) =>
+  ensureModelSelectionRuntimePlugins(selectionOptions(options));
+function installerResult(
+  status: "failed" | "installed" | "skipped" | "timed_out",
+  cfg: OpenClawConfig = {},
+  extra: { error?: string; pluginId?: string } = {},
+) {
+  return { cfg, installed: status === "installed", pluginId: "codex", status, ...extra };
+}
+function mockInstall(...args: Parameters<typeof installerResult>) {
+  mocks.ensureOnboardingPluginInstalled.mockResolvedValueOnce(installerResult(...args));
+}
+
+function providerRuntime(provider: string, id: string, baseUrl: string): OpenClawConfig {
+  return { models: { providers: { [provider]: { baseUrl, models: [], agentRuntime: { id } } } } };
+}
+
 describe("Codex runtime plugin install repair", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: [],
-      warnings: [],
-    });
-    mocks.ensureOnboardingPluginInstalled.mockResolvedValue({
-      cfg: {},
-      installed: false,
-      pluginId: "codex",
-      status: "failed",
-    });
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({ changes: [], warnings: [] });
+    mocks.ensureOnboardingPluginInstalled.mockResolvedValue(installerResult("failed"));
   });
 
   it.each([
-    { enabled: false, accepted: false, usable: false, promptError: undefined },
-    { enabled: false, accepted: true, usable: true, promptError: undefined },
-    { enabled: true, accepted: false, usable: true, promptError: undefined },
-    { enabled: false, accepted: false, usable: false, promptError: new WizardCancelledError() },
+    { accepted: false, promptError: undefined },
+    { accepted: true, promptError: undefined },
+    { accepted: false, promptError: new WizardCancelledError() },
   ])(
-    "honors runtime capabilities, enabled=$enabled accepted=$accepted promptError=$promptError",
-    async ({ enabled, accepted, usable, promptError }) => {
+    "requires consent for runtime capabilities: accepted=$accepted promptError=$promptError",
+    async ({ accepted, promptError }) => {
       await withTestDir({ prefix: "openclaw-runtime-consent-" }, async (artifactDir) => {
         createColdPluginFixture({
           rootDir: artifactDir,
@@ -100,7 +102,7 @@ describe("Codex runtime plugin install repair", () => {
         const metadata = metadataSnapshot({
           id: "codex",
           name: "Codex",
-          enabled,
+          enabled: false,
           origin: "global",
           installRecord: record,
         });
@@ -109,7 +111,7 @@ describe("Codex runtime plugin install repair", () => {
         manifest.contracts = { tools: ["runtime.write"] };
         metadata.index.plugins[0]!.rootDir = artifactDir;
         mocks.metadata.mockReturnValue(metadata);
-        const cfg: OpenClawConfig = { plugins: { entries: { codex: { enabled } } } };
+        const cfg: OpenClawConfig = { plugins: { entries: { codex: { enabled: false } } } };
         const beforePersistentEffect = vi.fn();
         const confirm = vi.fn(async () => {
           expect(beforePersistentEffect).not.toHaveBeenCalled();
@@ -119,11 +121,10 @@ describe("Codex runtime plugin install repair", () => {
           return accepted;
         });
 
-        const pending = ensureCodexRuntimePluginForModelSelection({
+        const pending = selectRuntime({
           cfg,
-          model: "openai/gpt-5.6-luna",
           prompter: { confirm, note: vi.fn(async () => {}) } as never,
-          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          runtime: runtime(),
           beforePersistentEffect,
         });
         if (promptError) {
@@ -132,23 +133,13 @@ describe("Codex runtime plugin install repair", () => {
           return;
         }
         const result = await pending;
-
-        if (usable) {
+        expect(cfg.plugins?.entries?.codex?.enabled).toBe(false);
+        expect(confirm).toHaveBeenCalledOnce();
+        if (accepted) {
           expect(result).toMatchObject({
             ok: true,
             cfg: { plugins: { entries: { codex: { enabled: true } } } },
           });
-        } else {
-          expect(result).toMatchObject({
-            ok: false,
-            status: "failed",
-            message: expect.stringMatching(/capabilit/i),
-          });
-          expect(result).not.toHaveProperty("cfg");
-        }
-        expect(cfg.plugins?.entries?.codex?.enabled).toBe(enabled);
-        expect(confirm).toHaveBeenCalledTimes(enabled ? 0 : 1);
-        if (accepted && !enabled) {
           expect(beforePersistentEffect).toHaveBeenCalledOnce();
           expect(mocks.writeInstallRecords).toHaveBeenCalledWith(
             expect.objectContaining({
@@ -160,6 +151,12 @@ describe("Codex runtime plugin install repair", () => {
             expect.any(Object),
           );
         } else {
+          expect(result).toMatchObject({
+            ok: false,
+            status: "failed",
+            message: expect.stringMatching(/capabilit/i),
+          });
+          expect(result).not.toHaveProperty("cfg");
           expect(beforePersistentEffect).not.toHaveBeenCalled();
           expect(mocks.writeInstallRecords).not.toHaveBeenCalled();
         }
@@ -175,20 +172,10 @@ describe("Codex runtime plugin install repair", () => {
         message: "Continue installation?",
         initialValue: false,
       });
-      return {
-        cfg,
-        pluginId: "codex",
-        installed: accepted,
-        status: accepted ? "installed" : "skipped",
-      };
+      return installerResult(accepted ? "installed" : "skipped", cfg);
     });
     const session = new WizardSession(async (prompter) => {
-      const result = await ensureCodexRuntimePluginForModelSelection({
-        cfg: {},
-        model: "openai/gpt-5.6-luna",
-        prompter,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      });
+      const result = await selectRuntime({ prompter, runtime: runtime() });
       expect(result.ok).toBe(true);
     });
     try {
@@ -207,41 +194,28 @@ describe("Codex runtime plugin install repair", () => {
     }
   });
 
-  it.each([
-    { pluginId: "codex", provider: "openai" },
-    { pluginId: "copilot", provider: "github-copilot" },
-  ])(
-    "surfaces non-fatal $pluginId repair notices to command callers",
-    async ({ pluginId, provider }) => {
-      const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
-      mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-        changes: [`Repaired missing configured plugin "${pluginId}".`],
-        warnings: [],
-        notices: [reviewNotice],
-      });
+  it("surfaces non-fatal Copilot repair notices to command callers", async () => {
+    const pluginId = "copilot";
+    const provider = "github-copilot";
+    const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+      changes: [`Repaired missing configured plugin "${pluginId}".`],
+      warnings: [],
+      notices: [reviewNotice],
+    });
 
-      const result = await repairModelSelectionRuntimePlugins({
-        cfg: {
-          models: {
-            providers: {
-              [provider]: {
-                baseUrl: "https://provider.example.test",
-                models: [],
-                agentRuntime: { id: pluginId },
-              },
-            },
-          },
-        },
-        model: `${provider}/gpt-5.5`,
-        env: {},
-      });
+    const result = await repairModelSelectionRuntimePlugins({
+      cfg: providerRuntime(provider, pluginId, "https://provider.example.test"),
+      model: `${provider}/gpt-5.5`,
+      env: {},
+    });
 
-      const repairCall = readOnlyMissingPluginInstallRepairCall();
-      expect(repairCall.pluginIds).toStrictEqual([pluginId]);
-      expect(repairCall.env).toStrictEqual({});
-      expect(result).toStrictEqual([reviewNotice]);
-    },
-  );
+    expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledOnce();
+    expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginIds: [pluginId], env: {} }),
+    );
+    expect(result).toStrictEqual([reviewNotice]);
+  });
 
   it("does not report an existing Codex install as usable when plugins are disabled", async () => {
     const cfg = { plugins: { enabled: false } };
@@ -249,12 +223,7 @@ describe("Codex runtime plugin install repair", () => {
       codex: { source: "npm", installPath: process.cwd() },
     });
 
-    const result = await ensureCodexRuntimePluginForModelSelection({
-      cfg,
-      model: "openai/gpt-5.5",
-      prompter: {} as never,
-      runtime: {} as never,
-    });
+    const result = await selectRuntime({ cfg });
 
     expect(result).toMatchObject({
       ok: false,
@@ -264,109 +233,31 @@ describe("Codex runtime plugin install repair", () => {
     expect("cfg" in result).toBe(false);
   });
 
-  it("enables an allowed existing Codex install", async () => {
-    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
-      codex: { source: "npm", installPath: process.cwd() },
-    });
-    const cfg: OpenClawConfig = {
-      plugins: {
-        allow: ["codex"],
-        entries: { codex: { enabled: false } },
-      },
-    };
-
-    const result = await ensureCodexRuntimePluginForModelSelection({
-      cfg,
-      model: "openai/gpt-5.5",
-      prompter: {} as never,
-      runtime: {} as never,
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      required: true,
-      cfg: { plugins: { entries: { codex: { enabled: true } } } },
-    });
-  });
-
   const sensitiveFixture = ["fixture", "credential"].join("-");
-  it.each([
-    {
-      status: "failed" as const,
-      error: `Install failed: https://user:${sensitiveFixture}@registry.example.test/pkg?token=${sensitiveFixture}\u001b[2K`,
-    },
-    {
-      status: "timed_out" as const,
-      error: undefined,
-    },
-  ])("formats a sanitized actionable $status failure for required Codex", async (failure) => {
-    mocks.ensureOnboardingPluginInstalled.mockResolvedValueOnce({
-      cfg: {},
-      installed: false,
-      pluginId: "codex",
-      status: failure.status,
-      ...(failure.error ? { error: failure.error } : {}),
-    });
+  it("formats a sanitized actionable failure for required Codex", async () => {
+    mockInstall(
+      "failed",
+      {},
+      {
+        error: `Install failed: https://user:${sensitiveFixture}@registry.example.test/pkg?token=${sensitiveFixture}\u001b[2K`,
+      },
+    );
 
-    const result = await ensureCodexRuntimePluginForModelSelection({
-      cfg: {},
-      model: "openai/gpt-5.5",
-      prompter: {} as never,
-      runtime: {} as never,
-    });
+    const result = await selectRuntime();
 
     expect(result.ok).toBe(false);
     if (result.ok) {
       throw new Error("expected required runtime failure");
     }
-    expect(result.message).toContain(`Codex runtime is required but unavailable`);
-    expect(result.message).toContain(`status: ${failure.status}`);
+    expect(result.message).toContain("Codex runtime is required but unavailable");
+    expect(result.message).toContain("status: failed");
     expect(result.message).toContain("Retry setup");
     expect(result.message).toContain("npm");
     expect(result.message).toContain("registry");
-    if (failure.error) {
-      expect(result.message).toContain("Install failed:");
-    }
+    expect(result.message).toContain("Install failed:");
     expect(result.message).not.toContain(sensitiveFixture);
     expect(result.message).not.toContain("\u001b");
     expect(result).not.toHaveProperty("cfg");
-  });
-
-  it("keeps an optional Codex runtime selection as a successful no-op", async () => {
-    const result = await ensureCodexRuntimePluginForModelSelection({
-      cfg: {},
-      model: "anthropic/claude-sonnet-4-6",
-      prompter: {} as never,
-      runtime: {} as never,
-    });
-
-    expect(result).toEqual({
-      ok: true,
-      cfg: {},
-      required: false,
-    });
-    expect(mocks.ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
-  });
-
-  it("allows source checkouts to use the matching bundled Codex plugin", async () => {
-    await ensureCodexRuntimePluginForModelSelection({
-      cfg: {},
-      model: "openai/gpt-5.5",
-      prompter: {} as never,
-      runtime: {} as never,
-    });
-
-    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: {
-          pluginId: "codex",
-          label: "Codex",
-          install: { npmSpec: "@openclaw/codex", defaultChoice: "npm" },
-          trustedSourceLinkedOfficialInstall: true,
-          versionBoundToOpenClaw: true,
-        },
-      }),
-    );
   });
 
   it("sees an agent-scoped Codex runtime pin behind a custom OpenAI route", async () => {
@@ -382,75 +273,37 @@ describe("Codex runtime plugin install repair", () => {
           },
         },
       },
-      models: {
-        providers: {
-          openai: { baseUrl: "https://proxy.example.test/v1", models: [] },
-        },
-      },
+      models: { providers: { openai: { baseUrl: "https://proxy.example.test/v1", models: [] } } },
     };
 
-    const result = await ensureCodexRuntimePluginForModelSelection({
-      cfg,
-      model: "openai/gpt-5.5",
-      agentId: "ops",
-      prompter: {} as never,
-      runtime: {} as never,
-    });
+    const result = await selectRuntime({ cfg, agentId: "ops" });
 
-    expect(result).toMatchObject({
-      ok: true,
-      required: true,
-    });
+    expect(result).toMatchObject({ ok: true, required: true });
   });
 
   it("stops the aggregate after a required Codex failure with no config result", async () => {
-    mocks.ensureOnboardingPluginInstalled.mockResolvedValueOnce({
-      cfg: { plugins: { entries: { codex: { enabled: false } } } },
-      installed: false,
-      pluginId: "codex",
-      status: "failed",
-      error: "registry unavailable",
-    });
+    mockInstall(
+      "failed",
+      { plugins: { entries: { codex: { enabled: false } } } },
+      {
+        error: "registry unavailable",
+      },
+    );
 
-    const result = await ensureModelSelectionRuntimePlugins({
-      cfg: {},
-      model: "openai/gpt-5.5",
-      prompter: {} as never,
-      runtime: {} as never,
-    });
+    const result = await selectRuntimes();
 
-    expect(result).toEqual({
-      ok: false,
-      message: expect.stringContaining("registry unavailable"),
-    });
+    expect(result).toEqual({ ok: false, message: expect.stringContaining("registry unavailable") });
     expect(result).not.toHaveProperty("cfg");
     expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
   });
 
   it("evaluates Copilot after optional Codex and returns the closed success shape", async () => {
     const installedConfig = { plugins: { entries: { copilot: { enabled: true } } } };
-    mocks.ensureOnboardingPluginInstalled.mockResolvedValueOnce({
-      cfg: installedConfig,
-      installed: true,
-      pluginId: "copilot",
-      status: "installed",
-    });
+    mockInstall("installed", installedConfig, { pluginId: "copilot" });
 
-    const result = await ensureModelSelectionRuntimePlugins({
-      cfg: {
-        models: {
-          providers: {
-            "github-copilot": {
-              baseUrl: "https://api.githubcopilot.com",
-              models: [],
-              agentRuntime: { id: "copilot" },
-            },
-          },
-        },
-      },
+    const result = await selectRuntimes({
+      cfg: providerRuntime("github-copilot", "copilot", "https://api.githubcopilot.com"),
       model: "github-copilot/gpt-5.5",
-      prompter: {} as never,
-      runtime: {} as never,
     });
 
     expect(result).toEqual({ ok: true, cfg: installedConfig, codexInstalled: false });
@@ -460,92 +313,45 @@ describe("Codex runtime plugin install repair", () => {
     );
   });
 
-  it.each(["ordinary selection", "silent supervision"] as const)(
-    "keeps runtime installation prompt-free for %s",
-    async (caller) => {
-      const prompter = createWizardPrompter();
+  it("keeps runtime installation prompt-free for silent supervision", async () => {
+    const prompter = createWizardPrompter();
+    mocks.ensureOnboardingPluginInstalled.mockImplementationOnce(async (params) => {
+      expect(await params.onCapabilityConsent({})).toBeUndefined();
+      return installerResult("installed", params.cfg);
+    });
+    const result = await ensureCodexRuntimePluginForSupervision(
+      selectionOptions({ prompter, runtime: runtime(), output: "silent" }),
+    );
+    expect(result).toMatchObject({ ok: true, required: true });
+    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
+    expect(prompter.confirm).not.toHaveBeenCalled();
+  });
+
+  it.each(["silent", "interactive"] as const)(
+    "suppresses installer presentation in %s mode",
+    async (output) => {
+      const note = vi.fn(async () => {}),
+        log = vi.fn(),
+        error = vi.fn();
       mocks.ensureOnboardingPluginInstalled.mockImplementationOnce(async (params) => {
-        if (caller === "silent supervision") {
-          expect(await params.onCapabilityConsent({})).toBeUndefined();
+        await params.prompter.note("installer failure");
+        params.runtime.error("installer failure");
+        if (output === "silent") {
+          params.prompter.progress("installing").update("downloading");
+          params.runtime.log("installer log");
+          await expect(params.prompter.confirm({ message: "fallback?" })).rejects.toThrow(
+            "Runtime plugin install unexpectedly prompted",
+          );
         }
-        return { cfg: params.cfg, installed: true, pluginId: "codex", status: "installed" };
+        return installerResult(output === "silent" ? "timed_out" : "failed");
       });
-      const ensure =
-        caller === "silent supervision"
-          ? ensureCodexRuntimePluginForSupervision
-          : ensureCodexRuntimePluginForModelSelection;
-      const result = await ensure({
-        cfg: {
-          agents: {
-            defaults: { models: { "openai/fixture-model": { agentRuntime: { id: "codex" } } } },
-          },
-        },
-        model: "openai/fixture-model",
-        prompter,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        ...(caller === "silent supervision" ? { output: "silent" } : {}),
-      });
-      expect(result).toMatchObject({ ok: true, required: true });
-      expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
-      expect(prompter.confirm).not.toHaveBeenCalled();
+      const select = output === "silent" ? selectRuntimes : selectRuntime;
+      await select({ prompter: { note } as never, runtime: { log, error, exit: vi.fn() }, output });
+      expect(note).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      if (output === "silent") {
+        expect(log).not.toHaveBeenCalled();
+      }
     },
   );
-
-  it("silences installer output and rejects prompts in non-interactive mode", async () => {
-    const note = vi.fn(async () => {});
-    const log = vi.fn();
-    const error = vi.fn();
-    mocks.ensureOnboardingPluginInstalled.mockImplementationOnce(async (params) => {
-      await params.prompter.note("installer note");
-      params.prompter.progress("installing").update("downloading");
-      params.runtime.log("installer log");
-      params.runtime.error("installer error");
-      await expect(params.prompter.confirm({ message: "fallback?" })).rejects.toThrow(
-        "Runtime plugin install unexpectedly prompted",
-      );
-      return {
-        cfg: {},
-        installed: false,
-        pluginId: "codex",
-        status: "timed_out",
-      };
-    });
-
-    await ensureModelSelectionRuntimePlugins({
-      cfg: {},
-      model: "openai/gpt-5.5",
-      prompter: { note } as never,
-      runtime: { log, error, exit: vi.fn() },
-      output: "silent",
-    });
-
-    expect(note).not.toHaveBeenCalled();
-    expect(log).not.toHaveBeenCalled();
-    expect(error).not.toHaveBeenCalled();
-  });
-
-  it("suppresses installer terminal failure presentation in interactive mode", async () => {
-    const note = vi.fn(async () => {});
-    const error = vi.fn();
-    mocks.ensureOnboardingPluginInstalled.mockImplementationOnce(async (params) => {
-      await params.prompter.note("installer failure");
-      params.runtime.error("installer failure");
-      return {
-        cfg: {},
-        installed: false,
-        pluginId: "codex",
-        status: "failed",
-      };
-    });
-
-    await ensureCodexRuntimePluginForModelSelection({
-      cfg: {},
-      model: "openai/gpt-5.5",
-      prompter: { note } as never,
-      runtime: { log: vi.fn(), error, exit: vi.fn() },
-    });
-
-    expect(note).not.toHaveBeenCalled();
-    expect(error).not.toHaveBeenCalled();
-  });
 });

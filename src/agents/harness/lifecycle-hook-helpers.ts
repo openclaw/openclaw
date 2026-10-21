@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { BeforeAgentFinalizeResultWithRetryCandidates } from "../../plugins/hook-runner-types.js";
 import type {
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentFinalizeEvent,
-  PluginHookBeforeAgentFinalizeResult,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
 } from "../../plugins/hook-types.js";
@@ -24,9 +24,8 @@ type AgentHarnessHookParams<Event> = {
   ctx: AgentHarnessHookContext;
   hookRunner?: AgentHarnessHookRunner;
 };
-type FinalizeRetryBudget = Map<string, Map<string, number>>;
+type FinalizeRetryBudget = Map<string, number>;
 
-/** Returns the current global hook runner for harness lifecycle hooks. */
 export function getAgentHarnessHookRunner(): AgentHarnessHookRunner {
   return getGlobalHookRunner();
 }
@@ -35,41 +34,12 @@ function getFinalizeRetryBudget(): FinalizeRetryBudget {
   return resolveGlobalSingleton<FinalizeRetryBudget>(FINALIZE_RETRY_BUDGET_KEY, () => new Map());
 }
 
-function countFinalizeRetryBudgetEntries(budget: FinalizeRetryBudget): number {
-  let count = 0;
-  for (const runBudget of budget.values()) {
-    count += runBudget.size;
-  }
-  return count;
-}
-
-function pruneFinalizeRetryBudget(budget: FinalizeRetryBudget): void {
-  while (countFinalizeRetryBudgetEntries(budget) > FINALIZE_RETRY_BUDGET_MAX_ENTRIES) {
-    const oldestRunId = budget.keys().next().value;
-    if (oldestRunId === undefined) {
-      return;
-    }
-    const oldestRunBudget = budget.get(oldestRunId);
-    const oldestRetryKey = oldestRunBudget?.keys().next().value;
-    if (oldestRunBudget && oldestRetryKey !== undefined) {
-      oldestRunBudget.delete(oldestRetryKey);
-    }
-    if (!oldestRunBudget || oldestRunBudget.size === 0) {
-      budget.delete(oldestRunId);
-    }
-  }
-}
-
-function buildFinalizeRetryInstructionKey(instruction: string): string {
-  return `instruction:${createHash("sha256").update(instruction).digest("hex")}`;
-}
-
 /** Dispatches best-effort LLM input hooks for a harness attempt. */
 export function runAgentHarnessLlmInputHook(
   params: AgentHarnessHookParams<PluginHookLlmInputEvent>,
 ): void {
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("llm_input") || typeof hookRunner.runLlmInput !== "function") {
+  if (!hookRunner?.hasHooks("llm_input")) {
     return;
   }
   void hookRunner
@@ -84,7 +54,7 @@ export function runAgentHarnessLlmOutputHook(
   params: AgentHarnessHookParams<PluginHookLlmOutputEvent>,
 ): void {
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("llm_output") || typeof hookRunner.runLlmOutput !== "function") {
+  if (!hookRunner?.hasHooks("llm_output")) {
     return;
   }
   void hookRunner
@@ -99,7 +69,7 @@ async function executeAgentHarnessAgentEndHook(
 ): Promise<void> {
   const loadMessages = takeHookMessageLoader(params.event);
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("agent_end") || typeof hookRunner.runAgentEnd !== "function") {
+  if (!hookRunner?.hasHooks("agent_end")) {
     return;
   }
   try {
@@ -126,7 +96,6 @@ export async function awaitAgentHarnessAgentEndHook(
   await executeAgentHarnessAgentEndHook({ ...params, unrefTimeout: false });
 }
 
-/** Normalized before-finalize hook decision consumed by harness loops. */
 type AgentHarnessBeforeAgentFinalizeOutcome =
   | { action: "continue" }
   | { action: "revise"; reason: string }
@@ -138,10 +107,7 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(
 ): Promise<AgentHarnessBeforeAgentFinalizeOutcome> {
   const loadMessages = takeHookMessageLoader(params.event);
   const hookRunner = params.hookRunner ?? getGlobalHookRunner();
-  if (
-    !hookRunner?.hasHooks("before_agent_finalize") ||
-    typeof hookRunner.runBeforeAgentFinalize !== "function"
-  ) {
+  if (!hookRunner?.hasHooks("before_agent_finalize")) {
     return { action: "continue" };
   }
   try {
@@ -164,73 +130,51 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(
 }
 
 function normalizeBeforeAgentFinalizeResult(
-  result: PluginHookBeforeAgentFinalizeResult | undefined,
+  result: BeforeAgentFinalizeResultWithRetryCandidates | undefined,
   event?: PluginHookBeforeAgentFinalizeEvent,
 ): AgentHarnessBeforeAgentFinalizeOutcome {
   if (result?.action === "finalize") {
     const reason = normalizeTrimmedString(result.reason);
     return reason ? { action: "finalize", reason } : { action: "finalize" };
   }
-  if (result?.action === "revise") {
-    const retryCandidates = readBeforeAgentFinalizeRetryCandidates(result);
-    if (retryCandidates.length > 0) {
-      const reason = normalizeTrimmedString(result.reason);
-      for (const retry of retryCandidates) {
-        const retryInstruction = normalizeTrimmedString(retry.instruction);
-        if (!retryInstruction) {
-          continue;
-        }
-        const maxAttempts =
-          typeof retry.maxAttempts === "number" && Number.isFinite(retry.maxAttempts)
-            ? Math.max(1, Math.floor(retry.maxAttempts))
-            : 1;
-        const retryRunId = event?.runId ?? event?.sessionId ?? "unknown-run";
-        const retryKey =
-          normalizeTrimmedString(retry.idempotencyKey) ||
-          buildFinalizeRetryInstructionKey(retryInstruction);
-        // Track retry attempts per run+instruction to prevent finalize hooks
-        // from creating an unbounded revise loop.
-        const budget = getFinalizeRetryBudget();
-        const runBudget = budget.get(retryRunId) ?? new Map<string, number>();
-        const nextCount = (runBudget.get(retryKey) ?? 0) + 1;
-        runBudget.delete(retryKey);
-        runBudget.set(retryKey, nextCount);
-        budget.delete(retryRunId);
-        budget.set(retryRunId, runBudget);
-        pruneFinalizeRetryBudget(budget);
-        if (nextCount > maxAttempts) {
-          continue;
-        }
-        const revisedReason =
-          reason && reason.includes(retryInstruction)
-            ? reason
-            : [reason, retryInstruction].filter(Boolean).join("\n\n");
-        return { action: "revise", reason: revisedReason };
-      }
-      return { action: "continue" };
-    }
-    const reason = normalizeTrimmedString(result.reason);
+  if (result?.action !== "revise") {
+    return { action: "continue" };
+  }
+  const retryCandidates = result.retryCandidates?.length
+    ? result.retryCandidates
+    : result.retry
+      ? [result.retry]
+      : [];
+  const reason = normalizeTrimmedString(result.reason);
+  if (retryCandidates.length === 0) {
     return reason ? { action: "revise", reason } : { action: "continue" };
   }
-  return { action: "continue" };
-}
-
-function readBeforeAgentFinalizeRetryCandidates(
-  result: PluginHookBeforeAgentFinalizeResult,
-): NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]>[] {
-  const candidateList = (
-    result as {
-      retryCandidates?: unknown;
+  for (const retry of retryCandidates) {
+    const retryInstruction = retry.instruction;
+    const maxAttempts =
+      typeof retry.maxAttempts === "number" && Number.isFinite(retry.maxAttempts)
+        ? Math.max(1, Math.floor(retry.maxAttempts))
+        : 1;
+    const retryRunId = event?.runId ?? event?.sessionId ?? "unknown-run";
+    const retryKey =
+      normalizeTrimmedString(retry.idempotencyKey) ||
+      `instruction:${createHash("sha256").update(retryInstruction).digest("hex")}`;
+    // Track retry attempts per run+instruction to prevent finalize hooks
+    // from creating an unbounded revise loop.
+    const budget = getFinalizeRetryBudget();
+    const key = JSON.stringify([retryRunId, retryKey]);
+    const nextCount = (budget.get(key) ?? 0) + 1;
+    budget.delete(key);
+    budget.set(key, nextCount);
+    pruneMapToMaxSize(budget, FINALIZE_RETRY_BUDGET_MAX_ENTRIES);
+    if (nextCount > maxAttempts) {
+      continue;
     }
-  ).retryCandidates;
-  if (Array.isArray(candidateList) && candidateList.length > 0) {
-    return candidateList.filter(isBeforeAgentFinalizeRetry);
+    const revisedReason =
+      reason && reason.includes(retryInstruction)
+        ? reason
+        : [reason, retryInstruction].filter(Boolean).join("\n\n");
+    return { action: "revise", reason: revisedReason };
   }
-  return isBeforeAgentFinalizeRetry(result.retry) ? [result.retry] : [];
-}
-
-function isBeforeAgentFinalizeRetry(
-  value: unknown,
-): value is NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]> {
-  return isRecord(value);
+  return { action: "continue" };
 }

@@ -1,7 +1,6 @@
 // @vitest-environment node
-// Control UI tests cover browser redact behavior.
 import { describe, expect, it } from "vitest";
-import { redactToolDetail, redactToolPayloadText } from "./browser-redact.ts";
+import { redactToolDetail } from "./browser-redact.ts";
 
 describe("browser tool detail redaction", () => {
   it("redacts credentials while preserving diagnostic paths", () => {
@@ -21,24 +20,19 @@ describe("browser tool detail redaction", () => {
       ].join("\n"),
     );
 
-    expect(redacted).toContain("Authorization: [redacted]");
-    expect(redacted).toContain("refresh_token=ya29.l...alue");
-    expect(redacted).toContain("client_secret=client...nder");
-    expect(redacted).toContain("AIzaSy...7890");
-    expect(redacted).toContain("[redacted private key]");
-    expect(redacted).toContain("cookie: [redacted]");
-    expect(redacted).toContain("Bearer [redacted]");
-    expect(redacted).not.toContain("supersecretpassword");
-    expect(redacted).not.toContain("longOAuthRefreshTokenValue");
-    expect(redacted).not.toContain("clientSecretValueThatShouldNotRender");
-    expect(redacted).not.toContain("DUMMYGoogleApiKeyValue1234567890");
-    expect(redacted).toContain("bare Fireworks key fw-CCC...CCCC");
-    expect(redacted).toContain("https://example.test?debug=fw_AAA...AAAA&ok=1");
-    expect(redacted).toContain("X-Debug: fpk_BB...BBBB");
-    expect(redacted).not.toContain("abc123");
-    expect(redacted).not.toContain("verySensitiveCookieValue");
-    expect(redacted).not.toContain("abcdefghijkl");
-    expect(redacted).toContain("/Users/alice/private/config.json");
+    expect(redacted.split("\n")).toEqual([
+      "Authorization: [redacted]",
+      "curl 'https://example.test?refresh_token=ya29.l...alue&ok=1'",
+      "client_secret=client...nder",
+      "AIzaSy...7890",
+      "bare Fireworks key fw-CCC...CCCC",
+      "https://example.test?debug=fw_AAA...AAAA&ok=1",
+      "X-Debug: fpk_BB...BBBB",
+      "[redacted private key]",
+      "cookie: [redacted]",
+      "Bearer [redacted]",
+      "/Users/alice/private/config.json",
+    ]);
     for (const masked of ["fw-CCC...CCCC", "fw_AAA...AAAA", "fpk_BB...BBBB"]) {
       expect(redactToolDetail(masked)).toBe(masked);
     }
@@ -92,30 +86,28 @@ describe("browser tool detail redaction", () => {
     ["intact leading pair", "abcd😀xxxxxxxxwxyz", "abcd😀...wxyz"],
     ["intact trailing pair", "abcdefghijklmn😀xy", "abcdef...😀xy"],
   ])("masks tool payload tokens with a UTF-16-safe %s", (_label, token, masked) => {
-    expect(redactToolPayloadText(`{"accessToken":"${token}"}`)).toBe(`{"accessToken":"${masked}"}`);
+    expect(redactToolDetail(`{"accessToken":"${token}"}`)).toBe(`{"accessToken":"${masked}"}`);
   });
 
   it("does not trust mask-shaped input as already redacted", () => {
-    expect(redactToolPayloadText("OPENAI_API_KEY=abcde...wxyz")).toBe(
-      "OPENAI_API_KEY=abcde....wxyz",
-    );
+    expect(redactToolDetail("OPENAI_API_KEY=abcde...wxyz")).toBe("OPENAI_API_KEY=abcde....wxyz");
   });
 
   it("redacts replacement-template text literally without changing surrounding text", () => {
     const markerLike = "\u{e000}0\u{e001}";
-    expect(redactToolPayloadText(`${markerLike} OPENAI_API_KEY=$\`abcdxxxxxxxxwxyz`)).toBe(
+    expect(redactToolDetail(`${markerLike} OPENAI_API_KEY=$\`abcdxxxxxxxxwxyz`)).toBe(
       `${markerLike} OPENAI_API_KEY=$\`abcd...wxyz`,
     );
   });
 
   it("redacts the captured value when key and value repeat", () => {
-    expect(redactToolPayloadText("LONG_LONG_LONG_TOKEN=LONG_LONG_LONG_TOKEN")).toBe(
+    expect(redactToolDetail("LONG_LONG_LONG_TOKEN=LONG_LONG_LONG_TOKEN")).toBe(
       "LONG_LONG_LONG_TOKEN=LONG_L...OKEN",
     );
   });
 
   it("fully redacts a nested credential after the outer match", () => {
-    expect(redactToolPayloadText('client_secret: "TOKEN=abcdefghijklmno&abcdefghij"')).toBe(
+    expect(redactToolDetail('client_secret: "TOKEN=abcdefghijklmno&abcdefghij"')).toBe(
       'client_secret: "TOKEN=[redacted]"',
     );
   });

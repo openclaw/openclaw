@@ -24,7 +24,12 @@ const native = vi.hoisted(() => ({
   running: vi.fn<typeof import("./schtasks-runtime.js").waitForScheduledTaskRunningEvidence>(),
   stop: vi.fn<typeof import("./schtasks-control.js").stopRegisteredScheduledTask>(),
 }));
-vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.exec }));
+// mock-isolation: Install recovery changes only the task registration modeled by this fixture.
+vi.mock("./schtasks-exec.js", () => ({
+  execSchtasks: native.exec,
+  execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
+    native.exec(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+}));
 vi.mock("./schtasks-control.js", async (original) => ({
   ...(await original<typeof import("./schtasks-control.js")>()),
   runScheduledTaskOrThrow: native.run,
@@ -120,10 +125,47 @@ async function fixture(enabled = false) {
   return { args, scriptPath, launcherPath, original, registration, assertRestored, assertBackups };
 }
 
-it.each(["runtime", "arguments", "environment"])(
-  "replaces a running registered task before publishing a changed %s",
-  async (change) => {
-    const { args, scriptPath, original } = await fixture(true);
+it.each([false, true])(
+  "accepts publication timestamp settlement and restores after activation failure (%s)",
+  async (failActivation) => {
+    const f = await fixture();
+    const rename = fs.rename;
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (to === f.scriptPath || to === f.launcherPath) {
+        const stat = await fs.stat(to);
+        // Windows can settle the writer's mtime after the staged snapshot.
+        await fs.utimes(to, stat.atime, new Date(stat.mtimeMs + 10));
+      }
+    });
+    const failure = new Error("Synthetic activation failure");
+    if (failActivation) {
+      native.run.mockRejectedValueOnce(failure);
+      await expect(installScheduledTask(f.args)).rejects.toBe(failure);
+      await f.assertRestored();
+    } else {
+      await expect(installScheduledTask(f.args)).resolves.toEqual({ scriptPath: f.scriptPath });
+      expect((await readScheduledTaskCommand(f.args.env))?.programArguments).toEqual(
+        f.args.programArguments,
+      );
+    }
+    await f.assertBackups();
+    expect(f.args.stdout.read(f.args.stdout.readableLength)?.toString()).toContain(
+      `${f.scriptPath}.task.xml.bak and launcher .bak files beside it are retained for recovery`,
+    );
+    expect(f.args.warn).not.toHaveBeenCalled();
+  },
+);
+
+it.each(
+  ["runtime", "arguments", "environment"].flatMap((change) => [
+    { change, unattended: false },
+    { change, unattended: true },
+  ]),
+)(
+  "replaces a running registered task before publishing a changed $change (unattended=$unattended)",
+  async ({ change, unattended }) => {
+    const { args, scriptPath, original, registration } = await fixture(true);
     let running = original;
     native.probe.mockReturnValue({ status: "found", state: 4, enabled: true });
     native.stop.mockImplementation(async (params) => {
@@ -141,6 +183,7 @@ it.each(["runtime", "arguments", "environment"])(
     });
     await installScheduledTask({
       ...args,
+      env: { ...args.env, ...(unattended ? { USERNAME: "operator" } : {}) },
       programArguments:
         change === "runtime"
           ? ["bun", "/prefix-a/openclaw/dist/index.js", "gateway"]
@@ -151,6 +194,15 @@ it.each(["runtime", "arguments", "environment"])(
     });
     expect(running).toEqual(await fs.readFile(scriptPath));
     expect(running).not.toEqual(original);
+    if (unattended) {
+      expect(registration.xml).toContain("<LogonType>S4U</LogonType>");
+      expect(registration.xml).toContain("<BootTrigger><Enabled>true</Enabled></BootTrigger>");
+      expect(registration.xml).toContain("<LogonTrigger>");
+      expect(registration.xml).toContain("<Command>C:\\Windows\\System32\\cmd.exe</Command>");
+      expect(registration.xml).toContain(
+        `<Arguments>/d /s /c &quot;&quot;${scriptPath}&quot;&quot;</Arguments>`,
+      );
+    }
   },
 );
 
@@ -229,6 +281,25 @@ it.each(
     expect(native.run).toHaveBeenCalledTimes(phase === "publication" ? 0 : 1);
   },
 );
+
+it("restores the previous definition when registration fails after changing its action", async () => {
+  const f = await fixture();
+  const execute = native.exec.getMockImplementation()!;
+  let rejected = false;
+  native.exec.mockImplementation(async (command) => {
+    if (command[0] === "/Change" && command.includes("/TR")) {
+      f.registration.xml = f.registration.xml.replace("original", "replacement");
+    }
+    if (command[0] === "/Create" && !rejected) {
+      rejected = true;
+      throw Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
+    }
+    return execute(command);
+  });
+  await expect(installScheduledTask(f.args)).rejects.toThrow("spawn EINVAL");
+  await f.assertRestored();
+  expect(f.args.warn).not.toHaveBeenCalled();
+});
 
 it.each(["process", "definition"])(
   "preserves a replacement %s observed during stop",
@@ -330,6 +401,22 @@ function installWithCustody(
     { updateOwned: false, assertRecoveryCurrent: () => {} },
   );
 }
+
+it("restores Password-task launchers after failed activation without re-registering credentials", async () => {
+  const f = await fixture();
+  const originalTask = f.registration.xml.replace(
+    "<Task>",
+    "<Task><Principals><Principal><UserId>operator</UserId><LogonType>Password</LogonType></Principal></Principals>",
+  );
+  f.registration.xml = originalTask;
+  native.run.mockRejectedValueOnce(new Error("activation rejected"));
+
+  await expect(installScheduledTask(f.args)).rejects.toThrow("activation rejected");
+  expect(f.registration.xml).toBe(originalTask);
+  expect(await fs.readFile(f.scriptPath)).toEqual(f.original);
+  expect(await fs.readFile(f.launcherPath, "utf8")).toBe("original hidden launcher");
+  expect(native.exec.mock.calls.some(([args]) => args[0] === "/Create")).toBe(false);
+});
 
 it("leaves both original launchers intact when staging cannot capture the hidden launcher", async () => {
   const { args, scriptPath, launcherPath, original } = await fixture();

@@ -55,12 +55,9 @@ function resolvePhysicalPathInsideRootSync(
     while (true) {
       const candidate = fs.statSync(current, { bigint: true });
       if (candidate.dev === root.dev && candidate.ino === root.ino) {
-        // Prefer the matching observed spelling unless it is itself a link.
-        // Windows 8.3 aliases are ordinary directory paths; junction roots retain
-        // their already-admitted canonical spelling.
-        const physicalRoot = fs.lstatSync(current).isSymbolicLink()
-          ? path.resolve(rootPath)
-          : current;
+        // Resolve ancestor junctions too; ordinary realpath preserves 8.3 names.
+        // The descriptor boundary revalidates this spelling against rootIdentity.
+        const physicalRoot = fs.realpathSync(current);
         return {
           rootPath: physicalRoot,
           targetPath: path.resolve(physicalRoot, path.relative(current, targetPath)),
@@ -111,9 +108,9 @@ function createIdentityBoundRootFileFs(
     // SAFETY: Reflect invokes fs.lstatSync with the original overload arguments.
     const stat = Reflect.apply(fs.lstatSync, fs, args) as fs.Stats | fs.BigIntStats;
     if (args[0] === rootPath) {
-      const dev = typeof stat.dev === "bigint" ? stat.dev : BigInt(stat.dev);
-      const ino = typeof stat.ino === "bigint" ? stat.ino : BigInt(stat.ino);
-      if (!stat.isDirectory() || dev !== expected.dev || ino !== expected.ino) {
+      const identity =
+        typeof stat.ino === "bigint" ? stat : fs.lstatSync(rootPath, { bigint: true });
+      if (!stat.isDirectory() || identity.dev !== expected.dev || identity.ino !== expected.ino) {
         throw new FsSafeError(
           "path-mismatch",
           "plugin root identity changed during alias reconciliation",

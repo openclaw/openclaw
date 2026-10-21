@@ -1,5 +1,5 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { openMatrixCredentialsAsyncStore, openMatrixCredentialsStore } from "./credentials-read.js";
+import { openMatrixCredentialsAsyncStore } from "./credentials-read.js";
 import {
   isMatrixCredentialRevocation,
   matrixCredentialsStoreKey,
@@ -10,6 +10,7 @@ import type {
   MatrixStoredCredentialRecord,
   MatrixStoredCredentials,
 } from "./credentials-state.js";
+import { updateMatrixKeyedState } from "./sqlite-state.js";
 
 export {
   clearMatrixCredentials,
@@ -79,21 +80,6 @@ async function persistMatrixCredentials(
   return result;
 }
 
-export async function touchMatrixCredentials(
-  env: NodeJS.ProcessEnv = process.env,
-  accountId?: string | null,
-): Promise<void> {
-  const normalizedAccountId = normalizeAccountId(accountId);
-  await updateMatrixCredentials(env, normalizedAccountId, (current) => {
-    // A delayed activity touch must preserve an explicit logout tombstone.
-    if (isMatrixCredentialRevocation(current, normalizedAccountId)) {
-      return current;
-    }
-    const existing = normalizeMatrixStoredCredentials(current, normalizedAccountId);
-    return existing ? { ...existing, lastUsedAt: new Date().toISOString() } : undefined;
-  });
-}
-
 async function updateMatrixCredentials(
   env: NodeJS.ProcessEnv,
   accountId: string,
@@ -103,24 +89,5 @@ async function updateMatrixCredentials(
 ): Promise<void> {
   const store = openMatrixCredentialsAsyncStore(env);
   const key = matrixCredentialsStoreKey(accountId);
-  if (!store.observe || !store.compareAndApply) {
-    // Matrix's published >=2026.9.4 host floor predates data-only comparisons.
-    openMatrixCredentialsStore(env).update(key, update);
-    return;
-  }
-  let observation = await store.observe(key);
-  for (;;) {
-    const value = update(observation.value);
-    const result = await store.compareAndApply(
-      key,
-      observation.comparison,
-      value === undefined
-        ? { operation: "update", action: "keep" }
-        : { operation: "update", action: "set", value },
-    );
-    if (result.status !== "conflict") {
-      return;
-    }
-    observation = result.current;
-  }
+  await updateMatrixKeyedState(store, key, update);
 }

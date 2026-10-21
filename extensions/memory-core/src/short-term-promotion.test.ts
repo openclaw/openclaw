@@ -6,7 +6,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  openOpenClawStateDatabase,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it as baseIt, vi } from "vitest";
 import { deriveConceptTags } from "./concept-vocabulary.js";
@@ -25,7 +28,6 @@ import {
   SHORT_TERM_LOCK_MAX_ENTRIES,
   SHORT_TERM_LOCK_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
-  SHORT_TERM_RECALL_NAMESPACE,
 } from "./dreaming-state.js";
 import {
   deleteShortTermLockEntryIfCurrent,
@@ -36,7 +38,6 @@ import {
   auditShortTermPromotionArtifacts,
   filterLiveShortTermRecallEntries,
   loadShortTermPromotionDreamingStats,
-  recordGroundedShortTermCandidates,
   rankShortTermPromotionCandidates,
   recordDreamingPhaseSignals,
   recordRemConsideredPhaseSignals,
@@ -66,9 +67,6 @@ type ApplyAllOptions = Omit<
   "workspaceDir" | "candidates" | "minScore" | "minRecallCount" | "minUniqueQueries"
 >;
 type PromotionCandidate = Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>[number];
-type GroundedCandidateFixture = Parameters<
-  typeof recordGroundedShortTermCandidates
->[0]["items"][number];
 type PromotionCandidateFixture = Pick<
   PromotionCandidate,
   "key" | "path" | "startLine" | "endLine" | "source" | "snippet"
@@ -166,10 +164,10 @@ function recallStoreEntryFixture(
 }
 
 function groundedCandidateFixture(
-  params: Pick<GroundedCandidateFixture, "path" | "snippet" | "query"> &
-    Partial<GroundedCandidateFixture>,
-): GroundedCandidateFixture {
+  params: Pick<RecallResult, "path" | "snippet" | "query"> & Partial<RecallResult>,
+): RecallResult {
   return {
+    source: "memory",
     startLine: 1,
     endLine: 1,
     score: 0.9,
@@ -472,10 +470,11 @@ describe("short-term promotion", () => {
     const maxSnippetChars = testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS;
     const longSnippet = `Stable claim identity ${"x".repeat(maxSnippetChars + 100)}`;
 
-    await recordGroundedShortTermCandidates({
+    await recordShortTermRecalls({
       workspaceDir,
       query: "__dreaming_grounded_backfill__",
-      items: [
+      signalType: "grounded",
+      results: [
         groundedCandidateFixture({
           path: "memory/2026-04-03.md",
           snippet: longSnippet,
@@ -939,10 +938,11 @@ describe("short-term promotion", () => {
       'Always use "Happy Together" calendar for flights and reservations.',
     ]);
 
-    await recordGroundedShortTermCandidates({
+    await recordShortTermRecalls({
       workspaceDir,
       query: "__dreaming_grounded_backfill__",
-      items: [
+      signalType: "grounded",
+      results: [
         groundedCandidateFixture({
           path: "memory/2026-04-03.md",
           snippet: 'Always use "Happy Together" calendar for flights and reservations.',
@@ -1007,10 +1007,8 @@ describe("short-term promotion", () => {
       query: "__dreaming_grounded_backfill__:candidate",
     });
 
-    await recordGroundedShortTermCandidates({
-      workspaceDir,
-      query: "__dreaming_grounded_backfill__",
-      items: [groundedItem],
+    await recordMemoryRecalls(workspaceDir, "__dreaming_grounded_backfill__", [groundedItem], {
+      signalType: "grounded",
       nowMs: Date.parse("2026-04-03T09:00:00.000Z"),
     });
     for (const query of ["router backups", "encrypted retention", "glacier storage"]) {
@@ -1026,10 +1024,8 @@ describe("short-term promotion", () => {
     expect(before).toHaveLength(1);
     expect(before[0]?.uniqueQueries).toBe(3);
 
-    await recordGroundedShortTermCandidates({
-      workspaceDir,
-      query: "__dreaming_grounded_backfill__",
-      items: [groundedItem],
+    await recordMemoryRecalls(workspaceDir, "__dreaming_grounded_backfill__", [groundedItem], {
+      signalType: "grounded",
       nowMs: Date.parse("2026-04-03T11:00:00.000Z"),
     });
 
@@ -1046,10 +1042,11 @@ describe("short-term promotion", () => {
       "Live recall-backed rule.",
     ]);
 
-    await recordGroundedShortTermCandidates({
+    await recordShortTermRecalls({
       workspaceDir,
       query: "__dreaming_grounded_backfill__",
-      items: [
+      signalType: "grounded",
+      results: [
         groundedCandidateFixture({
           path: "memory/2026-04-03.md",
           snippet: "Grounded only rule.",
@@ -2194,7 +2191,7 @@ describe("short-term promotion", () => {
     expect(await testing.readRecallStore(workspaceDir, nowIso)).toEqual(recallBefore);
   });
 
-  it("converges on retry when the recall write fails after phase cleanup", async (workspaceDir) => {
+  it("converges on retry when recall and phase cleanup rolls back", async (workspaceDir) => {
     await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Live source note."]);
     await testing.writeRawRecallStore(workspaceDir, {
       version: 1,
@@ -2213,25 +2210,22 @@ describe("short-term promotion", () => {
       },
     });
 
-    const env = { ...process.env };
-    configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) => {
-      const store = createPluginStateKeyedStoreForTests<T>("memory-core", { ...options, env });
-      if (options.namespace !== SHORT_TERM_RECALL_NAMESPACE) {
-        return store;
-      }
-      return {
-        ...store,
-        register: async () => {
-          throw new Error("recall write unavailable");
-        },
-      };
-    });
+    const db = openOpenClawStateDatabase().db;
+    const workspaceKey = memoryCoreWorkspaceStateKey(workspaceDir);
+    db.exec(`
+      CREATE TRIGGER abort_recall_prune BEFORE DELETE ON plugin_state_entries
+      WHEN OLD.plugin_id = 'memory-core'
+        AND OLD.namespace = '${SHORT_TERM_PHASE_SIGNAL_NAMESPACE}'
+        AND json_extract(OLD.value_json, '$.workspaceKey') = '${workspaceKey}'
+        AND json_extract(OLD.value_json, '$.key') = 'missing'
+      BEGIN SELECT RAISE(ABORT, 'phase cleanup unavailable'); END;
+    `);
     try {
-      await expect(repairShortTermPromotionArtifacts({ workspaceDir })).rejects.toThrow(
-        "recall write unavailable",
-      );
+      await expect(repairShortTermPromotionArtifacts({ workspaceDir })).rejects.toMatchObject({
+        cause: { message: "phase cleanup unavailable" },
+      });
     } finally {
-      await configureMemoryCoreDreamingStateForTests();
+      db.exec("DROP TRIGGER abort_recall_prune");
     }
 
     expect(Object.keys(await readRecallStoreEntries(workspaceDir))).toEqual(["live", "missing"]);
@@ -2239,7 +2233,7 @@ describe("short-term promotion", () => {
       Object.keys(
         (await testing.readPhaseSignalStore(workspaceDir, new Date().toISOString())).entries,
       ),
-    ).toEqual(["live"]);
+    ).toEqual(["live", "missing"]);
 
     await expect(repairShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
       changed: true,

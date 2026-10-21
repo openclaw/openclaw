@@ -13,7 +13,6 @@ const A2UI_V09_ACTION_KEYS = [
   "deleteSurface",
 ] as const;
 
-/** Validates A2UI JSONL and returns the detected dialect/version metadata. */
 export function validateSupportedA2UIJsonl(jsonl: string) {
   const lines = jsonl.split(/\r?\n/);
   const errors: string[] = [];

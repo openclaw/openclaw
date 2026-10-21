@@ -66,7 +66,7 @@ Video generation is asynchronous:
    automatic final reply, or `message(action="send")` when the session requires
    the message tool. If the requester session is inactive, or its wake fails and
    generated media is still missing from the completion reply, OpenClaw sends
-   an idempotent direct fallback with the media.
+   a direct fallback with the media, without duplicate sends on retries.
 
 While a job is in flight, duplicate `video_generate` calls in the same
 chat return the current task status instead of starting another
@@ -112,7 +112,7 @@ of failing the task if local persistence rejects an oversized file.
 | PixVerse              | `v6`                            |  ✓   | 1 local or remote image                              | -                                               | `PIXVERSE_API_KEY`                       |
 | Qwen                  | `wan2.6-t2v`                    |  ✓   | Local or remote (i2v and Wan 2.7)                    | Yes (remote URL)                                | `QWEN_API_KEY`                           |
 | Runway                | `gen4.5`                        |  ✓   | 1 image                                              | 1 video                                         | `RUNWAYML_API_SECRET`                    |
-| Together              | `Wan-AI/Wan2.2-T2V-A14B`        |  ✓   | `Wan-AI/Wan2.2-I2V-A14B` only                        | -                                               | `TOGETHER_API_KEY`                       |
+| Together              | `Wan-AI/wan2.7-t2v`             |  ✓   | `Wan-AI/wan2.7-i2v` only                             | -                                               | `TOGETHER_API_KEY`                       |
 | Vydra                 | `veo3`                          |  ✓   | 1 image (`kling`)                                    | -                                               | `VYDRA_API_KEY`                          |
 | xAI                   | `grok-imagine-video`            |  ✓   | Classic: 1 first frame or 7 references; 1.5: 1 frame | Classic: 1 video                                | `XAI_API_KEY`                            |
 | Z.AI                  | `cogvideox-3`                   |  ✓   | 1 image (URL or local file)                          | -                                               | `ZAI_API_KEY`                            |
@@ -162,13 +162,13 @@ the shared live sweep:
 <ParamField path="images" type="string[]">Multiple reference images (up to 9).</ParamField>
 <ParamField path="imageRoles" type="string[]">
 Optional per-position role hints parallel to the combined image list.
-Canonical values: `first_frame`, `last_frame`, `reference_image`.
+Standard values: `first_frame`, `last_frame`, `reference_image`.
 </ParamField>
 <ParamField path="video" type="string">Single reference video (path or URL).</ParamField>
 <ParamField path="videos" type="string[]">Multiple reference videos (up to 4).</ParamField>
 <ParamField path="videoRoles" type="string[]">
 Optional per-position role hints parallel to the combined video list.
-Canonical value: `reference_video`.
+Standard value: `reference_video`.
 </ParamField>
 <ParamField path="audioRef" type="string">
 Single reference audio (path or URL). Used for background music or voice
@@ -177,11 +177,11 @@ reference when the provider supports audio inputs.
 <ParamField path="audioRefs" type="string[]">Multiple reference audios (up to 3).</ParamField>
 <ParamField path="audioRoles" type="string[]">
 Optional per-position role hints parallel to the combined audio list.
-Canonical value: `reference_audio`.
+Standard value: `reference_audio`.
 </ParamField>
 
 <Note>
-Role hints are forwarded to the provider as-is. Canonical values come from
+Role hints are forwarded to the provider as-is. Standard values come from
 the `VideoGenerationAssetRole` union but providers may accept additional
 role strings. `*Roles` arrays must not have more entries than the
 corresponding reference list; off-by-one mistakes fail with a clear error.
@@ -200,6 +200,9 @@ Repeated references keep their positions, so the same image can supply both
 <ParamField path="resolution" type="string">Resolution hint such as `360P`, `480P`, `540P`, `720P`, `768P`, `1080P`, `4K`, or a provider-specific value. OpenClaw normalizes or ignores unsupported values per provider.</ParamField>
 <ParamField path="durationSeconds" type="number">
   Target duration in seconds (rounded to nearest provider-supported value).
+  Explicit values must round to a positive safe integer (1–9007199254740991 seconds);
+  invalid values fail instead of being clamped to one second. Omission preserves
+  the provider default.
 </ParamField>
 <ParamField path="size" type="string">Size hint when the provider supports it.</ParamField>
 <ParamField path="audio" type="boolean">
@@ -224,8 +227,9 @@ dimensions). Providers that do not declare it surface the value via
 
 For Runway and Together, an explicit timeout covers submission, polling, and
 downloading together. Individual HTTP requests retain a 120-second limit.
-Without an explicit timeout, their 120-second polling budget starts after
-submission; request and download limits remain separate.
+Without an explicit timeout, the polling budget starts after submission:
+20 minutes for Together and 120 seconds for Runway. Request and download
+limits remain separate.
 
 <ParamField path="providerOptions" type="object">
   Provider-specific options as a JSON object (e.g. `{"seed": 42, "draft": true}`).
@@ -443,7 +447,9 @@ OpenClaw does not append auto-detected providers.
     ratios.
   </Accordion>
   <Accordion title="Together">
-    Single image reference only.
+    Single first-frame image only with `Wan-AI/wan2.7-i2v`. Wan 2.7 requests
+    use 2-10 seconds in OpenClaw. See [Together AI](/providers/together) for
+    supported sizes and request parameters.
   </Accordion>
   <Accordion title="Vydra">
     Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping
@@ -508,7 +514,7 @@ Flat aggregate fields such as `maxInputImages` and `maxInputVideos` are
 **not** enough to advertise transform-mode support. Providers should
 declare `generate`, `imageToVideo`, and `videoToVideo` explicitly so live
 tests, contract tests, and the shared `video_generate` tool can validate
-mode support deterministically.
+mode support from those declarations.
 
 When one model in a provider has wider reference-input support than the
 rest, use `maxInputImagesByModel`, `maxInputVideosByModel`, or

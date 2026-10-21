@@ -140,34 +140,27 @@ async function validatePackageEntryForInstall(params: {
   entryKind: "extension" | "setup";
   allowSourceTypeScriptEntries?: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  const sourceEntry = await validatePackageExtensionEntry({
-    packageDir: params.packageDir,
-    entry: params.entry,
-    label: `${params.entryKind} entry`,
-    requireExisting: false,
-  });
+  const entryLabel = `${params.entryKind} entry`;
+  const validateEntry = (entry: string, label = entryLabel, requireExisting = false) =>
+    validatePackageExtensionEntry({
+      packageDir: params.packageDir,
+      entry,
+      label,
+      requireExisting,
+    });
+  const sourceEntry = await validateEntry(params.entry);
   if (!sourceEntry.ok) {
     return sourceEntry;
   }
 
   if (params.runtimeEntry) {
-    const runtimeResult = await validatePackageExtensionEntry({
-      packageDir: params.packageDir,
-      entry: params.runtimeEntry,
-      label: `runtime ${params.entryKind} entry`,
-      requireExisting: true,
-    });
+    const runtimeResult = await validateEntry(params.runtimeEntry, `runtime ${entryLabel}`, true);
     return runtimeResult.ok ? { ok: true } : runtimeResult;
   }
 
   const builtEntryCandidates = listBuiltRuntimeEntryCandidates(params.entry);
   for (const builtEntry of builtEntryCandidates) {
-    const builtResult = await validatePackageExtensionEntry({
-      packageDir: params.packageDir,
-      entry: builtEntry,
-      label: `inferred runtime ${params.entryKind} entry`,
-      requireExisting: false,
-    });
+    const builtResult = await validateEntry(builtEntry, `inferred runtime ${entryLabel}`);
     if (!builtResult.ok) {
       return builtResult;
     }

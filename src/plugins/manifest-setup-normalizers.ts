@@ -1,6 +1,6 @@
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
+  normalizeOptionalTrimmedStringList,
   normalizeTrimmedStringList,
   normalizeUniqueTrimmedStringList,
 } from "../../packages/normalization-core/src/string-normalization.js";
@@ -14,8 +14,12 @@ import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { isRecord } from "../utils.js";
 import {
+  isPluginManifestOnboardingScope,
   normalizeManifestObjectList,
   normalizeNamedMetadataRecord,
+  normalizeProviderAssistantVisibility,
+  omitUndefinedManifestFields,
+  optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
 import type {
@@ -24,11 +28,8 @@ import type {
   PluginManifestChannelCommandDefaults,
   PluginManifestChannelConfig,
   PluginManifestCliCommand,
-  PluginManifestControlUi,
   PluginManifestDashboard,
   PluginManifestDashboardActionVerb,
-  PluginManifestDashboardDataBinding,
-  PluginManifestOnboardingScope,
   PluginManifestProviderAuthChoice,
   PluginManifestQaRunner,
   PluginManifestSetup,
@@ -37,6 +38,8 @@ import type {
   PluginConfigUiHint,
 } from "./manifest-types.js";
 import { normalizeSetupPresentationHttpsUrl } from "./setup-presentation-url.js";
+
+export { normalizeManifestControlUi } from "./manifest-control-ui.js";
 
 export function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
   if (!isRecord(value)) {
@@ -129,15 +132,12 @@ function normalizeManifestSetupProviders(
     if (!id) {
       return undefined;
     }
-    const authMethods = normalizeTrimmedStringList(entry.authMethods);
-    const envVars = normalizeTrimmedStringList(entry.envVars);
-    const authEvidence = normalizeManifestSetupProviderAuthEvidence(entry.authEvidence);
-    return {
+    return omitUndefinedManifestFields({
       id,
-      ...(authMethods.length > 0 ? { authMethods } : {}),
-      ...(envVars.length > 0 ? { envVars } : {}),
-      ...(authEvidence ? { authEvidence } : {}),
-    };
+      authMethods: normalizeOptionalTrimmedStringList(entry.authMethods),
+      envVars: normalizeOptionalTrimmedStringList(entry.envVars),
+      authEvidence: normalizeManifestSetupProviderAuthEvidence(entry.authEvidence),
+    });
   });
 }
 
@@ -153,22 +153,19 @@ function normalizeManifestSetupProviderAuthEvidence(
       return undefined;
     }
     const fileEnvVar = normalizeOptionalString(entry.fileEnvVar);
-    const fallbackPaths = normalizeTrimmedStringList(entry.fallbackPaths);
-    if (!fileEnvVar && fallbackPaths.length === 0) {
+    const fallbackPaths = normalizeOptionalTrimmedStringList(entry.fallbackPaths);
+    if (!fileEnvVar && !fallbackPaths) {
       return undefined;
     }
-    const requiresAnyEnv = normalizeTrimmedStringList(entry.requiresAnyEnv);
-    const requiresAllEnv = normalizeTrimmedStringList(entry.requiresAllEnv);
-    const source = normalizeOptionalString(entry.source);
-    return {
+    return omitUndefinedManifestFields<PluginManifestSetupProviderAuthEvidence>({
       type: "local-file-with-env",
-      ...(fileEnvVar ? { fileEnvVar } : {}),
-      ...(fallbackPaths.length > 0 ? { fallbackPaths } : {}),
-      ...(requiresAnyEnv.length > 0 ? { requiresAnyEnv } : {}),
-      ...(requiresAllEnv.length > 0 ? { requiresAllEnv } : {}),
+      fileEnvVar,
+      fallbackPaths,
+      requiresAnyEnv: normalizeOptionalTrimmedStringList(entry.requiresAnyEnv),
+      requiresAllEnv: normalizeOptionalTrimmedStringList(entry.requiresAllEnv),
       credentialMarker,
-      ...(source ? { source } : {}),
-    };
+      source: normalizeOptionalString(entry.source),
+    });
   });
 }
 
@@ -176,40 +173,22 @@ export function normalizeManifestSetup(value: unknown): PluginManifestSetup | un
   if (!isRecord(value)) {
     return undefined;
   }
-  const providers = normalizeManifestSetupProviders(value.providers);
-  const cliBackends = normalizeTrimmedStringList(value.cliBackends);
-  const configMigrations = normalizeTrimmedStringList(value.configMigrations);
   const nativeSessionCatalog = isRecord(value.nativeSessionCatalog)
-    ? {
+    ? omitUndefinedManifestFields({
         label: normalizeOptionalString(value.nativeSessionCatalog.label) ?? "",
+        legacyDefaultEnabled:
+          value.nativeSessionCatalog.legacyDefaultEnabled === true ? true : undefined,
+        nodeCommands: normalizeOptionalTrimmedStringList(value.nativeSessionCatalog.nodeCommands),
         description: normalizeOptionalString(value.nativeSessionCatalog.description),
-        nodeCommands: normalizeTrimmedStringList(value.nativeSessionCatalog.nodeCommands),
-        legacyDefaultEnabled: value.nativeSessionCatalog.legacyDefaultEnabled === true,
-      }
+      })
     : undefined;
-  const requiresRuntime =
-    typeof value.requiresRuntime === "boolean" ? value.requiresRuntime : undefined;
-  const setup = {
-    ...(providers ? { providers } : {}),
-    ...(cliBackends.length > 0 ? { cliBackends } : {}),
-    ...(configMigrations.length > 0 ? { configMigrations } : {}),
-    ...(nativeSessionCatalog?.label
-      ? {
-          nativeSessionCatalog: {
-            label: nativeSessionCatalog.label,
-            ...(nativeSessionCatalog.legacyDefaultEnabled ? { legacyDefaultEnabled: true } : {}),
-            ...(nativeSessionCatalog.nodeCommands.length > 0
-              ? { nodeCommands: nativeSessionCatalog.nodeCommands }
-              : {}),
-            ...(nativeSessionCatalog.description
-              ? { description: nativeSessionCatalog.description }
-              : {}),
-          },
-        }
-      : {}),
-    ...(requiresRuntime !== undefined ? { requiresRuntime } : {}),
-  } satisfies PluginManifestSetup;
-  return Object.keys(setup).length > 0 ? setup : undefined;
+  return optionalManifestFields({
+    providers: normalizeManifestSetupProviders(value.providers),
+    cliBackends: normalizeOptionalTrimmedStringList(value.cliBackends),
+    configMigrations: normalizeOptionalTrimmedStringList(value.configMigrations),
+    nativeSessionCatalog: nativeSessionCatalog?.label ? nativeSessionCatalog : undefined,
+    requiresRuntime: typeof value.requiresRuntime === "boolean" ? value.requiresRuntime : undefined,
+  });
 }
 
 export function normalizeManifestQaRunners(value: unknown): PluginManifestQaRunner[] | undefined {
@@ -218,11 +197,10 @@ export function normalizeManifestQaRunners(value: unknown): PluginManifestQaRunn
     if (!commandName) {
       return undefined;
     }
-    const description = normalizeOptionalString(entry.description) ?? "";
-    return {
+    return omitUndefinedManifestFields({
       commandName,
-      ...(description ? { description } : {}),
-    };
+      description: normalizeOptionalString(entry.description),
+    });
   });
 }
 
@@ -260,87 +238,42 @@ export function normalizeManifestDashboard(value: unknown): DashboardManifestRes
   if (!isRecord(value)) {
     return { ok: false, error: "dashboard must be an object" };
   }
-  if (value.dataBindings !== undefined && !Array.isArray(value.dataBindings)) {
-    return { ok: false, error: "dashboard.dataBindings must be an array" };
-  }
-  if (value.actionVerbs !== undefined && !Array.isArray(value.actionVerbs)) {
-    return { ok: false, error: "dashboard.actionVerbs must be an array" };
-  }
-
-  const dataBindings: PluginManifestDashboardDataBinding[] = [];
-  for (const [index, entry] of (value.dataBindings ?? []).entries()) {
-    const normalized = normalizeDashboardCapabilityBase(entry, "dashboard.dataBindings", index);
-    if (typeof normalized === "string") {
-      return { ok: false, error: normalized };
+  const groups: Array<{ field: keyof PluginManifestDashboard; entries: unknown[] }> = [];
+  // Validate both containers before entries to retain manifest error precedence.
+  for (const field of ["dataBindings", "actionVerbs"] as const) {
+    const entries = value[field];
+    if (entries !== undefined && !Array.isArray(entries)) {
+      return { ok: false, error: `dashboard.${field} must be an array` };
     }
-    dataBindings.push(normalized);
+    groups.push({ field, entries: entries ?? [] });
   }
-
-  const actionVerbs: PluginManifestDashboardActionVerb[] = [];
-  for (const [index, entry] of (value.actionVerbs ?? []).entries()) {
-    const normalized = normalizeDashboardCapabilityBase(entry, "dashboard.actionVerbs", index);
-    if (typeof normalized === "string") {
-      return { ok: false, error: normalized };
+  const dashboard: PluginManifestDashboard = {};
+  for (const group of groups) {
+    const { field } = group;
+    const entries: PluginManifestDashboardActionVerb[] = [];
+    for (const [index, entry] of group.entries.entries()) {
+      const normalized = normalizeDashboardCapabilityBase(entry, `dashboard.${field}`, index);
+      if (typeof normalized === "string") {
+        return { ok: false, error: normalized };
+      }
+      const rawParamShape =
+        field === "actionVerbs" && isRecord(entry) ? entry.paramShape : undefined;
+      if (rawParamShape !== undefined && !isRecord(rawParamShape)) {
+        return {
+          ok: false,
+          error: `dashboard.actionVerbs[${index}].paramShape must be a JSON Schema object`,
+        };
+      }
+      entries.push({
+        ...normalized,
+        ...(rawParamShape ? { paramShape: rawParamShape as JsonSchemaObject } : {}),
+      });
     }
-    const rawParamShape = isRecord(entry) ? entry.paramShape : undefined;
-    if (rawParamShape !== undefined && !isRecord(rawParamShape)) {
-      return {
-        ok: false,
-        error: `dashboard.actionVerbs[${index}].paramShape must be a JSON Schema object`,
-      };
-    }
-    actionVerbs.push({
-      ...normalized,
-      ...(rawParamShape ? { paramShape: rawParamShape as JsonSchemaObject } : {}),
-    });
-  }
-
-  if (dataBindings.length === 0 && actionVerbs.length === 0) {
-    return { ok: true };
-  }
-  return {
-    ok: true,
-    dashboard: {
-      ...(dataBindings.length > 0 ? { dataBindings } : {}),
-      ...(actionVerbs.length > 0 ? { actionVerbs } : {}),
-    },
-  };
-}
-
-export function normalizeManifestControlUi(
-  value: unknown,
-): Result<PluginManifestControlUi | undefined, string> {
-  if (value === undefined) {
-    return ok(undefined);
-  }
-  if (!isRecord(value) || Object.keys(value).some((key) => key !== "entry" && key !== "styles")) {
-    return err("controlUi must contain only entry and optional styles");
-  }
-  const entry = typeof value.entry === "string" ? value.entry.replace(/^\.\//u, "") : "";
-  // A dedicated built directory prevents a declaration from publishing package sources.
-  const builtEntry = /^dist\/(?:[\w-][\w.-]*\/)+[\w-][\w.-]*\.m?js$/u;
-  if (entry.length > 512 || !builtEntry.test(entry)) {
-    return err("controlUi.entry must be a JavaScript file in a dedicated dist subdirectory");
-  }
-  if (value.styles !== undefined && (!Array.isArray(value.styles) || value.styles.length > 16)) {
-    return err("controlUi.styles must be an array of at most 16 stylesheets");
-  }
-  const assetPrefix = entry.slice(0, entry.lastIndexOf("/") + 1);
-  const styles: string[] = [];
-  for (const rawStyle of value.styles ?? []) {
-    const style = typeof rawStyle === "string" ? rawStyle.replace(/^\.\//u, "") : "";
-    if (
-      style.length > 512 ||
-      !style.startsWith(assetPrefix) ||
-      !/^(?:[\w-][\w.-]*\/)+[\w-][\w.-]*\.css$/u.test(style)
-    ) {
-      return err("controlUi.styles must contain CSS files under the entry's asset directory");
-    }
-    if (!styles.includes(style)) {
-      styles.push(style);
+    if (entries.length > 0) {
+      dashboard[field] = entries;
     }
   }
-  return ok({ entry, ...(styles.length > 0 ? { styles } : {}) });
+  return Object.keys(dashboard).length > 0 ? { ok: true, dashboard } : { ok: true };
 }
 
 function normalizeProviderChannelLogin(
@@ -370,72 +303,47 @@ export function normalizeProviderAuthChoices(
     if (!provider || !method || !choiceId) {
       return undefined;
     }
-    const choiceLabel = normalizeOptionalString(entry.choiceLabel) ?? "";
-    const choiceHint = normalizeOptionalString(entry.choiceHint) ?? "";
-    const icon = normalizeSetupPresentationHttpsUrl(entry.icon);
-    const website = normalizeSetupPresentationHttpsUrl(entry.website);
-    const docsUrl = normalizeSetupPresentationHttpsUrl(entry.docsUrl);
-    const assistantPriority =
-      typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
-        ? entry.assistantPriority
-        : undefined;
-    const assistantVisibility =
-      entry.assistantVisibility === "manual-only" ||
-      entry.assistantVisibility === "visible" ||
-      entry.assistantVisibility === "detected-only"
-        ? entry.assistantVisibility
-        : undefined;
-    const deprecatedChoiceIds = normalizeTrimmedStringList(entry.deprecatedChoiceIds);
-    const groupId = normalizeOptionalString(entry.groupId) ?? "";
-    const groupLabel = normalizeOptionalString(entry.groupLabel) ?? "";
-    const groupHint = normalizeOptionalString(entry.groupHint) ?? "";
-    const optionKey = normalizeOptionalString(entry.optionKey) ?? "";
-    const cliFlag = normalizeOptionalString(entry.cliFlag) ?? "";
-    const cliOption = normalizeOptionalString(entry.cliOption) ?? "";
-    const cliDescription = normalizeOptionalString(entry.cliDescription) ?? "";
-    const appGuidedActionLabel = normalizeOptionalString(entry.appGuidedActionLabel) ?? "";
-    const appGuidedAuth =
-      entry.appGuidedAuth === "oauth" || entry.appGuidedAuth === "device-code"
-        ? entry.appGuidedAuth
-        : undefined;
     const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
-      (scope): scope is PluginManifestOnboardingScope =>
-        scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
+      isPluginManifestOnboardingScope,
     );
-    const channelLogin = normalizeProviderChannelLogin(entry.channelLogin);
-    return {
+    return omitUndefinedManifestFields<PluginManifestProviderAuthChoice>({
       provider,
       method,
       choiceId,
-      ...(entry.modelTarget === "utility" ? { modelTarget: "utility" as const } : {}),
-      ...(entry.platforms !== undefined
-        ? { platforms: normalizeManifestPlatforms(entry.platforms) }
-        : {}),
-      ...(choiceLabel ? { choiceLabel } : {}),
-      ...(choiceHint ? { choiceHint } : {}),
-      ...(icon ? { icon } : {}),
-      ...(website ? { website } : {}),
-      ...(docsUrl ? { docsUrl } : {}),
-      ...(assistantPriority !== undefined ? { assistantPriority } : {}),
-      ...(assistantVisibility ? { assistantVisibility } : {}),
-      ...(deprecatedChoiceIds.length > 0 ? { deprecatedChoiceIds } : {}),
-      ...(groupId ? { groupId } : {}),
-      ...(groupLabel ? { groupLabel } : {}),
-      ...(groupHint ? { groupHint } : {}),
-      ...(entry.onboardingFeatured === true ? { onboardingFeatured: true } : {}),
-      ...(entry.appGuidedDiscovery === true ? { appGuidedDiscovery: true } : {}),
-      ...(optionKey ? { optionKey } : {}),
-      ...(cliFlag ? { cliFlag } : {}),
-      ...(cliOption ? { cliOption } : {}),
-      ...(cliDescription ? { cliDescription } : {}),
-      ...(entry.appGuidedSecret === true ? { appGuidedSecret: true } : {}),
-      ...(entry.personalAccount === true ? { personalAccount: true } : {}),
-      ...(appGuidedActionLabel ? { appGuidedActionLabel } : {}),
-      ...(appGuidedAuth ? { appGuidedAuth } : {}),
-      ...(entry.credentialOnly === true ? { credentialOnly: true } : {}),
-      ...(channelLogin ? { channelLogin } : {}),
-      ...(onboardingScopes.length > 0 ? { onboardingScopes } : {}),
-    };
+      modelTarget: entry.modelTarget === "utility" ? "utility" : undefined,
+      platforms:
+        entry.platforms !== undefined ? normalizeManifestPlatforms(entry.platforms) : undefined,
+      choiceLabel: normalizeOptionalString(entry.choiceLabel),
+      choiceHint: normalizeOptionalString(entry.choiceHint),
+      icon: normalizeSetupPresentationHttpsUrl(entry.icon),
+      website: normalizeSetupPresentationHttpsUrl(entry.website),
+      docsUrl: normalizeSetupPresentationHttpsUrl(entry.docsUrl),
+      assistantPriority:
+        typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
+          ? entry.assistantPriority
+          : undefined,
+      assistantVisibility: normalizeProviderAssistantVisibility(entry.assistantVisibility),
+      deprecatedChoiceIds: normalizeOptionalTrimmedStringList(entry.deprecatedChoiceIds),
+      groupId: normalizeOptionalString(entry.groupId),
+      groupLabel: normalizeOptionalString(entry.groupLabel),
+      groupHint: normalizeOptionalString(entry.groupHint),
+      onboardingFeatured: entry.onboardingFeatured === true ? true : undefined,
+      appGuidedDiscovery: entry.appGuidedDiscovery === true ? true : undefined,
+      optionKey: normalizeOptionalString(entry.optionKey),
+      cliFlag: normalizeOptionalString(entry.cliFlag),
+      cliOption: normalizeOptionalString(entry.cliOption),
+      cliDescription: normalizeOptionalString(entry.cliDescription),
+      appGuidedSecret: entry.appGuidedSecret === true ? true : undefined,
+      personalAccount: entry.personalAccount === true ? true : undefined,
+      appGuidedActionLabel: normalizeOptionalString(entry.appGuidedActionLabel),
+      appGuidedAuth:
+        entry.appGuidedAuth === "oauth" || entry.appGuidedAuth === "device-code"
+          ? entry.appGuidedAuth
+          : undefined,
+      credentialOnly: entry.credentialOnly === true ? true : undefined,
+      channelLogin: normalizeProviderChannelLogin(entry.channelLogin),
+      onboardingScopes: onboardingScopes.length > 0 ? onboardingScopes : undefined,
+    });
   });
 }
 
@@ -454,6 +362,9 @@ export function normalizeConfigUiHints(
     if ("presentation" in hint && hint.presentation !== "phone-number") {
       delete hint.presentation;
     }
+    if ("multiline" in hint && typeof hint.multiline !== "boolean") {
+      delete hint.multiline;
+    }
     normalized[hintPath] = hint as PluginConfigUiHint;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
@@ -467,24 +378,18 @@ export function normalizeChannelConfigs(
     if (!schema) {
       return undefined;
     }
-    const uiHints = normalizeConfigUiHints(rawEntry.uiHints);
-    const runtime =
-      isRecord(rawEntry.runtime) && typeof rawEntry.runtime.safeParse === "function"
-        ? (rawEntry.runtime as ChannelConfigRuntimeSchema)
-        : undefined;
-    const label = normalizeOptionalString(rawEntry.label) ?? "";
-    const description = normalizeOptionalString(rawEntry.description) ?? "";
-    const preferOver = normalizeTrimmedStringList(rawEntry.preferOver);
-    const commandDefaults = normalizeManifestChannelCommandDefaults(rawEntry.commands);
-    return {
+    return omitUndefinedManifestFields({
       schema,
-      ...(uiHints ? { uiHints } : {}),
-      ...(runtime ? { runtime } : {}),
-      ...(label ? { label } : {}),
-      ...(description ? { description } : {}),
-      ...(preferOver.length > 0 ? { preferOver } : {}),
-      ...(commandDefaults ? { commands: commandDefaults } : {}),
-    };
+      uiHints: normalizeConfigUiHints(rawEntry.uiHints),
+      runtime:
+        isRecord(rawEntry.runtime) && typeof rawEntry.runtime.safeParse === "function"
+          ? (rawEntry.runtime as ChannelConfigRuntimeSchema)
+          : undefined,
+      label: normalizeOptionalString(rawEntry.label),
+      description: normalizeOptionalString(rawEntry.description),
+      preferOver: normalizeOptionalTrimmedStringList(rawEntry.preferOver),
+      commands: normalizeManifestChannelCommandDefaults(rawEntry.commands),
+    });
   });
 }
 

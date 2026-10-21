@@ -41,14 +41,6 @@ function resolveGoogleMeetTokenExpiresAt(value: unknown): number {
   );
 }
 
-type GoogleMeetOAuthTokens = {
-  accessToken: string;
-  expiresAt: number;
-  refreshToken?: string;
-  scope?: string;
-  tokenType?: string;
-};
-
 export function buildGoogleMeetAuthUrl(params: {
   clientId: string;
   challenge: string;
@@ -70,7 +62,7 @@ export function buildGoogleMeetAuthUrl(params: {
   return `${GOOGLE_MEET_AUTH_URL}?${search.toString()}`;
 }
 
-async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleMeetOAuthTokens> {
+async function executeGoogleTokenRequest(body: URLSearchParams) {
   const { response, release } = await fetchWithSsrFGuard({
     url: GOOGLE_MEET_TOKEN_URL,
     init: {
@@ -129,7 +121,7 @@ export async function exchangeGoogleMeetAuthCode(params: {
   code: string;
   verifier: string;
   redirectUri?: string;
-}): Promise<GoogleMeetOAuthTokens> {
+}) {
   return await executeGoogleTokenRequest(
     tokenRequestBody({
       client_id: params.clientId,
@@ -142,35 +134,6 @@ export async function exchangeGoogleMeetAuthCode(params: {
   );
 }
 
-async function refreshGoogleMeetAccessToken(params: {
-  clientId: string;
-  clientSecret?: string;
-  refreshToken: string;
-}): Promise<GoogleMeetOAuthTokens> {
-  return await executeGoogleTokenRequest(
-    tokenRequestBody({
-      client_id: params.clientId,
-      client_secret: params.clientSecret,
-      grant_type: "refresh_token",
-      refresh_token: params.refreshToken,
-    }),
-  );
-}
-
-function shouldUseCachedGoogleMeetAccessToken(params: {
-  accessToken?: string;
-  expiresAt?: number;
-}): boolean {
-  const now = Date.now();
-  return Boolean(
-    params.accessToken?.trim() &&
-    typeof params.expiresAt === "number" &&
-    Number.isFinite(params.expiresAt) &&
-    params.expiresAt <= MAX_DATE_TIMESTAMP_MS &&
-    params.expiresAt > now + 60_000,
-  );
-}
-
 export async function resolveGoogleMeetAccessToken(params: {
   clientId?: string;
   clientSecret?: string;
@@ -178,9 +141,16 @@ export async function resolveGoogleMeetAccessToken(params: {
   accessToken?: string;
   expiresAt?: number;
 }): Promise<{ accessToken: string; expiresAt?: number; refreshed: boolean }> {
-  if (shouldUseCachedGoogleMeetAccessToken(params)) {
+  const now = Date.now();
+  if (
+    params.accessToken?.trim() &&
+    typeof params.expiresAt === "number" &&
+    Number.isFinite(params.expiresAt) &&
+    params.expiresAt <= MAX_DATE_TIMESTAMP_MS &&
+    params.expiresAt > now + 60_000
+  ) {
     return {
-      accessToken: params.accessToken!.trim(),
+      accessToken: params.accessToken.trim(),
       expiresAt: params.expiresAt,
       refreshed: false,
     };
@@ -190,11 +160,15 @@ export async function resolveGoogleMeetAccessToken(params: {
       "Missing Google Meet OAuth credentials. Configure oauth.clientId and oauth.refreshToken, or pass --client-id and --refresh-token.",
     );
   }
-  const refreshed = await refreshGoogleMeetAccessToken({
-    clientId: params.clientId,
-    clientSecret: params.clientSecret,
-    refreshToken: params.refreshToken,
-  });
+  const { clientId, clientSecret, refreshToken } = params;
+  const refreshed = await executeGoogleTokenRequest(
+    tokenRequestBody({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+  );
   return {
     accessToken: refreshed.accessToken,
     expiresAt: refreshed.expiresAt,
@@ -213,24 +187,6 @@ function isLocalCallbackListenerError(error: unknown): boolean {
   );
 }
 
-async function readManualGoogleMeetAuthCode(params: {
-  state: string;
-  promptInput: (message: string) => Promise<string>;
-}): Promise<string> {
-  const input = await params.promptInput("Paste the full redirect URL here: ");
-  const parsed = parseOAuthCallbackInput(input, {
-    missingState: "Missing 'state' parameter. Paste the full redirect URL.",
-    invalidInput: "Paste the full redirect URL, not just the code.",
-  });
-  if ("error" in parsed) {
-    throw new Error(parsed.error);
-  }
-  if (parsed.state !== params.state) {
-    throw new Error("OAuth state mismatch - please try again");
-  }
-  return parsed.code;
-}
-
 export async function waitForGoogleMeetAuthCode(params: {
   state: string;
   manual: boolean;
@@ -239,12 +195,24 @@ export async function waitForGoogleMeetAuthCode(params: {
   promptInput: (message: string) => Promise<string>;
   writeLine: (message: string) => void;
 }): Promise<string> {
+  async function readManualGoogleMeetAuthCode(): Promise<string> {
+    const { state, promptInput } = params;
+    const input = await promptInput("Paste the full redirect URL here: ");
+    const parsed = parseOAuthCallbackInput(input, {
+      missingState: "Missing 'state' parameter. Paste the full redirect URL.",
+      invalidInput: "Paste the full redirect URL, not just the code.",
+    });
+    if ("error" in parsed) {
+      throw new Error(parsed.error);
+    }
+    if (parsed.state !== state) {
+      throw new Error("OAuth state mismatch - please try again");
+    }
+    return parsed.code;
+  }
   params.writeLine(`Open this URL in your browser:\n\n${params.authUrl}\n`);
   if (params.manual) {
-    return await readManualGoogleMeetAuthCode({
-      state: params.state,
-      promptInput: params.promptInput,
-    });
+    return await readManualGoogleMeetAuthCode();
   }
   try {
     const callback = await waitForLocalOAuthCallback({
@@ -261,9 +229,6 @@ export async function waitForGoogleMeetAuthCode(params: {
       throw error;
     }
     params.writeLine("Local callback server failed. Switching to manual mode...");
-    return await readManualGoogleMeetAuthCode({
-      state: params.state,
-      promptInput: params.promptInput,
-    });
+    return await readManualGoogleMeetAuthCode();
   }
 }

@@ -1,16 +1,9 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  isSessionSkillEnabled,
-  resolveEffectiveAgentSkillFilter,
-} from "../discovery/agent-filter.js";
+import { resolveEffectiveAgentSkillFilter } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
 import { assertUnambiguousManagedSkillNames } from "../library/command-name.js";
 import type { SkillEligibilityContext, SkillEntry } from "../types.js";
-import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
-import { resolveSkillKey } from "./frontmatter.js";
-
-const skillsLogger = createSubsystemLogger("skills");
+import { isSkillEntrySelected, resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
 
 export function filterSkillEntries(
   entries: SkillEntry[],
@@ -27,23 +20,11 @@ export function filterSkillEntries(
   const bundledAllowlist = resolveBundledAllowlist(config);
   assertUnambiguousManagedSkillNames(entries);
   const normalized = normalizeSkillFilter(skillFilter);
-  const filtered = entries.filter(
+  return entries.filter(
     (entry) =>
-      isSessionSkillEnabled(
-        entry.skill.name,
-        normalized,
-        skillOverrides,
-        resolveSkillKey(entry.skill, entry),
-      ) && shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility, hasBin, platform }),
+      isSkillEntrySelected(entry, normalized, skillOverrides) &&
+      shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility, hasBin, platform }),
   );
-  if (skillFilter !== undefined || skillOverrides !== undefined) {
-    const label = normalized?.length ? normalized.join(", ") : "(none)";
-    skillsLogger.debug(`Applying skill filter: ${label}`);
-    skillsLogger.debug(
-      `After skill filter: ${filtered.map((entry) => entry.skill.name).join(", ") || "(none)"}`,
-    );
-  }
-  return filtered;
 }
 
 export function resolveEffectiveWorkspaceSkillFilter(opts?: {

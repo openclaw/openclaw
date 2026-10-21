@@ -1,10 +1,10 @@
 import { listAgentEntries, listAgentIds } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { groupPluginRecords as groupRecords } from "../../../plugins/record-groups.js";
 import { normalizeAgentId, normalizeOptionalAgentId } from "../../../routing/session-key.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 
 type StaleSubagentAllowlistHit = {
-  /** Config path containing the stale allowAgents entry. */
   pathLabel: string;
   /** Original configured agent id. */
   agentId: string;
@@ -14,24 +14,15 @@ type StaleSubagentAllowlistHit = {
 
 function collectConfiguredSubagentTargetIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>(listAgentIds(cfg));
-  for (const agent of listAgentEntries(cfg)) {
-    if (agent.runtime?.type !== "acp") {
-      continue;
-    }
-    const acpAgent = normalizeOptionalAgentId(agent.runtime.acp?.agent);
-    if (acpAgent) {
-      ids.add(acpAgent);
-    }
-  }
-  const defaultAcpAgent = normalizeOptionalAgentId(cfg.acp?.defaultAgent);
-  if (defaultAcpAgent) {
-    ids.add(defaultAcpAgent);
-  }
-  for (const entry of cfg.acp?.allowedAgents ?? []) {
-    if (entry.trim() === "*") {
-      continue;
-    }
-    const acpAgent = normalizeOptionalAgentId(entry);
+  const targets = [
+    ...listAgentEntries(cfg).flatMap((agent) =>
+      agent.runtime?.type === "acp" ? [agent.runtime.acp?.agent] : [],
+    ),
+    cfg.acp?.defaultAgent,
+    ...(cfg.acp?.allowedAgents ?? []).filter((entry) => entry.trim() !== "*"),
+  ];
+  for (const target of targets) {
+    const acpAgent = normalizeOptionalAgentId(target);
     if (acpAgent) {
       ids.add(acpAgent);
     }
@@ -58,14 +49,10 @@ function collectStaleAllowlistEntries(params: {
       continue;
     }
     const normalizedAgentId = normalizeAgentId(trimmed);
-    if (params.configuredTargetIds.has(normalizedAgentId)) {
+    if (params.configuredTargetIds.has(normalizedAgentId) || seen.has(normalizedAgentId)) {
       continue;
     }
-    const key = `${params.pathLabel}:${normalizedAgentId}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
+    seen.add(normalizedAgentId);
     hits.push({
       pathLabel: params.pathLabel,
       agentId: trimmed,
@@ -87,7 +74,6 @@ function listSubagentAllowlists(cfg: OpenClawConfig) {
   });
 }
 
-/** Find subagent allowlist entries not backed by configured agent or ACP targets. */
 export function scanStaleSubagentAllowlistReferences(
   cfg: OpenClawConfig,
 ): StaleSubagentAllowlistHit[] {
@@ -101,7 +87,6 @@ export function scanStaleSubagentAllowlistReferences(
   );
 }
 
-/** Format warnings for stale subagent allowlist entries. */
 export function collectStaleSubagentAllowlistWarnings(params: {
   hits: readonly StaleSubagentAllowlistHit[];
   doctorFixCommand: string;
@@ -129,10 +114,7 @@ export function maybeRepairStaleSubagentAllowlists(cfg: OpenClawConfig): {
   }
 
   const next = structuredClone(cfg);
-  const hitsByPath = new Map<string, StaleSubagentAllowlistHit[]>();
-  for (const hit of hits) {
-    hitsByPath.set(hit.pathLabel, [...(hitsByPath.get(hit.pathLabel) ?? []), hit]);
-  }
+  const hitsByPath = groupRecords(hits, (hit) => hit.pathLabel);
 
   for (const { subagents, pathLabel } of listSubagentAllowlists(next)) {
     const pathHits = hitsByPath.get(pathLabel);

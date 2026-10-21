@@ -1,11 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { writeJsonWithoutCharset as respondJson } from "openclaw/plugin-sdk/http-response-runtime";
 import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   beginWebhookRequestPipelineOrReject,
   createFixedWindowRateLimiter,
@@ -43,12 +44,9 @@ type InvalidTokenRateLimitState = {
 };
 
 class InvalidTokenRateLimiter {
-  private readonly limit: number;
   private readonly state = new Map<string, InvalidTokenRateLimitState>();
 
-  constructor(limit: number) {
-    this.limit = limit;
-  }
+  constructor(readonly limit: number) {}
 
   private normalizeState(key: string, nowMs: number): InvalidTokenRateLimitState | undefined {
     const existing = this.state.get(key);
@@ -62,37 +60,30 @@ class InvalidTokenRateLimiter {
     return existing;
   }
 
-  private touch(key: string, value: InvalidTokenRateLimitState): void {
-    this.state.delete(key);
-    this.state.set(key, value);
-    pruneMapToMaxSize(this.state, INVALID_TOKEN_MAX_TRACKED_KEYS);
-  }
-
-  isLocked(key: string, nowMs = Date.now()): boolean {
+  isLocked(key: string): boolean {
     if (!key) {
       return false;
     }
-    const existing = this.normalizeState(key, nowMs);
+    const existing = this.normalizeState(key, Date.now());
     return (existing?.count ?? 0) > this.limit;
   }
 
-  recordFailure(key: string, nowMs = Date.now()): boolean {
+  recordFailure(key: string): boolean {
     if (!key) {
       return false;
     }
+    const nowMs = Date.now();
     const existing = this.normalizeState(key, nowMs);
     const nextCount = (existing?.count ?? 0) + 1;
     const windowStartMs = existing?.windowStartMs ?? nowMs;
-    this.touch(key, { count: nextCount, windowStartMs });
+    this.state.delete(key);
+    this.state.set(key, { count: nextCount, windowStartMs });
+    pruneMapToMaxSize(this.state, INVALID_TOKEN_MAX_TRACKED_KEYS);
     return nextCount > this.limit;
   }
 
   clear(): void {
     this.state.clear();
-  }
-
-  maxRequests(): number {
-    return this.limit;
   }
 }
 
@@ -116,7 +107,7 @@ function getRateLimiter(account: ResolvedSynologyChatAccount): FixedWindowRateLi
 function getInvalidTokenRateLimiter(account: ResolvedSynologyChatAccount): InvalidTokenRateLimiter {
   const limit = Math.min(account.rateLimitPerMinute, PREAUTH_MAX_REQUESTS_PER_MINUTE);
   let rl = invalidTokenRateLimiters.get(account.accountId);
-  if (!rl || rl.maxRequests() !== limit) {
+  if (!rl || rl.limit !== limit) {
     rl?.clear();
     rl = new InvalidTokenRateLimiter(limit);
     invalidTokenRateLimiters.set(account.accountId, rl);
@@ -192,7 +183,7 @@ function extractTokenFromHeaders(req: IncomingMessage): string | undefined {
   if (bearerMatch?.[1]) {
     return bearerMatch[1].trim();
   }
-  return auth.trim();
+  return auth;
 }
 
 // Token precedence is body, query, then headers.
@@ -260,11 +251,6 @@ function parsePayload(
 const SYNOLOGY_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
 const SYNOLOGY_WEBHOOK_ACCEPTED_VALUE = "durable";
 
-function respondJson(res: ServerResponse, statusCode: number, body: Record<string, unknown>) {
-  res.writeHead(statusCode, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(body));
-}
-
 export interface WebhookHandlerDeps {
   account: ResolvedSynologyChatAccount;
   receive: SynologyIngressMonitor["receive"];
@@ -276,176 +262,6 @@ export interface WebhookHandlerDeps {
     error: (...args: unknown[]) => void;
   };
   bodyTimeoutMs?: number;
-}
-
-type SynologyWebhookAuthorization = { ok: false; statusCode: number; error: string } | { ok: true };
-
-async function parseWebhookPayloadRequest(params: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  log?: WebhookHandlerDeps["log"];
-  bodyTimeoutMs?: number;
-}): Promise<
-  { ok: false } | { ok: true; payload: SynologyWebhookPayload; rawEvent: SynologyWebhookRawEvent }
-> {
-  let body: string;
-  try {
-    body = await readRequestBodyWithLimit(params.req, {
-      maxBytes: PREAUTH_MAX_BODY_BYTES,
-      timeoutMs:
-        params.bodyTimeoutMs === undefined ? PREAUTH_BODY_TIMEOUT_MS : params.bodyTimeoutMs,
-      // Defer destruction so the rejection owner can flush its response before closing.
-      destroyOnLimit: false,
-    });
-  } catch (err) {
-    const limited = isRequestBodyLimitError(err);
-    const error = limited ? requestBodyErrorToText(err.code) : "Invalid request body";
-    params.log?.error("Failed to read request body", error);
-    if (limited) {
-      await sendHttpRequestRejection(
-        params.req,
-        params.res,
-        err.statusCode,
-        JSON.stringify({ error }),
-        "application/json",
-      );
-      return { ok: false };
-    }
-    respondJson(params.res, 400, { error });
-    return { ok: false };
-  }
-
-  let raw: ReturnType<typeof parseRawEvent>;
-  try {
-    raw = parseRawEvent(params.req, body);
-  } catch (err) {
-    params.log?.warn("Failed to parse webhook payload", err);
-    respondJson(params.res, 400, { error: "Invalid request body" });
-    return { ok: false };
-  }
-  const payload = parsePayload(raw.rawEvent, raw.token);
-  if (!payload) {
-    respondJson(params.res, 400, { error: "Missing required fields (token, user_id, text)" });
-    return { ok: false };
-  }
-  return { ok: true, payload, rawEvent: raw.rawEvent };
-}
-
-async function authorizeSynologyWebhook(params: {
-  req: IncomingMessage;
-  account: ResolvedSynologyChatAccount;
-  payload: SynologyWebhookPayload;
-  invalidTokenRateLimiter: InvalidTokenRateLimiter;
-  rateLimiter: FixedWindowRateLimiter;
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-  log?: WebhookHandlerDeps["log"];
-}): Promise<SynologyWebhookAuthorization> {
-  const invalidTokenRateLimitKey = getSynologyWebhookInvalidTokenRateLimitKey({
-    req: params.req,
-    trustedProxies: params.trustedProxies,
-    allowRealIpFallback: params.allowRealIpFallback,
-  });
-  // Once a source has exhausted its invalid-token budget, reject all requests in the window.
-  if (params.invalidTokenRateLimiter.isLocked(invalidTokenRateLimitKey)) {
-    params.log?.warn(`Rate limit exceeded for remote IP: ${invalidTokenRateLimitKey}`);
-    return { ok: false, statusCode: 429, error: "Rate limit exceeded" };
-  }
-
-  if (!validateToken(params.payload.token, params.account.token)) {
-    if (params.invalidTokenRateLimiter.recordFailure(invalidTokenRateLimitKey)) {
-      params.log?.warn(`Rate limit exceeded for remote IP: ${invalidTokenRateLimitKey}`);
-      return { ok: false, statusCode: 429, error: "Rate limit exceeded" };
-    }
-    params.log?.warn(`Invalid token from ${params.req.socket?.remoteAddress}`);
-    return { ok: false, statusCode: 401, error: "Invalid token" };
-  }
-
-  const auth = await authorizeUserForDmWithIngress({
-    accountId: params.account.accountId,
-    userId: params.payload.user_id,
-    dmPolicy: params.account.dmPolicy,
-    allowedUserIds: params.account.allowedUserIds,
-  });
-  if (!auth.senderAccess.allowed) {
-    if (auth.senderAccess.reasonCode === "dm_policy_disabled") {
-      return { ok: false, statusCode: 403, error: "DMs are disabled" };
-    }
-    if (params.account.dmPolicy === "allowlist" && params.account.allowedUserIds.length === 0) {
-      params.log?.warn(
-        "Synology Chat allowlist is empty while dmPolicy=allowlist; rejecting message",
-      );
-      return {
-        ok: false,
-        statusCode: 403,
-        error:
-          'Allowlist is empty. Configure allowedUserIds or use dmPolicy=open with allowedUserIds=["*"].',
-      };
-    }
-    params.log?.warn(`Unauthorized user: ${params.payload.user_id}`);
-    return { ok: false, statusCode: 403, error: "User not authorized" };
-  }
-
-  if (params.rateLimiter.isRateLimited(params.payload.user_id)) {
-    // Keep a separate post-auth budget so authenticated users are still throttled per sender.
-    params.log?.warn(`Rate limit exceeded for user: ${params.payload.user_id}`);
-    return { ok: false, statusCode: 429, error: "Rate limit exceeded" };
-  }
-
-  return { ok: true };
-}
-
-function sanitizeSynologyWebhookText(payload: SynologyWebhookPayload): string {
-  let cleanText = sanitizeInput(payload.text);
-  if (payload.trigger_word && cleanText.startsWith(payload.trigger_word)) {
-    cleanText = cleanText.slice(payload.trigger_word.length).trim();
-  }
-  return cleanText;
-}
-
-async function resolveSynologyReplyDeliveryUserId(params: {
-  account: ResolvedSynologyChatAccount;
-  payload: SynologyWebhookPayload;
-  log?: WebhookHandlerDeps["log"];
-}): Promise<string> {
-  if (!params.account.dangerouslyAllowNameMatching) {
-    return params.payload.user_id;
-  }
-
-  const resolvedChatApiUserId = await synologyClient.resolveLegacyWebhookNameToChatUserId({
-    incomingUrl: params.account.incomingUrl,
-    mutableWebhookUsername: params.payload.username,
-    allowInsecureSsl: params.account.allowInsecureSsl,
-    log: params.log,
-  });
-  if (resolvedChatApiUserId !== undefined) {
-    return String(resolvedChatApiUserId);
-  }
-  params.log?.warn(
-    `Could not resolve Chat API user_id for "${params.payload.username}" — falling back to webhook user_id ${params.payload.user_id}. Reply delivery may fail.`,
-  );
-  return params.payload.user_id;
-}
-
-async function authorizeClaimedSynologyWebhook(params: {
-  account: ResolvedSynologyChatAccount;
-  payload: SynologyWebhookPayload;
-  contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding;
-}) {
-  const auth = await authorizeUserForDmWithIngress({
-    accountId: params.account.accountId,
-    userId: params.payload.user_id,
-    dmPolicy: params.account.dmPolicy,
-    allowedUserIds: params.account.allowedUserIds,
-    contextBinding: params.contextBinding,
-  });
-  if (!auth.senderAccess.allowed) {
-    throw new SynologyIngressPermanentError(
-      "synology-auth",
-      `Synology Chat user ${params.payload.user_id} is no longer authorized.`,
-    );
-  }
-  return auth;
 }
 
 export async function processSynologyWebhookIngressEvent(params: {
@@ -467,37 +283,61 @@ export async function processSynologyWebhookIngressEvent(params: {
   }
   const resolveChannelIngress = async (
     contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
-  ) =>
-    await authorizeClaimedSynologyWebhook({
-      account: params.account,
-      payload,
+  ) => {
+    const auth = await authorizeUserForDmWithIngress({
+      accountId: params.account.accountId,
+      userId: payload.user_id,
+      dmPolicy: params.account.dmPolicy,
+      allowedUserIds: params.account.allowedUserIds,
       contextBinding,
     });
+    if (!auth.senderAccess.allowed) {
+      throw new SynologyIngressPermanentError(
+        "synology-auth",
+        `Synology Chat user ${payload.user_id} is no longer authorized.`,
+      );
+    }
+    return auth;
+  };
   const channelIngress = await resolveChannelIngress();
-  const body = sanitizeSynologyWebhookText(payload);
+  let body = sanitizeInput(payload.text);
+  if (payload.trigger_word && body.startsWith(payload.trigger_word)) {
+    body = body.slice(payload.trigger_word.length).trim();
+  }
   if (!body) {
     return;
   }
-  const preview = body.length > 100 ? `${truncateUtf16Safe(body, 100)}...` : body;
-  params.log?.info?.(`Message from ${payload.username} (${payload.user_id}): ${preview}`);
+  params.log?.info?.(`Message from ${payload.username} (${payload.user_id}): len=${body.length}`);
 
   const authorizedWebhookUserId = payload.user_id;
-  const deliveryUserId = await resolveSynologyReplyDeliveryUserId({
-    account: params.account,
-    payload,
-    log: params.log,
-  });
+  const { account, log } = params;
+  const deliveryUserId = await (async () => {
+    if (!account.dangerouslyAllowNameMatching) {
+      return payload.user_id;
+    }
+
+    const resolvedChatApiUserId = await synologyClient.resolveLegacyWebhookNameToChatUserId({
+      incomingUrl: account.incomingUrl,
+      mutableWebhookUsername: payload.username,
+      allowInsecureSsl: account.allowInsecureSsl,
+      log,
+    });
+    if (resolvedChatApiUserId !== undefined) {
+      return String(resolvedChatApiUserId);
+    }
+    log?.warn(
+      `Could not resolve Chat API user_id for "${payload.username}" — falling back to webhook user_id ${payload.user_id}. Reply delivery may fail.`,
+    );
+    return payload.user_id;
+  })();
   await params.deliver(
     {
       body,
-      channelIngress,
       resolveChannelIngress,
       messageId: payload.post_id,
       from: authorizedWebhookUserId,
       senderName: payload.username,
-      provider: "synology-chat",
       chatType: "direct",
-      accountId: params.account.accountId,
       commandAuthorized: channelIngress.senderAccess.allowed,
       chatUserId: deliveryUserId,
     },
@@ -528,30 +368,101 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
 
     let rawEvent: SynologyWebhookRawEvent;
     try {
-      const parsed = await parseWebhookPayloadRequest({
-        req,
-        res,
-        log,
-        bodyTimeoutMs: deps.bodyTimeoutMs,
-      });
-      if (!parsed.ok) {
+      const bodyTimeoutMs = deps.bodyTimeoutMs;
+      let body: string;
+      try {
+        body = await readRequestBodyWithLimit(req, {
+          maxBytes: PREAUTH_MAX_BODY_BYTES,
+          timeoutMs: bodyTimeoutMs === undefined ? PREAUTH_BODY_TIMEOUT_MS : bodyTimeoutMs,
+          // Defer destruction so the rejection owner can flush its response before closing.
+          destroyOnLimit: false,
+        });
+      } catch (err) {
+        const limited = isRequestBodyLimitError(err);
+        const error = limited ? requestBodyErrorToText(err.code) : "Invalid request body";
+        log?.error("Failed to read request body", error);
+        if (limited) {
+          await sendHttpRequestRejection(
+            req,
+            res,
+            err.statusCode,
+            JSON.stringify({ error }),
+            "application/json",
+          );
+          return;
+        }
+        respondJson(res, 400, { error });
         return;
       }
-      const authorized = await authorizeSynologyWebhook({
-        req,
-        account,
-        payload: parsed.payload,
-        invalidTokenRateLimiter,
-        rateLimiter,
-        trustedProxies: deps.trustedProxies,
-        allowRealIpFallback: deps.allowRealIpFallback,
-        log,
-      });
-      if (!authorized.ok) {
-        respondJson(res, authorized.statusCode, { error: authorized.error });
+
+      let raw: ReturnType<typeof parseRawEvent>;
+      try {
+        raw = parseRawEvent(req, body);
+      } catch (err) {
+        log?.warn("Failed to parse webhook payload", err);
+        respondJson(res, 400, { error: "Invalid request body" });
         return;
       }
-      rawEvent = parsed.rawEvent;
+      const payload = parsePayload(raw.rawEvent, raw.token);
+      if (!payload) {
+        respondJson(res, 400, { error: "Missing required fields (token, user_id, text)" });
+        return;
+      }
+      const { trustedProxies, allowRealIpFallback } = deps;
+      const invalidTokenRateLimitKey = getSynologyWebhookInvalidTokenRateLimitKey({
+        req,
+        trustedProxies,
+        allowRealIpFallback,
+      });
+      // Once a source has exhausted its invalid-token budget, reject all requests in the window.
+      if (invalidTokenRateLimiter.isLocked(invalidTokenRateLimitKey)) {
+        log?.warn(`Rate limit exceeded for remote IP: ${invalidTokenRateLimitKey}`);
+        respondJson(res, 429, { error: "Rate limit exceeded" });
+        return;
+      }
+
+      if (!validateToken(payload.token, account.token)) {
+        if (invalidTokenRateLimiter.recordFailure(invalidTokenRateLimitKey)) {
+          log?.warn(`Rate limit exceeded for remote IP: ${invalidTokenRateLimitKey}`);
+          respondJson(res, 429, { error: "Rate limit exceeded" });
+          return;
+        }
+        log?.warn(`Invalid token from ${req.socket?.remoteAddress}`);
+        respondJson(res, 401, { error: "Invalid token" });
+        return;
+      }
+
+      const auth = await authorizeUserForDmWithIngress({
+        accountId: account.accountId,
+        userId: payload.user_id,
+        dmPolicy: account.dmPolicy,
+        allowedUserIds: account.allowedUserIds,
+      });
+      if (!auth.senderAccess.allowed) {
+        if (auth.senderAccess.reasonCode === "dm_policy_disabled") {
+          respondJson(res, 403, { error: "DMs are disabled" });
+          return;
+        }
+        if (account.dmPolicy === "allowlist" && account.allowedUserIds.length === 0) {
+          log?.warn("Synology Chat allowlist is empty while dmPolicy=allowlist; rejecting message");
+          respondJson(res, 403, {
+            error:
+              'Allowlist is empty. Configure allowedUserIds or use dmPolicy=open with allowedUserIds=["*"].',
+          });
+          return;
+        }
+        log?.warn(`Unauthorized user: ${payload.user_id}`);
+        respondJson(res, 403, { error: "User not authorized" });
+        return;
+      }
+
+      if (rateLimiter.isRateLimited(payload.user_id)) {
+        // Keep a separate post-auth budget so authenticated users are still throttled per sender.
+        log?.warn(`Rate limit exceeded for user: ${payload.user_id}`);
+        respondJson(res, 429, { error: "Rate limit exceeded" });
+        return;
+      }
+      rawEvent = raw.rawEvent;
     } finally {
       // Only bound the pre-auth request pipeline; async reply delivery is outside webhook ingress.
       requestLifecycle.release();

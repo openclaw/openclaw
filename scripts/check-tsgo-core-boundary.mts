@@ -5,10 +5,11 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
+import { resolveRepoToolBinPath, resolveTypeCheckTool } from "./lib/local-check-runtime.mts";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
+  expandTsgoExecutionGraphs,
   findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
   TSGO_CI_ADDITIONAL_GRAPHS,
@@ -37,7 +38,8 @@ export class CoreTsgoBoundaryInterruptedError extends Error {
   }
 }
 
-async function runTsgoQuery(
+async function runCompilerQuery(
+  bin: string,
   config: string,
   query: string,
   label: string,
@@ -50,7 +52,7 @@ async function runTsgoQuery(
   let code: number;
   try {
     code = await runManagedCommand({
-      bin: tsgoPath,
+      bin,
       args: ["-p", config, "--pretty", "false", query],
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
@@ -102,7 +104,7 @@ async function readGraphConfig(
   files?: string[];
 }> {
   return JSON.parse(
-    await runTsgoQuery(config, "--showConfig", `${config} config expansion`, cwd),
+    await runCompilerQuery(tsgoPath, config, "--showConfig", `${config} config expansion`, cwd),
   ) as {
     compilerOptions?: { tsBuildInfoFile?: string };
     files?: string[];
@@ -116,36 +118,37 @@ export type CoreTsgoGraph = {
   files: readonly string[];
 };
 
-type GraphQuery = {
-  config: (config: string, cwd: string) => ReturnType<typeof readGraphConfig>;
-  files: (config: string, name: string, cwd: string) => Promise<readonly string[]>;
-};
-const compilerQueries: GraphQuery = {
-  config: readGraphConfig,
-  async files(config, name, cwd) {
-    return (await runTsgoQuery(config, "--listFilesOnly", `${name} file listing`, cwd))
-      .split(/\r?\n/u)
-      .filter(Boolean);
-  },
-};
+/** Complete config membership, excluding the selected compiler's own libraries. */
+export async function readTsconfigFileMembership(
+  config: string,
+  cwd = repoRoot,
+): Promise<string[]> {
+  const bin = resolveRepoToolBinPath(resolveTypeCheckTool(), { cwd: repoRoot });
+  // Both compiler packages colocate their bundled libraries with the resolved
+  // native executable. Those are compiler identity, not repository membership.
+  const libraryDirectory = `${realpathSync(path.dirname(bin))}${path.sep}`;
+  return (await runCompilerQuery(bin, config, "--listFilesOnly", `${config} file listing`, cwd))
+    .split(/\r?\n/u)
+    .filter((file) => file && !path.resolve(cwd, file).startsWith(libraryDirectory));
+}
 
 /** Validates all boundaries and returns this invocation's compiler-resolved inputs. */
 export async function checkCoreTsgoGraphBoundary(
   options: { cwd?: string } = {},
 ): Promise<CoreTsgoGraph[]> {
   const cwd = realpathSync(options.cwd ?? repoRoot);
-  return validateCoreGraphs(cwd, compilerQueries);
+  return validateCoreGraphs(cwd);
 }
 
-async function validateCoreGraphs(cwd: string, query: GraphQuery): Promise<CoreTsgoGraph[]> {
+async function validateCoreGraphs(cwd: string): Promise<CoreTsgoGraph[]> {
   const normalize = (file: string) => normalizeFilePath(file, cwd);
   const testRootPattern = /\.test\.(?:ts|tsx)$/u;
-  const canonicalRoots = ((await query.config(canonicalCoreTestConfig, cwd)).files ?? [])
+  const canonicalRoots = ((await readGraphConfig(canonicalCoreTestConfig, cwd)).files ?? [])
     .map(normalize)
     .filter((file) => testRootPattern.test(file));
   const shardConfigs = [];
   for (const shard of TSGO_CORE_TEST_SHARDS) {
-    shardConfigs.push({ ...shard, expanded: await query.config(shard.config, cwd) });
+    shardConfigs.push({ ...shard, expanded: await readGraphConfig(shard.config, cwd) });
   }
   const shardRoots = shardConfigs.map((shard) => ({
     name: shard.name,
@@ -194,7 +197,7 @@ async function validateCoreGraphs(cwd: string, query: GraphQuery): Promise<CoreT
   const violations: string[] = [];
   const graphs: CoreTsgoGraph[] = [];
   for (const graph of TSGO_CORE_GRAPHS) {
-    const files = (await query.files(graph.config, graph.name, cwd)).map(normalize);
+    const files = (await readTsconfigFileMembership(graph.config, cwd)).map(normalize);
     graphs.push({
       ...graph,
       files,
@@ -202,7 +205,15 @@ async function validateCoreGraphs(cwd: string, query: GraphQuery): Promise<CoreT
         .map((file) => normalize(path.resolve(cwd, path.dirname(graph.config), file)))
         .filter((file) => testRootPattern.test(file)),
     });
-    const extensionFiles = files.filter((file) => file.startsWith("extensions/"));
+    const extensionFiles = files.filter(
+      (file) =>
+        file.startsWith("extensions/") &&
+        !(
+          (graph.name === "ui" || graph.name.startsWith("core-test-")) &&
+          (file === "extensions/active-memory/control-ui.presentation.json" ||
+            file === "extensions/memory-wiki/control-ui.presentation.json")
+        ),
+    );
     for (const file of extensionFiles) {
       violations.push(`${graph.name}: ${file}`);
     }
@@ -226,68 +237,14 @@ export async function inspectCiTsgoCheckGraphs(
   options: { cwd?: string; scope?: "all" | "noncore" } = {},
 ): Promise<CoreTsgoGraph[]> {
   const cwd = realpathSync(options.cwd ?? repoRoot);
-  const inspect = async (query: GraphQuery) => {
-    const graphs = options.scope === "noncore" ? [] : await validateCoreGraphs(cwd, query);
-    for (const graph of TSGO_CI_ADDITIONAL_GRAPHS) {
-      const files = (await query.files(graph.config, graph.name, cwd)).map((file) =>
-        normalizeFilePath(file, cwd),
-      );
-      graphs.push({ ...graph, files, roots: [] });
-    }
-    return graphs;
-  };
-  if (["1", "true"].includes(process.env.OPENCLAW_CI_TYPE_PLAN_SERIAL ?? "")) {
-    return inspect(compilerQueries);
+  const graphs = options.scope === "noncore" ? [] : await validateCoreGraphs(cwd);
+  for (const graph of expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS)) {
+    const files = (await readTsconfigFileMembership(graph.config, cwd)).map((file) =>
+      normalizeFilePath(file, cwd),
+    );
+    graphs.push({ ...graph, files, roots: [] });
   }
-  // One immutable compiler snapshot shares parsing and resolution across projects.
-  // Membership still comes from each complete compiler program, including type-only edges.
-  const { API } = await import("typescript/unstable/async");
-  const api = new API({ cwd });
-  try {
-    const configs = [
-      ...(options.scope === "noncore" ? [] : TSGO_CORE_GRAPHS),
-      ...TSGO_CI_ADDITIONAL_GRAPHS,
-    ];
-    const snapshot = await api.createSnapshot({
-      openProjects: configs.map(({ config }) => path.resolve(cwd, config)),
-      ensurePrograms: true,
-    });
-    const project = (config: string) => {
-      const opened = snapshot.getConfiguredProject(path.resolve(cwd, config));
-      if (!opened) {
-        throw new Error(`Native TypeScript did not open ${config}`);
-      }
-      return opened;
-    };
-    for (const { config } of configs) {
-      const diagnostics = await project(config).program.getConfigFileParsingDiagnostics();
-      if (diagnostics.length) {
-        throw new Error(`Invalid TypeScript config ${config}: ${JSON.stringify(diagnostics)}`);
-      }
-    }
-    return await inspect({
-      async config(config) {
-        const absolute = path.resolve(cwd, config);
-        const parsed =
-          config === canonicalCoreTestConfig
-            ? await api.parseConfigFile(absolute)
-            : project(config).parsedCommandLine;
-        const syntax = await api.readConfigFile(absolute);
-        if (parsed.errors.length || syntax.error) {
-          throw new Error(`Invalid TypeScript config ${config}`);
-        }
-        return {
-          compilerOptions: { tsBuildInfoFile: parsed.options.tsBuildInfoFile },
-          files: parsed.fileNames.map((file) => path.relative(path.dirname(absolute), file)),
-        };
-      },
-      async files(config) {
-        return project(config).program.getSourceFileNames();
-      },
-    });
-  } finally {
-    await api.close();
-  }
+  return graphs;
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

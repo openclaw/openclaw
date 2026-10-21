@@ -18,7 +18,7 @@ export class CodexServerRequestResolvedError extends Error {
 export type CodexServerRequestHandler = (
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
   signal?: AbortSignal,
-  setExecutionTimeoutMs?: (timeoutMs: number) => void,
+  setExecutionTimeoutMs?: (timeoutMs: number | null) => void,
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
 
 type ServerRequest = Parameters<CodexServerRequestHandler>[0];
@@ -89,23 +89,31 @@ export class CodexServerRequests {
           method: request.method,
           timeoutMs,
         });
-        deadline.resolve(timeoutServerRequestResponse(timeoutMs));
+        deadline.resolve(
+          failedToolResponse(
+            `OpenClaw dynamic tool call timed out after ${timeoutMs}ms before sending a response to Codex.`,
+          ),
+        );
         controller.abort(new Error("codex app-server server request timed out"));
       }, timeoutMs);
       timeout.unref?.();
     };
-    const setExecutionTimeoutMs = (executionTimeoutMs: number) => {
+    const setExecutionTimeoutMs = (executionTimeoutMs: number | null) => {
       if (
         settled ||
         controller.signal.aborted ||
         executionTimeoutResolved ||
-        !Number.isFinite(executionTimeoutMs) ||
-        executionTimeoutMs <= 0
+        (executionTimeoutMs !== null &&
+          (!Number.isFinite(executionTimeoutMs) || executionTimeoutMs <= 0))
       ) {
         return;
       }
       // The admitted owner sets one execution budget; later progress cannot reset it.
       executionTimeoutResolved = true;
+      if (executionTimeoutMs === null) {
+        clearTimeout(timeout);
+        return;
+      }
       timeoutMs = addSafeTimeoutDelayGraceMs(executionTimeoutMs, 30_000);
       armTimeout();
     };
@@ -169,15 +177,7 @@ export class CodexServerRequests {
 
 function defaultServerRequestResponse(request: ServerRequest): JsonValue {
   if (request.method === "item/tool/call") {
-    return {
-      contentItems: [
-        {
-          type: "inputText",
-          text: "OpenClaw did not register a handler for this app-server tool call.",
-        },
-      ],
-      success: false,
-    };
+    return failedToolResponse("OpenClaw did not register a handler for this app-server tool call.");
   }
   if (
     request.method === "item/commandExecution/requestApproval" ||
@@ -189,9 +189,7 @@ function defaultServerRequestResponse(request: ServerRequest): JsonValue {
     return { permissions: {}, scope: "turn" };
   }
   if (request.method === "item/tool/requestUserInput") {
-    return {
-      answers: {},
-    };
+    return { answers: {} };
   }
   if (request.method === "mcpServer/elicitation/request") {
     return createCodexElicitationResponse("decline", null, {
@@ -201,14 +199,9 @@ function defaultServerRequestResponse(request: ServerRequest): JsonValue {
   return {};
 }
 
-function timeoutServerRequestResponse(timeoutMs: number): JsonValue {
+function failedToolResponse(text: string): JsonValue {
   return {
-    contentItems: [
-      {
-        type: "inputText",
-        text: `OpenClaw dynamic tool call timed out after ${timeoutMs}ms before sending a response to Codex.`,
-      },
-    ],
+    contentItems: [{ type: "inputText", text }],
     success: false,
   };
 }

@@ -2,14 +2,17 @@
 import { randomUUID } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { resolveExecDefaults, type ResolvedExecDefaults } from "../exec-defaults.js";
+import type { ResolvedExecDefaults } from "../exec-defaults.js";
+import { resolveExecDefaultsLegacy } from "../exec-defaults.legacy.js";
 import { withPreparedExecDefaults } from "../exec-defaults.preparation.js";
 import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedToolConstruction } from "../tool-construction-preparation.js";
 import { jsonResult, readToolStringParam, type AnyAgentTool } from "./common.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
@@ -28,9 +31,7 @@ const OpenClawDelegateOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type OpenClawDelegateResult = Static<typeof OpenClawDelegateOutputSchema> & {
-  sessionId: string;
-};
+type OpenClawDelegateResult = Static<typeof OpenClawDelegateOutputSchema>;
 
 function stableDelegationSessionId(sessionKey: string | undefined, agentId: string): string {
   return sessionKey?.trim()
@@ -90,7 +91,7 @@ export function createOpenClawDelegateToolsForRun(
   }
   const sessionKey = options.runSessionKey ?? options.agentSessionKey;
   const defaultSessionId = stableDelegationSessionId(sessionKey, options.sessionAgentId);
-  const execPolicy = preparedExecDefaults ?? resolveExecDefaults(execDefaultsParams(options));
+  const execPolicy = preparedExecDefaults ?? resolveExecDefaultsLegacy(execDefaultsParams(options));
   const fullPermission =
     options.fsPolicy?.workspaceOnly !== true &&
     execPolicy.effectiveHost !== "sandbox" &&
@@ -135,19 +136,24 @@ export function createOpenClawDelegateToolsForRun(
             approvalSignals: signal ? [signal] : [],
           }
         : undefined;
+      // The helper admits its own runtime; caller authority remains in its separate scope.
       const result = await withGatewayToolCallerIdentity(caller, () =>
-        callInProcessGatewayTool<OpenClawDelegateResult>("openclaw.chat", {
-          sessionId,
-          message,
-          delegation: {
-            agentId: options.sessionAgentId,
-            ...(sessionKey ? { sessionKey } : {}),
-            ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
-            ...(turnSourceTo ? { turnSourceTo } : {}),
-            ...(options.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
-            ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
-          },
-        }),
+        runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+          runOutsidePluginRuntimeGenerationScope(() =>
+            callInProcessGatewayTool<OpenClawDelegateResult>("openclaw.chat", {
+              sessionId,
+              message,
+              delegation: {
+                agentId: options.sessionAgentId,
+                ...(sessionKey ? { sessionKey } : {}),
+                ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
+                ...(turnSourceTo ? { turnSourceTo } : {}),
+                ...(options.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
+                ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+              },
+            }),
+          ),
+        ),
       );
       return jsonResult({
         reply: result.reply,

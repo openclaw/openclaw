@@ -1,8 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
-import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
-import { resolveRealpathOrAbsolute as canonicalFilePath } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   type ActiveSessionSqliteMigrationRun,
@@ -14,8 +10,9 @@ import {
   resolveTargetSqlitePath,
   scanReadOnlySqliteActiveTranscriptFiles,
 } from "../infra/session-sqlite-migration-readers.js";
-import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
+import { resolveActiveSqliteTranscriptFile } from "./doctor-session-sqlite-transcript-file.js";
 import type {
   DoctorSessionSqliteMode,
   DoctorSessionSqliteReport,
@@ -27,18 +24,13 @@ export function countLegacyTranscript(
   report: DoctorSessionSqliteTargetReport,
 ): void {
   const result = countTranscriptEventsForPath(record.transcriptPath);
-  if (result.status === "missing") {
+  if (result.status !== "ok") {
     report.issues.push({
-      code: "transcript_missing",
-      message: `Transcript file is missing: ${record.transcriptPath}`,
-      sessionKey: record.sessionKey,
-    });
-    return;
-  }
-  if (result.status === "malformed") {
-    report.issues.push({
-      code: "transcript_malformed",
-      message: result.message,
+      code: result.status === "missing" ? "transcript_missing" : "transcript_malformed",
+      message:
+        result.status === "missing"
+          ? `Transcript file is missing: ${record.transcriptPath}`
+          : result.message,
       sessionKey: record.sessionKey,
     });
     return;
@@ -56,7 +48,7 @@ export function appendRetainedPluginSessionSourceIssue(
     : "await archival. Run openclaw doctor --fix to finish.";
   report.issues.push({
     code: "plugin_migration_source_retained",
-    message: `Canonical session import is verified. Original session migration inputs, including unindexed history, ${pending}`,
+    message: `Session import is verified. Original session migration inputs, including unindexed history, ${pending}`,
   });
 }
 
@@ -134,7 +126,7 @@ export async function compactSqliteDatabase(
 ): Promise<void> {
   try {
     if (options.operation === "import-finalize") {
-      closeOpenClawAgentDatabaseByPath(resolveTargetSqlitePath(target));
+      await closeOpenClawAgentDatabaseByPathAsync(resolveTargetSqlitePath(target));
     }
     report.compact = await compactDoctorSessionSqliteTarget(target, options);
   } catch (err) {
@@ -143,39 +135,6 @@ export async function compactSqliteDatabase(
       message: `SQLite database compact failed: ${formatErrorMessage(err)}`,
     });
   }
-}
-
-function resolveActiveSqliteTranscriptFile(
-  target: SessionStoreTarget,
-  entry: { sessionFile?: string; sessionId: string },
-): string | undefined {
-  let transcriptPath: string;
-  try {
-    transcriptPath = resolveSessionFilePathCore(entry.sessionId, entry, {
-      agentId: target.agentId,
-      sessionsDir: path.dirname(target.storePath),
-    });
-  } catch {
-    return undefined;
-  }
-  if (!transcriptPath.endsWith(".jsonl")) {
-    return undefined;
-  }
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(transcriptPath);
-  } catch {
-    return undefined;
-  }
-  if (!stat.isFile()) {
-    return undefined;
-  }
-  const sessionsDir = canonicalFilePath(path.dirname(target.storePath));
-  const activePath = canonicalFilePath(transcriptPath);
-  if (path.dirname(activePath) !== sessionsDir) {
-    return undefined;
-  }
-  return activePath;
 }
 
 export function summarizeDoctorSessionSqliteReport(

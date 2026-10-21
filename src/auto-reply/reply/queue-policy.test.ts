@@ -20,16 +20,6 @@ describe("resolveActiveRunQueueAction", () => {
     },
   );
 
-  it("drops heartbeat runs while another run is active", () => {
-    expect(
-      resolveActiveRunQueueAction({
-        isActive: true,
-        isHeartbeat: true,
-        shouldFollowup: true,
-      }),
-    ).toBe("drop");
-  });
-
   it("enqueues followups for non-heartbeat active runs", () => {
     expect(
       resolveActiveRunQueueAction({
@@ -38,6 +28,43 @@ describe("resolveActiveRunQueueAction", () => {
         shouldFollowup: true,
       }),
     ).toBe("enqueue-followup");
+  });
+
+  it("runs interrupts ahead of queued followups", () => {
+    expect(
+      resolveActiveRunQueueAction({
+        hasQueuedFollowups: true,
+        isActive: true,
+        interrupt: true,
+        isHeartbeat: false,
+        shouldFollowup: false,
+      }),
+    ).toBe("run-now");
+  });
+
+  it.each(["steer", "followup", "collect"] as const)(
+    "enqueues %s turns behind queued followups",
+    (mode) => {
+      expect(
+        resolveActiveRunQueueAction({
+          hasQueuedFollowups: true,
+          isActive: true,
+          isHeartbeat: false,
+          shouldFollowup: mode === "steer" || mode === "followup" || mode === "collect",
+        }),
+      ).toBe("enqueue-followup");
+    },
+  );
+
+  it("drops heartbeats while an active run has queued followups", () => {
+    expect(
+      resolveActiveRunQueueAction({
+        hasQueuedFollowups: true,
+        isActive: true,
+        isHeartbeat: true,
+        shouldFollowup: true,
+      }),
+    ).toBe("drop");
   });
 
   it("runs reset-triggered turns immediately while another run is active", () => {
@@ -60,16 +87,5 @@ describe("resolveActiveRunQueueAction", () => {
         resetTriggered: true,
       }),
     ).toBe("drop");
-  });
-
-  it("ignores reset-triggered policy when there is no active run", () => {
-    expect(
-      resolveActiveRunQueueAction({
-        isActive: false,
-        isHeartbeat: false,
-        shouldFollowup: true,
-        resetTriggered: true,
-      }),
-    ).toBe("run-now");
   });
 });

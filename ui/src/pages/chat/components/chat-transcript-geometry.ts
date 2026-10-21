@@ -1,5 +1,4 @@
 import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptViewportMeasurement } from "./chat-transcript-scroll-events.ts";
 
@@ -89,20 +88,16 @@ export function resolvePositionRailReaderViewport(
   return { state, scheduleLayout };
 }
 
-function transcriptScrollMargin(element: Element | null): number {
-  if (!(element instanceof HTMLElement) || typeof getComputedStyle !== "function") {
-    return 0;
-  }
-  const margin = Number.parseFloat(getComputedStyle(element).paddingTop);
-  return Number.isFinite(margin) ? margin : 0;
-}
-
 /** Row offsets start below the scroll padding plus the in-flow history header. */
 export function resolveTranscriptScrollMargin(
   scrollElement: Element | null,
   headerHeight: number,
 ): number {
-  return transcriptScrollMargin(scrollElement) + headerHeight;
+  const margin =
+    scrollElement instanceof HTMLElement && typeof getComputedStyle === "function"
+      ? Number.parseFloat(getComputedStyle(scrollElement).paddingTop)
+      : 0;
+  return (Number.isFinite(margin) ? margin : 0) + headerHeight;
 }
 
 export function syncScrollMargin(
@@ -125,10 +120,25 @@ export function initialTranscriptRect() {
   };
 }
 
-export function measureConnectedTranscriptRows(
-  scrollElement: HTMLDivElement | null,
+export function isTranscriptRangeCommitted(
+  inner: HTMLElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): boolean {
+  return virtualizer.getVirtualItems().every((row) => {
+    const node = virtualizer.elementsCache.get(row.key);
+    return (
+      node !== undefined &&
+      inner?.contains(node) === true &&
+      Number.parseFloat(node.style.getPropertyValue("contain-intrinsic-block-size")) === row.size
+    );
+  });
+}
+
+export function readConnectedTranscriptRows(
+  scrollElement: HTMLDivElement | null,
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  rowElements: Iterable<HTMLElement>,
+): (() => boolean) | null {
   const rect = scrollElement?.getBoundingClientRect();
   if (
     !scrollElement ||
@@ -136,26 +146,34 @@ export function measureConnectedTranscriptRows(
     !rect?.width ||
     !rect.height
   ) {
-    return false;
+    return null;
   }
   // Width changes and retired smooth commands can have undelivered sizes.
   // Ordinary row refs stay on TanStack's observer path; never clear its cache.
   const measurements: Array<{ index: number; height: number }> = [];
-  for (const row of scrollElement.querySelectorAll<HTMLElement>(".chat-virtual-row")) {
+  // Refs can arrive out of order during prepends; preserve DOM-order corrections.
+  const rows = [...rowElements]
+    .filter((row) => scrollElement.contains(row))
+    .toSorted(
+      (left, right) => virtualizer.indexFromElement(left) - virtualizer.indexFromElement(right),
+    );
+  for (const row of rows) {
     const index = virtualizer.indexFromElement(row);
     // Rows are border-boxes; read their fractional layout height, not a scaled
     // client rect when a containing board or sidebar is transitioning.
     const height = Number.parseFloat(getComputedStyle(row).height);
     measurements.push({ index, height: Number.isFinite(height) ? height : row.offsetHeight });
   }
-  let changed = false;
-  for (const { index, height } of measurements) {
-    const key = virtualizer.options.getItemKey(index);
-    const previousSize = virtualizer.itemSizeCache.get(key);
-    virtualizer.resizeItem(index, height);
-    changed ||= virtualizer.itemSizeCache.get(key) !== previousSize;
-  }
-  return changed;
+  return () => {
+    let changed = false;
+    for (const { index, height } of measurements) {
+      const key = virtualizer.options.getItemKey(index);
+      const previousSize = virtualizer.itemSizeCache.get(key);
+      virtualizer.resizeItem(index, height);
+      changed ||= virtualizer.itemSizeCache.get(key) !== previousSize;
+    }
+    return changed;
+  };
 }
 
 export function measureTranscriptRow(
@@ -163,27 +181,21 @@ export function measureTranscriptRow(
   entry: ResizeObserverEntry | undefined,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): number {
-  if (!entry && virtualizer.targetWindow?.ResizeObserver) {
-    // Registration happens during Lit commit; the observer supplies real sizes
-    // after layout, including the first measurement of a newly mounted row.
-    const index = virtualizer.indexFromElement(element);
-    return (
-      virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index)) ??
-      virtualizer.options.estimateSize(index)
-    );
+  if (entry || !virtualizer.targetWindow?.ResizeObserver) {
+    // Rounded row heights accumulate when skipped overscan uses those measurements.
+    const size =
+      entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
+    if (size !== 0 || virtualizer.scrollElement?.clientHeight !== 0) {
+      return size;
+    }
   }
-  // Rounded row heights accumulate when skipped overscan uses those measurements.
-  const size = entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
-  if (size === 0 && virtualizer.scrollElement?.clientHeight === 0) {
-    // A hidden panel has no row geometry. Retain the last measurement instead
-    // of replacing it with zero and moving the restored viewport.
-    const index = virtualizer.indexFromElement(element);
-    return (
-      virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index)) ??
-      virtualizer.options.estimateSize(index)
-    );
-  }
-  return size;
+  // Row registration waits for the observer's first layout; hidden panels retain
+  // their last measurement instead of replacing it with zero and moving the viewport.
+  const index = virtualizer.indexFromElement(element);
+  return (
+    virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index)) ??
+    virtualizer.options.estimateSize(index)
+  );
 }
 
 export function maxTranscriptScrollOffset(element: HTMLElement | null): number | null {
@@ -192,60 +204,42 @@ export function maxTranscriptScrollOffset(element: HTMLElement | null): number |
     : null;
 }
 
-export function reconcileInitialTranscriptOffset(
-  element: HTMLDivElement | null,
-  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-): "pending" | "settled" | "corrected" {
-  const maxOffset = maxTranscriptScrollOffset(element);
-  const offset = virtualizer.scrollOffset;
-  if (maxOffset === null || offset === null) {
-    return "pending";
-  }
-  if (offset >= 0 && offset <= maxOffset) {
-    return "settled";
-  }
-  if (maxOffset !== 0) {
-    return "pending";
-  }
-  // An underfilled end anchor clamps to zero without a native scroll event.
-  virtualizer.scrollOffset = 0;
-  virtualizer.scrollToOffset(0);
-  return "corrected";
-}
+export function createPositionRailGutter(
+  scrollElement: () => HTMLDivElement | null,
+  innerElement: () => HTMLDivElement | null,
+  columnElement: () => HTMLDivElement | undefined,
+) {
+  let resizeObserver: ResizeObserver | null = null;
+  let observedViewport: HTMLDivElement | null = null;
+  let observedInner: HTMLDivElement | null = null;
+  let observedRegion: HTMLElement | null = null;
 
-export class PositionRailGutterController implements ReactiveController {
-  private resizeObserver: ResizeObserver | null = null;
-  private viewport: HTMLDivElement | null = null;
-  private innerElement: HTMLDivElement | null = null;
-  private region: HTMLElement | null = null;
+  const disconnect = () => {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    observedViewport = null;
+    observedInner = null;
+    observedRegion = null;
+  };
 
-  constructor(
-    private readonly host: ReactiveControllerHost & {
-      readonly scrollElement: HTMLDivElement | null;
-    },
-    private readonly inner: () => HTMLDivElement | null,
-  ) {
-    host.addController(this);
-  }
-
-  hostUpdated(): void {
-    const viewport = this.host.scrollElement;
-    const inner = this.inner();
+  const update = () => {
+    const viewport = scrollElement();
+    const inner = innerElement();
     const region = viewport?.closest<HTMLElement>(".chat-main__conversation") ?? viewport;
-    if (viewport === this.viewport && inner === this.innerElement && region === this.region) {
+    if (viewport === observedViewport && inner === observedInner && region === observedRegion) {
       return;
     }
-    this.hostDisconnected();
-    if (!viewport?.isConnected || inner?.parentElement !== viewport || !region) {
+    disconnect();
+    const column = columnElement();
+    if (!viewport?.isConnected || inner?.parentElement !== viewport || !region || !column) {
       return;
     }
-    this.viewport = viewport;
-    this.innerElement = inner;
-    this.region = region;
-    const column = inner.querySelector<HTMLElement>(":scope > .chat-virtual-sizer") ?? inner;
+    observedViewport = viewport;
+    observedInner = inner;
+    observedRegion = region;
     let innerWidth: number | undefined;
     let regionHeight: number | undefined;
-    this.resizeObserver = new ResizeObserver((entries) => {
+    resizeObserver = new ResizeObserver((entries) => {
       let changed = false;
       for (const entry of entries) {
         if (entry.target === column) {
@@ -259,26 +253,18 @@ export class PositionRailGutterController implements ReactiveController {
         }
       }
       if (changed) {
-        this.sync();
+        sync();
       }
     });
     // The virtual column has no flow height. Observing the owned range instead
     // feeds row measurements back into shallower ResizeObserver delivery.
-    this.resizeObserver.observe(column, { box: "border-box" });
-    this.resizeObserver.observe(region, { box: "border-box" });
-  }
+    resizeObserver.observe(column, { box: "border-box" });
+    resizeObserver.observe(region, { box: "border-box" });
+  };
 
-  hostDisconnected(): void {
-    this.resizeObserver?.disconnect();
-    this.resizeObserver = null;
-    this.viewport = null;
-    this.innerElement = null;
-    this.region = null;
-  }
-
-  read() {
-    const viewport = this.host.scrollElement;
-    const inner = this.inner();
+  const read = () => {
+    const viewport = scrollElement();
+    const inner = innerElement();
     if (!viewport?.isConnected || inner?.parentElement !== viewport) {
       return null;
     }
@@ -289,9 +275,9 @@ export class PositionRailGutterController implements ReactiveController {
     const columnWidth = inner.clientWidth;
     const region = viewport.closest<HTMLElement>(".chat-main__conversation") ?? viewport;
     return { viewport, gutter, columnWidth, regionHeight: region.clientHeight };
-  }
+  };
 
-  sync(geometry = this.read()): void {
+  const sync = (geometry = read()) => {
     if (!geometry) {
       return;
     }
@@ -304,5 +290,7 @@ export class PositionRailGutterController implements ReactiveController {
     // Reserve room for the compact left rail and breathing space, including
     // when a saved width fills the pane.
     viewport.toggleAttribute("data-position-rail-gutter", gutter >= 68);
-  }
+  };
+
+  return { update, disconnect, read, sync };
 }

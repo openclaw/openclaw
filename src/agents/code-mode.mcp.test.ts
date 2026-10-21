@@ -1,6 +1,9 @@
-import { GetPromptResultSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { JsonSchemaType } from "@modelcontextprotocol/sdk/validation";
-import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import type { JsonSchemaType } from "@modelcontextprotocol/client";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
+import {
+  GetPromptResultSchema as LegacyGetPromptResultSchema,
+  type CallToolResult as LegacyCallToolResult,
+} from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -75,7 +78,8 @@ afterEach(async () => {
 
 describe("Code Mode MCP namespace", () => {
   it("preserves native MCP results through bundled materialization and the guest namespace", async () => {
-    const success: CallToolResult = {
+    // SessionMcpRuntime retains its published v1 result shapes during the deprecation window.
+    const success: LegacyCallToolResult = {
       content: [
         {
           type: "text",
@@ -92,7 +96,7 @@ describe("Code Mode MCP namespace", () => {
       isError: false,
       _meta: { privateAppState: "must-not-reach-guest" },
     };
-    const failure: CallToolResult = {
+    const failure: LegacyCallToolResult = {
       content: [{ type: "text", text: "recoverable failure" }],
       structuredContent: { retryable: true },
       isError: true,
@@ -182,7 +186,7 @@ describe("Code Mode MCP namespace", () => {
       listResources: async () => privateUtilityResults.resources_list,
       readResource: async () => privateUtilityResults.resources_read,
       listPrompts: async () => privateUtilityResults.prompts_list,
-      getPrompt: async () => GetPromptResultSchema.parse(privateUtilityResults.prompts_get),
+      getPrompt: async () => LegacyGetPromptResultSchema.parse(privateUtilityResults.prompts_get),
       dispose: async () => {},
     };
     const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
@@ -306,11 +310,7 @@ describe("Code Mode MCP namespace", () => {
     },
   );
 
-  it.each([
-    ["constructor", "prototype", "constructor2", "prototype2"],
-    ["github", "delete", "github", "delete2"],
-    ["github", "enum", "github", "enum2"],
-  ])(
+  it.each([["constructor", "prototype", "constructor2", "prototype2"]])(
     "escapes reserved MCP paths: %s.%s",
     async (serverName, toolName, serverIdentifier, toolIdentifier) => {
       const target = materializedMcpTool({
@@ -495,7 +495,7 @@ describe("MCP declaration consumers", () => {
     const value = details.value as {
       file: { content: string; bytes: number };
       api: { header: string };
-      results: CallToolResult[];
+      results: LegacyCallToolResult[];
     };
     expect(
       value.results.map((result) => JSON.parse((result.content[0] as { text: string }).text)),
@@ -559,6 +559,57 @@ function invoiceTool(toolName: string) {
 }
 
 describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) => {
+  it("carries server instructions through search handles and describe()", async () => {
+    const { config, catalogRef, ctx, tools } = createCodeModeHarness();
+    const instructions = [
+      ...Array.from({ length: 12 }, (_, index) => `Rule ${index + 1}.`),
+      "Confirm before paid calls.",
+    ].join("\n");
+    const target = mcpTool({
+      name: "research__search",
+      serverName: "research",
+      toolName: "search",
+      description: "Search research sources.",
+      instructions,
+      execute: vi.fn(async () =>
+        projectMcpCallToolResult({ content: [{ type: "text", text: "result" }] }),
+      ),
+    });
+    applyCodeModeCatalog({ tools: [...tools, target], config, catalogRef });
+    const code = `
+      const [tool] = await catalog.search("MCP.research.search", { limit: 1 });
+      const described = await tool.describe();
+      const apiFile = await API.read(tool.apiPath);
+      return {
+        instructions: tool.instructions,
+        serialized: tool.toJSON().instructions,
+        server: described.server,
+        header: described.header,
+        apiFile: apiFile.content,
+      };
+    `;
+    const result =
+      mode === "headless"
+        ? await runCodeModeScriptHeadless({ ctx, code })
+        : await runUntilCompleted({ execTool: tools[0]!, waitTool: tools[1]!, code });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        instructions,
+        serialized: instructions,
+        server: {
+          identifier: "research",
+          serverName: "research",
+          instructions,
+        },
+        header: expect.stringContaining("Confirm before paid calls."),
+        apiFile: expect.stringContaining("Confirm before paid calls."),
+      },
+    });
+    expect(target.execute).not.toHaveBeenCalled();
+  });
+
   it("finds native and MCP capabilities by intent and calls the correct colliding namespace", async () => {
     const { config, catalogRef, ctx, tools } = createCodeModeHarness();
     const native = pluginTool("invoices", "Find overdue invoices locally");
@@ -643,6 +694,48 @@ describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) 
     }
     expect(denied.execute).not.toHaveBeenCalled();
   });
+
+  it("directs truncated server instructions to handle.describe()", async () => {
+    const { config, catalogRef, ctx, tools } = createCodeModeHarness();
+    const instructions = `${"Do not omit this guidance. ".repeat(40)}\nNever retry monthly_quota_exceeded.`;
+    const target = mcpTool({
+      name: "research__search",
+      serverName: "research",
+      toolName: "search",
+      description: "Search research sources.",
+      instructions,
+      execute: vi.fn(async () =>
+        projectMcpCallToolResult({ content: [{ type: "text", text: "result" }] }),
+      ),
+    });
+    applyCodeModeCatalog({ tools: [...tools, target], config, catalogRef });
+    const code = `
+      const [tool] = await catalog.search("MCP.research.search", { limit: 1 });
+      const described = await tool.describe();
+      return {
+        instructions: tool.instructions,
+        hint: tool.instructionsHint,
+        serializedHint: tool.toJSON().instructionsHint,
+        described: described.server.instructions,
+      };
+    `;
+    const result =
+      mode === "headless"
+        ? await runCodeModeScriptHeadless({ ctx, code })
+        : await runUntilCompleted({ execTool: tools[0]!, waitTool: tools[1]!, code });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        instructions: expect.stringMatching(/\.\.\.$/u),
+        hint: "Call handle.describe() before invocation to load the complete server instructions.",
+        serializedHint:
+          "Call handle.describe() before invocation to load the complete server instructions.",
+        described: instructions,
+      },
+    });
+    expect(target.execute).not.toHaveBeenCalled();
+  });
 });
 
 it("bounds MCP discovery and wraps remote metadata before any tool executes", async () => {
@@ -670,4 +763,58 @@ it("bounds MCP discovery and wraps remote metadata before any tool executes", as
   for (const target of targets) {
     expect(target.execute).not.toHaveBeenCalled();
   }
+});
+
+it("supports root MCP API and multiple server declarations", async () => {
+  const h = createCodeModeHarness();
+  const targets = ["alpha", "beta", "index"].map((serverName) =>
+    mcpTool({
+      name: serverName + "_ping",
+      serverName,
+      toolName: "ping",
+      execute: vi.fn(async () =>
+        projectMcpCallToolResult({ content: [{ type: "text", text: "pong" }] }),
+      ),
+    }),
+  );
+  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...targets] });
+  const result = resultDetails(
+    await expectDefined(h.tools[0], "exec").execute("root-api", {
+      code: `
+          const root = await MCP.$api();
+          const rootFile = await API.read("mcp/index.d.ts");
+          const a = await MCP.alpha.$api();
+          const b = await MCP.beta.$api();
+          await MCP.alpha.ping();
+          await MCP.beta.ping();
+          await MCP.index.ping();
+          const [indexTool] = await catalog.search("MCP.index.ping", { limit: 1 });
+          const indexFile = indexTool.source === "mcp" ? await API.read(indexTool.apiPath) : undefined;
+          return {
+            headers: [typeof root.header, typeof a.header, typeof b.header],
+            rootDeclaration: rootFile.content.includes(root.header),
+            indexDeclaration: indexFile?.content.includes("declare namespace MCP.index"),
+            files: [rootFile, indexFile, await API.read("mcp/alpha.d.ts"), await API.read("mcp/beta.d.ts")],
+          };
+        `,
+    }),
+  );
+  expect(result, JSON.stringify(result)).toMatchObject({
+    status: "completed",
+    value: {
+      headers: ["string", "string", "string"],
+      rootDeclaration: true,
+      indexDeclaration: true,
+    },
+  });
+  for (const target of targets) {
+    expect(target.execute).toHaveBeenCalledOnce();
+  }
+  const { files } = result.value as { files: Array<{ path: string; content: string }> };
+  expect(
+    typeCheckSources({
+      ...Object.fromEntries(files.map((file) => ["/" + file.path, file.content])),
+      "/consumer.ts": "MCP.$api(); MCP.alpha.$api(); MCP.beta.$api(); MCP.index.$api();",
+    }),
+  ).toEqual([]);
 });

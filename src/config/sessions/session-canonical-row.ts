@@ -27,7 +27,7 @@ export function canonicalSessionKeyMigrationRequiredError(
   return new SessionCanonicalKeyMigrationRequiredError(detail);
 }
 
-/** One validator serves full Doctor scans, pending rows, and final writer certification. */
+/** One validator serves full Doctor scans, pending rows, and canonical writer inputs. */
 export function validateCanonicalSessionRow(
   row: CanonicalSessionValidationRow,
   mode: "admission" | "read" = "admission",
@@ -59,7 +59,7 @@ export function validateCanonicalSessionRowEntry(
   ) {
     return undefined;
   }
-  // Raw writes clear writer proof; selected reads still validate their current source bytes.
+  // Uncertified imported rows still validate their selected source bytes on reads.
   if (!entry || (row.entry_valid !== 1 && (mode !== "read" || row.entry_valid !== 0))) {
     throw canonicalSessionKeyMigrationRequiredError(
       `invalid persisted session row requires repair for ${row.session_key}`,

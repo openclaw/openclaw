@@ -13,6 +13,8 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawPluginApi } from "../api.js";
+import { buildCallBriefInstructions } from "./call-brief.js";
+import { createCallDeliveryRuntime } from "./call-delivery-runtime.js";
 import type { VoiceCallConfig } from "./config.js";
 import {
   resolveVoiceCallEffectiveConfig,
@@ -20,8 +22,6 @@ import {
   resolveVoiceCallSessionKey,
   resolveVoiceCallStreamExposurePaths,
   resolveTwilioAuthToken,
-  resolveVoiceCallConfig,
-  validateProviderConfig,
 } from "./config.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
@@ -44,11 +44,8 @@ import { cleanupTailscaleExposure, setupTailscaleExposure } from "./webhook/tail
 
 export type VoiceCallRuntime = {
   config: VoiceCallConfig;
-  provider: VoiceCallProvider;
   manager: CallManager;
   webhookServer: VoiceCallWebhookServer;
-  webhookUrl: string;
-  publicUrl: string | null;
   stop: () => Promise<void>;
 };
 
@@ -57,23 +54,21 @@ const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
   "Act on behalf of the caller using the normal available tools when the caller asks you to do work.",
   "Prioritize completing the user's request and returning a fast, speakable result over exhaustive investigation.",
   "For tool-backed status checks, prefer one or two bounded read-only queries before answering.",
+  "This consult is bound to the current phone call. Use voice_call end_call to hang up; no other voice_call action or call is permitted.",
+  "The delegated input is the other party's latest words and the transcript shows both sides. Act on that context: when the Agent line says it is hanging up, do exactly that; when both sides have said goodbye or the other party asks to end the call, hang up with end_call.",
   "Do not print secret values or dump environment variables; only check whether required configuration is present.",
   "Be accurate, brief, and speakable.",
 ].join(" ");
 
 function mapVoiceCallConsultTranscript(
-  call: {
-    transcript?: Array<{ speaker: "user" | "bot"; text: string }>;
-  },
-  context?: ToolHandlerContext,
+  call: CallRecord,
+  context: ToolHandlerContext,
 ): RealtimeVoiceAgentConsultTranscriptEntry[] {
-  const transcript: RealtimeVoiceAgentConsultTranscriptEntry[] = (call.transcript ?? []).map(
-    (entry) => ({
-      role: entry.speaker === "bot" ? "assistant" : "user",
-      text: entry.text,
-    }),
-  );
-  const partial = context?.partialUserTranscript?.trim();
+  const transcript: RealtimeVoiceAgentConsultTranscriptEntry[] = call.transcript.map((entry) => ({
+    role: entry.speaker === "bot" ? "assistant" : "user",
+    text: entry.text,
+  }));
+  const partial = context.partialUserTranscript?.trim();
   if (partial && transcript.at(-1)?.text !== partial) {
     transcript.push({ role: "user", text: partial });
   }
@@ -82,9 +77,9 @@ function mapVoiceCallConsultTranscript(
 
 async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvider> {
   const allowNgrokFreeTierLoopbackBypass =
-    config.tunnel?.provider === "ngrok" &&
-    isLoopbackHost(config.serve?.bind ?? "") &&
-    (config.tunnel?.allowNgrokFreeTierLoopbackBypass ?? false);
+    config.tunnel.provider === "ngrok" &&
+    isLoopbackHost(config.serve.bind) &&
+    config.tunnel.allowNgrokFreeTierLoopbackBypass;
 
   switch (config.provider) {
     case "telnyx": {
@@ -186,7 +181,11 @@ async function createRealtimeInstructionsResolver(params: {
     }),
   );
   const instructionsByAgentId = new Map(entries);
-  return (call) => instructionsByAgentId.get(resolveCallAgentId(call)) ?? genericInstructions;
+  return (call) => {
+    const instructions = instructionsByAgentId.get(resolveCallAgentId(call)) ?? genericInstructions;
+    const brief = buildCallBriefInstructions(call);
+    return brief ? `${instructions}\n\n${brief}` : instructions;
+  };
 }
 
 export async function createVoiceCallRuntime(params: {
@@ -198,6 +197,8 @@ export async function createVoiceCallRuntime(params: {
   stateRuntime?: VoiceCallStateRuntime["state"];
   ttsRuntime?: TelephonyTtsRuntime;
   logger?: PluginLogger;
+  deliveryRuntime?: Pick<OpenClawPluginApi["runtime"], "gateway" | "subagent">;
+  runInServiceContext?: <T>(run: () => T) => T;
 }): Promise<VoiceCallRuntime> {
   params.scheduler.signal.throwIfAborted();
   const {
@@ -217,22 +218,12 @@ export async function createVoiceCallRuntime(params: {
   };
 
   const cfg = fullConfig ?? coreConfig;
-  const unresolvedConfig = resolveVoiceCallConfig(rawConfig);
-  const config = { ...unresolvedConfig, agentId: resolveVoiceCallAgentId(unresolvedConfig, cfg) };
-
-  if (!config.enabled) {
-    throw new Error("Voice call disabled. Enable the plugin entry in config.");
-  }
+  const config = { ...rawConfig, agentId: resolveVoiceCallAgentId(rawConfig, cfg) };
 
   if (config.skipSignatureVerification) {
     log.warn(
       "[voice-call] SECURITY WARNING: skipSignatureVerification=true disables webhook signature verification (development only). Do not use in production.",
     );
-  }
-
-  const validation = validateProviderConfig(config);
-  if (!validation.valid) {
-    throw new Error(`Invalid voice-call config: ${validation.errors.join("; ")}`);
   }
 
   const provider = await resolveProvider(config);
@@ -264,11 +255,11 @@ export async function createVoiceCallRuntime(params: {
       ...config.realtime,
       tools: resolveVoiceCallRealtimeTools(config.realtime.toolPolicy, config.realtime.tools),
     };
-    const resolveCallRegistration = (call: CallRecord) => {
+    const resolveCallRegistration = async (call: CallRecord) => {
       const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
       const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
       const agentId = resolveCallAgentId(call);
-      const resolved = realtimeVoiceRuntime.resolveConfiguredRealtimeVoiceProvider({
+      const resolved = await realtimeVoiceRuntime.resolveConfiguredRealtimeVoiceProviderAsync({
         configuredProviderId: effectiveConfig.realtime.provider,
         providerConfigs: effectiveConfig.realtime.providers,
         cfg,
@@ -291,6 +282,7 @@ export async function createVoiceCallRuntime(params: {
       config.serve.path,
       webhookServer.getStreamDisconnectLifecycle(),
       cfg,
+      config.voicemail.holdOpeningMaxMs,
     );
     if (config.realtime.toolPolicy !== "none") {
       realtimeHandler.registerToolHandler(
@@ -382,16 +374,46 @@ export async function createVoiceCallRuntime(params: {
             timeoutMs: effectiveConfig.responseTimeoutMs,
             spawnedBy: requesterSessionKey,
             contextMode: requesterSessionKey ? "fork" : undefined,
-            toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(
-              effectiveConfig.realtime.toolPolicy,
-            ),
-            extraSystemPrompt: REALTIME_VOICE_CONSULT_SYSTEM_PROMPT,
+            toolsAllow: (() => {
+              const allowed = resolveRealtimeVoiceAgentConsultToolsAllow(
+                effectiveConfig.realtime.toolPolicy,
+              );
+              return allowed?.length ? [...allowed, "voice_call"] : allowed;
+            })(),
+            toolBindings: {
+              voice_call: { kind: "active-call", callId: call.callId },
+            },
+            extraSystemPrompt: `${REALTIME_VOICE_CONSULT_SYSTEM_PROMPT} The bound call id is ${JSON.stringify(call.callId)}.\n\n${buildCallBriefInstructions(call)}`,
             abortSignal: handlerContext.abortSignal,
           });
         },
       );
     }
+    manager.playRealtimeVoicemail = (callId, instructions) =>
+      realtimeHandler.playVoicemail(callId, instructions);
+    manager.beforeCarrierPlayback = (callId) => realtimeHandler.prepareCarrierPlayback(callId);
+    if (config.reports.enabled || config.live.transcript || config.voicemail.detection !== "off") {
+      manager.beforeCallEnd = (call) => realtimeHandler.drainCall(call.callId);
+    }
     webhookServer.setRealtimeHandler(realtimeHandler);
+  }
+  const delivery =
+    (config.reports.enabled || config.live.transcript) &&
+    params.deliveryRuntime &&
+    params.runInServiceContext
+      ? createCallDeliveryRuntime({
+          config,
+          coreConfig: cfg,
+          runtime: params.deliveryRuntime,
+          runInServiceContext: params.runInServiceContext,
+          manager,
+          logger: log,
+        })
+      : undefined;
+  if ((config.reports.enabled || config.live.transcript) && !delivery) {
+    log.warn(
+      "[voice-call] Reports/live transcript require the plugin delivery runtime; transcripts remain in call history.",
+    );
   }
   let tunnelResult: TunnelResult | null = null;
   let stopPromise: Promise<void> | undefined;
@@ -402,6 +424,7 @@ export async function createVoiceCallRuntime(params: {
         () => tunnelResult?.stop(),
         () => cleanupTailscaleExposure(config),
         () => webhookServer.stop(),
+        () => delivery?.stop(),
         () => manager.stop(),
       ]) {
         try {
@@ -513,17 +536,11 @@ export async function createVoiceCallRuntime(params: {
 
     return {
       config,
-      provider,
       manager,
       webhookServer,
-      webhookUrl,
-      publicUrl,
       stop: () => stop(),
     };
   } catch (err) {
-    // If any step after the server started fails, clean up every provisioned
-    // resource (tunnel, tailscale exposure, and webhook server) so retries
-    // don't leak processes or keep the port bound.
     await stop(true);
     throw err;
   }

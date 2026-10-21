@@ -1,4 +1,4 @@
-import { decodeTerminalPtyControl, type TerminalPtyEvent } from "./terminal-pty-protocol.js";
+import type { TerminalPtyControl, TerminalPtyEvent } from "./terminal-pty-protocol.js";
 import { prepareTerminalPty, spawnTerminalPty, type TerminalPtyHandle } from "./terminal-pty.js";
 
 let pty: TerminalPtyHandle | undefined;
@@ -40,12 +40,8 @@ process.once("SIGTERM", close);
 process.once("SIGINT", close);
 process.stdout.on("error", close);
 process.stdout.on("drain", () => pty?.resume());
-process.on("message", (raw: unknown) => {
-  const message = decodeTerminalPtyControl(raw);
-  if (!message) {
-    finish({ type: "error", message: "Invalid terminal host message" });
-    return;
-  }
+// Only the spawning host writes this channel; launch authority is checked separately.
+process.on("message", (message: TerminalPtyControl) => {
   if (message.type === "start" || message.type === "prepare") {
     if (starting || parentLost) {
       return;

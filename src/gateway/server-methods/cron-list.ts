@@ -1,7 +1,6 @@
 import { validateCronListParams } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
-import { cronJobReadView } from "../../cron/job-read-view.js";
 import { resolveCronJobBoundSessionKeys } from "../../cron/job-session-bindings.js";
 import type { CronListPageResult } from "../../cron/service/list-page-types.js";
 import type { CronJob } from "../../cron/types.js";
@@ -14,12 +13,8 @@ import {
 } from "./cron-caller-scope.js";
 import { assertCronReadCurrent, respondInvalidCronParams } from "./cron-job-access.js";
 import { startCronListDiagnostics } from "./cron-list-diagnostics.js";
-import { compactCronListJob } from "./cron-list-projection.js";
-import {
-  createCronSessionVisibility,
-  cronJobIsVisible,
-  cronJobVisibilityTarget,
-} from "./cron-visibility.js";
+import { projectCronListJobs } from "./cron-list-projection.js";
+import { createCronSessionVisibility, cronJobIsVisible } from "./cron-visibility.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
 import { assertValidParams } from "./validation.js";
 
@@ -27,7 +22,7 @@ export const cronListHandler = createPreparedReadHandler((options) => {
   const { params, respond: originalRespond, context, client } = options;
   const diagnostics = startCronListDiagnostics(context.logGateway, originalRespond);
   const respondToCaller = diagnostics?.respond ?? originalRespond;
-  const visibilityRead = createCronSessionVisibility(client, () => context.getRuntimeConfig());
+  const visibilityRead = createCronSessionVisibility(client, context);
   let handlerOutcome: "returned" | "threw" = "returned";
   let prepared = false;
   try {
@@ -43,7 +38,6 @@ export const cronListHandler = createPreparedReadHandler((options) => {
       return undefined;
     }
     const release = (outcome: "returned" | "threw") => {
-      visibilityRead.release();
       diagnostics?.finish(outcome);
     };
     const shareable = !callerScope && !visibilityRead.resolve();
@@ -96,23 +90,8 @@ export const cronListHandler = createPreparedReadHandler((options) => {
                     normalizeAgentId(p.sessionAgentId))))
           );
         };
-        if (visibilityRead.resolve()) {
-          const loadedJobs: CronJob[] = [];
-          // The list owner applies every authored filter before sharing preparation.
-          await context.cron.listPage(listOptions, (job) => {
-            if (matchesRequestScope(job)) {
-              loadedJobs.push(job);
-            }
-            return false;
-          });
-          assertCronReadCurrent(options);
-          await visibilityRead.prepare(
-            loadedJobs.map((job) => cronJobVisibilityTarget(job, context.cron.getDefaultAgentId())),
-          );
-        }
-        assertCronReadCurrent(options);
+        await visibilityRead.prepare();
         const cronVisibility = visibilityRead.resolve();
-        const defaultAgentId = context.cron.getDefaultAgentId();
         diagnostics?.mark("listing");
         const selectedJobIds = new Set<string>();
         const matchesCurrentJob = (job: CronJob) =>
@@ -153,22 +132,14 @@ export const cronListHandler = createPreparedReadHandler((options) => {
         } finally {
           finishPage?.();
         }
-        if (matchesJob) {
-          for (const job of page.jobs) {
-            selectedJobIds.add(job.id);
-          }
-        }
-        assertPageCurrent();
         diagnostics?.setReturnedCount(page.jobs.length);
         diagnostics?.mark("projection");
-        const jobs = page.jobs.map((job) => ({
-          ...(p.compact === true ? compactCronListJob(job) : cronJobReadView(job)),
-          effectiveAgentId: tryResolveCronJobEffectiveAgentId(job, defaultAgentId) ?? null,
-        }));
+        const jobs = projectCronListJobs(context.cron, page, p.compact === true);
         if (p.compact === true || p.includeDeliveryPreviews === false) {
           // Full job rows are the default because editors need their payloads. Delivery
           // previews are independently suppressible so list-only callers avoid per-job I/O
           // without weakening the shipped full-response default.
+          assertPageCurrent();
           respond(true, { ...page, jobs }, undefined);
           return;
         }
@@ -187,7 +158,6 @@ export const cronListHandler = createPreparedReadHandler((options) => {
     throw error;
   } finally {
     if (!prepared) {
-      visibilityRead.release();
       diagnostics?.finish(handlerOutcome);
     }
   }

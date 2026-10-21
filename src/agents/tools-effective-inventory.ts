@@ -20,7 +20,7 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { createOpenClawCodingToolsInternalAsync } from "./agent-tools.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
-import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
@@ -60,7 +60,7 @@ function buildToolInventoryNotices(params: {
   cfg: OpenClawConfig;
   profile: string;
   entries: EffectiveToolInventoryEntry[];
-  effectivePolicy: ReturnType<typeof resolveConversationCapabilityProfile>["policy"];
+  effectivePolicy: Awaited<ReturnType<typeof prepareConversationCapabilityProfile>>["policy"];
 }): EffectiveToolInventoryNotice[] | undefined {
   const hasBrowserTool = params.entries.some(
     (entry) => normalizeToolPolicyName(entry.id) === "browser",
@@ -241,6 +241,9 @@ export async function acquireEffectiveToolInventoryRuntimeModelContext(
       // The selected provider owner must join the generation before dynamic hooks resolve.
       loadRuntimePlugins: true,
       runtimePluginSelections: [{ provider, modelId, agentId }],
+      // Gateway-hosted reads borrow the admitting Gateway's live plugin instances
+      // instead of synchronously loading another copy on every cold refresh.
+      allowGatewaySubagentBinding: true,
     },
     { catalogMode: "static" },
   );
@@ -332,12 +335,12 @@ export async function resolveEffectiveToolInventory(
 
   const capabilityProfile =
     params.conversationCapabilityProfile ??
-    resolveConversationCapabilityProfile({
+    (await prepareConversationCapabilityProfile({
       ...params,
       config: params.cfg,
       agentId,
       agentAccountId: params.accountId,
-    });
+    }));
   const diagnostics = createToolAccessDiagnostics({ profiles: capabilityProfile.policy.profiles });
   const effectiveTools = await createOpenClawCodingToolsInternalAsync(
     {

@@ -7,7 +7,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { loadDeviceAuthTokens } from "../infra/device-auth-store.js";
-import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
+import { loadDeviceIdentityIfPresentAsync } from "../infra/device-identity-async.js";
 import {
   summarizeDeviceTokens,
   type DeviceAuthTokenSummary,
@@ -66,11 +66,12 @@ async function loadDoctorPairingSnapshot(params: {
       const payload = await requestGateway<GatewayDevicePairingPayload>({
         method: "device.pair.list",
         timeoutMs: 5_000,
+        sharedStateMode: "read-only",
         config: params.cfg,
       });
       return {
         pending: payload.pending,
-        paired: payload.paired.map((device) => normalizeGatewayPairedDevice(device)),
+        paired: payload.paired.map(normalizeGatewayPairedDevice),
       };
     } catch {
       // Gateway health already reported separately. Fall back to local pairing
@@ -83,7 +84,7 @@ async function loadDoctorPairingSnapshot(params: {
   const local = await listDevicePairingReadOnly();
   return {
     pending: local.pending,
-    paired: local.paired.map((device) => normalizeLocalPairedDevice(device)),
+    paired: local.paired.map(normalizeLocalPairedDevice),
   };
 }
 
@@ -99,6 +100,10 @@ function formatValues(values: string[]): string {
 
 function formatCliArgs(args: string[]): string {
   return formatCliCommand(args.map(quoteCliArg).join(" "));
+}
+
+function formatRotateCommand(deviceId: string, role: string): string {
+  return formatCliArgs(["openclaw", "devices", "rotate", "--device", deviceId, "--role", role]);
 }
 
 function describeDevice(params: {
@@ -212,15 +217,7 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
     }
     for (const role of approvedRoles) {
       const token = findTokenSummary(device, role);
-      const rotateCommand = formatCliArgs([
-        "openclaw",
-        "devices",
-        "rotate",
-        "--device",
-        device.deviceId,
-        "--role",
-        role,
-      ]);
+      const rotateCommand = formatRotateCommand(device.deviceId, role);
       if (!token) {
         findings.push({
           ...finding,
@@ -253,18 +250,15 @@ function collectPairedRecordFindings(snapshot: DoctorPairingSnapshot): HealthFin
   return findings;
 }
 
-function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): { deviceId: string } | null {
-  try {
-    return loadDeviceIdentityIfPresent({ env });
-  } catch {
-    return null;
-  }
-}
-
 async function collectLocalDeviceAuthFindings(
   snapshot: DoctorPairingSnapshot,
 ): Promise<HealthFinding[]> {
-  const identity = readLocalIdentity();
+  let identity;
+  try {
+    identity = await loadDeviceIdentityIfPresentAsync({ env: process.env });
+  } catch {
+    return [];
+  }
   if (!identity) {
     return [];
   }
@@ -303,15 +297,7 @@ async function collectLocalDeviceAuthFindings(
       });
       continue;
     }
-    const rotateCommand = formatCliArgs([
-      "openclaw",
-      "devices",
-      "rotate",
-      "--device",
-      paired.deviceId,
-      "--role",
-      role,
-    ]);
+    const rotateCommand = formatRotateCommand(paired.deviceId, role);
     const gatewayIssuedAtMs = pairedToken.rotatedAtMs ?? pairedToken.createdAtMs;
     // Local device auth survives gateway restarts; compare timestamps to catch stale cached tokens.
     if (entry.updatedAtMs < gatewayIssuedAtMs) {
@@ -364,16 +350,21 @@ export async function collectDevicePairingHealthFindings(params: {
   // Report this debt even without a reachable remote Gateway or local identity.
   const deviceAuth = detectLegacyDeviceAuth({ stateDir: resolveStateDir(params.env) });
   if (deviceAuth.sourcePresent) {
-    const fixCommand = formatCliCommand("openclaw doctor --fix", params.env);
-    const fixHint = `Stop the Gateway and run ${fixCommand} to finish migration or cleanup.`;
-    legacyStoreFindings.push({
-      checkId: DEVICE_PAIRING_CHECK_ID,
-      severity: "warning",
-      message: `Legacy device auth store ${sanitizeTerminalText(deviceAuth.sourcePath)} is still present, so doctor cannot inspect locally cached device tokens. ${fixHint}`,
-      path: "identity.device-auth",
-      requirement: "device-auth-store-legacy-file",
-      fixHint,
-    });
+    try {
+      // A consumed import remains on disk; local owner admission proves its durable claim.
+      await loadDeviceIdentityIfPresentAsync({ env: params.env ?? process.env });
+    } catch {
+      const fixCommand = formatCliCommand("openclaw doctor --fix", params.env);
+      const fixHint = `Stop the Gateway and run ${fixCommand} to finish local credential migration or repair.`;
+      legacyStoreFindings.push({
+        checkId: DEVICE_PAIRING_CHECK_ID,
+        severity: "warning",
+        message: `Legacy device auth store ${sanitizeTerminalText(deviceAuth.sourcePath)} is still present and local credentials require migration or repair. ${fixHint}`,
+        path: "identity.device-auth",
+        requirement: "device-auth-store-legacy-file",
+        fixHint,
+      });
+    }
   }
   const snapshot = await loadDoctorPairingSnapshot({
     cfg: params.cfg,

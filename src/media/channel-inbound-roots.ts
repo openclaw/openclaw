@@ -9,7 +9,7 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 // never pulls the control-plane/kysely graph into light call paths.
 import { getCurrentPluginMetadataSnapshotRuntime } from "../plugins/plugin-metadata-snapshot.runtime.js";
 import {
-  loadBundledPluginPublicArtifactModuleSync,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync,
   loadPluginPublicArtifactModuleSync,
 } from "../plugins/public-surface-loader.js";
 
@@ -67,24 +67,15 @@ function findChannelMediaContractApi(params: {
   if (!channelId) {
     return undefined;
   }
-  try {
-    // Resolve only the narrow contract artifact, never the full channel bootstrap.
-    const loaded = loadBundledPluginPublicArtifactModuleSync<ChannelMediaContractApi>({
-      dirName: channelId,
-      artifactBasename: CHANNEL_MEDIA_CONTRACT_ARTIFACT,
-    });
-    if (typeof loaded[params.resolver] === "function") {
-      return loaded;
-    }
-  } catch (error) {
-    if (
-      !(
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      )
-    ) {
-      throw error;
-    }
+  // Resolve only the narrow contract artifact, never the full channel bootstrap:
+  // a missing artifact stays optional, but an artifact that resolves and then
+  // fails to initialize must propagate instead of reading as "no contract".
+  const bundled = loadBundledPluginPublicArtifactModuleFromCandidatesSync<ChannelMediaContractApi>({
+    dirName: channelId,
+    artifactCandidates: [CHANNEL_MEDIA_CONTRACT_ARTIFACT],
+  });
+  if (bundled && typeof bundled[params.resolver] === "function") {
+    return bundled;
   }
   for (const owner of resolveInstalledChannelMediaContractOwners({ channelId, cfg: params.cfg })) {
     try {

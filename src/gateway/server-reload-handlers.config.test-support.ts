@@ -1,47 +1,65 @@
 import { vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import type { ConfigWriteNotification } from "../config/config.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import type { GatewayReloadPlan } from "./config-reload-plan.js";
+import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type {
   GatewayPluginReloadResult,
+  GatewayHotReloadPublication,
+  GatewayReloadHandlerParams,
+  ManagedGatewayConfigReloaderHandle,
   ManagedGatewayConfigReloaderParams,
 } from "./server-reload-contracts.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
+
+export type ReloadTestFactories = {
+  createGatewayReloadHandlers: (
+    params: Partial<GatewayReloadHandlerParams>,
+  ) => ReturnType<typeof import("./server-reload-hot.js").createGatewayReloadHandlers>;
+  startManagedGatewayConfigReloader: (
+    params: Pick<
+      ManagedGatewayConfigReloaderParams,
+      "initialConfig" | "readSnapshot" | "subscribeToWrites"
+    > &
+      Partial<ManagedGatewayConfigReloaderParams>,
+  ) => ManagedGatewayConfigReloaderHandle;
+};
+
+export function createHotReloadPublication(
+  sourceConfig: OpenClawConfig = {},
+  isCurrent = () => true,
+): GatewayHotReloadPublication {
+  return { sourceConfig, isCurrent, publish: async (commit) => await commit() };
+}
 
 export function createMonitorPublicationFailure() {
   const database = openOpenClawStateDatabase();
+  const exec = (sql: string) =>
+    runOpenClawStateWriteTransaction(({ db }) => db.exec(sql), { database });
   return {
     install() {
       // Persistent fault injection reaches cron workers; managed admission services
       // outstanding grants instead of blocking the host needed to finish their write.
-      runOpenClawStateWriteTransaction(
-        ({ db }) =>
-          db.exec(`CREATE TRIGGER monitor_publication_failure BEFORE UPDATE ON cron_jobs
+      exec(`CREATE TRIGGER monitor_publication_failure BEFORE UPDATE ON cron_jobs
           WHEN json_extract(NEW.job_json, '$.agentId') = 'second'
             AND json_extract(NEW.job_json, '$.schedule.everyMs') = 7200000
-          BEGIN SELECT RAISE(FAIL, 'monitor write failed'); END`),
-        { database },
-      );
+          BEGIN SELECT RAISE(FAIL, 'monitor write failed'); END`);
     },
     remove() {
-      runOpenClawStateWriteTransaction(
-        ({ db }) => db.exec("DROP TRIGGER monitor_publication_failure"),
-        { database },
-      );
+      exec("DROP TRIGGER monitor_publication_failure");
     },
     dispose() {
-      runOpenClawStateWriteTransaction(
-        ({ db }) => db.exec("DROP TRIGGER IF EXISTS monitor_publication_failure"),
-        { database },
-      );
+      exec("DROP TRIGGER IF EXISTS monitor_publication_failure");
     },
   };
 }
@@ -60,20 +78,18 @@ export function makePluginReloadResult(
 }
 
 export function enableChannelReloadsForTest() {
-  const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
-  const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
-  delete process.env.OPENCLAW_SKIP_CHANNELS;
-  delete process.env.OPENCLAW_SKIP_PROVIDERS;
+  const previous = ["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"].map((key) => {
+    const value = process.env[key];
+    delete process.env[key];
+    return { key, value };
+  });
   return () => {
-    if (previousSkipChannels === undefined) {
-      delete process.env.OPENCLAW_SKIP_CHANNELS;
-    } else {
-      process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
-    }
-    if (previousSkipProviders === undefined) {
-      delete process.env.OPENCLAW_SKIP_PROVIDERS;
-    } else {
-      process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+    for (const { key, value } of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   };
 }
@@ -87,11 +103,7 @@ export function createTestConfigRevisionProjector(): ManagedGatewayConfigReloade
 }
 
 export function createCronRestartPlan(): GatewayReloadPlan {
-  return createHotTailPlan({
-    changedPaths: ["cron"],
-    hotReasons: ["cron"],
-    restartCron: true,
-  });
+  return createHotTailPlan({ changedPaths: ["cron"], hotReasons: ["cron"], restartCron: true });
 }
 
 export function createHotTailPlan(overrides: Partial<GatewayReloadPlan> = {}): GatewayReloadPlan {
@@ -168,7 +180,6 @@ export function createConfigWriteNotification(
     revision,
     fingerprint,
     sourceFingerprint,
-    writtenAtMs: Date.now(),
     ...overrides,
     snapshot: overrides.snapshot ?? {
       ...createValidConfigSnapshot(sourceConfig, overrides.persistedHash ?? persistedHash),
@@ -240,6 +251,62 @@ export function createTestCronState(overrides: Partial<GatewayCronState> = {}): 
   };
 }
 
+export function createManagedReloadTestParams(
+  params: Pick<
+    ManagedGatewayConfigReloaderParams,
+    | "initialConfig"
+    | "scheduler"
+    | "activateRuntimeSecrets"
+    | "readSnapshot"
+    | "subscribeToWrites"
+    | "channelManager"
+  > &
+    Partial<ManagedGatewayConfigReloaderParams>,
+): ManagedGatewayConfigReloaderParams {
+  let state = createDefaultGatewayReloadState();
+  const log = createInfoWarnErrorLogger();
+  return {
+    getPluginRegistry: requireActivePluginChannelRegistry,
+    configRevisionProjector: createTestConfigRevisionProjector(),
+    minimalTestGateway: false,
+    initialCompareConfig: params.initialConfig,
+    initialSnapshotRawHash: null,
+    initialAuthoredConfig: {},
+    initialSnapshotValid: true,
+    initialSnapshotIssues: [],
+    initialPluginInstallRecords: {},
+    watchPath: "/tmp/openclaw.json",
+    promoteSnapshot: async () => true,
+    deps: {},
+    broadcast: vi.fn(),
+    getState: () => state,
+    setState: (next) => {
+      state = next;
+    },
+    startChannel: vi.fn(async () => new Map()),
+    stopChannel: vi.fn(async () => {}),
+    reloadPlugins: async () => {
+      throw new Error("Unexpected plugin reload");
+    },
+    logHooks: log,
+    logChannels: log,
+    logCron: log,
+    logReload: log,
+    cronReconciliation: { arm: () => ({ complete: async () => {} }), invalidate: vi.fn() },
+    resolveSharedGatewaySessionGenerationForConfig: () => undefined,
+    sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+      current: undefined,
+      required: null,
+    }),
+    prepareTerminalConfig: vi.fn(),
+    reconcileRuntimePolicy: vi.fn(),
+    commitRuntimePolicy: vi.fn(),
+    acceptTerminalConfig: vi.fn(),
+    clients: [],
+    ...params,
+  };
+}
+
 export function createManagedReloadAuthFixture(params: {
   sharedAuthRotation?: boolean;
   resolvedProviderRotation?: "channel" | "agent";
@@ -269,82 +336,57 @@ export function createManagedRestartSequenceConfigs() {
   // This fixture owns auth inputs throughout asynchronous restart checks.
   vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
   vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
-  const initialConfig = {
+  const secret = (id: string) => ({ source: "env" as const, provider: "default", id });
+  const gatewayConfig = (port: number, token?: string, enabled = true): OpenClawConfig => ({
     gateway: {
-      port: 18789,
+      port,
       reload: {},
-      terminal: { enabled: true },
+      terminal: { enabled },
+      ...(token ? { auth: { mode: "token", token: secret(token) } } : {}),
     },
-  } as OpenClawConfig;
-  const deferredConfig = {
-    gateway: {
-      port: 18790,
-      reload: {},
-      terminal: { enabled: true },
-      auth: {
-        mode: "token",
-        token: {
-          source: "env",
-          provider: "default",
-          id: "RESTART_A_TOKEN",
-        },
-      },
-    },
-  } as OpenClawConfig;
-  const invalidConfig = {
-    gateway: {
-      ...deferredConfig.gateway,
-      port: 18791,
-      auth: {
-        mode: "token",
-        token: {
-          source: "env",
-          provider: "default",
-          id: "MISSING_RESTART_TOKEN",
-        },
-      },
-      terminal: { enabled: false },
-    },
-  } as OpenClawConfig;
-  const missingHotSecret = {
-    source: "env" as const,
-    provider: "default",
-    id: "MISSING_HOT_TOKEN",
-  };
-  const invalidHotConfig = {
-    ...deferredConfig,
-    models: {
-      providers: {
-        test: {
-          baseUrl: "https://example.com",
-          apiKey: missingHotSecret,
-          models: [],
-        },
-      },
-    },
-  } as OpenClawConfig;
-  const invalidNoopConfig = {
-    ...deferredConfig,
-    plugins: {
-      entries: {
-        brave: {
-          config: { webSearch: { apiKey: missingHotSecret } },
-        },
-      },
-    },
-  } as OpenClawConfig;
-  const replacementConfig = {
-    gateway: {
-      ...deferredConfig.gateway,
-      bind: "lan",
-    },
-  } as OpenClawConfig;
+  });
+  const deferredConfig = gatewayConfig(18790, "RESTART_A_TOKEN");
+  const missingHotSecret = secret("MISSING_HOT_TOKEN");
   return {
-    initialConfig,
+    initialConfig: gatewayConfig(18789),
     deferredConfig,
-    invalidConfig,
-    invalidHotConfig,
-    invalidNoopConfig,
-    replacementConfig,
+    invalidConfig: gatewayConfig(18791, "MISSING_RESTART_TOKEN", false),
+    invalidHotConfig: {
+      ...deferredConfig,
+      models: {
+        providers: {
+          test: {
+            baseUrl: "https://example.com",
+            apiKey: missingHotSecret,
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig,
+    invalidNoopConfig: {
+      ...deferredConfig,
+      plugins: {
+        entries: {
+          brave: {
+            config: { webSearch: { apiKey: missingHotSecret } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig,
+    replacementConfig: {
+      gateway: { ...deferredConfig.gateway, bind: "lan" },
+    } satisfies OpenClawConfig,
+  };
+}
+
+export function createRecordedChannelHandlers(events: string[]) {
+  return {
+    stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+      events.push(`stop:${channel}:${accountId}`);
+    }),
+    start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+      events.push(`start:${channel}:${accountId}`);
+      return new Map();
+    }),
   };
 }

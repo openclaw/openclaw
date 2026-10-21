@@ -5,7 +5,6 @@ import type { ChatEvent, TuiHistoryLoadResult, TuiStateAccess } from "./tui-type
 
 const MAX_TRACKED_RUNS = 200;
 const RETAINED_TRACKED_RUNS = 150;
-const TRACKED_RUN_RETENTION_MS = 10 * 60 * 1000;
 const HISTORY_RELOAD_QUEUED = 1;
 const HISTORY_RELOAD_OWNED = 1 << 1;
 const HISTORY_RELOAD_DISPLAYED = 1 << 2;
@@ -54,13 +53,13 @@ type TuiSessionRunCoordinatorContext = {
 /** Keeps one session's run, persistence, and transcript ownership together. */
 export class TuiSessionRunCoordinator {
   readonly sessionRuns = new Map<string, SessionRunObservation>();
-  readonly finalizedRuns = new Map<string, number>();
-  readonly finalizedRunsWithDisplay = new Map<string, number>();
+  readonly finalizedRuns = new Set<string>();
+  readonly finalizedRunsWithDisplay = new Set<string>();
   readonly pendingNewSessionRunIds = new Set<string>();
-  readonly persistedTerminalRunIds = new Map<string, number>();
+  readonly persistedTerminalRunIds = new Set<string>();
   readonly liveTerminalErrorMessages = new Map<string, string>();
-  readonly completedRuns = new Map<string, number>();
-  readonly postFinalizingRuns = new Map<string, number>();
+  readonly completedRuns = new Set<string>();
+  readonly postFinalizingRuns = new Set<string>();
   readonly streamAssembler: TuiStreamAssembler;
 
   pendingHistoryRefresh = false;
@@ -84,40 +83,25 @@ export class TuiSessionRunCoordinator {
     });
   }
 
-  private pruneRunMap(
-    runs: Map<string, number> | Map<string, SessionRunObservation>,
+  private pruneRuns(
+    runs: Map<string, SessionRunObservation> | Set<string>,
     protectActiveRun = false,
   ): void {
     if (runs.size <= MAX_TRACKED_RUNS) {
       return;
     }
-    const keepUntil = Date.now() - TRACKED_RUN_RETENTION_MS;
     const canRemove = (runId: string) =>
       !protectActiveRun ||
       (runId !== this.context.state.activeChatRunId &&
         runId !== getPendingSubmitAcceptedRunId(this.context.state) &&
         !this.confirmedStreamRunIds.has(runId));
 
-    for (const [runId, observation] of runs) {
+    for (const runId of runs.keys()) {
       if (runs.size <= RETAINED_TRACKED_RUNS) {
         break;
       }
-      if (
-        (typeof observation === "number" ? observation : observation.seenAt) < keepUntil &&
-        canRemove(runId)
-      ) {
-        runs.delete(runId);
-      }
-    }
-    if (runs.size <= MAX_TRACKED_RUNS) {
-      return;
-    }
-    for (const runId of runs.keys()) {
       if (canRemove(runId)) {
         runs.delete(runId);
-      }
-      if (runs.size <= RETAINED_TRACKED_RUNS) {
-        break;
       }
     }
   }
@@ -144,7 +128,7 @@ export class TuiSessionRunCoordinator {
       }
     }
     this.sessionRuns.set(runId, { seenAt: Date.now() });
-    this.pruneRunMap(this.sessionRuns, true);
+    this.pruneRuns(this.sessionRuns, true);
   }
 
   isRetiredOrphanRun(runId: string): boolean {
@@ -236,19 +220,19 @@ export class TuiSessionRunCoordinator {
   }
 
   noteCompletedRun(runId: string): void {
-    this.completedRuns.set(runId, Date.now());
-    this.pruneRunMap(this.completedRuns);
+    this.completedRuns.add(runId);
+    this.pruneRuns(this.completedRuns);
   }
 
   noteFinalizedRun(runId: string, options?: { displayedFinal?: boolean }): void {
-    this.finalizedRuns.set(runId, Date.now());
+    this.finalizedRuns.add(runId);
     this.noteCompletedRun(runId);
     if (options?.displayedFinal) {
-      this.finalizedRunsWithDisplay.set(runId, Date.now());
+      this.finalizedRunsWithDisplay.add(runId);
     }
     this.dropSessionRun(runId);
-    this.pruneRunMap(this.finalizedRuns);
-    this.pruneRunMap(this.finalizedRunsWithDisplay);
+    this.pruneRuns(this.finalizedRuns);
+    this.pruneRuns(this.finalizedRunsWithDisplay);
 
     for (const retainedRunId of this.liveTerminalErrorMessages.keys()) {
       if (!this.finalizedRunsWithDisplay.has(retainedRunId)) {
@@ -258,13 +242,13 @@ export class TuiSessionRunCoordinator {
   }
 
   notePostFinalizingRun(runId: string): void {
-    this.postFinalizingRuns.set(runId, Date.now());
-    this.pruneRunMap(this.postFinalizingRuns);
+    this.postFinalizingRuns.add(runId);
+    this.pruneRuns(this.postFinalizingRuns);
   }
 
   notePersistedRun(runId: string): void {
-    this.persistedTerminalRunIds.set(runId, Date.now());
-    this.pruneRunMap(this.persistedTerminalRunIds);
+    this.persistedTerminalRunIds.add(runId);
+    this.pruneRuns(this.persistedTerminalRunIds);
   }
 
   collectTrackedSessionRunIds() {

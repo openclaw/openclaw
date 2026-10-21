@@ -17,6 +17,7 @@ import {
   type CodeModeNativeCall,
 } from "./event-projector-code-mode.js";
 import {
+  auditNativeToolTerminalStatus,
   isMutatingNativeToolItem,
   isNonSuccessItemStatus,
   isProjectedNativeToolItem,
@@ -51,7 +52,7 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
-import { sanitizeCodexToolArguments } from "./tool-progress-normalization.js";
+import { asCodexToolArguments } from "./tool-progress-normalization.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -164,7 +165,7 @@ export class CodexToolTranscriptProjection {
     this.recordToolCall({
       id: params.callId,
       name: params.tool,
-      arguments: sanitizeCodexToolArguments(params.arguments),
+      arguments: asCodexToolArguments(params.arguments),
     });
   }
 
@@ -494,21 +495,28 @@ export class CodexToolTranscriptProjection {
     const output =
       this.progress.approvalTimeoutExplanation(params.item.id, params.status) ??
       itemOutputText(params.item, this.progress.outputTextByItem);
+    const status =
+      params.status === "running" ? "running" : auditNativeToolTerminalStatus(params.item);
     this.options.trajectoryRecorder?.recordEvent("tool.result", {
       threadId: this.threadId,
       turnId: this.turnId,
       itemId: params.item.id,
       toolCallId: params.item.id,
       name: params.name,
-      status: params.status,
+      status,
       isError: isNonSuccessItemStatus(params.status),
+      ...(status === "running" || status === "unknown" ? {} : { success: status === "completed" }),
       ...(toolResult ? { result: toolResult } : {}),
       ...(output ? { output } : {}),
     });
   }
 
   emitAfterToolCallObservation(item: CodexThreadItem): void {
-    if (!this.shouldEmitAfterToolCallObservation(item)) {
+    if (
+      !isProjectedNativeToolItem(item) ||
+      this.afterToolCallObservedItemIds.has(item.id) ||
+      (this.options.nativePostToolUseRelayEnabled && isNativePostToolUseRelayItem(item))
+    ) {
       return;
     }
     const name = itemName(item);
@@ -581,6 +589,7 @@ export class CodexToolTranscriptProjection {
         name,
         status: processId ? "running" : "failed",
         isError: !processId,
+        ...(!processId ? { success: false } : {}),
         result: processId
           ? { status: "running", processId }
           : { status: "failed", reason: "missing_tool_result" },
@@ -668,13 +677,6 @@ export class CodexToolTranscriptProjection {
       error: formatMissingToolResultError({ id: firstMissingId, name }),
       ...(item && isMutatingNativeToolItem(item) ? { mutatingAction: true } : {}),
     });
-  }
-
-  private shouldEmitAfterToolCallObservation(item: CodexThreadItem): boolean {
-    if (!isProjectedNativeToolItem(item) || this.afterToolCallObservedItemIds.has(item.id)) {
-      return false;
-    }
-    return !(this.options.nativePostToolUseRelayEnabled && isNativePostToolUseRelayItem(item));
   }
 
   private createToolCallMessage(params: ToolTranscriptCallInput): AgentMessage {

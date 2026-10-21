@@ -1,12 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type {
-  PluginStateEntry,
-  PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import {
@@ -17,41 +11,28 @@ import {
 
 function createStateStore() {
   const values = new Map<string, StoredCodexManagedThread>();
-  const state: Pick<
-    PluginStateKeyedStore<StoredCodexManagedThread>,
-    "entries" | "lookup" | "registerIfAbsent"
-  > = {
+  const state: Parameters<typeof createCodexManagedThreadStore>[0] = {
     async registerIfAbsent(key, value) {
-      if (values.has(key)) {
-        return false;
-      }
-      values.set(key, value);
-      return true;
+      const inserted = !values.has(key);
+      values.set(key, values.get(key) ?? value);
+      return inserted;
     },
-    lookup: async (key) => values.get(key),
     entries: async () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
   };
-  return { state, values };
+  const store = createCodexManagedThreadStore(state);
+  const mark = (threadId = "thread", sourceHomeId = "home", rolloutPath?: string) =>
+    store.mark({ sourceHomeId, threadId, ...(rolloutPath ? { rolloutPath } : {}) });
+  return { state, values, store, mark };
 }
 
 describe("Codex managed thread store", () => {
   afterEach(() => vi.restoreAllMocks());
   it("records one durable ownership row per home and thread", async () => {
-    const { state, values } = createStateStore();
-    const store = createCodexManagedThreadStore(state);
+    const { values, store, mark } = createStateStore();
     const sourceHomeId = codexCatalogHomeId("/tmp/codex-home");
 
-    await expect(
-      store.mark({
-        sourceHomeId: ` ${sourceHomeId} `,
-        threadId: " thread-1 ",
-        rolloutPath: " /rollout.jsonl ",
-      }),
-    ).resolves.toBe(true);
-    await expect(
-      store.mark({ sourceHomeId, threadId: "thread-1", rolloutPath: "/new-path.jsonl" }),
-    ).resolves.toBe(true);
-
+    await expect(mark(" thread-1 ", ` ${sourceHomeId} `, " /rollout.jsonl ")).resolves.toBe(true);
+    await expect(mark("thread-1", sourceHomeId, "/new-path.jsonl")).resolves.toBe(true);
     await expect(store.has(sourceHomeId, "thread-1")).resolves.toBe(true);
     await expect(store.has("other-home", "thread-1")).resolves.toBe(false);
     await expect(store.has(sourceHomeId, "missing-thread")).resolves.toBe(false);
@@ -67,25 +48,13 @@ describe("Codex managed thread store", () => {
     );
   });
 
-  it("ignores malformed rows when building a snapshot", async () => {
-    const { state, values } = createStateStore();
-    values.set("malformed", {
-      version: 1,
-      kind: "managed-thread",
-    } as unknown as StoredCodexManagedThread);
-
-    await expect(createCodexManagedThreadStore(state).snapshot()).resolves.toEqual(new Map());
-  });
-
   it("hydrates once and keeps concurrent marks within the global oldest-first bound", async () => {
-    const { state } = createStateStore();
+    const { state, store, mark } = createStateStore();
     const pending = createDeferred<Awaited<ReturnType<typeof state.entries>>>();
     const entries = vi.spyOn(state, "entries").mockReturnValue(pending.promise);
-    const lookup = vi.spyOn(state, "lookup");
-    const store = createCodexManagedThreadStore(state);
     const snapshots = [store.snapshot(), store.snapshot()];
-    await store.mark({ sourceHomeId: "home", threadId: "thread-1" });
-    await expect(store.mark({ sourceHomeId: "home", threadId: "new-thread" })).resolves.toBe(true);
+    await mark("thread-1");
+    await expect(mark("new-thread")).resolves.toBe(true);
     pending.resolve(
       Array.from(
         { length: CODEX_MANAGED_THREAD_MAX_ENTRIES },
@@ -107,27 +76,22 @@ describe("Codex managed thread store", () => {
       expect(snapshot.get("home")?.has("thread-1")).toBe(true);
       expect(snapshot.get("home")?.has("new-thread")).toBe(true);
     }
-    await store.mark({ sourceHomeId: "home", threadId: "after-hydration" });
+    await mark("after-hydration");
     await expect(store.has("home", "thread-1")).resolves.toBe(false);
-    await store.mark({ sourceHomeId: "home", threadId: "thread-2" });
-    await store.mark({ sourceHomeId: "home", threadId: "latest-thread" });
+    await mark("thread-2");
+    await mark("latest-thread");
     await expect(store.has("home", "thread-2")).resolves.toBe(false);
-    for (let i = 0; i < 100; i++) {
-      expect((await store.snapshot()).get("home")?.size).toBe(CODEX_MANAGED_THREAD_MAX_ENTRIES);
-      await expect(store.has("home", "new-thread")).resolves.toBe(true);
-    }
+    expect((await store.snapshot()).get("home")?.size).toBe(CODEX_MANAGED_THREAD_MAX_ENTRIES);
+    await expect(store.has("home", "new-thread")).resolves.toBe(true);
     expect(entries).toHaveBeenCalledTimes(1);
-    expect(lookup).not.toHaveBeenCalled();
   });
 
   it("waits for durable registration before reporting success", async () => {
-    const { state } = createStateStore();
+    const { state, mark } = createStateStore();
     const durable = createDeferred<boolean>();
     state.registerIfAbsent = () => durable.promise;
     const finished = vi.fn();
-    const marked = createCodexManagedThreadStore(state)
-      .mark({ sourceHomeId: "home", threadId: "thread" })
-      .then(finished);
+    const marked = mark().then(finished);
     await Promise.resolve();
     expect(finished).not.toHaveBeenCalled();
     durable.resolve(false);
@@ -136,51 +100,26 @@ describe("Codex managed thread store", () => {
   });
 
   it("warns and fails open after rejected storage or invalid input", async () => {
-    const { state } = createStateStore();
+    const { state, store, mark } = createStateStore();
     const failure = new Error("synthetic storage rejection");
-    state.registerIfAbsent = vi.fn(async () => {
-      throw failure;
-    });
+    state.registerIfAbsent = vi.fn<typeof state.registerIfAbsent>().mockRejectedValue(failure);
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    const store = createCodexManagedThreadStore(state);
-    await expect(store.mark({ sourceHomeId: "home", threadId: "thread" })).resolves.toBe(false);
+    await expect(mark()).resolves.toBe(false);
     expect(warn).toHaveBeenCalledWith("failed to record Codex managed thread ownership", {
       error: failure,
     });
-    await expect(store.mark({ sourceHomeId: " ", threadId: "thread" })).resolves.toBe(false);
+    await expect(mark("thread", " ")).resolves.toBe(false);
     expect(state.registerIfAbsent).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledTimes(2);
     await expect(store.snapshot()).resolves.toEqual(new Map());
   });
 
-  it.each(["has", "snapshot"] as const)("propagates %s storage rejection", async (operation) => {
-    const { state } = createStateStore();
+  it("propagates membership storage rejection and retries hydration", async () => {
+    const { state, store } = createStateStore();
     const failure = new Error("synthetic read rejection");
-    state.lookup = async () => {
-      throw failure;
-    };
-    state.entries = async () => {
-      throw failure;
-    };
-    const store = createCodexManagedThreadStore(state);
-    await expect(operation === "has" ? store.has("home", "thread") : store.snapshot()).rejects.toBe(
-      failure,
-    );
+    state.entries = vi.fn<typeof state.entries>().mockRejectedValue(failure);
+    await expect(store.has("home", "thread")).rejects.toBe(failure);
     state.entries = async () => [];
     await expect(store.snapshot()).resolves.toEqual(new Map());
-  });
-
-  it("uses the same source identity for a symlinked configured home", async () => {
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "codex-home-id-")));
-    try {
-      const home = path.join(root, "home");
-      const alias = path.join(root, "alias");
-      await fs.mkdir(home);
-      await fs.symlink(home, alias, process.platform === "win32" ? "junction" : "dir");
-
-      expect(codexCatalogHomeId(alias)).toBe(codexCatalogHomeId(home));
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
   });
 });

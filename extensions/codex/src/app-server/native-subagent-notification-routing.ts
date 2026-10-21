@@ -101,6 +101,18 @@ export function createCodexNativeSubagentNotificationRouter(
       if (state && parentThreadId) {
         const turnId = readString(params, "turnId");
         const owner = deps.resolveParentOwner(state, turnId, parentThreadId);
+        const registerSpawn = (childThreadId: string, agentPath?: string) =>
+          deps.registerDirectSpawnChild(
+            state,
+            turnId,
+            {
+              parentThreadId: state.parentThreadId,
+              nativeParentThreadId: parentThreadId,
+              childThreadId,
+              ...(agentPath === undefined ? {} : { agentPath }),
+            },
+            owner,
+          );
         if (notification.method === "item/completed") {
           if (
             readString(item, "type") === "subAgentActivity" &&
@@ -153,17 +165,7 @@ export function createCodexNativeSubagentNotificationRouter(
           const childThreadId = readString(item, "agentThreadId")?.trim();
           const agentPath = readString(item, "agentPath");
           if (childThreadId) {
-            deps.registerDirectSpawnChild(
-              state,
-              turnId,
-              {
-                parentThreadId: state.parentThreadId,
-                nativeParentThreadId: parentThreadId,
-                childThreadId,
-                ...(agentPath === undefined ? {} : { agentPath }),
-              },
-              owner,
-            );
+            registerSpawn(childThreadId, agentPath);
           }
           return state;
         }
@@ -190,16 +192,7 @@ export function createCodexNativeSubagentNotificationRouter(
           accepted =
             Boolean(
               isCompletedSpawnAgentTool
-                ? deps.registerDirectSpawnChild(
-                    state,
-                    turnId,
-                    {
-                      parentThreadId: state.parentThreadId,
-                      nativeParentThreadId: parentThreadId,
-                      childThreadId,
-                    },
-                    owner,
-                  )
+                ? registerSpawn(childThreadId)
                 : deps.registerChildThread(state, childThreadId),
             ) && accepted;
         }

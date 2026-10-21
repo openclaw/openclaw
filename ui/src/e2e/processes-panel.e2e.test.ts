@@ -18,6 +18,14 @@ suite.define(() => {
           : {}),
       },
       async ({ page }) => {
+        const screenshot = async (name: string) => {
+          if (capture) {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(suite.artifactDir, name),
+            });
+          }
+        };
         const key = "agent:main:process-review";
         const process = {
           processId: "build-process",
@@ -69,15 +77,16 @@ suite.define(() => {
         const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const draft = pane.locator(".agent-chat__composer-combobox textarea");
         await draft.fill("Keep my next instruction");
-        await pane.getByRole("button", { name: "Side panel", exact: true }).click();
-        const choices = pane.locator(".side-panel-empty__type");
-        await choices.first().waitFor();
-        if (capture) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, "processes-before.png"),
-          });
+        const panels = pane.locator(".sidebar-region__panels-toggle").getByRole("button", {
+          name: "Panels",
+          exact: true,
+        });
+        if ((await panels.getAttribute("aria-expanded")) !== "true") {
+          await panels.click();
         }
+        const choices = pane.locator(".side-panel-launcher").getByRole("button");
+        await choices.first().waitFor();
+        await screenshot("processes-before.png");
         expect(await choices.allTextContents()).toEqual(
           expect.arrayContaining([expect.stringContaining("Processes")]),
         );
@@ -86,15 +95,10 @@ suite.define(() => {
         await panel.getByText(process.name, { exact: true }).waitFor();
         const request = await gateway.waitForRequest("sessions.processes.list");
         expect(request.params).toMatchObject({ key });
-        const finishedToggle = panel.getByRole("button", { name: "Finished (1)", exact: true });
+        const finishedToggle = panel.getByRole("button", { name: /^Finished\s*1$/ });
         const finishedRow = panel.getByRole("button", { name: finishedProcess.name, exact: true });
         await finishedToggle.waitFor();
-        if (capture) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, "finished-default.png"),
-          });
-        }
+        await screenshot("finished-default.png");
         expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
         expect(await finishedRow.count()).toBe(0);
         await finishedToggle.click();
@@ -105,17 +109,22 @@ suite.define(() => {
         expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
         await panel.getByText(process.name, { exact: true }).click();
         await panel.getByText(process.tail, { exact: true }).waitFor();
+        const updatedTail = "Compiled 84 modules. Waiting for the next file change.";
+        await gateway.setMethodResponse("sessions.processes.list", {
+          ...result,
+          processes: [{ ...process, tail: updatedTail }, finishedProcess],
+        });
+        await gateway.emitGatewayEvent("sessions.processes.changed", {
+          sessionKey: key,
+          agentId: "main",
+        });
+        await panel.getByText(updatedTail, { exact: true }).waitFor();
         await openChatSidePanelType(page, "Subagents");
         const selectTab = (label: string) =>
           pane.locator(".side-panel__header .tabstrip-tab").filter({ hasText: label }).click();
         await selectTab("Processes");
-        await panel.getByText(process.tail, { exact: true }).waitFor();
-        if (capture) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, "processes-after.png"),
-          });
-        }
+        await panel.getByText(updatedTail, { exact: true }).waitFor();
+        await screenshot("processes-after.png");
         await gateway.deferNext("sessions.processes.stop");
         await panel.getByRole("button", { name: "Stop " + process.name, exact: true }).click();
         const stop = await gateway.waitForRequest("sessions.processes.stop");

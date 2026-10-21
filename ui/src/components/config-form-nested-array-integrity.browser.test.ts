@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderArrayFixture } from "../test-helpers/config-form-fixtures.ts";
+import { renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);

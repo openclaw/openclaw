@@ -4,13 +4,12 @@ import { detectMime, mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
 import {
   buildOutboundMediaLoadOptions,
   MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
-  runFfmpeg,
   runFfprobe,
+  transcodeAudioBufferToOpus,
   type OutboundMediaAccess,
 } from "openclaw/plugin-sdk/media-runtime";
 import type { SavedMedia } from "openclaw/plugin-sdk/media-store";
 import type { ReplyPayloadTtsSupplement } from "openclaw/plugin-sdk/reply-payload";
-import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -29,8 +28,6 @@ const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const FEISHU_MAX_FILE_UPLOAD_BYTES = 30 * 1024 * 1024;
 const FEISHU_MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024;
 const FEISHU_VOICE_FILE_NAME = "voice.ogg";
-const FEISHU_VOICE_SAMPLE_RATE_HZ = 48_000;
-const FEISHU_VOICE_BITRATE = "64k";
 
 const FEISHU_SUPPORTED_IMAGE_CONTENT_TYPES = new Set([
   "image/jpeg",
@@ -448,54 +445,6 @@ function isLikelyTranscodableAudio(params: { fileName: string; contentType?: str
   return FEISHU_TRANSCODABLE_AUDIO_EXTS.has(ext) || mediaKindFromMime(contentType) === "audio";
 }
 
-async function transcodeToFeishuVoiceOpus(
-  params: FeishuMedia,
-): Promise<FeishuMedia & { contentType: string }> {
-  return await withTempWorkspace(
-    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-voice-" },
-    async (workspace) => {
-      const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
-      const inputExt = ext && ext.length <= 12 ? ext : ".audio";
-      const inputPath = await workspace.write(`input${inputExt}`, params.buffer);
-      await writeExternalFileWithinRoot({
-        rootDir: workspace.dir,
-        path: FEISHU_VOICE_FILE_NAME,
-        write: async (outputPath) => {
-          await runFfmpeg([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            inputPath,
-            "-vn",
-            "-sn",
-            "-dn",
-            "-t",
-            String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-            "-ar",
-            String(FEISHU_VOICE_SAMPLE_RATE_HZ),
-            "-ac",
-            "1",
-            "-c:a",
-            "libopus",
-            "-b:a",
-            FEISHU_VOICE_BITRATE,
-            "-f",
-            "ogg",
-            outputPath,
-          ]);
-        },
-      });
-      return {
-        buffer: await workspace.read(FEISHU_VOICE_FILE_NAME),
-        fileName: FEISHU_VOICE_FILE_NAME,
-        contentType: "audio/ogg",
-      };
-    },
-  );
-}
-
 async function prepareFeishuVoiceMedia(
   params: FeishuMedia & { audioAsVoice?: boolean },
 ): Promise<FeishuMedia> {
@@ -506,7 +455,20 @@ async function prepareFeishuVoiceMedia(
     return params;
   }
   try {
-    return await transcodeToFeishuVoiceOpus(params);
+    return {
+      buffer: await transcodeAudioBufferToOpus({
+        audioBuffer: params.buffer,
+        inputFileName: params.fileName,
+        tempPrefix: "feishu-voice-",
+        outputFileName: FEISHU_VOICE_FILE_NAME,
+        sampleRateHz: 48_000,
+        bitrate: "64k",
+        channels: 1,
+        maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+      }),
+      fileName: FEISHU_VOICE_FILE_NAME,
+      contentType: "audio/ogg",
+    };
   } catch (err) {
     console.warn(
       `[feishu] audioAsVoice transcode failed; sending ${params.fileName} as a file attachment:`,
@@ -541,7 +503,7 @@ async function probeMediaDurationMs(params: FeishuMedia): Promise<number | undef
       },
     );
   } catch (err) {
-    console.warn("[feishu] failed to probe media duration; upload will omit it:", err);
+    console.warn("[feishu] failed to check media duration; upload will omit it:", err);
     return undefined;
   }
 }

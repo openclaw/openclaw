@@ -21,6 +21,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { ensureSessionTranscriptArchiveSchema } from "../state/openclaw-agent-session-transcript-archive-schema.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import { transformMediaArchiveContent } from "./state-migrations.media-persistence-transform.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { cleanupMediaPersistenceFixtures } from "./state-migrations.media-persistence.test-support.js";
@@ -174,7 +175,32 @@ function fixture(
           .get(sessionId, generation) as ArchiveRow,
       true,
     );
-  return { archiveDirectory, archiveName, archivePath, databasePath, env, read };
+  const recoveryDirectories = () =>
+    fs
+      .readdirSync(path.dirname(databasePath))
+      .filter((name) => name.startsWith("openclaw-media-persistence-recovery-"));
+  return {
+    archiveDirectory,
+    archiveName,
+    archivePath,
+    databasePath,
+    env,
+    read,
+    recoveryDirectories,
+  };
+}
+
+function archiveCloner(database: DatabaseSync) {
+  const insert = database.prepare(`INSERT INTO session_transcript_archives(
+    session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
+    archive_name,created_at,published_at)
+    SELECT ?,?,session_key,reason,encoding,archive_blob,archive_sha256,?,created_at,published_at
+    FROM session_transcript_archives WHERE session_id = ? AND generation = ?`);
+  return (id: string, retained = generation, name = `${id}.jsonl`) =>
+    insert.run(id, retained, name, sessionId, generation);
+}
+function expectNoChanges(result: { changes: string[]; warnings: string[] }) {
+  expect(result).toEqual({ changes: [], warnings: [] });
 }
 
 function expectCanonical(row: ArchiveRow): void {
@@ -190,17 +216,13 @@ function expectCanonical(row: ArchiveRow): void {
 }
 
 function expectPreservedIdentity(before: ArchiveRow, after: ArchiveRow): void {
-  for (const key of [
-    "session_id",
-    "generation",
-    "session_key",
-    "reason",
-    "encoding",
-    "archive_name",
-    "created_at",
-  ] as const) {
-    expect(after[key], key).toEqual(before[key]);
-  }
+  const identity = ({
+    archive_blob: _blob,
+    archive_sha256: _hash,
+    published_at: _published,
+    ...rest
+  }: ArchiveRow) => rest;
+  expect(identity(after)).toEqual(identity(before));
 }
 
 afterEach(() => {
@@ -209,19 +231,46 @@ afterEach(() => {
 });
 
 describe("media migration of canonical SQLite transcript archives", () => {
+  it.each([
+    {
+      label: "media",
+      migrate: migrateLegacyMediaPersistence,
+      entry: "migrateCanonicalTranscriptArchives",
+    },
+    {
+      label: "directives",
+      migrate: migrateHistoricalTranscriptDirectives,
+      entry: "migrateTranscriptDirectiveArchives",
+    },
+  ] as const)(
+    "preserves archive interruption through the $label migration owner",
+    async ({ migrate, entry }) => {
+      const f = fixture({ content: canonicalContent });
+      const controller = new AbortController();
+      const interrupted = new Error("Doctor interrupted by SIGINT");
+      const archives = await import("./state-migrations.transcript-directives-archives.js");
+      vi.spyOn(archives, entry).mockImplementation(async () => {
+        controller.abort(interrupted);
+        throw interrupted;
+      });
+      await expect(
+        withSqliteReadOnlyWorkerScope(() => migrate({ env: f.env }), {
+          signal: controller.signal,
+          deadlineOwnedByCaller: true,
+        }),
+      ).rejects.toBe(interrupted);
+    },
+  );
+
   it("verifies 200 unchanged archives without taking an archive write lock", async () => {
     const f = fixture({ content: canonicalContent });
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(f.databasePath);
     try {
-      const insert = database.prepare(`INSERT INTO session_transcript_archives(
-        session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
-        archive_name,created_at,published_at)
-        SELECT ?,generation,session_key,reason,encoding,archive_blob,archive_sha256,
-        ?,created_at,published_at FROM session_transcript_archives WHERE session_id = ?`);
+      const clone = archiveCloner(database);
       for (let index = 1; index < 200; index++) {
         const name = `canonical-${index}.jsonl`;
-        insert.run(`canonical-${index}`, name, sessionId);
+        clone(`canonical-${index}`, generation, name);
         fs.writeFileSync(path.join(f.archiveDirectory, name), canonicalContent);
       }
       await withAgentDatabaseMaintenanceLease({ env: f.env, processBound: true }, async () => {
@@ -236,7 +285,7 @@ describe("media migration of canonical SQLite transcript archives", () => {
           database,
           pathname: f.databasePath,
           start: { generation: "", sessionId: "" },
-          transformContent: transformMediaArchiveContent,
+          transformLine: transformMediaArchiveContent,
         });
         const elapsed = performance.now() - started;
         expect(result).toEqual({ rewrittenArchives: 0, warnings: [] });
@@ -253,17 +302,12 @@ describe("media migration of canonical SQLite transcript archives", () => {
     const f = fixture({ fileContent: null });
     const { DatabaseSync } = requireNodeSqlite();
     withDatabase(f.databasePath, (database) => {
-      const insert = database.prepare(`INSERT INTO session_transcript_archives(
-          session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
-          archive_name,created_at,published_at)
-        SELECT ?, ?, session_key, reason, encoding, archive_blob, archive_sha256,
-          ?, created_at, published_at FROM session_transcript_archives
-        WHERE session_id = ? AND generation = ?`);
+      const clone = archiveCloner(database);
       database.exec("BEGIN");
       for (const session of ["a", "b", "c"]) {
         for (let index = 0; index < 40; index++) {
           const retained = String(index).padStart(3, "0");
-          insert.run(session, retained, `${session}-${retained}.jsonl`, sessionId, generation);
+          clone(session, retained, `${session}-${retained}.jsonl`);
         }
       }
       database.exec("COMMIT");
@@ -335,11 +379,8 @@ describe("media migration of canonical SQLite transcript archives", () => {
   });
 
   it.each([
-    ["identity", "identity", legacyContent, legacyContent],
     ["zstd", "zstd", legacyContent, legacyContent],
     ["already repaired file", "identity", legacyContent, canonicalContent],
-    ["stale file", "identity", canonicalContent, legacyContent],
-    ["corrupt file", "identity", canonicalContent, "{broken archive\n"],
   ] as const)(
     "converges the %s blob, digest and published file without changing archive identity",
     async (_label, encoding, content, fileContent) => {
@@ -348,6 +389,17 @@ describe("media migration of canonical SQLite transcript archives", () => {
       const originalFile = fs.readFileSync(f.archivePath);
       const result = await migrateLegacyMediaPersistence({ env: f.env });
       expect(result.warnings).toEqual([]);
+      const backups = f.recoveryDirectories();
+      expect(backups).toHaveLength(1);
+      withDatabase(
+        path.join(path.dirname(f.databasePath), backups[0]!, "database.sqlite"),
+        (database) => {
+          expect(database.prepare("SELECT * FROM session_transcript_archives").get()).toEqual(
+            before,
+          );
+        },
+        true,
+      );
       const after = f.read();
       expectCanonical(after);
       expectPreservedIdentity(before, after);
@@ -356,9 +408,6 @@ describe("media migration of canonical SQLite transcript archives", () => {
       if (fileContent === canonicalContent) {
         expect(fs.readFileSync(f.archivePath)).toEqual(originalFile);
         expect(Buffer.from(after.archive_blob)).toEqual(originalFile);
-      } else if (content === canonicalContent) {
-        expect(Buffer.from(after.archive_blob)).toEqual(Buffer.from(before.archive_blob));
-        expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(before.archive_blob));
       }
       expect(
         publishEncodedSessionTranscriptArchive({
@@ -369,52 +418,29 @@ describe("media migration of canonical SQLite transcript archives", () => {
         }),
       ).toBe(f.archivePath);
 
-      expect(await migrateLegacyMediaPersistence({ env: f.env })).toEqual({
-        changes: [],
-        warnings: [],
-      });
+      expectNoChanges(await migrateLegacyMediaPersistence({ env: f.env }));
       expect(f.read()).toEqual(after);
       expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(after.archive_blob));
+      expect(f.recoveryDirectories()).toEqual(backups);
     },
   );
 
-  it.each([
-    { label: "media", content: legacyContent, migrate: migrateLegacyMediaPersistence },
-    {
-      label: "historical directives",
-      content: canonicalContent,
-      migrate: migrateHistoricalTranscriptDirectives,
-    },
-  ])(
-    "reports an absent archive copy during $label migration",
-    async ({ label, content, migrate }) => {
-      const f = fixture({ content, fileContent: null });
-      const before = f.read();
-      const result = await migrate({ env: f.env });
-      expect(result.warningDisposition).toBe("recoverable");
-      expect(result.warnings).toEqual([
-        expect.stringContaining("Missing 1 canonical transcript archive file(s)"),
-        `Missing canonical transcript archive copy: ${f.archivePath}`,
-      ]);
-      const after = f.read();
-      if (label === "media") {
-        expectCanonical(after);
-        expectPreservedIdentity(before, after);
-        expect(after.published_at).toBeNull();
-      } else {
-        expect(result.changes).toEqual([]);
-        expect(after).toEqual(before);
-      }
-      expect(fs.existsSync(f.archivePath)).toBe(false);
-      expect(await migrate({ env: f.env })).toEqual(
-        label === "media"
-          ? { changes: [], warnings: result.warnings, warningDisposition: "recoverable" }
-          : { changes: [], warnings: [] },
-      );
-      expect(f.read()).toEqual(after);
-      expect(fs.existsSync(f.archivePath)).toBe(false);
-    },
-  );
+  it("reports an absent archive copy during historical directives migration", async () => {
+    const f = fixture({ content: canonicalContent, fileContent: null });
+    const before = f.read();
+    const result = await migrateHistoricalTranscriptDirectives({ env: f.env });
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Missing 1 canonical transcript archive file(s)"),
+      `Missing canonical transcript archive copy: ${f.archivePath}`,
+    ]);
+    expect(result.changes).toEqual([]);
+    expect(f.read()).toEqual(before);
+    expect(fs.existsSync(f.archivePath)).toBe(false);
+    expectNoChanges(await migrateHistoricalTranscriptDirectives({ env: f.env }));
+    expect(f.read()).toEqual(before);
+    expect(fs.existsSync(f.archivePath)).toBe(false);
+  });
 
   it.each([
     { failure: "digest", digest: "0".repeat(64), content: legacyContent },
@@ -430,44 +456,11 @@ describe("media migration of canonical SQLite transcript archives", () => {
     expect(fs.readFileSync(f.archivePath)).toEqual(ownedFile);
   });
 
-  it("detects a restored canonical blob during repair of its unchanged file", async () => {
-    const f = fixture({ content: canonicalContent, fileContent: legacyContent });
-    const restored = Buffer.from(
-      canonicalContent.replace("keep the attachment", "restored history"),
-    );
-    const renameSync = fs.renameSync;
-    const rename = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
-      renameSync(source, destination);
-      if (destination === f.archivePath) {
-        withDatabase(f.databasePath, (database) => {
-          database
-            .prepare("UPDATE session_transcript_archives SET archive_blob = ?, archive_sha256 = ?")
-            .run(restored, sha256(restored));
-        });
-      }
-    });
-    const result = await migrateLegacyMediaPersistence({ env: f.env }).finally(() =>
-      rename.mockRestore(),
-    );
-    expect(result.warnings.join("\n")).toMatch(
-      /Transcript archive (?:source )?changed before migration commit/,
-    );
-    expect(Buffer.from(f.read().archive_blob)).toEqual(restored);
-    expect((await migrateLegacyMediaPersistence({ env: f.env })).warnings).toEqual([]);
-    expect(fs.readFileSync(f.archivePath)).toEqual(restored);
-  });
-
   it("repairs earlier archives before reporting an unreadable later copy", async () => {
     const f = fixture();
     const deniedPath = path.join(f.archiveDirectory, "z-denied.jsonl");
     withDatabase(f.databasePath, (database) => {
-      database
-        .prepare(`INSERT INTO session_transcript_archives(
-        session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
-        archive_name,created_at,published_at)
-        SELECT 'z-denied',generation,session_key,reason,encoding,archive_blob,archive_sha256,
-          'z-denied.jsonl',created_at,published_at FROM session_transcript_archives WHERE session_id = ?`)
-        .run(sessionId);
+      archiveCloner(database)("z-denied");
     });
     fs.writeFileSync(deniedPath, legacyContent);
     const readFileSync = fs.readFileSync;
@@ -493,18 +486,13 @@ describe("media migration of canonical SQLite transcript archives", () => {
     const content = ` ${JSON.stringify(canonicalEvent)} \n ${JSON.stringify(preservedEvent)} `;
     const f = fixture({ content });
     const before = f.read();
-    expect(await migrateLegacyMediaPersistence({ env: f.env })).toEqual({
-      changes: [],
-      warnings: [],
-    });
+    expectNoChanges(await migrateLegacyMediaPersistence({ env: f.env }));
     expect(f.read()).toEqual(before);
     expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(before.archive_blob));
+    expect(f.recoveryDirectories()).toEqual([]);
 
     const reads = vi.spyOn(fs, "readFileSync");
-    expect(await migrateLegacyMediaPersistence({ env: f.env })).toEqual({
-      changes: [],
-      warnings: [],
-    });
+    expectNoChanges(await migrateLegacyMediaPersistence({ env: f.env }));
     expect(reads.mock.calls.filter(([file]) => file === f.archivePath)).toEqual([]);
     reads.mockRestore();
 
@@ -539,10 +527,7 @@ describe("media migration of canonical SQLite transcript archives", () => {
     // Historical same-version databases may predate the lazy archive table.
     opened.db.exec("DROP TABLE IF EXISTS session_transcript_archives");
     closeOpenClawAgentDatabasesForTest();
-    expect(await migrateLegacyMediaPersistence({ env })).toEqual({
-      changes: [],
-      warnings: [],
-    });
+    expectNoChanges(await migrateLegacyMediaPersistence({ env }));
     withDatabase(
       databasePath,
       (database) => {

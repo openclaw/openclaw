@@ -38,6 +38,10 @@ openclaw onboard --auth-choice ollama-cloud --ollama-cloud-api-key "<key>"
 
 Onboarding sets the default model to `ollama-cloud/minimax-m2.7`.
 
+The setup flow rejects `ollama-local`, including when it comes from
+`OLLAMA_API_KEY` or a saved profile. That placeholder only enables local Ollama;
+it is not a hosted API key.
+
 ## Defaults
 
 - Provider: `ollama-cloud`
@@ -70,14 +74,13 @@ openclaw models list --provider ollama-cloud
 openclaw models set ollama-cloud/kimi-k2.6
 ```
 
-Hosted ids in the live catalog include `deepseek-v4-flash`, `glm-5.2`,
+Hosted ids in the live catalog include `deepseek-v4-pro`, `glm-5.2`,
 `gpt-oss:20b`, `kimi-k3`, and `minimax-m3`. Failed discovery keeps the last
 successful inventory for the same credentials. Without a prior inventory,
 OpenClaw offers bundled suggestions and records the discovery failure. A
 successful empty response clears discovered models; later failures preserve
-that empty result. Retired `kimi-k2.5` remains marked
-deprecated for existing exact references, but is no longer a current hosted
-model.
+that empty result. Retired models are removed from bundled suggestions;
+existing configurations are not rewritten automatically.
 
 Model ids are cloud catalog ids, not local pull names. If a model name works in
 a local Ollama host but is absent from the hosted catalog, use the `ollama`

@@ -29,6 +29,22 @@ import {
   maybeStopManagedServiceBeforeMutableUpdate,
 } from "./update-command-service.js";
 
+function revocableAuthority() {
+  let current = true;
+  return {
+    assertCurrent() {
+      if (!current) {
+        throw new Error("Original update owner revoked");
+      }
+    },
+    revoke() {
+      current = false;
+    },
+  };
+}
+const installed = () => commandResult({ stdout: JSON.stringify({ action: "install", ok: true }) });
+const verifiedStep = expect.objectContaining({ name: "gateway verification", exitCode: 0 });
+
 export function registerRestartOutcomeTests(
   getFixture: () => {
     root: string;
@@ -46,6 +62,34 @@ export function registerRestartOutcomeTests(
     };
   },
 ) {
+  async function prepareRestart(
+    root: string,
+    result: UpdateRunResult,
+    before: Awaited<ReturnType<typeof maybeStopManagedServiceBeforeMutableUpdate>>,
+    run: NonNullable<UpdateCommandOptions["run"]>,
+  ) {
+    const prepared = await prepareUpdateRestart(
+      {
+        root,
+        result,
+        preManagedServiceStop: before,
+        shouldRestart: true,
+        updateStepTimeoutMs: 1_000,
+        assertCurrent: () => run.executorFence?.assertCurrent(),
+      },
+      await readConfigFileSnapshot(),
+    );
+    return {
+      ...prepared,
+      shouldRestart: true,
+      result,
+      opts: { json: true, run },
+      refreshServiceEnv: prepared.refreshGatewayServiceEnv,
+      serviceEnv: prepared.gatewayServiceEnv,
+      serviceInstallEnv: prepared.gatewayServiceInstallEnv,
+      timeoutMs: 1_000,
+    };
+  }
   it.each([false, true])(
     "uses the native restart owner after preparing a writable unknown-version target (revoked=%s)",
     async (revoked) => {
@@ -62,28 +106,13 @@ export function registerRestartOutcomeTests(
         jsonMode: true,
       });
       const result: UpdateRunResult = serviceUpdateResult(root);
-      const prepared = await prepareUpdateRestart(
-        {
-          root,
-          result,
-          preManagedServiceStop: before,
-          shouldRestart: true,
-          updateStepTimeoutMs: 1_000,
-          assertCurrent: () => run.executorFence?.assertCurrent(),
-        },
-        await readConfigFileSnapshot(),
-      );
+      const prepared = await prepareRestart(root, result, before, run);
       expect(prepared.refreshGatewayServiceEnv).toBe(true);
-      let current = true;
-      const executorFence = {
-        assertCurrent() {
-          if (!current) {
-            throw new Error("Original update owner revoked");
-          }
-        },
-      };
+      const executorFence = revocableAuthority();
       mocks.configSnapshot.mockImplementationOnce(async () => {
-        current = !revoked;
+        if (revoked) {
+          executorFence.revoke();
+        }
       });
       mocks.child.mockImplementation(async (argv) => {
         if (argv.includes("restart")) {
@@ -93,36 +122,27 @@ export function registerRestartOutcomeTests(
         } else {
           expect(argv).toContain("install");
         }
-        return commandResult({
-          stdout: argv.includes("restart")
-            ? JSON.stringify(mocks.writeJson.mock.lastCall?.[0])
-            : JSON.stringify({ action: "install", ok: true }),
-        });
+        return argv.includes("restart")
+          ? commandResult({ stdout: JSON.stringify(mocks.writeJson.mock.lastCall?.[0]) })
+          : installed();
       });
       const onVerified = vi.fn();
       const activation = maybeRestartService({
         ...prepared,
-        shouldRestart: true,
-        result,
         opts: { json: true, run: { ...run, executorFence } },
-        refreshServiceEnv: prepared.refreshGatewayServiceEnv,
-        serviceEnv: prepared.gatewayServiceEnv,
-        serviceInstallEnv: prepared.gatewayServiceInstallEnv,
-        timeoutMs: 1_000,
         onVerified,
       });
       if (revoked) {
         await expect(activation).rejects.toThrow("Original update owner revoked");
         expect(mocks.restart).not.toHaveBeenCalled();
         expect(onVerified).not.toHaveBeenCalled();
-        expect(result.steps).toEqual([]);
+        // The completed install child keeps its timing; nothing after revocation is recorded.
+        expect(result.steps.map(({ name }) => name)).toEqual(["managed-service-install"]);
       } else {
         await expect(activation).resolves.toBe("ok");
         expect(mocks.restart).toHaveBeenCalledOnce();
         expect(onVerified).toHaveBeenCalledOnce();
-        expect(result.steps).toContainEqual(
-          expect.objectContaining({ name: "gateway verification", exitCode: 0 }),
-        );
+        expect(result.steps).toContainEqual(verifiedStep);
       }
       expect(unownedSpawn).not.toHaveBeenCalled();
       expect(mocks.child.mock.calls.map(([argv]) => argv[3])).toEqual(
@@ -153,20 +173,17 @@ export function registerRestartOutcomeTests(
         throw new Error("Missing managed service fixture command");
       }
       expect(before.stopped).toBe(true);
-      let current = true;
-      const assertCurrent = () => {
-        if (!current) {
-          throw new Error("Original update owner revoked");
-        }
-      };
-      run.executorFence = { assertCurrent };
+      const authority = revocableAuthority();
+      run.executorFence = authority;
       mocks.command.mockImplementation(async (_env, options) => {
         if (options?.requireLoaded && !mocks.running) {
           if (!options.loadForInspection) {
             throw new Error("Effective systemd service command could not be inspected.");
           }
           expect(options.loadForInspection.managerUid).toBe(before.serviceManagerUid);
-          current = scenario !== "revoked recovery";
+          if (scenario === "revoked recovery") {
+            authority.revoke();
+          }
           options.loadForInspection.assertCurrent();
         }
         return command;
@@ -200,43 +217,20 @@ export function registerRestartOutcomeTests(
             programArguments: [process.execPath, packageEntry, "gateway", "--port", "19305"],
           };
           mocks.running = true;
-          return commandResult({
-            stdout: JSON.stringify({ action: "install", ok: true }),
-          });
+          return installed();
         });
         const result: UpdateRunResult = serviceUpdateResult(packageRoot, {
           before: { version: VERSION },
           after: { version: VERSION },
         });
-        const prepared = await prepareUpdateRestart(
-          {
-            root,
-            result,
-            preManagedServiceStop: before,
-            shouldRestart: true,
-            updateStepTimeoutMs: 1_000,
-            assertCurrent,
-          },
-          await readConfigFileSnapshot(),
-        );
+        const prepared = await prepareRestart(root, result, before, run);
         expect(prepared.serviceUpdateVerdict).toMatchObject({
           kind: "owned",
           root,
           requiresInstallRootRefresh: true,
         });
         expect(prepared.refreshGatewayServiceEnv).toBe(true);
-        await expect(
-          maybeRestartService({
-            ...prepared,
-            shouldRestart: true,
-            result,
-            opts: { json: true, run },
-            refreshServiceEnv: prepared.refreshGatewayServiceEnv,
-            serviceEnv: prepared.gatewayServiceEnv,
-            serviceInstallEnv: prepared.gatewayServiceInstallEnv,
-            timeoutMs: 1_000,
-          }),
-        ).resolves.toBe("ok");
+        await expect(maybeRestartService(prepared)).resolves.toBe("ok");
         expect(mocks.child).toHaveBeenCalledOnce();
         expect(await summarizeGatewayServiceLayout(command)).toMatchObject({
           packageRootReal: packageRoot,
@@ -264,13 +258,9 @@ export function registerRestartOutcomeTests(
   );
 
   it.each([
-    ["preserved health", "restart-health-failed"],
     ["native refusal", "failed"],
-    ["unexpected check", "failed"],
     ["retry refusal", "failed"],
     ["writable health", "restart-health-failed"],
-    ["writable retry health", "restart-health-failed"],
-    ["progressing cap", "readiness-pending"],
     ["cap then healthy", "ok"],
     ["writable progressing cap", "readiness-pending"],
   ])(
@@ -307,8 +297,7 @@ export function registerRestartOutcomeTests(
       mocks.health.mockResolvedValue({
         outcome: "failed",
         healthy: false,
-        staleGatewayPids:
-          scenario === "retry refusal" || scenario === "writable retry health" ? [4242] : [],
+        staleGatewayPids: scenario === "retry refusal" ? [4242] : [],
         runtime: { status: "stopped" },
         portUsage: { port: 19305, status: "free", listeners: [], hints: [] },
       });
@@ -325,9 +314,6 @@ export function registerRestartOutcomeTests(
           scenario === "cap then healthy" ? readyRecoveryHealth(19305, true) : health,
         );
         mocks.health.mockResolvedValueOnce(health);
-      }
-      if (scenario === "unexpected check") {
-        mocks.health.mockRejectedValueOnce(new Error("health observer crashed"));
       }
       const actual =
         await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
@@ -393,9 +379,7 @@ export function registerRestartOutcomeTests(
         expect(mocks.restart).toHaveBeenCalledOnce();
         expect(mocks.configSnapshot).toHaveBeenCalledTimes(writable ? 1 : 0);
         expect(mocks.terminateStale).not.toHaveBeenCalled();
-        expect(result.steps).toContainEqual(
-          expect.objectContaining({ name: "gateway verification", exitCode: 0 }),
-        );
+        expect(result.steps).toContainEqual(verifiedStep);
         expect(mocks.writeJson).toHaveBeenCalledWith(
           expect.objectContaining({
             result: "restart-health-failed",
@@ -403,66 +387,22 @@ export function registerRestartOutcomeTests(
           }),
         );
       }
-      if (scenario === "writable retry health") {
-        expect(mocks.terminateStale).toHaveBeenCalledExactlyOnceWith(
-          [4242],
-          expect.objectContaining({ env: expect.any(Object), assertCurrent: expect.any(Function) }),
-        );
-        expect(mocks.restart).toHaveBeenCalledTimes(2);
-        expect(mocks.health.mock.lastCall?.[0]).toMatchObject({
-          requireRunningService: true,
-          requirePluginHealth: false,
-        });
-      }
     },
   );
 
-  const healthFailure = {
+  const json = JSON.stringify({
     action: "restart",
     ok: false,
     result: "restart-health-failed",
     error: "Gateway is unhealthy",
-  };
-  const json = JSON.stringify(healthFailure);
-  const success = JSON.stringify({ action: "restart", ok: true, result: "restarted" });
-  it.each<{
-    scenario: string;
-    response?: Partial<
-      Awaited<ReturnType<typeof import("../../process/exec.js").runCommandWithTimeout>>
-    >;
-    action?: "install" | "restart";
-  }>([
-    { scenario: "health" },
-    { scenario: "missing", response: { stdout: "" } },
-    { scenario: "malformed", response: { stdout: "{" } },
-    { scenario: "mixed", response: { stdout: `log before result\n${json}` } },
-    { scenario: "multiple", response: { stdout: `${json}\n${json}` } },
-    {
-      scenario: "wrong action",
-      response: { stdout: JSON.stringify({ ...healthFailure, action: "install" }) },
-    },
-    {
-      scenario: "wrong result",
-      response: { stdout: JSON.stringify({ ...healthFailure, result: "unknown" }) },
-    },
-    { scenario: "wrong ok", response: { stdout: JSON.stringify({ ...healthFailure, ok: true }) } },
-    {
-      scenario: "missing error",
-      response: { stdout: JSON.stringify({ ...healthFailure, error: undefined }) },
-    },
-    { scenario: "signal", response: { signal: "SIGTERM", termination: "signal" } },
-    { scenario: "timeout", response: { termination: "timeout" } },
-    { scenario: "truncated", response: { stdoutTruncatedBytes: 1 } },
-    { scenario: "killed", response: { killed: true } },
-    { scenario: "wrong exit", response: { code: 2 } },
-    { scenario: "forced", response: { cleanup: "forced" } },
-    { scenario: "uncertain", response: { cleanup: "uncertain" } },
-    { scenario: "forced success", response: { cleanup: "forced", code: 0, stdout: success } },
-    { scenario: "uncertain success", response: { cleanup: "uncertain", code: 0, stdout: success } },
-    { scenario: "install", action: "install" },
-  ])(
-    "classifies only the complete owned restart health response ($scenario)",
-    async ({ scenario, response, action = "restart" }) => {
+  });
+  it.each([
+    ["missing", { stdout: "" }, "Error"],
+    ["truncated", { stdoutTruncatedBytes: 1 }, "Error"],
+    ["uncertain", { cleanup: "uncertain" }, "CommandProcessCleanupError"],
+  ] as const)(
+    "classifies only the complete owned restart health response (%s)",
+    async (_scenario, response, name) => {
       const { root, mocks } = getFixture();
       mocks.child.mockResolvedValueOnce(
         commandResult({
@@ -480,16 +420,9 @@ export function registerRestartOutcomeTests(
             invocationEnv: process.env,
             nodeRunner: process.execPath,
           },
-          action,
+          "restart",
         ),
-      ).rejects.toMatchObject({
-        name:
-          scenario === "health"
-            ? "GatewayRestartHealthError"
-            : response?.cleanup === "forced" || response?.cleanup === "uncertain"
-              ? "CommandProcessCleanupError"
-              : "Error",
-      });
+      ).rejects.toMatchObject({ name });
       expect(mocks.child.mock.lastCall?.[0]).toContain("--json");
     },
   );

@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { CronStoredJob } from "../types.js";
 import {
   deleteCronJobRowInDatabase,
@@ -17,7 +17,7 @@ import {
 import type { CronStoreTransactionHooks } from "./transaction-hooks.types.js";
 
 export type CronRuntimeRowsMutation<T> = (context: {
-  database: DatabaseSync;
+  database: EngineConnection;
   receiptSchema: CronRunReceiptWriteSchema;
   jobs: ReadonlyMap<string, CronStoredJob>;
 }) => {
@@ -29,7 +29,7 @@ export type CronRuntimeRowsMutation<T> = (context: {
 
 /** The caller owns the transaction; target rows and their authority are reread under its write lock. */
 export function mutateCronRuntimeRowsInDatabase<T>(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   storeKey: string;
   jobIds: ReadonlySet<string>;
   transactionHooks?: Pick<CronStoreTransactionHooks, "beforeWrite" | "afterWrite">;

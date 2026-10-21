@@ -57,15 +57,13 @@ export type {
 
 const SANDBOX_BACKEND_FACTORIES_STATE_KEY = Symbol.for("openclaw.sandboxBackendFactories");
 
-type SandboxBackendRegistrationGeneration = {
+type SandboxBackendRegistrationEntry = {
   registration: RegisteredSandboxBackend;
-  previous: SandboxBackendRegistrationGeneration | undefined;
-  retired: boolean;
 };
 
-// Only explicit overrides need process-wide generations. Built-in defaults stay
+// Only explicit overrides need a process-wide stack. Built-in defaults stay
 // module-local so repeated imports neither retain old graphs nor replace overrides.
-function getSandboxBackendFactories(): Map<SandboxBackendId, SandboxBackendRegistrationGeneration> {
+function getSandboxBackendFactories(): Map<SandboxBackendId, SandboxBackendRegistrationEntry[]> {
   return resolveGlobalMap(SANDBOX_BACKEND_FACTORIES_STATE_KEY);
 }
 
@@ -85,31 +83,19 @@ export function registerSandboxBackend(
   const normalizedId = normalizeSandboxBackendId(id);
   const resolved = typeof registration === "function" ? { factory: registration } : registration;
   const factories = getSandboxBackendFactories();
-  const generation: SandboxBackendRegistrationGeneration = {
-    registration: resolved,
-    previous: factories.get(normalizedId),
-    retired: false,
-  };
-  factories.set(normalizedId, generation);
+  const registrations = factories.get(normalizedId) ?? [];
+  const entry = { registration: resolved };
+  registrations.push(entry);
+  factories.set(normalizedId, registrations);
   return () => {
-    if (generation.retired) {
+    const index = registrations.indexOf(entry);
+    if (index < 0) {
       return;
     }
-    generation.retired = true;
-    if (factories.get(normalizedId) !== generation) {
-      return;
+    registrations.splice(index, 1);
+    if (registrations.length === 0) {
+      factories.delete(normalizedId);
     }
-    // Older disposers can run before newer plugin generations retire. Skip
-    // every retired predecessor so stale sandbox authority never returns.
-    let previous = generation.previous;
-    while (previous?.retired) {
-      previous = previous.previous;
-    }
-    if (previous) {
-      factories.set(normalizedId, previous);
-      return;
-    }
-    factories.delete(normalizedId);
   };
 }
 
@@ -211,22 +197,24 @@ export async function createSandboxBackend(
   }
   for (let attempt = 0; ; attempt++) {
     params.assertRuntimeCurrent?.();
-    const reservation = reserveSandboxRegistryEntry({
-      containerName: reserveRuntimeId(params),
-      backendId: params.cfg.backend,
-      sessionKey: params.scopeKey,
-      createdAtMs: Date.now(),
-      lastUsedAtMs: Date.now(),
-      image: params.cfg.docker.image,
-      workspaceDir: params.workspaceDir,
-    });
+    const reservation = await reserveSandboxRegistryEntry(
+      {
+        containerName: reserveRuntimeId(params),
+        backendId: params.cfg.backend,
+        sessionKey: params.scopeKey,
+        createdAtMs: Date.now(),
+        lastUsedAtMs: Date.now(),
+        image: params.cfg.docker.image,
+        workspaceDir: params.workspaceDir,
+      },
+      { ...guard, beforeLegacyApply: params.assertRuntimeCurrent },
+    );
     try {
       return await withSandboxRegistryEntryLock(reservation, async () => {
         const assertCurrent = () => {
           params.assertRuntimeCurrent?.();
           assertSandboxRegistryEntryCurrent(reservation);
         };
-        assertCurrent();
         try {
           const backend = await factory({
             ...params,
@@ -240,10 +228,11 @@ export async function createSandboxBackend(
           ) {
             throw new Error("Sandbox backend returned a runtime outside its reserved generation.");
           }
-          await completeSandboxRegistryReservation(toEntry(backend), false, {
-            ...guard,
-            beforeLegacyApply: assertCurrent,
-          });
+          await completeSandboxRegistryReservation(
+            { ...reservation, ...toEntry(backend), createdAtMs: reservation.createdAtMs },
+            false,
+            { ...guard, beforeLegacyApply: params.assertRuntimeCurrent },
+          );
           return backend;
         } catch (error) {
           if (
@@ -252,7 +241,7 @@ export async function createSandboxBackend(
           ) {
             await completeSandboxRegistryReservation(reservation, true, {
               ...guard,
-              beforeLegacyApply: assertCurrent,
+              beforeLegacyApply: params.assertRuntimeCurrent,
             });
           }
           throw error;
@@ -293,7 +282,7 @@ builtinSandboxBackends.set("ssh", {
 function resolveSandboxBackendRegistration(id: string): RegisteredSandboxBackend | undefined {
   const normalizedId = normalizeSandboxBackendId(id);
   return (
-    getSandboxBackendFactories().get(normalizedId)?.registration ??
+    getSandboxBackendFactories().get(normalizedId)?.at(-1)?.registration ??
     builtinSandboxBackends.get(normalizedId)
   );
 }

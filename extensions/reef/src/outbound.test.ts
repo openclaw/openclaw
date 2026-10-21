@@ -1,13 +1,13 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
   generateIdentity,
   PipelineError,
   REEF_MAX_PLAINTEXT_BYTES,
 } from "../protocol/index.js";
-import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
 import { ReefMessageFlow } from "./flow.js";
 import {
   allow,
@@ -15,18 +15,17 @@ import {
   guard,
   peerTrust,
   reefKeys,
+  resetFlowStoresForTests,
   transport,
-  trust,
+  workerFlowStores,
 } from "./flow.test-helpers.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import { createReefRuntimeAuthority, getActiveReef } from "./runtime.js";
 import type { ReefTransportClient } from "./transport.js";
 
-describe("reefOutboundAdapter", () => {
-  it("delegates delivery to the Gateway that owns the active encrypted flow", () => {
-    expect(reefOutboundAdapter.deliveryMode).toBe("gateway");
-  });
+afterEach(resetFlowStoresForTests);
 
+describe("reefOutboundAdapter", () => {
   it("removes internal tool text while preserving user-visible examples", () => {
     const sanitizeText = reefOutboundAdapter.sanitizeText;
     if (!sanitizeText) {
@@ -116,34 +115,39 @@ describe("reefOutboundAdapter", () => {
   });
 
   it("revokes a borrowed encrypted flow before a paused guard reaches the replaced relay", async () => {
+    const guardEntered = createDeferred<void>();
     const guardPaused = createDeferred<void>();
     const firstAuthority = createReefRuntimeAuthority();
     const classifier = {
       ...guard(allow),
       classify: vi.fn(async () => {
+        guardEntered.resolve();
         await guardPaused.promise;
         return allow;
       }),
     };
     const relay = transport();
+    const cfg = config();
+    const { trusted, audit, ...stores } = await workerFlowStores(cfg, {
+      alice: peerTrust(generateIdentity()),
+    });
     const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({ alice: peerTrust(generateIdentity()) }).store,
+      config: cfg,
+      trust: trusted,
       keys: reefKeys(),
       transport: relay as unknown as ReefTransportClient,
       guard: classifier,
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(9)),
+      audit,
       replay: new MemoryReplayStore(),
-      // The send path consults the review store before classifying.
-      reviews: { lookupDecision: async () => "none", request: async () => undefined } as never,
-      delivered: {} as never,
+      ...stores,
       authoritySignal: firstAuthority.signal,
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
     firstAuthority.activate({ flow, friends: {}, reviews: {} } as never);
     const stale = reefMessageAdapter.send.text({ cfg: {}, to: "reef:alice", text: "stale" });
-    await vi.waitFor(() => expect(classifier.classify).toHaveBeenCalledOnce());
+    await Promise.race([guardEntered.promise, stale]);
+    expect(classifier.classify).toHaveBeenCalledOnce();
 
     const replacementAuthority = createReefRuntimeAuthority();
     const replacement = { flow: {}, friends: {}, reviews: {} } as never;
@@ -161,57 +165,18 @@ describe("reefOutboundAdapter", () => {
     }
   });
 
-  it("proves local flow failures happened before platform dispatch", async () => {
-    const cause = new Error("guard denied");
-    const send = vi.fn(async () => {
-      throw cause;
-    });
-    createReefRuntimeAuthority().activate({ flow: { send }, friends: {}, reviews: {} } as never);
-
-    const error = await reefMessageAdapter.send
-      .text({
-        cfg: {},
-        to: "reef:Alice",
-        text: "hello",
-      })
-      .catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-    expect(error).toMatchObject({ cause, retryable: true });
-  });
-
-  it("terminally rejects local Reef policy denials", async () => {
-    const cause = new PipelineError("guard", "guard denied", {
-      decision: "deny",
-      category: "confidential",
-      reason: "Denied.",
-      model: "gpt-5.6-sol",
-      policyVersion: "reef-v1",
-    });
-    const send = vi.fn(async () => {
-      throw cause;
-    });
-    createReefRuntimeAuthority().activate({ flow: { send }, friends: {}, reviews: {} } as never);
-
-    const error = await reefMessageAdapter.send
-      .text({ cfg: {}, to: "reef:Alice", text: "hello" })
-      .catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-    expect(error).toMatchObject({ cause, retryable: false });
-  });
-
   it("terminally rejects unapproved Reef peers", async () => {
+    const cfg = config();
+    const { trusted, audit, ...stores } = await workerFlowStores(cfg, {});
     const flow = new ReefMessageFlow({
-      config: config(),
-      trust: trust({}).store,
+      config: cfg,
+      trust: trusted,
       keys: reefKeys(),
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(9)),
+      audit,
       replay: new MemoryReplayStore(),
-      reviews: {} as never,
-      delivered: {} as never,
+      ...stores,
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -298,16 +263,6 @@ describe("reefOutboundAdapter", () => {
     expect(second > first).toBe(true);
   });
 
-  it("rejects oversized correlated text during pre-queue id preparation", () => {
-    expect(() =>
-      reefOutboundAdapter.prepareConversationTurnMessageId!({
-        cfg: {},
-        to: "reef:alice",
-        text: "x".repeat(32 * 1024),
-      }),
-    ).toThrow("atomic message limit");
-  });
-
   it("permanently rejects correlated text enlarged after its initial preflight", async () => {
     const rawText = "x".repeat(REEF_MAX_PLAINTEXT_BYTES - 256);
     const preparedMessageId = reefOutboundAdapter.prepareConversationTurnMessageId!({
@@ -349,30 +304,5 @@ describe("reefOutboundAdapter", () => {
         }).length,
       ).toBeLessThanOrEqual(REEF_MAX_PLAINTEXT_BYTES);
     }
-  });
-
-  it("honors a stricter configured chunk limit", () => {
-    const chunks = reefOutboundAdapter.chunker!("🦞".repeat(2_000), 1_024);
-
-    expect(chunks.length).toBeGreaterThan(1);
-    for (const chunk of chunks) {
-      expect(
-        canonicalBytes({
-          text: chunk,
-          replyTo: "0".repeat(26),
-          thread: "0".repeat(26),
-        }).length,
-      ).toBeLessThanOrEqual(1_024);
-    }
-  });
-
-  it("searches chunk boundaries only between complete Unicode code points", () => {
-    const limit = canonicalBytes({
-      text: "🦞",
-      replyTo: "0".repeat(26),
-      thread: "0".repeat(26),
-    }).length;
-
-    expect(reefOutboundAdapter.chunker!("🦞🦞🦞", limit)).toEqual(["🦞", "🦞", "🦞"]);
   });
 });

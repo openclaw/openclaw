@@ -1,4 +1,3 @@
-// `openclaw transcripts`: SQLite-backed transcript inspector and artifact exporter.
 import path from "node:path";
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
@@ -133,7 +132,6 @@ async function pathCommand(selector: string, options: TranscriptsPathOptions): P
   writeLine(selectedPath);
 }
 
-/** Register transcript list/show/path inspection and export commands. */
 export function registerTranscriptsCli(program: Command): void {
   const transcripts = program.command("transcripts").description("Inspect stored transcripts");
 

@@ -13,7 +13,6 @@ import {
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { createSkillEntry } from "./skill-entry-metadata.js";
 import { compactSkillPath } from "./skill-paths.js";
-import { mergeSkillRecords, type SkillCollision } from "./skill-precedence.js";
 import {
   canonicalSkillDirForSource,
   discoverPluginSkills,
@@ -37,6 +36,26 @@ type LoadedSkillRecord = Pick<LoadedLocalSkill, "skill" | "frontmatter"> & {
   syncDirName?: string;
 };
 
+/** Admitted entries shared only within one synchronous discovery pass and environment. */
+export type SkillSourceReadBatch = Map<string, WorkspaceSkillSources["entries"]>;
+
+function readSourceEntries(
+  batch: SkillSourceReadBatch | undefined,
+  input: readonly unknown[],
+  read: () => WorkspaceSkillSources["entries"],
+): WorkspaceSkillSources["entries"] {
+  if (!batch) {
+    return read();
+  }
+  const key = JSON.stringify(input);
+  let entries = batch.get(key);
+  if (!entries) {
+    entries = read();
+    batch.set(key, entries);
+  }
+  return entries;
+}
+
 export function warnInvalidSkill(source: string, diagnostic: LocalSkillLoadDiagnostic): void {
   skillsLogger.warn("Skipping invalid skill.", {
     source,
@@ -59,7 +78,7 @@ function loadContainedSkillRecord(
   if (!loaded) {
     return null;
   }
-  // Discovery selected one terminal SKILL.md; keep its parsed facts, not its content, in the cache.
+  // Discovery selected one terminal SKILL.md; retain its parsed facts.
   const record: LoadedSkillRecord = { skill: loaded.skill, frontmatter: loaded.frontmatter };
   if (!params.canonicalSkillDir) {
     return record;
@@ -129,11 +148,12 @@ export function loadSkillRootRecords(params: {
         resolveSkillTelemetrySourceValue(params.source) === "bundled" ? "bundled" : "workspace",
       rootDir: params.dir,
     });
+  const allowedSymlinkTargetRealPaths = resolveAllowedSkillSymlinkTargetRealPaths(params.config);
   const discovered = discoverSkillCandidates({
     dir: params.dir,
     source: params.source,
     limits,
-    allowedSymlinkTargetRealPaths: resolveAllowedSkillSymlinkTargetRealPaths(params.config),
+    allowedSymlinkTargetRealPaths,
     onDiagnostic: params.onDiagnostic,
   });
   const maxSkillsLoadedPerSource = Math.max(0, limits.maxSkillsLoadedPerSource);
@@ -215,24 +235,31 @@ function loadGeneratedPluginSkillRecords(params: {
 export function loadWorkspaceSkillSourceEntries(
   plan: WorkspaceSkillSourcePlan,
   config?: OpenClawConfig,
-  collisions?: SkillCollision[],
+  batch?: SkillSourceReadBatch,
 ): WorkspaceSkillSources["entries"] {
-  const grouped = new Map<string, Array<LoadedSkillRecord & { sourceOrder?: number }>>();
+  const grouped = new Map<string, WorkspaceSkillSources["entries"]>();
   for (const root of plan.roots) {
-    const records = grouped.get(root.tier) ?? [];
-    for (const record of loadSkillRootRecords({ ...root, config })) {
-      records.push({ ...record, sourceOrder: root.order });
+    const { tier, order, ...policy } = root;
+    const input = { ...policy, config };
+    const records = grouped.get(tier) ?? [];
+    for (const entry of readSourceEntries(batch, ["root", input], () =>
+      loadSkillRootRecords(input).map(createSkillEntry),
+    )) {
+      records.push(order === undefined ? entry : { ...entry, sourceOrder: order });
     }
-    grouped.set(root.tier, records);
+    grouped.set(tier, records);
   }
   const extra = grouped.get("extra") ?? [];
   if (plan.pluginSkillsDir) {
-    for (const record of loadGeneratedPluginSkillRecords({
+    const input = {
       pluginSkillsDir: plan.pluginSkillsDir,
       pluginSkillRoots: plan.pluginSkillRoots,
       source: "openclaw-extra",
       limits: resolveSkillDiscoveryLimits(config),
-    })) {
+    };
+    for (const record of readSourceEntries(batch, ["generated", input], () =>
+      loadGeneratedPluginSkillRecords(input).map(createSkillEntry),
+    )) {
       extra.push({
         ...record,
         sourceOrder:
@@ -250,25 +277,20 @@ export function loadWorkspaceSkillSourceEntries(
         left.skill.name.localeCompare(right.skill.name, "en") ||
         left.skill.source.localeCompare(right.skill.source, "en"),
     );
-  return mergeSkillRecords(
-    ["extra", "bundled", "workshop", "managed", "personal", "workspace"].flatMap(
-      (tier) => grouped.get(tier) ?? [],
-    ),
-    JSON.stringify(["sources", plan.workspaceDir]),
-    collisions,
-  ).map(createSkillEntry);
+  return ["extra", "bundled", "workshop", "managed", "personal", "workspace"].flatMap(
+    (tier) => grouped.get(tier) ?? [],
+  );
 }
 
 export function loadExecutionSkillEntries(
   executionWorkspaceDir: string,
   config?: OpenClawConfig,
-  collisions?: SkillCollision[],
+  batch?: SkillSourceReadBatch,
 ): SkillEntry[] {
-  return mergeSkillRecords(
-    resolveWorkspaceSkillDirectories(executionWorkspaceDir).flatMap((root) =>
-      loadSkillRootRecords({ ...root, config }),
-    ),
-    JSON.stringify(["execution", executionWorkspaceDir]),
-    collisions,
-  ).map(createSkillEntry);
+  return resolveWorkspaceSkillDirectories(executionWorkspaceDir).flatMap((root) => {
+    const input = { ...root, config };
+    return readSourceEntries(batch, ["root", input], () =>
+      loadSkillRootRecords(input).map(createSkillEntry),
+    );
+  });
 }

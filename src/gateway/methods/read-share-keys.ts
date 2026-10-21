@@ -2,7 +2,7 @@ import type { GatewayReadSharing } from "./descriptor.js";
 
 type ShareKey = GatewayReadSharing["shareKey"];
 
-function callerKey(...[caller, params]: Parameters<ShareKey>): string | null {
+export function operatorReadShareKey(...[caller, params]: Parameters<ShareKey>): string | null {
   const { client } = caller;
   if (
     !client?.authenticatedUserProfile ||
@@ -35,11 +35,7 @@ function callerKey(...[caller, params]: Parameters<ShareKey>): string | null {
 }
 
 export const cronListShareKey: ShareKey = (caller, params) =>
-  caller.read?.shareable === true ? callerKey(caller, params) : null;
-
-export const sessionsListShareKey: ShareKey = (caller, params) => callerKey(caller, params);
+  caller.read?.shareable === true ? operatorReadShareKey(caller, params) : null;
 
 export const modelsListShareKey: ShareKey = (caller, params) =>
-  params.refresh === true ? null : callerKey(caller, params);
-
-export const chatMetadataShareKey: ShareKey = (caller, params) => callerKey(caller, params);
+  params.refresh === true ? null : operatorReadShareKey(caller, params);

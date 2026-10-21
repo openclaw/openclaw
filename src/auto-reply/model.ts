@@ -27,29 +27,18 @@ const MODEL_DIRECTIVE_PATTERN = new RegExp(
   "i",
 );
 
-function parseModelScope(raw: string | undefined): ModelSelectionScope | undefined {
-  switch (raw?.trim().toLowerCase()) {
-    case "-s":
-    case "--session":
-      return "session";
-    case "-a":
-    case "--agent":
-      return "agent";
-    case "-g":
-    case "--global":
-      return "global";
-    default:
-      return undefined;
-  }
-}
-
-function hasAdditionalModelScope(body: string, match: RegExpMatchArray | null): boolean {
-  if (!match || match.index === undefined) {
-    return false;
-  }
-  const trailing = body.slice(match.index + match[0].length);
-  return new RegExp(String.raw`^\s+${MODEL_SCOPE_OPTION_PATTERN}`, "i").test(trailing);
-}
+const MODEL_SCOPE_OPTIONS = new Map<string, ModelSelectionScope>([
+  ["-s", "session"],
+  ["--session", "session"],
+  ["-a", "agent"],
+  ["--agent", "agent"],
+  ["-g", "global"],
+  ["--global", "global"],
+]);
+const ADDITIONAL_MODEL_SCOPE_PATTERN = new RegExp(
+  String.raw`^\s+${MODEL_SCOPE_OPTION_PATTERN}`,
+  "i",
+);
 
 /** Extract and remove a `/model` directive, including optional auth profile/runtime hints. */
 export function extractModelDirective(
@@ -110,10 +99,13 @@ export function extractModelDirective(
       ? (modelOptionsOnlyMatch[1] ?? modelOptionsOnlyMatch[4])
       : (match?.[2] ?? match?.[5])
   )?.trim();
-  const scope = parseModelScope(
-    modelOptionsOnlyMatch
+  const scope = MODEL_SCOPE_OPTIONS.get(
+    (modelOptionsOnlyMatch
       ? (modelOptionsOnlyMatch[2] ?? modelOptionsOnlyMatch[3])
-      : (match?.[3] ?? match?.[4]),
+      : (match?.[3] ?? match?.[4])
+    )
+      ?.trim()
+      .toLowerCase() ?? "",
   );
 
   let rawModel = raw;
@@ -140,7 +132,9 @@ export function extractModelDirective(
     rawProfile,
     rawRuntime,
     scope,
-    scopeConflict: hasAdditionalModelScope(body, match),
+    scopeConflict: match
+      ? ADDITIONAL_MODEL_SCOPE_PATTERN.test(body.slice(match.index + match[0].length))
+      : false,
     hasDirective: Boolean(match),
     ...(match ? { source: modelMatch ? ("model" as const) : ("alias" as const) } : {}),
   };

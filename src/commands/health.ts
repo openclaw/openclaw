@@ -6,11 +6,7 @@ import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-on
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import { withProgress } from "../cli/progress.js";
-import {
-  createConfigReadError,
-  formatInvalidConfigDetails,
-  isConfigReadFailure,
-} from "../config/io.invalid-config.js";
+import { createConfigReadError, isConfigReadFailure } from "../config/io.invalid-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildGatewayConnectionDetails,
@@ -74,13 +70,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   }
   let rateLimited = directRateLimit;
   if (!directRateLimit) {
-    const details = await buildGatewayProbeConnectionDetails({
-      config: params.config,
-      token: params.token,
-      password: params.password,
-      ignoreEnvUrlOverride: params.ignoreEnvUrlOverride,
-      localPortOverride: params.localPortOverride,
-    });
+    const details = await buildGatewayProbeConnectionDetails(params);
     const probe = await probeGatewayStatus({
       url: details.url,
       token: params.token,
@@ -170,15 +160,10 @@ export async function healthCommand(
   } catch (error) {
     if (
       await emitReachableGatewayAuthDiagnostic({
+        ...opts,
         error,
         config: cfg,
         runtime,
-        timeoutMs: opts.timeoutMs,
-        token: opts.token,
-        password: opts.password,
-        ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
-        localPortOverride: opts.localPortOverride,
-        json: opts.json,
       })
     ) {
       return;
@@ -218,12 +203,7 @@ export async function healthCommand(
     const localAgents = resolveHealthAgentOrder(cfg);
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
-    const resolvedAgents =
-      agents.length > 0 ? agents : await buildHealthAgentSummaries(cfg, localAgents);
-    const displayAgents =
-      opts.verbose || !defaultAgentId
-        ? resolvedAgents
-        : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
+    const collectLocalAgents = agents.length === 0 && localAgents.ordered.length > 0;
     const channelBindings = buildChannelAccountBindings(cfg);
     const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
       includeSetupFallbackPlugins: false,
@@ -265,7 +245,7 @@ export async function healthCommand(
         );
         runtime.log(`  ${channelId}: ${entries.join(" ")}`);
       }
-      runtime.log(info("[debug] gateway channel probes"));
+      runtime.log(info("[debug] gateway channel checks"));
       for (const [channelId, channelSummary] of Object.entries(summary.channels ?? {})) {
         const accounts = channelSummary.accounts ?? {};
         const probes = Object.entries(accounts).map(([accountId, accountSummary]) => {
@@ -277,6 +257,58 @@ export async function healthCommand(
         runtime.log(`  ${channelId}: ${probes.join(", ") || "(none)"}`);
       }
     }
+    const selfIdAccounts = [];
+    for (const plugin of displayPlugins) {
+      const channelSummary = summary.channels?.[plugin.id];
+      if (channelSummary?.linked !== true || !plugin.status?.logSelfId) {
+        continue;
+      }
+      const boundAccounts = defaultAgentId
+        ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+        : [];
+      const accountIds = plugin.config.listAccountIds(cfg);
+      const defaultAccountId = resolveChannelDefaultAccountId({
+        plugin,
+        cfg,
+        accountIds,
+      });
+      const accountId = resolvePreferredAccountId({
+        defaultAccountId,
+        boundAccounts,
+      });
+      const accountContext = await resolveHealthAccountContext({
+        plugin,
+        cfg,
+        accountId,
+      });
+      if (
+        accountContext.probeAccount === undefined ||
+        !accountContext.enabled ||
+        accountContext.configured !== true ||
+        accountContext.diagnostics.length > 0
+      ) {
+        continue;
+      }
+      selfIdAccounts.push({
+        channelId: plugin.id,
+        accountId,
+        account: accountContext.probeAccount,
+        logSelfId: plugin.status.logSelfId.bind(plugin.status),
+      });
+    }
+    // Local session publication follows every asynchronous account inspection.
+    const resolvedAgents = collectLocalAgents
+      ? await buildHealthAgentSummaries(cfg, localAgents)
+      : agents;
+    const displayDefaultAgentId =
+      collectLocalAgents && defaultAgentId
+        ? (resolvedAgents.find((agent) => agent.agentId === defaultAgentId) ?? resolvedAgents[0])
+            ?.agentId
+        : defaultAgentId;
+    const displayAgents =
+      opts.verbose || !displayDefaultAgentId
+        ? resolvedAgents
+        : resolvedAgents.filter((agent) => agent.agentId === displayDefaultAgentId);
     const accountIdsByChannel = (() => {
       if (opts.verbose) {
         return undefined;
@@ -311,52 +343,17 @@ export async function healthCommand(
         runtime.log(styleHealthChannelLine(line, rich));
       }
     }
-    for (const plugin of displayPlugins) {
-      const channelSummary = summary.channels?.[plugin.id];
-      if (!channelSummary || channelSummary.linked !== true) {
-        continue;
-      }
-      if (!plugin.status?.logSelfId) {
-        continue;
-      }
-      const boundAccounts = defaultAgentId
-        ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
-        : [];
-      const accountIds = plugin.config.listAccountIds(cfg);
-      const defaultAccountId = resolveChannelDefaultAccountId({
-        plugin,
-        cfg,
-        accountIds,
-      });
-      const accountId = resolvePreferredAccountId({
-        defaultAccountId,
-        boundAccounts,
-      });
-      const accountContext = await resolveHealthAccountContext({
-        plugin,
-        cfg,
-        accountId,
-      });
-      if (
-        accountContext.probeAccount === undefined ||
-        !accountContext.enabled ||
-        accountContext.configured !== true
-      ) {
-        continue;
-      }
-      if (accountContext.diagnostics.length > 0) {
-        continue;
-      }
+    for (const { channelId, accountId, account, logSelfId } of selfIdAccounts) {
       try {
-        plugin.status.logSelfId({
-          account: accountContext.probeAccount,
+        logSelfId({
+          account,
           cfg,
           runtime,
           includeChannelPrefix: true,
         });
       } catch (error) {
         const details = {
-          channel: plugin.id,
+          channel: channelId,
           accountId,
           error: formatErrorMessage(error),
         };
@@ -367,7 +364,7 @@ export async function healthCommand(
     }
 
     if (Number.isFinite(summary.durationMs)) {
-      runtime.log(info(`Gateway probe duration: ${summary.durationMs}ms`));
+      runtime.log(info(`Gateway check duration: ${summary.durationMs}ms`));
     }
 
     if (resolvedAgents.length > 0) {
@@ -425,7 +422,7 @@ export async function readNonObservingHealthConfig(): Promise<OpenClawConfig> {
     pluginValidation: "core-only",
   });
   if (isConfigReadFailure(snapshot)) {
-    throw createConfigReadError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
+    throw createConfigReadError(snapshot);
   }
   return snapshot.runtimeConfig ?? snapshot.config;
 }

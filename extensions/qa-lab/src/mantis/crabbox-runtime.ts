@@ -4,6 +4,7 @@ import {
   resolveCrabboxBinary,
 } from "@openclaw/crabbox-provider/cli-runtime-api.js";
 import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shellEscapeBackslash as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { isTruthyOptIn } from "../mantis-options.runtime.js";
 
 export type MantisCrabboxLeaseOptions = {
@@ -15,16 +16,19 @@ export type MantisCrabboxLeaseOptions = {
   ttl?: string;
 };
 
-export function resolveMantisCrabboxLeaseOptions(
+function resolveMantisCrabboxLeaseOptions(
   opts: MantisCrabboxLeaseOptions,
   env: NodeJS.ProcessEnv,
-  defaults: { idleTimeout?: string; keepLease?: boolean; ttl?: string } = {},
+  defaults: { idleTimeout?: string; keepLease?: boolean; machineClass?: string; ttl?: string } = {},
 ) {
   return {
     provider:
       trimToValue(opts.provider) ?? trimToValue(env.OPENCLAW_MANTIS_CRABBOX_PROVIDER) ?? "hetzner",
     machineClass:
-      trimToValue(opts.machineClass) ?? trimToValue(env.OPENCLAW_MANTIS_CRABBOX_CLASS) ?? "beast",
+      trimToValue(opts.machineClass) ??
+      trimToValue(env.OPENCLAW_MANTIS_CRABBOX_CLASS) ??
+      defaults.machineClass ??
+      "beast",
     idleTimeout:
       trimToValue(opts.idleTimeout) ??
       trimToValue(env.OPENCLAW_MANTIS_CRABBOX_IDLE_TIMEOUT) ??
@@ -45,11 +49,10 @@ type CommandResult = {
   stdout: string;
 };
 
-export type CommandRunner = (
-  command: string,
-  args: readonly string[],
-  options: SpawnOptions,
-) => Promise<CommandResult>;
+// Keep private command output out of Error serialization and routine Mantis reports.
+const commandRecoveryLeases = new WeakMap<Error, string[]>();
+
+export type CommandRunner = typeof defaultCommandRunner;
 
 export type CrabboxInspect = {
   host?: string;
@@ -77,6 +80,7 @@ export async function defaultCommandRunner(
     });
     let stdout = "";
     let stderr = "";
+    let spawnError: Error | undefined;
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
     child.stdout?.on("data", (text: string) => {
@@ -91,18 +95,38 @@ export async function defaultCommandRunner(
         process.stderr.write(text);
       }
     });
-    child.on("error", reject);
+    // Abort emits error before termination. Wait for close so native lease rollback
+    // can finish and its final diagnostics are captured; exit 0 cannot erase abort.
+    child.on("error", (error) => {
+      spawnError ??= error;
+    });
     child.on("close", (code, signal) => {
-      if (code === 0) {
+      if (code === 0 && !spawnError) {
         resolve({ stdout, stderr });
         return;
       }
       const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
-      reject(
+      const error =
+        spawnError ??
         new Error(
           `${command} ${args.join(" ")} failed with ${detail}${stderr ? `\n${stderr.trimEnd()}` : ""}`,
-        ),
-      );
+        );
+      // These native acquisition markers identify recovery candidates, not ready
+      // leases. Inspect the full output so verbose bootstrap cannot erase them.
+      const recoveryLeaseCandidates: string[] = [];
+      for (const match of stderr.matchAll(
+        /^(?:leased (cbx_[a-f0-9]{12}) slug=|provisioned lease=(cbx_[a-f0-9]{12}) server=)/gmu,
+      )) {
+        const id = match[1] ?? match[2];
+        if (id && !recoveryLeaseCandidates.includes(id)) {
+          recoveryLeaseCandidates.push(id);
+          if (recoveryLeaseCandidates.length > 8) {
+            recoveryLeaseCandidates.shift();
+          }
+        }
+      }
+      commandRecoveryLeases.set(error, recoveryLeaseCandidates);
+      reject(error);
     });
   });
 }
@@ -130,22 +154,23 @@ function extractLeaseId(output: string) {
   return output.match(/\b(?:cbx_[a-f0-9]+|tbx_[A-Za-z0-9_-]+)\b/u)?.[0];
 }
 
-export function shellQuote(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
+export { shellQuote };
 
-export function createMantisCrabboxSession(params: {
-  crabboxBin: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  leaseId?: string;
-  provider: string;
-  runner: CommandRunner;
-}) {
-  let leaseId = params.leaseId;
+export async function createMantisCrabboxSession(
+  opts: MantisCrabboxLeaseOptions & { crabboxBin?: string; commandRunner?: CommandRunner },
+  context: { repoRoot: string; env: NodeJS.ProcessEnv },
+  defaults?: Parameters<typeof resolveMantisCrabboxLeaseOptions>[2],
+) {
+  const { env, repoRoot } = context;
+  const crabboxBin = await resolveCrabboxBin({ env, explicit: opts.crabboxBin, repoRoot });
+  const options = resolveMantisCrabboxLeaseOptions(opts, env, defaults);
+  const runner = opts.commandRunner ?? defaultCommandRunner;
+  const { provider, keepLease } = options;
+  let leaseId = options.leaseId;
+  let recoveryLeaseCandidates: string[] = [];
   const createdLease = leaseId === undefined;
   const run = (args: readonly string[], stdio: "inherit" | "pipe" = "pipe") =>
-    params.runner(params.crabboxBin, args, { cwd: params.cwd, env: params.env, stdio });
+    runner(crabboxBin, args, { cwd: repoRoot, env, stdio });
   const requireLeaseId = () => {
     if (!leaseId) {
       throw new Error("Crabbox lease id is unavailable before acquisition.");
@@ -153,16 +178,13 @@ export function createMantisCrabboxSession(params: {
     return leaseId;
   };
   return {
-    createdLease,
+    bin: crabboxBin,
+    provider,
+    runner,
     get leaseId() {
       return leaseId;
     },
-    async acquire(options: {
-      idleTimeout: string;
-      machineClass: string;
-      market?: string;
-      ttl: string;
-    }) {
+    async acquire(market?: string) {
       if (leaseId !== undefined) {
         return leaseId;
       }
@@ -170,51 +192,77 @@ export function createMantisCrabboxSession(params: {
         [
           "warmup",
           "--provider",
-          params.provider,
+          provider,
           "--desktop",
           "--browser",
           "--class",
           options.machineClass,
-          ...(options.market ? ["--market", options.market] : []),
+          ...(market ? ["--market", market] : []),
           "--idle-timeout",
           options.idleTimeout,
           "--ttl",
           options.ttl,
         ],
         "inherit",
-      );
+      ).catch((error: unknown) => {
+        recoveryLeaseCandidates =
+          error instanceof Error ? (commandRecoveryLeases.get(error) ?? []) : [];
+        throw error;
+      });
       const acquired = extractLeaseId(`${result.stdout}\n${result.stderr}`);
       if (!acquired) {
         throw new Error("Crabbox warmup did not print a lease id.");
       }
       leaseId = acquired;
+      recoveryLeaseCandidates = [];
       return acquired;
     },
     async inspect() {
       const result = await run([
         "inspect",
         "--provider",
-        params.provider,
+        provider,
         "--id",
         requireLeaseId(),
         "--json",
       ]);
       return JSON.parse(result.stdout) as CrabboxInspect;
     },
+    runShell(script: string, flags: readonly string[]) {
+      return run(
+        [
+          "run",
+          "--provider",
+          provider,
+          "--id",
+          requireLeaseId(),
+          "--desktop",
+          "--browser",
+          ...flags,
+          "--shell",
+          "--",
+          script,
+        ],
+        "inherit",
+      );
+    },
     describe(inspected?: CrabboxInspect) {
       return {
-        bin: params.crabboxBin,
+        bin: crabboxBin,
         createdLease,
         id: leaseId ?? "unallocated",
-        provider: params.provider,
+        provider,
+        ...(recoveryLeaseCandidates.length ? { recoveryLeaseCandidates } : {}),
         ...(inspected ? { slug: inspected.slug, state: inspected.state } : {}),
         vncCommand: leaseId
-          ? `${params.crabboxBin} vnc --provider ${params.provider} --id ${leaseId} --open`
+          ? `${crabboxBin} vnc --provider ${provider} --id ${leaseId} --open`
           : "unallocated",
       };
     },
-    async stop() {
-      await run(["stop", "--provider", params.provider, requireLeaseId()], "inherit");
+    async stopIfOwned() {
+      if (createdLease && leaseId && !keepLease) {
+        await run(["stop", "--provider", provider, leaseId], "inherit");
+      }
     },
   };
 }

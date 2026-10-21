@@ -87,3 +87,14 @@ export function joinQaCredentialEndpoint(baseUrl: string, prefix: string, suffix
   url.hash = "";
   return url.toString();
 }
+
+export function parseQaCredentialResponsePayload(text: string) {
+  if (!text.trim()) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}

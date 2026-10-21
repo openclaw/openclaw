@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi, type Mock } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -6,16 +7,28 @@ import {
 } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
+import {
+  createReplyOperation,
+  bindSessionControllerSourceTurnId,
+} from "../../sessions/session-controller.js";
+import * as controllerMailbox from "../../sessions/session-controller.mailbox.js";
+import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
 import type { TemplateContext } from "../templating.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { enqueueFollowupRun, parkSteerCandidate, type FollowupRun } from "./queue.js";
-import { clearFollowupDrainCallback } from "./queue/drain.js";
-import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import {
+  enqueueFollowupRun,
+  reserveSteerCandidate,
+  scheduleFollowupDrain,
+  type FollowupRun,
+} from "./queue.js";
+import { clearSessionQueues } from "./queue/cleanup.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
 type SteeringReceiptFixture = {
   createMinimalRun: (params: {
@@ -34,12 +47,15 @@ type SteeringReceiptFixture = {
     attachSteerBackend?: boolean;
   }) => { followupRun: FollowupRun; run: () => Promise<unknown> };
   makeSessionEntry: (overrides?: Partial<SessionEntry>) => SessionEntry;
-  makeSessionFixture: (overrides?: Partial<SessionEntry>) => Promise<{
+  makeSessionFixture: (
+    overrides?: Partial<SessionEntry>,
+    sessionKey?: string,
+  ) => Promise<{
     sessionEntry: SessionEntry;
     sessionStore: Record<string, SessionEntry>;
     storePath: string;
   }>;
-  state: { queueEmbeddedAgentMessageMock: Mock; runEmbeddedAgentMock: Mock };
+  state: { backendQueueMessageMock: Mock; runEmbeddedAgentMock: Mock };
 };
 
 export function registerSteeringReceiptCases({
@@ -48,11 +64,190 @@ export function registerSteeringReceiptCases({
   makeSessionFixture,
   state,
 }: SteeringReceiptFixture): void {
+  it.each(
+    [undefined, false].flatMap((allowCollaborativeSteering) =>
+      [false, true].map((explicitCommand) => ({ allowCollaborativeSteering, explicitCommand })),
+    ),
+  )(
+    "refuses another human's steer without leaving drainable work (collaboration: $allowCollaborativeSteering, explicit command: $explicitCommand)",
+    async ({ allowCollaborativeSteering, explicitCommand }) => {
+      const runState: ReplyOperationRunState = {};
+      const onAdopted = vi.fn();
+      const onAbandoned = vi.fn();
+      const onSettled = vi.fn();
+      const active = createReplyOperation({
+        sessionKey: "main",
+        sessionId: "session",
+        resetTriggered: false,
+      });
+      const candidate = createMinimalRun({
+        isActive: true,
+        shouldSteer: true,
+        resolvedQueueMode: "steer",
+        bindActiveAuthority: false,
+        sessionCtx: {
+          Provider: "telegram",
+          SenderId: "bob",
+          ...(explicitCommand
+            ? { CommandSource: "text" as const, CommandAuthorized: true, Body: "/steer stop" }
+            : {}),
+        },
+        runOverrides: {
+          messageProvider: "telegram",
+          config:
+            allowCollaborativeSteering === undefined
+              ? {}
+              : { messages: { queue: { allowCollaborativeSteering } } },
+        },
+        opts: {
+          [REPLY_OPERATION_RUN_STATE]: runState,
+          turnAdoptionLifecycle: { onAdopted, onAbandoned, onSettled },
+        },
+      });
+      await active.bindToolAuthoritySnapshotAsync(
+        prepareReplyToolAuthority({
+          ...candidate.followupRun,
+          run: { ...candidate.followupRun.run, senderId: "alice" },
+        }),
+      );
+      active.setPhase("running");
+      try {
+        await candidate.run();
+        expect(runState.admission).toEqual({
+          status: "skipped",
+          reason: "collaborative-steering-disabled",
+        });
+        expect(getExistingFollowupQueue("main")?.items ?? []).toEqual([]);
+        expect(onAdopted).toHaveBeenCalledOnce();
+        expect(onSettled).toHaveBeenCalledOnce();
+        expect(onAbandoned).not.toHaveBeenCalled();
+        expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
+        active.complete();
+        expect(getExistingFollowupQueue("main")?.items ?? []).toEqual([]);
+        expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      } finally {
+        active.complete();
+        clearSessionQueues(["main"]);
+      }
+    },
+  );
+
+  it("queues instead of steering when privilege facts differ on the active route", async ({
+    signal,
+  }) => {
+    const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
+    const followupTasks: Promise<void>[] = [];
+    const observeFollowup =
+      (runFollowup: Parameters<typeof scheduleFollowupDrain>[1]) => (queued: FollowupRun) => {
+        const task = runFollowup(queued);
+        followupTasks.push(task.catch(() => {}));
+        return task;
+      };
+    vi.mocked(reserveSteerCandidate).mockImplementation((key, queued, settings, runFollowup) =>
+      actualQueue.reserveSteerCandidate(key, queued, settings, observeFollowup(runFollowup)),
+    );
+    vi.mocked(scheduleFollowupDrain).mockImplementation((key, runFollowup) =>
+      actualQueue.scheduleFollowupDrain(key, observeFollowup(runFollowup)),
+    );
+    const queued = createDeferred();
+    const onDeferred = vi.fn(() => queued.resolve());
+    const settled = createDeferred();
+    const onAdopted = vi.fn();
+    const onBlockReply = vi.fn();
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      runOverrides: { config: { messages: { queue: { allowCollaborativeSteering: false } } } },
+      bindActiveAuthority: false,
+      opts: {
+        onBlockReply,
+        turnAdoptionLifecycle: {
+          onAdopted,
+          onDeferred,
+          onSettled: settled.resolve,
+        },
+      },
+    });
+    await active.bindToolAuthoritySnapshotAsync(
+      prepareReplyToolAuthority({
+        ...followupRun,
+        run: {
+          ...followupRun.run,
+          runtimePluginToolGrant: {
+            pluginId: "workboard",
+            toolNames: ["workboard_complete"],
+          },
+        },
+      }),
+    );
+    await active.bindToolAuthorityRouteAsync({ provider: "openai", model: "gpt-fallback" });
+    active.setPhase("running");
+    try {
+      await expect(run()).resolves.toBeUndefined();
+      await withinTest(
+        awaitGateBeforeSettlement(
+          queued.promise,
+          settled.promise,
+          "followup settled before queue acceptance",
+        ),
+        signal,
+      );
+      expect(onDeferred).toHaveBeenCalledOnce();
+      expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
+      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(onAdopted).not.toHaveBeenCalled();
+      expect(onBlockReply).not.toHaveBeenCalled();
+
+      active.complete();
+      await withinTest(settled.promise, signal);
+      await Promise.all(followupTasks);
+      expect(onAdopted).toHaveBeenCalledOnce();
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(state.runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
+        prompt: "hello",
+      });
+      expect(onBlockReply).toHaveBeenCalledOnce();
+      expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "final" }));
+    } finally {
+      active.complete();
+      clearSessionQueues(["main"], getSessionControllerEntryForOperation(active).target);
+      await Promise.all(followupTasks);
+    }
+  });
+
+  it("does not steer, enqueue, or start a second run after accepted Gateway injection", async () => {
+    const runState: ReplyOperationRunState = {};
+    const { run } = createMinimalRun({
+      opts: {
+        messageInjectionDisposition: "accepted",
+        [REPLY_OPERATION_RUN_STATE]: runState,
+      },
+      isActive: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
+    expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it.each(["new", "old"] as const)(
     "keeps a rejected steer skipped when drop:%s discards it",
     async (dropPolicy) => {
+      using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
       const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
-      vi.mocked(parkSteerCandidate).mockImplementation(actualQueue.parkSteerCandidate);
+      vi.mocked(reserveSteerCandidate).mockImplementation(actualQueue.reserveSteerCandidate);
       const active = createReplyOperation({
         sessionKey: "main",
         sessionId: "session",
@@ -87,36 +282,42 @@ export function registerSteeringReceiptCases({
       if (dropPolicy === "new") {
         enqueueRetained();
       } else {
-        state.queueEmbeddedAgentMessageMock.mockImplementationOnce(() => {
+        state.backendQueueMessageMock.mockImplementationOnce(() => {
           enqueueRetained();
           return false;
         });
       }
       try {
         await candidate.run();
-        expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
+        expect(warning).toHaveBeenCalledWith(
+          "steering rejected; applying follow-up policy",
+          expect.objectContaining({ reason: "runtime_rejected", disposition: "skipped-queue-cap" }),
+        );
+        expect(state.backendQueueMessageMock).toHaveBeenCalledOnce();
         expect(replyState.admission).toEqual({ status: "skipped", reason: "queue-cap" });
         expect(getExistingFollowupQueue("main")?.items).toEqual([retained]);
       } finally {
-        clearFollowupQueue("main");
-        clearFollowupDrainCallback("main");
+        clearSessionQueues(["main"], getSessionControllerEntryForOperation(active).target);
         active.complete();
       }
     },
   );
 
-  it("queues a waiting steer when its predecessor outlives terminal delivery", async ({
-    signal,
-  }) => {
+  const blockedSteers = ["terminal-delivery", "backend-unavailable"] as const;
+  it.for(blockedSteers)("queues a waiting steer after %s", async (change, { signal }) => {
     const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
-    vi.mocked(parkSteerCandidate).mockImplementation(actualQueue.parkSteerCandidate);
-    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
-      status: "running",
-      restartRecoveryDeliveryRunId: "active-recovery",
-      restartRecoveryDeliverySourceRunId: "active-source",
-    });
+    vi.mocked(reserveSteerCandidate).mockImplementation(actualQueue.reserveSteerCandidate);
+    const sessionKey = "agent:main:main";
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture(
+      {
+        status: undefined,
+        restartRecoveryDeliveryRunId: "active-recovery",
+        restartRecoveryDeliverySourceRunId: "active-source",
+      },
+      sessionKey,
+    );
     const active = createReplyOperation({
-      sessionKey: "main",
+      sessionKey,
       sessionId: "session",
       resetTriggered: false,
     });
@@ -124,8 +325,20 @@ export function registerSteeringReceiptCases({
     const firstEntered = createDeferred();
     const firstAcceptance = createDeferred<boolean>();
     const secondParked = createDeferred();
-    state.queueEmbeddedAgentMessageMock.mockReturnValue(true);
-    state.queueEmbeddedAgentMessageMock.mockImplementationOnce(() => {
+    const onDeferred = vi.fn();
+    const inject = controllerMailbox.beginSessionControllerSourceInjection;
+    const injection = vi
+      .spyOn(controllerMailbox, "beginSessionControllerSourceInjection")
+      .mockImplementation((input, options) => {
+        const receipt = inject(input, options);
+        if (input.source?.messageId === "second-parked-input") {
+          expect(input.phase).toBe("injecting");
+          secondParked.resolve();
+        }
+        return receipt;
+      });
+    state.backendQueueMessageMock.mockReturnValue(true);
+    state.backendQueueMessageMock.mockImplementationOnce(() => {
       firstEntered.resolve();
       return firstAcceptance.promise;
     });
@@ -137,6 +350,8 @@ export function registerSteeringReceiptCases({
       sessionEntry,
       sessionStore,
       storePath,
+      sessionKey,
+      runOverrides: { agentId: "main" },
     };
     const first = createMinimalRun({
       ...common,
@@ -146,15 +361,16 @@ export function registerSteeringReceiptCases({
     const secondState: ReplyOperationRunState = {
       admission: { status: "skipped", reason: "active-run" },
     };
+    const senderId = change === "backend-unavailable" ? "bob" : "sender-42";
     const second = createMinimalRun({
       ...common,
       bindActiveAuthority: false,
       attachSteerBackend: false,
-      sessionCtx: { MessageSid: "second-parked-input" },
+      sessionCtx: { MessageSid: "second-parked-input", SenderId: senderId },
       opts: {
         [REPLY_OPERATION_RUN_STATE]: secondState,
         turnAdoptionLifecycle: {
-          onDeferred: () => secondParked.resolve(),
+          onDeferred,
           onAdopted: async () => {},
         },
       },
@@ -181,39 +397,62 @@ export function registerSteeringReceiptCases({
         ),
         signal,
       );
-      await replaceSessionEntry(
-        { storePath, sessionKey: "main" },
-        {
-          ...sessionEntry,
-          restartRecoveryDeliveryReceiptState: "delivered-terminal",
-          restartRecoveryDeliveryToolCallId: "terminal-message-call",
-        },
+      const backend = expectDefined(
+        getSessionControllerEntryForOperation(active).attachment?.backend?.handle
+          .messageInjectionV2,
+        "The first steer installed its guarded backend",
       );
+      using _ =
+        change === "backend-unavailable"
+          ? vi.spyOn(backend, "isAvailable").mockReturnValue(false)
+          : undefined;
+      if (change === "terminal-delivery") {
+        await replaceSessionEntry(
+          { agentId: "main", storePath, sessionKey },
+          {
+            ...sessionEntry,
+            restartRecoveryDeliveryReceiptState: "delivered-terminal",
+            restartRecoveryDeliveryToolCallId: "terminal-message-call",
+          },
+        );
+      }
 
       firstAcceptance.resolve(true);
       await Promise.all([firstRun, secondRun]);
 
-      expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
-      expect(secondState.admission).toEqual({ status: "accepted", mode: "followup" });
-      expect(getExistingFollowupQueue("main")?.items).toEqual([
+      expect(state.backendQueueMessageMock).toHaveBeenCalledOnce();
+      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(secondState.admission).toEqual({
+        status: "accepted",
+        mode: "followup",
+        reason: "steering-unavailable",
+      });
+      expect(onDeferred).toHaveBeenCalledOnce();
+      expect(getExistingFollowupQueue(sessionKey)?.items).toEqual([
         expect.objectContaining({
           messageId: "second-parked-input",
           prompt: "answer the second input",
+          run: expect.objectContaining({ senderId }),
         }),
       ]);
     } finally {
       firstAcceptance.resolve(true);
       await Promise.allSettled([firstRun, ...(secondRun ? [secondRun] : [])]);
-      clearFollowupQueue("main");
-      clearFollowupDrainCallback("main");
+      clearSessionQueues([sessionKey], getSessionControllerEntryForOperation(active).target);
       active.complete();
+      injection.mockRestore();
     }
   });
 
-  for (const receiptState of ["terminal-pending", "delivered-terminal"] as const) {
-    it(`queues instead of steering while the active turn holds a ${receiptState} source-reply receipt`, async () => {
+  for (const { receiptState, enqueued } of [
+    { receiptState: "terminal-pending", enqueued: true },
+    { receiptState: "delivered-terminal", enqueued: true },
+    { receiptState: "terminal-pending", enqueued: false },
+  ] as const) {
+    it(`${enqueued ? "queues instead of steering" : "reports a non-enqueued fallback"} while the active turn holds a ${receiptState} source-reply receipt`, async () => {
+      using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
       const sessionEntry = makeSessionEntry({
-        status: "running",
+        status: undefined,
         restartRecoveryDeliveryRunId: "recovery-run-1",
         restartRecoveryDeliverySourceRunId: "source-turn-1",
         restartRecoveryDeliveryReceiptState: receiptState,
@@ -228,7 +467,8 @@ export function registerSteeringReceiptCases({
       active.setPhase("running");
       // The active turn's backend would accept the steer; the failure mode is
       // that the steered message-tool final then gets fail-closed and lost.
-      state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+      state.backendQueueMessageMock.mockReturnValueOnce(true);
+      vi.mocked(enqueueFollowupRun).mockReturnValueOnce(enqueued);
       const runState: ReplyOperationRunState = {};
       const { run } = createMinimalRun({
         opts: { [REPLY_OPERATION_RUN_STATE]: runState },
@@ -253,9 +493,20 @@ export function registerSteeringReceiptCases({
       // A terminal source-reply receipt fail-closes any second terminal send
       // on the same source turn. Steering the new inbound into that turn would
       // reuse the same delivery claim and silently lose its reply (#128971).
-      expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+      expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
       expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-      expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+      expect(warning).toHaveBeenCalledWith("steering rejected; applying follow-up policy", {
+        reason: receiptState,
+        disposition: enqueued ? "followup-queued" : "followup-not-enqueued",
+        channel: "telegram",
+        sessionId: "session",
+        runId: undefined,
+      });
+      expect(runState.admission).toEqual(
+        enqueued
+          ? { status: "accepted", mode: "followup", reason: "steering-unavailable" }
+          : undefined,
+      );
       expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
       active.complete();
     });
@@ -265,7 +516,7 @@ export function registerSteeringReceiptCases({
     // The claim was cleaned after the terminal send; the source turn stays
     // tombstoned so a steered send resolves to already-delivered (#128971).
     const sessionEntry = makeSessionEntry({
-      status: "running",
+      status: undefined,
       restartRecoveryTerminalRunIds: ["source-turn-1"],
     });
     const sessionStore = { main: sessionEntry };
@@ -276,9 +527,9 @@ export function registerSteeringReceiptCases({
     });
     // The owning registry records the active source turn when the run admits
     // its delivery claim; this tombstone belongs to that exact source.
-    replyRunRegistry.bindSourceTurnId(active, "source-turn-1");
+    bindSessionControllerSourceTurnId(active, "source-turn-1");
     active.setPhase("running");
-    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    state.backendQueueMessageMock.mockReturnValueOnce(true);
     const runState: ReplyOperationRunState = {};
     const { run } = createMinimalRun({
       opts: { [REPLY_OPERATION_RUN_STATE]: runState },
@@ -300,9 +551,13 @@ export function registerSteeringReceiptCases({
 
     await expect(run()).resolves.toBeUndefined();
 
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+    expect(runState.admission).toEqual({
+      status: "accepted",
+      mode: "followup",
+      reason: "steering-unavailable",
+    });
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
     active.complete();
   });
@@ -312,7 +567,7 @@ export function registerSteeringReceiptCases({
     // finished earlier source must not fence a safe steer into the active run:
     // only the active source turn's own tombstone fail-closes delivery.
     const sessionEntry = makeSessionEntry({
-      status: "running",
+      status: undefined,
       restartRecoveryTerminalRunIds: ["source-turn-1"],
     });
     const sessionStore = { main: sessionEntry };
@@ -323,9 +578,9 @@ export function registerSteeringReceiptCases({
     });
     // The active run owns a different source turn ("source-turn-2"); the
     // retained tombstone belongs to an unrelated earlier turn.
-    replyRunRegistry.bindSourceTurnId(active, "source-turn-2");
+    bindSessionControllerSourceTurnId(active, "source-turn-2");
     active.setPhase("running");
-    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    state.backendQueueMessageMock.mockReturnValueOnce(true);
     const runState: ReplyOperationRunState = {};
     const { run } = createMinimalRun({
       opts: { [REPLY_OPERATION_RUN_STATE]: runState },
@@ -347,7 +602,7 @@ export function registerSteeringReceiptCases({
 
     await expect(run()).resolves.toBeUndefined();
 
-    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
+    expect(state.backendQueueMessageMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
     active.complete();
@@ -357,7 +612,7 @@ export function registerSteeringReceiptCases({
     // beginTerminalSourceReplyDelivery fail-closes any send while a terminal
     // tool-call id is armed, even without a receipt state (delivery-ambiguous).
     const sessionEntry = makeSessionEntry({
-      status: "running",
+      status: undefined,
       restartRecoveryDeliveryRunId: "recovery-run-1",
       restartRecoveryDeliverySourceRunId: "source-turn-1",
       restartRecoveryDeliveryToolCallId: "message-call-2",
@@ -369,7 +624,7 @@ export function registerSteeringReceiptCases({
       resetTriggered: false,
     });
     active.setPhase("running");
-    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    state.backendQueueMessageMock.mockReturnValueOnce(true);
     const runState: ReplyOperationRunState = {};
     const { run } = createMinimalRun({
       opts: { [REPLY_OPERATION_RUN_STATE]: runState },
@@ -391,16 +646,19 @@ export function registerSteeringReceiptCases({
 
     await expect(run()).resolves.toBeUndefined();
 
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+    expect(runState.admission).toEqual({
+      status: "accepted",
+      mode: "followup",
+      reason: "steering-unavailable",
+    });
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
     active.complete();
   });
 
   it("queues instead of steering while the active turn holds a stale delivery claim", async () => {
-    // A non-running session entry keeps its claim fields but the owner is no
-    // longer "running", so beginTerminalSourceReplyDelivery resolves to stale.
+    // The active source differs from the retained delivery claim.
     const sessionEntry = makeSessionEntry({
       status: "done",
       restartRecoveryDeliveryRunId: "recovery-run-1",
@@ -412,8 +670,9 @@ export function registerSteeringReceiptCases({
       sessionId: "session",
       resetTriggered: false,
     });
+    bindSessionControllerSourceTurnId(active, "source-turn-2");
     active.setPhase("running");
-    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    state.backendQueueMessageMock.mockReturnValueOnce(true);
     const runState: ReplyOperationRunState = {};
     const { run } = createMinimalRun({
       opts: { [REPLY_OPERATION_RUN_STATE]: runState },
@@ -435,9 +694,13 @@ export function registerSteeringReceiptCases({
 
     await expect(run()).resolves.toBeUndefined();
 
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+    expect(runState.admission).toEqual({
+      status: "accepted",
+      mode: "followup",
+      reason: "steering-unavailable",
+    });
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
     active.complete();
   });
@@ -445,7 +708,7 @@ export function registerSteeringReceiptCases({
   it("does not replay an accepted steer after terminal delivery", async () => {
     // Accepted input is already owned by its injection target. A later receipt cannot authorize replay.
     const sessionEntry = makeSessionEntry({
-      status: "running",
+      status: undefined,
       restartRecoveryDeliveryRunId: "recovery-run-1",
       restartRecoveryDeliverySourceRunId: "source-turn-1",
       restartRecoveryDeliveryReceiptState: "terminal-pending",
@@ -477,7 +740,7 @@ export function registerSteeringReceiptCases({
     await expect(run()).resolves.toBeUndefined();
 
     expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
+    expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });

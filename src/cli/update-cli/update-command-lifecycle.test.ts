@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createDoctorMaintenanceFixture } from "../../commands/doctor-maintenance.test-support.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
@@ -116,8 +117,8 @@ vi.mock("../../plugins/plugin-lifecycle-lease.js", () => ({
   },
 }));
 
-vi.mock("../../state/openclaw-state-ownership.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership.js")>()),
+vi.mock("../../state/openclaw-state-ownership-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership-preflight.js")>()),
   assertOpenClawStateWriteAllowedAtPath: vi.fn(async () => undefined),
 }));
 
@@ -405,16 +406,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         path.join(await resolveUpdateRoot(), "package.json"),
         JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
       );
-      const maintenance = {
-        signal: new AbortController().signal,
-        run: <T>(operation: () => T): T => operation(),
-        finish: vi.fn(async () => {}),
-        release: vi.fn(async () => {}),
-        repairSqliteNoCow: async () => {},
-        enableSqliteReclamation: async () => {},
-        cleanupRetainedRuntimes: async () => {},
-        releaseState: vi.fn(async () => {}),
-      };
+      const maintenance = createDoctorMaintenanceFixture();
       mocks.maintenance.mockResolvedValueOnce(maintenance);
       const verification = await vi.importActual<typeof gatewayVerification>(
         "./update-command-verification.js",
@@ -524,13 +516,12 @@ describe("update plugin lifecycle lease boundaries", () => {
   );
 
   it.each([
-    { installedVersion: VERSION, previousInstallRoot: "/tmp/openclaw", resumed: true },
-    { installedVersion: "2026.8.27", previousInstallRoot: "/tmp/openclaw", resumed: true },
-    { installedVersion: "2026.8.27", previousInstallRoot: "/tmp/openclaw", resumed: false },
-    { installedVersion: VERSION, previousInstallRoot: "/tmp/openclaw-source", resumed: true },
+    { installedVersion: VERSION, previousInstallRoot: "/tmp/openclaw" },
+    { installedVersion: "2026.8.27", previousInstallRoot: "/tmp/openclaw" },
+    { installedVersion: VERSION, previousInstallRoot: "/tmp/openclaw-source" },
   ])(
-    "keeps already-current $installedVersion convergence owned by its runtime from $previousInstallRoot (resumed=$resumed)",
-    async ({ installedVersion, previousInstallRoot, resumed }) => {
+    "keeps already-current $installedVersion convergence owned by its runtime from $previousInstallRoot",
+    async ({ installedVersion, previousInstallRoot }) => {
       const needsTargetRuntime =
         installedVersion !== VERSION || previousInstallRoot !== "/tmp/openclaw";
       vi.mocked(readPackageVersion).mockResolvedValue(installedVersion);
@@ -547,8 +538,8 @@ describe("update plugin lifecycle lease boundaries", () => {
       vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementation(async () => {
         record("target-convergence");
         return {
-          resumed,
-          ...(resumed ? { pluginUpdate: { ...successfulPluginUpdate, changed: false } } : {}),
+          resumed: true,
+          pluginUpdate: { ...successfulPluginUpdate, changed: false },
         };
       });
 
@@ -583,19 +574,17 @@ describe("update plugin lifecycle lease boundaries", () => {
         expect(updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
       } else {
         expect(continuePostCoreUpdateInFreshProcess).not.toHaveBeenCalled();
-        expect(mocks.events.slice(0, 3)).toEqual([
-          "lease-enter:false",
-          "runtime-completion:true",
-          "lease-exit:false",
-        ]);
+        expect(completeSourceUpdateRuntime).toHaveBeenCalledOnce();
+        expect(
+          mocks.events.findIndex((event) => event.startsWith("runtime-completion:")),
+        ).toBeLessThan(mocks.events.indexOf("plugin-update:true"));
         expect(mocks.events).toContain("plugin-update:true");
       }
       expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
-      expect(result.resultWithPostUpdate).toMatchObject(
-        resumed
-          ? { status: "skipped", reason: "already-current" }
-          : { status: "error", reason: "post-core-update-failed" },
-      );
+      expect(result.resultWithPostUpdate).toMatchObject({
+        status: "skipped",
+        reason: "already-current",
+      });
     },
   );
 
@@ -655,7 +644,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     );
   });
 
-  it.each(["copied", "live", "unset selectors"] as const)(
+  it.each(["live", "unset selectors"] as const)(
     "preserves the %s invocation environment through a failed phase",
     async (source) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", "/fixture/invocation-state");
@@ -718,12 +707,9 @@ describe("update plugin lifecycle lease boundaries", () => {
       expect(completeSourceUpdateRuntime).toHaveBeenCalledWith(
         expect.objectContaining({ sourceRuntimePrepared }),
       );
-      expect(mocks.events.indexOf("runtime-completion:true")).toBeGreaterThan(
-        mocks.events.indexOf("lease-enter:false"),
-      );
-      expect(mocks.events.indexOf("runtime-completion:true")).toBeLessThan(
-        mocks.events.indexOf("prepare-config:true"),
-      );
+      expect(
+        mocks.events.findIndex((event) => event.startsWith("runtime-completion:")),
+      ).toBeLessThan(mocks.events.indexOf("prepare-config:true"));
       expect(mocks.events.includes("fresh-doctor:false")).toBe(owner === undefined);
       expect(mocks.events).not.toContain("fresh-doctor:true");
       expect(mocks.events).not.toContain("config-snapshot:false");
@@ -754,12 +740,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       });
       mocks.maintenance.mockImplementationOnce(async () => {
         record("park-service");
-        return {
-          signal: new AbortController().signal,
-          run: <T>(operation: () => T): T => operation(),
-          repairSqliteNoCow: async () => {},
-          enableSqliteReclamation: async () => {},
-          cleanupRetainedRuntimes: async () => {},
+        return createDoctorMaintenanceFixture({
           releaseState: async () => {
             record("release-state");
           },
@@ -767,7 +748,7 @@ describe("update plugin lifecycle lease boundaries", () => {
           release: async () => {
             record("release-custody");
           },
-        };
+        });
       });
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/post-core-result.json");
       const publish = async () => {
@@ -941,19 +922,14 @@ describe("update plugin lifecycle lease boundaries", () => {
           : "Optional version probe timed out; recheck after restart.";
       if (source === "restoration") {
         const warnings: string[] = [];
-        mocks.maintenance.mockResolvedValue({
-          signal: new AbortController().signal,
-          run: <T>(operation: () => T): T => operation(),
-          release: async () => {},
-          repairSqliteNoCow: async () => {},
-          enableSqliteReclamation: async () => {},
-          cleanupRetainedRuntimes: async () => {},
-          releaseState: async () => {},
-          finish: async () => {
-            warnings.push(warning);
-          },
-          warnings,
-        });
+        mocks.maintenance.mockResolvedValue(
+          createDoctorMaintenanceFixture({
+            finish: async () => {
+              warnings.push(warning);
+            },
+            warnings,
+          }),
+        );
         vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
       } else {
         mocks.doctorWarnings = [warning];

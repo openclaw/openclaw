@@ -1,57 +1,21 @@
-import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
-  replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { applySessionModelSelection as applySdkModelSelection } from "../plugin-sdk/model-session-runtime.js";
 import {
-  onSessionLifecycleEvent,
-  type SessionLifecycleEvent,
-} from "../sessions/session-lifecycle-events.js";
-import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
-import { createModelSelectionInputs } from "./apply-session-model-selection.test-support.js";
+  createModelSelectionInputs,
+  selectionMocks,
+  useSelectionEffects,
+  useSelectionStore,
+} from "./apply-session-model-selection.test-support.js";
+await vi.hoisted(() => import("./apply-session-model-selection.test-support.js"));
+const { placementMocks, validateRuntime } = selectionMocks;
 
-const runtimeChoiceMocks = vi.hoisted(() => ({
-  validate: vi.fn<() => string | undefined>(),
-}));
-
-// Runtime eligibility belongs to its owner; exercise its commit guard here.
-vi.mock("../agents/model-runtime-choice.js", () => ({
-  preparePublishedModelRuntimeChoice: vi.fn<
-    typeof import("../agents/model-runtime-choice.js").preparePublishedModelRuntimeChoice
-  >(async ({ runtimeId, preferredRuntimeId }) => ({
-    kind: "ready",
-    runtimeId: runtimeId ?? preferredRuntimeId ?? "openclaw",
-    validate: runtimeChoiceMocks.validate,
-  })),
-}));
-
-vi.mock("../agents/model-catalog.runtime.js", () => ({
-  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-}));
-
-const { effects, placementMocks, factories, resetMocks } = await vi.hoisted(async () => {
-  const { createModelSelectionMocks } =
-    await import("./apply-session-model-selection.test-support.js");
-  return createModelSelectionMocks();
-});
-
-const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-model-picker-runtime-race-");
-let lifecycleEvents: SessionLifecycleEvent[];
-let unsubscribeLifecycle: () => void;
-
-vi.mock("../infra/system-events.js", factories.systemEvents);
-vi.mock("../auto-reply/reply/queue.js", factories.queue);
-vi.mock("../gateway/session-patch-hooks.js", factories.patchHooks);
-vi.mock("../config/config.js", factories.config);
-
-vi.mock("../logging/subsystem.js", factories.logging);
-
-vi.mock("../gateway/session-worker-placement-context.js", factories.placementContext);
-vi.mock("../gateway/worker-environments/placement-session-runtime.js", factories.placementRuntime);
+const persistedSession = useSelectionStore("openclaw-model-picker-runtime-race-");
+const { expectNoSelectionEffects } = useSelectionEffects();
 
 import { applySessionModelSelectionInternal as applySessionModelSelection } from "./apply-session-model-selection.js";
 
@@ -63,141 +27,108 @@ function createPlacement(sessionId: string, state: "local" | "active" = "active"
     state,
     executionMode: "worker-turn" as const,
     generation: 1,
-    environmentId: "env-1",
-    runnerId: "runner-1",
-    runnerStatus: "available" as const,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
-    transitionGeneration: 1,
-    ownerId: "worker",
-    ownerEpoch: 1,
-    turnClaim: null,
-    workspace: null,
-    retirement: null,
-    createdAtMs: 0,
-    updatedAtMs: 0,
   };
 }
 
-beforeEach(() => {
-  runtimeChoiceMocks.validate.mockReset().mockReturnValue(undefined);
-  vi.mocked(loadProviderScopedThinkingCatalog).mockReset().mockResolvedValue([]);
-  lifecycleEvents = [];
-  unsubscribeLifecycle = onSessionLifecycleEvent((event) => lifecycleEvents.push(event));
-  resetMocks();
-});
-
-afterEach(() => unsubscribeLifecycle());
-
 describe("applySessionModelSelection — placement guard", () => {
-  it("rejects a model selection incompatible with an active cloud placement without persisting", async () => {
-    const sessionEntry = createEntry({ sessionId: "placement-active-1" });
-    const initial = structuredClone(sessionEntry);
-    placementMocks.getMany.mockReturnValue(
-      new Map([[sessionEntry.sessionId, createPlacement(sessionEntry.sessionId)]]),
-    );
-    placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReturnValue({
-      executionMode: undefined,
-    });
+  it.each([undefined, "worker-turn"] as const)(
+    "checks active placement compatibility with %s",
+    async (executionMode) => {
+      const sessionEntry = createEntry({ sessionId: "placement-active-1" });
+      const initial = structuredClone(sessionEntry);
+      placementMocks.getMany.mockReturnValue(
+        new Map([[sessionEntry.sessionId, createPlacement(sessionEntry.sessionId)]]),
+      );
+      placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReturnValue({
+        executionMode,
+      });
 
-    const result = await applySessionModelSelection(createParams({ sessionEntry }));
+      const result = await applySessionModelSelection(createParams({ sessionEntry }));
 
-    expect(result).toEqual({
-      status: "rejected",
-      reason: "invalid-runtime",
-      message:
-        "Session cannot select a runtime without cloud placement support while cloud worker placement is active.",
-    });
-    expect(sessionEntry).toEqual(initial);
-    expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
-    expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
-    expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
-  });
+      if (executionMode) {
+        expect(result.status).toBe("applied");
+      } else {
+        expect(result).toEqual({
+          status: "rejected",
+          reason: "invalid-runtime",
+          message:
+            "Session cannot select a runtime without cloud placement support while cloud worker placement is active.",
+        });
+        expect(sessionEntry).toEqual(initial);
+        expectNoSelectionEffects();
+      }
+    },
+  );
 
-  it("allows a model selection compatible with an active cloud placement", async () => {
-    const sessionEntry = createEntry({ sessionId: "placement-active-2" });
-    placementMocks.getMany.mockReturnValue(
-      new Map([[sessionEntry.sessionId, createPlacement(sessionEntry.sessionId)]]),
-    );
-    placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReturnValue({
-      executionMode: "worker-turn",
-    });
-
-    const result = await applySessionModelSelection(createParams({ sessionEntry }));
-
-    expect(result.status).toBe("applied");
-  });
-
-  it("rejects runtime availability revoked while waiting for the session writer", async () => {
-    const tempRoot = sessionDirs.make();
-    const storePath = path.join(tempRoot, "sessions.json");
-    const sessionKey = "agent:main:dm:runtime-race";
-    const sessionEntry = createEntry({ sessionId: "runtime-race-1" });
-    const initial = structuredClone(sessionEntry);
-    await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
-    const entered = createDeferred();
-    const release = createDeferred();
-    const writer = patchSessionEntryCore({ sessionKey, storePath }, async () => {
-      entered.resolve();
-      await release.promise;
-      return null;
-    });
-    await entered.promise;
-    let runtimeAvailable = true;
-    const validated = createDeferred();
-    runtimeChoiceMocks.validate.mockImplementation(() => {
-      validated.resolve();
-      return runtimeAvailable ? undefined : "Selected runtime is no longer available.";
-    });
-    const pending = applySessionModelSelection(
-      createParams({
+  it.each(["runtime", "SDK account"] as const)(
+    "rejects %s availability revoked while waiting for the session writer",
+    async (source) => {
+      const sessionEntry = createEntry({ sessionId: "runtime-race-1" });
+      const initial = structuredClone(sessionEntry);
+      const { sessionKey, storePath } = await persistedSession(
         sessionEntry,
-        sessionKey,
-        storePath,
-        request: {
-          provider: "openai",
-          model: "gpt-4o",
-          isDefault: false,
-          runtime: { kind: "set", runtime: "openclaw" },
-        },
-      }),
-    );
-    try {
-      // Preparation accepts the runtime; revoke it before the queued write can commit.
-      expect(
-        await Promise.race([validated.promise.then(() => true), pending.then(() => false)]),
-      ).toBe(true);
-      runtimeAvailable = false;
-    } finally {
-      release.resolve();
-      await writer;
-    }
+        "agent:main:dm:runtime-race",
+      );
+      const entered = createDeferred();
+      const release = createDeferred();
+      const writer = patchSessionEntryCore({ sessionKey, storePath }, async () => {
+        entered.resolve();
+        await release.promise;
+        return null;
+      });
+      await entered.promise;
+      let available = true;
+      const validated = createDeferred();
+      const error = `Selected ${source === "runtime" ? "runtime" : "account"} is no longer available.`;
+      const validate = () => {
+        validated.resolve();
+        return available ? undefined : error;
+      };
+      if (source === "runtime") {
+        validateRuntime.mockImplementation(validate);
+      }
+      const applySelection =
+        source === "runtime" ? applySessionModelSelection : applySdkModelSelection;
+      const pending = applySelection(
+        createParams({
+          sessionEntry,
+          sessionKey,
+          storePath,
+          ...(source === "SDK account" ? { validateAuthProfileSelection: validate } : {}),
+          request: { ...createParams().request, runtime: { kind: "set", runtime: "openclaw" } },
+        }),
+      );
+      try {
+        // Preparation accepts the selection; revoke it before the queued write can commit.
+        expect(
+          await Promise.race([validated.promise.then(() => true), pending.then(() => false)]),
+        ).toBe(true);
+        available = false;
+      } finally {
+        release.resolve();
+        await writer;
+      }
 
-    expect(await pending).toMatchObject({
-      status: "rejected",
-      reason: "not-allowed",
-      message: "Selected runtime is no longer available.",
-    });
-    expect(loadSessionEntryReadOnly({ sessionKey, storePath })).toEqual(initial);
-    expect(sessionEntry).toEqual(initial);
-    expect(lifecycleEvents).toEqual([]);
-    expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
-    expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
-    expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
-  });
+      expect(await pending).toMatchObject({
+        status: "rejected",
+        reason: "not-allowed",
+        message: error,
+      });
+      expect(loadSessionEntryReadOnly({ sessionKey, storePath })).toEqual(initial);
+      expect(sessionEntry).toEqual(initial);
+      expectNoSelectionEffects();
+    },
+  );
 
   it("rejects a model selection when placement activates between the pre-write read and the durable commit", async () => {
-    const tempRoot = sessionDirs.make();
-    const storePath = path.join(tempRoot, "sessions.json");
-    const sessionKey = "agent:main:dm:placement-race";
-    const sessionEntry = createEntry({ sessionId: "placement-race-1" });
-    await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
+    const { sessionEntry, sessionKey, storePath } = await persistedSession(
+      createEntry({ sessionId: "placement-race-1" }),
+      "agent:main:dm:placement-race",
+    );
     const initial = structuredClone(sessionEntry);
     const localPlacement = createPlacement(sessionEntry.sessionId, "local");
     const activePlacement = { ...localPlacement, state: "active" as const, generation: 2 };
-    // First read (pre-write guard) sees a local placement; the synchronous commit boundary
-    // then sees an activation that overtook the directive's first read.
+    // The prepared owner sees local placement; its commit assertion observes activation.
     placementMocks.getMany
       .mockReturnValueOnce(new Map([["placement-race-1", localPlacement]]))
       .mockReturnValueOnce(new Map([["placement-race-1", activePlacement]]));
@@ -211,14 +142,11 @@ describe("applySessionModelSelection — placement guard", () => {
 
     expect(result).toMatchObject({
       status: "rejected",
-      message:
-        "Session cannot select a runtime without cloud placement support while cloud worker placement is active.",
+      message: "Session placement changed; retry model selection.",
     });
     // The durable write was fenced: the stored entry is unchanged.
     const stored = loadSessionEntryReadOnly({ sessionKey, storePath });
     expect(stored).toEqual(initial);
-    expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
-    expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
-    expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
+    expectNoSelectionEffects();
   });
 });

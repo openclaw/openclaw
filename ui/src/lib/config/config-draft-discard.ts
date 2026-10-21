@@ -1,3 +1,4 @@
+import type { AppliedConfigRefresh } from "./applied-refresh.ts";
 import { resetConfigPendingChanges } from "./config-draft-model.ts";
 import { loadConfig, type ConfigWriteCoordinator } from "./config-gateway-operations.ts";
 import type { RuntimeConfigState } from "./config-state-model.ts";
@@ -12,8 +13,7 @@ export function createConfigDraftDiscard(context: {
   run: <T>(task: () => Promise<T>, loadKey?: "config" | "schema") => Promise<T>;
   mutate: (task: () => void) => void;
   clearDraftConnection: () => void;
-  cancelAppliedRefresh: () => void;
-  reconcileAppliedRefresh: () => void;
+  appliedRefresh: AppliedConfigRefresh;
 }): ConfigWriteCoordinator["discardDraft"] {
   const { state } = context;
   const drainWrites = async () => {
@@ -34,7 +34,7 @@ export function createConfigDraftDiscard(context: {
     // re-dirty or trail-write over the discard.
     await drainWrites();
     if (state.connected && state.client) {
-      context.cancelAppliedRefresh();
+      context.appliedRefresh.cancel();
       try {
         const loaded = await context.run(
           () => loadConfig(state, { discardPendingChanges: true }),
@@ -44,7 +44,7 @@ export function createConfigDraftDiscard(context: {
           context.clearDraftConnection();
         }
       } finally {
-        context.reconcileAppliedRefresh();
+        context.appliedRefresh.reconcile();
       }
       return;
     }

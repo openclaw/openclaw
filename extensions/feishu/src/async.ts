@@ -1,6 +1,6 @@
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 const RACE_TIMEOUT = Symbol("race-timeout");
 const RACE_ABORT = Symbol("race-abort");
@@ -25,27 +25,15 @@ export async function raceWithTimeoutAndAbort<T>(
     return { status: "resolved", value: await promise };
   }
 
-  let abortHandler: (() => void) | undefined;
-  const contenders: Array<Promise<T | typeof RACE_ABORT>> = [promise];
-
-  if (options.abortSignal) {
-    contenders.push(
-      new Promise((resolve) => {
-        abortHandler = () => resolve(RACE_ABORT);
-        options.abortSignal?.addEventListener("abort", abortHandler, { once: true });
-      }),
-    );
-  }
-
   try {
-    const settled = Promise.race(contenders);
     const result =
       options.timeoutMs === undefined
-        ? await settled
-        : await raceWithTimeout(
-            settled,
+        ? await racePromiseWithAbortSignal(promise, options.abortSignal, () => RACE_ABORT)
+        : await raceWithTimeout<T, typeof RACE_TIMEOUT | typeof RACE_ABORT>(
+            promise,
             resolveTimerTimeoutMs(options.timeoutMs, 1),
-            (): typeof RACE_TIMEOUT => RACE_TIMEOUT,
+            () => RACE_TIMEOUT,
+            { signal: options.abortSignal, onAbort: () => RACE_ABORT },
           );
     if (result === RACE_TIMEOUT) {
       return { status: "timeout" };
@@ -54,10 +42,11 @@ export async function raceWithTimeoutAndAbort<T>(
       return { status: "aborted" };
     }
     return { status: "resolved", value: result };
-  } finally {
-    if (abortHandler) {
-      options.abortSignal?.removeEventListener("abort", abortHandler);
+  } catch (error) {
+    if (error === RACE_ABORT) {
+      return { status: "aborted" };
     }
+    throw error;
   }
 }
 

@@ -14,11 +14,9 @@ import {
   setupSessionCreateTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
-import {
-  resolveSessionMutationAuthorization,
-  SessionMutationAuthorizationChangedError,
-} from "./session-sharing.js";
-import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
+import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   createCompactedSessionFixture,
@@ -188,7 +186,8 @@ test("operator role agent allowlists protect creation without blocking existing 
     sessionId: "role-existing-session",
   });
   expect(
-    resolveGatewaySessionStoreTarget({ cfg, key: existingKey, agentId: "main" }).storePath,
+    (await resolveGatewaySessionStoreTargetInWorker({ cfg, key: existingKey, agentId: "main" }))
+      .storePath,
   ).toBe(storePath);
   const adopted = await directSessionReq(
     "sessions.create",
@@ -270,12 +269,13 @@ test("sessions.create revalidates parent participation before committing a fork 
     parentSessionKey,
     fork: true,
   };
-  const authorization = resolveSessionMutationAuthorization({
+  const authorization = await resolveSessionMutationAuthorizationAsync({
     client,
     method: "sessions.create",
     requestParams,
     context: { getRuntimeConfig } as never,
   });
+  using _ = { [Symbol.dispose]: () => authorization.authorization?.release?.() };
   expect(authorization.error).toBeNull();
   const assertCurrent = authorization.authorization?.assertCurrent;
   if (!assertCurrent) {
@@ -343,7 +343,7 @@ test("sessions.create revalidates parent participation before committing a fork 
 
 test("createGatewaySession rejects explicit and key-derived unconfigured creation owners", async () => {
   const { createGatewaySession } = await import("./session-create-service.js");
-  const cfg = { agents: { entries: { ops: {} } } };
+  const cfg = { agents: { ownership: "explicit" as const, entries: { ops: {} } } };
   const prepareLifecycle = vi.fn();
 
   for (const { owner, message } of [
@@ -353,6 +353,11 @@ test("createGatewaySession rejects explicit and key-derived unconfigured creatio
       message: 'Unknown agent id "main"',
     },
     { owner: { agentId: "   " }, message: 'Unknown agent id "   "' },
+    { owner: { parentSessionKey: "agent:retired:main" }, message: 'Unknown agent id "retired"' },
+    {
+      owner: { agentId: "   ", parentSessionKey: "agent:ops:main" },
+      message: 'Unknown agent id "   "',
+    },
   ]) {
     await expect(
       createGatewaySession({ cfg, ...owner, commandSource: "test", prepareLifecycle }),

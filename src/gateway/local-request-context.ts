@@ -1,4 +1,3 @@
-// Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -14,6 +13,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
 import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
@@ -63,19 +63,21 @@ const unavailableCron: GatewayCronServiceContract = {
   quiesceJobs: cronUnavailable,
   run: cronUnavailable,
   enqueueRun: cronUnavailable,
+  readEventSources: cronUnavailable,
+  runEvent: cronUnavailable,
   waitForManualRun: cronUnavailable,
   getJob: () => undefined,
   readJob: async () => undefined,
   readScratch: cronUnavailable,
   writeScratch: cronUnavailable,
   getDefaultAgentId: () => undefined,
-  wake: () => ({ ok: false, reason: "unwakeable-session-key" }),
+  wake: async () => ({ ok: false, reason: "unwakeable-session-key" }),
 };
 
 /** Creates the minimal gateway context used by embedded local agent execution. */
-function createLocalGatewayRequestContext(
+async function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
-): GatewayRequestContext {
+): Promise<GatewayRequestContext> {
   const logGateway = createSubsystemLogger("gateway/local");
   const resourceHost = getLegacyPluginSdkResourceHost();
   const cron: GatewayCronServiceContract = {
@@ -104,10 +106,11 @@ function createLocalGatewayRequestContext(
     localEmbedded: true,
     trackExecution: trackAsyncWork,
     deps: params.deps,
-    configRevisionProjector: loadGatewayConfigRevisionProjector({ env: process.env }),
+    configRevisionProjector: await loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     resolveSessionRequestTargets: (request) =>
       resolveSessionRequestTargets({ ...request, context }),
     // Embedded calls have no running Gateway application owner.
@@ -146,8 +149,6 @@ function createLocalGatewayRequestContext(
     hasConnectedTalkNode: async () => false,
     nodeRegistry: new NodeRegistry(),
     agentRunSeq: new Map(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     chatRunState,
     addChatRun: chatRunState.registry.add,
     removeChatRun: chatRunState.registry.remove,
@@ -229,20 +230,20 @@ function createLocalGatewayRequestContext(
 }
 
 /** Runs code inside a local gateway request scope unless an outer scope already exists. */
-export function withLocalGatewayRequestScope<T>(
+export async function withLocalGatewayRequestScope<T>(
   params: LocalGatewayRequestContextParams,
   run: () => T,
-): T {
+): Promise<Awaited<T>> {
   const existing = getPluginRuntimeGatewayRequestScope();
   if (existing?.context || existing?.resolveGatewayContext) {
-    return run();
+    return await run();
   }
-  const context = createLocalGatewayRequestContext(params);
+  const context = await createLocalGatewayRequestContext(params);
   // Session admission retains the instance binding after dropping request context.
   const resolveGatewayContext = () => context;
   context.resolveGatewayContext = resolveGatewayContext;
   bindLegacyPluginSdkResourceHost(resolveGatewayContext, getLegacyPluginSdkResourceHost());
-  return withPluginRuntimeGatewayRequestScope(
+  return await withPluginRuntimeGatewayRequestScope(
     {
       ...existing,
       context,

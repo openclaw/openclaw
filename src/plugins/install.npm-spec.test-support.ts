@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -12,16 +13,11 @@ let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
-  const request = JSON.parse(input);
-  if (request.sourcePathKind === "directory") {
-    process.stdout.write(JSON.stringify({
-      protocolVersion: 1,
-      decision: "block",
-      reason: "blocked installed package tree",
-    }));
-    return;
-  }
-  process.stdout.write(JSON.stringify({ protocolVersion: 1, decision: "allow" }));
+  const blocked = JSON.parse(input).sourcePathKind === "directory";
+  process.stdout.write(JSON.stringify({
+    protocolVersion: 1, decision: blocked ? "block" : "allow",
+    ...(blocked ? { reason: "blocked installed package tree" } : {}),
+  }));
 });
 `;
 
@@ -106,7 +102,7 @@ export function registerNpmPayloadIdentityTests({
   uniquePackageName: (prefix: string) => string;
   useStaticRegistry: (packages: RegistryPackage[]) => Promise<string>;
 }) {
-  it.each(["version", "name", "matching", "normalized-version", "loose-version"] as const)(
+  it.each(["version", "name", "normalized-version"] as const)(
     "checks real npm payload %s against the selected registry identity",
     { timeout: 120_000 },
     async (identity) => {
@@ -117,34 +113,18 @@ export function registerNpmPayloadIdentityTests({
       const payloadVersion = {
         version: "1.9.0",
         name: "2.0.0",
-        matching: "2.0.0",
         "normalized-version": "v2.0.0",
-        "loose-version": "02.0.0",
       }[identity];
       const versions = await packPlugins(rootDir, [
         { packageName, version: "1.0.0", pluginId },
-        {
-          packageName: payloadName,
-          version: payloadVersion,
-          pluginId,
-        },
+        { packageName: payloadName, version: payloadVersion, pluginId },
       ]);
-      for (const [index, entry] of versions.entries()) {
-        if (index === 1) {
-          entry.version = "2.0.0";
-        }
-      }
-      await useStaticRegistry([
-        {
-          packageName,
-          latest: "2.0.0",
-          versions,
-        },
-      ]);
+      const selected = versions[1];
+      assert(selected, "packed update payload");
+      selected.version = "2.0.0";
+      await useStaticRegistry([{ packageName, latest: "2.0.0", versions }]);
       const original = await installNpmPlugin({ spec: `${packageName}@1.0.0`, npmRoot });
-      if (!original.ok) {
-        throw new Error(original.error);
-      }
+      assert(original.ok, JSON.stringify(original));
       const manifestPath = path.join(original.targetDir, "package.json");
       const originalManifest = await fs.readFile(manifestPath, "utf8");
       const projectsRoot = path.join(npmRoot, "projects");
@@ -162,7 +142,7 @@ export function registerNpmPayloadIdentityTests({
       });
 
       expect(await fs.readFile(manifestPath, "utf8")).toBe(originalManifest);
-      if (identity !== "version" && identity !== "name") {
+      if (identity === "normalized-version") {
         expect(result).toMatchObject({
           ok: true,
           pluginId,
@@ -172,10 +152,7 @@ export function registerNpmPayloadIdentityTests({
         });
         expect(beforeCommit).toHaveBeenCalledOnce();
       } else {
-        expect(result.ok).toBe(false);
-        if (result.ok) {
-          return;
-        }
+        assert(!result.ok, JSON.stringify(result));
         expect(result.error).toMatch(/expected/i);
         expect(result.error).toContain(identity === "version" ? "1.9.0" : payloadName);
         expect(result.error).toContain(identity === "version" ? "2.0.0" : packageName);

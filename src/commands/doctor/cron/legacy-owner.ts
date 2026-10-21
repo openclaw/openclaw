@@ -1,16 +1,14 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../../agents/agent-scope-config.js";
 import { createCronOwnerWriteRefusalError } from "../../../config/io.cron-owner-refusal.js";
 import { resolveLegacyAgentRosterOwner } from "../../../config/legacy.roster.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
-import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import { resolveCronJobsStorePathFromConfig } from "../../../cron/store/paths.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { loadLegacyCronRepairState } from "./legacy-repair.js";
-import { repairLegacyCronJobOwnersForDoctor } from "./store-repair.js";
+import { repairLegacyCronJobOwnersForDoctor, resolveStoredCronJobOwner } from "./store-repair.js";
 
 /** Runs under Doctor's config lock before retiring the source roster's owner marker. */
 export async function repairLegacyCronOwnersBeforeConfigWrite(params: {
@@ -36,14 +34,9 @@ export async function repairLegacyCronOwnersBeforeConfigWrite(params: {
     readOnly: true,
   });
   params.assertCurrent?.();
-  const hasExplicitOwner = (job: Record<string, unknown> | undefined) =>
-    tryResolveCronJobEffectiveAgentId({
-      agentId: normalizeOptionalString(job?.agentId),
-      sessionKey: normalizeOptionalString(job?.sessionKey),
-    });
   const ownerless =
-    state?.rawJobs.some((job) => !hasExplicitOwner(job)) ||
-    state?.ownerRows.some((row) => !hasExplicitOwner(safeParseJsonRecord(row.job_json)));
+    state?.rawJobs.some((job) => !resolveStoredCronJobOwner(job)) ||
+    state?.ownerRows.some((row) => !resolveStoredCronJobOwner(safeParseJsonRecord(row.job_json)));
   if (!ownerless) {
     return [];
   }

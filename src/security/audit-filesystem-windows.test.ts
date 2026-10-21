@@ -2,7 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 import { AsyncTempCaseFactory } from "./test-temp-cases.js";
 
@@ -11,32 +12,20 @@ const windowsAuditEnv = {
   USERDOMAIN: "DESKTOP-TEST",
 };
 
-function isStateDirectoryTarget(target: string): boolean {
-  return /(?:^|[\\/])state$/u.test(target);
-}
-
 function windowsAclQueryResult(
   command: string,
   args: string[],
   stateGrant?: { sid: string; mask: number },
 ): { stdout: string; stderr: string } {
-  expect(command.toLowerCase()).toMatch(/powershell\.exe$/u);
-  const encodedCommand = expectDefined(
-    args[args.indexOf("-EncodedCommand") + 1],
-    "encoded PowerShell command",
-  );
-  const script = Buffer.from(encodedCommand, "base64").toString("utf16le");
-  const encodedPath = expectDefined(
-    /FromBase64String\('([^']+)'\)/u.exec(script)?.[1],
-    "encoded permission target",
-  );
-  const target = Buffer.from(encodedPath, "base64").toString("utf8");
+  expect(path.basename(command)).toBe("windows-security-helper.exe");
+  expect(args[0]).toBe("owner");
+  const target = expectDefined(args[1], "permission target");
   const currentUserSid = "S-1-5-21-1-2-3-1001";
   const grants = [
     { sid: "S-1-5-18", mask: 0x001f_01ff },
     { sid: currentUserSid, mask: 0x001f_01ff },
   ];
-  if (stateGrant && isStateDirectoryTarget(target)) {
+  if (stateGrant && /(?:^|[\\/])state$/u.test(target)) {
     grants.push(stateGrant);
   }
   return {
@@ -55,101 +44,71 @@ function windowsAclQueryResult(
 describe("security audit filesystem Windows findings", () => {
   const tempCases = new AsyncTempCaseFactory("openclaw-security-audit-win-");
 
-  beforeAll(async () => {
-    await tempCases.setup();
+  let nativeModeEnv: ReturnType<typeof captureEnv>;
+  beforeEach(() => {
+    nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
+    // The injected Windows helper fixture exercises the supported command fallback.
+    setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
   });
+  afterEach(() => nativeModeEnv.restore());
 
-  afterAll(async () => {
-    await tempCases.cleanup();
-  });
+  beforeAll(() => tempCases.setup());
+  afterAll(() => tempCases.cleanup());
+
+  async function auditAcl(label: string, stateGrant?: { sid: string; mask: number }) {
+    const stateDir = path.join(await tempCases.makeTmpDir(label), "state");
+    await fs.mkdir(stateDir, { recursive: true });
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+    return collectSecurityAuditFindings(
+      { agents: { entries: { main: {} } } },
+      {
+        stateDir,
+        configPath,
+        includeFilesystem: true,
+        configSnapshot: null,
+        platform: "win32",
+        env: windowsAuditEnv,
+        execIcacls: async (cmd: string, args: string[]) =>
+          windowsAclQueryResult(cmd, args, stateGrant),
+      },
+    );
+  }
 
   it("evaluates Windows ACL-derived filesystem findings", async () => {
     await Promise.all([
       (async () => {
-        const tmp = await tempCases.makeTmpDir("win");
-        const stateDir = path.join(tmp, "state");
-        await fs.mkdir(stateDir, { recursive: true });
-        const configPath = path.join(stateDir, "openclaw.json");
-        await fs.writeFile(configPath, "{}\n", "utf-8");
-        const findings = await collectSecurityAuditFindings(
-          { agents: { entries: { main: {} } } },
-          {
-            stateDir,
-            configPath,
-            includeFilesystem: true,
-            configSnapshot: null,
-            platform: "win32",
-            env: windowsAuditEnv,
-            execIcacls: async (cmd: string, args: string[]) => windowsAclQueryResult(cmd, args),
-          },
-        );
-        const forbidden = new Set([
+        const findings = await auditAcl("win");
+        const forbidden = [
           "fs.state_dir.perms_world_writable",
           "fs.state_dir.perms_group_writable",
           "fs.state_dir.perms_readable",
           "fs.config.perms_writable",
           "fs.config.perms_world_readable",
           "fs.config.perms_group_readable",
-        ]);
+        ];
+        const checkIds = findings.map((finding) => finding.checkId);
         for (const id of forbidden) {
-          expect(
-            findings.some((finding) => finding.checkId === id),
-            id,
-          ).toBe(false);
+          expect(checkIds, id).not.toContain(id);
         }
       })(),
       (async () => {
-        const tmp = await tempCases.makeTmpDir("win-open");
-        const stateDir = path.join(tmp, "state");
-        await fs.mkdir(stateDir, { recursive: true });
-        const configPath = path.join(stateDir, "openclaw.json");
-        await fs.writeFile(configPath, "{}\n", "utf-8");
-        const findings = await collectSecurityAuditFindings(
-          { agents: { entries: { main: {} } } },
-          {
-            stateDir,
-            configPath,
-            includeFilesystem: true,
-            configSnapshot: null,
-            platform: "win32",
-            env: windowsAuditEnv,
-            execIcacls: async (cmd: string, args: string[]) =>
-              windowsAclQueryResult(cmd, args, { sid: "S-1-5-32-545", mask: 0x0012_00a9 }),
-          },
+        const findings = await auditAcl("win-open", { sid: "S-1-5-32-545", mask: 0x0012_00a9 });
+        expect(findings).toContainEqual(
+          expect.objectContaining({
+            checkId: "fs.state_dir.perms_readable",
+            severity: "warn",
+          }),
         );
-        expect(
-          findings.some(
-            (finding) =>
-              finding.checkId === "fs.state_dir.perms_readable" && finding.severity === "warn",
-          ),
-        ).toBe(true);
       })(),
       (async () => {
-        const tmp = await tempCases.makeTmpDir("win-anon-world");
-        const stateDir = path.join(tmp, "state");
-        await fs.mkdir(stateDir, { recursive: true });
-        const configPath = path.join(stateDir, "openclaw.json");
-        await fs.writeFile(configPath, "{}\n", "utf-8");
-        const findings = await collectSecurityAuditFindings(
-          { agents: { entries: { main: {} } } },
-          {
-            stateDir,
-            configPath,
-            includeFilesystem: true,
-            configSnapshot: null,
-            platform: "win32",
-            env: windowsAuditEnv,
-            execIcacls: async (cmd: string, args: string[]) =>
-              windowsAclQueryResult(cmd, args, { sid: "S-1-5-7", mask: 0x001f_01ff }),
-          },
+        const findings = await auditAcl("win-anon-world", { sid: "S-1-5-7", mask: 0x001f_01ff });
+        expect(findings).toContainEqual(
+          expect.objectContaining({
+            checkId: "fs.state_dir.perms_world_writable",
+            severity: "critical",
+          }),
         );
-        expect(
-          findings.some(
-            (finding) =>
-              finding.checkId === "fs.state_dir.perms_world_writable" &&
-              finding.severity === "critical",
-          ),
-        ).toBe(true);
         expect(
           findings.some((finding) => finding.checkId === "fs.state_dir.perms_group_writable"),
         ).toBe(false);

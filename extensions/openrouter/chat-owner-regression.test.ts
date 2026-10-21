@@ -6,6 +6,35 @@ import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import openrouterPlugin from "./index.js";
 
+function deepSeekModel(compat: Parameters<StreamFn>[0]["compat"] = {}): Parameters<StreamFn>[0] {
+  return {
+    provider: "openrouter",
+    id: "deepseek/deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
+    api: "openclaw-provider-simple:synthetic",
+    baseUrl: "https://openrouter.ai/api/v1",
+    reasoning: true,
+    input: ["text"],
+    compat,
+    contextWindow: 100_000,
+    maxTokens: 4096,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+}
+
+function captureCompletion(requests: Record<string, unknown>[]): StreamFn {
+  return async (model, context, options) => {
+    const payload = buildOpenAICompletionsParams(
+      { ...model, api: "openai-completions" },
+      context,
+      options,
+    );
+    await options?.onPayload?.(payload, model);
+    requests.push(payload);
+    return createAssistantMessageEventStream();
+  };
+}
+
 async function captureProviderPayload(
   modelId: string,
   thinkingLevel: string | undefined,
@@ -157,30 +186,11 @@ describe("OpenRouter chat owner invariants", () => {
     async (thinkingLevel) => {
       const provider = await registerSingleProviderPlugin(openrouterPlugin);
       const model: Parameters<StreamFn>[0] = {
-        provider: "openrouter",
-        id: "deepseek/deepseek-v4-pro",
-        name: "DeepSeek V4 Pro",
-        api: "openclaw-provider-simple:synthetic",
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: true,
-        input: ["text"],
-        compat: { supportedReasoningEfforts: ["none", "high", "xhigh"] },
+        ...deepSeekModel({ supportedReasoningEfforts: ["none", "high", "xhigh"] }),
         thinkingLevelMap: { off: "none" },
-        contextWindow: 100_000,
-        maxTokens: 4096,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       };
-      let payload: Record<string, unknown> | undefined;
-      const baseStreamFn: StreamFn = async (runtimeModel, context, options) => {
-        const request = buildOpenAICompletionsParams(
-          { ...runtimeModel, api: "openai-completions" },
-          context,
-          options,
-        );
-        await options?.onPayload?.(request, runtimeModel);
-        payload = request;
-        return createAssistantMessageEventStream();
-      };
+      const requests: Record<string, unknown>[] = [];
+      const baseStreamFn = captureCompletion(requests);
       const wrapped =
         provider.wrapSimpleCompletionStreamFn?.({
           provider: "openrouter",
@@ -221,8 +231,8 @@ describe("OpenRouter chat owner invariants", () => {
         { reasoning: thinkingLevel },
       );
 
-      expect(payload?.reasoning).toEqual({ effort: thinkingLevel === "off" ? "none" : "high" });
-      expect(payload?.messages).toEqual(
+      expect(requests[0]?.reasoning).toEqual({ effort: thinkingLevel === "off" ? "none" : "high" });
+      expect(requests[0]?.messages).toEqual(
         expect.arrayContaining([
           thinkingLevel === "off"
             ? { role: "assistant", content: "Ready." }
@@ -240,22 +250,28 @@ describe("OpenRouter chat owner invariants", () => {
     "openrouter/z-ai/glm-5.2",
     "~anthropic/claude-opus-latest",
     "~moonshotai/kimi-latest",
+    "x-ai/grok-4-1-fast",
+    "openrouter/x-ai/grok-4-1-fast",
+    "google/gemini-2.5-pro",
+    "openrouter/google/gemini-3.1-pro-preview",
   ])("recognizes the live upstream cacheable model reference %s", async (modelId) => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
 
     expect(provider.isCacheTtlEligible?.({ provider: "openrouter", modelId } as never)).toBe(true);
   });
 
-  it.each(["openai/gpt-5.4", "~openai/gpt-5.4", "openrouter/openai/gpt-5.4"])(
-    "does not infer provider cache support for unrelated model reference %s",
-    async (modelId) => {
-      const provider = await registerSingleProviderPlugin(openrouterPlugin);
+  it.each([
+    "openai/gpt-5.4",
+    "~openai/gpt-5.4",
+    "openrouter/openai/gpt-5.4",
+    // OpenRouter documents implicit Gemini caching only for 2.5 and newer.
+    "google/gemini-2.0-flash-001",
+    "google/gemma-3-27b-it",
+  ])("does not infer provider cache support for unrelated model reference %s", async (modelId) => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
 
-      expect(provider.isCacheTtlEligible?.({ provider: "openrouter", modelId } as never)).toBe(
-        false,
-      );
-    },
-  );
+    expect(provider.isCacheTtlEligible?.({ provider: "openrouter", modelId } as never)).toBe(false);
+  });
 
   it("preserves assistant prefill when the provider reasoning object disables reasoning", async () => {
     const payload = await captureProviderPayload("anthropic/claude-opus-5", "off", {
@@ -300,6 +316,17 @@ describe("OpenRouter chat owner invariants", () => {
 
   it("backfills reasoning replay for the live dated DeepSeek V4 model", async () => {
     const payload = await captureProviderPayload("deepseek/deepseek-v4-flash-0731", "high", {
+      messages: [{ role: "assistant", content: "done" }],
+    });
+
+    expect(payload.reasoning).toEqual({ effort: "high" });
+    expect(payload.messages).toEqual([
+      { role: "assistant", content: "done", reasoning_content: "" },
+    ]);
+  });
+
+  it("backfills reasoning replay for the dated DeepSeek V4.1 model", async () => {
+    const payload = await captureProviderPayload("deepseek/deepseek-v4.1-flash-1017", "high", {
       messages: [{ role: "assistant", content: "done" }],
     });
 

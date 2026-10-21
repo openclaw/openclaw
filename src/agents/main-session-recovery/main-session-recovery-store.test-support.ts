@@ -10,7 +10,7 @@ import {
   drainSessionStateForTest,
 } from "../../test-utils/session-state-cleanup.js";
 
-/** Database lifecycle for main-session-recovery-store.test.ts only. */
+/** Database lifecycle for recovery store tests. */
 export function createMainSessionRecoveryStoreFixture() {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterAll(async () => {

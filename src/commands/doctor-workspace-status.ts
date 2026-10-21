@@ -45,6 +45,12 @@ function claimPluginDiagnostic(seen: Set<string>, diagnostic: WorkspacePluginDia
   return true;
 }
 
+function pluginTargetResolutionError(entry: PluginVersionDriftReport["drifts"][number]): string {
+  return entry.targetResolution?.status === "unresolved"
+    ? entry.targetResolution.error
+    : "npm registry target was not resolved";
+}
+
 function pluginVersionReadinessToHealthFindings(
   readiness: PluginVersionRestartReadiness | undefined,
 ): HealthFinding[] {
@@ -94,10 +100,7 @@ function pluginVersionReadinessToHealthFindings(
     }
     const updateCommand = resolvePluginVersionDriftUpdateCommand(entry);
     const targetResolution = entry.targetResolution;
-    const targetError =
-      targetResolution?.status === "unresolved"
-        ? targetResolution.error
-        : "npm registry target was not resolved";
+    const targetError = pluginTargetResolutionError(entry);
     return {
       checkId: WORKSPACE_STATUS_CHECK_ID,
       severity: "warning",
@@ -121,17 +124,6 @@ function isGatewayRestartPending(
     resolveOpenClawReleaseCohortVersion(runningGatewayVersion) !==
       resolveOpenClawReleaseCohortVersion(drift.gatewayVersion),
   );
-}
-
-function pluginCompatibilityWarningToHealthFinding(message: string): HealthFinding {
-  return {
-    checkId: WORKSPACE_STATUS_CHECK_ID,
-    severity: "warning",
-    message,
-    path: "plugins",
-    requirement: "plugin-compatibility",
-    fixHint: "Update or replace the plugin so it no longer depends on legacy compatibility paths.",
-  };
 }
 
 function pluginDiagnosticToHealthFinding(
@@ -215,9 +207,15 @@ export function collectWorkspaceStatusHealthFindings(
   visitWorkspacePluginStatus(cfg, options, ({ agentLabel, compatibilityWarnings, diagnostics }) => {
     const prefix = agentLabel ? `${agentLabel} ` : "";
     workspaceFindings.push(
-      ...compatibilityWarnings.map((message) =>
-        pluginCompatibilityWarningToHealthFinding(`${prefix}${message}`),
-      ),
+      ...compatibilityWarnings.map((message): HealthFinding => ({
+        checkId: WORKSPACE_STATUS_CHECK_ID,
+        severity: "warning",
+        message: `${prefix}${message}`,
+        path: "plugins",
+        requirement: "plugin-compatibility",
+        fixHint:
+          "Update or replace the plugin so it no longer depends on legacy compatibility paths.",
+      })),
       ...diagnostics.map((diagnostic) =>
         pluginDiagnosticToHealthFinding(diagnostic, `${prefix}${diagnostic.message}`),
       ),
@@ -263,17 +261,14 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
   const repairs = drift.drifts.map((entry) => ({
     entry,
     command: resolvePluginVersionDriftUpdateCommand(entry),
+    registryLag: resolvePluginVersionDriftRegistryLag(entry),
   }));
   const updateCommands = repairs
     .map(({ command }) => command)
     .filter((command): command is string => Boolean(command))
     .map((command) => formatCliCommand(command));
-  const registryLagRepairs = repairs.filter(({ entry }) =>
-    Boolean(resolvePluginVersionDriftRegistryLag(entry)),
-  );
-  const unresolvedRepairs = repairs.filter(
-    ({ entry, command }) => !command && !resolvePluginVersionDriftRegistryLag(entry),
-  );
+  const registryLagRepairs = repairs.filter(({ registryLag }) => registryLag);
+  const unresolvedRepairs = repairs.filter(({ command, registryLag }) => !command && !registryLag);
   const lines = [
     ...(readiness.runningGatewayVersion
       ? [`Running Gateway: OpenClaw ${readiness.runningGatewayVersion}`]
@@ -289,18 +284,14 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
           : drift.gatewayVersion;
       return `- ${entry.pluginId}: ${entry.installedVersion} (${sourceLabel}) -> expected ${expectedVersion}`;
     }),
-    ...registryLagRepairs.map(({ entry }) => {
-      const registryLag = resolvePluginVersionDriftRegistryLag(entry);
-      return `${entry.pluginId} already holds registry version ${registryLag?.registryVersion}; no release reaches ${registryLag?.expectedVersion} yet, so no update command applies.`;
-    }),
-    ...unresolvedRepairs.map(({ entry }) => {
-      const targetResolution = entry.targetResolution;
-      const detail =
-        targetResolution?.status === "unresolved"
-          ? targetResolution.error
-          : "npm registry target was not resolved";
-      return `Repair target resolution failed for ${entry.pluginId}: ${detail}. No install command generated.`;
-    }),
+    ...registryLagRepairs.map(
+      ({ entry, registryLag }) =>
+        `${entry.pluginId} already holds registry version ${registryLag?.registryVersion}; no release reaches ${registryLag?.expectedVersion} yet, so no update command applies.`,
+    ),
+    ...unresolvedRepairs.map(
+      ({ entry }) =>
+        `Repair target resolution failed for ${entry.pluginId}: ${pluginTargetResolutionError(entry)}. No install command generated.`,
+    ),
     singleDrift && updateCommands.length === 1
       ? `Fix: ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`
       : updateCommands.length > 0

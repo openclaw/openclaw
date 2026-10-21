@@ -36,7 +36,6 @@ type ExecAuthorizationTransport =
       kind: "shell-wrapper";
       wrapperSegment: ExecCommandSegment;
       wrapperArgv: string[];
-      wrapperPrefix: string;
       inlineCommand: string;
     };
 
@@ -45,7 +44,6 @@ type ExecAuthorizationTrustMode = "executable" | "exact-command" | "prompt-only"
 export type ExecAuthorizationCandidate = {
   sourceSegment: ExecCommandSegment;
   sourceStep: CommandStep;
-  sourceStepId?: string;
   transport: ExecAuthorizationTransport;
   trustMode: ExecAuthorizationTrustMode;
   allowAlways: boolean;
@@ -53,7 +51,6 @@ export type ExecAuthorizationCandidate = {
 };
 
 type ExecAuthorizationGroup = {
-  opToNext?: ShellChainOperator | null;
   candidates: ExecAuthorizationCandidate[];
 };
 
@@ -167,26 +164,15 @@ function commandSegmentFromArgv(
 
 type AuthorizationOperator = ShellChainOperator | "pipe";
 
-function authorizationOperatorForTopology(operator: CommandOperator): AuthorizationOperator {
-  switch (operator.kind) {
-    case "and":
-      return "&&";
-    case "or":
-      return "||";
-    case "pipe":
-    case "stderr-pipe":
-      return "pipe";
-    case "sequence":
-    case "newline-sequence":
-      return ";";
-    case "background":
-      return "&";
-    default: {
-      const unreachable: never = operator.kind;
-      return unreachable;
-    }
-  }
-}
+const AUTHORIZATION_OPERATOR_BY_KIND: Record<CommandOperator["kind"], AuthorizationOperator> = {
+  and: "&&",
+  or: "||",
+  pipe: "pipe",
+  "stderr-pipe": "pipe",
+  sequence: ";",
+  "newline-sequence": ";",
+  background: "&",
+};
 
 function riskInsideStep(risk: CommandRisk, step: CommandStep): boolean {
   return risk.span.startIndex >= step.span.startIndex && risk.span.endIndex <= step.span.endIndex;
@@ -262,7 +248,7 @@ function shellWrapperPreludeReasons(params: {
   return uniqueStrings(reasons);
 }
 
-function isPathScopedExecutableToken(token: string): boolean {
+export function isPathScopedExecutableToken(token: string): boolean {
   return token.includes("/") || token.includes("\\");
 }
 
@@ -411,7 +397,6 @@ function createCandidate(params: {
   return {
     sourceSegment: params.segment,
     sourceStep: params.step,
-    ...(params.step.id ? { sourceStepId: params.step.id } : {}),
     transport: params.transport,
     trustMode,
     allowAlways:
@@ -422,33 +407,28 @@ function createCandidate(params: {
   };
 }
 
-function finalizeGroup(params: {
-  steps: CommandStepWithSegment[];
-  opToNext: ShellChainOperator | null;
-  transport: ExecAuthorizationTransport;
-  risks: readonly CommandRisk[];
-}): ExecAuthorizationGroup {
-  const relationship = params.steps.length > 1 ? "pipeline" : "simple";
-  return {
-    opToNext: params.opToNext,
-    candidates: params.steps.map((entry) =>
-      createCandidate({
-        step: entry.step,
-        segment: entry.segment,
-        relationship,
-        transport: params.transport,
-        risks: params.risks,
-      }),
-    ),
-  };
-}
-
 function groupsFromSteps(params: {
   steps: CommandStepWithSegment[];
   operators?: readonly CommandOperator[];
   transport: ExecAuthorizationTransport;
   risks: readonly CommandRisk[];
 }): ExecAuthorizationGroup[] {
+  const finalizeGroup = (steps: CommandStepWithSegment[]): ExecAuthorizationGroup => {
+    const transport = params.transport;
+    const risks = params.risks;
+    const relationship = steps.length > 1 ? "pipeline" : "simple";
+    return {
+      candidates: steps.map((entry) =>
+        createCandidate({
+          step: entry.step,
+          segment: entry.segment,
+          relationship,
+          transport,
+          risks,
+        }),
+      ),
+    };
+  };
   const sorted = params.steps.toSorted(
     (left, right) => left.step.span.startIndex - right.step.span.startIndex,
   );
@@ -456,18 +436,10 @@ function groupsFromSteps(params: {
   let current: CommandStepWithSegment[] = [];
   const operatorByFromCommandId = new Map<string, AuthorizationOperator>();
   for (const operator of params.operators ?? []) {
-    operatorByFromCommandId.set(operator.fromCommandId, authorizationOperatorForTopology(operator));
-  }
-
-  if (sorted.length > 1 && operatorByFromCommandId.size === 0) {
-    return [
-      finalizeGroup({
-        steps: sorted,
-        opToNext: null,
-        transport: params.transport,
-        risks: params.risks,
-      }),
-    ];
+    operatorByFromCommandId.set(
+      operator.fromCommandId,
+      AUTHORIZATION_OPERATOR_BY_KIND[operator.kind],
+    );
   }
 
   for (const entry of sorted) {
@@ -478,30 +450,16 @@ function groupsFromSteps(params: {
     }
     const previousCommandId = previous.step.id;
     const operator = previousCommandId ? operatorByFromCommandId.get(previousCommandId) : undefined;
-    if (operator === "pipe") {
+    if (operator === "pipe" || operatorByFromCommandId.size === 0) {
       current.push(entry);
       continue;
     }
-    groups.push(
-      finalizeGroup({
-        steps: current,
-        opToNext: operator ?? ";",
-        transport: params.transport,
-        risks: params.risks,
-      }),
-    );
+    groups.push(finalizeGroup(current));
     current = [entry];
   }
 
   if (current.length > 0) {
-    groups.push(
-      finalizeGroup({
-        steps: current,
-        opToNext: null,
-        transport: params.transport,
-        risks: params.risks,
-      }),
-    );
+    groups.push(finalizeGroup(current));
   }
 
   return groups;
@@ -558,7 +516,6 @@ function wrapperPayloadPlan(params: {
     kind: "shell-wrapper",
     wrapperSegment: wrapper.segment,
     wrapperArgv: wrapper.segment.argv,
-    wrapperPrefix: wrapperPrefixForStep(wrapper.step),
     inlineCommand: wrapperRisk.payload,
   };
   const operatorsForWrapper = wrapper.step.id
@@ -752,7 +709,6 @@ export async function planExecAuthorization(params: {
                 kind: "shell-wrapper",
                 wrapperSegment,
                 wrapperArgv: wrapperSegment.argv,
-                wrapperPrefix: "",
                 inlineCommand,
               };
               return {

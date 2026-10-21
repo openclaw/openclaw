@@ -1,6 +1,6 @@
 import path from "node:path";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveBootstrapMaxChars } from "../agents/embedded-agent-helpers.js";
+import { resolveBootstrapMaxChars } from "../agents/embedded-agent-helpers/bootstrap.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type ToolsMdMigrationWorkspaceTarget = {
@@ -16,12 +16,9 @@ export function resolveToolsMdMigrationWorkspaceTargets(
   for (const agentId of listAgentIds(cfg)) {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const key = path.resolve(workspaceDir);
-    const existing = targets.get(key);
-    if (existing !== undefined) {
-      existing.agentIds.push(agentId);
-    } else {
-      targets.set(key, { primaryAgentId: agentId, agentIds: [agentId], workspaceDir });
-    }
+    const target = targets.get(key) ?? { primaryAgentId: agentId, agentIds: [], workspaceDir };
+    target.agentIds.push(agentId);
+    targets.set(key, target);
   }
   return [...targets.values()];
 }

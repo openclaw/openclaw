@@ -4,48 +4,30 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
-import {
-  cleanupPluginLoaderFixturesForTest,
-  EMPTY_PLUGIN_SCHEMA,
-  makePluginLoaderTempDir,
-  resetPluginLoaderTestStateForTest,
-  useNoBundledPlugins,
-  writePlugin,
-  writePluginMetadata,
-} from "../../plugins/loader.test-fixtures.js";
-import {
-  createPluginCache,
-  retirePluginCache,
-  withPluginCache,
-} from "../../plugins/plugin-cache.js";
+import * as loader from "../../plugins/loader.test-fixtures.js";
+import * as cache from "../../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { finalizePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
-import { disposePluginRegistryInstances } from "../../plugins/runtime.js";
-import {
-  bootstrapOutboundChannelPlugin,
-  bootstrapOutboundChannelPluginAsync,
-  resetOutboundChannelBootstrapStateForTests,
-} from "./channel-bootstrap.runtime.js";
+import { bootstrapOutboundChannelPluginAsync } from "./channel-bootstrap.runtime.js";
 
 afterEach(() => {
-  resetOutboundChannelBootstrapStateForTests();
-  resetPluginLoaderTestStateForTest();
+  loader.resetPluginLoaderTestStateForTest();
   vi.unstubAllEnvs();
 });
-afterAll(cleanupPluginLoaderFixturesForTest);
+afterAll(loader.cleanupPluginLoaderFixturesForTest);
 
 function createFixture({ global = false, deferInstall = false } = {}) {
-  useNoBundledPlugins();
-  const root = makePluginLoaderTempDir();
+  loader.useNoBundledPlugins();
+  const root = loader.makePluginLoaderTempDir();
   const stateDir = path.join(root, "state");
   vi.stubEnv("OPENCLAW_HOME", path.join(root, "home"));
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const id = "bootstrap-lifecycle";
   const events = path.join(root, "events.txt");
   const write = (dir: string, label: string) => {
-    const plugin = writePlugin({
+    loader.writePlugin({
       id,
       dir,
       filename: "index.cjs",
@@ -65,13 +47,12 @@ function createFixture({ global = false, deferInstall = false } = {}) {
           },
         } });`,
     });
-    writePluginMetadata({
+    loader.writePluginMetadata({
       dir,
       id,
       channels: [id],
       packageJson: { name: id, openclaw: { extensions: ["./index.cjs"] } },
     });
-    return plugin;
   };
   const pluginDir = global ? path.join(stateDir, "extensions", id) : path.join(root, "plugin");
   const plugin = { id, dir: pluginDir, file: path.join(pluginDir, "index.cjs") };
@@ -87,10 +68,16 @@ function createFixture({ global = false, deferInstall = false } = {}) {
     },
     channels: { [id]: { enabled: true } },
   };
+  const params = { channel: id, cfg: config };
+  const request = { cfg: config, to: "recipient", text: "hello" };
   return {
     plugin,
-    config,
-    params: { channel: id, cfg: config },
+    bootstrap: () => bootstrapOutboundChannelPluginAsync(params),
+    request,
+    send: (registry: PluginRegistry | undefined, messageId = "first") =>
+      expect(sender(registry)(request)).resolves.toMatchObject({ messageId }),
+    scope: <T>(snapshot: Parameters<typeof withPluginMetadataSnapshotScope>[0], run: () => T) =>
+      withPluginMetadataSnapshotScope(snapshot, run, { config, trustConfigIdentity: true }),
     events: () => fs.readFileSync(events, "utf8").trim().split("\n"),
     write,
     root,
@@ -102,62 +89,45 @@ function sender(registry: PluginRegistry | undefined) {
 }
 
 describe("outbound bootstrap lifetime", () => {
-  it.each([
-    { retirement: "registry", bootstrap: bootstrapOutboundChannelPlugin },
-    { retirement: "cache", bootstrap: bootstrapOutboundChannelPluginAsync },
-  ])(
-    "sends through a fresh instance after $retirement retirement",
-    async ({ retirement, bootstrap }) => {
-      const fixture = createFixture();
-      const request = { cfg: fixture.config, to: "recipient", text: "hello" };
-      await using firstCache = createPluginCache();
-      await using nextCache = createPluginCache();
-      const first = await withPluginCache(firstCache, () => bootstrap(fixture.params));
-      const firstSend = sender(first);
-      await expect(firstSend(request)).resolves.toMatchObject({ messageId: "first" });
-      if (retirement === "cache") {
-        await retirePluginCache(firstCache);
-      } else {
-        await disposePluginRegistryInstances(expectDefined(first, "first registry"));
-      }
-      expect(() => firstSend(request)).toThrow(/reloaded|disabled|retir/);
+  it("sends through a fresh instance after replacing the plugin cache", async () => {
+    const fixture = createFixture();
+    await using firstCache = cache.createPluginCache();
+    await using nextCache = cache.createPluginCache();
+    const first = await cache.withPluginCache(firstCache, fixture.bootstrap);
+    const firstSend = sender(first);
+    await fixture.send(first);
+    await cache.retirePluginCache(firstCache);
+    expect(() => firstSend(fixture.request)).toThrow(/reloaded|disabled|retir/);
 
-      const cache = retirement === "cache" ? nextCache : firstCache;
-      const next = await withPluginCache(cache, () => bootstrap(fixture.params));
-      await expect(sender(next)(request)).resolves.toMatchObject({ messageId: "first" });
-      expect(fixture.events()).toEqual([
-        "registered:first",
-        "sent:first",
-        "disposed:first",
-        "registered:first",
-        "sent:first",
-      ]);
-    },
-  );
+    await fixture.send(await cache.withPluginCache(nextCache, fixture.bootstrap));
+    expect(fixture.events()).toEqual([
+      "registered:first",
+      "sent:first",
+      "disposed:first",
+      "registered:first",
+      "sent:first",
+    ]);
+  });
 
   it("discovers a newly installed sender after metadata invalidation clears an unavailable outcome", async () => {
-    const bootstrap = bootstrapOutboundChannelPluginAsync;
     const fixture = createFixture({ global: true, deferInstall: true });
-    await using cache = createPluginCache();
-    await withPluginCache(cache, async () => {
-      expect(await bootstrap(fixture.params)).toBeUndefined();
+    await using lifetime = cache.createPluginCache();
+    await cache.withPluginCache(lifetime, async () => {
+      expect(await fixture.bootstrap()).toBeUndefined();
       fixture.write(fixture.plugin.dir, "first");
-      expect(await bootstrap(fixture.params)).toBeUndefined();
+      expect(await fixture.bootstrap()).toBeUndefined();
 
       clearPluginMetadataLifecycleCaches();
 
-      const registry = await bootstrap(fixture.params);
-      const request = { cfg: fixture.config, to: "recipient", text: "hello" };
-      await expect(sender(registry)(request)).resolves.toMatchObject({ messageId: "first" });
+      await fixture.send(await fixture.bootstrap());
     });
     expect(fixture.events()).toEqual(["registered:first", "sent:first"]);
   });
 
   it("keeps available and empty metadata outcomes separate within one cache", async () => {
-    const bootstrap = bootstrapOutboundChannelPluginAsync;
     const fixture = createFixture();
-    await using cache = createPluginCache();
-    const { available, empty } = withPluginCache(cache, () => ({
+    await using lifetime = cache.createPluginCache();
+    const { available, empty } = cache.withPluginCache(lifetime, () => ({
       available: finalizePluginMetadataSnapshot(
         createPluginMetadataSnapshotFixture({
           plugins: [
@@ -167,34 +137,24 @@ describe("outbound bootstrap lifetime", () => {
               source: fixture.plugin.file,
               origin: "config",
               channels: [fixture.plugin.id],
-              configSchema: EMPTY_PLUGIN_SCHEMA,
+              configSchema: loader.EMPTY_PLUGIN_SCHEMA,
             },
           ],
         }),
       ),
       empty: finalizePluginMetadataSnapshot(createPluginMetadataSnapshotFixture()),
     }));
-    const options = { config: fixture.config, trustConfigIdentity: true };
-    await withPluginMetadataSnapshotScope(
-      available,
-      async () => {
-        const first = await bootstrap(fixture.params);
-        const request = { cfg: fixture.config, to: "recipient", text: "hello" };
-        await expect(sender(first)(request)).resolves.toMatchObject({ messageId: "first" });
-        await withPluginMetadataSnapshotScope(
-          empty,
-          async () => {
-            expect(await bootstrap(fixture.params)).toBeUndefined();
-            expect(await bootstrap(fixture.params)).toBeUndefined();
-          },
-          options,
-        );
-        const restored = await bootstrap(fixture.params);
-        expect(restored).toBe(first);
-        await expect(sender(restored)(request)).resolves.toMatchObject({ messageId: "first" });
-      },
-      options,
-    );
+    await fixture.scope(available, async () => {
+      const first = await fixture.bootstrap();
+      await fixture.send(first);
+      await fixture.scope(empty, async () => {
+        expect(await fixture.bootstrap()).toBeUndefined();
+        expect(await fixture.bootstrap()).toBeUndefined();
+      });
+      const restored = await fixture.bootstrap();
+      expect(restored).toBe(first);
+      await fixture.send(restored);
+    });
     expect(fixture.events()).toEqual(["registered:first", "sent:first", "sent:first"]);
   });
 });
@@ -203,13 +163,11 @@ it("keeps an async bootstrap outcome in its captured state namespace", async () 
   const fixture = createFixture({ global: true });
   const nextState = path.join(fixture.root, "other-state");
   fixture.write(path.join(nextState, "extensions", fixture.plugin.id), "second");
-  await using cache = createPluginCache();
-  await withPluginCache(cache, async () => {
-    const pending = bootstrapOutboundChannelPluginAsync(fixture.params);
+  await using lifetime = cache.createPluginCache();
+  await cache.withPluginCache(lifetime, async () => {
+    const pending = fixture.bootstrap();
     vi.stubEnv("OPENCLAW_STATE_DIR", nextState);
-    const request = { cfg: fixture.config, to: "recipient", text: "hello" };
-    await expect(sender(await pending)(request)).resolves.toMatchObject({ messageId: "first" });
-    const next = await bootstrapOutboundChannelPluginAsync(fixture.params);
-    await expect(sender(next)(request)).resolves.toMatchObject({ messageId: "second" });
+    await fixture.send(await pending);
+    await fixture.send(await fixture.bootstrap(), "second");
   });
 });

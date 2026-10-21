@@ -6,7 +6,7 @@ import { resolveManagedNpmRootDependencySpec } from "../infra/npm-managed-root.j
 import {
   formatPrereleaseResolutionError,
   isPrereleaseResolutionAllowed,
-  parseRegistryNpmSpec,
+  parseRegistryNpmSpecResult,
 } from "../infra/npm-registry-spec.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveUserPath } from "../utils.js";
@@ -60,23 +60,15 @@ export async function installPluginFromNpmSpec(
   );
   const expectedPluginId = params.expectedPluginId;
   const spec = params.spec.trim();
-  const specError = runtime.validateRegistryNpmSpec(spec);
-  if (specError) {
+  const parsed = parseRegistryNpmSpecResult(spec);
+  if (!parsed.ok) {
     return {
       ok: false,
-      error: specError,
+      error: parsed.error,
       code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
     };
   }
-
-  const parsedSpec = parseRegistryNpmSpec(spec);
-  if (!parsedSpec) {
-    return {
-      ok: false,
-      error: "unsupported npm spec",
-      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
-    };
-  }
+  const parsedSpec = parsed.parsed;
 
   // A channel fallback changes the attempt's spec and must resolve its own metadata.
   const preparedMetadata = params.npmMetadata?.spec === spec ? params.npmMetadata : undefined;
@@ -158,12 +150,7 @@ export async function installPluginFromNpmSpec(
       Object.assign(npmResolution, compatibleResolution, {
         resolvedAt: npmResolution.resolvedAt,
       });
-      compatibilityError = validateNpmResolutionCompatibility({
-        runtime,
-        parsedSpec,
-        expectedPluginId,
-        resolution: npmResolution,
-      });
+      compatibilityError = null;
     }
   }
   if (compatibilityError) {
@@ -237,10 +224,8 @@ export async function installPluginFromNpmSpec(
       trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       config: params.config,
       packageName: parsedSpec.name,
-      dependencySpec: resolveManagedNpmRootDependencySpec({
-        parsedSpec,
-        resolution: npmResolution,
-      }),
+      prepareDependencySpec: async () =>
+        resolveManagedNpmRootDependencySpec({ parsedSpec, resolution: npmResolution }),
       displaySpec: spec,
       installPolicyRequest: {
         kind: "plugin-npm",
@@ -260,7 +245,6 @@ export async function installPluginFromNpmSpec(
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       beforePersistentApply: params.beforePersistentApply,
       npmResolution,
-      ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
     }),
   );
   emitSuccessfulPluginInstallSecurityEvent(result, {

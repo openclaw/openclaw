@@ -78,7 +78,6 @@ export function createSettledFinalizationTestInput(
     getLifecycleGeneration: () => lifecycleGeneration,
     getParams: () => ({ ...runParams, sessionFile: "/tmp/session-settled.jsonl" }),
     globalLane: "settled-finalization-global",
-    sessionLane: "settled-finalization-session",
     initialQueuedLifecycleGeneration: lifecycleGeneration,
     setLifecycleGeneration: (value) => {
       lifecycleGeneration = value;
@@ -117,7 +116,6 @@ export function createSettledFinalizationTestInput(
       contextRecoveryState: createEmbeddedRunContextRecoveryState(),
       resolvedToolResultFormat: "markdown",
     },
-    lastRunPromptUsage: undefined,
     finalization: {
       preparedAttempt: { ...runParams },
       harness: {
@@ -128,7 +126,6 @@ export function createSettledFinalizationTestInput(
         finalizeSettledTurn: vi.fn(),
       },
       modelApi: "openai-responses",
-      executionContract: undefined,
       hasTerminalToolPresentation: false,
       createAttemptControls: vi.fn(laneController.createAttemptControls),
       abortSignal: laneController.abortSignal,
@@ -143,13 +140,13 @@ export function projectSettledProviderFailureAttempt(
   if (!assistant) {
     throw new Error("Missing failed assistant");
   }
+  const transcript = { sessionIdUsed: base.sessionIdUsed, messagesSnapshot: base.messagesSnapshot };
   const settled: Parameters<typeof completeEmbeddedAttemptResult>[1] = {
     promptError: null,
     promptErrorSource: null,
     timedOutDuringCompaction: false,
     compactionOccurredThisAttempt: false,
-    sessionIdUsed: base.sessionIdUsed,
-    messagesSnapshot: base.messagesSnapshot,
+    ...transcript,
     lastAssistant: assistant,
     currentAttemptAssistant: assistant,
     currentAttemptCompletedAssistant: assistant,
@@ -162,9 +159,8 @@ export function projectSettledProviderFailureAttempt(
     preflightRecovery: undefined,
     contextBudgetStatus: undefined,
     yieldAborted: false,
-    sessionIdUsed: base.sessionIdUsed,
+    ...transcript,
     sessionFileUsed: undefined,
-    messagesSnapshot: base.messagesSnapshot,
   };
   const subscription = {
     assistantTexts: base.assistantTexts,
@@ -177,6 +173,7 @@ export function projectSettledProviderFailureAttempt(
     getHeartbeatToolResponse: () => undefined,
     getItemLifecycle: () => base.itemLifecycle,
     getLastAssistantTextMessageIndex: () => undefined,
+    getKeptAnswer: () => undefined,
     getLastCompactionTokensAfter: () => undefined,
     getLastToolError: () => undefined,
     getLatestMcpAppChannelView: () => undefined,
@@ -207,32 +204,23 @@ export function projectSettledProviderFailureAttempt(
       model: { api: assistant.api },
       trigger: "user",
     },
-    state: {
-      terminal: base.terminal,
-      beforeAgentRunBlockedBy: undefined,
-      trajectoryEndRecorded: false,
-    },
+    state: { terminal: base.terminal },
     diagnostics: { diagnosticTrace: { traceId: "trace-settled", spanId: "span-settled" } },
     setup: { sessionAgentId: "main" },
     lifecycle: { readYieldState: () => ({ yieldDetected: false }) },
     prepared: {
       bootstrap: { bootstrapPromptWarning: {} },
-      systemPrompt: { systemPromptReport: undefined },
+      systemPrompt: {},
       sessionRuntime: {
         agentSession: {
           clientToolCallSlots: [],
           hasDeliveredSourceReply: () => false,
           hookRunner: null,
         },
-        state: { promptCache: undefined },
-        cacheTrace: null,
-        transport: { streamStrategy: "default" },
+        state: {},
       },
     },
-    preparedStreamRuntime: {
-      stream: { subscription },
-      cache: { observabilityEnabled: false },
-    },
+    preparedStreamRuntime: { stream: { subscription } },
   };
   return completeEmbeddedAttemptResult(input as never, settled, prompt);
 }

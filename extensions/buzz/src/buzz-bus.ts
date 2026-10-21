@@ -1,4 +1,5 @@
 import { finalizeEvent, verifyEvent, type Event } from "nostr-tools";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
@@ -236,12 +237,7 @@ export async function startBuzzBus(options: {
       channelId: root.channelId.toLowerCase(),
       isBotOwned: event.pubkey === publicKey,
     });
-    if (threadRoots.size > THREAD_ROOT_CACHE_MAX_ENTRIES) {
-      const oldest = threadRoots.keys().next().value;
-      if (oldest) {
-        threadRoots.delete(oldest);
-      }
-    }
+    pruneMapToMaxSize(threadRoots, THREAD_ROOT_CACHE_MAX_ENTRIES);
   };
   const bus: BuzzBus = {
     publicKey,
@@ -267,7 +263,6 @@ export async function startBuzzBus(options: {
             },
             result: () => {},
             onTimeout: reportFatalError,
-            checkAbortAfterSubscribe: true,
           });
         } catch (error) {
           signal.throwIfAborted();
@@ -502,9 +497,9 @@ export async function startBuzzBus(options: {
         onFatalError: reportFatalError,
         signal,
       })
-        .then((result) => {
-          if (!signal.aborted && result.status === "published") {
-            options.onProfilePublished?.(result.eventId);
+        .then((eventId) => {
+          if (!signal.aborted && eventId !== undefined) {
+            options.onProfilePublished?.(eventId);
           }
         })
         .catch((error: unknown) => {

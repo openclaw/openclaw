@@ -1,8 +1,5 @@
-// Gateway node event dispatcher.
 // Handles device/node-originated events and routes them to sessions/channels.
 import { randomUUID } from "node:crypto";
-import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
-import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -21,14 +18,8 @@ import { agentCommandFromIngress } from "../commands/agent.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions/main-session.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { updatePairedDevicePresence, type NodePairingGeneration } from "../infra/device-pairing.js";
+import { updatePairedDevicePresence } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  resolveEventSessionKeyForPolicy,
-  resolveEventSessionRoutingPolicy,
-  scopedHeartbeatWakeOptionsForPolicy,
-} from "../infra/event-session-routing.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -38,7 +29,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { deleteMediaBuffer } from "../media/store.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
-import { isUnscopedSessionKeySentinel, normalizeMainKey } from "../routing/session-key.js";
+import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -57,13 +48,24 @@ import {
   persistInboundImagesForTranscript,
 } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
-import { registerNodeApnsEvent } from "./server-node-events-apns.js";
-import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
-  loadSessionEntry,
-  resolveGatewayModelSupportsImages,
-  resolveSessionModelRef,
-} from "./session-utils.js";
+  withNodeEventSessionSource,
+  isNodeEventConnectionCurrent,
+  pairingChangedResult,
+  parseNodeEventPayload,
+  type NodeEventSessionSource,
+} from "./server-node-event-source.js";
+import { registerNodeApnsEvent } from "./server-node-events-apns.js";
+import { enqueueNodeExecNotice } from "./server-node-events-exec-notice.js";
+import type {
+  NodeEvent,
+  NodeEventContext,
+  NodeEventHandlerOptions,
+  NodeEventHandleResult,
+} from "./server-node-events-types.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
+import { resolveGatewayModelSupportsImages, resolveSessionModelRef } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -82,21 +84,14 @@ type VoiceTranscriptReservation = {
   receivedAt: number;
   status: "pending" | "ready" | "checking" | "rejected";
   isConnectionCurrent?: () => boolean | Promise<boolean>;
+  assertCurrent?: () => void;
   start?: () => Promise<unknown>;
   resolve: (admission: VoiceTranscriptReservationAdmission) => void;
   rejectDecision: (reason: unknown) => void;
-  decision: Promise<VoiceTranscriptReservationAdmission>;
 };
 const pendingVoiceTranscriptReservations = new Map<string, VoiceTranscriptReservation[]>();
 const recentExecFinishedRuns = new Map<string, number>();
 const recentNodePresencePersistAt = new Map<string, number>();
-
-type NodeEventHandleResult = {
-  ok: true;
-  event: string;
-  handled: boolean;
-  reason?: string;
-};
 
 type NodeAgentCommandInput = Parameters<typeof agentCommandFromIngress>[0];
 
@@ -110,11 +105,11 @@ function dispatchNodeAgentCommand(
   input: NodeAgentCommandInput,
   isConnectionCurrent?: () => boolean | Promise<boolean>,
   onAdmissionRejected?: () => void | Promise<void>,
-): void {
+): Promise<void> {
   // The node RPC can finish before the agent starts its own session admission.
   // Reserve a root now so suspension cannot acknowledge and then strand the turn,
   // but recheck the admitted connection before agent work actually starts.
-  void runWithGatewayIndependentRootWorkContinuation(async () => {
+  return runWithGatewayIndependentRootWorkContinuation(async () => {
     if (isConnectionCurrent && !(await isConnectionCurrent())) {
       await onAdmissionRejected?.();
       return;
@@ -191,120 +186,6 @@ function shouldDropDuplicateVoiceTranscript(params: {
   return false;
 }
 
-function reserveVoiceTranscript(params: {
-  sessionKey: string;
-  fingerprint: string;
-  receivedAt: number;
-}): {
-  admit: (params: {
-    isConnectionCurrent?: () => boolean | Promise<boolean>;
-    start: () => Promise<unknown>;
-  }) => Promise<VoiceTranscriptReservationAdmission>;
-  reject: () => void;
-} {
-  // Resolve reservations in receipt order so delayed currentness checks cannot
-  // change the dedupe window, while rejected connections leave no committed state.
-  const decision = createDeferredCore<VoiceTranscriptReservationAdmission>();
-  const reservation: VoiceTranscriptReservation = {
-    fingerprint: params.fingerprint,
-    receivedAt: params.receivedAt,
-    status: "pending",
-    resolve: decision.resolve,
-    rejectDecision: decision.reject,
-    decision: decision.promise,
-  };
-  const queue = pendingVoiceTranscriptReservations.get(params.sessionKey) ?? [];
-  queue.push(reservation);
-  pendingVoiceTranscriptReservations.set(params.sessionKey, queue);
-
-  const drain = () => {
-    while (queue[0]?.status === "rejected") {
-      const next = queue.shift();
-      if (!next) {
-        break;
-      }
-      next.resolve(null);
-    }
-    const next = queue[0];
-    if (!next) {
-      pendingVoiceTranscriptReservations.delete(params.sessionKey);
-      return;
-    }
-    if (next.status !== "ready") {
-      return;
-    }
-    next.status = "checking";
-    void (async () => {
-      try {
-        const isCurrent = next.isConnectionCurrent ? await next.isConnectionCurrent() : true;
-        const admission =
-          isCurrent &&
-          !shouldDropDuplicateVoiceTranscript({
-            sessionKey: params.sessionKey,
-            fingerprint: next.fingerprint,
-            now: next.receivedAt,
-          }) &&
-          next.start
-            ? { work: next.start() }
-            : null;
-        queue.shift();
-        next.resolve(admission);
-      } catch (err) {
-        queue.shift();
-        next.rejectDecision(err);
-      }
-      drain();
-    })();
-  };
-  const settle = (status: "ready" | "rejected") => {
-    if (reservation.status !== "pending") {
-      return;
-    }
-    reservation.status = status;
-    drain();
-  };
-
-  return {
-    admit: ({ isConnectionCurrent, start }) => {
-      reservation.isConnectionCurrent = isConnectionCurrent;
-      reservation.start = start;
-      settle("ready");
-      return reservation.decision;
-    },
-    reject: () => settle("rejected"),
-  };
-}
-
-function dispatchReservedVoiceAgentCommand(params: {
-  ctx: NodeEventContext;
-  nodeId: string;
-  input: NodeAgentCommandInput;
-  reservation: ReturnType<typeof reserveVoiceTranscript>;
-  isConnectionCurrent?: () => boolean | Promise<boolean>;
-  onStart: () => void;
-}): void {
-  void runWithGatewayIndependentRootWorkContinuation(async () => {
-    if (params.isConnectionCurrent && !(await params.isConnectionCurrent())) {
-      params.reservation.reject();
-      return;
-    }
-    const admission = await params.reservation.admit({
-      isConnectionCurrent: params.isConnectionCurrent,
-      start: () => {
-        params.onStart();
-        return agentCommandFromIngress(params.input, defaultRuntime, params.ctx.deps);
-      },
-    });
-    if (!admission) {
-      return;
-    }
-    await admission.work;
-  }, "node-events:voice-turn").catch((err: unknown) => {
-    params.reservation.reject();
-    params.ctx.logGateway.warn(`agent failed node=${params.nodeId}: ${formatForLog(err)}`);
-  });
-}
-
 function shouldDropDuplicateExecFinished(params: {
   sessionKey: string;
   runId: string;
@@ -352,14 +233,14 @@ function compactNodeEventText(raw: string, maxChars: number) {
   return truncateUtf16WithEllipsis(raw.replace(/\s+/g, " ").trim(), maxChars);
 }
 
-type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
+type LoadedSessionEntry = Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
 
 async function touchSessionStore(params: {
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
-  entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
+  assertCurrent?: () => void;
 }) {
   const { storePath } = params;
   if (!storePath) {
@@ -373,14 +254,8 @@ async function touchSessionStore(params: {
     {
       sessionId: params.sessionId,
       updatedAt: params.now,
-      thinkingLevel: params.entry?.thinkingLevel,
-      fastMode: params.entry?.fastMode,
-      verboseLevel: params.entry?.verboseLevel,
-      reasoningLevel: params.entry?.reasoningLevel,
-      systemSent: params.entry?.systemSent,
-      sendPolicy: params.entry?.sendPolicy,
-      delivery: params.entry?.delivery,
     },
+    { workerGuard: { assertCurrent: params.assertCurrent } },
   );
 }
 
@@ -389,10 +264,10 @@ function queueSessionStoreTouch(
     ctx: NodeEventContext;
     isConnectionCurrent?: () => boolean | Promise<boolean>;
   },
-) {
+): Promise<void> {
   // Voice dispatch intentionally does not wait for persistence, but a host
   // snapshot must not race the accepted write after its node RPC returns.
-  void runWithGatewayIndependentRootWorkContinuation(async () => {
+  return runWithGatewayIndependentRootWorkContinuation(async () => {
     if (params.isConnectionCurrent && !(await params.isConnectionCurrent())) {
       return;
     }
@@ -400,23 +275,6 @@ function queueSessionStoreTouch(
   }, "node-events:voice-persist").catch((err: unknown) => {
     params.ctx.logGateway.warn("voice session-store update failed: " + formatForLog(err));
   });
-}
-
-async function isNodeEventConnectionCurrent(opts?: {
-  isConnectionCurrent?: () => boolean | Promise<boolean>;
-}): Promise<boolean> {
-  if (!opts?.isConnectionCurrent) {
-    return true;
-  }
-  try {
-    return await opts.isConnectionCurrent();
-  } catch {
-    return false;
-  }
-}
-
-function pairingChangedResult(event: string): NodeEventHandleResult {
-  return { ok: true, event, handled: false, reason: "pairing_changed" };
 }
 
 async function cleanupNodeEventMedia(
@@ -434,66 +292,29 @@ async function cleanupNodeEventMedia(
   }
 }
 
-function parsePayloadObject(payloadJSON?: string | null): Record<string, unknown> | null {
-  return payloadJSON ? asNullableObjectRecord(safeParseJson(payloadJSON)) : null;
-}
-
-async function sendReceiptAck(params: {
-  cfg: OpenClawConfig;
-  deps: NodeEventContext["deps"];
-  sessionKey: string;
-  channel: string;
-  to: string;
-  text: string;
-}) {
-  const resolved = resolveOutboundTarget({
-    channel: params.channel,
-    to: params.to,
-    cfg: params.cfg,
-    mode: "explicit",
-  });
-  if (!resolved.ok) {
-    throw new Error(String(resolved.error));
-  }
-  const session = buildOutboundSessionContext({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-  });
-  const send = await sendDurableMessageBatchCore({
-    cfg: params.cfg,
-    channel: params.channel,
-    to: resolved.to,
-    payloads: [{ text: params.text }],
-    session,
-    bestEffort: true,
-    durability: "best_effort",
-    deps: createOutboundSendDeps(params.deps),
-  });
-  if (send.status === "failed") {
-    throw send.error;
-  }
-}
-
-export const handleNodeEvent = async (
+export const handleNodeEvent = (
   ctx: NodeEventContext,
   nodeId: string,
   evt: NodeEvent,
-  opts?: {
-    connId?: string;
-    deviceId?: string;
-    pairingGeneration?: NodePairingGeneration;
-    presenceAllowed?: boolean;
-    isConnectionCurrent?: () => boolean | Promise<boolean>;
-    resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
-    assertApnsRegistrationCurrent?: () => void;
-  },
-): Promise<NodeEventHandleResult | undefined> => {
+  opts?: NodeEventHandlerOptions,
+): Promise<NodeEventHandleResult | undefined> =>
+  withNodeEventSessionSource(evt, opts, (preparedOptions, source) =>
+    handlePreparedNodeEvent(ctx, nodeId, evt, preparedOptions, source),
+  );
+
+async function handlePreparedNodeEvent(
+  ctx: NodeEventContext,
+  nodeId: string,
+  evt: NodeEvent,
+  opts?: NodeEventHandlerOptions,
+  source?: NodeEventSessionSource,
+): Promise<NodeEventHandleResult | undefined> {
   if (!(await isNodeEventConnectionCurrent(opts))) {
     return pairingChangedResult(evt.event);
   }
   switch (evt.event) {
     case "node.desktop.availability": {
-      const availability = parsePayloadObject(evt.payloadJSON);
+      const availability = parseNodeEventPayload(evt.payloadJSON);
       if (!Value.Check(DesktopAvailabilitySchema, availability)) {
         return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
       }
@@ -513,7 +334,7 @@ export const handleNodeEvent = async (
       };
     }
     case "voice.transcript": {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parseNodeEventPayload(evt.payloadJSON);
       if (!obj) {
         return undefined;
       }
@@ -528,7 +349,13 @@ export const handleNodeEvent = async (
       const cfg = getRuntimeConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
-      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } =
+        source?.loaded ??
+        (await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg,
+          key: sessionKey,
+          excludeInternalEffects: true,
+        }));
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
@@ -536,42 +363,85 @@ export const handleNodeEvent = async (
       const fingerprint = resolveVoiceTranscriptFingerprint(obj, text);
       const sessionId = entry?.sessionId ?? randomUUID();
       const runId = randomUUID();
-      const transcriptReservation = reserveVoiceTranscript({
-        sessionKey: canonicalKey,
+      source?.assertCurrent();
+      // Resolve reservations in receipt order so delayed currentness checks cannot
+      // change the dedupe window, while rejected connections leave no committed state.
+      const decision = createDeferredCore<VoiceTranscriptReservationAdmission>();
+      const reservation: VoiceTranscriptReservation = {
         fingerprint,
         receivedAt,
-      });
+        status: "pending",
+        resolve: decision.resolve,
+        rejectDecision: decision.reject,
+        assertCurrent: source?.assertCurrent,
+      };
+      const queue = pendingVoiceTranscriptReservations.get(canonicalKey) ?? [];
+      queue.push(reservation);
+      pendingVoiceTranscriptReservations.set(canonicalKey, queue);
 
-      dispatchReservedVoiceAgentCommand({
-        ctx,
-        nodeId,
-        input: {
-          runId,
-          message: text,
-          sessionId,
-          sessionKey: canonicalKey,
-          thinking: "low",
-          deliver: false,
-          messageChannel: "node",
-          inputProvenance: {
-            kind: "external_user",
-            sourceChannel: "voice",
-            sourceTool: "gateway.voice.transcript",
-          },
-          allowModelOverride: false,
-        },
-        reservation: transcriptReservation,
-        isConnectionCurrent: opts?.isConnectionCurrent,
-        onStart: () => {
-          queueSessionStoreTouch({
+      const drain = () => {
+        while (queue[0]?.status === "rejected") {
+          queue.shift()?.resolve(null);
+        }
+        const next = queue[0];
+        if (!next) {
+          pendingVoiceTranscriptReservations.delete(canonicalKey);
+          return;
+        }
+        if (next.status !== "ready") {
+          return;
+        }
+        next.status = "checking";
+        void (async () => {
+          try {
+            const isCurrent = next.isConnectionCurrent ? await next.isConnectionCurrent() : true;
+            next.assertCurrent?.();
+            const admission =
+              isCurrent &&
+              !shouldDropDuplicateVoiceTranscript({
+                sessionKey: canonicalKey,
+                fingerprint: next.fingerprint,
+                now: next.receivedAt,
+              }) &&
+              next.start
+                ? { work: next.start() }
+                : null;
+            next.resolve(admission);
+          } catch (err) {
+            next.rejectDecision(err);
+          } finally {
+            queue.shift();
+            drain();
+          }
+        })();
+      };
+      const settle = (status: "ready" | "rejected") => {
+        if (reservation.status !== "pending") {
+          return;
+        }
+        reservation.status = status;
+        drain();
+      };
+
+      const isConnectionCurrent = opts?.isConnectionCurrent;
+      const voiceWork = runWithGatewayIndependentRootWorkContinuation(async () => {
+        if (isConnectionCurrent && !(await isConnectionCurrent())) {
+          settle("rejected");
+          return;
+        }
+        reservation.isConnectionCurrent = isConnectionCurrent;
+        reservation.start = () => {
+          const touch = queueSessionStoreTouch({
             ctx,
             storePath,
             canonicalKey,
-            entry,
             sessionId,
             now: receivedAt,
+            assertCurrent: source?.assertCurrent,
             isConnectionCurrent: opts?.isConnectionCurrent,
           });
+
+          source?.pending.push(touch);
 
           // Voice now has a unique per-turn run id, so it is also the stable
           // client identity for chat streaming and abort lifecycle ownership.
@@ -579,8 +449,37 @@ export const handleNodeEvent = async (
             sessionKey: canonicalKey,
             clientRunId: runId,
           });
-        },
+          return agentCommandFromIngress(
+            {
+              runId,
+              message: text,
+              sessionId,
+              sessionKey: canonicalKey,
+              thinking: "low",
+              deliver: false,
+              messageChannel: "node",
+              inputProvenance: {
+                kind: "external_user",
+                sourceChannel: "voice",
+                sourceTool: "gateway.voice.transcript",
+              },
+              allowModelOverride: false,
+            },
+            defaultRuntime,
+            ctx.deps,
+          );
+        };
+        settle("ready");
+        const admission = await decision.promise;
+        if (!admission) {
+          return;
+        }
+        await admission.work;
+      }, "node-events:voice-turn").catch((err: unknown) => {
+        settle("rejected");
+        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
       });
+      source?.pending.push(voiceWork);
       return undefined;
     }
     case "agent.request": {
@@ -616,7 +515,13 @@ export const handleNodeEvent = async (
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = getRuntimeConfig();
-      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } =
+        source?.loaded ??
+        (await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg,
+          key: sessionKey,
+          excludeInternalEffects: true,
+        }));
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
@@ -704,9 +609,9 @@ export const handleNodeEvent = async (
       await touchSessionStore({
         storePath,
         canonicalKey,
-        entry,
         sessionId,
         now,
+        assertCurrent: source?.assertCurrent,
       });
       if (!(await isNodeEventConnectionCurrent(opts))) {
         await cleanupNodeEventMedia(offloadedRefs ?? [], ctx);
@@ -759,28 +664,49 @@ export const handleNodeEvent = async (
       if (wantsReceipt && deliveryChannel && deliveryTo) {
         // Delivery stays detached from agent startup, but remains part of the
         // accepted node request until the durable send settles.
-        void runWithGatewayIndependentRootWorkContinuation(async () => {
+        const receipt = runWithGatewayIndependentRootWorkContinuation(async () => {
           if (!(await isNodeEventConnectionCurrent(opts))) {
             return;
           }
-          await sendReceiptAck({
-            cfg,
-            deps: ctx.deps,
-            sessionKey: canonicalKey,
+          const receiptDeps = ctx.deps;
+          const resolved = await resolveOutboundTarget({
             channel: deliveryChannel,
             to: deliveryTo,
-            text: receiptText,
+            cfg,
+            mode: "explicit",
           });
+          if (!resolved.ok) {
+            throw new Error(String(resolved.error));
+          }
+          const session = buildOutboundSessionContext({
+            cfg,
+            sessionKey: canonicalKey,
+          });
+          const send = await sendDurableMessageBatchCore({
+            cfg,
+            channel: deliveryChannel,
+            to: resolved.to,
+            payloads: [{ text: receiptText }],
+            session,
+            bestEffort: true,
+            durability: "best_effort",
+            deps: createOutboundSendDeps(receiptDeps),
+          });
+          if (send.status === "failed") {
+            throw send.error;
+          }
         }, "node-events:delivery").catch((err: unknown) => {
           ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
         });
+        source?.pending.push(receipt);
       } else if (wantsReceipt) {
         ctx.logGateway.warn(
           `agent receipt skipped node=${nodeId}: missing delivery route (channel=${deliveryChannel ?? "-"} to=${deliveryTo ?? "-"})`,
         );
       }
 
-      dispatchNodeAgentCommand(
+      source?.assertCurrent();
+      const agentWork = dispatchNodeAgentCommand(
         ctx,
         nodeId,
         {
@@ -806,10 +732,11 @@ export const handleNodeEvent = async (
         opts?.isConnectionCurrent,
         () => cleanupNodeEventMedia(persistedTranscriptMedia.entries, ctx),
       );
+      source?.pending.push(agentWork);
       return undefined;
     }
     case "notifications.changed": {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parseNodeEventPayload(evt.payloadJSON);
       if (!obj) {
         return undefined;
       }
@@ -837,9 +764,13 @@ export const handleNodeEvent = async (
         canonicalKey: sessionKey,
         entry,
         agentId,
-      } = loadSessionEntry(target.sessionKey, {
+      } = source?.loaded ??
+      (await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: getRuntimeConfig(),
+        key: target.sessionKey,
         agentId: target.agentId,
-      });
+        excludeInternalEffects: true,
+      }));
       if (resolveAgentHarnessSessionContextError(sessionKey, entry)) {
         return undefined;
       }
@@ -865,6 +796,10 @@ export const handleNodeEvent = async (
         }
       }
 
+      if (!(await isNodeEventConnectionCurrent(opts))) {
+        return pairingChangedResult(evt.event);
+      }
+      source?.assertCurrent();
       const queued = enqueueSystemEvent(
         summary,
         withSystemEventOwner({ sessionKey, contextKey: `notification:${key}` }, agentId),
@@ -882,11 +817,13 @@ export const handleNodeEvent = async (
     }
     case "chat.subscribe":
     case "chat.unsubscribe": {
-      const sessionKey = normalizeOptionalString(parsePayloadObject(evt.payloadJSON)?.sessionKey);
+      const sessionKey = normalizeOptionalString(
+        parseNodeEventPayload(evt.payloadJSON)?.sessionKey,
+      );
       if (!sessionKey) {
         return undefined;
       }
-      const { canonicalKey } = loadSessionEntry(sessionKey);
+      const { canonicalKey } = resolveSessionStoreIdentity({ cfg: getRuntimeConfig(), sessionKey });
       // Fanout is keyed by the canonical session; retain the connection owner for safe reconnect.
       if (evt.event === "chat.subscribe") {
         await ctx.nodeSubscribe(nodeId, canonicalKey, opts?.connId);
@@ -898,25 +835,25 @@ export const handleNodeEvent = async (
     case "exec.started":
     case "exec.finished":
     case "exec.denied": {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parseNodeEventPayload(evt.payloadJSON);
       if (!obj) {
         return undefined;
       }
       const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
-      const { canonicalKey: sessionKey, agentId } = loadSessionEntry(sessionKeyRaw);
-
       const cfg = getRuntimeConfig();
+      const { canonicalKey: sessionKey, agentId } = resolveSessionStoreIdentity({
+        cfg,
+        sessionKey: sessionKeyRaw,
+      });
       const runId = normalizeOptionalString(obj.runId) ?? "";
-      if (
-        !ctx.authorizeNodeSystemRunEvent({
-          nodeId,
-          connId: opts?.connId,
-          ...(runId ? { runId } : {}),
-          // Match the key sent in system.run params; canonicalization below is for routing.
-          sessionKey: sessionKeyRaw,
-          terminal: evt.event === "exec.finished" || evt.event === "exec.denied",
-        })
-      ) {
+      const auth = ctx.authorizeNodeSystemRunEvent({
+        nodeId,
+        connId: opts?.connId,
+        ...(runId ? { runId } : {}),
+        sessionKey: sessionKeyRaw,
+        event: evt.event,
+      });
+      if (!auth) {
         return {
           ok: true,
           event: evt.event,
@@ -924,11 +861,10 @@ export const handleNodeEvent = async (
           reason: "unmatched_exec_event",
         };
       }
-      if (
-        cfg.tools?.exec?.notifyOnExit === false ||
-        obj.suppressNotifyOnExit === true ||
-        evt.event === "exec.denied"
-      ) {
+      if (cfg.tools?.exec?.notifyOnExit === false || obj.suppressNotifyOnExit === true) {
+        return undefined;
+      }
+      if (evt.event === "exec.denied") {
         return undefined;
       }
       const command = normalizeOptionalString(obj.command) ?? "";
@@ -968,37 +904,18 @@ export const handleNodeEvent = async (
         }
       }
 
-      const eventRouting = resolveEventSessionRoutingPolicy({ cfg, sessionKey });
-      const queued = enqueueSystemEvent(
-        text,
-        withSystemEventOwner(
-          {
-            sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
-            contextKey: runId ? `exec:${runId}` : "exec",
-          },
-          agentId,
-        ),
-      );
-      if (queued) {
-        // Global keys retain the loaded owner; synthetic node-* keys keep unscoped wakes.
-        requestHeartbeat(
-          scopedHeartbeatWakeOptionsForPolicy(
-            sessionKey,
-            {
-              source: "exec-event",
-              intent: "event",
-              reason: "exec-event",
-              coalesceMs: 0,
-              ...(isUnscopedSessionKeySentinel(sessionKey) ? { agentId } : {}),
-            },
-            eventRouting,
-          ),
-        );
+      const notify = () =>
+        enqueueNodeExecNotice({ cfg, sessionKey, agentId, authorization: auth, runId, text });
+      // A caller still waiting on this run gets its output inline; notify only if that fails.
+      if (typeof auth === "object" && auth.holdNotice) {
+        auth.holdNotice(notify);
+      } else {
+        notify();
       }
       return undefined;
     }
     case "push.apns.register": {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parseNodeEventPayload(evt.payloadJSON);
       if (!obj) {
         return undefined;
       }
@@ -1006,7 +923,7 @@ export const handleNodeEvent = async (
       return result === "pairing-changed" ? pairingChangedResult(evt.event) : undefined;
     }
     case NODE_HOST_STATS_EVENT: {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parseNodeEventPayload(evt.payloadJSON);
       if (!obj || !validateNodeHostStatsPayload(obj)) {
         return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
       }
@@ -1018,7 +935,7 @@ export const handleNodeEvent = async (
       return { ok: true, event: evt.event, handled: true, reason: "updated" };
     }
     case NODE_PRESENCE_ACTIVITY_EVENT: {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parseNodeEventPayload(evt.payloadJSON);
       if (!obj || !validateNodePresenceActivityPayload(obj)) {
         return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
       }
@@ -1056,7 +973,7 @@ export const handleNodeEvent = async (
       return { ok: true, event: evt.event, handled: true, reason: "updated" };
     }
     case NODE_PRESENCE_ALIVE_EVENT: {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parseNodeEventPayload(evt.payloadJSON);
       if (!obj) {
         return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
       }
@@ -1105,5 +1022,5 @@ export const handleNodeEvent = async (
     default:
       return { ok: true, event: evt.event, handled: false, reason: "unsupported_event" };
   }
-};
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

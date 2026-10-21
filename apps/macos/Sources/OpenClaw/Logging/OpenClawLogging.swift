@@ -43,9 +43,7 @@ enum OpenClawLogging {
     private static let didBootstrap: Void = {
         LoggingSystem.bootstrap { label in
             let (subsystem, category) = Self.parseLabel(label)
-            let osHandler = OpenClawOSLogHandler(subsystem: subsystem, category: category)
-            let fileHandler = OpenClawFileLogHandler(label: label)
-            return MultiplexLogHandler([osHandler, fileHandler])
+            return OpenClawLogHandler(subsystem: subsystem, category: category)
         }
     }()
 
@@ -124,9 +122,18 @@ private func stringifyLogMetadataValue(_ value: Logger.Metadata.Value) -> String
     }
 }
 
-private protocol AppLogLevelBackedHandler: LogHandler {}
+struct OpenClawLogHandler: LogHandler {
+    private let osLogger: os.Logger
+    private let subsystem: String
+    private let category: String
+    var metadata: Logger.Metadata = [:]
 
-extension AppLogLevelBackedHandler {
+    init(subsystem: String, category: String) {
+        self.osLogger = os.Logger(subsystem: subsystem, category: category)
+        self.subsystem = subsystem
+        self.category = category
+    }
+
     var logLevel: Logger.Level {
         get { AppLogSettings.logLevel() }
         set { AppLogSettings.setLogLevel(newValue) }
@@ -136,20 +143,26 @@ extension AppLogLevelBackedHandler {
         get { self.metadata[key] }
         set { self.metadata[key] = newValue }
     }
-}
-
-struct OpenClawOSLogHandler: AppLogLevelBackedHandler {
-    private let osLogger: os.Logger
-    var metadata: Logger.Metadata = [:]
-
-    init(subsystem: String, category: String) {
-        self.osLogger = os.Logger(subsystem: subsystem, category: category)
-    }
 
     func log(event: LogEvent) {
         let merged = self.metadata.merging(event.metadata ?? [:], uniquingKeysWith: { _, new in new })
         let rendered = Self.renderMessage(event.message, metadata: merged)
         self.osLogger.log(level: Self.osLogType(for: event.level), "\(rendered, privacy: .public)")
+
+        guard DiagnosticsFileLog.isEnabled() else { return }
+        var fields: [String: String] = [
+            "subsystem": self.subsystem,
+            "category": self.category,
+            "level": event.level.rawValue,
+            "source": event.source,
+            "file": event.file,
+            "function": event.function,
+            "line": "\(event.line)",
+        ]
+        for (key, value) in merged {
+            fields["meta.\(key)"] = stringifyLogMetadataValue(value)
+        }
+        DiagnosticsFileLog.shared.log(category: self.category, event: event.message.description, fields: fields)
     }
 
     private static func osLogType(for level: Logger.Level) -> OSLogType {
@@ -174,29 +187,5 @@ struct OpenClawOSLogHandler: AppLogLevelBackedHandler {
             .map { "\($0.key)=\(stringifyLogMetadataValue($0.value))" }
             .joined(separator: " ")
         return "\(message.description) [\(meta)]"
-    }
-}
-
-struct OpenClawFileLogHandler: AppLogLevelBackedHandler {
-    let label: String
-    var metadata: Logger.Metadata = [:]
-
-    func log(event: LogEvent) {
-        guard DiagnosticsFileLog.isEnabled() else { return }
-        let (subsystem, category) = OpenClawLogging.parseLabel(self.label)
-        var fields: [String: String] = [
-            "subsystem": subsystem,
-            "category": category,
-            "level": event.level.rawValue,
-            "source": event.source,
-            "file": event.file,
-            "function": event.function,
-            "line": "\(event.line)",
-        ]
-        let merged = self.metadata.merging(event.metadata ?? [:], uniquingKeysWith: { _, new in new })
-        for (key, value) in merged {
-            fields["meta.\(key)"] = stringifyLogMetadataValue(value)
-        }
-        DiagnosticsFileLog.shared.log(category: category, event: event.message.description, fields: fields)
     }
 }

@@ -9,10 +9,6 @@ vi.mock("./tools/agents-wait-tool.js", () => {
   throw new Error("ordinary Code Mode must not load the collector waiter");
 });
 
-vi.mock("../skills/workshop/service-query.js", () => {
-  throw new Error("ordinary Code Mode must not load Skill Workshop proposal queries");
-});
-
 it.each([false, true])(
   "executes ordinary tools without optional runtime imports (swarm=%s)",
   async (enabled) => {

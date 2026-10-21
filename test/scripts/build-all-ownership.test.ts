@@ -41,12 +41,15 @@ for (const scenario of scenarios) {
       fs.writeFileSync(path.join(root, "package.json"), '{"private":true,"type":"module"}\n');
       fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
       const settled = path.join(root, "workload-settled.json");
-      const pnpm = path.join(root, "pnpm.cjs");
-      // Only the terminal workload is synthetic; build selection, child joining,
+      const scripts = path.join(root, "scripts");
+      fs.mkdirSync(scripts);
+      fs.writeFileSync(path.join(scripts, "tsx.mjs"), "");
+      // Only the terminal workload/loader are synthetic; build selection, child joining,
       // inherited claims and their cleanup all run through the real entrypoints.
       fs.writeFileSync(
-        pnpm,
-        `require("node:fs").writeFileSync(${JSON.stringify(settled)}, JSON.stringify(process.argv.slice(2)));
+        path.join(scripts, "bundled-plugin-assets.mts"),
+        `import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(settled)}, JSON.stringify(process.argv.slice(2)));
 console.error("fixture joined build failure");
 process.exitCode = 7;
 `,
@@ -78,7 +81,7 @@ process.exitCode = await withDistArtifactOwnership(process.cwd(), () => runManag
           OPENCLAW_BUILD_ALL_NO_PNPM: "0",
           OPENCLAW_BUILD_CACHE: "0",
           OPENCLAW_UPDATE_IN_PROGRESS: "0",
-          npm_execpath: pnpm,
+          npm_execpath: path.join(root, "unavailable-pnpm.cjs"),
         },
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
@@ -95,7 +98,8 @@ process.exitCode = await withDistArtifactOwnership(process.cwd(), () => runManag
       expect(fs.existsSync(settled), output).toBe(scenario.runsWorkload);
       if (scenario.runsWorkload) {
         expect(JSON.parse(fs.readFileSync(settled, "utf8"))).toEqual([
-          "plugins:assets:build",
+          "--phase",
+          "build",
           "--defer-isolated",
         ]);
         expect(output).toContain("fixture joined build failure");

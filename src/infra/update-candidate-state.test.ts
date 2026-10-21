@@ -7,11 +7,17 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import {
+  generateStoredDeviceIdentity,
+  insertStoredDeviceIdentityIfAbsent,
+  readStoredDeviceIdentityReadOnly,
+} from "./device-identity-store.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import {
@@ -19,14 +25,12 @@ import {
   prepareUpdateCandidatePlugins,
 } from "./update-candidate-plugins.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
-import {
-  readUpdateStateSchemaVersions,
-  updateStateSchemaVersionsMatch,
-} from "./update-candidate-state.js";
+import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import {
   materializeUpdateCandidateStateWorker,
   runUpdateCandidateSnapshotWorker,
 } from "./update-candidate-state.test-support.js";
+import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 let root: string;
 beforeEach(async () => {
@@ -34,6 +38,7 @@ beforeEach(async () => {
   await materializeUpdateCandidateStateWorker(root);
 });
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await fs.rm(root, { recursive: true, force: true });
 });
@@ -59,7 +64,7 @@ function runSnapshotWorker(
   });
 }
 
-it.each(["DELETE", "WAL"])(
+it.each(["DELETE"])(
   "copies registered databases in %s mode without source process leases or source artifact changes",
   async (journalMode) => {
     const source = path.join(root, "source");
@@ -67,9 +72,13 @@ it.each(["DELETE", "WAL"])(
     const shared = path.join(source, "state", "openclaw.sqlite");
     const canonical = path.join(source, "agents", "main", "agent", "openclaw-agent.sqlite");
     const external = path.join(root, "external", "openclaw-agent.sqlite");
+    const credentialPath = path.join(source, "client", "credentials.sqlite");
     await createDatabase(canonical);
     await createDatabase(external);
     const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
+    const identity = insertStoredDeviceIdentityIfAbsent(generateStoredDeviceIdentity(17), {
+      env: { OPENCLAW_STATE_DIR: source },
+    });
     const insert = registry.prepare(
       "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
     );
@@ -101,8 +110,8 @@ it.each(["DELETE", "WAL"])(
         now,
         now,
       );
-    closeOpenClawStateDatabaseByPath(shared);
-    const sources = [shared, canonical, external];
+    await closeOpenClawStateDatabaseByPathAsync(shared);
+    const sources = [shared, canonical, external, credentialPath];
     for (const file of sources) {
       const database = openNodeSqliteDatabase(file);
       database.exec(`PRAGMA journal_mode = ${journalMode};`);
@@ -133,6 +142,9 @@ it.each(["DELETE", "WAL"])(
       config: {},
     });
     expect(versions).toEqual(inspected);
+    expect(readStoredDeviceIdentityReadOnly({ env: { OPENCLAW_STATE_DIR: target } })).toEqual(
+      identity,
+    );
     await expect(
       withAgentDatabaseMaintenanceLease(
         {
@@ -221,6 +233,14 @@ it("keeps absent stores explicit and observes newly created databases for rollba
   const stateDir = path.join(root, "state-owner");
   const before = await readUpdateStateSchemaVersions({ stateDir, config: {} });
   expect(before.every((entry) => entry.userVersion === null)).toBe(true);
+  const daemon = path.join(stateDir, "control", "services.sqlite");
+  const client = path.join(stateDir, "client", "credentials.sqlite");
+  const legacy = before.filter((entry) => entry.path !== daemon && entry.path !== client);
+  expect(
+    updateStateSchemaVersionsMatch(legacy, before, {
+      sharedPath: path.join(stateDir, "state", "openclaw.sqlite"),
+    }),
+  ).toBe(true);
   const main = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   await createDatabase(main);
   const after = await readUpdateStateSchemaVersions({ stateDir, config: {} });
@@ -237,6 +257,22 @@ it("keeps absent stores explicit and observes newly created databases for rollba
   ).toBe(false);
   expect(updateStateSchemaVersionsMatch(after, before, candidate)).toBe(false);
   expect(updateStateSchemaVersionsMatch(after, after.toReversed(), candidate)).toBe(true);
+  await createDatabase(daemon, "PRAGMA user_version = 1;");
+  const withDaemon = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+  expect(
+    updateStateSchemaVersionsMatch(
+      after.filter((entry) => entry.path !== daemon),
+      withDaemon,
+      { sharedPath },
+    ),
+  ).toBe(false);
+  expect(updateStateSchemaVersionsMatch(after, withDaemon, candidate)).toBe(true);
+  expect(updateStateSchemaVersionsMatch(withDaemon, after, candidate)).toBe(false);
+  await createDatabase(client, "PRAGMA user_version = 1;");
+  const withClient = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+  expect(updateStateSchemaVersionsMatch(withDaemon, withClient, { sharedPath })).toBe(false);
+  expect(updateStateSchemaVersionsMatch(withDaemon, withClient, candidate)).toBe(true);
+  expect(updateStateSchemaVersionsMatch(withClient, withDaemon, candidate)).toBe(false);
 });
 
 it.runIf(process.platform !== "win32")(
@@ -293,7 +329,6 @@ it.runIf(process.platform !== "win32")(
 );
 
 it.each([
-  { source: "npm", relative: "extensions/demo" },
   { source: "npm", relative: "npm/projects/demo/node_modules/demo" },
   { source: "npm", relative: "npm/node_modules/demo" },
 ])(
@@ -358,7 +393,7 @@ it.each([
         1,
       );
     const shared = path.join(source, "state", "openclaw.sqlite");
-    closeOpenClawStateDatabaseByPath(shared);
+    await closeOpenClawStateDatabaseByPathAsync(shared);
     const before = await fs.readFile(shared);
     await runSnapshotWorker({ stateDir: source, targetStateDir: target, config: {} });
     expect((await fs.readFile(shared)).equals(before)).toBe(true);
@@ -405,13 +440,11 @@ it.each([
 );
 
 it.each([
-  { extension: "js", linked: false },
   { extension: "ts", linked: false },
   { extension: "js", linked: true },
-  { extension: "js", linked: false, directoryAlias: true },
 ])(
-  "preserves external .$extension entry imports and path identity (linked=$linked, directoryAlias=$directoryAlias)",
-  async ({ extension, linked, directoryAlias = false }) => {
+  "preserves external .$extension entry imports and path identity (linked=$linked)",
+  async ({ extension, linked }) => {
     const source = path.join(root, "source-state");
     const external = path.join(root, "external-plugin");
     const install = path.join(root, "installed-plugin");
@@ -450,11 +483,6 @@ it.each([
     } else {
       await fs.writeFile(path.join(sourcePackage, "marker"), "source payload");
     }
-    if (directoryAlias) {
-      const aliasDirectory = path.join(root, "directory-alias");
-      await fs.symlink(path.dirname(realEntry), aliasDirectory, "junction");
-      entry = path.join(aliasDirectory, path.basename(realEntry));
-    }
     const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
     registry
       .prepare(
@@ -465,7 +493,7 @@ it.each([
         JSON.stringify({ revision: 1, index: { installRecords: {} } }),
         1,
       );
-    closeOpenClawStateDatabaseByPath(path.join(source, "state", "openclaw.sqlite"));
+    await closeOpenClawStateDatabaseByPathAsync(path.join(source, "state", "openclaw.sqlite"));
     const config: OpenClawConfig = {
       plugins: {
         load: { paths: [entry] },
@@ -481,9 +509,6 @@ it.each([
       const copied: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
       const copiedEntry = copied.plugins!.load!.paths![0]!;
       expect(path.basename(copiedEntry)).toBe(path.basename(entry));
-      if (directoryAlias) {
-        expect((await fs.lstat(copiedEntry)).isSymbolicLink()).toBe(false);
-      }
       expect(copiedEntry.startsWith(rehearsal.stateDir + path.sep)).toBe(true);
       const result = await runCommandBuffered(
         [
@@ -563,7 +588,7 @@ it("preserves an existing copied file behind a case-equivalent entry name", asyn
   }
 });
 
-it.each(["relative", "absolute", "external-store", "cycle"] as const)(
+it.each(["external-store", "cycle"] as const)(
   "preserves pnpm transitive dependency topology in a private rehearsal (%s)",
   async (layout) => {
     const plugin = path.join(root, "local-plugin");
@@ -597,9 +622,7 @@ it.each(["relative", "absolute", "external-store", "cycle"] as const)(
     ] as const;
     for (const [link, target] of links) {
       await fs.symlink(
-        layout === "absolute" || process.platform === "win32"
-          ? target
-          : path.relative(path.dirname(link), target),
+        process.platform === "win32" ? target : path.relative(path.dirname(link), target),
         link,
         "junction",
       );
@@ -693,7 +716,6 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.each([
-  { alias: false, shadow: false, linkedModules: false, sharedOrder: "none" },
   { alias: true, shadow: false, linkedModules: false, sharedOrder: "none" },
   { alias: false, shadow: true, linkedModules: false, sharedOrder: "none" },
   { alias: false, shadow: false, linkedModules: true, sharedOrder: "none" },

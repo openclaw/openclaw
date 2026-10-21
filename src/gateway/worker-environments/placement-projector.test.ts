@@ -47,7 +47,104 @@ function activePlacement(environmentId = "environment-1") {
   } satisfies WorkerSessionPlacementRecord;
 }
 
+function provisioningPlacement() {
+  return {
+    ...RECORD_BASE,
+    state: "provisioning" as const,
+    environmentId: "environment-1",
+    activeOwnerEpoch: null,
+  };
+}
+
+type Environment = NonNullable<
+  ReturnType<
+    Parameters<typeof createWorkerPlacementRunnerAvailabilityReader>[0]["environments"]["get"]
+  >
+>;
+function environmentFixture(overrides: Partial<Environment> = {}): Environment {
+  return {
+    environmentId: "environment-1",
+    providerId: "crabbox",
+    profileId: "development",
+    ownerEpoch: 7,
+    state: "attached",
+    leaseId: "lease-cloud",
+    nodeDeviceId: null,
+    sharedHost: false,
+    createdAtMs: 1,
+    idleSinceAtMs: null,
+    destroyRequestedAtMs: null,
+    attachedSessionIds: ["session-1"],
+    desktopAvailable: false,
+    desktopApps: [],
+    tunnelStatus: "stopped",
+    ...overrides,
+  };
+}
+
+const PROJECTED_TIMING = {
+  generation: 4,
+  createdAtMs: 100,
+  updatedAtMs: 200,
+  stateChangedAtMs: 150,
+};
+
 describe("worker placement projection", () => {
+  it("limits inference metadata to the exact active worker-turn binding", () => {
+    const placement = activePlacement("environment-device");
+    const environment = {
+      environmentId: placement.environmentId,
+      providerId: "device",
+      profileId: "named-device",
+      ownerEpoch: 7,
+      state: "attached" as const,
+      leaseId: "lease-device",
+      nodeDeviceId: "paired-node",
+      attachedSessionIds: [placement.sessionId],
+      profileSnapshot: { settings: { device: "paired-node", inference: "worker" } },
+      inference: "worker" as const,
+    };
+    const project = (record: WorkerSessionPlacementRecord, prepared = environment) =>
+      projectWorkerSessionPlacement(
+        record,
+        undefined,
+        undefined,
+        readWorkerPlacementIdentity(record, undefined, prepared),
+      );
+    const active = project(placement);
+    expect(active).toHaveProperty("inference", "worker");
+    expect(Value.Check(SessionPlacementSchema, active)).toBe(true);
+    expect(active).not.toHaveProperty("profileSnapshot");
+    for (const changed of [
+      { ...environment, environmentId: "replacement" },
+      { ...environment, ownerEpoch: 8 },
+      { ...environment, attachedSessionIds: [] },
+      { ...environment, attachedSessionIds: ["other-session"] },
+      { ...environment, attachedSessionIds: [placement.sessionId, "other-session"] },
+      { ...environment, nodeDeviceId: "" },
+    ]) {
+      expect(project(placement, changed)).not.toHaveProperty("inference");
+    }
+    for (const state of ["idle", "draining", "destroyed", "failed", "orphaned"] as const) {
+      const identity = readWorkerPlacementIdentity(placement, undefined, { ...environment, state });
+      expect(
+        projectWorkerSessionPlacement(placement, undefined, undefined, identity),
+      ).not.toHaveProperty("inference");
+    }
+    expect(project({ ...placement, executionMode: "remote-exec" })).not.toHaveProperty("inference");
+    for (const state of ["draining", "reconciling", "reclaimed"] as const) {
+      const projected = project({ ...placement, state });
+      expect(projected).not.toHaveProperty("inference");
+      expect(Value.Check(SessionPlacementSchema, projected)).toBe(true);
+    }
+    expect(project({ ...placement, state: "failed", recoveryError: "stopped" })).not.toHaveProperty(
+      "inference",
+    );
+    expect(
+      project({ ...RECORD_BASE, state: "local", environmentId: null, activeOwnerEpoch: null }),
+    ).not.toHaveProperty("inference");
+  });
+
   it.each(["local", "requested", "provisioning", "failed", "reclaimed"] as const)(
     "retains machine identity only for worker placement states (%s)",
     (state) => {
@@ -80,29 +177,17 @@ describe("worker placement projection", () => {
   );
 
   it("omits an empty machine result from correlated placement identity", () => {
-    const record = {
-      ...RECORD_BASE,
-      state: "provisioning" as const,
-      environmentId: "environment-1",
-      activeOwnerEpoch: null,
-    };
+    const record = provisioningPlacement();
     const identity = readWorkerPlacementIdentity(record, {
-      get: () => ({
-        environmentId: "environment-1",
-        providerId: "crabbox",
-        profileId: "aws",
-        ownerEpoch: 1,
-        state: "requested",
-        leaseId: null,
-        sharedHost: null,
-        createdAtMs: 1,
-        idleSinceAtMs: null,
-        destroyRequestedAtMs: null,
-        attachedSessionIds: [],
-        desktopAvailable: false,
-        desktopApps: [],
-        tunnelStatus: "stopped",
-      }),
+      get: () =>
+        environmentFixture({
+          profileId: "aws",
+          ownerEpoch: 1,
+          state: "requested",
+          leaseId: null,
+          sharedHost: null,
+          attachedSessionIds: [],
+        }),
       readMachineShape: () => ({}),
     });
     expect(identity).toEqual({ providerId: "crabbox", profileId: "aws" });
@@ -122,12 +207,7 @@ describe("worker placement projection", () => {
   });
 
   it("projects provisioning transfers before node assignment and active transfers by stale node build", () => {
-    const record = {
-      ...RECORD_BASE,
-      state: "provisioning" as const,
-      environmentId: "environment-1",
-      activeOwnerEpoch: null,
-    };
+    const record = provisioningPlacement();
     const observation = {
       nodeId: "device-1",
       environmentIds: [record.environmentId],
@@ -218,23 +298,15 @@ describe("worker placement projection", () => {
     let connected = false;
     const reader = createWorkerPlacementRunnerAvailabilityReader({
       environments: {
-        get: () => ({
-          environmentId: active.environmentId,
-          providerId: "device",
-          profileId: "device-profile",
-          leaseId: "lease-device",
-          nodeDeviceId: "device-1",
-          sharedHost: true,
-          state: "attached",
-          ownerEpoch: active.activeOwnerEpoch,
-          createdAtMs: 1,
-          idleSinceAtMs: null,
-          destroyRequestedAtMs: null,
-          attachedSessionIds: [active.sessionId],
-          desktopAvailable: false,
-          desktopApps: [],
-          tunnelStatus: "stopped",
-        }),
+        get: () =>
+          environmentFixture({
+            environmentId: active.environmentId,
+            providerId: "device",
+            profileId: "device-profile",
+            leaseId: "lease-device",
+            nodeDeviceId: "device-1",
+            sharedHost: true,
+          }),
       },
       hasCurrentDeviceRunner: (deviceId) => deviceId === "device-1" && connected,
     });
@@ -255,60 +327,51 @@ describe("worker placement projection", () => {
 
   it("omits runner availability for non-device and inexact environment owners", () => {
     const active = activePlacement("environment-cloud");
-    const environment: ReturnType<
-      Parameters<typeof createWorkerPlacementRunnerAvailabilityReader>[0]["environments"]["get"]
-    > = {
-      environmentId: active.environmentId,
-      providerId: "crabbox",
-      profileId: "development",
-      leaseId: "lease-cloud",
-      nodeDeviceId: null,
-      sharedHost: false,
-      state: "attached" as const,
-      ownerEpoch: active.activeOwnerEpoch,
-      createdAtMs: 1,
-      idleSinceAtMs: null,
-      destroyRequestedAtMs: null,
-      attachedSessionIds: [active.sessionId],
-      desktopAvailable: false,
-      desktopApps: [],
-      tunnelStatus: "stopped" as const,
-    };
+    const environment = environmentFixture({ environmentId: active.environmentId });
     const reader = createWorkerPlacementRunnerAvailabilityReader({
       environments: { get: () => environment },
       hasCurrentDeviceRunner: () => true,
     });
     expect(reader.read(active)).toBeUndefined();
-    if (!environment) {
-      throw new Error("expected environment fixture");
-    }
     environment.providerId = "device";
     environment.nodeDeviceId = "device-1";
     environment.ownerEpoch += 1;
     expect(reader.read(active)).toBeUndefined();
   });
 
-  it("projects move status without exposing operation authority", () => {
-    const projected = projectWorkerPlacementMove({
-      operationId: "move:v1:opaque",
-      sessionId: "session-1",
-      source: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
-      target: { kind: "device", deviceId: "device-1" },
-      abandonSource: false,
-      lastError: "device worker is offline",
-      createdAtMs: 100,
-      updatedAtMs: 200,
-    });
+  it.each([false, true])(
+    "projects failed Move retry facts without operation authority (abandon=%s)",
+    (abandonSource) => {
+      const intent = {
+        operationId: "move:v1:opaque",
+        sessionId: "session-1",
+        source: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+        target: { kind: "gateway" as const },
+        abandonSource,
+        lastError: "device worker is offline",
+        createdAtMs: 100,
+        updatedAtMs: 200,
+      };
+      const projected = projectWorkerPlacementMove(intent);
 
-    expect(projected).toEqual({
-      target: { kind: "device", deviceId: "device-1" },
-      error: "device worker is offline",
-      updatedAtMs: 200,
-    });
-    expect(Value.Check(SessionPlacementMoveSchema, projected)).toBe(true);
-    expect(projected).not.toHaveProperty("operationId");
-    expect(projected).not.toHaveProperty("source");
-  });
+      expect(projected).toEqual({
+        target: { kind: "gateway" },
+        error: "device worker is offline",
+        updatedAtMs: 200,
+        retry: {
+          expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+          target: { kind: "gateway" },
+          ...(abandonSource ? { abandonSource: true } : {}),
+        },
+      });
+      expect(Value.Check(SessionPlacementMoveSchema, projected)).toBe(true);
+      expect(projected).not.toHaveProperty("operationId");
+      expect(projected.retry).not.toHaveProperty("operationId");
+      expect(projectWorkerPlacementMove({ ...intent, lastError: null })).not.toHaveProperty(
+        "retry",
+      );
+    },
+  );
 
   it("emits only fields valid for each placement discriminator", () => {
     const records = [
@@ -318,21 +381,11 @@ describe("worker placement projection", () => {
         environmentId: null,
         activeOwnerEpoch: null,
       },
+      provisioningPlacement(),
       {
-        ...RECORD_BASE,
-        state: "provisioning",
-        environmentId: "environment-1",
-        activeOwnerEpoch: null,
-      },
-      {
-        ...RECORD_BASE,
+        ...activePlacement(),
         state: "reclaimed",
         terminalAtMs: 250,
-        environmentId: "environment-1",
-        activeOwnerEpoch: 7,
-        workspaceBaseManifestRef: "manifest-1",
-        remoteWorkspaceDir: "/workspace",
-        workerBundleHash: BUNDLE_HASH,
         workspaceResultConflict: {
           paths: ["src/local.ts"],
           stagedResultRef: "refs/openclaw/worker-results/claim-1",
@@ -354,25 +407,16 @@ describe("worker placement projection", () => {
     expect(projected).toEqual([
       {
         state: "local",
-        generation: 4,
-        createdAtMs: 100,
-        updatedAtMs: 200,
-        stateChangedAtMs: 150,
+        ...PROJECTED_TIMING,
       },
       {
         state: "provisioning",
-        generation: 4,
-        createdAtMs: 100,
-        updatedAtMs: 200,
-        stateChangedAtMs: 150,
+        ...PROJECTED_TIMING,
         environmentId: "environment-1",
       },
       {
         state: "reclaimed",
-        generation: 4,
-        createdAtMs: 100,
-        updatedAtMs: 200,
-        stateChangedAtMs: 150,
+        ...PROJECTED_TIMING,
         environmentId: "environment-1",
         activeOwnerEpoch: 7,
         workspaceBaseManifestRef: "manifest-1",
@@ -386,10 +430,7 @@ describe("worker placement projection", () => {
       },
       {
         state: "failed",
-        generation: 4,
-        createdAtMs: 100,
-        updatedAtMs: 200,
-        stateChangedAtMs: 150,
+        ...PROJECTED_TIMING,
         environmentId: "environment-1",
         activeOwnerEpoch: 7,
         recoveryError: "worker unavailable",

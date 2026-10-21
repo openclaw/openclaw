@@ -19,7 +19,9 @@ import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { nostrPlugin } from "./channel.js";
 import { getActiveNostrBuses } from "./gateway.js";
+import { registerNostrAdmissionTests } from "./nostr-bus.admission.test-support.js";
 import { startNostrBus } from "./nostr-bus.js";
+import { registerNostrGatewayAdmissionTests } from "./nostr-gateway.admission.test-support.js";
 import { createNostrRelayFixture, PREFIX_ACK_REASON } from "./nostr-relay.test-harness.js";
 import { getNostrRuntime, setNostrRuntime } from "./runtime.js";
 import {
@@ -263,6 +265,42 @@ describe("Nostr outbound relay failover", () => {
     ]);
   });
 
+  it("prefers the last successful relay after falling back", async () => {
+    const first = await relay({ accepted: false, reason: PREFIX_ACK_REASON });
+    const second = await relay();
+    const bus = await startBus([first.url, second.url]);
+
+    await bus.sendDm(RECIPIENT_PUBKEY, "initial fallback");
+    const nextId = await bus.sendDm(RECIPIENT_PUBKEY, "preferred relay");
+
+    expect(first.events).toHaveLength(1);
+    expect(second.events).toHaveLength(2);
+    expect(second.events[1]!.id).toBe(nextId);
+    expect(decrypt(RECIPIENT_KEY, bus.publicKey, second.events[1]!.content)).toBe(
+      "preferred relay",
+    );
+  });
+
+  it("retries a recovered relay on the next explicit send after repeated rejections", async () => {
+    const options = { accepted: false, reason: "fixture relay unavailable" };
+    const recovering = await relay(options);
+    const bus = await startBus([recovering.url]);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await expect(bus.sendDm(RECIPIENT_PUBKEY, `rejected ${attempt}`)).rejects.toThrow(
+        options.reason,
+      );
+    }
+
+    options.accepted = true;
+    const id = await bus.sendDm(RECIPIENT_PUBKEY, "relay recovered");
+
+    expect(recovering.events).toHaveLength(6);
+    expect(recovering.acknowledgements.at(-1)).toEqual(["OK", id, true, options.reason]);
+    expect(decrypt(RECIPIENT_KEY, bus.publicKey, recovering.events[5]!.content)).toBe(
+      "relay recovered",
+    );
+  });
+
   describe("registered message sender", () => {
     it("falls back past connection and publish failures, accounting only for EVENT handoffs", async () => {
       const refused = await relay({ rejectUpgrade: true });
@@ -369,3 +407,7 @@ describe("Nostr outbound relay failover", () => {
     );
   });
 });
+
+describe("Nostr local admission", registerNostrAdmissionTests);
+
+describe("Nostr Gateway admission", registerNostrGatewayAdmissionTests);

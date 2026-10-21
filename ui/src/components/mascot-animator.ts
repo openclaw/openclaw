@@ -87,7 +87,6 @@ class SeededGenerator {
   }
 }
 
-/** Mood loops plus randomized blink, gaze, claw-snap, and mood-beat schedules. */
 export class MascotAnimator {
   private readonly rng: SeededGenerator;
   private currentMood: MascotMood = "idle";

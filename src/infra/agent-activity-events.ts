@@ -50,7 +50,7 @@ export type AgentCommandOutputEventFields = {
 export type AgentCommandOutputEventData = Record<string, unknown> & AgentCommandOutputEventFields;
 
 /** Patch summary payload emitted after an agent applies file changes. */
-export type AgentPatchSummaryEventData = Record<string, unknown> & {
+type AgentPatchSummaryEventData = Record<string, unknown> & {
   itemId: string;
   phase: "end";
   title: string;
@@ -339,16 +339,22 @@ export function projectAgentHistoryActivity(
       });
     }
   }
-  const prepared = [...facts].map(([key, fact]) => ({
-    key,
-    callId: fact.callId,
-    runId: fact.runId,
-    parentToolCallId: fact.parentToolCallId,
-    activity: projectAgentToolActivity({
+  const prepared = [...facts].map(([key, fact]) => {
+    const activity = projectAgentToolActivity({
       ...fact,
       ...(fact.name === "collab.wait" ? { nativeOperation: "wait" as const } : {}),
-    }),
-  }));
+    });
+    if (fact.result === undefined) {
+      activity.unpairedCall = true;
+    }
+    return {
+      key,
+      callId: fact.callId,
+      runId: fact.runId,
+      parentToolCallId: fact.parentToolCallId,
+      activity,
+    };
+  });
   const wrappers = resolveCompletedActivityWrappers(prepared);
   const preparedByKey = new Map(prepared.map((call) => [call.key, call]));
   return entries.flatMap(({ messageId, blocks, hasTools }) => {

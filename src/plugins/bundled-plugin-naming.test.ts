@@ -1,28 +1,11 @@
-// Verifies bundled plugin naming conventions and package metadata.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
-
-type PluginManifestShape = {
-  id?: unknown;
-};
-
-type OpenClawPackageShape = {
-  name?: unknown;
-  openclaw?: {
-    install?: {
-      npmSpec?: unknown;
-    };
-    channel?: {
-      id?: unknown;
-    };
-  };
-};
+import type { PackageManifest, PluginManifest } from "./manifest.js";
 
 type BundledPluginRecord = {
   dirName: string;
@@ -47,50 +30,21 @@ const ALLOWED_PACKAGE_SUFFIXES = [
   "-media-understanding",
 ] as const;
 
-function readJsonFile(filePath: string): unknown {
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
-
 function listBundledPluginDirs(): string[] {
-  const externalDirs = listExternalBundledPluginDirs();
-  if (externalDirs) {
-    return externalDirs;
-  }
-  return fs.readdirSync(EXTENSIONS_ROOT).toSorted();
-}
-
-function listExternalBundledPluginDirs(): string[] | null {
-  const files = listGitPluginMetadataFiles() ?? listFindPluginMetadataFiles();
+  const files =
+    listGitTrackedFiles({
+      pathspecs: ["extensions/*/package.json", "extensions/*/openclaw.plugin.json"],
+    }) ?? listFindPluginMetadataFiles();
   if (!files) {
-    return null;
+    return fs.readdirSync(EXTENSIONS_ROOT).toSorted();
   }
-
-  const metadataByDir = new Map<string, Set<string>>();
-  for (const file of files) {
-    const match = /^extensions\/([^/]+)\/(openclaw\.plugin\.json|package\.json)$/u.exec(file);
-    if (!match) {
-      continue;
-    }
-    const [, dirName, fileName] = match;
-    const metadataFiles =
-      metadataByDir.get(expectDefined(dirName, "dirName test invariant")) ?? new Set<string>();
-    metadataFiles.add(expectDefined(fileName, "fileName test invariant"));
-    metadataByDir.set(expectDefined(dirName, "dirName test invariant"), metadataFiles);
-  }
-
-  return [...metadataByDir.entries()]
-    .filter(
-      ([, metadataFiles]) =>
-        metadataFiles.has("package.json") && metadataFiles.has("openclaw.plugin.json"),
-    )
-    .map(([dirName]) => dirName)
+  const metadata = new Set(files);
+  return [...metadata]
+    .flatMap((file) => {
+      const dir = /^extensions\/([^/]+)\/package\.json$/u.exec(file)?.[1];
+      return dir && metadata.has(`extensions/${dir}/openclaw.plugin.json`) ? [dir] : [];
+    })
     .toSorted();
-}
-
-function listGitPluginMetadataFiles(): string[] | null {
-  return listGitTrackedFiles({
-    pathspecs: ["extensions/*/package.json", "extensions/*/openclaw.plugin.json"],
-  });
 }
 
 function listFindPluginMetadataFiles(): string[] | null {
@@ -137,8 +91,8 @@ function readBundledPluginRecords(): BundledPluginRecord[] {
       return [];
     }
 
-    const manifest = readJsonFile(manifestPath) as PluginManifestShape;
-    const pkg = readJsonFile(packagePath) as OpenClawPackageShape;
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as PluginManifest;
+    const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8")) as PackageManifest;
     const manifestId = normalizeOptionalString(manifest.id);
     const packageName = normalizeOptionalString(pkg.name);
     if (!manifestId || !packageName) {
@@ -157,109 +111,44 @@ function readBundledPluginRecords(): BundledPluginRecord[] {
   });
 }
 
-function resolveAllowedPackageNamesForId(pluginId: string): string[] {
-  return ALLOWED_PACKAGE_SUFFIXES.map((suffix) => `@openclaw/${pluginId}${suffix}`);
-}
-
-function resolveBundledPluginMismatches(
-  collectMismatches: (records: BundledPluginRecord[]) => string[],
-) {
-  return collectMismatches(readBundledPluginRecords());
-}
-
-function expectNoBundledPluginNamingMismatches(params: {
-  message: string;
-  collectMismatches: (records: BundledPluginRecord[]) => string[];
-}) {
-  const mismatches = resolveBundledPluginMismatches(params.collectMismatches);
-  expect(
-    mismatches,
-    `${params.message}\nFound: ${mismatches.join(", ") || "<none>"}`,
-  ).toStrictEqual([]);
-}
-
 describe("bundled plugin naming guardrails", () => {
   it("lists bundled plugin metadata without scanning extension directories in-process", () => {
     expectNoReaddirSyncDuring(() => {
       const records = readBundledPluginRecords();
-
       expect(records.length).toBeGreaterThan(0);
       expect(records.every((record) => record.dirName.length > 0)).toBe(true);
     });
   });
 
-  it.each([
+  it.each<{ name: string; valid: (record: BundledPluginRecord) => boolean }>([
     {
-      name: "keeps bundled workspace package names anchored to the plugin id",
-      message: `Bundled extension package names must stay anchored to the manifest id via @openclaw/<id> or an approved suffix (${ALLOWED_PACKAGE_SUFFIXES.join(", ")}). Update the plugin naming docs and this invariant before adding a new naming form.`,
-      collectMismatches: (records: BundledPluginRecord[]) =>
-        records
-          .filter(
-            ({ packageName, manifestId }) =>
-              !resolveAllowedPackageNamesForId(manifestId).includes(packageName),
-          )
-          .map(
-            ({ dirName, packageName, manifestId }) =>
-              `${dirName}: ${packageName} (id=${manifestId})`,
-          ),
+      name: "package names stay anchored to the plugin id with an approved suffix",
+      valid: ({ packageName, manifestId }) =>
+        ALLOWED_PACKAGE_SUFFIXES.some(
+          (suffix) => packageName === `@openclaw/${manifestId}${suffix}`,
+        ),
     },
     {
-      name: "keeps bundled workspace directories aligned with the plugin id unless explicitly allowlisted",
-      message:
-        "Bundled extension directory names should match openclaw.plugin.json:id. If a legacy exception is unavoidable, add it to DIR_ID_EXCEPTIONS with a comment.",
-      collectMismatches: (records: BundledPluginRecord[]) =>
-        records
-          .filter(
-            ({ dirName, manifestId }) => (DIR_ID_EXCEPTIONS.get(dirName) ?? dirName) !== manifestId,
-          )
-          .map(({ dirName, manifestId }) => `${dirName} -> ${manifestId}`),
+      name: "directories match the plugin id unless explicitly allowlisted",
+      valid: ({ dirName, manifestId }) =>
+        (DIR_ID_EXCEPTIONS.get(dirName) ?? dirName) === manifestId,
     },
     {
-      name: "keeps bundled openclaw.install.npmSpec aligned with the package name",
-      message:
-        "Bundled openclaw.install.npmSpec values must match the package name so install/update paths stay deterministic.",
-      collectMismatches: (records: BundledPluginRecord[]) =>
-        records
-          .filter(
-            ({ installNpmSpec, packageName }) =>
-              typeof installNpmSpec === "string" && installNpmSpec !== packageName,
-          )
-          .map(
-            ({ dirName, packageName, installNpmSpec }) =>
-              `${dirName}: package=${packageName}, npmSpec=${installNpmSpec}`,
-          ),
+      name: "install npm specs match the package name",
+      valid: ({ installNpmSpec, packageName }) =>
+        typeof installNpmSpec !== "string" || installNpmSpec === packageName,
     },
     {
-      name: "keeps non-packaged bundled plugins from advertising npm installs",
-      message:
-        "Non-packaged bundled plugins are source-only/private and must not advertise openclaw.install.npmSpec.",
-      collectMismatches: (records: BundledPluginRecord[]) =>
-        records
-          .filter(
-            ({ dirName, installNpmSpec }) =>
-              NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(dirName) && typeof installNpmSpec === "string",
-          )
-          .map(({ dirName, installNpmSpec }) => `${dirName}: npmSpec=${installNpmSpec}`),
+      name: "non-packaged plugins do not advertise npm installs",
+      valid: ({ dirName, installNpmSpec }) =>
+        !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(dirName) || typeof installNpmSpec !== "string",
     },
     {
-      name: "keeps bundled channel ids aligned with the canonical plugin id",
-      message:
-        "Bundled openclaw.channel.id values must match openclaw.plugin.json:id for the owning plugin.",
-      collectMismatches: (records: BundledPluginRecord[]) =>
-        records
-          .filter(
-            ({ channelId, manifestId }) =>
-              typeof channelId === "string" && channelId !== manifestId,
-          )
-          .map(
-            ({ dirName, manifestId, channelId }) =>
-              `${dirName}: channel=${channelId}, id=${manifestId}`,
-          ),
+      name: "channel ids match the canonical plugin id",
+      valid: ({ channelId, manifestId }) =>
+        typeof channelId !== "string" || channelId === manifestId,
     },
-  ] as const)("$name", ({ message, collectMismatches }) => {
-    expectNoBundledPluginNamingMismatches({
-      message,
-      collectMismatches,
-    });
+  ])("$name", ({ valid }) => {
+    expect(readBundledPluginRecords().filter((record) => !valid(record))).toStrictEqual([]);
   });
 });

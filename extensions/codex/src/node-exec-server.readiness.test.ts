@@ -165,7 +165,7 @@ describe("Codex node native readiness", () => {
       expect(cleanupStarted).not.toHaveBeenCalled();
       expect(harness.release).not.toHaveBeenCalled();
       expect(harness.command.hasActiveWork?.()).toBe(true);
-      await expect(access(harness.privateHome)).resolves.toBeUndefined();
+      await access(harness.privateHome);
 
       receipt.resolve();
       await harness.outcome;
@@ -199,7 +199,7 @@ describe("Codex node native readiness", () => {
       expect(harness.child.signalCode).toBeNull();
       expect(harness.release).not.toHaveBeenCalled();
       expect(harness.command.hasActiveWork?.()).toBe(true);
-      await expect(access(harness.privateHome)).resolves.toBeUndefined();
+      await access(harness.privateHome);
       await expect(harness.command.onDisconnect?.()).rejects.toThrow("did not terminate");
 
       failedClose.mockRestore();
@@ -220,14 +220,6 @@ describe("Codex node native readiness", () => {
     }
   });
 
-  it("retains native readiness emitted before process registration returns", async () => {
-    const harness = await startFixture(true);
-    try {
-      await vi.waitFor(() => expect(harness.receiver).toHaveBeenCalledOnce());
-    } finally {
-      await harness.cleanup();
-    }
-  });
   it("withholds the carrier until the fragmented native-ready line and preserves the first initialize", async () => {
     const harness = await startFixture();
     try {

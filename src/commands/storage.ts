@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   initStorageLocation,
@@ -14,7 +14,7 @@ import { acquireStorageProvider } from "../storage/provider.js";
 type StorageCommandOptions = { json?: boolean };
 
 export async function storageListCommand(runtime: RuntimeEnv, opts: StorageCommandOptions) {
-  const config = getRuntimeConfig();
+  const config = await captureRuntimeConfigAsyncReader()();
   const locations = [];
   for (const location of listStorageLocations(config)) {
     let displayTarget = location.displayTarget;
@@ -63,7 +63,10 @@ export async function storageInitCommand(
   name: string,
   opts: StorageCommandOptions,
 ) {
-  const location = await initStorageLocation({ name, config: getRuntimeConfig() });
+  const location = await initStorageLocation({
+    name,
+    config: await captureRuntimeConfigAsyncReader()(),
+  });
   try {
     const description = location.describe();
     if (opts.json) {
@@ -81,7 +84,10 @@ export async function storageTestCommand(
   name: string,
   opts: StorageCommandOptions,
 ) {
-  const location = await openStorageLocation({ name, config: getRuntimeConfig() });
+  const location = await openStorageLocation({
+    name,
+    config: await captureRuntimeConfigAsyncReader()(),
+  });
   try {
     const key = `.openclaw-probe-${randomUUID()}`;
     const payload = randomBytes(256);

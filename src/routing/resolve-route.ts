@@ -174,7 +174,7 @@ export function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): 
     return DEFAULT_AGENT_ID;
   }
   if (lookup.agentIds.size === 0) {
-    return normalizeAgentId(trimmed);
+    return normalized;
   }
   throw new AgentSelectionRequiredError([...lookup.agentIds], {
     surface: "route binding",
@@ -189,17 +189,6 @@ type BindingScope = {
   memberRoleIds: Set<string>;
 };
 
-const resolvedRouteCacheByCfg = new WeakMap<
-  OpenClawConfig,
-  {
-    bindingsRef: OpenClawConfig["bindings"];
-    agentsRef: OpenClawConfig["agents"];
-    sessionRef: OpenClawConfig["session"];
-    byKey: Map<string, ResolvedAgentRoute>;
-  }
->();
-const MAX_RESOLVED_ROUTE_CACHE_KEYS = 4000;
-
 /** @internal Lists exact DM peers from the canonical channel/account binding index. */
 export function listExactDirectMessageBindingPeerIds(
   input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId">,
@@ -212,34 +201,6 @@ export function listExactDirectMessageBindingPeerIds(
       normalizeAccountId(input.accountId),
     ).index.byPeer.keys(),
   ].flatMap((key) => (key.startsWith(prefix) ? [key.slice(prefix.length)] : []));
-}
-
-function resolveRouteCacheForConfig(cfg: OpenClawConfig): Map<string, ResolvedAgentRoute> {
-  const existing = resolvedRouteCacheByCfg.get(cfg);
-  if (
-    existing &&
-    existing.bindingsRef === cfg.bindings &&
-    existing.agentsRef === cfg.agents &&
-    existing.sessionRef === cfg.session
-  ) {
-    return existing.byKey;
-  }
-  const byKey = new Map<string, ResolvedAgentRoute>();
-  resolvedRouteCacheByCfg.set(cfg, {
-    bindingsRef: cfg.bindings,
-    agentsRef: cfg.agents,
-    sessionRef: cfg.session,
-    byKey,
-  });
-  return byKey;
-}
-
-function formatRouteCachePeer(peer: RoutePeer | null): string {
-  // Empty IDs still enable kind-specific wildcard routing, so only a missing peer is peerless.
-  if (!peer) {
-    return "-";
-  }
-  return `${peer.kind}:${peer.id}`;
 }
 
 function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {
@@ -280,29 +241,6 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const shouldLogDebug = shouldLogVerbose();
   const parentPeer = normalizeRoutePeer(input.parentPeer);
 
-  const routeCache =
-    !shouldLogDebug && !identityLinks ? resolveRouteCacheForConfig(input.cfg) : null;
-  const routeCacheKey = routeCache
-    ? JSON.stringify([
-        channel,
-        defaultAgentId,
-        accountId,
-        formatRouteCachePeer(peer),
-        formatRouteCachePeer(parentPeer),
-        guildId,
-        teamId,
-        memberRoleIds.toSorted(),
-        dmScope,
-        groupScope,
-      ])
-    : "";
-  if (routeCache && routeCacheKey) {
-    const cachedRoute = routeCache.get(routeCacheKey);
-    if (cachedRoute) {
-      return { ...cachedRoute };
-    }
-  }
-
   const memberRoleIdSet = new Set(memberRoleIds);
   const { bindings, index: bindingsIndex } = getEvaluatedBindingsForChannelAccount(
     input.cfg,
@@ -328,13 +266,11 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       groupScope: effectiveGroupScope,
       identityLinks,
     });
-    const mainSessionKey = normalizeLowercaseStringOrEmpty(
-      buildAgentMainSessionKey({
-        agentId: resolvedAgentId,
-        mainKey: input.cfg.session?.mainKey,
-      }),
-    );
-    const route = {
+    const mainSessionKey = buildAgentMainSessionKey({
+      agentId: resolvedAgentId,
+      mainKey: input.cfg.session?.mainKey,
+    });
+    return {
       agentId: resolvedAgentId,
       channel,
       accountId,
@@ -345,16 +281,6 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       lastRoutePolicy: deriveLastRoutePolicy({ sessionKey, mainSessionKey }),
       matchedBy,
     };
-    if (routeCache && routeCacheKey) {
-      routeCache.set(routeCacheKey, route);
-      if (routeCache.size > MAX_RESOLVED_ROUTE_CACHE_KEYS) {
-        routeCache.clear();
-        routeCache.set(routeCacheKey, route);
-      }
-      // Cold and warm returns are caller-owned; edits must not poison the cache.
-      return { ...route };
-    }
-    return route;
   };
 
   const formatPeer = (value?: RoutePeer | null) =>

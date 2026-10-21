@@ -1,5 +1,5 @@
 import { readOfflineStorageScope } from "./boot-record.ts";
-import type { ApplicationGateway } from "./gateway.ts";
+import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import type { AuthenticatedUser } from "./user-profile.ts";
 
 type GatewayPresentationScope = {
@@ -9,22 +9,27 @@ type GatewayPresentationScope = {
 };
 type OwnedPresentationScope = {
   scope: GatewayPresentationScope;
-  revision: number;
+  revision: number | undefined;
   userId?: string;
   recoveryScope?: string;
 };
+type GatewayPresentationSource = {
+  readonly snapshot: Pick<ApplicationGatewaySnapshot, "client" | "phase"> &
+    Partial<Pick<ApplicationGatewaySnapshot, "hello" | "selfUser">>;
+  readonly connectionRevision?: number;
+};
 
-const scopes = new WeakMap<ApplicationGateway, OwnedPresentationScope>();
+const scopes = new WeakMap<GatewayPresentationSource, OwnedPresentationScope>();
 let nextScopeKey = 0;
 
 /** Stable page scope and display identity; never an authentication source. */
 export function gatewayPresentationScope(
-  gateway: ApplicationGateway,
+  gateway: GatewayPresentationSource,
 ): Readonly<GatewayPresentationScope> {
   const revision = gateway.connectionRevision;
   const snapshot = gateway.snapshot;
   const ready = snapshot.phase === "connected" && snapshot.client?.recoveryScopeReady !== false;
-  const user = snapshot.phase === "connected" ? (snapshot.selfUser ?? null) : undefined;
+  const user = snapshot.phase === "connected" ? snapshot.selfUser : undefined;
   const userId = user?.id;
   const recoveryScope = snapshot.client?.offlineRecoveryRetired
     ? undefined
@@ -49,13 +54,18 @@ export function gatewayPresentationScope(
     return next.scope;
   }
   // First authentication completes the existing owner; reconnects may temporarily
-  // clear selfUser without retiring that owner's mounted pages or loader results.
+  // clear selfUser, including after hello while users.self is pending. Only an
+  // explicit null resolves profileless without retiring mounted pages or loaders.
   previous.userId ??= userId;
   previous.recoveryScope ??= recoveryScope;
   previous.scope.readyOnce ||= ready;
   if (user !== undefined) {
     previous.scope.displayUser = user;
-  } else if (snapshot.phase !== "reconnecting" && snapshot.phase !== "reload-required") {
+  } else if (
+    snapshot.phase !== "connected" &&
+    snapshot.phase !== "reconnecting" &&
+    snapshot.phase !== "reload-required"
+  ) {
     previous.scope.displayUser = null;
   }
   return previous.scope;

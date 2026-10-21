@@ -70,25 +70,21 @@ function collectDiscordIdLists(
 
 export function scanDiscordNumericIdEntries(cfg: OpenClawConfig): DiscordNumericIdHit[] {
   const hits: DiscordNumericIdHit[] = [];
-  const scanList = (pathLabel: string, list: unknown) => {
-    if (!Array.isArray(list)) {
-      return;
-    }
-    for (const [index, entry] of list.entries()) {
-      if (typeof entry !== "number") {
-        continue;
-      }
-      hits.push({
-        path: `${pathLabel}[${index}]`,
-        entry,
-        safe: Number.isSafeInteger(entry) && entry >= 0,
-      });
-    }
-  };
-
   for (const scope of collectChannelAccountScopes({ cfg, channelId: "discord" })) {
     for (const ref of collectDiscordIdLists(scope.prefix, scope.account)) {
-      scanList(ref.pathLabel, ref.holder[ref.key]);
+      const list = ref.holder[ref.key];
+      if (!Array.isArray(list)) {
+        continue;
+      }
+      for (const [index, entry] of list.entries()) {
+        if (typeof entry === "number") {
+          hits.push({
+            path: `${ref.pathLabel}[${index}]`,
+            entry,
+            safe: Number.isSafeInteger(entry) && entry >= 0,
+          });
+        }
+      }
     }
   }
   return hits;
@@ -135,51 +131,39 @@ export function maybeRepairDiscordNumericIds(
 
   const next = structuredClone(cfg);
   const changes: string[] = [];
-
-  const repairList = (pathLabel: string, holder: Record<string, unknown>, key: string) => {
-    const raw = holder[key];
-    if (!Array.isArray(raw)) {
-      return;
-    }
-    const hasUnsafe = raw.some(
-      (entry) => typeof entry === "number" && (!Number.isSafeInteger(entry) || entry < 0),
-    );
-    if (hasUnsafe) {
-      return;
-    }
-    let converted = 0;
-    holder[key] = raw.map((entry) => {
-      if (typeof entry === "number") {
-        converted += 1;
-        return String(entry);
-      }
-      return entry;
-    });
-    if (converted > 0) {
-      changes.push(
-        `- ${sanitizeForLog(pathLabel)}: converted ${converted} numeric ${converted === 1 ? "ID" : "IDs"} to strings`,
-      );
-    }
-  };
-
   for (const scope of collectChannelAccountScopes({ cfg: next, channelId: "discord" })) {
-    for (const ref of collectDiscordIdLists(scope.prefix, scope.account)) {
-      repairList(ref.pathLabel, ref.holder, ref.key);
+    for (const { pathLabel, holder, key } of collectDiscordIdLists(scope.prefix, scope.account)) {
+      const raw = holder[key];
+      if (
+        !Array.isArray(raw) ||
+        raw.some(
+          (entry) => typeof entry === "number" && (!Number.isSafeInteger(entry) || entry < 0),
+        )
+      ) {
+        continue;
+      }
+      let converted = 0;
+      holder[key] = raw.map((entry) => {
+        if (typeof entry === "number") {
+          converted += 1;
+          return String(entry);
+        }
+        return entry;
+      });
+      if (converted > 0) {
+        changes.push(
+          `- ${sanitizeForLog(pathLabel)}: converted ${converted} numeric ${converted === 1 ? "ID" : "IDs"} to strings`,
+        );
+      }
     }
   }
 
-  if (changes.length === 0) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: collectDiscordNumericIdWarnings({ hits, doctorFixCommand }),
-    };
-  }
+  const repaired = changes.length > 0;
   return {
-    config: next,
+    config: repaired ? next : cfg,
     changes,
     warnings: collectDiscordNumericIdWarnings({
-      hits: hits.filter((hit) => !hit.safe),
+      hits: repaired ? hits.filter((hit) => !hit.safe) : hits,
       doctorFixCommand,
     }),
   };
@@ -239,25 +223,23 @@ function collectDiscordTranscriptsAutoStartWarnings(cfg: OpenClawConfig): string
 
 function collectDiscordMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
   const hits: Array<{ path: string; entry: string }> = [];
-  const addHits = (pathLabel: string, list: unknown) => {
-    if (!Array.isArray(list)) {
-      return;
-    }
-    for (const entry of list) {
-      const text = normalizeOptionalString(String(entry)) ?? "";
-      if (!text || text === "*" || !isDiscordMutableAllowEntry(text)) {
-        continue;
-      }
-      hits.push({ path: pathLabel, entry: text });
-    }
-  };
-
   for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "discord")) {
     if (scope.dangerousNameMatchingEnabled) {
       continue;
     }
     for (const ref of collectDiscordIdLists(scope.prefix, scope.account, true)) {
-      addHits(ref.pathLabel, ref.holder[ref.key]);
+      const pathLabel = ref.pathLabel;
+      const list = ref.holder[ref.key];
+      if (!Array.isArray(list)) {
+        continue;
+      }
+      for (const entry of list) {
+        const text = normalizeOptionalString(String(entry)) ?? "";
+        if (!text || text === "*" || !isDiscordMutableAllowEntry(text)) {
+          continue;
+        }
+        hits.push({ path: pathLabel, entry: text });
+      }
     }
   }
 

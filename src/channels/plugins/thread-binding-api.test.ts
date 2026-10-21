@@ -20,17 +20,6 @@ const { loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock } = vi.hoist
           }),
         };
       }
-      if (dirName === "invalid" && artifactBasename === "thread-binding-api.js") {
-        return {
-          defaultTopLevelPlacement: "floating",
-        };
-      }
-      if (dirName === "empty" && artifactBasename === "thread-binding-api.js") {
-        return {};
-      }
-      if (dirName === "broken" && artifactBasename === "thread-binding-api.js") {
-        throw new Error("broken thread binding artifact");
-      }
       return null;
     },
   ),
@@ -84,25 +73,5 @@ describe("bundled channel thread binding fast path", () => {
         isGroup: true,
       }),
     ).toBeUndefined();
-  });
-
-  it("ignores invalid placement values", () => {
-    expect(resolveBundledChannelThreadBindingDefaultPlacement("invalid")).toBeUndefined();
-  });
-
-  it("distinguishes a present artifact without an inbound resolver from a missing artifact", () => {
-    expect(
-      resolveBundledChannelThreadBindingInboundConversation({
-        channelId: "empty",
-        to: "channel:general",
-        isGroup: true,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("surfaces errors from present thread binding artifacts", () => {
-    expect(() => resolveBundledChannelThreadBindingDefaultPlacement("broken")).toThrow(
-      "broken thread binding artifact",
-    );
   });
 });

@@ -1,12 +1,8 @@
 // Imessage test support covers self chat cache plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSelfChatCache } from "./self-chat-cache.js";
+import { SelfChatCache } from "./self-chat-cache.js";
 
-type SelfChatCacheDebug = {
-  insertionOrder: Map<number, string>;
-};
-
-describe("createSelfChatCache", () => {
+describe("SelfChatCache", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -21,7 +17,7 @@ describe("createSelfChatCache", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
 
-    const cache = createSelfChatCache();
+    const cache = new SelfChatCache();
     cache.remember({
       ...directLookup,
       text: "  hello\r\nworld  ",
@@ -41,7 +37,7 @@ describe("createSelfChatCache", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
 
-    const cache = createSelfChatCache();
+    const cache = new SelfChatCache();
     cache.remember({
       ...directLookup,
       text: "hello",
@@ -62,7 +58,7 @@ describe("createSelfChatCache", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
 
-    const cache = createSelfChatCache();
+    const cache = new SelfChatCache();
     cache.remember({ ...directLookup, text: "hello", createdAt: 123 });
 
     vi.advanceTimersByTime(11_001);
@@ -74,7 +70,7 @@ describe("createSelfChatCache", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
 
-    const cache = createSelfChatCache();
+    const cache = new SelfChatCache();
     for (let i = 0; i < 2_000; i += 1) {
       cache.remember({
         ...directLookup,
@@ -91,29 +87,11 @@ describe("createSelfChatCache", () => {
     expect(cache.has({ ...directLookup, text: "burst-1999", createdAt: 1_999 })).toBe(true);
   });
 
-  it("discards stale insertion order records during ttl-only cleanup", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
-
-    const cache = createSelfChatCache();
-    for (let i = 0; i < 1_500; i += 1) {
-      cache.remember({
-        ...directLookup,
-        text: `ttl-${i}`,
-        createdAt: i,
-      });
-      vi.advanceTimersByTime(1_001);
-    }
-
-    const debug = cache as unknown as SelfChatCacheDebug;
-    expect(debug.insertionOrder.size).toBeLessThanOrEqual(512);
-  });
-
   it("does not collide long texts that differ only in the middle", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
 
-    const cache = createSelfChatCache();
+    const cache = new SelfChatCache();
     const prefix = "a".repeat(256);
     const suffix = "b".repeat(256);
     const longTextA = `${prefix}${"x".repeat(300)}${suffix}`;

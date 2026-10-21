@@ -10,6 +10,7 @@ import type {
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import {
+  resolveSessionCreatorActor,
   sessionCreatorProfileId,
   type SessionActor,
 } from "../config/sessions/session-entry-provenance.js";
@@ -28,41 +29,44 @@ import type { SynchronousWork } from "../shared/synchronous-work.js";
 import { resolveUserProfileReference } from "../state/user-profile-list.js";
 import { buildControlUiResourcePath } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import {
+  resolveCurrentUserProfileDisplay,
+  type CurrentUserProfileDisplay,
+} from "./current-user-profile-display.js";
 import type { SessionEntryPair } from "./session-list-order.js";
-import type {
-  SessionActorProfileIdentity,
-  SessionIdentityProjection,
-} from "./session-utils-contracts.js";
+
+export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
+export type SessionIdentityProjection = ReturnType<typeof createSessionIdentityProjection>;
 
 /** The row owner invalidates these facts on profile/config publication; entry replacement is exact. */
-export function createSessionIdentityProjection(): SessionIdentityProjection {
+export function createSessionIdentityProjection() {
+  let revision = {};
   let owners = new WeakMap<SessionEntry, ReturnType<typeof projectSessionOwner>>();
   let participants = new WeakMap<SessionEntry, ReadonlyMap<string, SessionParticipant>>();
   let people = new WeakMap<SessionEntry, readonly SessionPerson[]>();
   let involvement = new WeakMap<SessionEntry, Map<string, SessionProfileInvolvement>>();
   return {
+    get revision() {
+      return revision;
+    },
     invalidate() {
+      revision = {};
       owners = new WeakMap();
       participants = new WeakMap();
       people = new WeakMap();
       involvement = new WeakMap();
     },
-    involvement(this: void, entry, profileId, profiles) {
+    involvement(
+      this: void,
+      entry: SessionEntry,
+      profiles: Parameters<typeof projectSessionProfileInvolvements>[1],
+    ): ReadonlyMap<string, SessionProfileInvolvement> {
       let projected = involvement.get(entry);
       if (!projected) {
-        projected = new Map();
-        for (const [id, state] of Object.entries(entry.profileInvolvement?.profiles ?? {})) {
-          const canonical = projectSessionParticipant({ type: "profile", id }, profiles).identity
-            .id;
-          const merged = mergeSessionProfileInvolvement([projected.get(canonical), state]);
-          if (merged) {
-            projected.set(canonical, merged);
-          }
-        }
+        projected = projectSessionProfileInvolvements(entry, profiles);
         involvement.set(entry, projected);
       }
-      return projected.get(profileId);
+      return projected;
     },
     owner(this: void, ...args: Parameters<typeof projectSessionOwner>) {
       const [entry] = args;
@@ -140,18 +144,19 @@ export function projectSessionParticipant(
 }
 
 /** Resolve merged profiles without rewriting personal choices in other agent stores. */
-export function projectSessionProfileInvolvement(
+export function projectSessionProfileInvolvements(
   entry: SessionEntry,
-  profileId: string,
   profiles: Map<string, SessionActorProfileIdentity | undefined>,
-): SessionProfileInvolvement | undefined {
-  return mergeSessionProfileInvolvement(
-    Object.entries(entry.profileInvolvement?.profiles ?? {}).flatMap(([id, state]) =>
-      projectSessionParticipant({ type: "profile", id }, profiles).identity.id === profileId
-        ? [state]
-        : [],
-    ),
-  );
+): Map<string, SessionProfileInvolvement> {
+  const projected = new Map<string, SessionProfileInvolvement>();
+  for (const [id, state] of Object.entries(entry.profileInvolvement?.profiles ?? {})) {
+    const canonical = projectSessionParticipant({ type: "profile", id }, profiles).identity.id;
+    const merged = mergeSessionProfileInvolvement([projected.get(canonical), state]);
+    if (merged) {
+      projected.set(canonical, merged);
+    }
+  }
+  return projected;
 }
 
 export function projectSessionActor(
@@ -215,7 +220,7 @@ export function projectSessionOwner(
   const persisted = entry?.owner;
   const identities = userProfileIdentityById ?? new Map();
   const actor = projectAssignableSessionOwner(
-    persisted?.actor ?? entry?.createdActor,
+    persisted?.actor ?? resolveSessionCreatorActor(entry?.createdActor),
     identities,
     cfg,
     configuredAgentIds,

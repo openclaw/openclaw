@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
+  RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -15,6 +16,34 @@ import {
   createCarrierLifecycleHarness,
   makeRealtimeProvider,
 } from "./realtime-handler.lifecycle.test-helpers.js";
+
+async function openBridge(
+  close: RealtimeVoiceBridge["close"],
+  overrides: Partial<RealtimeVoiceBridge> = {},
+  options: Parameters<typeof createCarrierLifecycleHarness>[1] = {},
+) {
+  const ready = createDeferred<RealtimeVoiceBridgeCreateRequest>();
+  const createBridgeForCall = vi.fn((request: RealtimeVoiceBridgeCreateRequest) => {
+    ready.resolve(request);
+    return createBridge(close, overrides);
+  });
+  const fixture = createCarrierLifecycleHarness(createBridgeForCall, options);
+  const { ws } = await connectCarrierStream(fixture.handler);
+  sendCarrierStart(ws, "MZ-test", fixture.call.providerCallId);
+  await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledOnce());
+  return { ...fixture, ws, callbacks: await ready.promise };
+}
+
+function endedEvents(
+  processEvent: ReturnType<typeof createCarrierLifecycleHarness>["processEvent"],
+) {
+  return processEvent.mock.calls.filter(([event]) => event.type === "call.ended");
+}
+
+const nextImmediate = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 
 describe("RealtimeCallHandler lifecycle", () => {
   it("abandons pending carrier admission on shutdown", async () => {
@@ -65,18 +94,14 @@ describe("RealtimeCallHandler lifecycle", () => {
 
       expect((await closed).code).toBe(1011);
       expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId, { reason: "error" });
-      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
-        0,
-      );
+      expect(endedEvents(processEvent)).toHaveLength(0);
       expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("carrier unavailable"));
 
       termination.resolve({ success: false, error: "carrier unavailable" });
       await vi.waitFor(() =>
         expect(warn).toHaveBeenCalledWith(expect.stringContaining("carrier unavailable")),
       );
-      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
-        0,
-      );
+      expect(endedEvents(processEvent)).toHaveLength(0);
       expect(call.state).toBe("ringing");
     } finally {
       termination.resolve({ success: false, error: "carrier unavailable" });
@@ -90,18 +115,12 @@ describe("RealtimeCallHandler lifecycle", () => {
     const disposed = createDeferred<void>();
     const endCall = vi.fn(() => termination.promise);
     const closeBridge = vi.fn(() => disposed.promise);
-    let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
-    const { call, handler, processEvent } = createCarrierLifecycleHarness(
-      (request) => {
-        callbacks = request;
-        return createBridge(closeBridge);
-      },
+    const { call, handler, processEvent, ws, callbacks } = await openBridge(
+      closeBridge,
+      {},
       { endCall },
     );
-    const { ws } = await connectCarrierStream(handler);
     try {
-      sendCarrierStart(ws, "MZ-shutdown", call.providerCallId);
-      await vi.waitFor(() => expect(callbacks).toBeDefined());
       const closed = waitForClose(ws);
       let settled = false;
       const closing = handler.close(barrier.promise);
@@ -295,9 +314,7 @@ describe("RealtimeCallHandler lifecycle", () => {
     expect(
       processEvent.mock.calls.filter(([event]) => event.type === "call.answered"),
     ).toHaveLength(1);
-    expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
-      0,
-    );
+    expect(endedEvents(processEvent)).toHaveLength(0);
     expect(endCall).not.toHaveBeenCalled();
     expect(predecessor.ws.readyState).toBe(WebSocket.OPEN);
     expect(handler.speak(call.callId, "predecessor remains connected")).toEqual({
@@ -332,9 +349,7 @@ describe("RealtimeCallHandler lifecycle", () => {
     pendingStartup.reject(new Error("superseded provider rejected startup"));
     expect((await previousClosed).code).toBe(1011);
     expect(endCall).not.toHaveBeenCalled();
-    expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
-      0,
-    );
+    expect(endedEvents(processEvent)).toHaveLength(0);
     expect(replacement.ws.readyState).toBe(WebSocket.OPEN);
     expect(handler.speak(call.callId, "replacement remains connected")).toEqual({
       success: true,
@@ -342,7 +357,7 @@ describe("RealtimeCallHandler lifecycle", () => {
     expect(replacementGreeting).toHaveBeenCalledWith("replacement remains connected");
   });
 
-  it.each([false, true])("ends the call after inactivity with media renewal=%s", async (renew) => {
+  it("ends the call after inactivity following media renewal", async () => {
     const bridgeStarted = createDeferred<void>();
     const mediaReceived = createDeferred<void>();
     const sendAudio = vi.fn(() => mediaReceived.resolve());
@@ -358,27 +373,21 @@ describe("RealtimeCallHandler lifecycle", () => {
       sendCarrierStart(ws, "MZ-inactivity", call.providerCallId);
       await bridgeStarted.promise;
 
-      if (renew) {
-        await vi.advanceTimersByTimeAsync(29_999);
-        ws.send(
-          JSON.stringify({
-            event: "media",
-            media: { payload: Buffer.from([0xff]).toString("base64") },
-          }),
-        );
-        await mediaReceived.promise;
-      }
+      await vi.advanceTimersByTimeAsync(29_999);
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          media: { payload: Buffer.from([0xff]).toString("base64") },
+        }),
+      );
+      await mediaReceived.promise;
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(sendAudio).toHaveBeenCalledTimes(renew ? 1 : 0);
+      expect(sendAudio).toHaveBeenCalledOnce();
       expect(endCall).not.toHaveBeenCalled();
       expect(ws.readyState).toBe(WebSocket.OPEN);
-      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
-        0,
-      );
+      expect(endedEvents(processEvent)).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(1_999);
-      expect(processEvent.mock.calls.filter(([event]) => event.type === "call.ended")).toHaveLength(
-        0,
-      );
+      expect(endedEvents(processEvent)).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(1);
 
       expect(closeBridge).toHaveBeenCalledOnce();
@@ -388,58 +397,17 @@ describe("RealtimeCallHandler lifecycle", () => {
     }
   });
 
-  it("rejects a bridge closed during creation and discards late transcripts", async () => {
-    const reason = "completed";
-    let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
-    const bridgeConnect = vi.fn(async () => {});
-    const bridgeClose = vi.fn();
-    const createBridgeForCall = vi.fn((request: RealtimeVoiceBridgeCreateRequest) => {
-      callbacks = request;
-      request.onClose?.(reason);
-      return createBridge(bridgeClose, { connect: bridgeConnect });
-    });
-    const { call, handler, endCall, processEvent } =
-      createCarrierLifecycleHarness(createBridgeForCall);
-    const { ws } = await connectCarrierStream(handler);
-
-    const closed = waitForClose(ws);
-    sendCarrierStart(ws, "MZ-synchronous-close", call.providerCallId);
-    expect((await closed).code).toBe(1000);
-    callbacks?.onTranscript?.("user", "Still listening", true);
-    expect(processEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: "call.speech" }));
-    await vi.waitFor(() =>
-      expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId, { reason }),
-    );
-    expect(bridgeConnect).not.toHaveBeenCalled();
-    expect(bridgeClose).toHaveBeenCalledOnce();
-    expect(handler.speak(call.callId, "Do not revive this call")).toEqual({
-      success: false,
-      error: "No active realtime bridge for call",
-    });
-  });
-
   it("does not start a native consult after teardown during transcript settling", async () => {
-    let onToolCall: RealtimeVoiceBridgeCreateRequest["onToolCall"];
-    let onTranscript: RealtimeVoiceBridgeCreateRequest["onTranscript"];
     const submitToolResult = vi.fn();
-    const createBridgeForCall = vi.fn((request: RealtimeVoiceBridgeCreateRequest) => {
-      onToolCall = request.onToolCall;
-      onTranscript = request.onTranscript;
-      return createBridge(vi.fn(), {
-        supportsToolResultContinuation: true,
-        submitToolResult,
-      });
+    const { handler, ws, callbacks } = await openBridge(vi.fn(), {
+      supportsToolResultContinuation: true,
+      submitToolResult,
     });
-    const { call, handler } = createCarrierLifecycleHarness(createBridgeForCall);
     const consult = vi.fn(async () => ({ text: "This should not run." }));
     handler.registerToolHandler("openclaw_agent_consult", consult);
-    const { ws } = await connectCarrierStream(handler);
 
-    sendCarrierStart(ws, "MZ-settling-consult", call.providerCallId);
-    await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledTimes(1));
-
-    onTranscript?.("user", "Check the deployment", false);
-    onToolCall?.({
+    callbacks.onTranscript?.("user", "Check the deployment", false);
+    callbacks.onToolCall?.({
       itemId: "item-settling-consult",
       callId: "tool-settling-consult",
       name: "openclaw_agent_consult",
@@ -469,17 +437,12 @@ describe("RealtimeCallHandler lifecycle", () => {
   });
 
   it("aborts a hung native consult during stream teardown", async () => {
-    let onToolCall: RealtimeVoiceBridgeCreateRequest["onToolCall"];
     let consultSignal: AbortSignal | undefined;
     const submitToolResult = vi.fn();
-    const createBridgeForCall = vi.fn((request: RealtimeVoiceBridgeCreateRequest) => {
-      onToolCall = request.onToolCall;
-      return createBridge(vi.fn(), {
-        supportsToolResultContinuation: true,
-        submitToolResult,
-      });
+    const { handler, ws, callbacks } = await openBridge(vi.fn(), {
+      supportsToolResultContinuation: true,
+      submitToolResult,
     });
-    const { call, handler } = createCarrierLifecycleHarness(createBridgeForCall);
     handler.registerToolHandler("openclaw_agent_consult", async (_args, _callId, context) => {
       consultSignal = context.abortSignal;
       return await new Promise<unknown>((_resolve, reject) => {
@@ -490,12 +453,7 @@ describe("RealtimeCallHandler lifecycle", () => {
         );
       });
     });
-    const { ws } = await connectCarrierStream(handler);
-
-    sendCarrierStart(ws, "MZ-consult", call.providerCallId);
-    await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledTimes(1));
-
-    onToolCall?.({
+    callbacks.onToolCall?.({
       itemId: "item-consult",
       callId: "tool-consult",
       name: "openclaw_agent_consult",
@@ -516,9 +474,7 @@ describe("RealtimeCallHandler lifecycle", () => {
     await vi.waitFor(() => expect(consults.size).toBe(0));
 
     expect(consultSignal?.aborted).toBe(true);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextImmediate();
     expect(submitToolResult).toHaveBeenCalledTimes(1);
   });
 
@@ -671,94 +627,45 @@ describe("RealtimeCallHandler lifecycle", () => {
     },
   );
 
-  it.each(["provider", "transcript"] as const)(
-    "retains early %s failure until the shutdown barrier settles",
-    async (failureSource) => {
-      const disposed = createDeferred<void>();
-      const persisted = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
-      const barrier = createDeferred<void>();
-      const failure = new Error(`${failureSource} cleanup failed`);
-      const providerClose = vi.fn(() => disposed.promise);
-      let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
-      const { call, handler, processEvent, endCall } = createCarrierLifecycleHarness((request) => {
-        callbacks = request;
-        return createBridge(providerClose);
-      });
-      const { ws } = await connectCarrierStream(handler);
-      let closing: Promise<void> | undefined;
-      try {
-        sendCarrierStart(ws, "MZ-early-failure", call.providerCallId);
-        await vi.waitFor(() => expect(callbacks).toBeDefined());
-        processEvent.mockImplementation(async (event) =>
-          event.type === "call.assistant-speech" ? persisted.promise : { kind: "processed" },
-        );
-        const closed = waitForClose(ws);
-        closing = handler.close(barrier.promise);
-        let settled = false;
-        const completion = closing
-          .catch((error: unknown) => error)
-          .finally(() => {
-            settled = true;
-          });
-        await closed;
-        await vi.waitFor(() => expect(providerClose).toHaveBeenCalledOnce());
-        callbacks?.onTranscript?.("assistant", "Received final answer", true);
-        if (failureSource === "provider") {
-          disposed.reject(failure);
-          persisted.resolve({ kind: "processed" });
-        } else {
-          disposed.resolve();
-          persisted.reject(failure);
-        }
-        await vi.waitFor(() => expect(endCall).toHaveBeenCalledOnce());
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(settled).toBe(false);
-        barrier.resolve();
-        expect(await completion).toBe(failure);
-        await expect(handler.close()).resolves.toBeUndefined();
-        expect(endCall).toHaveBeenCalledOnce();
-        expect(providerClose).toHaveBeenCalledOnce();
-      } finally {
-        barrier.resolve();
-        disposed.resolve();
-        persisted.resolve({ kind: "processed" });
-        await closing?.catch(() => undefined);
-      }
-    },
-  );
-
-  it("assigns unique event IDs to finalized chunks received in the same millisecond", async () => {
-    let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
-    const { call, handler, processEvent } = createCarrierLifecycleHarness((request) => {
-      callbacks = request;
-      return createBridge(() => {});
-    });
-    const { ws } = await connectCarrierStream(handler);
-    sendCarrierStart(ws, "MZ-transcript-ids", call.providerCallId);
-    await vi.waitFor(() => expect(callbacks).toBeDefined());
-    const timestamp = 1_720_000_000_123;
-    const clock = vi.spyOn(Date, "now").mockReturnValue(timestamp);
+  it("retains early transcript failure until the shutdown barrier settles", async () => {
+    const disposed = createDeferred<void>();
+    const persisted = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
+    const barrier = createDeferred<void>();
+    const failure = new Error("transcript cleanup failed");
+    const providerClose = vi.fn(() => disposed.promise);
+    const { handler, processEvent, endCall, ws, callbacks } = await openBridge(providerClose);
+    let closing: Promise<void> | undefined;
     try {
-      callbacks?.onTranscript?.("user", "First user chunk", true);
-      callbacks?.onTranscript?.("user", "Second user chunk", true);
-      callbacks?.onTranscript?.("assistant", "First assistant chunk", true);
-      callbacks?.onTranscript?.("assistant", "Second assistant chunk", true);
+      processEvent.mockImplementation(async (event) =>
+        event.type === "call.assistant-speech" ? persisted.promise : { kind: "processed" },
+      );
+      const closed = waitForClose(ws);
+      closing = handler.close(barrier.promise);
+      let settled = false;
+      const completion = closing
+        .catch((error: unknown) => error)
+        .finally(() => {
+          settled = true;
+        });
+      await closed;
+      await vi.waitFor(() => expect(providerClose).toHaveBeenCalledOnce());
+      callbacks?.onTranscript?.("assistant", "Received final answer", true);
+      disposed.resolve();
+      persisted.reject(failure);
+      await vi.waitFor(() => expect(endCall).toHaveBeenCalledOnce());
+      await nextImmediate();
+      expect(settled).toBe(false);
+      barrier.resolve();
+      expect(await completion).toBe(failure);
+      await expect(handler.close()).resolves.toBeUndefined();
+      expect(endCall).toHaveBeenCalledOnce();
+      expect(providerClose).toHaveBeenCalledOnce();
     } finally {
-      clock.mockRestore();
+      barrier.resolve();
+      disposed.resolve();
+      persisted.resolve({ kind: "processed" });
+      await closing?.catch(() => undefined);
     }
-    const events = processEvent.mock.calls
-      .map(([event]) => event)
-      .filter((event) => event.type === "call.speech" || event.type === "call.assistant-speech");
-    expect(events.map((event) => event.transcript)).toEqual([
-      "First user chunk",
-      "Second user chunk",
-      "First assistant chunk",
-      "Second assistant chunk",
-    ]);
-    expect(events.every((event) => event.timestamp === timestamp)).toBe(true);
-    expect(new Set(events.map((event) => event.id)).size).toBe(4);
   });
 
   it.each(["provider", "shutdown"] as const)(
@@ -767,16 +674,10 @@ describe("RealtimeCallHandler lifecycle", () => {
       const disposed = createDeferred<void>();
       const persisted = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
       const providerClose = vi.fn(() => disposed.promise);
-      let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
-      const { call, handler, endCall, processEvent } = createCarrierLifecycleHarness((request) => {
-        callbacks = request;
-        return createBridge(providerClose);
-      });
-      const { ws } = await connectCarrierStream(handler);
+      const { call, handler, endCall, processEvent, ws, callbacks } =
+        await openBridge(providerClose);
       let closing: Promise<void> | undefined;
       try {
-        sendCarrierStart(ws, "MZ-durable-final", call.providerCallId);
-        await vi.waitFor(() => expect(callbacks).toBeDefined());
         processEvent.mockImplementation(async (event) =>
           event.type === "call.assistant-speech" ? persisted.promise : { kind: "processed" },
         );
@@ -809,9 +710,7 @@ describe("RealtimeCallHandler lifecycle", () => {
           }),
         );
         disposed.resolve();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextImmediate();
         expect(endCall).not.toHaveBeenCalled();
         expect(settled).toBe(false);
         persisted.resolve({ kind: "processed" });

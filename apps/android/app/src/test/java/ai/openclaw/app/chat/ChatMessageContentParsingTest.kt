@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayCanvasHostRoute
 import ai.openclaw.app.ui.chat.completedToolDisplayName
 import ai.openclaw.app.ui.chat.readBoundedWidgetDocument
 import kotlinx.coroutines.test.runTest
@@ -294,7 +295,7 @@ class ChatMessageContentParsingTest {
     val surfaces =
       ChatWidgetSurfaceUrls(
         node = null,
-        operator = ChatWidgetSurface(url = fallbackSurface, tlsFingerprintSha256 = null),
+        operator = GatewayCanvasHostRoute(url = fallbackSurface, tlsFingerprintSha256 = null),
       )
 
     val resolved = ChatWidgetUrlResolver.resolvePreferred(surfaces, target, excluding = null)
@@ -311,10 +312,10 @@ class ChatMessageContentParsingTest {
       val oldPin = "aa".repeat(32)
       val newPin = "bb".repeat(32)
       val failedUrl = ChatWidgetUrlResolver.resolve(oldSurface, target)
-      val failedResource = ChatWidgetResource(url = requireNotNull(failedUrl), tlsFingerprintSha256 = oldPin)
+      val failedResource = ChatWidgetResource(url = requireNotNull(failedUrl), tlsFingerprintSha256 = oldPin, surfaceRole = ChatWidgetSurfaceRole.NODE)
       var current =
         ChatWidgetSurfaceUrls(
-          node = ChatWidgetSurface(url = oldSurface, tlsFingerprintSha256 = oldPin),
+          node = GatewayCanvasHostRoute(url = oldSurface, tlsFingerprintSha256 = oldPin),
           operator = null,
         )
 
@@ -326,7 +327,7 @@ class ChatMessageContentParsingTest {
           refreshNodeSurface = {
             current =
               ChatWidgetSurfaceUrls(
-                node = ChatWidgetSurface(url = newSurface, tlsFingerprintSha256 = newPin),
+                node = GatewayCanvasHostRoute(url = newSurface, tlsFingerprintSha256 = newPin),
                 operator = null,
               )
             null
@@ -346,10 +347,10 @@ class ChatMessageContentParsingTest {
       val oldPin = "aa".repeat(32)
       val newPin = "bb".repeat(32)
       val url = requireNotNull(ChatWidgetUrlResolver.resolve(surface, target))
-      val failedResource = ChatWidgetResource(url = url, tlsFingerprintSha256 = oldPin)
+      val failedResource = ChatWidgetResource(url = url, tlsFingerprintSha256 = oldPin, surfaceRole = ChatWidgetSurfaceRole.NODE)
       var current =
         ChatWidgetSurfaceUrls(
-          node = ChatWidgetSurface(url = surface, tlsFingerprintSha256 = oldPin),
+          node = GatewayCanvasHostRoute(url = surface, tlsFingerprintSha256 = oldPin),
           operator = null,
         )
 
@@ -361,7 +362,7 @@ class ChatMessageContentParsingTest {
           refreshNodeSurface = {
             current =
               ChatWidgetSurfaceUrls(
-                node = ChatWidgetSurface(url = surface, tlsFingerprintSha256 = newPin),
+                node = GatewayCanvasHostRoute(url = surface, tlsFingerprintSha256 = newPin),
                 operator = null,
               )
             null
@@ -383,8 +384,8 @@ class ChatMessageContentParsingTest {
       var refreshCount = 0
       var current =
         ChatWidgetSurfaceUrls(
-          node = ChatWidgetSurface(url = oldSurface, tlsFingerprintSha256 = null),
-          operator = ChatWidgetSurface(url = fallbackSurface, tlsFingerprintSha256 = null),
+          node = GatewayCanvasHostRoute(url = oldSurface, tlsFingerprintSha256 = null),
+          operator = GatewayCanvasHostRoute(url = fallbackSurface, tlsFingerprintSha256 = null),
         )
       val initialNode = ChatWidgetUrlResolver.resolvePreferred(current, target, excluding = null)
 
@@ -395,7 +396,7 @@ class ChatMessageContentParsingTest {
           currentSurfaceUrls = { current },
           refreshNodeSurface = {
             refreshCount += 1
-            current = current.copy(node = ChatWidgetSurface(url = newSurface, tlsFingerprintSha256 = null))
+            current = current.copy(node = GatewayCanvasHostRoute(url = newSurface, tlsFingerprintSha256 = null))
             null
           },
           refreshOperatorSurface = { null },
@@ -429,12 +430,13 @@ class ChatMessageContentParsingTest {
         ChatWidgetResource(
           url = requireNotNull(ChatWidgetUrlResolver.resolve(oldSurface, target)),
           tlsFingerprintSha256 = null,
+          surfaceRole = ChatWidgetSurfaceRole.OPERATOR,
         )
       var operatorRefreshCount = 0
       var current =
         ChatWidgetSurfaceUrls(
           node = null,
-          operator = ChatWidgetSurface(url = oldSurface, tlsFingerprintSha256 = null),
+          operator = GatewayCanvasHostRoute(url = oldSurface, tlsFingerprintSha256 = null),
         )
 
       val resolved =
@@ -445,7 +447,7 @@ class ChatMessageContentParsingTest {
           refreshNodeSurface = { null },
           refreshOperatorSurface = {
             operatorRefreshCount += 1
-            ChatWidgetSurface(url = newSurface, tlsFingerprintSha256 = null).also {
+            GatewayCanvasHostRoute(url = newSurface, tlsFingerprintSha256 = null).also {
               current = current.copy(operator = it)
             }
           },

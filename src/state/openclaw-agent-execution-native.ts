@@ -1,24 +1,22 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Result } from "@openclaw/normalization-core/result";
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import {
-  createSqliteLifecycleAggregateError,
-  throwSqliteLifecycleErrors,
-} from "../infra/sqlite-lifecycle-errors.js";
-import { publishSqliteWalCheckpointObservation } from "../infra/sqlite-wal-checkpoint.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import type { SqliteWorkerCloseReceipt } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
-import type {
-  SqliteWorkerAdmissionFactory,
-  SqliteWorkerAdmissionRequest,
+import {
+  bindSqliteWorkerExecutionAuthority,
+  type SqliteWorkerAdmissionFactory,
+  type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import {
@@ -26,143 +24,66 @@ import {
   isSqliteWorkerStoreAvailable,
   openAgentDatabaseSqliteWorkerStore,
   runSqliteWorkerStoreOperation,
-  type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
-import { captureAgentDatabasePreparationJournal } from "./agent-database-admission.js";
-import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
-import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
+import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
 import {
-  hasAgentDatabaseMaintenanceAuthority,
-  type OpenClawAgentDatabaseWorkerLeaseReceipt,
-} from "./openclaw-agent-db-lease.js";
-import { captureOpenClawAgentDatabaseRegistration } from "./openclaw-agent-db-registry-listing.js";
+  AgentDatabaseExecutionAdmissionClosedError,
+  AgentDatabaseSchemaAdmissionChangedError,
+} from "./agent-database-admission-error.js";
 import {
-  captureOpenClawAgentDatabaseValidationTransfer,
+  captureAgentDatabasePreparationJournal,
+  recordAgentDatabaseStartupFtsRepair,
+} from "./agent-database-admission.js";
+import { captureAgentDeletionCleanupAdmission } from "./agent-deletion-cleanup-admission.js";
+import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
+import {
+  captureOpenClawAgentDatabaseRegistration,
+  settleAgentRegistration,
+  type AgentDatabaseRegistration,
+} from "./openclaw-agent-db-registry-listing.js";
+import {
+  captureOpenClawAgentDatabaseAdmissionPublication,
   getOpenClawAgentDatabaseValidationForTransfer,
+  hasRevokedOpenClawAgentDatabaseValidation,
+  invalidateOpenClawAgentDatabaseValidation,
+  retireReplacedAgentValidation,
 } from "./openclaw-agent-db-validation-cache.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
+import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
 import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "./openclaw-agent-db.paths.js";
-import { cleanupRetiredAgentDatabaseLease } from "./openclaw-agent-execution-cleanup.js";
+  cleanupRetiredAgentDatabaseLease,
+  readAgentDatabaseClosedReceipt,
+  publishAgentDatabaseCloseCheckpoint,
+} from "./openclaw-agent-execution-cleanup.js";
 import type {
   AgentDatabaseFileExecutionIdentity,
   AgentDatabaseExecutionFileIdentity,
-  AgentDatabaseExecutionOpen,
+  AgentDatabaseFileExecutionOpen,
   AgentDatabaseExecutionScope,
-  AgentDatabaseGenerationClaim,
-  AgentDatabaseRequestExecutionSource,
+  AgentDatabaseNativeGeneration,
+  AgentDatabaseNativeStore as Store,
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
-import { requestOpenClawAgentDatabaseIntegrityCheck } from "./openclaw-database-verify.js";
-import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import { createSharedAgentDatabasePreparation } from "./openclaw-agent-execution-preparation.js";
 import { publishOpenClawStateDatabaseWorkerAdmission } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
-
-type Store = SqliteWorkerStore<AgentDatabaseOperations>;
-type Registration = ReturnType<typeof captureOpenClawAgentDatabaseRegistration> & {
-  nativeSettlement?: Promise<SqliteWorkerOperationSettlement>;
-};
-
-export function supportsAgentDatabaseExecutionScope(
-  options: OpenClawAgentDatabaseOptions,
-): boolean {
-  return (
-    getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance !== true &&
-    !hasAgentDatabaseMaintenanceAuthority() &&
-    !getAgentDeletionDatabaseCleanup(options)
-  );
-}
-
-/** These native-only scopes still need their complete owning caller cutover. */
-export function supportsOpenClawAgentDatabaseExecution(
-  options: OpenClawAgentDatabaseOptions,
-): boolean {
-  return (
-    !isIncognitoOpenClawAgentSqlitePath(resolveOpenClawAgentSqlitePath(options), options) &&
-    supportsAgentDatabaseExecutionScope(options)
-  );
-}
-
-async function settleAgentRegistration<T>(
-  registration: Registration,
-  operation: () => Promise<T>,
-): Promise<T> {
-  let result: Result<T, unknown>;
-  try {
-    result = { ok: true, value: await operation() };
-  } catch (error) {
-    result = { ok: false, error };
-  }
-  try {
-    // Native exit and queued receipts settle before registration publication.
-    registration.finish(await registration.nativeSettlement);
-  } catch (error) {
-    if (!result.ok) {
-      throw createSqliteLifecycleAggregateError(
-        [result.error, error],
-        "Agent open and registration publication failed",
-        result.error,
-      );
-    }
-    throw error;
-  }
-  if (!result.ok) {
-    throw result.error;
-  }
-  return result.value;
-}
-
-export type AgentDatabaseNativeGeneration = {
-  failure(): "open-refused" | "native" | undefined;
-  isPrepared(): boolean;
-  captureClaim(): AgentDatabaseGenerationClaim;
-  run<T>(
-    source: AgentDatabaseRequestExecutionSource,
-    operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
-    assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
-    createIfMissing?: boolean,
-    signal?: AbortSignal,
-  ): Promise<T | undefined>;
-  close(): Promise<void>;
-};
-
-/** Bind a native claim to the same borrower and logical generation that captured it. */
-export function captureBorrowedAgentDatabaseGenerationClaim(
-  assertBorrowed: () => void,
-  readGeneration: () => AgentDatabaseNativeGeneration | undefined,
-): AgentDatabaseGenerationClaim {
-  assertBorrowed();
-  const captured = readGeneration();
-  if (!captured) {
-    throw new Error("Agent database execution has no admitted generation");
-  }
-  const claim = captured.captureClaim();
-  return {
-    identity: claim.identity,
-    incarnation: claim.incarnation,
-    assertCurrent() {
-      assertBorrowed();
-      if (readGeneration() !== captured) {
-        throw new Error("Agent database execution generation was replaced");
-      }
-      claim.assertCurrent();
-    },
-  };
-}
 
 /** A logical execution owner can replace this generation only after its native close settles. */
 export function createAgentDatabaseNativeGeneration(
   agentId: string,
   pathname: string,
   context: OpenClawStateWorkerContext,
+  logicalLifetime: Int32Array<SharedArrayBuffer>,
   assertLogicalCurrent: () => void,
   assertCleanupOwned: () => void,
   expectedIdentity: AgentDatabaseExecutionFileIdentity | undefined,
   acceptFileIdentity: (identity: AgentDatabaseExecutionFileIdentity) => void,
+  onTerminal: (reason: Error) => void,
   creatingIdentity?: DatabasePathIdentity,
+  creationClaim?: AgentDatabaseFileExecutionOpen["creationClaim"],
 ): AgentDatabaseNativeGeneration {
-  const input: AgentDatabaseExecutionOpen = {
+  const inPreparation = AsyncLocalStorage.snapshot();
+  const input: AgentDatabaseFileExecutionOpen = {
     leaseId: randomUUID(),
     agentId,
     databasePath: pathname,
@@ -170,11 +91,13 @@ export function createAgentDatabaseNativeGeneration(
     environment: context.environment,
     ...(expectedIdentity ? { expectedIdentity } : {}),
     ...(creatingIdentity ? { creatingIdentity } : {}),
+    ...(creationClaim ? { creationClaim } : {}),
   };
-  let retiring = false;
+  const lifetime = new AgentDatabaseExecutionLifetime();
   let opening: Promise<Store | undefined> | undefined;
   let openedStore: Store | undefined;
   let openingFailure: "open-refused" | "native" | undefined;
+  let closedOpeningRefusal: Error | undefined;
   let openingAdmission:
     | {
         admission: ReturnType<SqliteWorkerAdmissionFactory>["admission"];
@@ -185,29 +108,42 @@ export function createAgentDatabaseNativeGeneration(
   let nativeIdentity: AgentDatabaseFileExecutionIdentity | undefined;
   let nativeStopped: Promise<void> | undefined;
   let readCloseReceipt: (() => SqliteWorkerCloseReceipt | undefined) | undefined;
+  let readOpenRefused: (() => boolean) | undefined;
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
-  let integrityCheckPending: "quick" | "full" | undefined;
   let preparationPublished = false;
-  let receiveValidation:
-    | ReturnType<typeof captureOpenClawAgentDatabaseValidationTransfer>
-    | undefined;
+  const sharedPreparation = createSharedAgentDatabasePreparation(() => assertCurrent());
 
+  // The actor retains this observer; keep it outside the opening caller's scope.
+  const onNativeLost = (reason: Error) => {
+    lifetime.retire();
+    // Before the lease handoff this generation has borrowed no validation.
+    if (lease) {
+      invalidateOpenClawAgentDatabaseValidation(pathname);
+    }
+    // Failed opening admission can be ordinary lock contention; run classifies it after settlement.
+    if (preparationPublished) {
+      onTerminal(reason);
+    }
+  };
   const assertCurrent = () => {
     assertLogicalCurrent();
-    if (retiring) {
-      throw new Error("Agent native generation is retiring");
-    }
     if (openedStore && !isSqliteWorkerStoreAvailable(openedStore)) {
       throw new Error("Agent database execution lost its native owner");
+    }
+    if (!lifetime.open) {
+      throw new Error("Agent native generation is retiring");
     }
   };
   const admission =
     (
       source: AgentDatabaseRequestExecutionSource,
-      registration?: Registration,
+      registration?: AgentDatabaseRegistration,
       assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     ): SqliteWorkerAdmissionFactory =>
     (operation) => {
+      let receiveValidation = registration
+        ? captureOpenClawAgentDatabaseAdmissionPublication({ agentId, path: pathname })
+        : undefined;
       if (registration) {
         registration.nativeSettlement = operation.settled;
       }
@@ -225,14 +161,12 @@ export function createAgentDatabaseNativeGeneration(
         assertCurrent();
         // The reference checks its captured constraints; this owner checks the path last.
         assertCallerCurrent?.(identity);
-        if (identity) {
-          assertExistingDatabaseIdentity(
-            pathname,
-            `file:${identity.physicalIdentity}`,
-            identity.birthtime,
-          );
-        }
       };
+      const cleanup = captureAgentDeletionCleanupAdmission(
+        { agentId, path: pathname, env: context.environment },
+        operation,
+        assertSourceCurrent,
+      );
       const observeNative = (request: SqliteWorkerAdmissionRequest): void => {
         const facts = request.facts;
         if (
@@ -241,15 +175,7 @@ export function createAgentDatabaseNativeGeneration(
           facts.kind === "agent-registration-committed"
         ) {
           const received = facts.registration;
-          if (
-            !registration ||
-            !lease ||
-            !isRecord(received) ||
-            received.agentId !== input.agentId ||
-            received.agentPath !== pathname ||
-            received.stateDatabasePath !== lease.sharedStatePath ||
-            received.stateDatabaseIdentity !== lease.sharedStateIdentity
-          ) {
+          if (!registration || !lease || !isRecord(received)) {
             throw new Error("Agent registration commit differs from its admitted native owner");
           }
           // Revocation governs future work; it cannot erase a witnessed COMMIT.
@@ -265,14 +191,27 @@ export function createAgentDatabaseNativeGeneration(
         request: SqliteWorkerAdmissionRequest,
       ): AgentDatabaseFileExecutionIdentity | undefined => {
         const facts = request.facts;
-        if (
-          request.stage === "prepare" &&
-          isRecord(facts) &&
-          facts.kind === "agent-registration-committed"
-        ) {
+        if (cleanup?.authorize(request)) {
           return undefined;
         }
         assertCurrent();
+        cleanup?.assertCurrent();
+        if (request.stage === "prepare" && isRecord(facts) && facts.kind === "agent-startup-fts") {
+          assertSourceCurrent();
+          if (
+            !assertPreparationJournal ||
+            !lease ||
+            (facts.message !== undefined && typeof facts.message !== "string")
+          ) {
+            throw new Error("FTS repair requires live Gateway startup admission");
+          }
+          recordAgentDatabaseStartupFtsRepair(
+            [expectedIdentity?.physicalIdentity ?? pathname, expectedIdentity?.birthtime].join(":"),
+            context.admission.databasePath,
+            facts.message,
+          );
+          return undefined;
+        }
         if (!nativeIdentity || creatingIdentity) {
           assertCallerCurrent?.();
         }
@@ -282,7 +221,7 @@ export function createAgentDatabaseNativeGeneration(
           facts.kind === "agent-registration-start"
         ) {
           assertSourceCurrent();
-          if (!registration || !lease || !isDeepStrictEqual(facts.lease, lease)) {
+          if (!registration || !lease) {
             throw new Error("Agent registration start differs from its admitted native owner");
           }
           registration.begin();
@@ -297,15 +236,8 @@ export function createAgentDatabaseNativeGeneration(
             publishOpenClawStateDatabaseWorkerAdmission(context.admission);
             const received = facts.lease;
             if (
-              !isDeepStrictEqual(facts.identity, context.admission.identity) ||
               !isRecord(received) ||
-              received.leaseId !== input.leaseId ||
-              received.agentId !== input.agentId ||
-              received.path !== pathname ||
-              received.ownerPid !== process.pid ||
-              (received.ownerStartTime !== null && typeof received.ownerStartTime !== "number") ||
-              received.sharedStatePath !== context.admission.databasePath ||
-              received.sharedStateIdentity !== context.admission.identity.key
+              (received.ownerStartTime !== null && typeof received.ownerStartTime !== "number")
             ) {
               throw new Error("Agent worker lease differs from its captured native owner");
             }
@@ -318,14 +250,19 @@ export function createAgentDatabaseNativeGeneration(
               sharedStatePath: context.admission.databasePath,
               sharedStateIdentity: context.admission.identity.key,
             };
-            receiveValidation = captureOpenClawAgentDatabaseValidationTransfer({
+            receiveValidation = captureOpenClawAgentDatabaseAdmissionPublication({
               agentId,
               path: pathname,
             });
-            facts.validationPort.postMessage(
-              getOpenClawAgentDatabaseValidationForTransfer({ agentId, path: pathname }),
-              [],
-            );
+            const preparation = {
+              integrityRevoked: hasRevokedOpenClawAgentDatabaseValidation(pathname),
+              validation: getOpenClawAgentDatabaseValidationForTransfer({
+                agentId,
+                path: pathname,
+              }),
+            };
+            facts.validationPort.postMessage(preparation, []);
+            recordWorkerMessage("admission", "to_worker");
           } finally {
             facts.validationPort.close();
           }
@@ -334,25 +271,23 @@ export function createAgentDatabaseNativeGeneration(
         if (
           request.stage === "prepare" &&
           isRecord(facts) &&
-          (facts.kind === "agent-integrity-check" || facts.kind === "agent-open-resume")
+          (facts.kind === "agent-open-resume" || facts.kind === "agent-validation-start")
         ) {
           assertSourceCurrent();
-          if (!lease || !isDeepStrictEqual(facts.lease, lease)) {
+          if (!lease) {
             throw new Error("Agent open notice differs from its captured native lease");
           }
-          if (facts.kind === "agent-integrity-check") {
-            if (facts.check !== "quick" && facts.check !== "full") {
-              throw new Error("Agent integrity notice has an invalid check mode");
-            }
-            integrityCheckPending = facts.check;
+          if (facts.kind === "agent-validation-start") {
+            // Lease cleanup can revoke borrowed proof. Capture before verification,
+            // so a later revocation still rejects the resulting publication.
+            receiveValidation = captureOpenClawAgentDatabaseAdmissionPublication({
+              agentId,
+              path: pathname,
+            });
           }
           return undefined;
         }
-        if (request.stage === "open") {
-          if (!isDeepStrictEqual(facts, input)) {
-            throw new Error("Agent database open differs from its captured owner");
-          }
-        } else {
+        if (request.stage !== "open") {
           const received = isRecord(facts) ? facts.identity : undefined;
           if (
             !isRecord(received) ||
@@ -407,19 +342,35 @@ export function createAgentDatabaseNativeGeneration(
         attachment: {
           kind: "agent-execution",
           startupJournal: assertPreparationJournal !== undefined,
+          ...(cleanup ? { deletion: cleanup.guard } : {}),
         },
         nativeLocations,
         assertCurrent,
         authorize(request) {
+          if (
+            request.stage === "prepare" &&
+            isRecord(request.facts) &&
+            request.facts.kind === "agent-registration-committed"
+          ) {
+            // observeNative records this past COMMIT; subsequent work still requires live authority.
+            return;
+          }
           const identity = authorizeNative(request);
           if (request.stage === "open" && registration) {
             assertSourceCurrent();
-            const creating = creatingIdentity
-              ? creatingIdentity.key.startsWith("path:")
-              : !nativeIdentity &&
-                !expectedIdentity &&
-                readDatabasePathIdentitySync(pathname).key.startsWith("path:");
+            const creating =
+              !nativeIdentity &&
+              !expectedIdentity &&
+              readDatabasePathIdentitySync(pathname).key.startsWith("path:");
             if (creating) {
+              if (
+                !lease &&
+                getOpenClawAgentDatabaseValidationForTransfer({ agentId, path: pathname })
+              ) {
+                // Absence ends retained proof even if Linux reuses the inode. Later open
+                // checkpoints must preserve the publication captured by the lease handoff.
+                invalidateOpenClawAgentDatabaseValidation(pathname);
+              }
               registration.begin();
             }
           }
@@ -427,7 +378,8 @@ export function createAgentDatabaseNativeGeneration(
             request.stage === "prepare" &&
             identity &&
             receiveValidation &&
-            isRecord(request.facts)
+            isRecord(request.facts) &&
+            request.facts.validation !== undefined
           ) {
             assertSourceCurrent(identity);
             receiveValidation(identity.physicalIdentity, request.facts.validation);
@@ -436,7 +388,29 @@ export function createAgentDatabaseNativeGeneration(
           assertSourceCurrent(identity);
         },
       })(operation);
+      if (preparationPublished && nativeIdentity && !creatingIdentity && !registration) {
+        bindSqliteWorkerExecutionAuthority(captured.admission, {
+          logical: logicalLifetime,
+          native: lifetime.state,
+          physicalIdentity: nativeIdentity.physicalIdentity,
+          incarnation: nativeIdentity.incarnation,
+          ...(nativeIdentity.birthtime !== undefined
+            ? { birthtime: nativeIdentity.birthtime }
+            : {}),
+        });
+      }
       captured.admission.observeRequests(observeNative);
+      return captured;
+    };
+  const captureOpeningAdmission =
+    (
+      source: AgentDatabaseRequestExecutionSource,
+      registration?: AgentDatabaseRegistration,
+      assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
+    ): SqliteWorkerAdmissionFactory =>
+    (operation) => {
+      const captured = admission(source, registration, assertCallerCurrent)(operation);
+      openingAdmission = { admission: captured.admission, settled: operation.settled };
       return captured;
     };
   const open = (
@@ -448,104 +422,136 @@ export function createAgentDatabaseNativeGeneration(
     assertCurrent();
     source.assertCurrent();
     assertCallerCurrent?.();
-    opening ??= (async () => {
-      const registration = createIfMissing
-        ? captureOpenClawAgentDatabaseRegistration({
-            agentId,
-            agentPath: pathname,
-            admission: context.admission,
-            assertPublicationCurrent: context.assertPublicationCurrent,
-            onRegistryChange: source.onRegistryChange,
-          })
-        : undefined;
-      const openStore = async () => {
-        const assertOpening = () => {
-          assertCurrent();
-          source.assertCurrent();
-          assertCallerCurrent?.();
-          signal?.throwIfAborted();
-        };
-        const createAdmission = admission(source, registration, assertCallerCurrent);
-        const store = await openAgentDatabaseSqliteWorkerStore<AgentDatabaseOperations>(
-          {
-            moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.agentDatabaseExecution),
-            databasePath: pathname,
-            input,
-            existingOnly: !createIfMissing,
-          },
-          {
-            stateContext: context,
-            stateDatabasePath: context.admission.databasePath,
-            assertCurrent: assertOpening,
-            signal,
-            createAdmission: (operation) => {
-              const captured = createAdmission(operation);
-              openingAdmission = { admission: captured.admission, settled: operation.settled };
-              return captured;
+    if (!opening) {
+      const finishPreparation = sharedPreparation.retain();
+      const finishNativeOpen = sharedPreparation.beginNativeOpen();
+      opening = (async () => {
+        retireReplacedAgentValidation(agentId, pathname, expectedIdentity);
+        // Existing physical files share preparation. First-use creation retains its caller's claim.
+        const preparingShared = expectedIdentity !== undefined;
+        const registration =
+          createIfMissing || preparingShared
+            ? captureOpenClawAgentDatabaseRegistration({
+                agentId,
+                agentPath: pathname,
+                admission: context.admission,
+                assertPublicationCurrent: context.assertPublicationCurrent,
+                onRegistryChange: (preparingShared ? sharedPreparation.source : source)
+                  .onRegistryChange,
+              })
+            : undefined;
+        const openStore = async () => {
+          const assertOpening = () => {
+            assertCurrent();
+            source.assertCurrent();
+            assertCallerCurrent?.();
+            signal?.throwIfAborted();
+          };
+          // Keep the native owner reachable if registration publication fails after open.
+          openedStore = await openAgentDatabaseSqliteWorkerStore<AgentDatabaseOperations>(
+            {
+              moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.agentDatabaseExecution),
+              databasePath: pathname,
+              input,
+              existingOnly: preparingShared || !createIfMissing,
             },
-            onNativeStopped: (stopped, readReceipt) => {
-              nativeStopped = stopped;
-              readCloseReceipt = readReceipt;
+            {
+              stateContext: context,
+              stateDatabasePath: context.admission.databasePath,
+              assertCurrent: preparingShared ? assertCurrent : assertOpening,
+              signal: preparingShared ? undefined : signal,
+              createAdmission: captureOpeningAdmission(
+                preparingShared ? sharedPreparation.source : source,
+                registration,
+                preparingShared ? undefined : assertCallerCurrent,
+              ),
+              onNativeStopped: (stopped, readReceipt, readRefused) => {
+                nativeStopped = stopped;
+                readCloseReceipt = readReceipt;
+                readOpenRefused = readRefused;
+              },
+              onNativeLost,
             },
-          },
-        );
-        // Keep the native owner reachable if registration publication fails after open.
-        openedStore = store;
-        return store;
-      };
-      const store = registration
-        ? await settleAgentRegistration(registration, openStore)
-        : await openStore();
-      if (!store) {
-        return undefined;
-      }
-      try {
-        assertCurrent();
-        // An eager opener has already settled registration and its topology publication.
-        if (nativeIdentity) {
-          preparationPublished = true;
-        }
-        return store;
-      } catch (error) {
-        try {
-          await store.close();
-        } catch (cleanupError) {
-          throw new AggregateError([error, cleanupError], "Agent open and cleanup failed", {
-            cause: cleanupError,
-          });
-        }
-        throw error;
-      }
-    })()
-      .catch(async (error: unknown) => {
-        openingFailure = "native";
-        if (openingAdmission) {
-          const { admission: captured, settled } = openingAdmission;
-          const outcome = await settled;
-          // Only a settled caller refusal can preserve other logical borrowers.
-          // Protocol faults, cleanup aggregates, and uncertain native work retire the whole owner.
-          if (
-            captured.failure !== undefined &&
-            captured.failureSource !== "protocol" &&
-            error === captured.failure &&
-            outcome.kind !== "unknown" &&
-            !captured.committed &&
-            captured.cleanupFailures.length === 0
-          ) {
-            openingFailure = "open-refused";
+          );
+          const store = openedStore;
+          finishNativeOpen();
+          if (store && preparingShared && !nativeIdentity) {
+            await inPreparation(() =>
+              runSqliteWorkerStoreOperation(
+                store,
+                (scope) => scope.execute({ type: "database.prepareWrite", input: undefined }),
+                undefined,
+                assertCurrent,
+                captureOpeningAdmission(sharedPreparation.source, registration),
+              ),
+            );
           }
+          return openedStore;
+        };
+        const store = registration
+          ? await settleAgentRegistration(registration, openStore)
+          : await openStore();
+        if (!store) {
+          return undefined;
         }
-        throw error;
-      })
-      .finally(() => {
-        openingAdmission = undefined;
-      });
+        try {
+          assertCurrent();
+          // An eager opener has already settled registration and its topology publication.
+          if (nativeIdentity) {
+            preparationPublished = true;
+          }
+          return store;
+        } catch (error) {
+          try {
+            await store.close();
+          } catch (cleanupError) {
+            throw new AggregateError([error, cleanupError], "Agent open and cleanup failed", {
+              cause: cleanupError,
+            });
+          }
+          if (error instanceof AgentDatabaseExecutionAdmissionClosedError) {
+            closedOpeningRefusal = error;
+          }
+          throw error;
+        }
+      })()
+        .catch(async (error: unknown) => {
+          openingFailure =
+            error instanceof AgentDatabaseSchemaAdmissionChangedError ||
+            (closedOpeningRefusal !== undefined && error === closedOpeningRefusal)
+              ? "open-refused"
+              : "native";
+          if (openingAdmission) {
+            const { admission: captured, settled } = openingAdmission;
+            const outcome = await settled;
+            // Only a settled caller refusal can preserve other logical borrowers.
+            // Protocol faults, cleanup aggregates, and uncertain native work retire the whole owner.
+            if (
+              captured.failure !== undefined &&
+              captured.failureSource !== "protocol" &&
+              error === captured.failure &&
+              outcome.kind !== "unknown" &&
+              !captured.committed &&
+              captured.cleanupFailures.length === 0
+            ) {
+              openingFailure = "open-refused";
+            }
+          }
+          throw error;
+        })
+        .finally(() => {
+          openingAdmission = undefined;
+          closedOpeningRefusal = undefined;
+          finishNativeOpen();
+          finishPreparation();
+        });
+    }
     const attempt = opening;
     return attempt.then((store) => {
       if (!store && opening === attempt) {
         opening = undefined;
       }
-      if (!store && createIfMissing) {
+      if (!store && createIfMissing && !expectedIdentity) {
         return open(source, assertCallerCurrent, true, signal);
       }
       return store;
@@ -564,89 +570,87 @@ export function createAgentDatabaseNativeGeneration(
       assertCallerCurrent?.();
       signal?.throwIfAborted();
     };
-    const store = openedStore ?? (await open(source, assertCallerCurrent, createIfMissing, signal));
-    assertOperationCurrent();
-    if (!store) {
-      return undefined;
-    }
-    if (!nativeIdentity) {
-      const registration = captureOpenClawAgentDatabaseRegistration({
-        agentId,
-        agentPath: pathname,
-        admission: context.admission,
-        assertPublicationCurrent: context.assertPublicationCurrent,
-        onRegistryChange: source.onRegistryChange,
-      });
-      await settleAgentRegistration(registration, async () => {
-        const createAdmission = admission(source, registration, assertCallerCurrent);
-        await runSqliteWorkerStoreOperation(
-          store,
-          (scope) => scope.execute({ type: "database.prepareWrite", input: undefined }, { signal }),
-          undefined,
-          assertOperationCurrent,
-          createAdmission,
-        );
-        assertCurrent();
-        source.assertCurrent();
-      });
-      preparationPublished = true;
-    }
-    if (integrityCheckPending) {
-      requestOpenClawAgentDatabaseIntegrityCheck({
-        path: pathname,
-        env: input.environment,
-        check: integrityCheckPending,
-      });
-      integrityCheckPending = undefined;
+    const finishPreparation = preparationPublished ? undefined : sharedPreparation.retain();
+    const publication = finishPreparation
+      ? sharedPreparation.follow(source, assertOperationCurrent)
+      : undefined;
+    let preparedStore: Store;
+    try {
+      // Opening publishes registration before another caller can reuse this generation.
+      const store = preparationPublished
+        ? openedStore
+        : await racePromiseWithAbortSignal(
+            open(source, assertCallerCurrent, createIfMissing, signal),
+            signal,
+            (aborted) => aborted.reason,
+          );
+      publication?.assertPublished();
+      assertOperationCurrent();
+      if (!store) {
+        if (createIfMissing && expectedIdentity) {
+          throw new Error("Captured agent database file disappeared before writable preparation");
+        }
+        return undefined;
+      }
+      const schema = createIfMissing
+        ? getOpenClawAgentDatabaseValidationForTransfer({ agentId, path: pathname })?.schema
+        : undefined;
+      // Explicitly invalidated proof must be prepared in the worker before host adoption.
+      if (
+        !nativeIdentity ||
+        (createIfMissing &&
+          preparationPublished &&
+          (!schema || Atomics.load(new Int32Array(schema.valid), 0) !== 1))
+      ) {
+        const registration = captureOpenClawAgentDatabaseRegistration({
+          agentId,
+          agentPath: pathname,
+          admission: context.admission,
+          assertPublicationCurrent: context.assertPublicationCurrent,
+          onRegistryChange: source.onRegistryChange,
+        });
+        await settleAgentRegistration(registration, async () => {
+          await runSqliteWorkerStoreOperation(
+            store,
+            (scope) =>
+              scope.execute({ type: "database.prepareWrite", input: undefined }, { signal }),
+            undefined,
+            assertOperationCurrent,
+            admission(source, registration, assertCallerCurrent),
+          );
+          assertCurrent();
+          source.assertCurrent();
+        });
+        preparationPublished = true;
+      }
+      preparedStore = store;
+    } finally {
+      publication?.release();
+      finishPreparation?.();
     }
     return runSqliteWorkerStoreOperation(
-      store,
+      preparedStore,
       operation,
       undefined,
       assertOperationCurrent,
       admission(source, undefined, assertCallerCurrent),
     );
   }
-  const readConfirmedClose = () => {
-    const receipt = readCloseReceipt?.();
-    if (
-      !receipt ||
-      !nativeIdentity ||
-      !lease ||
-      receipt.incarnation !== nativeIdentity.incarnation ||
-      receipt.identity.key !== `file:${nativeIdentity.physicalIdentity}` ||
-      receipt.identity.canonicalPath !== nativeIdentity.nativeLocation
-    ) {
-      return undefined;
-    }
-    return { receipt, identity: nativeIdentity, lease };
-  };
-  const publishCloseCheckpoint = () => {
-    const closed = readConfirmedClose();
-    if (!closed) {
-      return;
-    }
-    const { receipt, identity, lease: closedLease } = closed;
-    try {
-      // Cleanup retains custody after ordinary admission is revoked during shutdown.
-      assertCleanupOwned();
-      assertExistingDatabaseIdentity(pathname, receipt.identity.key);
-      assertExistingDatabaseIdentity(identity.nativeLocation, receipt.identity.key);
-      assertExistingDatabaseIdentity(closedLease.sharedStatePath, closedLease.sharedStateIdentity);
-      publishSqliteWalCheckpointObservation(pathname, receipt.checkpoint);
-    } catch {
-      // A stale diagnostic must not clear another generation's budget or fail native cleanup.
-    }
-  };
   return {
     failure: () =>
       openingFailure ??
-      (openedStore && !isSqliteWorkerStoreAvailable(openedStore) ? "native" : undefined),
+      (openedStore && !isSqliteWorkerStoreAvailable(openedStore)
+        ? preparationPublished
+          ? "lost"
+          : "native"
+        : undefined),
     isPrepared() {
       assertCurrent();
       return preparationPublished;
     },
-    captureClaim() {
+    getPendingNativeOpen: sharedPreparation.getPendingNativeOpen,
+    getPendingPreparation: sharedPreparation.getPendingPreparation,
+    captureClaim(assertBorrowed) {
       assertCurrent();
       const captured = nativeIdentity;
       if (!captured) {
@@ -656,16 +660,14 @@ export function createAgentDatabaseNativeGeneration(
         identity: captured.physicalIdentity,
         incarnation: captured.incarnation,
         assertCurrent() {
+          assertBorrowed();
           assertCurrent();
-          if (nativeIdentity !== captured) {
-            throw new Error("Agent database generation changed");
-          }
         },
       };
     },
     run,
     close() {
-      retiring = true;
+      lifetime.retire();
       closing ??= (async () => {
         const errors: unknown[] = [];
         let storeClosed = false;
@@ -685,28 +687,30 @@ export function createAgentDatabaseNativeGeneration(
             errors.push(error);
           }
         }
-        if (nativeStopped && lease) {
+        // A failed close can leave the Worker running; its retry owns lease cleanup.
+        if (errors.length === 0 && nativeStopped && lease) {
           try {
-            await nativeStopped;
-            assertCleanupOwned();
-            // The backend publishes this receipt only after native close and lease release.
-            // A closed client or exited Worker alone still needs orphan recovery.
-            if (storeClosed && readConfirmedClose()) {
-              assertExistingDatabaseIdentity(lease.sharedStatePath, lease.sharedStateIdentity);
-            } else {
-              await cleanupRetiredAgentDatabaseLease({
-                context,
-                stopped: nativeStopped,
-                assertOwned: assertCleanupOwned,
-                lease,
-              });
-            }
+            await cleanupRetiredAgentDatabaseLease({
+              context,
+              stopped: nativeStopped,
+              assertOwned: assertCleanupOwned,
+              lease,
+              refusedBeforeAgentOpen: readOpenRefused?.(),
+              closed: () =>
+                storeClosed
+                  ? readAgentDatabaseClosedReceipt(readCloseReceipt?.(), nativeIdentity, lease)
+                  : undefined,
+            });
           } catch (error) {
             errors.push(error);
           }
         }
         throwSqliteLifecycleErrors(errors, "Agent native close and lease cleanup failed");
-        publishCloseCheckpoint();
+        publishAgentDatabaseCloseCheckpoint(
+          pathname,
+          readAgentDatabaseClosedReceipt(readCloseReceipt?.(), nativeIdentity, lease),
+          assertCleanupOwned,
+        );
       })().catch((error: unknown) => {
         closing = undefined;
         throw error;

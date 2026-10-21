@@ -22,6 +22,7 @@ export function copyDockerSchedulerHarness(root: string) {
     "docker-e2e-scenarios.mts",
     "local-check-runtime.mts",
     "managed-child-process.mts",
+    "managed-cleanup-handoff.mts",
     "vitest-resource-ownership.mts",
     "official-external-channel-catalog.json",
     "official-external-provider-catalog.json",

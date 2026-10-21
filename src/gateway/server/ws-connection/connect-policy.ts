@@ -1,4 +1,3 @@
-// WebSocket connect policy resolves Control UI pairing bypasses and missing-device identity decisions.
 import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { roleCanSkipDeviceIdentity } from "../../role-policy.js";
 import type { GatewayRole } from "../../role-policy.types.js";

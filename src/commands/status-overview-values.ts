@@ -1,6 +1,4 @@
-import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { HostDesktopStatus } from "../gateway/desktop/host-source.js";
-import { formatTokenCount } from "../utils/token-format.js";
 
 export function formatHostDesktopStatus(status?: HostDesktopStatus): string {
   if (!status || status.state === "disabled") {
@@ -18,31 +16,13 @@ export function formatHostDesktopStatus(status?: HostDesktopStatus): string {
   return `${status.state} · 127.0.0.1:${status.port}${status.security ? ` · security ${status.security}` : ""}`;
 }
 
-type AgentStatusLike = {
-  bootstrapPendingCount: number;
-  totalSessions: number;
-  agents: Array<{
-    id: string;
-    lastActiveAgeMs?: number | null;
-  }>;
-};
-
-type PluginCompatibilityNoticeLike = {
-  pluginId?: string | null;
-  plugin?: string | null;
-};
-
-type SummarySessionsLike = {
-  count: number;
-  paths: string[];
-  defaults: {
-    model?: string | null;
-    contextTokens?: number | null;
-  };
-};
-
 export function countActiveStatusAgents(params: {
-  agentStatus: Pick<AgentStatusLike, "agents">;
+  agentStatus: {
+    agents: Array<{
+      id: string;
+      lastActiveAgeMs?: number | null;
+    }>;
+  };
   activeThresholdMs?: number;
 }) {
   const activeThresholdMs = params.activeThresholdMs ?? 10 * 60_000;
@@ -50,51 +30,4 @@ export function countActiveStatusAgents(params: {
   return params.agentStatus.agents.filter(
     (agent) => agent.lastActiveAgeMs != null && agent.lastActiveAgeMs <= activeThresholdMs,
   ).length;
-}
-
-export function buildStatusAllAgentsValue(params: {
-  agentStatus: AgentStatusLike;
-  activeThresholdMs?: number;
-}) {
-  const activeAgents = countActiveStatusAgents(params);
-  return `${params.agentStatus.agents.length} total · ${params.agentStatus.bootstrapPendingCount} bootstrapping · ${activeAgents} active · ${params.agentStatus.totalSessions} sessions`;
-}
-
-export function buildStatusSecretsValue(count: number) {
-  return count > 0 ? `${count} diagnostic${count === 1 ? "" : "s"}` : "none";
-}
-
-export function buildStatusEventsValue(params: { queuedSystemEvents: string[] }) {
-  return params.queuedSystemEvents.length > 0
-    ? `${params.queuedSystemEvents.length} queued`
-    : "none";
-}
-
-export function buildStatusProbesValue(params: { health?: unknown }) {
-  return params.health ? theme.success("enabled") : theme.muted("skipped (use --deep)");
-}
-
-export function buildStatusPluginCompatibilityValue(params: {
-  notices: PluginCompatibilityNoticeLike[];
-}) {
-  if (params.notices.length === 0) {
-    return theme.success("none");
-  }
-  const pluginCount = new Set(
-    params.notices.map((notice) => notice.pluginId ?? notice.plugin ?? ""),
-  ).size;
-  return theme.warn(
-    `${params.notices.length} notice${params.notices.length === 1 ? "" : "s"} · ${pluginCount} plugin${pluginCount === 1 ? "" : "s"}`,
-  );
-}
-
-export function buildStatusSessionsOverviewValue(params: { sessions: SummarySessionsLike }) {
-  const defaultCtx = params.sessions.defaults.contextTokens
-    ? ` (${formatTokenCount(params.sessions.defaults.contextTokens)} ctx)`
-    : "";
-  const storeLabel =
-    params.sessions.paths.length > 1
-      ? `${params.sessions.paths.length} stores`
-      : (params.sessions.paths[0] ?? "unknown");
-  return `${params.sessions.count} stored · default ${params.sessions.defaults.model ?? "unknown"}${defaultCtx} · ${storeLabel}`;
 }

@@ -1,6 +1,4 @@
-# iOS Release Agent Policy
-
-Root rules still apply. This file adds the iOS release guardrails.
+# iOS app
 
 ## UI / Typography
 
@@ -15,12 +13,9 @@ Root rules still apply. This file adds the iOS release guardrails.
 
 - Maintain the Settings Licenses screen when iOS app dependencies change.
 - Bundled license files live in `apps/ios/Resources/Licenses/`.
-- License files must be UTF-8 `.txt` files. Do not add Markdown, HTML, RTF, or generated plist license content.
-- The Licenses screen discovers bundled `.txt` files at runtime through `LicenseDocumentLoader`; do not hardcode individual license rows in Swift.
-- License rows are ordered alphabetically in code by derived display title. Do not use numeric filename prefixes for ordering.
-- Filenames should be plain dependency names, for example `WebRTC.txt`; the filename is used only to derive the row title and must not be shown as a row subtitle.
+- License files: UTF-8 `.txt`, each named after the dependency (`WebRTC.txt`).
 - Do not add OpenClaw, OpenClaw Foundation, or other first-party/self-owned license entries. The screen is for third-party/open-source dependency acknowledgements.
-- When adding, removing, or upgrading iOS dependencies, audit whether `apps/ios/Resources/Licenses/` needs updates. Exclude dependencies owned by OpenClaw Foundation from the published license list.
+- When adding, removing, or upgrading iOS dependencies, audit whether `apps/ios/Resources/Licenses/` needs updates.
 - When adding, removing, or replacing redistributed font binaries under `apps/ios/Sources/Fonts/`, update `apps/ios/THIRD_PARTY_FONTS.md` with immutable upstream source URLs and SHA-256 checksums for each bundled file.
 - Keep license detail bodies rendered as verbatim monospace text.
 - Keep Licenses in the offline Settings fallback's Device section and in the Dashboard's This iPhone/This iPad page through the native bridge panel.
@@ -31,10 +26,7 @@ Root rules still apply. This file adds the iOS release guardrails.
 - Agent-driven iOS uploads must use only `pnpm ios:release:upload`. The default destination is App Store staging; `--destination testflight` distributes to the configured external TestFlight group without staging the App Store listing.
 - Run **iOS Store Release** from `main` with operation `release` or `testflight`, or use the matching `pnpm ios:release:upload` destination locally. The release entry point owns live planning, generated notes, the unchanged source SHA, upload, and staging of the processed build. It saves notes as an immutable artifact and does not edit tracked files or create preparation commits or metadata PRs.
 - The planner derives the gateway version from root `package.json`. App Store staging reuses the one editable revision for that gateway, retries an unreleased revision found in App Store Connect build-upload history, and allocates the next revision only after released history. Historical exact gateway versions consume revision zero.
-- Build allocation uses App Store Connect `buildUploads`, including awaiting, processing, failed, and complete uploads. Every Apple-visible attempt consumes its build number; retries increment the build within the same App Store revision.
-- Only one iOS release uploader may run at a time. App Store staging fails closed for multiple active versions, locked/in-review state, or a different active gateway. TestFlight planning uses the current gateway train independently of editable App Store drafts. Unknown upload state or revision exhaustion still fails closed.
-- `--version`, `--revision`, and `--build-number` remain checked overrides. The pipeline must reject an override that differs from the live deterministic plan. `--version` is always the gateway version, never the encoded App Store version.
-- Do not infer release identity from the current date, mobile-release refs, or generated local files. Generate store notes from changes since the exact build attached to the latest public App Store version. Require the saved notes artifact; historical changelog tools do not supply or gate store notes.
+- Do not infer release identity from the current date, mobile-release refs, or generated local files.
 - If `pnpm ios:release:upload` exits non-zero, stop immediately and report the failing step.
 - After a failed `pnpm ios:release:upload`, do not continue with a lower-level upload path. For an already processed upload whose notes, build selection, or TestFlight distribution failed, use `node scripts/mobile-release.mjs stage --platform ios --recovery-dir DIR` with its saved artifacts; this must never reupload or regenerate notes. Otherwise inspect and reconcile App Store Connect state before another upload attempt.
 - Daily TestFlight runs use the `ios-testflight` environment, the configured external group ID, and existing beta metadata. Submit for TestFlight beta review when required and enable automatic tester notification; preserve pending reviews and use saved-artifact recovery for partially completed distribution. See [TestFlight distribution](VERSIONING.md#testflight-distribution).

@@ -363,79 +363,6 @@ function removeMarkdownImageSpans(line: string, matches: MarkdownImageMatch[]): 
   return pieces.join("");
 }
 
-function collectMarkdownImageSegments(params: {
-  line: string;
-  matches: MarkdownImageMatch[];
-  media: string[];
-  allowlist?: ReadonlyMap<string, string>;
-  preserveTrailingWhitespace?: boolean;
-}): {
-  cleanedLine?: string;
-  lineSegments: ParsedMediaOutputSegment[];
-  foundMedia: boolean;
-} {
-  const { matches } = params;
-  if (matches.length === 0) {
-    return { lineSegments: [], foundMedia: false };
-  }
-
-  const segmentPieces: string[] = [];
-  const visiblePieces: string[] = [];
-  const extractedImages: MarkdownImageMatch[] = [];
-  const lineSegments: ParsedMediaOutputSegment[] = [];
-  let cursor = 0;
-  let foundMedia = false;
-
-  for (const match of matches) {
-    const before = params.line.slice(cursor, match.start);
-    segmentPieces.push(before);
-    visiblePieces.push(before);
-
-    const target = normalizeMediaSource(match.destination.trim());
-    const selectedTarget = params.allowlist?.get(target);
-    if (selectedTarget || (!params.allowlist && hasHttpUrlPrefix(target) && isValidMedia(target))) {
-      extractedImages.push(match);
-      const beforeText = params.preserveTrailingWhitespace
-        ? segmentPieces.join("")
-        : cleanLineText(segmentPieces.join(""));
-      if (beforeText.trim()) {
-        lineSegments.push({ type: "text", text: beforeText });
-      }
-      segmentPieces.length = 0;
-      const mediaTarget = selectedTarget ?? target;
-      params.media.push(mediaTarget);
-      lineSegments.push({ type: "media", url: mediaTarget });
-      foundMedia = true;
-    } else {
-      const original = params.line.slice(match.start, match.end);
-      segmentPieces.push(original);
-      visiblePieces.push(original);
-    }
-
-    cursor = match.end;
-  }
-
-  const after = params.line.slice(cursor);
-  segmentPieces.push(after);
-  visiblePieces.push(after);
-  const trailingText = params.preserveTrailingWhitespace
-    ? segmentPieces.join("")
-    : cleanLineText(segmentPieces.join(""));
-  if (trailingText.trim()) {
-    lineSegments.push({ type: "text", text: trailingText });
-  }
-  // Prepared projection cleans only gaps attached to removed images, preserving all other source.
-  const cleanedLine = params.preserveTrailingWhitespace
-    ? removeMarkdownImageSpans(params.line, extractedImages)
-    : cleanLineText(visiblePieces.join(""));
-
-  return {
-    cleanedLine: params.preserveTrailingWhitespace ? cleanedLine : cleanedLine || undefined,
-    lineSegments,
-    foundMedia,
-  };
-}
-
 /** Splits tool/stdout text into visible text, media attachments, voice tags, and ordered segments. */
 export function splitMediaOutput(
   raw: string,
@@ -513,14 +440,37 @@ export function splitMediaOutput(
   // Line offsets and scanner spans advance in source order.
   let codeBlockIndex = 0;
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 2) {
-    const line = expectDefined(lines[lineIndex], "media output line");
+    let line = expectDefined(lines[lineIndex], "media output line");
     lineSeparator = lines[lineIndex + 1] ?? "";
-    const lineEnd = lineOffset + line.length;
+    let lineEnd = lineOffset + line.length;
+    const isMediaDirective = extractMediaDirectives && /^\s*MEDIA:/i.test(line);
     const lineImages: MarkdownImageMatch[] = [];
     for (; markdownImageIndex < markdownImages.length; markdownImageIndex += 1) {
       const match = expectDefined(markdownImages[markdownImageIndex], "Markdown image span");
       if (match.start >= lineEnd) {
         break;
+      }
+      if (
+        !isMediaDirective &&
+        match.start >= lineOffset &&
+        match.end > lineEnd &&
+        match.end - lineOffset <= MAX_MARKDOWN_IMAGE_LINE_LENGTH &&
+        lineImages.length < MAX_MARKDOWN_IMAGE_MATCHES_PER_LINE
+      ) {
+        // The Markdown scanner can span label, destination, and title lines. Project
+        // that complete source range together so extraction cannot split the image.
+        let endIndex = lineIndex;
+        let endOffset = lineEnd;
+        while (endOffset < match.end && endIndex + 2 < lines.length) {
+          endOffset += (lines[endIndex + 1]?.length ?? 0) + (lines[endIndex + 2]?.length ?? 0);
+          endIndex += 2;
+        }
+        if (endOffset - lineOffset <= MAX_MARKDOWN_IMAGE_LINE_LENGTH) {
+          lineIndex = endIndex;
+          lineEnd = endOffset;
+          line = trimmedRaw.slice(lineOffset, lineEnd);
+          lineSeparator = lines[lineIndex + 1] ?? "";
+        }
       }
       if (
         line.length <= MAX_MARKDOWN_IMAGE_LINE_LENGTH &&
@@ -548,16 +498,77 @@ export function splitMediaOutput(
       continue;
     }
 
-    const linePrefix = line.trimStart().slice(0, "MEDIA:".length);
-    if (!extractMediaDirectives || !linePrefix.toUpperCase().startsWith("MEDIA:")) {
+    if (!isMediaDirective) {
       const markdownImageResult = extractMarkdownImages
-        ? collectMarkdownImageSegments({
-            line,
-            matches: lineImages,
-            media,
-            allowlist: markdownImageAllowlist,
-            preserveTrailingWhitespace: options.preserveTrailingWhitespace,
-          })
+        ? ((): {
+            cleanedLine?: string;
+            lineSegments: ParsedMediaOutputSegment[];
+            foundMedia: boolean;
+          } => {
+            const preserveTrailingWhitespace = options.preserveTrailingWhitespace;
+            if (lineImages.length === 0) {
+              return { lineSegments: [], foundMedia: false };
+            }
+
+            const segmentPieces: string[] = [];
+            const visiblePieces: string[] = [];
+            const extractedImages: MarkdownImageMatch[] = [];
+            const lineSegments: ParsedMediaOutputSegment[] = [];
+            let cursor = 0;
+
+            for (const imageMatch of lineImages) {
+              const before = line.slice(cursor, imageMatch.start);
+              segmentPieces.push(before);
+              visiblePieces.push(before);
+
+              const target = normalizeMediaSource(imageMatch.destination.trim());
+              const selectedTarget = markdownImageAllowlist?.get(target);
+              if (
+                selectedTarget ||
+                (!markdownImageAllowlist && hasHttpUrlPrefix(target) && isValidMedia(target))
+              ) {
+                extractedImages.push(imageMatch);
+                const beforeText = preserveTrailingWhitespace
+                  ? segmentPieces.join("")
+                  : cleanLineText(segmentPieces.join(""));
+                if (beforeText.trim()) {
+                  lineSegments.push({ type: "text", text: beforeText });
+                }
+                segmentPieces.length = 0;
+                const mediaTarget = selectedTarget ?? target;
+                media.push(mediaTarget);
+                lineSegments.push({ type: "media", url: mediaTarget });
+              } else {
+                const original = line.slice(imageMatch.start, imageMatch.end);
+                segmentPieces.push(original);
+                visiblePieces.push(original);
+              }
+
+              cursor = imageMatch.end;
+            }
+
+            const after = line.slice(cursor);
+            segmentPieces.push(after);
+            visiblePieces.push(after);
+            const trailingText = preserveTrailingWhitespace
+              ? segmentPieces.join("")
+              : cleanLineText(segmentPieces.join(""));
+            if (trailingText.trim()) {
+              lineSegments.push({ type: "text", text: trailingText });
+            }
+            // Prepared projection cleans only gaps attached to removed images, preserving all other source.
+            const cleanedImageLine = preserveTrailingWhitespace
+              ? removeMarkdownImageSpans(line, extractedImages)
+              : cleanLineText(visiblePieces.join(""));
+
+            return {
+              cleanedLine: preserveTrailingWhitespace
+                ? cleanedImageLine
+                : cleanedImageLine || undefined,
+              lineSegments,
+              foundMedia: extractedImages.length > 0,
+            };
+          })()
         : { lineSegments: [], foundMedia: false };
       if (!markdownImageResult.foundMedia) {
         keepLine(line);

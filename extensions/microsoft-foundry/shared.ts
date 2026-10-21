@@ -119,17 +119,24 @@ function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
   return normalized ? normalized.startsWith("claude") : false;
 }
 
+function matchesFoundryOpenAIFamily(
+  normalized: string | undefined,
+  gptPrefix: "gpt-" | "gpt-5",
+): boolean {
+  return (
+    normalized !== undefined &&
+    (normalized.startsWith(gptPrefix) ||
+      normalized.startsWith("o1") ||
+      normalized.startsWith("o3") ||
+      normalized.startsWith("o4"))
+  );
+}
+
 export function usesFoundryResponsesByDefault(value?: string | null): boolean {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return false;
-  }
   return (
-    normalized.startsWith("gpt-") ||
-    normalized.startsWith("o1") ||
-    normalized.startsWith("o3") ||
-    normalized.startsWith("o4") ||
-    normalized.startsWith("deepseek-v4") ||
+    matchesFoundryOpenAIFamily(normalized, "gpt-") ||
+    normalized?.startsWith("deepseek-v4") === true ||
     normalized === "computer-use-preview"
   );
 }
@@ -155,15 +162,9 @@ function supportsFoundryReasoningContent(value?: string | null): boolean {
 
 function supportsFoundryImageInput(value?: string | null): boolean {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return false;
-  }
   return (
     isAnthropicFoundryDeployment(normalized) ||
-    normalized.startsWith("gpt-") ||
-    normalized.startsWith("o1") ||
-    normalized.startsWith("o3") ||
-    normalized.startsWith("o4") ||
+    matchesFoundryOpenAIFamily(normalized, "gpt-") ||
     normalized === "computer-use-preview"
   );
 }
@@ -242,33 +243,17 @@ function resolveFoundryModelTokenLimits(value?: string | null): {
 }
 
 export function requiresFoundryMaxCompletionTokens(value?: string | null): boolean {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return false;
-  }
-  return (
-    normalized.startsWith("gpt-5") ||
-    normalized.startsWith("o1") ||
-    normalized.startsWith("o3") ||
-    normalized.startsWith("o4")
-  );
-}
-
-function supportsFoundryReasoningEffort(value?: string | null): boolean {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (
-    !normalized ||
-    /^gpt-5-chat(?:-|$)/u.test(normalized) ||
-    /^o1-mini(?:-|$)/u.test(normalized)
-  ) {
-    return false;
-  }
-  return requiresFoundryMaxCompletionTokens(normalized);
+  return matchesFoundryOpenAIFamily(normalizeOptionalLowercaseString(value), "gpt-5");
 }
 
 function resolveFoundryReasoningEfforts(value?: string | null): string[] | undefined {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized || !supportsFoundryReasoningEffort(normalized)) {
+  if (
+    !normalized ||
+    /^gpt-5-chat(?:-|$)/u.test(normalized) ||
+    /^o1-mini(?:-|$)/u.test(normalized) ||
+    !requiresFoundryMaxCompletionTokens(normalized)
+  ) {
     return undefined;
   }
   if (normalized === "gpt-5.1-codex-max") {
@@ -379,7 +364,7 @@ export function resolveFoundryModelCapabilities(
   const api = resolveFoundryApi(modelId, modelName, configuredApi);
   const normalizedInput = normalizeModelInput(existingInput);
   const supportedReasoningEfforts = resolveFoundryReasoningEfforts(modelName);
-  const supportsReasoningEffort = supportsFoundryReasoningEffort(modelName);
+  const supportsReasoningEffort = supportedReasoningEfforts !== undefined;
   const isAnthropic = api === ANTHROPIC_MESSAGES_API || isAnthropicFoundryDeployment(modelName);
   const supportsClaudeThinking =
     isAnthropic &&
@@ -556,9 +541,7 @@ export function buildFoundryAuthResult(params: {
           },
         },
       },
-      ...(Array.isArray(params.currentPluginsAllow) &&
-      params.currentPluginsAllow.length > 0 &&
-      !params.currentPluginsAllow.includes(PROVIDER_ID)
+      ...(params.currentPluginsAllow?.length && !params.currentPluginsAllow.includes(PROVIDER_ID)
         ? { plugins: { allow: [...params.currentPluginsAllow, PROVIDER_ID] } }
         : {}),
     },

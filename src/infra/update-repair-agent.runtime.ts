@@ -27,11 +27,6 @@ import {
   withInstallationTarget,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "./installation-target-context.js";
-import {
-  readUpdateRepairMaintenanceRequest,
-  updateRepairMaintenanceTool,
-  type UpdateRepairMaintenanceRequest,
-} from "./update-repair-maintenance.js";
 import type { UpdateRepairTarget } from "./update-repair-protocol.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 
@@ -129,7 +124,13 @@ async function withRepairResources<T>(run: () => Promise<T>): Promise<T> {
     Promise.resolve().then(() => {
       host.assertOpen();
       scheduler.signal.throwIfAborted();
-      return host.run(() => resources.run(run));
+      return host.run(() =>
+        resources.run(async () => {
+          const { captureRuntimeConfigAsyncReader } = await import("../config/io.js");
+          await captureRuntimeConfigAsyncReader()();
+          return run();
+        }),
+      );
     }),
   ]);
   try {
@@ -295,8 +296,10 @@ type UpdateRepairTurnParams = {
   timeoutMs: number;
   maxToolCalls: number;
   signal: AbortSignal;
+  /** Full authority for model candidates, tool admission, and tool effect guards. */
   isCurrent?: () => boolean;
-  maintenanceHandoff?: true;
+  /** Repeated run-preparation source checks; defaults to `isCurrent`. */
+  isLive?: () => boolean;
 };
 
 export async function runUpdateRepairTurn(params: UpdateRepairTurnParams) {
@@ -314,12 +317,14 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
   const runConfig = buildExecRunConfig({ base: config.value.runConfig, cwd: target.installRoot });
   const controller = new AbortController();
   const signal = AbortSignal.any([params.signal, controller.signal]);
-  const assertCurrent = () => {
+  const isLive = params.isLive ?? params.isCurrent;
+  const assertAuthority = (isCurrent: (() => boolean) | undefined) => {
     signal.throwIfAborted();
-    if (params.isCurrent?.() === false) {
+    if (isCurrent?.() === false) {
       throw new Error("Repair no longer owns the failed update.");
     }
   };
+  const assertCurrent = () => assertAuthority(params.isCurrent);
   const runId = `update-repair-${randomUUID()}`;
   const sessionKey = `agent:${route.agentId}:update-repair:${runId}`;
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
@@ -327,7 +332,7 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
     runId,
     route.agentId,
     "update.repair",
-    assertCurrent,
+    () => assertAuthority(isLive),
   );
   const toolBudget = createAgentToolExecutionBudget({
     maxToolCalls: params.maxToolCalls,
@@ -342,7 +347,6 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
     controller.abort(new Error("per-turn-budget"));
   }, params.timeoutMs);
   let cleanupProcessScope: (() => Promise<void>) | undefined;
-  let maintenance: UpdateRepairMaintenanceRequest | undefined;
   let envelope: {
     model: string;
     provider: string;
@@ -417,9 +421,6 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
                     cwd: target.installRoot,
                     config: runConfig,
                     prompt: params.prompt,
-                    clientTools: params.maintenanceHandoff
-                      ? [updateRepairMaintenanceTool]
-                      : undefined,
                     provider,
                     model,
                     ...(route.authProfileId && provider === route.provider
@@ -440,10 +441,6 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
         ),
     );
     const error = extractAgentRunTerminalError(result.result);
-    if (params.maintenanceHandoff && result.terminal.outcome.status === "ok" && !error) {
-      assertCurrent();
-      maintenance = readUpdateRepairMaintenanceRequest(result.result.meta);
-    }
     envelope = {
       model: result.model,
       provider: result.provider,
@@ -474,6 +471,5 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
     status: "completed" as const,
     toolCalls: toolBudget.toolCalls,
     envelope,
-    ...(maintenance ? { maintenance } : {}),
   };
 }

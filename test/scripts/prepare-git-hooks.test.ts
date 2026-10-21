@@ -24,53 +24,45 @@ function createSpawn(results: SpawnResult[]) {
   });
 }
 
+function configure(results: SpawnResult[], hooks = true, cwd = "/repo") {
+  const warn = vi.fn();
+  const spawnSync = createSpawn(results);
+  const result = configurePrepareGitHooks({
+    cwd,
+    existsSync: () => hooks,
+    spawnSync,
+    warn,
+  });
+  return { result, warn, spawnSync };
+}
+
 describe("configurePrepareGitHooks", () => {
   it.each([0, 1, 2])("stays quiet when Git is unavailable at command %i", (command) => {
-    const warn = vi.fn();
     const enoent = Object.assign(new Error("missing git"), { code: "ENOENT" });
     const preceding: SpawnResult[] = [{ status: 0, stdout: "true\n" }, { status: 1 }];
-
-    expect(
-      configurePrepareGitHooks({
-        cwd: "C:\\repo",
-        existsSync: () => true,
-        spawnSync: createSpawn([...preceding.slice(0, command), { error: enoent }]),
-        warn,
-      }),
-    ).toEqual({ configured: false, reason: "missing-git" });
+    const { result, warn } = configure(
+      [...preceding.slice(0, command), { error: enoent }],
+      true,
+      "C:\\repo",
+    );
+    expect(result).toEqual({ configured: false, reason: "missing-git" });
     expect(warn).not.toHaveBeenCalled();
   });
 
   it.each(["read", "write"])("warns without fallback when Git config %s fails", (operation) => {
-    const warn = vi.fn();
-    const spawnSync = createSpawn([
+    const { result, warn, spawnSync } = configure([
       { status: 0, stdout: "true\n" },
       ...(operation === "write" ? [{ status: 1 }] : []),
       { status: 128, stderr: "permission denied" },
     ]);
-
-    expect(
-      configurePrepareGitHooks({
-        cwd: "/repo",
-        existsSync: () => true,
-        spawnSync,
-        warn,
-      }),
-    ).toEqual({ configured: false, reason: "config-failed" });
+    expect(result).toEqual({ configured: false, reason: "config-failed" });
     expect(warn).toHaveBeenCalledWith("[prepare] could not configure git hooks: permission denied");
     expect(spawnSync).toHaveBeenCalledTimes(operation === "write" ? 3 : 2);
   });
 
   it("skips packaged installs without the source hook directory", () => {
-    const spawnSync = createSpawn([]);
-
-    expect(
-      configurePrepareGitHooks({
-        cwd: "/package",
-        existsSync: () => false,
-        spawnSync,
-      }),
-    ).toEqual({ configured: false, reason: "missing-hooks-dir" });
+    const { result, spawnSync } = configure([], false);
+    expect(result).toEqual({ configured: false, reason: "missing-hooks-dir" });
     expect(spawnSync).not.toHaveBeenCalled();
   });
 
@@ -84,50 +76,38 @@ describe("configurePrepareGitHooks", () => {
     reason: "configured" | "already-configured" | "config-failed";
     expected: string | null;
   };
-  const ownershipCases: OwnershipCase[] = [
-    { name: "fresh primary", reason: "configured", expected: "git-hooks" },
-    {
-      name: "explicit local owner",
+  function ownership(
+    name: string,
+    reason: OwnershipCase["reason"],
+    expected: string | null,
+    config: Omit<OwnershipCase, "name" | "reason" | "expected"> = {},
+  ): OwnershipCase {
+    return { name, reason, expected, ...config };
+  }
+  const ownershipCases = [
+    ownership("fresh primary", "configured", "git-hooks"),
+    ownership("explicit local owner", "already-configured", "local-hooks", {
       local: "local-hooks",
-      reason: "already-configured",
-      expected: "local-hooks",
-    },
-    {
-      name: "explicit global owner",
+    }),
+    ownership("explicit global owner", "already-configured", "global-hooks", {
       global: "global-hooks",
-      reason: "already-configured",
-      expected: "global-hooks",
-    },
-    { name: "explicit empty value", local: "", reason: "already-configured", expected: "" },
-    {
-      name: "linked without private config",
-      linked: true,
-      reason: "config-failed",
-      expected: null,
-    },
-    {
-      name: "linked inherited owner",
+    }),
+    ownership("explicit empty value", "already-configured", "", { local: "" }),
+    ownership("linked without private config", "config-failed", null, { linked: true }),
+    ownership("linked inherited owner", "already-configured", "shared-hooks", {
       linked: true,
       local: "shared-hooks",
-      reason: "already-configured",
-      expected: "shared-hooks",
-    },
-    {
-      name: "linked private initialization",
+    }),
+    ownership("linked private initialization", "configured", "git-hooks", {
       linked: true,
       worktreeConfig: true,
-      reason: "configured",
-      expected: "git-hooks",
-    },
-    {
-      name: "overrides masking shared config",
+    }),
+    ownership("overrides masking shared config", "already-configured", "linked-hooks", {
       linked: true,
       worktreeConfig: true,
       local: "shared-hooks",
       overrides: true,
-      reason: "already-configured",
-      expected: "linked-hooks",
-    },
+    }),
   ];
 
   it.each(ownershipCases)("preserves Git configuration ownership: $name", (scenario) => {

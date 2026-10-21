@@ -1,10 +1,12 @@
-/** Exact execution binding for owner-native outbound message lifecycle facts. */
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+/** Exact execution binding for owner-native outbound message lifecycle facts. */
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -12,7 +14,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import {
   parseExecutionIdentityAdmissionToken,
   type ExecutionIdentityAdmissionToken,
@@ -22,7 +24,7 @@ type ExecutionBindingDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "execution_identity_contexts" | "outbound_message_execution_bindings"
 >;
-const ensuredTerminalBindingDatabases = new WeakSet<DatabaseSync>();
+const ensuredTerminalBindingDatabases = new WeakSet<EngineConnection>();
 
 export type MessageExecutionBinding = Readonly<{
   contextId: string;
@@ -43,7 +45,7 @@ export function selectMessageExecutionBinding(params: {
 }
 
 export function hasMessageExecutionBindingColumns(
-  db: DatabaseSync,
+  db: EngineConnection,
   tableName: "outbound_message_progress",
 ): boolean {
   return (
@@ -52,19 +54,17 @@ export function hasMessageExecutionBindingColumns(
 }
 
 function terminalBindingSchemaSql(): string {
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS outbound_message_execution_bindings (",
-  );
-  const indexStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "CREATE INDEX IF NOT EXISTS outbound_message_execution_bindings_execution_event_idx",
-    start,
-  );
-  const end = indexStart >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(";", indexStart) : -1;
-  if (start < 0 || end < 0) {
-    throw new Error("canonical outbound message execution binding schema is missing");
-  }
-  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + 1);
+  return getOpenClawStateFeatureSchemaSql("outbound_message_execution_bindings", {
+    endMarker:
+      "  ON outbound_message_execution_bindings (context_id, execution_id, run_id, event_id);",
+    errorMessage: "canonical outbound message execution binding schema is missing",
+  });
 }
+
+const ensureTerminalBindingSchema = createSqliteSchemaEnsurer(terminalBindingSchemaSql, {
+  tables: ["outbound_message_execution_bindings"],
+  indexes: ["outbound_message_execution_bindings_execution_event_idx"],
+});
 
 /** Install the terminal binding companion only when an exact producer first uses it. */
 export function ensureTerminalMessageExecutionBindingSchema(
@@ -76,8 +76,11 @@ export function ensureTerminalMessageExecutionBindingSchema(
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; bindings use Kysely.
-      db.exec(terminalBindingSchemaSql());
+      if (isPostgresSqlConnection(db)) {
+        ensureStatePostgresFragment(db, "outbound_message_execution_bindings");
+      } else {
+        ensureTerminalBindingSchema(db);
+      }
     },
     { ...options, database },
     { operationLabel: "audit.outbound-message.execution-binding.schema.ensure" },
@@ -102,7 +105,7 @@ export function planMessageExecutionBinding(
 
 /** Confirm the exact retained admission row; run correlation alone never binds a receipt. */
 export function confirmMessageExecutionBinding(
-  db: DatabaseSync,
+  db: EngineConnection,
   token: ExecutionIdentityAdmissionToken | undefined,
 ): MessageExecutionBinding | undefined {
   if (!token || !tableExists(db, "execution_identity_contexts")) {
@@ -122,7 +125,7 @@ export function confirmMessageExecutionBinding(
 }
 
 function recordTerminalMessageExecutionBinding(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: MessageExecutionBinding & { eventId: string; runId: string },
 ): void {
   executeSqliteQuerySync(
@@ -139,7 +142,7 @@ function recordTerminalMessageExecutionBinding(
 }
 
 export function recordConfirmedTerminalMessageExecutionBinding(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { eventId: string | undefined; token?: ExecutionIdentityAdmissionToken },
 ): void {
   if (!params.eventId) {

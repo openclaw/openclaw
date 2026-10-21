@@ -19,6 +19,7 @@ import {
   identity,
   previousSha,
   syntheticImmutableGatewayObservation,
+  syntheticActivationCustody,
   syntheticImmutableServiceObservation,
 } from "./update-immutable-activation.test-support.js";
 import type {
@@ -26,6 +27,7 @@ import type {
   ImmutableInstallDescriptor,
   ImmutablePreparedGeneration,
 } from "./update-immutable-install-schema.js";
+import { expectUncalled } from "./update-immutable-layout.test-support.js";
 import type { ImmutableProtectionSnapshot } from "./update-immutable-protection-schema.js";
 import type { ImmutableServiceObservation } from "./update-immutable-service.js";
 import type { ImmutableGatewayObservation } from "./update-immutable-verification.js";
@@ -50,13 +52,16 @@ const mocks = vi.hoisted(() => ({
   prepareRecovery: vi.fn(),
   verifyRecovery: vi.fn(),
   operationLock: vi.fn(),
+  prewarm: vi.fn(),
+}));
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runCommandWithTimeout: mocks.prewarm,
 }));
 vi.mock("./package-update-activation-immutable-recovery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./package-update-activation-immutable-recovery.js")>()),
   prepareImmutableRecoveryRuntime: mocks.prepareRecovery,
   verifyImmutableRecoveryRuntime: mocks.verifyRecovery,
-  resolveImmutableRecoveryCommand: (reference: { helperPath: string }) =>
-    `synthetic-node ${reference.helperPath}`,
 }));
 vi.mock("./update-immutable-install-record.js", () => ({ readImmutableInstallRecord: mocks.read }));
 vi.mock("./update-immutable-install.js", async (importOriginal) => ({
@@ -67,7 +72,8 @@ vi.mock("./update-immutable-owner.js", () => ({ withImmutableUpdateOwner: mocks.
 vi.mock("../cli/update-cli/update-command-executor.js", () => ({
   captureUpdateCommandExecutorAuthority: mocks.authority,
 }));
-vi.mock("./update-immutable-generation.js", () => ({
+vi.mock("./update-immutable-generation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-immutable-generation.js")>()),
   verifyImmutableGeneration: mocks.generation,
 }));
 vi.mock("./update-candidate-canary.js", () => ({ validateUpdateCandidateCanary: mocks.canary }));
@@ -118,6 +124,20 @@ const read = () =>
   );
 
 const serviceObservation = () => syntheticImmutableServiceObservation(descriptor, serving);
+const activate = (options: Partial<Parameters<typeof activateImmutableUpdate>[0]> = {}) =>
+  activateImmutableUpdate({ root, expectedPrepared: candidate, ...options });
+const lifecycle = (sha: string, ...actions: string[]) =>
+  actions.map((action) => `${action}:${sha}`);
+function expectRestarts(stops: number, starts: number) {
+  expect(mocks.stop).toHaveBeenCalledTimes(stops);
+  expect(mocks.start).toHaveBeenCalledTimes(starts);
+}
+function requireFixture<T>(implementation: T | undefined): T {
+  if (implementation === undefined) {
+    throw new Error("Missing lifecycle fixture");
+  }
+  return implementation;
+}
 
 describe.skipIf(process.platform !== "linux")("immutable activation orchestration", () => {
   beforeEach(() => {
@@ -132,13 +152,7 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
     ({ root, descriptor, candidate, protection } = createImmutableActivationLayout(parent));
     serving = { pid: nextPid++, generationPath: descriptor.current.path };
     const assertCurrent = () => {};
-    const authority: ImmutableActivationOperation["authority"] = {
-      databasePath: journalPath(),
-      databaseIdentity: identity(journalPath()),
-      parentIdentity: identity(path.dirname(journalPath())),
-      installKey: root,
-      owner: "synthetic-executor",
-    };
+    const { authority, recovery } = syntheticActivationCustody(descriptor, ["1:9", "1:10"]);
     mocks.read.mockImplementation(async () => read());
     mocks.install.mockImplementation(async () => ({
       root,
@@ -163,16 +177,7 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
       }
     });
     mocks.authority.mockReturnValue(authority);
-    mocks.prepareRecovery.mockResolvedValue({
-      root,
-      path: path.join(path.dirname(journalPath()), `recovery-${previousSha}`),
-      sha: previousSha,
-      identity: "1:9",
-      buildDigest: descriptor.current.buildDigest,
-      helperPath: path.join(path.dirname(journalPath()), "recovery.mjs"),
-      helperIdentity: "1:10",
-      helperDigest: "6".repeat(64),
-    });
+    mocks.prepareRecovery.mockResolvedValue(recovery);
     mocks.verifyRecovery.mockImplementation(async ({ assertCurrent: check }) => check());
     mocks.generation.mockImplementation(async (generationPath: string) => ({
       identity: identity(generationPath),
@@ -184,16 +189,7 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
       return {
         status: "ok",
         phase: "readiness",
-        steps: [
-          {
-            name: "candidate-gateway-startup",
-            command: "gateway run",
-            durationMs: 1,
-            exitCode: 0,
-          },
-        ],
-        durationMs: 1,
-        logTail: [],
+        steps: [{ name: "candidate-gateway-startup", exitCode: 0 }],
       };
     });
     mocks.inspect.mockImplementation(async ({ assertCurrent: check }) => {
@@ -268,11 +264,108 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
 
   afterEach(() => vi.restoreAllMocks());
 
+  function enableRetention(publish: boolean, compatibleCandidate = true) {
+    for (const generation of [
+      descriptor.current.path,
+      ...(compatibleCandidate ? [candidate.path] : []),
+    ]) {
+      const file = path.join(generation, "package.json");
+      const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+      manifest.openclaw.immutableInstallDescriptorVersion = 3;
+      fs.writeFileSync(file, JSON.stringify(manifest));
+    }
+    const current = read();
+    const upgraded = updateImmutableInstallRecord(
+      current,
+      {
+        ...current,
+        descriptor: {
+          ...current.descriptor,
+          version: 3,
+          releaseRetention: { version: 1, mode: "inspect", keepVerifiedGenerations: 3, pins: [] },
+        },
+        prepared: publish ? null : current.prepared,
+      },
+      () => {},
+    );
+    if (publish) {
+      recordImmutablePreparedGeneration(upgraded, candidate, () => {});
+    }
+  }
+
+  it.each([
+    { publish: true, outcome: "succeeded" },
+    { publish: true, outcome: "rolled-back" },
+    { publish: false, outcome: "succeeded" },
+  ] as const)(
+    "records only native publication accepted by activation ($publish, $outcome)",
+    async ({ publish, outcome }) => {
+      enableRetention(publish);
+      const published = read().releases?.[0];
+      if (outcome === "rolled-back") {
+        outcomes = ["failed", "verified"];
+      }
+      const result = await activate();
+      expect(result.status).toBe(outcome);
+      const completed = read();
+      expect(completed.releases).toEqual(
+        publish
+          ? [
+              {
+                ...published,
+                verifiedRevision: outcome === "succeeded" ? completed.revision : null,
+              },
+            ]
+          : [],
+      );
+      expect(fs.existsSync(candidate.path)).toBe(true);
+      expect(fs.existsSync(descriptor.current.path)).toBe(true);
+    },
+  );
+
+  it("refuses an older candidate reader before drain on a version-3 installation", async () => {
+    enableRetention(true, false);
+    const before = read();
+    const pid = serving?.pid;
+    await expect(activate()).rejects.toThrow("cannot read this control format");
+    expectUncalled(mocks.drain, mocks.stop, mocks.prepareRecovery);
+    expect(serving?.pid).toBe(pid);
+    expect(read()).toEqual(before);
+    expect(selectedSha()).toBe(previousSha);
+  });
+
+  it.each([0, 1])(
+    "prewarms before stopping the service and treats exit %i as advisory",
+    async (code) => {
+      fs.mkdirSync(path.join(candidate.path, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(candidate.path, "dist/gateway-prewarm.js"), "");
+      mocks.prewarm.mockImplementation(async (argv) => {
+        expect(serving?.generationPath).toBe(descriptor.current.path);
+        expect(argv).toEqual([
+          "/usr/sbin/runuser",
+          "-u",
+          descriptor.service.account,
+          "--",
+          "/usr/bin/env",
+          "-i",
+          descriptor.runtime.path,
+          path.join(candidate.path, "gateway-prewarm.mjs"),
+        ]);
+        return { code, stdout: "", stderr: "" };
+      });
+      const onReceipt = vi.fn();
+      await activate({ onReceipt });
+      expect(mocks.prewarm).toHaveBeenCalledOnce();
+      expect(selectedSha()).toBe(candidateSha);
+      expect(
+        onReceipt.mock.calls.flat().some((line) => line.includes("compile-cache-warning")),
+      ).toBe(code !== 0);
+    },
+  );
+
   it("activates a prepared generation in lifecycle order and retires only verified success", async () => {
     const receipts: string[] = [];
-    const result = await activateImmutableUpdate({
-      root,
-      expectedPrepared: candidate,
+    const result = await activate({
       timeoutMs: 30_000,
       drainTimeoutMs: 30_000,
       onReceipt: (line) => receipts.push(line),
@@ -284,13 +377,9 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
     });
     expect(result.installation.prepared).toBeUndefined();
     expect(events).toEqual([
-      `canary:${candidateSha}`,
-      `drain:${previousSha}`,
-      `stop:${previousSha}`,
-      `start:${candidateSha}`,
-      `verify:${candidateSha}`,
-      `canary:${candidateSha}`,
-      `verify:${candidateSha}`,
+      ...lifecycle(candidateSha, "canary"),
+      ...lifecycle(previousSha, "drain", "stop"),
+      ...lifecycle(candidateSha, "start", "verify", "canary", "verify"),
     ]);
     expect(receipts).toContain("immutable:prepared");
     expect(receipts.at(-1)).toBe("immutable:retired");
@@ -303,12 +392,7 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
           operationId: result.operationId,
           outcome: "succeeded",
           selectedSha: candidateSha,
-          gateway: {
-            pid: 4_201,
-            bootId: "boot-4201",
-            version: "2026.10.3",
-            buildId: candidateSha,
-          },
+          gateway: { pid: 4_201, bootId: "boot-4201", version: "2026.10.3", buildId: candidateSha },
         },
       },
     });
@@ -334,9 +418,7 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
       { ...current, descriptor: { ...disabled, version: 1 } },
       () => {},
     );
-    await expect(activateImmutableUpdate({ root, expectedPrepared: candidate })).rejects.toThrow(
-      "activation is disabled",
-    );
+    await expect(activate()).rejects.toThrow("activation is disabled");
     expect(events).toEqual([]);
     expect(read()).toEqual(preparationOnly);
     expect(selectedSha()).toBe(previousSha);
@@ -354,22 +436,18 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
       buildDigest: "8".repeat(64),
       preparedAtMs: candidate.preparedAtMs + 1,
     };
-    const enter = mocks.owner.getMockImplementation();
-    if (!enter) {
-      throw new Error("Missing executor fixture");
-    }
+    const enter = requireFixture(mocks.owner.getMockImplementation());
     mocks.owner.mockImplementationOnce(async (...args) => {
       recordImmutablePreparedGeneration(read(), replacement, () => {});
       return enter(...args);
     });
-    await expect(activateImmutableUpdate({ root, expectedPrepared: candidate })).rejects.toThrow(
+    await expect(activate()).rejects.toThrow(
       "Prepared immutable generation changed before activation",
     );
     expect(read().prepared).toEqual(replacement);
     expect(selectedSha()).toBe(previousSha);
     expect(events).toEqual([]);
-    expect(mocks.drain).not.toHaveBeenCalled();
-    expect(mocks.stop).not.toHaveBeenCalled();
+    expectUncalled(mocks.drain, mocks.stop);
   });
 
   it.each([1, 2] as const)(
@@ -404,28 +482,21 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
       expect(receipts).toEqual(["immutable:control-recovered"]);
       expect(events).toEqual([]);
       expect(selectedSha()).toBe(previousSha);
-      expect(mocks.operationLock).not.toHaveBeenCalled();
-      expect(mocks.verifyRecovery).not.toHaveBeenCalled();
+      expectUncalled(mocks.operationLock, mocks.verifyRecovery);
     },
   );
 
   it("rolls a real candidate failure back to its predecessor and retains recovery evidence", async () => {
     outcomes = ["failed", "verified"];
-    const result = await activateImmutableUpdate({ root, expectedPrepared: candidate });
+    const result = await activate();
     expect(result).toMatchObject({ status: "rolled-back", phase: "rolled-back" });
     expect(events).toEqual([
-      `canary:${candidateSha}`,
-      `drain:${previousSha}`,
-      `stop:${previousSha}`,
-      `start:${candidateSha}`,
-      `verify:${candidateSha}`,
-      `canary:${previousSha}`,
-      `drain:${candidateSha}`,
-      `stop:${candidateSha}`,
-      `start:${previousSha}`,
-      `verify:${previousSha}`,
-      `canary:${previousSha}`,
-      `verify:${previousSha}`,
+      ...lifecycle(candidateSha, "canary"),
+      ...lifecycle(previousSha, "drain", "stop"),
+      ...lifecycle(candidateSha, "start", "verify"),
+      ...lifecycle(previousSha, "canary"),
+      ...lifecycle(candidateSha, "drain", "stop"),
+      ...lifecycle(previousSha, "start", "verify", "canary", "verify"),
     ]);
     expect(selectedSha()).toBe(previousSha);
     expect(read().activation).toMatchObject({
@@ -451,19 +522,14 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
       events.push(`start-failed:${selectedSha()}`);
       throw new Error("synthetic systemd start failed");
     });
-    const result = await activateImmutableUpdate({ root, expectedPrepared: candidate });
+    const result = await activate();
     expect(result).toMatchObject({ status: "rolled-back", phase: "rolled-back" });
     expect(selectedSha()).toBe(previousSha);
     expect(events).toEqual([
-      `canary:${candidateSha}`,
-      `drain:${previousSha}`,
-      `stop:${previousSha}`,
-      `start-failed:${candidateSha}`,
-      `canary:${previousSha}`,
-      `start:${previousSha}`,
-      `verify:${previousSha}`,
-      `canary:${previousSha}`,
-      `verify:${previousSha}`,
+      ...lifecycle(candidateSha, "canary"),
+      ...lifecycle(previousSha, "drain", "stop"),
+      ...lifecycle(candidateSha, "start-failed"),
+      ...lifecycle(previousSha, "canary", "start", "verify", "canary", "verify"),
     ]);
     expect(read().activation?.operation).toMatchObject({
       operationId: result.operationId,
@@ -486,9 +552,7 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
         return run(assertCurrent, { assertCurrent });
       });
       await expect(
-        activateImmutableUpdate({
-          root,
-          expectedPrepared: candidate,
+        activate({
           onReceipt: (line) => {
             if (line === "immutable:starting") {
               executorActive = false;
@@ -569,9 +633,7 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
         beforeEffect();
         events.push("unexpected-native-stop");
       });
-      await expect(activateImmutableUpdate({ root, expectedPrepared: candidate })).rejects.toThrow(
-        "protected state changed",
-      );
+      await expect(activate()).rejects.toThrow("protected state changed");
       expect(hostCommitted).toBe(false);
       expect(serving).toEqual(originalServing);
       expect(selectedSha()).toBe(previousSha);
@@ -599,10 +661,7 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
         }
         return foreignWrite ? foreign : original;
       });
-      const canary = mocks.canary.getMockImplementation();
-      if (!canary) {
-        throw new Error("Missing canary fixture");
-      }
+      const canary = requireFixture(mocks.canary.getMockImplementation());
       mocks.canary.mockImplementation(async (params) => {
         const result = await canary(params);
         if (window === "rehearsal" && params.root === descriptor.current.path) {
@@ -623,14 +682,11 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
       mocks.verifyProtection.mockImplementation((snapshot, options) => {
         checkProtection(snapshot, options);
       });
-      await expect(activateImmutableUpdate({ root, expectedPrepared: candidate })).rejects.toThrow(
-        "foreign config write",
-      );
+      await expect(activate()).rejects.toThrow("foreign config write");
       expect(read().activation?.operation?.protection).toEqual(original);
       expect(selectedSha()).toBe(candidateSha);
       expect(serving?.generationPath).toBe(candidate.path);
-      expect(mocks.stop).toHaveBeenCalledOnce();
-      expect(mocks.start).toHaveBeenCalledOnce();
+      expectRestarts(1, 1);
       expect(read().activation?.lastResult).toBeUndefined();
     },
   );
@@ -639,10 +695,7 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
     "resumes %s toward the predecessor after a crash with the failed candidate stopped",
     async (phase) => {
       outcomes = ["failed"];
-      const stop = mocks.stop.getMockImplementation();
-      if (!stop) {
-        throw new Error("Missing service-stop fixture");
-      }
+      const stop = requireFixture(mocks.stop.getMockImplementation());
       mocks.stop.mockImplementation(async (params) => {
         await stop(params);
         if (phase === "rollback-stopping" && selectedSha() === candidateSha) {
@@ -651,9 +704,7 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
       });
       let interrupted = false;
       await expect(
-        activateImmutableUpdate({
-          root,
-          expectedPrepared: candidate,
+        activate({
           onReceipt: (line) => {
             if (
               !interrupted &&
@@ -677,11 +728,8 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
       const result = await recoverImmutableUpdate({ root });
       expect(result.status).toBe("rolled-back");
       expect(events.slice(beforeRecovery)).toEqual([
-        `verify:${candidateSha}`,
-        `start:${previousSha}`,
-        `verify:${previousSha}`,
-        `canary:${previousSha}`,
-        `verify:${previousSha}`,
+        ...lifecycle(candidateSha, "verify"),
+        ...lifecycle(previousSha, "start", "verify", "canary", "verify"),
       ]);
       expect(selectedSha()).toBe(previousSha);
       expect(serving?.generationPath).toBe(descriptor.current.path);
@@ -694,9 +742,7 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
     mocks.stopped.mockImplementation(() => {
       throw new Error("synthetic cgroup still populated");
     });
-    await expect(activateImmutableUpdate({ root, expectedPrepared: candidate })).rejects.toThrow(
-      "synthetic cgroup still populated",
-    );
+    await expect(activate()).rejects.toThrow("synthetic cgroup still populated");
     expect(selectedSha()).toBe(previousSha);
     expect(mocks.start).not.toHaveBeenCalled();
     expect(read().activation?.operation).toMatchObject({
@@ -709,12 +755,11 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
     "retains a %s candidate without rolling back",
     async (outcome) => {
       outcomes = [outcome];
-      const result = await activateImmutableUpdate({ root, expectedPrepared: candidate });
+      const result = await activate();
       expect(result.status).toBe("pending");
       expect(result.installation.currentSha).toBe(candidateSha);
       expect(selectedSha()).toBe(candidateSha);
-      expect(mocks.stop).toHaveBeenCalledOnce();
-      expect(mocks.start).toHaveBeenCalledOnce();
+      expectRestarts(1, 1);
       expect(read().activation?.operation).toMatchObject({
         operationId: result.operationId,
         phase: "verifying",
@@ -730,7 +775,7 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
     "retires a healthy selected %s during recovery without another restart",
     async (selected) => {
       outcomes = selected === "candidate" ? ["unverified"] : ["failed", "verified"];
-      const initial = await activateImmutableUpdate({ root, expectedPrepared: candidate });
+      const initial = await activate();
       const starts = mocks.start.mock.calls.length;
       const stops = mocks.stop.mock.calls.length;
       const pid = serving?.pid;
@@ -740,8 +785,7 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
         status: selected === "candidate" ? "succeeded" : "rolled-back",
         operationId: initial.operationId,
       });
-      expect(mocks.start).toHaveBeenCalledTimes(starts);
-      expect(mocks.stop).toHaveBeenCalledTimes(stops);
+      expectRestarts(stops, starts);
       expect(serving?.pid).toBe(pid);
       expect(mocks.verifyRecovery).toHaveBeenCalledWith(
         expect.objectContaining({ reference: retainedRecovery }),
@@ -762,10 +806,7 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
   it("retains accepted startup writes when the post-start canary fails and later recovers a healthy PID", async () => {
     const accepted = { ...protection, capturedAtMs: 2 };
     mocks.capture.mockResolvedValueOnce(protection).mockResolvedValue(accepted);
-    const canary = mocks.canary.getMockImplementation();
-    if (!canary) {
-      throw new Error("Missing canary fixture");
-    }
+    const canary = requireFixture(mocks.canary.getMockImplementation());
     let canaries = 0;
     mocks.canary.mockImplementation(async (params) => {
       if (++canaries === 2) {
@@ -773,26 +814,21 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
       }
       return canary(params);
     });
-    const result = await activateImmutableUpdate({ root, expectedPrepared: candidate });
+    const result = await activate();
     expect(result).toMatchObject({ status: "pending", reason: "post-start-canary-unverified" });
     expect(selectedSha()).toBe(candidateSha);
     expect(read().activation?.operation?.protection).toEqual(accepted);
     expect(read().activation?.lastResult).toBeUndefined();
-    expect(mocks.stop).toHaveBeenCalledOnce();
-    expect(mocks.start).toHaveBeenCalledOnce();
+    expectRestarts(1, 1);
     serving = { pid: nextPid++, generationPath: candidate.path };
     const recovered = await recoverImmutableUpdate({ root });
     expect(recovered.status).toBe("succeeded");
     expect(read().activation?.lastResult?.gateway?.pid).toBe(serving.pid);
-    expect(mocks.stop).toHaveBeenCalledOnce();
-    expect(mocks.start).toHaveBeenCalledOnce();
+    expectRestarts(1, 1);
   });
 
   it("keeps recovery pending when the serving process changes after the post-start canary", async () => {
-    const wait = mocks.wait.getMockImplementation();
-    if (!wait) {
-      throw new Error("Missing readiness fixture");
-    }
+    const wait = requireFixture(mocks.wait.getMockImplementation());
     let observations = 0;
     mocks.wait.mockImplementation(async (params) => {
       if (++observations === 2) {
@@ -800,22 +836,19 @@ describe.skipIf(process.platform !== "linux")("immutable activation orchestratio
       }
       return wait(params);
     });
-    const result = await activateImmutableUpdate({ root, expectedPrepared: candidate });
+    const result = await activate();
     expect(result).toMatchObject({ status: "pending", reason: "post-start-generation-unverified" });
     expect(selectedSha()).toBe(candidateSha);
     expect(mocks.canary).toHaveBeenCalledTimes(2);
     expect(read().activation?.lastResult).toBeUndefined();
     expect(read().activation?.operation).toBeDefined();
-    expect(mocks.stop).toHaveBeenCalledOnce();
-    expect(mocks.start).toHaveBeenCalledOnce();
+    expectRestarts(1, 1);
   });
 
   it("retains the stopped predecessor and durable operation when activation is interrupted", async () => {
     let interrupted = false;
     await expect(
-      activateImmutableUpdate({
-        root,
-        expectedPrepared: candidate,
+      activate({
         onReceipt: (line) => {
           if (!interrupted && line === "immutable:publishing") {
             interrupted = true;

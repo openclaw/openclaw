@@ -3,6 +3,7 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.i18n.nativeString
 import java.time.DayOfWeek
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeFormatterBuilder
@@ -24,26 +25,20 @@ object SessionSnooze {
   ): List<Preset> {
     val now = Instant.ofEpochMilli(nowMs).atZone(zone)
     val today = now.toLocalDate()
-    val evening =
-      today
-        .atTime(18, 0)
+
+    fun wakeAt(
+      date: LocalDate,
+      hour: Int,
+    ): Long =
+      date
+        .atTime(hour, 0)
         .atZone(zone)
         .toInstant()
         .toEpochMilli()
-    val tomorrow =
-      today
-        .plusDays(1)
-        .atTime(9, 0)
-        .atZone(zone)
-        .toInstant()
-        .toEpochMilli()
-    val nextMonday =
-      today
-        .with(TemporalAdjusters.next(DayOfWeek.MONDAY))
-        .atTime(9, 0)
-        .atZone(zone)
-        .toInstant()
-        .toEpochMilli()
+
+    val evening = wakeAt(today, 18)
+    val tomorrow = wakeAt(today.plusDays(1), 9)
+    val nextMonday = wakeAt(today.with(TemporalAdjusters.next(DayOfWeek.MONDAY)), 9)
     return buildList {
       add(Preset("hour", nativeString("In 1 hour"), now.plusHours(1).toInstant().toEpochMilli()))
       add(Preset("three-hours", nativeString("In 3 hours"), now.plusHours(3).toInstant().toEpochMilli()))

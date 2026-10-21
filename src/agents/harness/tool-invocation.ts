@@ -6,7 +6,6 @@ import { runWithToolExecutionValidation } from "../agent-tools.execution-validat
 import type { AnyAgentTool } from "../agent-tools.types.js";
 import {
   consumeTrustedToolNoStartError,
-  isToolResultError,
   resolveToolResultFailureKind,
 } from "../tool-result-error.js";
 import { createAgentHarnessToolExecutionBoundaryRegistry } from "./tool-execution.js";
@@ -76,22 +75,18 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
       ? runWithToolExecutionValidation(params.call.toolCallId, params.validateArguments, invokeTool)
       : invokeTool());
     boundary.capture();
-    const executedArguments = boundary.executedArguments;
-    const rawIsError = isToolResultError(rawResult);
-    params.beforeSnapshotResult?.({
+    const resultFacts = {
       boundary,
       startedAt,
-      executedArguments,
+      executedArguments: boundary.executedArguments,
       rawResult,
-      rawIsError,
-    });
+    };
     const rawFailureKind = resolveToolResultFailureKind(rawResult);
+    const rawIsError = rawFailureKind !== undefined;
+    params.beforeSnapshotResult?.({ ...resultFacts, rawIsError });
     const rawResultSnapshot = params.snapshotResult ? params.snapshotResult(rawResult) : rawResult;
     const execution: AgentHarnessToolExecution = {
-      boundary,
-      startedAt,
-      executedArguments,
-      rawResult,
+      ...resultFacts,
       rawResultSnapshot,
       rawIsError,
       rawFailureKind,

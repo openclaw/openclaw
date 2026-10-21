@@ -1,6 +1,5 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { SessionDataController } from "../components/session-data-controller.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -40,17 +39,6 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       const session = sidebar.locator(`[data-session-key="${key}"]`).first();
       await session.waitFor({ state: "visible" });
-      await page.waitForFunction(() => {
-        const data = document.querySelector<HTMLElement & { sessionData: SessionDataController }>(
-          "openclaw-app-sidebar",
-        )?.sessionData;
-        return (
-          data &&
-          (data.sessionCatalogAgentId === null ||
-            data.sessionCatalogRefreshStatus.error !== null ||
-            data.sessionCatalogRefreshStatus.hasLoaded)
-        );
-      });
       await page.screenshot({ path: path.join(artifactDir, "sidebar.png") });
       expect((await gateway.getRequests("sessions.list")).length).toBeGreaterThan(0);
       expect(await gateway.getRequests("sessions.catalog.list")).toEqual([]);

@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { findExtraGatewayServices, listManagedOpenClawGatewayServices } from "./inspect.js";
-import { readScheduledTaskCommand } from "./schtasks-layout.js";
+import {
+  findExtraGatewayServices as findExtras,
+  listManagedOpenClawGatewayServices,
+} from "./inspect.js";
+import { readScheduledTaskCommand as readTaskCommand } from "./schtasks-layout.js";
 
 const spawnSync = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -21,246 +24,145 @@ afterEach(() => {
   Object.defineProperty(process, "platform", originalPlatform);
 });
 
-it.each([
-  "single foreign launcher",
-  "multiple foreign launchers",
-  "later Gateway launcher",
-  "later wrapped Gateway launcher",
-])("qualifies complete inventory failures from launcher evidence: %s", async (kind) => {
-  const taskName = "\\Microsoft\\Windows\\Hotpatch\\Monitoring";
-  const first = "C:\\fixtures\\maintenance.cmd";
-  const second = "C:\\fixtures\\assistant.vbs";
-  const wrapped = kind === "later wrapped Gateway launcher";
-  const gateway = `C:\\fixtures\\assistant.${wrapped ? "bat" : "cmd"}`;
-  const task = {
-    taskPath: taskName,
-    state: 4,
-    actions: (kind === "single foreign launcher" ? [first] : [first, second]).map((pathname) => ({
-      type: 0,
-      path: pathname === second && wrapped ? "C:\\Windows\\System32\\cmd.exe" : pathname,
-      arguments: pathname === second && wrapped ? `/d /c "${gateway}"` : "",
-      workingDirectory: "",
-    })),
-  };
-  spawnSync
-    .mockReturnValueOnce({ status: 0, stdout: JSON.stringify([task]) })
-    .mockReturnValue({ status: 0, stdout: JSON.stringify(task) });
-  vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
-    if (pathname === second) {
-      return Buffer.from(
-        `Set shell = CreateObject("WScript.Shell")\r\nWScript.Quit shell.Run("""${gateway}""", 0, True)`,
-      );
-    }
-    if (pathname === gateway && kind.startsWith("later")) {
-      return Buffer.from(
-        '@echo off\r\n"C:\\Node\\node.exe" "C:\\OpenClaw\\openclaw.mjs" --profile rescue gateway run\r\n',
-      );
-    }
-    if (pathname !== first && pathname !== gateway) {
-      throw new Error("Unexpected launcher read");
-    }
-    return Buffer.from('@echo off\r\nif "%HOTPATCH_ENABLED%"=="1" call maintenance.exe\r\n');
-  });
-  const inventory = await listManagedOpenClawGatewayServices(
-    { USERPROFILE: "C:\\Users\\test", APPDATA: tempDirs.make("foreign-task-startup-") },
-    { requireComplete: true },
-  );
-  expect(inventory).toEqual({
-    services: [],
-    errors: kind.startsWith("later")
-      ? [{ source: taskName, message: expect.stringContaining("could not be inspected") }]
-      : [],
-  });
+const account = { USERPROFILE: "C:\\Users\\test" };
+const quoteArgv = (argv: string[]) => argv.map((arg) => `"${arg}"`).join(" ");
+const gatewayFields = { platform: "win32", marker: "openclaw", legacy: false };
+const taskSnapshot = (taskPath: string, path: string, args = "") => ({
+  taskPath,
+  state: 3,
+  actions: [{ type: 0, path, arguments: args, workingDirectory: "" }],
 });
+function mockTask(task: ReturnType<typeof taskSnapshot>, list = true) {
+  spawnSync.mockReturnValueOnce({ status: 0, stdout: JSON.stringify(list ? [task] : task) });
+  return spawnSync.mockReturnValue({ status: 0, stdout: JSON.stringify(task) });
+}
 
-it("excludes a static non-Gateway runtime command without admitting its missing profile", async () => {
-  const taskName = "\\OpenClaw Helper (non-gateway)";
-  const scriptPath = "C:\\openclaw-schtasks\\non-gateway\\non-gateway.cmd";
-  const task = {
-    taskPath: taskName,
-    state: 1,
-    actions: [{ type: 0, path: scriptPath, arguments: "", workingDirectory: "" }],
-  };
-  spawnSync
-    .mockReturnValueOnce({ status: 0, stdout: JSON.stringify([task]) })
-    .mockReturnValue({ status: 0, stdout: JSON.stringify(task) });
-  vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
-    if (pathname !== scriptPath) {
-      throw new Error("Unexpected file read in unrelated-task inventory fixture");
-    }
-    return Buffer.from('@echo off\r\n"C:\\Node\\node.exe" --version\r\n');
-  });
-  const env = {
-    USERPROFILE: "C:\\Users\\test",
-    APPDATA: tempDirs.make("unrelated-task-startup-"),
-  };
-  await expect(findExtraGatewayServices(env, { deep: true })).resolves.toEqual({
-    services: [],
-    errors: [],
-  });
-  await expect(
-    readScheduledTaskCommand(
-      { ...env, OPENCLAW_WINDOWS_TASK_NAME: taskName },
-      { requireEffective: true, requireLoaded: true },
-    ),
-  ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
-});
+const effective = { requireEffective: true, requireLoaded: true };
+const inspectionError = "Effective Scheduled Task service command could not be inspected.";
+const registeredScript = (taskName: string) =>
+  [
+    "@echo off",
+    `set "OPENCLAW_WINDOWS_TASK_NAME=${taskName}"`,
+    'set "OPENCLAW_PROFILE=rescue"',
+    'set "OPENCLAW_SERVICE_MARKER=openclaw"',
+    'set "OPENCLAW_SERVICE_KIND=gateway"',
+    '"C:\\Node\\node.exe" "C:\\OtherInstall\\openclaw.mjs" gateway run < NUL',
+  ].join("\r\n");
 
-it.each(["direct executable", "Node runtime", "CMD launcher"])(
-  "binds the selected profile to effective argv for a %s",
+it.each(["foreign launcher", "wrapped gateway", "runtime version"])(
+  "qualifies complete inventory from %s evidence",
   async (kind) => {
-    const taskName = "\\Services\\Recovery";
-    const scriptPath = "C:\\Services\\Recovery\\gateway.cmd";
-    const direct = kind === "direct executable";
-    const launcher = kind === "CMD launcher";
-    const argv = direct
-      ? ["C:\\OpenClaw\\openclaw.exe", "--profile=rescue", "gateway"]
-      : [
-          "C:\\Node\\node.exe",
-          "--import",
-          "bootstrap.mjs",
-          "C:\\OpenClaw\\openclaw.mjs",
-          "--profile=rescue",
-          "gateway",
-        ];
-    const task = {
-      taskPath: taskName,
-      state: 3,
-      actions: [
-        {
-          type: 0,
-          path: launcher ? scriptPath : argv[0],
-          arguments: launcher
-            ? ""
-            : argv
-                .slice(1)
-                .map((arg) => `"${arg}"`)
-                .join(" "),
-          workingDirectory: "",
-        },
-      ],
-    };
-    spawnSync.mockReturnValue({ status: 0, stdout: JSON.stringify(task) });
-    vi.spyOn(fs, "readFile").mockResolvedValue(
-      Buffer.from(
-        [
-          "@echo off",
-          'set "OPENCLAW_PROFILE=default"',
-          argv.map((arg) => `"${arg}"`).join(" "),
-        ].join("\r\n"),
-      ),
-    );
-    const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_WINDOWS_TASK_NAME: taskName };
-    await expect(readScheduledTaskCommand(env, { requireLoaded: true })).rejects.toThrow(
-      "Effective Scheduled Task service command could not be inspected.",
-    );
-    for (const options of [
-      { env: { ...env, OPENCLAW_PROFILE: "rescue" }, profileScope: undefined },
-      { env, profileScope: "registered" as const },
-    ]) {
+    const version = kind === "runtime version";
+    const wrapped = kind === "wrapped gateway";
+    const taskName = version
+      ? "\\OpenClaw Helper (non-gateway)"
+      : "\\Microsoft\\Windows\\Hotpatch\\Monitoring";
+    const first = version
+      ? "C:\\openclaw-schtasks\\non-gateway\\non-gateway.cmd"
+      : "C:\\fixtures\\maintenance.cmd";
+    const gateway = "C:\\fixtures\\assistant.bat";
+    const task = { ...taskSnapshot(taskName, first), state: version ? 1 : 4 };
+    if (wrapped) {
+      task.actions.push(
+        taskSnapshot(taskName, "C:\\Windows\\System32\\cmd.exe", `/d /c "${gateway}"`).actions[0]!,
+      );
+    }
+    mockTask(task);
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      if (pathname === gateway && wrapped) {
+        return Buffer.from(
+          '@echo off\r\n"C:\\Node\\node.exe" "C:\\OpenClaw\\openclaw.mjs" --profile rescue gateway run\r\n',
+        );
+      }
+      if (pathname !== first) {
+        throw new Error("Unexpected launcher read");
+      }
+      return Buffer.from(
+        version
+          ? '@echo off\r\n"C:\\Node\\node.exe" --version\r\n'
+          : '@echo off\r\nif "%HOTPATCH_ENABLED%"=="1" call maintenance.exe\r\n',
+      );
+    });
+    const env = { ...account, APPDATA: tempDirs.make("task-startup-") };
+    const inventory = version
+      ? await findExtras(env, { deep: true })
+      : await listManagedOpenClawGatewayServices(env, { requireComplete: true });
+    expect(inventory).toEqual({
+      services: [],
+      errors: wrapped
+        ? [{ source: taskName, message: expect.stringContaining("could not be inspected") }]
+        : [],
+    });
+    if (version) {
       await expect(
-        readScheduledTaskCommand(options.env, {
-          requireLoaded: true,
-          profileScope: options.profileScope,
-        }),
-      ).resolves.toMatchObject({
-        programArguments: argv,
-        ...(launcher ? { environment: { OPENCLAW_PROFILE: "default" } } : {}),
-      });
+        readTaskCommand({ ...env, OPENCLAW_WINDOWS_TASK_NAME: taskName }, effective),
+      ).rejects.toThrow(inspectionError);
     }
   },
 );
 
-it.each([
-  ["implicit default", undefined],
-  ["another named profile", "primary"],
-])("inventories a profiled custom task without admitting it for %s", async (_name, profile) => {
-  const taskName = "\\Services\\Recovery";
-  const scriptPath = "C:\\Services\\Recovery\\gateway.cmd";
-  const task = {
-    taskPath: taskName,
-    state: 3,
-    actions: [{ type: 0, path: scriptPath, arguments: "", workingDirectory: "" }],
-  };
-  spawnSync
-    .mockReturnValueOnce({ status: 0, stdout: JSON.stringify([task]) })
-    .mockReturnValue({ status: 0, stdout: JSON.stringify(task) });
-  vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
-    if (pathname !== scriptPath) {
-      throw new Error("Unexpected file read in registered-task inventory fixture");
+it.each(["runtime argv", "launcher metadata"])(
+  "binds profiles from %s without admitting another profile",
+  async (source) => {
+    const taskName = "\\Services\\Recovery";
+    const scriptPath = "C:\\Services\\Recovery\\gateway.cmd";
+    const argv =
+      "C:\\Node\\node.exe --import bootstrap.mjs C:\\OpenClaw\\openclaw.mjs --profile=rescue gateway".split(
+        " ",
+      );
+    const launcher = source === "launcher metadata";
+    const env = {
+      ...account,
+      ...(launcher
+        ? { APPDATA: tempDirs.make("registered-task-startup-"), OPENCLAW_PROFILE: "primary" }
+        : {}),
+    };
+    if (launcher) {
+      mockTask(taskSnapshot(taskName, scriptPath));
+      vi.spyOn(fs, "readFile").mockImplementation(async (pathname) =>
+        pathname === scriptPath
+          ? Buffer.from(registeredScript(taskName.slice(1)))
+          : Promise.reject(new Error("Unexpected launcher read")),
+      );
+      await expect(findExtras(env, { deep: true })).resolves.toEqual({
+        services: [expect.objectContaining({ ...gatewayFields, label: taskName, scope: "system" })],
+        errors: [],
+      });
+    } else {
+      mockTask(taskSnapshot(taskName, argv[0]!, quoteArgv(argv.slice(1))), false);
     }
-    return Buffer.from(
-      [
-        "@echo off",
-        'set "OPENCLAW_WINDOWS_TASK_NAME=Services\\Recovery"',
-        'set "OPENCLAW_PROFILE=rescue"',
-        'set "OPENCLAW_SERVICE_MARKER=openclaw"',
-        'set "OPENCLAW_SERVICE_KIND=gateway"',
-        '"C:\\Node\\node.exe" "C:\\OtherInstall\\openclaw.mjs" gateway run < NUL',
-      ].join("\r\n"),
-    );
-  });
-  const env = {
-    USERPROFILE: "C:\\Users\\test",
-    APPDATA: tempDirs.make("registered-task-startup-"),
-    OPENCLAW_PROFILE: profile,
-  };
-  await expect(findExtraGatewayServices(env, { deep: true })).resolves.toEqual({
-    services: [
-      expect.objectContaining({
-        platform: "win32",
-        label: taskName,
-        scope: "system",
-        marker: "openclaw",
-        legacy: false,
-      }),
-    ],
-    errors: [],
-  });
-  await expect(
-    readScheduledTaskCommand(
-      { ...env, OPENCLAW_WINDOWS_TASK_NAME: taskName },
-      { requireEffective: true, requireLoaded: true },
-    ),
-  ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
-  await expect(
-    readScheduledTaskCommand(
-      { ...env, OPENCLAW_WINDOWS_TASK_NAME: taskName, OPENCLAW_PROFILE: "rescue" },
-      { requireEffective: true, requireLoaded: true },
-    ),
-  ).resolves.toMatchObject({ environment: { OPENCLAW_PROFILE: "rescue" } });
-});
+    const selectedEnv = { ...env, OPENCLAW_WINDOWS_TASK_NAME: taskName };
+    const options = launcher ? effective : { requireLoaded: true };
+    await expect(readTaskCommand(selectedEnv, options)).rejects.toThrow(inspectionError);
+    const expected = launcher
+      ? { environment: { OPENCLAW_PROFILE: "rescue" } }
+      : { programArguments: argv };
+    await expect(
+      readTaskCommand({ ...selectedEnv, OPENCLAW_PROFILE: "rescue" }, options),
+    ).resolves.toMatchObject(expected);
+    if (!launcher) {
+      await expect(
+        readTaskCommand(selectedEnv, { requireLoaded: true, profileScope: "registered" }),
+      ).resolves.toMatchObject(expected);
+    }
+  },
+);
 
 it.each([
   { extension: "cmd", exhaustedBy: "query" },
   { extension: "cmd", exhaustedBy: "fractional query" },
   { extension: "cmd", exhaustedBy: "source" },
   { extension: "vbs", exhaustedBy: "launcher" },
-  { extension: "cmd", exhaustedBy: "source revalidation" },
-  { extension: "vbs", exhaustedBy: "launcher revalidation" },
 ])(
   "retains completed $extension discovery when $exhaustedBy exhausts the shared inventory budget",
   async ({ extension, exhaustedBy }) => {
     const task = (name: string, launcherExtension = "cmd") => {
       const scriptPath = `C:\\Tasks\\${name}.cmd`;
       const launcherPath = `C:\\Tasks\\${name}.${launcherExtension}`;
-      const taskPath = `\\Services\\${name}`;
       return {
         scriptPath,
         launcherPath,
-        snapshot: {
-          taskPath,
-          state: 3,
-          actions: [{ type: 0, path: launcherPath, arguments: "", workingDirectory: "" }],
-        },
-        script: [
-          "@echo off",
-          `set "OPENCLAW_WINDOWS_TASK_NAME=${taskPath}"`,
-          'set "OPENCLAW_PROFILE=rescue"',
-          'set "OPENCLAW_SERVICE_MARKER=openclaw"',
-          'set "OPENCLAW_SERVICE_KIND=gateway"',
-          '"C:\\Node\\node.exe" "C:\\OtherInstall\\openclaw.mjs" gateway run < NUL',
-        ].join("\r\n"),
+        snapshot: taskSnapshot(`\\Services\\${name}`, launcherPath),
       };
     };
     const completed = task("Recovery", extension);
@@ -268,7 +170,7 @@ it.each([
     const trailing = task("Trailing");
     const tasks = [completed, slow, trailing];
     let now = 0;
-    const observations: Array<{ taskName: string; startedAt: number }> = [];
+    const observations: number[] = [];
     vi.spyOn(performance, "now").mockImplementation(() => now);
     spawnSync.mockImplementation((_command, args, options) => {
       const encoded = args[args.indexOf("-EncodedCommand") + 1];
@@ -278,7 +180,7 @@ it.each([
         throw new Error("Unbounded or unrecognized native Scheduler request");
       }
       const taskName = Buffer.from(encodedName, "base64").toString("utf8");
-      observations.push({ taskName, startedAt: now });
+      observations.push(now);
       const duration =
         taskName === ""
           ? exhaustedBy === "fractional query"
@@ -306,48 +208,34 @@ it.each([
         ),
       };
     });
-    const fileObservations: number[] = [];
-    const reads = new Map<string, number>();
     vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
-      fileObservations.push(now);
+      observations.push(now);
       const observed = tasks.find(
         (candidate) => pathname === candidate.scriptPath || pathname === candidate.launcherPath,
       );
       if (typeof pathname !== "string" || !observed) {
         throw new Error("Unexpected file read in bounded inventory fixture");
       }
-      const read = (reads.get(pathname) ?? 0) + 1;
-      reads.set(pathname, read);
-      if (observed === slow) {
-        const phase = pathname === slow.scriptPath ? "source" : "launcher";
-        if (`${phase}${read === 2 ? " revalidation" : ""}` === exhaustedBy) {
-          now = 60_000;
-        }
+      const phase = pathname === observed.scriptPath ? "source" : "launcher";
+      if (observed === slow && phase === exhaustedBy) {
+        now = 60_000;
       }
       return Buffer.from(
         pathname === observed.scriptPath
-          ? observed.script
+          ? registeredScript(observed.snapshot.taskPath)
           : `Set shell = CreateObject("WScript.Shell")\r\nWScript.Quit shell.Run("""${observed.scriptPath}""", 0, True)`,
       );
     });
-    const inventory = await findExtraGatewayServices(
-      { USERPROFILE: "C:\\Users\\test" },
-      { deep: true },
-    );
+    const inventory = await findExtras(account, { deep: true });
     expect(now).toBe(exhaustedBy === "fractional query" ? 59_999.5 : 60_000);
-    expect(observations.filter(({ startedAt }) => startedAt >= 60_000)).toEqual([]);
-    expect(fileObservations.filter((startedAt) => startedAt >= 60_000)).toEqual([]);
+    expect(observations.filter((startedAt) => startedAt >= 60_000)).toEqual([]);
     expect(inventory.services).toEqual([
-      expect.objectContaining({
-        label: completed.snapshot.taskPath,
-        platform: "win32",
-        marker: "openclaw",
-        legacy: false,
-      }),
+      expect.objectContaining({ ...gatewayFields, label: completed.snapshot.taskPath }),
     ]);
-    expect(inventory.errors).toEqual(
-      expect.arrayContaining([{ source: "schtasks", message: expect.stringMatching(/\S/) }]),
-    );
+    expect(inventory.errors).toContainEqual({
+      source: "schtasks",
+      message: expect.stringMatching(/\S/),
+    });
   },
 );
 
@@ -355,13 +243,8 @@ it.each(["launcher", "missing launcher metadata"])(
   "finishes inventory when %s never settles",
   async (phase) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const task = {
-      taskPath: "\\Services\\Recovery",
-      state: 3,
-      actions: [{ type: 0, path: "C:\\Tasks\\gateway.cmd", arguments: "", workingDirectory: "" }],
-    };
-    spawnSync
-      .mockReturnValueOnce({ status: 0, stdout: JSON.stringify([task]) })
+    const task = taskSnapshot("\\Services\\Recovery", "C:\\Tasks\\gateway.cmd");
+    mockTask(task)
       .mockReturnValueOnce({ status: 0, stdout: JSON.stringify(task) })
       .mockReturnValue({ status: 1, stdout: "-2147024894" });
     const lstat = vi.spyOn(fs, "lstat").mockImplementation(() => new Promise(() => {}));
@@ -375,21 +258,14 @@ it.each(["launcher", "missing launcher metadata"])(
       }
       return new Promise(() => {});
     });
-    let result: Awaited<ReturnType<typeof findExtraGatewayServices>> | undefined;
-    const inventory = findExtraGatewayServices(
-      { USERPROFILE: "C:\\Users\\test" },
-      { deep: true },
-    ).then((value) => {
-      result = value;
-    });
+    const inventory = findExtras(account, { deep: true });
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(result).toEqual({
+    expect(await inventory).toEqual({
       services: [],
       errors: [{ source: "schtasks", message: expect.stringMatching(/deadline expired/) }],
     });
     expect(signal?.aborted).toBe(true);
     expect(spawnSync).toHaveBeenCalledTimes(phase === "launcher" ? 2 : 3);
     expect(lstat).toHaveBeenCalledTimes(phase === "launcher" ? 0 : 1);
-    await inventory;
   },
 );

@@ -1,9 +1,7 @@
-/** Channel-level policy for which inbound messages should receive an ack reaction. */
 import { toErrorObject } from "../infra/errors.js";
 
 export type AckReactionScope = "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
 
-/** Sent ack reaction state plus the cleanup hook callers can run after reply delivery. */
 export type AckReactionHandle = {
   ackReactionPromise: Promise<boolean>;
   ackReactionValue: string;
@@ -28,7 +26,6 @@ export type AckReactionGateParams = {
   shouldBypassMention?: boolean;
 };
 
-/** Resolves the generic ack reaction gate without sending or removing reactions. */
 export function shouldAckReaction(params: AckReactionGateParams): boolean {
   const scope = params.scope ?? "group-mentions";
   if (scope === "off" || scope === "none") {
@@ -61,7 +58,6 @@ export function shouldAckReaction(params: AckReactionGateParams): boolean {
   return false;
 }
 
-/** Starts sending an ack reaction and returns the success-tracking cleanup handle. */
 export function createAckReactionHandle(params: {
   ackReactionValue: string;
   send: () => Promise<void>;
@@ -95,7 +91,6 @@ export function createAckReactionHandle(params: {
   };
 }
 
-/** Schedules removal of a previously sent ack reaction after reply delivery. */
 export function removeAckReactionAfterReply(params: {
   removeAfterReply: boolean;
   ackReactionPromise: Promise<boolean> | null;
@@ -115,7 +110,6 @@ export function removeAckReactionAfterReply(params: {
   });
 }
 
-/** Convenience wrapper that removes an ack reaction handle after reply delivery. */
 export function removeAckReactionHandleAfterReply(params: {
   removeAfterReply: boolean;
   ackReaction: AckReactionHandle | null | undefined;

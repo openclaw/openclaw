@@ -21,6 +21,27 @@ function classification(params: {
 }
 
 describe("sessionClassificationForRow", () => {
+  it.each([undefined, "plugin-dock"] as const)(
+    "classifies dock presentation from immutable creation surface: %s",
+    (createdSurface) => {
+      expect(
+        classification({
+          key: "agent:main:dashboard:board-agent",
+          isMain: false,
+          entry: entry({
+            createdVia: "operator",
+            createdSurface,
+            createdActor: { type: "human", source: "profile", id: "ada" },
+          }),
+        }),
+      ).toMatchObject({
+        classification: "dashboard",
+        isDock: createdSurface === "plugin-dock",
+        isBackground: false,
+      });
+    },
+  );
+
   it.each([
     ["agent:main:main", true, "main", false],
     ["agent:main:dashboard:01234567-89ab-cdef-0123-456789abcdef", false, "dashboard", false],

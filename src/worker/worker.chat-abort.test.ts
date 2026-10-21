@@ -1,14 +1,11 @@
-import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, onTestFailed, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type { WorkerInferenceTerminalOutcome } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
-  withTestTimeout,
+  withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveActiveEmbeddedRunOwner } from "../agents/embedded-agent-runner/runs.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -21,6 +18,7 @@ import {
   invokeChatAbortHandler,
 } from "../gateway/server-methods/chat.abort.test-helpers.js";
 import { coreGatewayHandlers } from "../gateway/server-methods/core-handlers.js";
+import { claimRpcSourceForTest } from "../gateway/test-helpers.rpc-source.js";
 import { hashWorkerCredential } from "../gateway/worker-environments/credential.js";
 import { projectWorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
 import { createWorkerTurnRunOwner } from "../gateway/worker-environments/worker-turn-run-owner.js";
@@ -34,7 +32,7 @@ import {
   getActiveAgentRunDelegatedAuthority,
   getAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { runWorkerCommand } from "./worker-command.runtime.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import {
   ComposedGatewayHarness,
   ENVIRONMENT_ID,
@@ -43,377 +41,346 @@ import {
   SESSION_KEY,
   doneOutcome,
 } from "./worker-fault-injection.test-support.js";
+import { createWorkerProcessTestHarness } from "./worker-process.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const workers = createWorkerProcessTestHarness((prefix) => tempDirs.make(prefix));
 
-describe("worker chat.abort settlement", () => {
-  let harness: ComposedGatewayHarness;
+let harness: ComposedGatewayHarness;
+let activeTestSignal: AbortSignal;
+let previousConfig: ReturnType<typeof getRuntimeConfigSnapshot>;
+let previousSourceConfig: ReturnType<typeof getRuntimeConfigSourceSnapshot>;
 
-  beforeEach(async () => {
-    harness = await ComposedGatewayHarness.create(tempDirs.make("oc-wa-"));
-    await harness.start();
-  });
+beforeEach(async ({ signal }) => {
+  activeTestSignal = signal;
+  // Capture config before harness storage pins its locator as the runtime snapshot.
+  previousConfig = getRuntimeConfigSnapshot();
+  previousSourceConfig = getRuntimeConfigSourceSnapshot();
+  harness = await ComposedGatewayHarness.create(tempDirs.make("oc-wa-"));
+  await harness.start();
+});
 
-  afterEach(async () => {
+afterEach(async ({ signal }) => {
+  try {
+    await workers.close(signal);
     await harness.close();
-  });
+  } finally {
+    if (previousConfig) {
+      setRuntimeConfigSnapshot(previousConfig, previousSourceConfig ?? undefined);
+    } else {
+      clearRuntimeConfigSnapshot();
+    }
+  }
+});
 
-  it.each([
-    { queuedPreview: false, fence: "none" },
-    { queuedPreview: true, fence: "none" },
-    { queuedPreview: true, fence: "claim" },
-    { queuedPreview: true, fence: "credential" },
-    { queuedPreview: true, fence: "run owner" },
-    { queuedPreview: true, fence: "lifecycle" },
-    { queuedPreview: true, fence: "before durable ACK" },
-    { queuedPreview: true, fence: "after durable ACK" },
-  ] as const)(
-    "settles managed chat.abort with queued preview $queuedPreview and $fence fence",
-    async ({ queuedPreview, fence }) => {
-      const descriptor = await harness.createDescriptor();
-      descriptor.assignment.toolAuthority.exec = {
-        host: "gateway",
-        security: "full",
-        ask: "off",
-        safeBins: [],
-      };
-      const claim = projectWorkerSessionTurnClaim(harness.placementStore.get(SESSION_ID)!);
-      expect(claim).toBeDefined();
-      const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      claimAgentRunContext(RUN_ID, {
-        agentId: "main",
-        sessionId: SESSION_ID,
+it.each([
+  { queuedPreview: false, fence: "none" },
+  { queuedPreview: true, fence: "none" },
+  { queuedPreview: true, fence: "claim" },
+  { queuedPreview: true, fence: "credential" },
+  { queuedPreview: true, fence: "run owner" },
+  { queuedPreview: true, fence: "lifecycle" },
+  { queuedPreview: true, fence: "before durable ACK" },
+  { queuedPreview: true, fence: "after durable ACK" },
+] as const)(
+  "settles managed chat.abort with queued preview $queuedPreview and $fence fence",
+  async ({ queuedPreview, fence }) => {
+    const signal = activeTestSignal;
+    const placements = harness.placementStore;
+    const cursor = () => placements.get(SESSION_ID)?.lastLiveEventAckCursor;
+    const descriptor = await harness.createDescriptor();
+    descriptor.assignment.toolAuthority.exec = {
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      safeBins: [],
+    };
+    const claim = projectWorkerSessionTurnClaim(placements.get(SESSION_ID)!);
+    expect(claim).toBeDefined();
+    const runContext = {
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    };
+    claimAgentRunContext(RUN_ID, {
+      ...runContext,
+      isControlUiVisible: true,
+    });
+    const context = createChatAbortContext({
+      chatRunState: harness.chat.state,
+      getRuntimeConfig: () => harness.cfg,
+      workerEnvironmentService: harness.serviceValue,
+      removeChatRun: (...args: Parameters<typeof harness.chat.state.registry.remove>) =>
+        harness.chat.state.registry.remove(...args),
+    });
+    let deliverCancellation: (() => void) | undefined;
+    const authority = getActiveAgentRunDelegatedAuthority(
+      descriptor.assignment.operationalRunInstance,
+    );
+    if (!authority) {
+      throw new Error("managed worker turn has no admitted authority");
+    }
+    const registration = registerChatAbortController({
+      target: captureSessionTarget({
+        storeScope: harness.sessionTarget.storePath,
         sessionKey: SESSION_KEY,
-        lifecycleGeneration,
-        isControlUiVisible: true,
-      });
-      const context = createChatAbortContext({
-        chatRunState: harness.chat.state,
-        getRuntimeConfig: () => harness.cfg,
-        workerEnvironmentService: harness.serviceValue,
-        removeChatRun: (...args: Parameters<typeof harness.chat.state.registry.remove>) =>
-          harness.chat.state.registry.remove(...args),
-      });
-      const authority = getActiveAgentRunDelegatedAuthority(
-        descriptor.assignment.operationalRunInstance,
-      );
-      if (!authority) {
-        throw new Error("managed worker turn has no admitted authority");
-      }
-      const registration = registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
-        runId: RUN_ID,
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
+        incarnation: SESSION_ID,
         agentId: "main",
-        ownerConnId: "fault-operator",
-        controlUiVisible: true,
-        lifecycleGeneration,
-        operationalRunInstance: authority.operationalRunInstance,
+      }),
+      runId: RUN_ID,
+      ...runContext,
+      ownerConnId: "fault-operator",
+      controlUiVisible: true,
+      operationalRunInstance: authority.operationalRunInstance,
+      timeoutMs: 60_000,
+      kind: "chat-send",
+    });
+    if (!registration.registered) {
+      throw new Error("Expected worker source admission");
+    }
+    registration.bindAgentRunDelegatedAuthority(authority);
+    registration.initializeTiming();
+    const releaseSource = await claimRpcSourceForTest(registration.entry);
+    const operation = registration.entry.input.claim?.operation;
+    if (!operation) {
+      throw new Error("Expected controller-owned worker operation");
+    }
+    expect(registration.markExecutionStarted()).toBe(true);
+    const ownerInput = {
+      placements,
+      isReplyDelivered: () => false,
+      claim: claim!,
+      sessionKey: SESSION_KEY,
+      turn: {
+        ...runContext,
+        sessionFile: SESSION_KEY,
+        sessionTarget: harness.sessionTarget,
+        workspaceDir: harness.root,
+        prompt: "fault injection",
         timeoutMs: 60_000,
-        kind: "chat-send",
-      });
-      registration.bindAgentRunDelegatedAuthority(authority);
-      registration.markExecutionStarted();
-      const ownerInput = {
-        placements: harness.placementStore,
-        claim: claim!,
-        sessionKey: SESSION_KEY,
-        turn: {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          sessionFile: SESSION_KEY,
-          sessionTarget: harness.sessionTarget,
-          workspaceDir: harness.root,
-          prompt: "fault injection",
-          timeoutMs: 60_000,
-          runId: RUN_ID,
-          config: harness.cfg,
-          lifecycleGeneration,
-          abortSignal: registration.controller.signal,
-        },
+        runId: RUN_ID,
+        config: harness.cfg,
+        abortSignal: registration.controller.signal,
+        replyOperation: operation,
+      },
+    };
+    const owner = await createWorkerTurnRunOwner(ownerInput);
+    const ackEntered = createDeferred();
+    const ackRelease = createDeferred();
+    const { release: providerRelease, started: providerStarted } = harness.planPending();
+    const previewRelease = createDeferred();
+    if (queuedPreview) {
+      harness.providerPlan = {
+        kind: "live-preview",
+        nextRelease: previewRelease,
+        produced: createDeferred(),
+        text: "preview reply",
       };
-      const owner = await createWorkerTurnRunOwner(ownerInput);
-      let replacement: Awaited<ReturnType<typeof createWorkerTurnRunOwner>> | undefined;
-      const ackEntered = createDeferred();
-      const ackRelease = createDeferred();
-      const providerRelease = createDeferred<WorkerInferenceTerminalOutcome>();
-      const providerStarted = createDeferred();
-      const previewRelease = createDeferred();
-      harness.providerPlan = queuedPreview
-        ? {
-            kind: "live-preview",
-            nextRelease: previewRelease,
-            produced: createDeferred(),
-            text: "preview reply",
-          }
-        : { kind: "pending", started: providerStarted, release: providerRelease };
-      const previewGate = queuedPreview
-        ? harness.addLiveEventGate("before-service", "preview")
-        : undefined;
-      const finishingGate = harness.addLiveEventGate("before-service", "finishing");
-      const liveStarted = createDeferred();
-      const outerCancelled = createDeferred();
-      const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
-      const unsubscribe = onAgentRuntimeEvent((event) => {
-        if (event.runId !== RUN_ID) {
-          return;
+    }
+    const previewGate = queuedPreview
+      ? harness.addLiveEventGate("before-service", "preview")
+      : undefined;
+    const finishingGate = harness.addLiveEventGate("before-service", "finishing");
+    const liveStarted = createDeferred();
+    const outerCancelled = createDeferred();
+    let publishedEvents = 0;
+    const unsubscribe = onAgentRuntimeEvent((event) => {
+      if (event.runId !== RUN_ID) {
+        return;
+      }
+      publishedEvents += 1;
+      if (event.stream === "lifecycle" && event.data.phase === "start") {
+        liveStarted.resolve();
+      }
+      if (event.stream === "lifecycle" && event.data.status === "cancelled") {
+        outerCancelled.resolve();
+      }
+    });
+    let stdout = "";
+    let cancelWorker: (() => void) | undefined;
+    let cancelRequestedAt: number | undefined;
+    let command: Promise<void> | undefined;
+    try {
+      const worker = await workers.launch({ descriptor, signal });
+      cancelWorker = () => {
+        cancelRequestedAt = performance.now();
+        if (fence === "after durable ACK") {
+          // Let the Gateway's inference cancellation arrive before local cancellation.
+          deliverCancellation = () => worker.cancel();
+        } else {
+          worker.cancel();
         }
-        events.push({ stream: event.stream, data: event.data });
-        if (event.stream === "lifecycle" && event.data.phase === "start") {
-          liveStarted.resolve();
-        }
-        if (event.stream === "lifecycle" && event.data.status === "cancelled") {
-          outerCancelled.resolve();
-        }
-      });
-      const input = new PassThrough();
-      const output = new PassThrough();
-      let stdout = "";
-      output.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString("utf8");
-      });
-      const lifetimeController = new AbortController();
-      const cancelWorker = () => {
-        input.write(
-          `${JSON.stringify({ type: "cancel", turnId: descriptor.assignment.turnId })}\n`,
-        );
       };
       owner.signal.addEventListener("abort", cancelWorker, { once: true });
-      const previousConfig = getRuntimeConfigSnapshot();
-      const previousSourceConfig = getRuntimeConfigSourceSnapshot();
-      setRuntimeConfigSnapshot(harness.cfg);
-      const startedAt = performance.now();
-      let phase = "command-start";
-      let commandOutcome = "pending";
-      const captureTrace = () => ({
-        phase,
-        elapsedMs: Math.round(performance.now() - startedAt),
-        commandOutcome,
-        requestCounts: Object.fromEntries(
-          [...new Set(harness.requests.map(({ method }) => method))].map((method) => [
-            method,
-            harness.requestParams(method).length,
-          ]),
-        ),
-        publishedEvents: events.length,
-        providerCalls: harness.providerCalls,
-      });
-      let failureTrace: ReturnType<typeof captureTrace> | undefined;
-      onTestFailed(() => {
-        console.error("worker chat.abort phase", failureTrace ?? captureTrace());
-      });
-      const command = runWorkerCommand({
-        input,
-        output,
-        managed: true,
-        lifetime: {
-          signal: lifetimeController.signal,
-          started: Promise.resolve(true),
-          dispose: vi.fn(),
-          reportConnectionFailure: vi.fn(),
-          terminateOwnedTree: vi.fn(),
-        },
-      });
-      void command.then(
-        () => {
-          commandOutcome = "completed";
-        },
-        () => {
-          commandOutcome = "rejected";
-        },
-      );
-      input.write(
-        `${JSON.stringify({ type: "turn", turnId: descriptor.assignment.turnId, descriptor })}\n`,
-      );
-      try {
-        phase = "waiting-live-start";
-        await withTestTimeout(
-          Promise.race([
-            liveStarted.promise,
-            command.then(() => {
-              throw new Error("worker command completed before live start");
-            }),
-          ]),
-          10_000,
-          "worker live start was not published",
-        );
-        phase = "waiting-cancellation-boundary";
-        await withTestTimeout(
-          previewGate?.entered.promise ?? providerStarted.promise,
-          10_000,
-          "worker did not reach the cancellation boundary",
-        );
-        expect(getAgentRunContext(RUN_ID)?.sessionId).toBe(SESSION_ID);
-        const respond = await invokeChatAbortHandler({
-          handler: coreGatewayHandlers["chat.abort"]!,
-          context,
-          request: { sessionKey: SESSION_KEY, runId: RUN_ID },
-          client: { connId: "fault-operator", connect: { scopes: ["operator.admin"] } },
-        });
-        expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: true, runIds: [RUN_ID] });
-        phase = "waiting-outer-cancellation";
-        await outerCancelled.promise;
-        expect(owner.signal.aborted).toBe(true);
-        expect(getAgentRunContext(RUN_ID)).toBeUndefined();
-        expect(harness.placementStore.validateTurnClaim(claim!)).toBe(true);
-        const publishedAtAbort = events.length;
-        previewGate?.release.resolve();
-        phase = "waiting-worker-finishing";
-        await withTestTimeout(
-          Promise.race([
-            finishingGate.entered.promise,
-            command.then(() => {
-              throw new Error(
-                `worker command completed before cancellation finishing: ${stdout || "no result"}`,
-              );
-            }),
-          ]),
-          10_000,
-          "worker did not finish cancellation",
-        );
-        const cursorAtAbort = harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor;
-        if (fence === "claim") {
-          await harness.settleRun(RUN_ID);
-        } else if (fence === "credential") {
-          const credential = harness.store.getCredential(ENVIRONMENT_ID)!;
-          await harness.store.renewCredential({
-            environmentId: ENVIRONMENT_ID,
-            expectedOwnerEpoch: harness.epoch,
-            sessionId: SESSION_ID,
-            rpcSetVersion: credential.rpcSetVersion,
-            expiresAtMs: credential.expiresAtMs,
-            credentialHash: hashWorkerCredential("synthetic-replacement-credential", claim!),
-          });
-        } else if (fence === "run owner") {
-          owner.dispose();
-        } else if (fence === "lifecycle") {
-          rotateAgentEventLifecycleGeneration();
+      command = worker.finish().then((exit) => {
+        stdout = exit.stdout;
+        if (exit.code !== 0) {
+          throw new Error(exit.stderr || `Worker exited with code ${exit.code}`);
         }
-        const replaceDuringAck = fence === "before durable ACK" || fence === "after durable ACK";
-        if (replaceDuringAck) {
-          const updateAckCursors = harness.placementStore.updateAckCursors.bind(
-            harness.placementStore,
+      });
+      // Register the rejection handler before waiting for worker lifecycle events.
+      void command.catch(() => undefined);
+      const waitFor = async (gate: PromiseLike<void>, boundary: string) => {
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              gate,
+              command!,
+              `worker command completed before ${boundary}`,
+            ),
+            signal,
           );
-          vi.spyOn(harness.placementStore, "updateAckCursors").mockImplementationOnce(
-            async (ackInput, assertCurrent) => {
-              if (fence === "before durable ACK") {
-                ackEntered.resolve();
-                await ackRelease.promise;
-                return updateAckCursors(ackInput, assertCurrent);
-              }
-              const record = await updateAckCursors(ackInput, assertCurrent);
+        } catch (error) {
+          throw new Error(
+            `Worker abort fixture stopped before ${boundary}: ${JSON.stringify({
+              cancelElapsedMs:
+                cancelRequestedAt === undefined
+                  ? null
+                  : Math.round(performance.now() - cancelRequestedAt),
+              previewReached: previewGate?.claimed ?? false,
+              finishingReached: finishingGate.claimed,
+              transcriptRequests: harness.requestParams("worker.transcript.commit").length,
+            })}`,
+            { cause: error },
+          );
+        }
+      };
+      await waitFor(liveStarted.promise, "live start");
+      await waitFor(
+        previewGate?.entered.promise ?? providerStarted.promise,
+        "cancellation boundary",
+      );
+      expect(getAgentRunContext(RUN_ID)?.sessionId).toBe(SESSION_ID);
+      const respond = await invokeChatAbortHandler({
+        handler: coreGatewayHandlers["chat.abort"]!,
+        context,
+        request: { sessionKey: SESSION_KEY, runId: RUN_ID },
+        client: { connId: "fault-operator", connect: { scopes: ["operator.admin"] } },
+      });
+      expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: true, runIds: [RUN_ID] });
+      await waitFor(outerCancelled.promise, "outer cancellation");
+      expect(owner.signal.aborted).toBe(true);
+      expect(getAgentRunContext(RUN_ID)).toBeUndefined();
+      expect(placements.validateTurnClaim(claim!)).toBe(true);
+      const publishedAtAbort = publishedEvents;
+      previewGate?.release.resolve();
+      await waitFor(finishingGate.entered.promise, "cancellation finishing");
+      deliverCancellation?.();
+      const cursorAtAbort = cursor();
+      if (fence === "claim") {
+        await harness.settleRun(RUN_ID);
+      } else if (fence === "credential") {
+        const credential = harness.store.getCredential(ENVIRONMENT_ID)!;
+        await harness.store.renewCredential({
+          environmentId: ENVIRONMENT_ID,
+          expectedOwnerEpoch: harness.epoch,
+          sessionId: SESSION_ID,
+          rpcSetVersion: credential.rpcSetVersion,
+          expiresAtMs: credential.expiresAtMs,
+          credentialHash: hashWorkerCredential("synthetic-replacement-credential", claim!),
+        });
+      } else if (fence === "run owner") {
+        owner.dispose();
+      } else if (fence === "lifecycle") {
+        rotateAgentEventLifecycleGeneration();
+      }
+      const replaceDuringAck = fence === "before durable ACK" || fence === "after durable ACK";
+      if (replaceDuringAck) {
+        const updateAckCursors = placements.updateAckCursors.bind(placements);
+        vi.spyOn(placements, "updateAckCursors").mockImplementationOnce(
+          async (ackInput, assertCurrent) => {
+            if (fence === "before durable ACK") {
               ackEntered.resolve();
               await ackRelease.promise;
-              return record;
-            },
-          );
-        }
-        finishingGate.release.resolve();
-        if (replaceDuringAck) {
-          await awaitGateBeforeSettlement(
-            ackEntered.promise,
-            command,
-            "worker command settled before durable ACK boundary",
-          );
-          replacement = await createWorkerTurnRunOwner({
+              return updateAckCursors(ackInput, assertCurrent);
+            }
+            const record = await updateAckCursors(ackInput, assertCurrent);
+            ackEntered.resolve();
+            await ackRelease.promise;
+            return record;
+          },
+        );
+      }
+      finishingGate.release.resolve();
+      if (replaceDuringAck) {
+        await waitFor(ackEntered.promise, "durable ACK boundary");
+        await expect(
+          createWorkerTurnRunOwner({
             ...ownerInput,
             turn: { ...ownerInput.turn, abortSignal: undefined },
-          });
-          // Reusing and cancelling the same claim cannot lend the first request
-          // a new owner's authority after its ACK await.
-          expect(resolveActiveEmbeddedRunOwner(SESSION_ID)?.abort()).toBe(true);
-          ackRelease.resolve();
-        }
-        phase = "waiting-command-settlement";
-        const failure = await command.then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        const liveRequests = harness
-          .requestParams("worker.live-event")
-          .map((request) => request as WorkerLiveEventParams);
-        expect(events).toHaveLength(publishedAtAbort);
-        expect(getAgentRunContext(RUN_ID)).toBeUndefined();
-        expect(harness.providerCalls).toBe(1);
-        if (fence !== "none") {
-          if (fence === "after durable ACK") {
-            const finishing = liveRequests.findLast(
-              ({ event }) => event.kind === "lifecycle" && event.payload.phase === "finishing",
-            );
-            expect(finishing).toBeDefined();
-            expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBe(
-              finishing?.seq,
-            );
-            expect(await harness.placementStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
-          } else {
-            expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBe(
-              cursorAtAbort,
-            );
-            expect(await harness.placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
-          }
-          if (fence === "credential") {
-            expect(failure).toBeUndefined();
-            expect(JSON.parse(stdout)).toMatchObject({
-              result: { status: "fenced", reason: "credential-replaced" },
-            });
-          } else {
-            expect(failure).toBeInstanceOf(Error);
-            expect(stdout).toBe("");
-          }
-          return;
-        }
-        expect(
-          failure,
-          JSON.stringify(
-            liveRequests.map(({ seq, lastAckedSeq, event }) => ({
-              seq,
-              lastAckedSeq,
-              event: event.kind === "lifecycle" ? event : { kind: event.kind },
-            })),
-          ),
-        ).toBeUndefined();
-        const finishing = liveRequests.filter(
-          ({ event }) => event.kind === "lifecycle" && event.payload.phase === "finishing",
-        );
-        expect(finishing.length).toBeGreaterThan(0);
-        expect(finishing.at(-1)?.event).toMatchObject({
-          kind: "lifecycle",
-          payload: { phase: "finishing", aborted: true, stopReason: "aborted" },
-        });
-        expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBe(
-          finishing.at(-1)?.seq,
-        );
-        expect(JSON.parse(stdout)).toMatchObject({
-          type: "result",
-          turnId: descriptor.assignment.turnId,
-          retainWorker: false,
-          result: { status: "failed", reason: "turn-failed" },
-        });
-      } catch (error) {
-        failureTrace = captureTrace();
-        throw error;
-      } finally {
-        previewGate?.release.resolve();
-        finishingGate.release.resolve();
-        ackRelease.resolve();
-        previewRelease.resolve();
-        providerRelease.resolve(doneOutcome("fixture teardown"));
-        lifetimeController.abort(new Error("fixture teardown"));
-        input.end();
-        await Promise.allSettled([command]);
-        owner.signal.removeEventListener("abort", cancelWorker);
+          }),
+        ).rejects.toThrow("Worker attempt retired");
         owner.dispose();
-        replacement?.dispose();
-        registration.cleanup();
-        unsubscribe();
-        if (previousConfig) {
-          setRuntimeConfigSnapshot(previousConfig, previousSourceConfig ?? undefined);
-        } else {
-          clearRuntimeConfigSnapshot();
-        }
+        ackRelease.resolve();
       }
-    },
-  );
-});
+      const failure = await command.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const liveRequests = harness
+        .requestParams("worker.live-event")
+        .map((request) => request as WorkerLiveEventParams);
+      const finishing = liveRequests.findLast(
+        ({ event }) => event.kind === "lifecycle" && event.payload.phase === "finishing",
+      );
+      expect(publishedEvents).toBe(publishedAtAbort);
+      expect(getAgentRunContext(RUN_ID)).toBeUndefined();
+      expect(harness.providerCalls).toBe(1);
+      if (fence !== "none") {
+        const afterAck = fence === "after durable ACK";
+        if (afterAck) {
+          expect(finishing).toBeDefined();
+        }
+        expect(cursor()).toBe(afterAck ? finishing?.seq : cursorAtAbort);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual(
+          afterAck ? [expect.anything()] : [],
+        );
+        if (fence === "credential") {
+          expect(failure).toBeUndefined();
+          expect(JSON.parse(stdout)).toMatchObject({
+            result: { status: "fenced", reason: "credential-replaced" },
+          });
+        } else {
+          expect(failure).toBeInstanceOf(Error);
+          expect(stdout).toBe("");
+        }
+        return;
+      }
+      expect(failure).toBeUndefined();
+      expect(finishing).toBeDefined();
+      expect(finishing?.event).toMatchObject({
+        kind: "lifecycle",
+        payload: { phase: "finishing", aborted: true, stopReason: "aborted" },
+      });
+      expect(cursor()).toBe(finishing?.seq);
+      expect(JSON.parse(stdout)).toMatchObject({
+        type: "result",
+        turnId: descriptor.assignment.turnId,
+        retainWorker: false,
+        result: { status: "failed", reason: "turn-failed" },
+      });
+    } finally {
+      previewGate?.release.resolve();
+      finishingGate.release.resolve();
+      ackRelease.resolve();
+      previewRelease.resolve();
+      providerRelease.resolve(doneOutcome("fixture teardown"));
+      try {
+        await workers.close(signal);
+        if (command) {
+          await Promise.allSettled([command]);
+        }
+      } finally {
+        if (cancelWorker) {
+          owner.signal.removeEventListener("abort", cancelWorker);
+        }
+        owner.dispose();
+        registration.cleanup();
+        releaseSource();
+        await registration.entry.input.settlement.promise;
+        unsubscribe();
+      }
+    }
+  },
+);

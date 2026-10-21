@@ -2,14 +2,13 @@ import { spawn, type SpawnOptions } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 
-const KNIP_VERSION = "6.32.2";
+const KNIP_VERSION = "6.40.0";
 const KNIP_TIMEOUT_MS = 10 * 60 * 1000;
 const KNIP_KILL_GRACE_MS = 5_000;
 const KNIP_PROCESS_TREE_EXIT_POLL_MS = 25;
 const KNIP_POST_FORCE_KILL_WAIT_MS = 1_000;
 const KNIP_HEARTBEAT_MS = 60_000;
 
-/** Maximum buffered Knip output retained for diagnostics. */
 export const KNIP_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 type KnipSignal = "SIGHUP" | "SIGINT" | "SIGKILL" | "SIGTERM";
@@ -129,7 +128,6 @@ async function waitForProcessTreeExit(child: KnipChildProcess, timeoutMs: number
   return !processTreeAlive(child);
 }
 
-/** Runs pinned Knip with the supplied CLI arguments. */
 export async function runKnip(knipArgs: string[], params: KnipRunParams = {}) {
   const run: KnipSpawnCommand = params.spawnCommand ?? spawn;
   const timeoutMs = params.timeoutMs ?? KNIP_TIMEOUT_MS;

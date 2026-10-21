@@ -5,6 +5,11 @@ import {
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../../infra/agent-run-registry.js";
 import {
+  captureExecRequestCustodySelection,
+  captureExecRequestOwners,
+  withExecRequestTurn,
+} from "../../infra/exec-request-context.js";
+import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
@@ -213,4 +218,37 @@ it("guards retained unknown-model work through policy introduction and releases 
   retained.release();
   expect(holds).toBe(0);
   expect(listeners.size).toBe(0);
+});
+
+it("captures request custody before plugin handoff and retains continuation ancestry", async () => {
+  const identity = {
+    runId: "retained-source",
+    sessionKey: "agent:main:request-custody",
+    sessionId: "physical-session",
+    ownerConnId: "request-owner",
+  };
+  const captured = await withExecRequestTurn({ identity }, async () => {
+    const host = await createAdmittedHostCapabilityTestFixture(identity);
+    cleanup.push(host.closeAdmission, host.closeHost);
+    return { host, owners: captureExecRequestOwners(identity) };
+  });
+  const host = captured.host.hostCapabilities;
+  const custody = host.captureRequestCustody?.();
+  expect(custody).toBeDefined();
+  expect(captureExecRequestCustodySelection(captured.owners ?? [])(custody)).toBe(true);
+  await withExecRequestTurn(
+    { identity: { ...identity, runId: "continuation" }, owners: captured.owners },
+    async () => {
+      const owners = captureExecRequestOwners({ ...identity, runId: "continuation" });
+      expect(captureExecRequestCustodySelection(owners ?? [])(custody)).toBe(true);
+    },
+  );
+  await withExecRequestTurn({ identity }, async () => {
+    const replacement = captureExecRequestOwners(identity);
+    expect(host.captureRequestCustody?.()).toBe(custody);
+    expect(captureExecRequestCustodySelection(replacement ?? [])(custody)).toBe(false);
+  });
+  captured.host.closeHost();
+  expect(() => host.captureRequestCustody?.()).toThrow();
+  expect(captureExecRequestCustodySelection(captured.owners ?? [])(custody)).toBe(true);
 });

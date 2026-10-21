@@ -1,6 +1,5 @@
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import {
-  addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatCliCommand,
   formatDocsLink,
@@ -52,19 +51,6 @@ function setZalouserAccountScopedConfig(
     accountId,
     patch: defaultPatch,
     accountPatch,
-  });
-}
-
-function setZalouserDmPolicy(
-  cfg: OpenClawConfig,
-  accountId: string,
-  policy: DmPolicy,
-): OpenClawConfig {
-  const resolvedAccountId = normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID;
-  const resolved = resolveZalouserAccountSync({ cfg, accountId: resolvedAccountId });
-  return setZalouserAccountScopedConfig(cfg, resolvedAccountId, {
-    dmPolicy: policy,
-    ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
   });
 }
 
@@ -163,10 +149,7 @@ const zalouserDmPolicy = createChannelDmPolicy({
   applyPatch: ({ cfg, account, patch }) =>
     setZalouserAccountScopedConfig(cfg, account.accountId, patch, patch),
   promptAllowFrom: async ({ cfg, prompter, accountId }) => {
-    const id =
-      accountId && normalizeAccountId(accountId)
-        ? (normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID)
-        : resolveDefaultZalouserAccountId(cfg);
+    const id = accountId ? normalizeAccountId(accountId) : resolveDefaultZalouserAccountId(cfg);
     return await promptZalouserAllowFrom({
       cfg,
       prompter,
@@ -218,7 +201,7 @@ async function promptZalouserQuickstartDmPolicy(params: {
       accountId,
     });
   }
-  return setZalouserDmPolicy(cfg, accountId, policy);
+  return zalouserDmPolicy.setPolicy(cfg, policy, accountId);
 }
 
 export { zalouserSetupAdapter } from "./setup-core.js";

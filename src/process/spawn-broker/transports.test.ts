@@ -6,8 +6,9 @@ import { prepareOomScoreAdjustedSpawn } from "../linux-oom-score.js";
 import { createChildAdapter } from "../supervisor/adapters/child.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
 describe.skipIf(skipBrokerTests)("Gateway spawn transports", () => {
   let broker: ReturnType<typeof createSpawnBrokerHost>;

@@ -8,13 +8,7 @@ enum CanvasScheme {
         comps.scheme = Self.scheme
         comps.host = session
         let p = (path ?? "/").trimmingCharacters(in: .whitespacesAndNewlines)
-        if p.isEmpty || p == "/" {
-            comps.path = "/"
-        } else if p.hasPrefix("/") {
-            comps.path = p
-        } else {
-            comps.path = "/" + p
-        }
+        comps.path = p.hasPrefix("/") ? p : "/" + p
         return comps.url
     }
 

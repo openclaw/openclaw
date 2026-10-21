@@ -86,10 +86,7 @@ function currentUid(overrideUid?: number | null): number | null {
   if (overrideUid !== undefined) {
     return overrideUid;
   }
-  if (process.platform === "win32") {
-    return null;
-  }
-  if (typeof process.getuid !== "function") {
+  if (process.platform === "win32" || typeof process.getuid !== "function") {
     return null;
   }
   return process.getuid();
@@ -619,56 +616,6 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     attemptedSources.set(resolved, candidate);
   }
 
-  function discoverBundleInRoot(params: {
-    rootDir: string;
-    origin: PluginOrigin;
-    workspaceDir?: string;
-    installOwner?: string;
-    installOwnerAmbiguous?: true;
-    manifest?: PackageManifest | null;
-  }): boolean {
-    const bundleFormat = detectBundleManifestFormat(params.rootDir);
-    if (!bundleFormat) {
-      return false;
-    }
-    const rootRealPath = pluginCacheRealpathSync(params.rootDir) ?? undefined;
-    const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
-      origin: params.origin,
-      rootDir: params.rootDir,
-      env,
-    });
-    const bundleManifest = loadBundleManifest({
-      rootDir: params.rootDir,
-      ...(rootRealPath !== undefined ? { rootRealPath } : {}),
-      bundleFormat,
-      rejectHardlinks,
-    });
-    if (!bundleManifest.ok) {
-      diagnostics.push({
-        level: "error",
-        message: bundleManifest.error,
-        source: bundleManifest.manifestPath,
-      });
-      return false;
-    }
-    addCandidate({
-      idHint: bundleManifest.manifest.id,
-      source: params.rootDir,
-      rootDir: params.rootDir,
-      origin: params.origin,
-      format: "bundle",
-      bundleFormat,
-      workspaceDir: params.workspaceDir,
-      ...(params.installOwner ? { installOwner: params.installOwner } : {}),
-      ...(params.installOwnerAmbiguous ? { installOwnerAmbiguous: true } : {}),
-      manifest: params.manifest,
-      packageDir: params.rootDir,
-      bundledManifestId: bundleManifest.manifest.id,
-      bundledManifestPath: bundleManifest.manifestPath,
-    });
-    return true;
-  }
-
   function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolean {
     const { dir, rootRealPath } = params;
     const requireBuiltRuntimeEntry =
@@ -719,7 +666,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       return true;
     }
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
-    const setupSource = resolvePackageSetupSource({
+    const packageEntryParams = {
       packageDir: dir,
       ...(rootRealPath !== undefined ? { packageRootRealPath: rootRealPath } : {}),
       manifest,
@@ -729,7 +676,8 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       sourceLabel: dir,
       diagnostics,
       rejectHardlinks,
-    });
+    };
+    const setupSource = resolvePackageSetupSource(packageEntryParams);
     const addPackageCandidate = (
       source: string,
       idHint: string,
@@ -755,17 +703,9 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
 
     if (extensions.length > 0) {
       const entries = resolvePluginPackageEntries({
-        packageDir: dir,
-        ...(rootRealPath !== undefined ? { packageRootRealPath: rootRealPath } : {}),
-        manifest,
+        ...packageEntryParams,
         extensions,
         manifestId: manifestId ?? normalizeOptionalString(packageMetadata?.plugin?.id),
-        origin: params.origin,
-        pluginIdHint,
-        requireBuiltRuntimeEntry,
-        sourceLabel: dir,
-        diagnostics,
-        rejectHardlinks,
       });
       for (const entry of entries) {
         addPackageCandidate(
@@ -777,17 +717,38 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       return true;
     }
 
-    if (
-      discoverBundleInRoot({
+    const bundleFormat = detectBundleManifestFormat(dir);
+    if (bundleFormat) {
+      const bundleManifest = loadBundleManifest({
         rootDir: dir,
-        origin: params.origin,
-        workspaceDir: params.workspaceDir,
-        ...(params.installOwner ? { installOwner: params.installOwner } : {}),
-        ...(params.installOwnerAmbiguous ? { installOwnerAmbiguous: true } : {}),
-        manifest,
-      })
-    ) {
-      return true;
+        ...(rootRealPath !== undefined ? { rootRealPath } : {}),
+        bundleFormat,
+        rejectHardlinks,
+      });
+      if (!bundleManifest.ok) {
+        diagnostics.push({
+          level: "error",
+          message: bundleManifest.error,
+          source: bundleManifest.manifestPath,
+        });
+      } else {
+        addCandidate({
+          idHint: bundleManifest.manifest.id,
+          source: dir,
+          rootDir: dir,
+          origin: params.origin,
+          format: "bundle",
+          bundleFormat,
+          workspaceDir: params.workspaceDir,
+          ...(params.installOwner ? { installOwner: params.installOwner } : {}),
+          ...(params.installOwnerAmbiguous ? { installOwnerAmbiguous: true } : {}),
+          manifest,
+          packageDir: dir,
+          bundledManifestId: bundleManifest.manifest.id,
+          bundledManifestPath: bundleManifest.manifestPath,
+        });
+        return true;
+      }
     }
 
     const indexFile = [...DEFAULT_PLUGIN_ENTRY_CANDIDATES]
@@ -1226,11 +1187,11 @@ export function discoverOpenClawPlugins(params: {
       "discovery scan",
       () => {
         scanner.discoverConfiguredPaths(params.extraPaths ?? [], workspaceDir);
-        const workspaceMatchesBundledRoot = resolvesToSameDirectory(workspaceRoot, roots.stock);
-        if (roots.workspace && workspaceRoot && !workspaceMatchesBundledRoot) {
-          // Keep workspace auto-discovery constrained to the OpenClaw extensions root.
-          // Recursively scanning the full workspace treats arbitrary project folders as
-          // plugin candidates and causes noisy "plugin manifest not found" validation failures.
+        const workspaceMatchesSharedRoot =
+          resolvesToSameDirectory(workspaceRoot, roots.stock) ||
+          resolvesToSameDirectory(roots.workspace, roots.global);
+        if (roots.workspace && workspaceRoot && !workspaceMatchesSharedRoot) {
+          // Scan only workspace extensions; shared roots retain their installed provenance.
           discoverInDirectory({
             dir: roots.workspace,
             origin: "workspace",

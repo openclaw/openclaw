@@ -1,13 +1,11 @@
-import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import {
   ErrorCodes,
   errorShape,
   validateSessionSuggestionsAddParams,
   validateSessionSuggestionsListParams,
   validateSessionSuggestionsResolveParams,
-  validateSessionTypingParams,
   type SessionSuggestion,
-  type SessionTypingEvent,
+  type SessionSuggestionEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   listSessionSuggestions,
@@ -20,51 +18,48 @@ import {
   finalizeSessionSuggestionClaimInWorker,
   releaseSessionSuggestionDispatchInWorker,
 } from "../../config/sessions/session-metadata-write.async.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { presenceUserKey } from "../../shared/presence-user.js";
-import { hasOperatorBoundary } from "../operator-role-policy.js";
-import { sessionObserverScopeKey } from "../session-observer-model.js";
-import {
-  resolveRequestedSessionAgentId,
-  tryResolveSessionCompatibilityOwnerAgentId,
-} from "../session-request-agent.js";
-import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
+import { isSessionWorkStartInvalidatedError } from "../../config/sessions/work-start-error.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   getSessionRowProjection,
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
-import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
+import { captureSessionSharingMemoryFacts } from "../session-sharing-incognito.js";
+import type { SessionSharingTarget } from "../session-sharing-policy.js";
+import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import {
-  authorizeIncognitoSessionTarget,
-  canManageSessionSharing,
   prepareProjectedSessionSharing,
-  resolveSessionSharingTarget,
-  resolveSessionVisibility,
+  SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
-import { resolveSessionSubscriptionKeys as subscriptionKeys } from "../session-subscription-keys.js";
+import { handleChatSend } from "./chat-send-handler.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import {
-  broadcastTypingThrottled,
-  liveViewerIdentities,
-  TYPING_PREVIEW_THROTTLE_MS,
-  TYPING_THROTTLE_MS,
-  updateTypingConnections,
-} from "./session-typing-state.js";
+  retainForwardedSessionMutationAuthorization,
+  withSessionMutationCommitGuard,
+} from "./session-mutation-guards.js";
 import { sharingExpectedEntry } from "./sessions-sharing-authority.js";
 import {
   authorizeSessionSuggestionMutation,
   createSessionSuggestionMutation,
+  sessionSuggestionSessionChangedError,
   suggestionScope,
-  publishSuggestion,
   requireSuggestionTarget,
+  readCollaborationTarget,
   requireVisibleSuggestionRole,
 } from "./sessions-suggestions-access.js";
-import { dispatchSuggestion } from "./sessions-suggestions-dispatch.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
-import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
+import { sessionTypingHandler } from "./sessions-typing.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+  RespondFn,
+  SessionMutationAuthorization,
+} from "./types.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 function protocolSuggestion(
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
+  target: SessionSharingTarget,
   suggestion: StoredSessionSuggestion,
 ): SessionSuggestion {
   return {
@@ -80,6 +75,27 @@ function protocolSuggestion(
     createdAt: suggestion.createdAt,
     state: suggestion.state,
   };
+}
+
+function publishSuggestion(
+  context: GatewayRequestContext,
+  target: SessionSharingTarget,
+  requestedSessionKey: string,
+  action: SessionSuggestionEvent["action"],
+  stored: StoredSessionSuggestion,
+): SessionSuggestion {
+  const suggestion = protocolSuggestion(target, stored);
+  context.broadcast(
+    "session.suggestion",
+    { action, suggestion },
+    {
+      sessionKeys: [
+        ...new Set([requestedSessionKey, target.canonicalKey, target.storeKey]),
+      ].toSorted(),
+      agentId: suggestion.agentId,
+    },
+  );
+  return suggestion;
 }
 
 function respondSuggestionDispatchError(respond: RespondFn, error: unknown): void {
@@ -102,16 +118,9 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     "session.suggestions.add",
     validateSessionSuggestionsAddParams,
     async ({ params, respond, client, context, signal, sessionMutationAuthorization }) => {
-      const cfg = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig();
-      const target = requireSuggestionTarget({ client, context, ...params, respond });
+      const target = await requireSuggestionTarget({ context, ...params, respond });
       const author = gatewayClientSessionCreator(client);
-      if (
-        !target ||
-        !authorizeSessionSuggestionMutation(
-          { client, cfg, sessionKey: params.sessionKey, target, respond },
-          "add",
-        )
-      ) {
+      if (!target) {
         return;
       }
       if (!author) {
@@ -162,12 +171,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
               assertCurrent,
             );
             mutation.readCurrent();
-            const projected = protocolSuggestion(target, suggestion);
-            publishSuggestion(context, target, params.sessionKey, {
-              action: "added",
-              suggestion: projected,
-            });
-            return projected;
+            return publishSuggestion(context, target, params.sessionKey, "added", suggestion);
           },
         });
         if (added.ok) {
@@ -201,63 +205,84 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         return;
       }
       const identity = gatewayClientSessionCreator(client);
-      const facts = await prepareSessionMutationFacts({
-        cfg,
-        sessionKey: params.sessionKey,
-        agentId: requested.agentId,
-        allowMissing: true,
-      });
-      try {
-        const readCurrent = () => {
+      const projection = requireSessionRowProjection(context);
+      const query = { key: params.sessionKey, agentId: requested.agentId };
+      const actorFacts = captureSessionSharingMemoryFacts(
+        {
+          sessionKey: query.key,
+          agentId: query.agentId,
+          resolved: null,
+        },
+        () => {
+          signal?.throwIfAborted();
           if (
-            signal?.aborted ||
             client?.invalidated ||
             client?.connectionSignal?.aborted ||
-            hasCurrentClientAuthority?.() === false ||
-            gatewayClientSessionCreator(client)?.id !== identity?.id
+            hasCurrentClientAuthority?.() === false
           ) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.FORBIDDEN, "suggestion reader authority changed"),
-            );
-            return null;
+            throw new SessionMutationFactsUnavailableError();
           }
-          const current = facts.readCurrent(context.getRuntimeConfig());
-          const policy = (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
-          const sharing = prepareProjectedSessionSharing({
-            cfg: policy,
-            client,
-            isMember: (_target, id) => current.membership.has(id),
-          });
-          const target = current.target;
-          if (
-            !target ||
-            (hasOperatorBoundary(client, policy) &&
-              sharing.entryFilter?.(target.storeKey, target.entry) === false)
-          ) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.sessionKey}`),
-            );
-            return null;
-          }
-          const role = requireVisibleSuggestionRole({
-            client,
-            cfg: policy,
-            sessionKey: params.sessionKey,
-            target,
-            respond,
-            sharing,
-          });
-          return role === null ? null : { target, role };
-        };
-        const initial = readCurrent();
-        if (!initial) {
-          return;
+        },
+      );
+      if (!actorFacts) {
+        while (projection.needsMembershipPreparation()) {
+          await projection.prepareMembership();
         }
-        const stored = await listSessionSuggestions(suggestionScope(initial.target));
+      }
+      let selected: ReturnType<typeof readCollaborationTarget> = null;
+      const readCurrent = () => {
+        if (
+          signal?.aborted ||
+          client?.invalidated ||
+          client?.connectionSignal?.aborted ||
+          hasCurrentClientAuthority?.() === false ||
+          gatewayClientSessionCreator(client)?.id !== identity?.id
+        ) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.FORBIDDEN, "suggestion reader authority changed"),
+          );
+          return null;
+        }
+        const target = readCollaborationTarget(projection, query, actorFacts);
+        if (
+          getSessionRowProjection(context) !== projection ||
+          (selected &&
+            (!target ||
+              (!actorFacts && target.generation !== selected.generation) ||
+              target.storePath !== selected.storePath ||
+              target.entry.sessionId !== selected.entry.sessionId ||
+              target.entry.lifecycleRevision !== selected.entry.lifecycleRevision))
+        ) {
+          throw new SessionMutationFactsUnavailableError();
+        }
+        const policy = (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
+        const sharing = prepareProjectedSessionSharing({
+          cfg: policy,
+          client,
+          isMember: (value, id) =>
+            actorFacts
+              ? actorFacts.readCurrent().membership.has(id)
+              : projection.hasMembership(value.storePath, value.storeKey, id),
+        });
+        const role = requireVisibleSuggestionRole({
+          client,
+          cfg: policy,
+          sessionKey: params.sessionKey,
+          target: target ?? null,
+          respond,
+          sharing,
+        });
+        return role === null || !target ? null : { target, role };
+      };
+      const initial = readCurrent();
+      if (!initial) {
+        return;
+      }
+      selected = initial.target;
+      const stored = await listSessionSuggestions(suggestionScope(initial.target));
+      const reply = () => {
         const current = readCurrent();
         if (!current) {
           return;
@@ -271,9 +296,8 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           role: current.role,
           suggestions: visible.map((suggestion) => protocolSuggestion(current.target, suggestion)),
         });
-      } finally {
-        facts.release();
-      }
+      };
+      reply();
     },
   ),
 
@@ -290,21 +314,12 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       signal,
       sessionMutationAuthorization,
     }) => {
-      const cfg = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig();
-      const target = requireSuggestionTarget({ client, context, ...params, respond });
+      const target = await requireSuggestionTarget({ context, ...params, respond });
       if (!target) {
         return;
       }
       const resolution = params.resolution;
       const dispatching = resolution === "send" || resolution === "queue";
-      if (
-        !authorizeSessionSuggestionMutation(
-          { client, cfg, sessionKey: params.sessionKey, target, respond },
-          resolution,
-        )
-      ) {
-        return;
-      }
       if (dispatching && !client) {
         respond(
           false,
@@ -394,30 +409,142 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
             });
             if (!released.ok) {
               respond(false, undefined, released.error);
-              return false;
             }
-            return true;
+            return released.ok;
           } catch (error) {
             respondSuggestionDispatchError(respond, error);
             return false;
           }
         };
         if (dispatching && client) {
+          const dispatchSuggestion = async (): Promise<
+            { ok: true } | { ok: false; error: Parameters<RespondFn>[2] }
+          > => {
+            let response: Parameters<RespondFn> | undefined;
+            const suggestion = claim.suggestion;
+            const chatParams = {
+              sessionKey: target.canonicalKey,
+              agentId: target.agentId,
+              sessionId: expectedSessionId,
+              message: suggestion.text,
+              queueMode: resolution === "queue" ? ("followup" as const) : ("steer" as const),
+              idempotencyKey: `session-suggestion:${suggestion.id}`,
+            };
+            const captureResponse: RespondFn = (...args) => {
+              response = args;
+            };
+            const label = suggestion.authorLabel ?? suggestion.authorId;
+            const chatClient: GatewayClient = {
+              ...client,
+              internal: {
+                ...client.internal,
+                syntheticClient: true,
+                senderAttribution: {
+                  id: suggestion.authorId,
+                  identity: { type: "profile", id: suggestion.authorId },
+                  name: `Suggested by ${label}`,
+                },
+              },
+            };
+            const assertRequestCurrent = () => {
+              signal?.throwIfAborted();
+              sessionMutationAuthorization?.assertCurrent();
+            };
+            const assertAdmittedCurrent =
+              sessionMutationAuthorization?.assertAdmittedSourceCurrent ??
+              sessionMutationAuthorization?.assertAdmittedInputCurrent ??
+              sessionMutationAuthorization?.assertCurrent;
+            let chatAuthorization: SessionMutationAuthorization | undefined;
+            let releaseChatAuthorization: (() => void) | undefined;
+            try {
+              assertRequestCurrent();
+              const current = mutation.readCurrent();
+              if (
+                !authorizeSessionSuggestionMutation(
+                  {
+                    client,
+                    ...current,
+                    sessionKey: target.canonicalKey,
+                    respond: captureResponse,
+                  },
+                  resolution,
+                )
+              ) {
+                return { ok: false, error: response?.[2] };
+              }
+              const expectedTarget = {
+                agentId: current.target.agentId,
+                sessionKey: current.target.canonicalKey,
+                storePath: current.target.storePath,
+                sessionId: expectedSessionId,
+              };
+              const authorization = await resolveSessionMutationAuthorizationAsync({
+                client: chatClient,
+                method: "chat.send",
+                requestParams: chatParams,
+                context,
+                expectedTarget,
+                assertInvocationCurrent: assertRequestCurrent,
+              });
+              releaseChatAuthorization = authorization.authorization?.release;
+              assertRequestCurrent();
+              if (authorization.error) {
+                return { ok: false, error: authorization.error };
+              }
+              chatAuthorization = withSessionMutationCommitGuard(
+                authorization.authorization,
+                assertAdmittedCurrent,
+                assertRequestCurrent,
+              );
+              if (chatAuthorization) {
+                chatAuthorization = retainForwardedSessionMutationAuthorization(
+                  chatAuthorization,
+                  sessionMutationAuthorization,
+                );
+                releaseChatAuthorization = chatAuthorization.release;
+              }
+              chatAuthorization?.assertCurrent();
+            } catch (error) {
+              releaseChatAuthorization?.();
+              // No chat invocation occurred, so the caller can release its exact claim.
+              if (error instanceof SessionMutationAuthorizationChangedError) {
+                return { ok: false, error: error.error };
+              }
+              if (isSessionWorkStartInvalidatedError(error)) {
+                return {
+                  ok: false,
+                  error: sessionSuggestionSessionChangedError(target.canonicalKey),
+                };
+              }
+              return {
+                ok: false,
+                error: errorShape(
+                  ErrorCodes.UNAVAILABLE,
+                  error instanceof Error
+                    ? error.message
+                    : "suggestion dispatch authorization failed",
+                ),
+              };
+            }
+            try {
+              await handleChatSend({
+                req: { ...req, method: "chat.send", params: chatParams },
+                params: chatParams,
+                client: chatClient,
+                isWebchatConnect,
+                respond: captureResponse,
+                sessionMutationAuthorization: chatAuthorization,
+                sessionMutationCommitGuard: assertRequestCurrent,
+                context,
+              });
+            } finally {
+              releaseChatAuthorization?.();
+            }
+            return response?.[0] === true ? { ok: true } : { ok: false, error: response?.[2] };
+          };
           let dispatched: Awaited<ReturnType<typeof dispatchSuggestion>>;
           try {
-            dispatched = await dispatchSuggestion({
-              context,
-              client,
-              req,
-              isWebchatConnect,
-              target,
-              suggestion: claim.suggestion,
-              resolution,
-              expectedSessionId,
-              readCurrent: mutation.readCurrent,
-              signal,
-              sessionMutationAuthorization,
-            });
+            dispatched = await dispatchSuggestion();
           } catch (error) {
             respondSuggestionDispatchError(respond, error);
             return;
@@ -455,12 +582,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
             if (!suggestion) {
               return null;
             }
-            const projected = protocolSuggestion(target, suggestion);
-            publishSuggestion(context, target, params.sessionKey, {
-              action: "resolved",
-              suggestion: projected,
-            });
-            return projected;
+            return publishSuggestion(context, target, params.sessionKey, "resolved", suggestion);
           },
         });
         if (!finalizeResult.ok) {
@@ -490,196 +612,5 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     },
   ),
 
-  "session.typing": async ({
-    params: requestParams,
-    respond,
-    client,
-    context,
-    hasCurrentClientAuthority,
-  }) => {
-    const params =
-      typeof requestParams.preview === "string"
-        ? {
-            ...requestParams,
-            preview: truncateCodePoints(requestParams.preview.trim(), 400),
-          }
-        : requestParams;
-    if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
-      return;
-    }
-    const projection = requireSessionRowProjection(context);
-    while (projection.needsMembershipPreparation()) {
-      await projection.prepareMembership();
-    }
-    const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const query = { key: params.sessionKey, agentId: requestedAgent.agentId };
-    const readTarget = (read: Pick<SessionRowReadView, "describe"> = projection) => {
-      if (isIncognitoSessionKey(query.key)) {
-        const row = read.describe(query);
-        return (
-          row && {
-            agentId: row.agentId,
-            canonicalKey: row.key,
-            storeKey: row.key,
-            storeKeys: [row.key],
-            storePath: row.storeTarget.storePath,
-            entry: row.entry,
-            generation: row.generation,
-          }
-        );
-      }
-      const current = projection.sharingTargetState(query);
-      return current.status === "ready" ? current.target : null;
-    };
-    const incognitoError = authorizeIncognitoSessionTarget({
-      client,
-      sessionKey: query.key,
-      target: null,
-    });
-    if (incognitoError) {
-      respond(false, undefined, incognitoError);
-      return;
-    }
-    const target = isIncognitoSessionKey(query.key)
-      ? await withReadySessionRows(projection, () => [query], readTarget)
-      : readTarget();
-    const sharing = () =>
-      prepareProjectedSessionSharing({
-        cfg: projection.getPolicyConfig(),
-        client,
-        isMember: (value, identity) =>
-          projection.hasMembership(value.storePath, value.storeKey, identity),
-      });
-    const prepared = sharing();
-    if (
-      !target ||
-      (hasOperatorBoundary(client, projection.getPolicyConfig()) &&
-        prepared.entryFilter?.(target.storeKey, target.entry) === false)
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.sessionKey}`),
-      );
-      return;
-    }
-    const denied = authorizeIncognitoSessionTarget({ client, sessionKey: query.key, target });
-    if (denied) {
-      respond(false, undefined, denied);
-      return;
-    }
-    const canType = (current: NonNullable<ReturnType<typeof readTarget>>, access = sharing()) => {
-      if (
-        authorizeIncognitoSessionTarget({ client, sessionKey: query.key, target: current }) ||
-        (hasOperatorBoundary(client, projection.getPolicyConfig()) &&
-          access.entryFilter?.(current.storeKey, current.entry) === false)
-      ) {
-        return false;
-      }
-      const role = access.roleForTarget(current);
-      const visibility = resolveSessionVisibility(current.entry);
-      return (
-        !(role === "viewer" && access.sessionCap === "view") &&
-        (visibility !== "draft" || canManageSessionSharing(role)) &&
-        (role !== "viewer" || visibility === "shared" || visibility === "suggest")
-      );
-    };
-    const actor = gatewayClientSessionCreator(client);
-    if (
-      params.sessionId !== target.entry.sessionId ||
-      !actor ||
-      client?.invalidated ||
-      client?.connectionSignal?.aborted ||
-      hasCurrentClientAuthority?.() === false ||
-      !canType(target, prepared)
-    ) {
-      respond(true, { ok: true, broadcast: false });
-      return;
-    }
-    if (params.typing) {
-      context.recordClientActivity?.(client);
-    }
-    const sessionKeys = new Set([
-      params.sessionKey,
-      target.canonicalKey,
-      target.storeKey,
-      sessionObserverScopeKey(target.canonicalKey, target.agentId),
-    ]);
-    const now = Date.now();
-    const typingKey = `${actor.id}\0${target.agentId}\0${target.canonicalKey}\0${target.entry.sessionId}\0${target.entry.lifecycleRevision ?? 0}`;
-    const { typing: effectiveTyping, preview } = updateTypingConnections({
-      key: typingKey,
-      connectionId: client?.connId ?? actor.id,
-      typing: params.typing,
-      ...(params.typing && params.preview ? { preview: params.preview } : {}),
-      now,
-    });
-    const broadcast = broadcastTypingThrottled({
-      key: typingKey,
-      typing: effectiveTyping,
-      signature: `${effectiveTyping}\0${preview ?? ""}`,
-      intervalMs: preview ? TYPING_PREVIEW_THROTTLE_MS : TYPING_THROTTLE_MS,
-      now,
-      emit: () => {
-        if (
-          client?.invalidated ||
-          client?.connectionSignal?.aborted ||
-          hasCurrentClientAuthority?.() === false ||
-          gatewayClientSessionCreator(client)?.id !== actor.id ||
-          getSessionRowProjection(context) !== projection
-        ) {
-          return false;
-        }
-        const current = readTarget();
-        if (
-          !current ||
-          current.generation !== target.generation ||
-          current.storePath !== target.storePath ||
-          current.entry.sessionId !== target.entry.sessionId ||
-          current.entry.lifecycleRevision !== target.entry.lifecycleRevision ||
-          !canType(current)
-        ) {
-          return false;
-        }
-        const liveIdentities = liveViewerIdentities(sessionKeys);
-        const actorKey = presenceUserKey({
-          id: actor.id,
-          identity: { type: "profile", id: actor.id },
-        });
-        if (liveIdentities.size < 2 || !liveIdentities.has(actorKey)) {
-          return false;
-        }
-        const event: SessionTypingEvent = {
-          sessionKey: target.canonicalKey,
-          sessionId: current.entry.sessionId,
-          agentId: target.agentId,
-          actor,
-          typing: effectiveTyping,
-          ...(preview ? { preview } : {}),
-          ts: Date.now(),
-        };
-        context.broadcast("session.typing", event, {
-          sessionKeys: subscriptionKeys(
-            current.canonicalKey,
-            current.agentId,
-            current.canonicalKey === "global"
-              ? tryResolveSessionCompatibilityOwnerAgentId(
-                  context.getRuntimeConfig(),
-                  current.canonicalKey,
-                )
-              : undefined,
-          ),
-          agentId: target.agentId,
-          dropIfSlow: true,
-        });
-        return true;
-      },
-    });
-    respond(true, { ok: true, broadcast });
-  },
+  "session.typing": sessionTypingHandler,
 };

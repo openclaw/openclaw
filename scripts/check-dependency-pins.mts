@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Audits patched dependency pins for exact versions and drift.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";

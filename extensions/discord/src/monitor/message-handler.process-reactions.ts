@@ -3,18 +3,15 @@ import {
   createStatusReactionController,
   logAckFailure,
   shouldAckReaction as shouldAckReactionGate,
+  type StatusReactionAdapter,
   type StatusReactionController,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createDiscordRestClient } from "../client.js";
+import { createDiscordRestClient, createDiscordRuntimeAccountContext } from "../client.js";
+import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
 import { resolveDiscordChannelId } from "../targets.js";
-import {
-  createDiscordAckReactionAdapter,
-  createDiscordAckReactionContext,
-  queueInitialDiscordAckReaction,
-} from "./ack-reactions.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 
 type ToolStartPayload = {
@@ -69,18 +66,23 @@ export function createDiscordMessageReactionRuntime(params: {
     (!params.sourceRepliesAreToolOnly || statusReactionsExplicitlyEnabled);
   const feedbackRest = createDiscordRestClient({ cfg, token, accountId }).rest;
   const deliveryRest = createDiscordRestClient({ cfg, token, accountId }).rest;
-  const ackReactionContext = createDiscordAckReactionContext({
+  const ackReactionContext = {
     rest: feedbackRest,
-    cfg,
-    accountId,
+    ...createDiscordRuntimeAccountContext({ cfg, accountId }),
+  };
+  const createReactionAdapter = (channelId: string, messageId: string): StatusReactionAdapter => ({
+    setReaction: async (emoji) => {
+      await reactMessageDiscord(channelId, messageId, emoji, ackReactionContext);
+    },
+    removeReaction: async (emoji) => {
+      await removeReactionDiscord(channelId, messageId, emoji, ackReactionContext);
+    },
   });
-  const discordAdapter = createDiscordAckReactionAdapter({
-    channelId: messageChannelId,
-    messageId: message.id,
-    reactionContext: ackReactionContext,
-  });
+  const discordAdapter = createReactionAdapter(messageChannelId, message.id);
   let statusReactionTarget = `${messageChannelId}/${message.id}`;
   let statusReactionsActive = statusReactionsEnabled;
+  const logReactionFailure = (target: string, error: unknown) =>
+    logAckFailure({ log: logVerbose, channel: "discord", target, error });
   const createController = (
     enabled: boolean,
     adapter: Parameters<typeof createStatusReactionController>[0]["adapter"],
@@ -91,14 +93,7 @@ export function createDiscordMessageReactionRuntime(params: {
       adapter,
       initialEmoji,
       presentation: "acknowledgement",
-      onError: (err) => {
-        logAckFailure({
-          log: logVerbose,
-          channel: "discord",
-          target: statusReactionTarget,
-          error: err,
-        });
-      },
+      onError: (err) => logReactionFailure(statusReactionTarget, err),
     });
   let statusReactions: StatusReactionController = createController(
     statusReactionsEnabled,
@@ -159,12 +154,10 @@ export function createDiscordMessageReactionRuntime(params: {
     try {
       trackedChannelId = await resolveTrackedReactionChannelId(args);
     } catch (err) {
-      logAckFailure({
-        log: logVerbose,
-        channel: "discord",
-        target: `${normalizeOptionalString(args.to) ?? normalizeOptionalString(args.channelId) ?? messageChannelId}/${trackedMessageId}`,
-        error: err,
-      });
+      logReactionFailure(
+        `${normalizeOptionalString(args.to) ?? normalizeOptionalString(args.channelId) ?? messageChannelId}/${trackedMessageId}`,
+        err,
+      );
       return;
     }
     statusReactionTarget = `${trackedChannelId}/${trackedMessageId}`;
@@ -173,11 +166,7 @@ export function createDiscordMessageReactionRuntime(params: {
     }
     statusReactions = createController(
       true,
-      createDiscordAckReactionAdapter({
-        channelId: trackedChannelId,
-        messageId: trackedMessageId,
-        reactionContext: ackReactionContext,
-      }),
+      createReactionAdapter(trackedChannelId, trackedMessageId),
       emoji,
     );
     statusReactionsActive = true;
@@ -190,14 +179,15 @@ export function createDiscordMessageReactionRuntime(params: {
       return;
     }
     initialAckReactionQueued = true;
-    queueInitialDiscordAckReaction({
-      enabled: statusReactionsEnabled,
-      shouldSendAckReaction,
-      ackReaction,
-      statusReactions,
-      reactionAdapter: discordAdapter,
-      target: `${messageChannelId}/${message.id}`,
-    });
+    if (statusReactionsEnabled) {
+      void statusReactions.setQueued();
+      return;
+    }
+    if (shouldSendAckReaction && ackReaction) {
+      void discordAdapter.setReaction(ackReaction).catch((err: unknown) => {
+        logReactionFailure(`${messageChannelId}/${message.id}`, err);
+      });
+    }
   };
 
   const finish = async (result: {
@@ -205,18 +195,17 @@ export function createDiscordMessageReactionRuntime(params: {
     dispatchError: boolean;
     finalDeliveryFailed: boolean;
   }) => {
-    if (statusReactionsActive) {
-      if (result.dispatchAborted) {
-        void statusReactions.restoreInitial();
-        return;
-      }
+    if (!statusReactionsActive) {
+      return;
+    }
+    if (!result.dispatchAborted) {
       if (result.dispatchError || result.finalDeliveryFailed) {
         await statusReactions.setError();
       } else {
         await statusReactions.setDone();
       }
-      void statusReactions.restoreInitial();
     }
+    void statusReactions.restoreInitial();
   };
 
   return {

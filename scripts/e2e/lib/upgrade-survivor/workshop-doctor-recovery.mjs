@@ -5,17 +5,30 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 import { isMainThread } from "node:worker_threads";
+import { findInstalledPackageRoot, readDatabase } from "./observations.mjs";
 import {
-  assertWorkshopLegacyImported,
-  assertWorkshopLegacyWarning,
+  assertWorkshopProposalsRetired,
   captureWorkshopLegacyState,
+  RETIRED_WORKSHOP_TABLES,
   seedWorkshopLegacyProposals,
 } from "./workshop-legacy-proposals.mjs";
 
 const PHYSICAL_INDEX = "idx_audit_events_kind_sequence";
 const INDEX = "idx_skill_workshop_collection_reviews_workspace_time";
 const INDEX_SQL = `CREATE INDEX ${INDEX} ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)`;
+// Published 2026.9.4 DDL for the retired table that carries the malformed index.
+const COLLECTION_REVIEWS_SQL = `CREATE TABLE skill_workshop_collection_reviews (
+  review_id TEXT NOT NULL PRIMARY KEY,
+  owner_agent_id TEXT NOT NULL,
+  backup_id TEXT NOT NULL,
+  create_time INTEGER NOT NULL,
+  kept_names_json TEXT NOT NULL,
+  written_names_json TEXT NOT NULL,
+  dropped_json TEXT NOT NULL
+) STRICT`;
+const RETIREMENT_OUTPUT = /Skill Workshop proposal/u;
 const REVIEW = {
   review_id: "survivor-workshop-review",
   owner_agent_id: "main",
@@ -82,28 +95,29 @@ export function captureWorkshopCandidate(tarball, artifactRoot, candidateVersion
 }
 
 function hasMalformedWorkshopIndex(filename) {
-  const database = new DatabaseSync(filename, { readOnly: true });
-  try {
-    database.prepare("SELECT review_id FROM skill_workshop_collection_reviews LIMIT 1").get();
-    return false;
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.includes("malformed database schema") &&
-      error.message.includes(INDEX)
-    ) {
-      return true;
+  return readDatabase(filename, (database) => {
+    try {
+      database.prepare("SELECT review_id FROM skill_workshop_collection_reviews LIMIT 1").get();
+      return false;
+    } catch (error) {
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      if (error.message.includes("malformed database schema") && error.message.includes(INDEX)) {
+        return true;
+      }
+      // Candidate Doctor retires the table that carries the malformed index.
+      if (error.message.includes("no such table: skill_workshop_collection_reviews")) {
+        return false;
+      }
+      throw error;
     }
-    throw error;
-  } finally {
-    database.close();
-  }
+  });
 }
 
 function inspectMalformedState(filename) {
   assert(hasMalformedWorkshopIndex(filename), "Legacy Workshop fixture is not malformed");
-  const database = new DatabaseSync(filename, { readOnly: true });
-  try {
+  return readDatabase(filename, (database) => {
     database.enableDefensive?.(false);
     database.exec("PRAGMA writable_schema = ON;");
     const catalog = database
@@ -138,9 +152,7 @@ function inspectMalformedState(filename) {
       rootpage: index.rootpage,
       stateSha256: digest.digest("hex"),
     };
-  } finally {
-    database.close();
-  }
+  });
 }
 
 export function seedWorkshopIndex(stateDir, artifactRoot, stage) {
@@ -148,25 +160,18 @@ export function seedWorkshopIndex(stateDir, artifactRoot, stage) {
   const filename = databasePath(stateDir);
   const database = new DatabaseSync(filename);
   try {
-    if (stage === "baseline") {
-      database
-        .prepare(
-          `INSERT INTO skill_workshop_collection_reviews (
-            review_id, owner_agent_id, backup_id, create_time, kept_names_json, written_names_json, dropped_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(...Object.values(REVIEW));
-    } else {
-      assert.deepEqual(
-        {
-          ...database
-            .prepare("SELECT * FROM skill_workshop_collection_reviews WHERE review_id = ?")
-            .get(REVIEW.review_id),
-        },
-        REVIEW,
-        "Candidate reseeding must preserve the upgraded review",
-      );
+    if (stage === "candidate") {
+      assert.deepEqual(retiredTables(database), [], "Candidate reseeding requires retired tables");
+      // Restore published-build state (e.g. from a backup) onto the retired candidate schema.
+      database.exec(COLLECTION_REVIEWS_SQL);
     }
+    database
+      .prepare(
+        `INSERT INTO skill_workshop_collection_reviews (
+          review_id, owner_agent_id, backup_id, create_time, kept_names_json, written_names_json, dropped_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(...Object.values(REVIEW));
     database.exec(
       `CREATE INDEX ${INDEX} ON skill_workshop_collection_reviews(review_id, create_time DESC);`,
     );
@@ -186,8 +191,7 @@ export function seedWorkshopIndex(stateDir, artifactRoot, stage) {
 }
 
 function inspectPhysicalState(filename) {
-  const database = new DatabaseSync(filename, { readOnly: true });
-  try {
+  return readDatabase(filename, (database) => {
     return {
       findings: database
         .prepare("PRAGMA integrity_check(2147483647)")
@@ -202,9 +206,7 @@ function inspectPhysicalState(filename) {
         .all()
         .map((row) => Object.assign({}, row)),
     };
-  } finally {
-    database.close();
-  }
+  });
 }
 
 function seedPhysicalIndex(stateDir, artifactRoot, stage) {
@@ -417,6 +419,15 @@ function assertPhysicalDoctorRepair(stateDir, artifactRoot, observations, logPat
       physicalIndexCorruptAtStart: true,
     },
   );
+  // The first explicit candidate Doctor after the update must not touch retired Workshop state.
+  const legacy = readJson(path.join(artifactRoot, "workshop-legacy-seeded.json"));
+  assert.equal(doctor.legacyExitCaptureError, undefined, "Candidate Doctor exit capture failed");
+  assert.deepEqual(
+    doctor.legacyAtExit,
+    legacy.after,
+    "Second candidate Doctor changed retired Workshop state",
+  );
+  assert(!RETIREMENT_OUTPUT.test(normalizeOutput(log)), "Second candidate Doctor was not a no-op");
   writeJson(path.join(artifactRoot, "physical-candidate-repair.json"), {
     status: "explicit-candidate-physical-index-repaired",
     index: PHYSICAL_INDEX,
@@ -443,14 +454,9 @@ function observeProcess() {
   }
   let identity = null;
   try {
-    let directory = path.dirname(fs.realpathSync(process.argv[1]));
-    // Installed CLI entrypoints are at the package root or inside dist.
-    for (let depth = 0; depth < 3; depth++, directory = path.dirname(directory)) {
-      const manifest = path.join(directory, "package.json");
-      if (fs.existsSync(manifest) && readJson(manifest).name === "openclaw") {
-        identity = installedIdentity(directory);
-        break;
-      }
+    const root = findInstalledPackageRoot(path.dirname(fs.realpathSync(process.argv[1])), 3);
+    if (root) {
+      identity = installedIdentity(root);
     }
   } catch {
     // Missing identity rejects the evidence without changing the observed CLI.
@@ -569,23 +575,40 @@ function processWitness(observations, identity, expected) {
   return witness;
 }
 
-function assertRepairedState(stateDir) {
-  const database = new DatabaseSync(databasePath(stateDir), { readOnly: true });
-  try {
+function retiredTables(database) {
+  return RETIRED_WORKSHOP_TABLES.filter((table) =>
+    database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?").get(table),
+  );
+}
+
+function normalizeOutput(text) {
+  return stripVTControlCharacters(text)
+    .split(/\r?\n/u)
+    .map((line) => line.replace(/^\s*[│|]\s?/u, "").replace(/\s*[│|]\s*$/u, ""))
+    .join(" ")
+    .replace(/\s+/gu, " ");
+}
+
+function assertRepairedState(stateDir, retired) {
+  readDatabase(databasePath(stateDir), (database) => {
     assert.equal(
       database.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(INDEX),
       undefined,
       "Doctor left the malformed Workshop index behind",
     );
-    assert.deepEqual(
-      {
-        ...database
-          .prepare("SELECT * FROM skill_workshop_collection_reviews WHERE review_id = ?")
-          .get(REVIEW.review_id),
-      },
-      REVIEW,
-      "Doctor changed the retained Workshop review",
-    );
+    if (retired) {
+      assert.deepEqual(retiredTables(database), [], "Doctor left retired Workshop tables behind");
+    } else {
+      assert.deepEqual(
+        {
+          ...database
+            .prepare("SELECT * FROM skill_workshop_collection_reviews WHERE review_id = ?")
+            .get(REVIEW.review_id),
+        },
+        REVIEW,
+        "Doctor changed the retained Workshop review",
+      );
+    }
     assert.deepEqual(
       database
         .prepare("PRAGMA integrity_check")
@@ -593,9 +616,7 @@ function assertRepairedState(stateDir) {
         .map((row) => row.integrity_check),
       ["ok"],
     );
-  } finally {
-    database.close();
-  }
+  });
 }
 
 export function assertWorkshopUpdateRefusal(
@@ -643,7 +664,7 @@ export function assertWorkshopUpdateRefusal(
 export function assertWorkshopDoctorRepair(stateDir, artifactRoot, observations, stage) {
   assert(["baseline", "candidate"].includes(stage));
   const identity = readJson(path.join(artifactRoot, `workshop-${stage}.json`));
-  assertRepairedState(stateDir);
+  assertRepairedState(stateDir, stage === "candidate");
   const doctor = processWitness(observations, identity, {
     role: "doctor",
     exitCode: 0,
@@ -651,33 +672,24 @@ export function assertWorkshopDoctorRepair(stateDir, artifactRoot, observations,
     updateInProgress: false,
   });
   let legacy;
-  let legacyWarning;
-  if (
-    stage === "candidate" &&
-    fs.existsSync(path.join(artifactRoot, "workshop-legacy-seeded.json"))
-  ) {
+  if (stage === "candidate") {
+    // Doctor repairs the index before retiring the restored table; exports stay untouched.
     const seeded = readJson(path.join(artifactRoot, "workshop-legacy-seeded.json"));
     assert.equal(doctor.legacyExitCaptureError, undefined, "Candidate Doctor exit capture failed");
-    legacy = assertWorkshopLegacyImported(stateDir, seeded, doctor.legacyAtExit);
-    assert.deepEqual(
-      legacy,
-      readJson(path.join(artifactRoot, "workshop-recovered-upgrade.json")).legacy.after,
-      "Second candidate Doctor changed imported or recoverable Workshop state",
-    );
+    legacy = assertWorkshopProposalsRetired(seeded, doctor.legacyAtExit);
     assert.deepEqual(
       captureWorkshopLegacyState(stateDir, seeded),
       legacy,
-      "Workshop state changed after second Doctor exit",
+      "Workshop state changed after candidate Doctor exit",
     );
-    legacyWarning = assertWorkshopLegacyWarning(seeded, [
-      fs.readFileSync(path.join(artifactRoot, "doctor.log"), "utf8"),
-    ]);
+    const log = normalizeOutput(fs.readFileSync(path.join(artifactRoot, "doctor.log"), "utf8"));
+    assert(
+      log.includes("Retired the Skill Workshop proposal tables."),
+      "Candidate Doctor did not retire the restored Workshop table",
+    );
+    assert(!log.includes("Exported"), "Candidate Doctor re-exported retired proposals");
   }
-  const repair = {
-    status: "explicit-doctor-repaired",
-    doctor,
-    ...(legacy ? { legacy, legacyWarning } : {}),
-  };
+  const repair = { status: "explicit-doctor-repaired", doctor, ...(legacy ? { legacy } : {}) };
   writeJson(path.join(artifactRoot, `workshop-${stage}-doctor.json`), repair);
   return repair;
 }
@@ -690,7 +702,7 @@ export function assertWorkshopRecoveredUpgrade(stateDir, artifactRoot, observati
     candidate,
     "Updater did not install the exact candidate",
   );
-  assertRepairedState(stateDir);
+  assertRepairedState(stateDir, true);
   const updater = processWitness(observations, baseline, {
     role: "update",
     exitCode: 0,
@@ -706,29 +718,38 @@ export function assertWorkshopRecoveredUpgrade(stateDir, artifactRoot, observati
   assert.deepEqual(
     updater.legacyAtStart,
     seeded.before,
-    "Published updater did not receive original legacy sidecars",
+    "Published updater did not receive the original proposal state",
   );
   assert.deepEqual(
     doctor.legacyAtStart,
     seeded.before,
-    "Candidate Doctor did not receive original legacy sidecars",
+    "Candidate Doctor did not receive the original proposal state",
   );
   assert.equal(doctor.legacyExitCaptureError, undefined, "Candidate Doctor exit capture failed");
-  const after = assertWorkshopLegacyImported(stateDir, seeded, doctor.legacyAtExit);
+  const after = assertWorkshopProposalsRetired(seeded, doctor.legacyAtExit);
   assert.deepEqual(
     captureWorkshopLegacyState(stateDir, seeded),
     after,
     "Workshop state changed after candidate Doctor exit",
   );
-  const warning = assertWorkshopLegacyWarning(seeded, doctor.doctorResultAtExit?.warnings);
-  const legacy = { seeded, after, warning };
-  const upgraded = { status: "upgraded-after-explicit-repair", updater, doctor, legacy };
+  const warnings = doctor.doctorResultAtExit?.warnings;
+  assert(Array.isArray(warnings), "Missing candidate Doctor result");
+  assert(
+    !warnings.some((warning) => RETIREMENT_OUTPUT.test(warning)),
+    "Candidate Doctor reported a Skill Workshop proposal retirement warning",
+  );
+  const upgraded = {
+    status: "upgraded-after-explicit-repair",
+    updater,
+    doctor,
+    legacy: { seeded, after },
+  };
   writeJson(path.join(artifactRoot, "workshop-recovered-upgrade.json"), upgraded);
   return upgraded;
 }
 
 export function completeWorkshopRecovery(stateDir, artifactRoot) {
-  assertRepairedState(stateDir);
+  assertRepairedState(stateDir, true);
   const firstAttempt = readJson(path.join(artifactRoot, "workshop-published-refusal.json"));
   const baselineDoctor = readJson(path.join(artifactRoot, "workshop-baseline-doctor.json"));
   const upgrade = readJson(path.join(artifactRoot, "workshop-recovered-upgrade.json"));
@@ -741,9 +762,8 @@ export function completeWorkshopRecovery(stateDir, artifactRoot) {
   assert.deepEqual(
     candidateDoctor.legacy,
     upgrade.legacy.after,
-    "Missing candidate Doctor idempotence evidence for the imported legacy proposals",
+    "Candidate Doctor changed exported Workshop proposals",
   );
-  assert.equal(candidateDoctor.legacyWarning.warning, upgrade.legacy.warning.warning);
   const result = { firstAttempt, baselineDoctor, upgrade, candidateDoctor };
   writeJson(path.join(artifactRoot, "workshop-doctor-recovery.json"), result);
   return result;

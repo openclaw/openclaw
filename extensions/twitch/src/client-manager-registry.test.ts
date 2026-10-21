@@ -1,6 +1,5 @@
-// Twitch tests cover client manager registry plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getClientManager,
   getOrCreateClientManager,
@@ -9,6 +8,28 @@ import {
 import { twitchOutbound } from "./outbound.js";
 import { BASE_TWITCH_TEST_ACCOUNT, makeTwitchTestConfig } from "./test-fixtures.js";
 import type { ChannelLogSink, TwitchAccountConfig } from "./types.js";
+
+vi.mock("@twurple/auth", () => ({
+  StaticAuthProvider: function StaticAuthProvider() {},
+  RefreshingAuthProvider: function RefreshingAuthProvider() {},
+}));
+
+vi.mock("@twurple/chat", () => ({
+  ChatClient: class {
+    private ready: (() => void) | undefined;
+    onAuthenticationSuccess(handler: () => void) {
+      this.ready = handler;
+      return { unbind() {} };
+    }
+    onAuthenticationFailure = vi.fn(() => ({ unbind() {} }));
+    onDisconnect = vi.fn(() => ({ unbind() {} }));
+    onMessage = vi.fn(() => ({ unbind() {} }));
+    connect = () => this.ready?.();
+    quit = vi.fn();
+    say = vi.fn(async (_channel: string, _message: string) => {});
+  },
+  LogLevel: { WARNING: 2 },
+}));
 
 function makeLogger(): ChannelLogSink {
   return {
@@ -25,121 +46,93 @@ const account = {
   enabled: true,
 } satisfies TwitchAccountConfig;
 
-function attachFakeTransport(manager: ReturnType<typeof getOrCreateClientManager>) {
-  const transport = {
-    quit: vi.fn(),
-    say: vi.fn((_channel: string, _message: string) => Promise.resolve()),
+type Manager = ReturnType<typeof getOrCreateClientManager>;
+
+async function attachFakeTransport(manager: Manager) {
+  const transport = await manager.getClient(account, makeTwitchTestConfig(account), "default");
+  manager.onMessage(vi.fn());
+  return {
+    quit: vi.spyOn(transport, "quit"),
+    say: vi.spyOn(transport, "say"),
   };
-  const state = manager as unknown as {
-    clients: Map<string, typeof transport>;
-    messageHandlers: Map<string, unknown>;
-  };
-  state.clients.set(manager.getAccountKey(account), transport);
-  manager.onMessage(account, vi.fn());
-  return { state, transport };
+}
+
+async function retireManager() {
+  const manager = getOrCreateClientManager("default", makeLogger());
+  const transport = await attachFakeTransport(manager);
+  const cleanup = createDeferred<void>();
+  const disconnect = manager.disconnectAll.bind(manager);
+  const disconnectSpy = vi.spyOn(manager, "disconnectAll").mockImplementation(async () => {
+    await disconnect();
+    await cleanup.promise;
+  });
+  const removal = removeClientManager("default");
+  return { manager, transport, cleanup, removal, disconnectSpy };
 }
 
 describe("client manager registry", () => {
+  let retired: Awaited<ReturnType<typeof retireManager>> | undefined;
+  beforeEach(async () => {
+    retired = undefined;
+    retired = await retireManager();
+  });
   afterEach(async () => {
+    retired?.cleanup.resolve();
+    await retired?.removal.catch(() => undefined);
     await removeClientManager("default");
   });
 
   it.each(["resolves", "rejects"] as const)(
     "retires managers immediately and preserves replacements when cleanup %s",
     async (outcome) => {
-      const logger = makeLogger();
-      const firstManager = getOrCreateClientManager("default", logger);
-      const { state, transport } = attachFakeTransport(firstManager);
-      const cleanup = createDeferred<void>();
-      const disconnect = firstManager.disconnectAll.bind(firstManager);
-      const disconnectAll = vi.spyOn(firstManager, "disconnectAll").mockImplementation(async () => {
-        await disconnect();
-        await cleanup.promise;
-      });
-      const unregisterMessage = "Unregistered client manager for account: default";
-      const removal = removeClientManager("default");
+      const { manager, transport, cleanup, removal, disconnectSpy } = retired!;
+      expect(disconnectSpy).toHaveBeenCalledOnce();
+      expect(transport.quit).toHaveBeenCalledOnce();
+      expect(getClientManager("default")).toBeUndefined();
 
-      try {
-        expect(disconnectAll).toHaveBeenCalledOnce();
-        expect(transport.quit).toHaveBeenCalledOnce();
-        expect(state.clients.size).toBe(0);
-        expect(state.messageHandlers.size).toBe(0);
-        expect(getClientManager("default")).toBeUndefined();
-        expect(logger.info).not.toHaveBeenCalledWith(unregisterMessage);
+      const replacement = getOrCreateClientManager("default", makeLogger());
+      expect(replacement).not.toBe(manager);
 
-        const replacement = getOrCreateClientManager("default", makeLogger());
-        expect(replacement).not.toBe(firstManager);
-
-        if (outcome === "rejects") {
-          const disconnectError = new Error("disconnect failed");
-          const rejected = expect(removal).rejects.toBe(disconnectError);
-          cleanup.reject(disconnectError);
-          await rejected;
-        } else {
-          cleanup.resolve();
-          await expect(removal).resolves.toBeUndefined();
-        }
-
-        expect(getClientManager("default")).toBe(replacement);
-        expect(logger.info).toHaveBeenCalledWith(unregisterMessage);
-      } finally {
+      if (outcome === "rejects") {
+        const disconnectError = new Error("disconnect failed");
+        const rejected = expect(removal).rejects.toBe(disconnectError);
+        cleanup.reject(disconnectError);
+        await rejected;
+      } else {
         cleanup.resolve();
-        await removal.catch(() => undefined);
+        await expect(removal).resolves.toBeUndefined();
       }
+
+      expect(getClientManager("default")).toBe(replacement);
     },
   );
 
   it("keeps outbound delivery off a retired manager and sends through its replacement", async () => {
-    const logger = makeLogger();
-    const firstManager = getOrCreateClientManager("default", logger);
-    const first = attachFakeTransport(firstManager);
-    const cleanup = createDeferred<void>();
-    const disconnect = firstManager.disconnectAll.bind(firstManager);
-    vi.spyOn(firstManager, "disconnectAll").mockImplementation(async () => {
-      await disconnect();
-      await cleanup.promise;
-    });
-    const getClient = firstManager.getClient.bind(firstManager);
-    const reconnect = vi.spyOn(firstManager, "getClient").mockImplementation(async (...args) => {
-      first.state.clients.set(firstManager.getAccountKey(account), first.transport);
-      return await getClient(...args);
-    });
-    const config = makeTwitchTestConfig(account);
-    const removal = removeClientManager("default");
-
-    try {
-      await expect(
-        twitchOutbound.sendText!({
-          to: "#testchannel",
-          text: "while retiring",
-          cfg: config,
-          accountId: "default",
-        }),
-      ).rejects.toThrow(
-        "Client manager not found for account: default. Please start the Twitch gateway first.",
-      );
-      expect(reconnect).not.toHaveBeenCalled();
-      expect(first.transport.say).not.toHaveBeenCalled();
-
-      const replacement = getOrCreateClientManager("default", makeLogger());
-      const { transport } = attachFakeTransport(replacement);
-      const afterRestart = await twitchOutbound.sendText!({
+    const { manager, transport: first, cleanup, removal } = retired!;
+    const reconnect = vi.spyOn(manager, "getClient");
+    const send = (text: string) =>
+      twitchOutbound.sendText!({
         to: "#testchannel",
-        text: "after restart",
-        cfg: config,
+        text,
+        cfg: makeTwitchTestConfig(account),
         accountId: "default",
       });
+    await expect(send("while retiring")).rejects.toThrow(
+      "Client manager not found for account: default. Please start the Twitch gateway first.",
+    );
+    expect(reconnect).not.toHaveBeenCalled();
+    expect(first.say).not.toHaveBeenCalled();
 
-      expect(afterRestart.messageId).toEqual(expect.any(String));
-      expect(afterRestart.receipt?.platformMessageIds).toEqual([afterRestart.messageId]);
-      expect(transport.say).toHaveBeenCalledWith("testchannel", "after restart");
+    const replacement = getOrCreateClientManager("default", makeLogger());
+    const transport = await attachFakeTransport(replacement);
+    const afterRestart = await send("after restart");
 
-      cleanup.resolve();
-      await expect(removal).resolves.toBeUndefined();
-      expect(getClientManager("default")).toBe(replacement);
-    } finally {
-      cleanup.resolve();
-      await removal.catch(() => undefined);
-    }
+    expect(afterRestart.messageId).toEqual(expect.any(String));
+    expect(afterRestart.receipt?.platformMessageIds).toEqual([afterRestart.messageId]);
+    expect(transport.say).toHaveBeenCalledWith("testchannel", "after restart");
+
+    cleanup.resolve();
+    await expect(removal).resolves.toBeUndefined();
+    expect(getClientManager("default")).toBe(replacement);
   });
 });

@@ -40,6 +40,7 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
     const gateway = "agent:main:gateway";
     const parent = "agent:main:parent";
     const child = "agent:main:child";
+    const query = (key: string) => ({ agentId: "main", key });
     const creator = { type: "human" as const, source: "profile" as const, id: profiles[0]!.id };
     for (const [key, sessionId, parentSessionKey, visibility, archivedAt] of [
       [gateway, "gateway", undefined, "shared", 1],
@@ -62,26 +63,20 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
     }
     const database = openOpenClawStateDatabase();
     const placements = createWorkerSessionPlacementStore({ database, now: () => now - 50 });
-    const rootPlacement = await placements.startDispatch({
-      sessionId: "root",
-      sessionKey: root,
-      agentId: "main",
-    });
-    await placements.startDispatch({
-      sessionId: "unused",
-      sessionKey: "agent:main:unused",
-      agentId: "main",
-    });
+    const dispatch = (sessionId: string) =>
+      placements.startDispatch({
+        sessionId,
+        sessionKey: `agent:main:${sessionId}`,
+        agentId: "main",
+      });
+    const rootPlacement = await dispatch("root");
+    await dispatch("unused");
     seedAttachedPlacementEnvironment(database, {
       environmentId: "ancestor-environment",
       sessionId: "parent",
       ownerEpoch: 7,
     });
-    let parentPlacement = await placements.startDispatch({
-      sessionId: "parent",
-      sessionKey: parent,
-      agentId: "main",
-    });
+    let parentPlacement = await dispatch("parent");
     for (const step of [
       { to: "provisioning", patch: { environmentId: "ancestor-environment" } },
       { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
@@ -104,7 +99,7 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
     if (parentPlacement.state !== "active") {
       throw new Error("Expected active ancestor fixture");
     }
-    const move = placements.beginPlacementMove({
+    const move = await placements.beginPlacementMove({
       sessionId: "parent",
       source: {
         generation: parentPlacement.generation,
@@ -114,6 +109,10 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
       target: { kind: "gateway" },
     });
     const placementReads = vi.spyOn(placements, "readProjection");
+    const expectReads = (ids: string[]) =>
+      expect(new Set(placementReads.mock.calls.flatMap(([readIds]) => readIds))).toEqual(
+        new Set(ids),
+      );
     const release = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({
       cfg,
@@ -126,7 +125,6 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
       cfg,
     });
     const context = requestContext(cfg);
-    context.chatAbortControllers = connection.chatAbortControllers;
     context.broadcastToConnIds = connection.broadcastToConnIds;
     bindSessionRowProjection(context, () => projection);
     const detach = connection.attachSessionRowProjection(projection);
@@ -137,28 +135,25 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
     });
     context.getSessionEventSubscriberConnIds = () =>
       new Set(peers.map(({ client }) => client.connId));
+    const materialized = (key: string) => projection.capture(query(key))?.materialized;
     try {
       await projection.ensureMaterialized();
-      expect(projection.capture({ agentId: "main", key: parent })?.materialized).toBeUndefined();
-      expect(projection.capture({ agentId: "main", key: root })?.materialized).toBeUndefined();
-      expect(new Set(placementReads.mock.calls.flatMap(([ids]) => ids))).toEqual(
-        new Set(["child"]),
-      );
+      expect(materialized(parent)).toBeUndefined();
+      expect(materialized(root)).toBeUndefined();
+      expectReads(["child"]);
       placementReads.mockClear();
-      const childQuery = { agentId: "main", key: child };
+      const childQuery = query(child);
       const childRow = projection.describe(childQuery)!;
       await projection.withPreparedExactRows(
         () => [childQuery],
         (read) => read.describe(childQuery),
       );
       expect(placementReads).not.toHaveBeenCalled();
-      expect(projection.capture({ agentId: "main", key: root })?.materialized).toBeUndefined();
+      expect(materialized(root)).toBeUndefined();
       emitSessionsChanged(
         context,
         { sessionKey: child, agentId: "main", reason: "patch" },
-        {
-          preparedPublication: true,
-        },
+        { preparedPublication: true },
       );
       const synchronousFrames = peers.map((peer) => JSON.parse(peer.send.mock.lastCall![0]));
       for (const frame of synchronousFrames) {
@@ -173,11 +168,9 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
         { includeAncestors: true },
       );
       expect((await escapedAncestors)?.map((row) => row.key)).toEqual([parent, root, gateway]);
-      expect(projection.capture({ agentId: "main", key: parent })?.materialized).toBeDefined();
-      expect(projection.capture({ agentId: "main", key: root })?.materialized).toBeDefined();
-      expect(new Set(placementReads.mock.calls.flatMap(([ids]) => ids))).toEqual(
-        new Set(["root", "parent", "gateway"]),
-      );
+      expect(materialized(parent)).toBeDefined();
+      expect(materialized(root)).toBeDefined();
+      expectReads(["root", "parent", "gateway"]);
       placementReads.mockClear();
       sessionChanges.emit({ all: true, scope: "worker-placements" });
       expect(projection.ancestorRows(childRow)).toBeUndefined();
@@ -234,12 +227,8 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
           expect(parentRow?.placementMove).toEqual(parentFields.placementMove);
         }
       }
-      expect(new Set(placementReads.mock.calls.flatMap(([ids]) => ids))).toEqual(
-        new Set(["child", "root", "parent", "gateway"]),
-      );
-      expect(
-        projection.capture({ agentId: "main", key: "agent:main:unused" })?.materialized,
-      ).toBeUndefined();
+      expectReads(["child", "root", "parent", "gateway"]);
+      expect(materialized("agent:main:unused")).toBeUndefined();
     } finally {
       await flushPendingSessionsChangedEvents(context);
       detach();

@@ -12,20 +12,22 @@ import {
   statMigrationPath,
   type MigrationArtifact,
   type MigrationArtifactIdentity,
+  type MigrationArtifactVerification,
 } from "../infra/session-sqlite-migration-artifact.js";
 import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
 import {
   hasSymbolicLinkInDirectoryPath,
-  readSessionSqliteMigrationManifest,
   writeSessionSqliteMigrationManifest,
   type ActiveSessionSqliteMigrationRun,
+  type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetInput,
+  type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership-preflight.js";
 import { collectHistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
 import { coalesceSessionSqliteArchiveReferences } from "./doctor-session-sqlite-migration-coalesce.js";
 import {
-  collectRecoveryInventory,
+  collectUpdateCleanupInventory,
   protectRecoveryDependencies,
   resolveRecoveryArtifact,
   summarizeRecoveryCleanup,
@@ -37,10 +39,20 @@ import {
   verifyHistoricalMigrationArtifact,
 } from "./doctor-session-sqlite-verification.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
+import { retireUpdateCaptures } from "./update-capture-cleanup.js";
+
+export type RecoveryCleanupProgress = {
+  phase: "verifying" | "claiming" | "removing-capture";
+  path: string;
+  index: number;
+  total: number;
+  bytes: number;
+};
 
 function assertRecoveryOriginal(
   archivePath: string,
   artifact: MigrationArtifact,
+  verification?: MigrationArtifactVerification,
 ): MigrationArtifactIdentity | undefined {
   const currentPath = statMigrationPath(archivePath)
     ? archivePath
@@ -57,7 +69,7 @@ function assertRecoveryOriginal(
     throw new Error("artifact is unexpectedly missing");
   }
   const links = isPendingMigrationArtifactClaim(archivePath, artifact) ? 2n : 1n;
-  const identity = readMigrationArtifactIdentity(currentPath, links);
+  const identity = readMigrationArtifactIdentity(currentPath, links, undefined, verification);
   if (
     !sameMigrationArtifact(identity, artifact.identity, {
       // APFS can assign a different st_dev after reboot while the retained inode and bytes stay
@@ -78,14 +90,28 @@ export async function settleDuplicateSessionSqliteArchives(params: {
 }) {
   const {
     claims,
-    inventory: { report, references },
+    inventory: { artifacts, references },
   } = collectHistoricalArchiveSources(params);
   const failures: Array<{
     target: SessionSqliteMigrationTargetInput;
     issues: DoctorSessionSqliteIssue[];
   }> = [];
+  const recordFailure = (target: SessionSqliteMigrationTargetInput, message: string) => {
+    failures.push({
+      target,
+      issues: [
+        { code: "historical_transcript_deferred", message: `${message}; original retained.` },
+      ],
+    });
+  };
   const survivors = new Map<string, RecoveryArtifactReference[]>();
   const selected: RecoveryCleanupReport["artifacts"] = [];
+  const artifactsByPath = new Map<string, (typeof artifacts)[number]>();
+  for (const item of artifacts) {
+    if (!artifactsByPath.has(item.path)) {
+      artifactsByPath.set(item.path, item);
+    }
+  }
   const replacements = new Map<string, RecoveryArtifactReference["move"]>();
   const assertSurvivor = (refs: RecoveryArtifactReference[]) => {
     const move = survivors.get(refs[0]!.move.archivePath)![0]!.move;
@@ -113,9 +139,7 @@ export async function settleDuplicateSessionSqliteArchives(params: {
       continue;
     }
     for (const refs of group.filter((candidate) => candidate !== survivor)) {
-      const item = report.artifacts.find(
-        (candidate) => candidate.path === refs[0]!.move.archivePath,
-      )!;
+      const item = artifactsByPath.get(refs[0]!.move.archivePath)!;
       survivors.set(item.path, survivor);
       try {
         assertSurvivor(refs);
@@ -133,15 +157,7 @@ export async function settleDuplicateSessionSqliteArchives(params: {
         }
         replacements.set(item.path, survivor[0]!.move);
       } catch (error) {
-        failures.push({
-          target,
-          issues: [
-            {
-              code: "historical_transcript_deferred",
-              message: `${item.path}: ${String(error)}; original retained.`,
-            },
-          ],
-        });
+        recordFailure(target, `${item.path}: ${String(error)}`);
       }
     }
   }
@@ -152,16 +168,8 @@ export async function settleDuplicateSessionSqliteArchives(params: {
       assertSurvivor(refs);
     } else {
       replacements.delete(archivePath);
-      const item = selected.find((candidate) => candidate.path === archivePath)!;
-      failures.push({
-        target: refs[0]!.target,
-        issues: [
-          {
-            code: "historical_transcript_deferred",
-            message: `${archivePath}: ${item.detail ?? item.reason}; original retained.`,
-          },
-        ],
-      });
+      const item = artifactsByPath.get(archivePath)!;
+      recordFailure(refs[0]!.target, `${archivePath}: ${item.detail ?? item.reason}`);
     }
   }
   return [
@@ -178,20 +186,24 @@ export async function retireSessionSqliteRecovery(params: {
   preview: RecoveryCleanupReport;
   readConfig(): Promise<OpenClawConfig>;
   confirm(report: RecoveryCleanupReport): Promise<boolean>;
+  onProgress?: (progress: RecoveryCleanupProgress) => void;
 }): Promise<RecoveryCleanupReport> {
-  await assertOpenClawStateWriteAllowedAtPath({
-    databasePath: path.join(params.preview.stateDir, "state", "openclaw.sqlite"),
-    env: params.env,
-    recoverOrphanedSidecars: false,
-  });
+  const assertStateWriteAllowed = (stateDir: string) =>
+    assertOpenClawStateWriteAllowedAtPath({
+      databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
+      env: params.env,
+      recoverOrphanedSidecars: false,
+    });
+  await assertStateWriteAllowed(params.preview.stateDir);
   return withDoctorSqliteMaintenanceLock({
     env: params.env,
     operation: "update recovery cleanup",
     run: async (authority) => {
-      const { report, references, manifestPaths } = collectRecoveryInventory({
-        cfg: await params.readConfig(),
-        env: params.env,
-      });
+      const { report, references, manifestPaths, captureIdentities } =
+        collectUpdateCleanupInventory({
+          cfg: await params.readConfig(),
+          env: params.env,
+        });
       authority.assertCurrent();
       if (
         report.stateDir !== params.preview.stateDir ||
@@ -199,14 +211,23 @@ export async function retireSessionSqliteRecovery(params: {
       ) {
         throw new Error("Recovery selection changed; preview cleanup again.");
       }
-      await assertOpenClawStateWriteAllowedAtPath({
-        databasePath: path.join(report.stateDir, "state", "openclaw.sqlite"),
-        env: params.env,
-        recoverOrphanedSidecars: false,
-      });
+      await assertStateWriteAllowed(report.stateDir);
       const adoptions = new Map<RecoveryArtifactReference, MigrationArtifact>();
+      const verification: MigrationArtifactVerification = new Map();
       const assertDestinations = createRecoveryDestinationVerifier(report.stateDir);
-      for (const item of report.artifacts) {
+      const originals = report.artifacts.filter(
+        (item) =>
+          item.kind !== "update-capture" &&
+          (item.outcome === "candidate" || item.outcome === "verification-required"),
+      );
+      for (const [index, item] of originals.entries()) {
+        params.onProgress?.({
+          phase: "verifying",
+          path: item.path,
+          index: index + 1,
+          total: originals.length,
+          bytes: item.bytes,
+        });
         if (item.outcome === "verification-required") {
           const refs = references.get(item.path)!;
           try {
@@ -238,7 +259,7 @@ export async function retireSessionSqliteRecovery(params: {
         try {
           const refs = references.get(item.path)!;
           const artifact = resolveRecoveryArtifact(refs) ?? adoptions.get(refs[0]!)!;
-          assertRecoveryOriginal(item.path, artifact);
+          assertRecoveryOriginal(item.path, artifact, verification);
         } catch (error) {
           item.outcome = "blocked";
           item.reason = "artifact-verification-failed";
@@ -247,7 +268,7 @@ export async function retireSessionSqliteRecovery(params: {
       }
       // Historical adoption also opens SQLite readers; finish those before fencing sidecar state.
       for (const item of report.artifacts) {
-        if (item.outcome !== "candidate") {
+        if (item.outcome !== "candidate" || item.kind === "update-capture") {
           continue;
         }
         try {
@@ -260,14 +281,21 @@ export async function retireSessionSqliteRecovery(params: {
       }
       // Verified historical dependencies affect selection now, but stay provisional until consent.
       protectRecoveryDependencies(report.artifacts, references, adoptions);
-      const verified = summarizeRecoveryCleanup(report.stateDir, report.artifacts, "preview");
-      const selected = verified.artifacts.filter((item) => item.outcome === "candidate");
+      const verified = summarizeRecoveryCleanup(
+        report.stateDir,
+        report.artifacts,
+        "preview",
+        report.missingOriginals,
+      );
+      const candidates = verified.artifacts.filter((item) => item.outcome === "candidate");
+      const selected = candidates.filter((item) => item.kind !== "update-capture");
+      const captures = candidates.filter((item) => item.kind === "update-capture");
       if (!(await params.confirm(verified))) {
         return { ...verified, status: "refused" };
       }
       authority.assertCurrent();
       const currentConfig = await params.readConfig();
-      const rechecked = collectRecoveryInventory({ cfg: currentConfig, env: params.env });
+      const rechecked = collectUpdateCleanupInventory({ cfg: currentConfig, env: params.env });
       // Existing artifacts can become protected during confirmation, not only newly added manifests.
       // Revalidate the whole selection before retiring any dependent originals.
       if (
@@ -277,31 +305,27 @@ export async function retireSessionSqliteRecovery(params: {
       ) {
         throw new Error("Recovery selection changed during confirmation; preview again.");
       }
-      for (const refs of references.values()) {
-        for (const ref of refs) {
-          if (
-            JSON.stringify(readSessionSqliteMigrationManifest(ref.run.manifestPath)) !==
-            JSON.stringify(ref.run.manifest)
-          ) {
-            throw new Error("Recovery manifest changed during confirmation; preview again.");
-          }
-          if (
-            !(rechecked.references.get(ref.move.archivePath) ?? []).some(
-              (current) =>
-                current.trusted === ref.trusted &&
-                current.target.storePath === ref.target.storePath &&
-                current.target.sqlitePath === ref.target.sqlitePath,
-            )
-          ) {
-            throw new Error("Recovery target changed during confirmation; preview again.");
-          }
+      const manifests = (refs: typeof references) =>
+        new Map([...refs.values()].flat().map(({ run }) => [run.manifestPath, run.manifest]));
+      const currentManifests = manifests(rechecked.references);
+      for (const [manifestPath, manifest] of manifests(references)) {
+        if (JSON.stringify(currentManifests.get(manifestPath)) !== JSON.stringify(manifest)) {
+          throw new Error("Recovery manifest changed during confirmation; preview again.");
         }
       }
-      await assertOpenClawStateWriteAllowedAtPath({
-        databasePath: path.join(report.stateDir, "state", "openclaw.sqlite"),
-        env: params.env,
-        recoverOrphanedSidecars: false,
-      });
+      for (const ref of [...references.values()].flat()) {
+        if (
+          !(rechecked.references.get(ref.move.archivePath) ?? []).some(
+            (current) =>
+              current.trusted === ref.trusted &&
+              current.target.storePath === ref.target.storePath &&
+              current.target.sqlitePath === ref.target.sqlitePath,
+          )
+        ) {
+          throw new Error("Recovery target changed during confirmation; preview again.");
+        }
+      }
+      await assertStateWriteAllowed(report.stateDir);
       authority.assertCurrent();
       for (const item of selected) {
         const refs = references.get(item.path)!;
@@ -309,6 +333,7 @@ export async function retireSessionSqliteRecovery(params: {
         assertRecoveryOriginal(
           item.path,
           resolveRecoveryArtifact(refs) ?? adoptions.get(refs[0]!)!,
+          verification,
         );
       }
       for (const [ref, artifact] of adoptions) {
@@ -329,6 +354,21 @@ export async function retireSessionSqliteRecovery(params: {
         references,
         assertDestinations,
         assertCurrent: () => authority.assertCurrent(),
+        verification,
+        onProgress: params.onProgress,
+      });
+      await retireUpdateCaptures({
+        selected: captures,
+        identities: captureIdentities,
+        assertCurrent: () => authority.assertCurrent(),
+        onProgress: (item, index) =>
+          params.onProgress?.({
+            phase: "removing-capture",
+            path: item.path,
+            index: index + 1,
+            total: captures.length,
+            bytes: item.bytes,
+          }),
       });
       return summarizeRecoveryCleanup(
         report.stateDir,
@@ -336,6 +376,7 @@ export async function retireSessionSqliteRecovery(params: {
         report.artifacts.some((item) => item.outcome === "failed" || item.outcome === "blocked")
           ? "blocked"
           : "complete",
+        report.missingOriginals,
       );
     },
   });
@@ -346,13 +387,36 @@ async function disposeRecoveryArtifacts({
   references,
   assertDestinations,
   assertCurrent,
+  verification,
+  onProgress,
 }: {
   selected: RecoveryCleanupReport["artifacts"];
   references: Map<string, RecoveryArtifactReference[]>;
   assertDestinations: (refs: RecoveryArtifactReference[]) => void;
   assertCurrent?: () => void;
+  verification?: MigrationArtifactVerification;
+  onProgress?: (progress: RecoveryCleanupProgress) => void;
 }): Promise<void> {
   const runs = new Set<ActiveSessionSqliteMigrationRun>();
+  const movesByTarget = new Map<
+    SessionSqliteMigrationTargetManifest,
+    Map<string, SessionSqliteMigrationMove[]>
+  >();
+  const movesFor = (ref: RecoveryArtifactReference, archivePath: string) => {
+    let byPath = movesByTarget.get(ref.target);
+    if (!byPath) {
+      byPath = new Map();
+      for (const move of [...ref.target.plannedMoves, ...ref.target.completedMoves]) {
+        if (move.artifact) {
+          const moves = byPath.get(move.archivePath) ?? [];
+          moves.push(move);
+          byPath.set(move.archivePath, moves);
+        }
+      }
+      movesByTarget.set(ref.target, byPath);
+    }
+    return byPath.get(archivePath) ?? [];
+  };
   for (const item of selected) {
     const refs = references.get(item.path)!;
     const pending = refs
@@ -365,10 +429,8 @@ async function disposeRecoveryArtifacts({
       claimPath: path.join(path.dirname(item.path), `.cleanup-${randomUUID()}`),
     };
     for (const ref of refs) {
-      for (const move of [...ref.target.plannedMoves, ...ref.target.completedMoves]) {
-        if (move.archivePath === item.path && move.artifact) {
-          move.artifact.disposal = disposal;
-        }
+      for (const move of movesFor(ref, item.path)) {
+        move.artifact!.disposal = disposal;
       }
       runs.add(ref.run);
     }
@@ -394,9 +456,16 @@ async function disposeRecoveryArtifacts({
   try {
     // Claim the entire selection before retiring any member: a changed later transcript
     // must not lose its index or siblings. Durable intent also owns partially moved claims.
-    for (const claim of claims) {
+    for (const [index, claim] of claims.entries()) {
       const { item, refs, artifact, disposal } = claim;
       activeItem = item;
+      onProgress?.({
+        phase: "claiming",
+        path: item.path,
+        index: index + 1,
+        total: claims.length,
+        bytes: item.bytes,
+      });
       assertCurrent?.();
       assertDestinations(refs);
       if (hasSymbolicLinkInDirectoryPath(path.dirname(item.path))) {
@@ -406,15 +475,22 @@ async function disposeRecoveryArtifacts({
         if (disposal.phase === "unlink-pending") {
           throw new Error("archive was recreated after claim");
         }
-        const identity = assertRecoveryOriginal(item.path, artifact);
+        const identity = assertRecoveryOriginal(item.path, artifact, verification);
         if (!identity) {
           throw new Error("artifact is unexpectedly missing");
         }
-        await moveMigrationArtifact(item.path, disposal.claimPath, identity);
+        await moveMigrationArtifact(
+          item.path,
+          disposal.claimPath,
+          identity,
+          undefined,
+          undefined,
+          verification,
+        );
       }
       assertCurrent?.();
       assertDestinations(refs);
-      assertRecoveryOriginal(item.path, artifact);
+      assertRecoveryOriginal(item.path, artifact, verification);
       claim.present = statMigrationPath(disposal.claimPath) !== undefined;
       disposal.phase = "unlink-pending";
     }
@@ -430,7 +506,7 @@ async function disposeRecoveryArtifacts({
       if (statMigrationPath(item.path)) {
         throw new Error("archive was recreated after claim");
       }
-      assertRecoveryOriginal(item.path, artifact);
+      assertRecoveryOriginal(item.path, artifact, verification);
       if (present !== (statMigrationPath(disposal.claimPath) !== undefined)) {
         throw new Error("disposal claim changed after intent");
       }
@@ -464,13 +540,11 @@ async function disposeRecoveryArtifacts({
       assertCurrent?.();
       assertDestinations(refs);
       for (const ref of refs) {
-        for (const move of [...ref.target.plannedMoves, ...ref.target.completedMoves]) {
-          if (move.archivePath === item.path && move.artifact) {
-            move.artifact.disposal = {
-              state: "disposed",
-              disposedAt: new Date().toISOString(),
-            };
-          }
+        for (const move of movesFor(ref, item.path)) {
+          move.artifact!.disposal = {
+            state: "disposed",
+            disposedAt: new Date().toISOString(),
+          };
         }
       }
     }

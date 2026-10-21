@@ -20,9 +20,9 @@ import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError } from "../../infra/fs-safe.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
-  hasMultipleSessionSharingIdentities,
+  hasMultipleResidentSessionSharingIdentities,
   readResidentUserProfileId,
-  readUserProfileIdentity,
+  readResidentUserProfileIdentity,
 } from "../../state/user-profile-list.js";
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
@@ -57,7 +57,7 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       );
     }
     options.sessionMutationCommitGuard?.();
-    if (!hasMultipleSessionSharingIdentities()) {
+    if (!hasMultipleResidentSessionSharingIdentities()) {
       throw new PersonalFileAccessError(
         "Personal instructions are only available on multi-user Gateways. Use the agent workspace USER.md on a single-user Gateway.",
       );
@@ -116,7 +116,7 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       );
     }
     const cfg = context.getRuntimeConfig();
-    const profile = readUserProfileIdentity(canonicalId);
+    const profile = readResidentUserProfileIdentity(canonicalId);
     const policy = resolveOperatorRolePolicyForAssignment(
       canonicalId,
       profile?.role ?? null,
@@ -174,6 +174,7 @@ async function runPersonalFile(
 ) {
   try {
     const target = preparePersonalFile(options, params.agentId);
+    const identity = { agentId: target.agentId, profileId: target.profileId };
     const fsRoot = await root(target.workspaceDir, {
       symlinks: "reject",
       mutationSymlinks: "reject",
@@ -187,8 +188,7 @@ async function runPersonalFile(
         const loaded = await fsRoot.read(target.name);
         target.assertCurrent();
         return {
-          agentId: target.agentId,
-          profileId: target.profileId,
+          ...identity,
           missing: false,
           content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(loaded.buffer),
           hash: sha256Hex(loaded.buffer),
@@ -199,8 +199,7 @@ async function runPersonalFile(
           throw error;
         }
         return {
-          agentId: target.agentId,
-          profileId: target.profileId,
+          ...identity,
           missing: true,
           content: "",
           hash: null,
@@ -245,8 +244,7 @@ async function runPersonalFile(
       await fsRoot.write(target.name, write.content, { mkdir: true, overwrite: !previous.missing });
       target.assertCurrent();
       options.respond(true, {
-        agentId: target.agentId,
-        profileId: target.profileId,
+        ...identity,
         missing: false,
         content: write.content,
         hash: sha256Hex(write.content),

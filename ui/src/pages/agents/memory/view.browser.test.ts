@@ -1,12 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
-import { createDreamingViewState, renderDreaming } from "./view.ts";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
+import { createDreamingViewState } from "./dreaming.ts";
+import { renderDreamingView } from "./view.test-helpers.ts";
+import { renderDreaming } from "./view.tsx";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 let host: HTMLDivElement | undefined;
 
 afterEach(() => {
+  cleanupSolid();
   host?.remove();
   host = undefined;
 });
@@ -70,16 +73,21 @@ describe.skipIf(!hasBrowserLayout)("dream diary browser layout", () => {
       onRefreshImports: () => {},
       onRefreshWikiOverview: () => {},
       onOpenConfig: () => {},
-      onOpenWikiPage: async () => null,
+      onOpenWikiPage: async () => {},
+      onCloseWikiPreview: () => {},
+      wikiPreview: null,
       onBackfillDiary: () => {},
       onCopyDreamingArchivePath: () => {},
       onDedupeDreamDiary: () => {},
       onResetDiary: () => {},
       onResetGroundedShortTerm: () => {},
       onRepairDreamingArtifacts: () => {},
-      onViewStateChange: () => render(renderDreaming(props), host!),
+      onViewStateChange: (update) => {
+        update(viewState);
+        renderDreamingView(props, host!);
+      },
     };
-    render(renderDreaming(props), host);
+    renderDreamingView(props, host);
 
     const diary = host.querySelector<HTMLElement>(".dreams-diary");
     const navigation = host.querySelector<HTMLElement>(".dreams-diary__daychips");

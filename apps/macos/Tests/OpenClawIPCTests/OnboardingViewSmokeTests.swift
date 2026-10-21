@@ -110,6 +110,8 @@ struct OnboardingViewSmokeTests {
             }
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                #"{"ok":true,"service":{"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
             let manager = GatewayProcessManager.shared
             let previousStatus = manager.status
             let previousOwnership = manager.gatewayOwnership
@@ -120,6 +122,7 @@ struct OnboardingViewSmokeTests {
             defer {
                 GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
                 manager.retainedServiceCLI = previousRetainedCLI
                 AppDefaults.standard.set(previousResume, forKey: GatewayLaunchAgentManager.resumeCommandKey)

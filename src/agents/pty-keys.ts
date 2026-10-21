@@ -10,9 +10,7 @@ const CR = "\r";
 const TAB = "\t";
 const BACKSPACE = "\x7f";
 
-/** Bracketed-paste prefix emitted before pasted text. */
 const BRACKETED_PASTE_START = `${ESC}[200~`;
-/** Bracketed-paste suffix emitted after pasted text. */
 const BRACKETED_PASTE_END = `${ESC}[201~`;
 
 type Modifiers = {
@@ -31,15 +29,7 @@ const DECCKM_SS3_KEYS: Record<string, string> = {
   end: `${ESC}OF`,
 };
 
-const namedKeyMap = new Map<string, string>([
-  ["enter", CR],
-  ["return", CR],
-  ["tab", TAB],
-  ["escape", ESC],
-  ["esc", ESC],
-  ["space", " "],
-  ["bspace", BACKSPACE],
-  ["backspace", BACKSPACE],
+const modifiableNamedKeys = new Map<string, string>([
   ["up", `${ESC}[A`],
   ["down", `${ESC}[B`],
   ["right", `${ESC}[C`],
@@ -57,7 +47,6 @@ const namedKeyMap = new Map<string, string>([
   ["delete", `${ESC}[3~`],
   ["del", `${ESC}[3~`],
   ["dc", `${ESC}[3~`],
-  ["btab", `${ESC}[Z`],
   ["f1", `${ESC}OP`],
   ["f2", `${ESC}OQ`],
   ["f3", `${ESC}OR`],
@@ -70,6 +59,19 @@ const namedKeyMap = new Map<string, string>([
   ["f10", `${ESC}[21~`],
   ["f11", `${ESC}[23~`],
   ["f12", `${ESC}[24~`],
+]);
+
+const namedKeyMap = new Map<string, string>([
+  ...modifiableNamedKeys,
+  ["enter", CR],
+  ["return", CR],
+  ["tab", TAB],
+  ["escape", ESC],
+  ["esc", ESC],
+  ["space", " "],
+  ["bspace", BACKSPACE],
+  ["backspace", BACKSPACE],
+  ["btab", `${ESC}[Z`],
   ["kp/", `${ESC}Oo`],
   ["kp*", `${ESC}Oj`],
   ["kp-", `${ESC}Om`],
@@ -88,38 +90,6 @@ const namedKeyMap = new Map<string, string>([
   ["kpenter", `${ESC}OM`],
 ]);
 
-const modifiableNamedKeys = new Set([
-  "up",
-  "down",
-  "left",
-  "right",
-  "home",
-  "end",
-  "pageup",
-  "pgup",
-  "ppage",
-  "pagedown",
-  "pgdn",
-  "npage",
-  "insert",
-  "ic",
-  "delete",
-  "del",
-  "dc",
-  "f1",
-  "f2",
-  "f3",
-  "f4",
-  "f5",
-  "f6",
-  "f7",
-  "f8",
-  "f9",
-  "f10",
-  "f11",
-  "f12",
-]);
-
 type KeyEncodingRequest = {
   keys?: string[];
   hex?: string[];
@@ -131,7 +101,6 @@ type KeyEncodingResult = {
   warnings: string[];
 };
 
-/** True when request keys depend on normal vs application cursor-key mode. */
 export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean {
   return (
     request.keys?.some((raw) => {
@@ -148,7 +117,6 @@ export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean
   );
 }
 
-/** Encodes literal, hex, and named key tokens into one PTY byte payload. */
 export function encodeKeySequence(
   request: KeyEncodingRequest,
   cursorKeyMode?: "normal" | "application",
@@ -175,7 +143,6 @@ export function encodeKeySequence(
   return { data, warnings };
 }
 
-/** Wraps pasted text in bracketed-paste markers when enabled. */
 export function encodePaste(text: string, bracketed = true): string {
   if (!bracketed) {
     return text;
@@ -208,7 +175,6 @@ function encodeKeyToken(
     return `${ESC}[Z`;
   }
 
-  // Handle arrow keys specially based on cursor key mode.
   // DECCKM only changes unmodified cursor keys; modified keys use xterm modifier scheme.
   if (
     modifiableNamedKeys.has(baseLower) &&

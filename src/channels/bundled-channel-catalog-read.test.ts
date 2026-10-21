@@ -1,9 +1,9 @@
-import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import type { PluginChannelCatalogEntry } from "../plugins/channel-catalog-registry.js";
+import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { captureEnv } from "../test-utils/env.js";
 
 // src/plugins/bundled-dir.test.ts owns source/dist directory precedence.
@@ -28,9 +28,7 @@ vi.mock("../plugins/official-external-plugin-bundled-catalogs.js", () => ({
   BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES: bundledOfficialExternalCatalogEntriesMock,
 }));
 
-// The channel-catalog.json fallback still walks package roots via
-// resolveOpenClawPackageRootSync. Isolate from the real repo by mocking
-// moduleUrl/argv1 resolution to null and deriving only from the tmp cwd.
+// Isolate package-root discovery to the temporary cwd, not this source checkout.
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: (opts: { cwd?: string; argv1?: string; moduleUrl?: string }) =>
     opts.cwd ?? null,
@@ -44,7 +42,6 @@ import {
   findBundledChannelCatalogMetadata,
   listBundledChannelCatalogEntries,
 } from "./bundled-channel-catalog-read.js";
-import { listBundledChannelIds } from "./plugins/bundled-ids.js";
 
 const tempDirs: string[] = [];
 const originalEnv = captureEnv([
@@ -58,10 +55,7 @@ afterEach(() => {
   bundledOfficialExternalCatalogEntriesMock.length = 0;
   vi.restoreAllMocks();
   vi.mocked(resolveBundledPluginsDir).mockReset();
-  listChannelCatalogEntriesMock.mockReset();
-  listChannelCatalogEntriesMock.mockImplementation(() => {
-    throw new Error("bundled channel catalog read must not run full plugin discovery");
-  });
+  listChannelCatalogEntriesMock.mockClear();
 });
 
 function useBundledPluginsDir(extensionsRoot: string | undefined): void {
@@ -81,258 +75,69 @@ function seedRoot(prefix: string): string {
   return root;
 }
 
-function seedChannelPkg(
-  pkgJsonPath: string,
-  opts: {
-    id: string;
-    pluginId?: string;
-    docsPath?: string;
-    label?: string;
-    blurb?: string;
-    markdownCapable?: boolean;
-    approvalFlags?: readonly ["native"];
-  },
-): void {
-  const pluginId = opts.pluginId ?? opts.id;
-  writeJsonFile(pkgJsonPath, {
-    name: `@openclaw/${pluginId}`,
-    openclaw: {
-      channel: {
-        id: opts.id,
-        label: opts.label ?? opts.id,
-        docsPath: opts.docsPath ?? `/channels/${opts.id}`,
-        blurb: opts.blurb ?? "test blurb",
-        ...(opts.markdownCapable !== undefined ? { markdownCapable: opts.markdownCapable } : {}),
-        ...(opts.approvalFlags ? { approvalFlags: opts.approvalFlags } : {}),
-      },
-    },
-  });
+function channelPackage(
+  id: string,
+  label: string,
+  doctorCapabilities?: PluginPackageChannel["doctorCapabilities"],
+) {
+  const channel = {
+    id,
+    label,
+    docsPath: `/channels/${id}`,
+    blurb: "test blurb",
+    doctorCapabilities,
+  };
+  return { name: `@openclaw/${id}`, openclaw: { channel } };
 }
 
-function seedGeneratedChannelCatalog(
-  root: string,
-  params: {
-    packageName: string;
-    id: string;
-    label: string;
-    docsPath: string;
-    blurb: string;
-    doctorCapabilities?: {
-      dmAllowFromMode?: "topOnly" | "nestedOnly";
-      groupModel?: "sender" | "route" | "hybrid";
-      groupAllowFromFallbackToAllowFrom?: boolean;
-      warnOnEmptyGroupSenderAllowlist?: boolean;
-    };
-  },
-): void {
-  const { packageName, ...channel } = params;
+function seedGeneratedChannelCatalog(root: string, pkg: ReturnType<typeof channelPackage>): void {
   writeJsonFile(path.join(root, "dist", "channel-catalog.json"), {
-    entries: [{ name: packageName, openclaw: { channel } }],
+    entries: [pkg],
   });
 }
 
-describe("listBundledChannelCatalogEntries", () => {
-  it("reads bundled channel metadata from the extensions dir returned by resolveBundledPluginsDir", () => {
-    // Published CLIs use dist/extensions even without a generated catalog.
-    const root = seedRoot("bcr-resolved-");
-    const extensionsRoot = path.join(root, "dist", "extensions");
-    seedChannelPkg(path.join(extensionsRoot, "telegram", "package.json"), {
-      id: "telegram",
-      label: "Telegram",
-      approvalFlags: ["native"],
-    });
-    seedChannelPkg(path.join(extensionsRoot, "imessage", "package.json"), {
-      id: "imessage",
-    });
-    useBundledPluginsDir(extensionsRoot);
+const channelLabel = (id: string) =>
+  listBundledChannelCatalogEntries().find((entry) => entry.id === id)?.channel.label;
 
-    const entries = listBundledChannelCatalogEntries();
+it("finds doctor capabilities from the generated catalog when the package is excluded", () => {
+  const root = seedRoot("bcr-generated-doctor-");
+  useBundledPluginsDir(undefined);
+  const doctorCapabilities = {
+    dmAllowFromMode: "topOnly",
+    groupModel: "route",
+    groupAllowFromFallbackToAllowFrom: false,
+    warnOnEmptyGroupSenderAllowlist: false,
+  } satisfies PluginPackageChannel["doctorCapabilities"];
+  seedGeneratedChannelCatalog(root, channelPackage("discord", "Discord", doctorCapabilities));
 
-    const ids = new Set(entries.map((entry) => entry.id));
-    expect(ids.has("imessage")).toBe(true);
-    expect(ids.has("telegram")).toBe(true);
-    const telegram = entries.find((entry) => entry.id === "telegram");
-    expect(telegram?.channel.docsPath).toBe("/channels/telegram");
-    expect(telegram?.channel.label).toBe("Telegram");
-    expect(telegram?.channel.approvalFlags).toEqual(["native"]);
-  });
+  expect(findBundledChannelCatalogMetadata("Discord")?.doctorCapabilities).toEqual(
+    doctorCapabilities,
+  );
+});
 
-  it("lists sorted bundled channel ids without substituting plugin ids", () => {
-    const root = seedRoot("bcr-channel-ids-");
-    const extensionsRoot = path.join(root, "dist", "extensions");
-    seedChannelPkg(path.join(extensionsRoot, "vendor-beta", "package.json"), {
-      id: "beta-chat",
-      pluginId: "vendor-beta-plugin",
-    });
-    seedChannelPkg(path.join(extensionsRoot, "vendor-alpha", "package.json"), {
-      id: "alpha-chat",
-      pluginId: "vendor-alpha-plugin",
-    });
-    useBundledPluginsDir(extensionsRoot);
+it("reloads installed bundled package metadata after an explicit plugin lifecycle reset", () => {
+  const root = seedRoot("bcr-package-lifecycle-");
+  const extensionsRoot = path.join(root, "dist", "extensions");
+  const packagePath = path.join(extensionsRoot, "alpha", "package.json");
+  writeJsonFile(packagePath, channelPackage("alpha", "Before"));
+  useBundledPluginsDir(extensionsRoot);
 
-    const entries = listBundledChannelCatalogEntries().filter(
-      (entry) => entry.id === "alpha-chat" || entry.id === "beta-chat",
-    );
-    expect(entries).toHaveLength(2);
-    listChannelCatalogEntriesMock.mockReturnValue(
-      entries.map((entry) => ({
-        pluginId: entry.id === "alpha-chat" ? "vendor-alpha-plugin" : "vendor-beta-plugin",
-        origin: "bundled",
-        rootDir: extensionsRoot,
-        channel: entry.channel,
-      })),
-    );
+  expect(channelLabel("alpha")).toBe("Before");
+  writeJsonFile(packagePath, channelPackage("alpha", "After"));
+  clearPluginMetadataLifecycleCaches();
 
-    const ids = listBundledChannelIds(process.env);
-    expect(ids).toEqual(["alpha-chat", "beta-chat"]);
-    expect(ids).not.toContain("vendor-alpha-plugin");
-    expect(ids).not.toContain("vendor-beta-plugin");
-  });
+  expect(channelLabel("alpha")).toBe("After");
+});
 
-  it("merges the generated official catalog with bundled package metadata", () => {
-    const root = seedRoot("bcr-generated-official-");
-    const extensionsRoot = path.join(root, "dist", "extensions");
-    seedChannelPkg(path.join(extensionsRoot, "telegram", "package.json"), {
-      id: "telegram",
-      label: "Telegram",
-    });
-    seedGeneratedChannelCatalog(root, {
-      packageName: "@tencent-connect/openclaw-qqbot",
-      id: "qqbot",
-      label: "QQ Bot",
-      docsPath: "/channels/qqbot",
-      blurb: "downloadable channel",
-    });
-    useBundledPluginsDir(extensionsRoot);
+it("discovers a generated catalog created after an explicit plugin lifecycle reset", () => {
+  const root = seedRoot("bcr-generated-lifecycle-");
+  useBundledPluginsDir(undefined);
 
-    const entries = listBundledChannelCatalogEntries();
-    const ids = new Set(entries.map((entry) => entry.id));
-    expect(ids.has("qqbot")).toBe(true);
-    expect(ids.has("telegram")).toBe(true);
-  });
+  expect(
+    listBundledChannelCatalogEntries().find((entry) => entry.id === "generated"),
+  ).toBeUndefined();
+  seedGeneratedChannelCatalog(root, channelPackage("generated", "Generated after reset"));
+  clearPluginMetadataLifecycleCaches();
 
-  it("uses bundled external channel metadata before a dist catalog exists", () => {
-    seedRoot("bcr-bundled-external-");
-    bundledOfficialExternalCatalogEntriesMock.push({
-      name: "@tencent-connect/openclaw-qqbot",
-      openclaw: {
-        channel: {
-          id: "qqbot",
-          label: "QQ Bot",
-          docsPath: "/channels/qqbot",
-          approvalFlags: ["native"],
-          doctorCapabilities: { openDmRequiresAllowFromWildcard: false },
-        },
-      },
-    });
-    useBundledPluginsDir(undefined);
-
-    expect(findBundledChannelCatalogMetadata("qqbot")).toMatchObject({
-      approvalFlags: ["native"],
-      doctorCapabilities: { openDmRequiresAllowFromWildcard: false },
-    });
-  });
-
-  it("finds doctor capabilities from the generated catalog when the package is excluded", () => {
-    const root = seedRoot("bcr-generated-doctor-");
-    useBundledPluginsDir(undefined);
-    seedGeneratedChannelCatalog(root, {
-      packageName: "@openclaw/discord",
-      id: "discord",
-      label: "Discord",
-      docsPath: "/channels/discord",
-      blurb: "downloadable channel",
-      doctorCapabilities: {
-        dmAllowFromMode: "topOnly",
-        groupModel: "route",
-        groupAllowFromFallbackToAllowFrom: false,
-        warnOnEmptyGroupSenderAllowlist: false,
-      },
-    });
-
-    expect(findBundledChannelCatalogMetadata("Discord")?.doctorCapabilities).toEqual({
-      dmAllowFromMode: "topOnly",
-      groupModel: "route",
-      groupAllowFromFallbackToAllowFrom: false,
-      warnOnEmptyGroupSenderAllowlist: false,
-    });
-  });
-
-  it("keeps bundled package metadata when generated catalog entries are stale", () => {
-    const root = seedRoot("bcr-package-wins-");
-    const extensionsRoot = path.join(root, "dist", "extensions");
-    seedChannelPkg(path.join(extensionsRoot, "matrix", "package.json"), {
-      id: "matrix",
-      label: "Matrix",
-      markdownCapable: true,
-    });
-    seedGeneratedChannelCatalog(root, {
-      packageName: "@openclaw/matrix",
-      id: "matrix",
-      label: "Matrix",
-      docsPath: "/channels/matrix",
-      blurb: "stale generated entry",
-    });
-    useBundledPluginsDir(extensionsRoot);
-
-    const matrix = listBundledChannelCatalogEntries().find((entry) => entry.id === "matrix");
-    expect(matrix?.channel.markdownCapable).toBe(true);
-  });
-
-  it("falls back to dist/channel-catalog.json when the resolved dir has no plugin package.jsons", () => {
-    // An empty override directory must not hide the shipped catalog.
-    const root = seedRoot("bcr-fallback-empty-");
-    const extensionsRoot = path.join(root, "dist", "extensions");
-    fs.mkdirSync(extensionsRoot, { recursive: true });
-    seedGeneratedChannelCatalog(root, {
-      packageName: "@openclaw/fallback",
-      id: "fallback-channel",
-      label: "Fallback",
-      docsPath: "/channels/fallback",
-      blurb: "fallback blurb",
-    });
-    useBundledPluginsDir(extensionsRoot);
-
-    const entries = listBundledChannelCatalogEntries();
-    expect(entries.map((entry) => entry.id)).toContain("fallback-channel");
-  });
-
-  it("reloads installed bundled package metadata after an explicit plugin lifecycle reset", () => {
-    const root = seedRoot("bcr-package-lifecycle-");
-    const extensionsRoot = path.join(root, "dist", "extensions");
-    const packagePath = path.join(extensionsRoot, "alpha", "package.json");
-    seedChannelPkg(packagePath, { id: "alpha", label: "Before" });
-    useBundledPluginsDir(extensionsRoot);
-
-    expect(
-      listBundledChannelCatalogEntries().find((entry) => entry.id === "alpha")?.channel.label,
-    ).toBe("Before");
-    seedChannelPkg(packagePath, { id: "alpha", label: "After" });
-    clearPluginMetadataLifecycleCaches();
-
-    expect(
-      listBundledChannelCatalogEntries().find((entry) => entry.id === "alpha")?.channel.label,
-    ).toBe("After");
-  });
-
-  it("discovers a generated catalog created after an explicit plugin lifecycle reset", () => {
-    const root = seedRoot("bcr-generated-lifecycle-");
-    useBundledPluginsDir(undefined);
-
-    expect(
-      listBundledChannelCatalogEntries().find((entry) => entry.id === "generated"),
-    ).toBeUndefined();
-    seedGeneratedChannelCatalog(root, {
-      packageName: "@openclaw/generated",
-      id: "generated",
-      label: "Generated after reset",
-      docsPath: "/channels/generated",
-      blurb: "generated channel",
-    });
-    clearPluginMetadataLifecycleCaches();
-
-    expect(
-      listBundledChannelCatalogEntries().find((entry) => entry.id === "generated")?.channel.label,
-    ).toBe("Generated after reset");
-  });
+  expect(channelLabel("generated")).toBe("Generated after reset");
 });

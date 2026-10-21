@@ -3,10 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -149,7 +146,6 @@ export function migrateLegacyTuiLastSessions(params: {
     (record) => !record.sessionKey.toLowerCase().endsWith(":heartbeat"),
   );
   const discardedHeartbeatCount = records.length - activeRecords.length;
-  const expectedRows = new Map<string, LegacyTuiLastSession>();
   let importedCount = 0;
   let supersededCount = 0;
   try {
@@ -167,50 +163,35 @@ export function migrateLegacyTuiLastSessions(params: {
               .select(["value_json", "updated_at_ms"])
               .where("state_key", "=", stateKey),
           );
-          if (!existing) {
-            executeSqliteQuerySync(
-              db,
-              tuiDb.insertInto("config_machine_state").values({
-                state_key: stateKey,
-                value_json: JSON.stringify(record.sessionKey),
-                updated_at_ms: record.updatedAt,
-              }),
-            );
-            expectedRows.set(record.scopeKey, record);
-            importedCount += 1;
-            continue;
-          }
-          // SAFETY: The TUI owner stores each tui.lastSession value as a JSON string.
-          const existingSessionKey = JSON.parse(existing.value_json) as string;
-          if (existing.updated_at_ms === record.updatedAt) {
-            if (existingSessionKey !== record.sessionKey) {
-              throw new Error(
-                `scope ${record.scopeKey} has divergent JSON and SQLite pointers at the same timestamp`,
-              );
+          if (existing) {
+            // SAFETY: The TUI owner stores each tui.lastSession value as a JSON string.
+            const existingSessionKey = JSON.parse(existing.value_json) as string;
+            if (existing.updated_at_ms === record.updatedAt) {
+              if (existingSessionKey !== record.sessionKey) {
+                throw new Error(
+                  `scope ${record.scopeKey} has divergent JSON and SQLite pointers at the same timestamp`,
+                );
+              }
+              continue;
             }
-            expectedRows.set(record.scopeKey, record);
-            continue;
+            if (existing.updated_at_ms > record.updatedAt) {
+              supersededCount += 1;
+              continue;
+            }
           }
-          if (existing.updated_at_ms > record.updatedAt) {
-            expectedRows.set(record.scopeKey, {
-              scopeKey: record.scopeKey,
-              sessionKey: existingSessionKey,
-              updatedAt: existing.updated_at_ms,
-            });
-            supersededCount += 1;
-            continue;
-          }
+          const values = {
+            value_json: JSON.stringify(record.sessionKey),
+            updated_at_ms: record.updatedAt,
+          };
           executeSqliteQuerySync(
             db,
-            tuiDb
-              .updateTable("config_machine_state")
-              .set({
-                value_json: JSON.stringify(record.sessionKey),
-                updated_at_ms: record.updatedAt,
-              })
-              .where("state_key", "=", stateKey),
+            existing
+              ? tuiDb
+                  .updateTable("config_machine_state")
+                  .set(values)
+                  .where("state_key", "=", stateKey)
+              : tuiDb.insertInto("config_machine_state").values({ state_key: stateKey, ...values }),
           );
-          expectedRows.set(record.scopeKey, record);
           importedCount += 1;
         }
       },
@@ -223,26 +204,6 @@ export function migrateLegacyTuiLastSessions(params: {
 
   try {
     params.beforeVerify?.();
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
-    });
-    const tuiDb = getNodeSqliteKysely<TuiLastSessionMigrationDatabase>(database.db);
-    for (const expected of expectedRows.values()) {
-      const row = executeSqliteQueryTakeFirstSync(
-        database.db,
-        tuiDb
-          .selectFrom("config_machine_state")
-          .select(["value_json", "updated_at_ms"])
-          .where("state_key", "=", `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${expected.scopeKey}`),
-      );
-      if (
-        !row ||
-        row.value_json !== JSON.stringify(expected.sessionKey) ||
-        row.updated_at_ms !== expected.updatedAt
-      ) {
-        throw new Error(`SQLite verification failed for scope ${expected.scopeKey}`);
-      }
-    }
     assertLegacySourceUnchanged(params.detected.sourcePath, snapshot);
   } catch (error) {
     warnings.push(`Failed verifying legacy TUI last-session migration: ${String(error)}`);

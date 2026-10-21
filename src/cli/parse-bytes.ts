@@ -24,7 +24,6 @@ function invalidByteSize(raw: string, reason?: string): Error {
   return new Error(`${prefix} Use values like 512kb, 10mb, 1gb, or 500.`);
 }
 
-/** Parse a non-negative byte size with optional binary units like kb, mb, gb, or tb. */
 export function parseByteSize(raw: string, opts?: BytesParseOptions): number {
   const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
@@ -37,7 +36,7 @@ export function parseByteSize(raw: string, opts?: BytesParseOptions): number {
   }
 
   const value = Number(m[1]);
-  if (!Number.isFinite(value) || value < 0) {
+  if (!Number.isFinite(value)) {
     throw invalidByteSize(raw);
   }
 

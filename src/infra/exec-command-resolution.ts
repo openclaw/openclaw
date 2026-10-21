@@ -116,19 +116,13 @@ export function resolveExecutableTrustPath(
 export function resolveExecutionTargetResolution(
   resolution: CommandResolution | ExecutableResolution | null,
 ): ExecutableResolution | null {
-  if (!resolution) {
-    return null;
-  }
-  return resolution.kind === "command" ? resolution.execution : resolution;
+  return resolution?.kind === "command" ? resolution.execution : (resolution ?? null);
 }
 
 export function resolvePolicyTargetResolution(
   resolution: CommandResolution | ExecutableResolution | null,
 ): ExecutableResolution | null {
-  if (!resolution) {
-    return null;
-  }
-  return resolution.kind === "command" ? resolution.policy : resolution;
+  return resolution?.kind === "command" ? resolution.policy : (resolution ?? null);
 }
 
 export function resolveExecutionTargetCandidatePath(
@@ -136,7 +130,7 @@ export function resolveExecutionTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    resolution?.kind === "command" ? resolution.execution : resolution,
+    resolveExecutionTargetResolution(resolution),
     cwd,
   );
 }
@@ -145,10 +139,7 @@ export function resolveExecutionTargetTrustPath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
 ): string | undefined {
-  return resolveExecutableTrustPath(
-    resolution?.kind === "command" ? resolution.execution : resolution,
-    cwd,
-  );
+  return resolveExecutableTrustPath(resolveExecutionTargetResolution(resolution), cwd);
 }
 
 export function resolvePolicyTargetCandidatePath(
@@ -156,7 +147,7 @@ export function resolvePolicyTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    resolution?.kind === "command" ? resolution.policy : resolution,
+    resolvePolicyTargetResolution(resolution),
     cwd,
   );
 }
@@ -165,10 +156,7 @@ export function resolvePolicyTargetTrustPath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
 ): string | undefined {
-  return resolveExecutableTrustPath(
-    resolution?.kind === "command" ? resolution.policy : resolution,
-    cwd,
-  );
+  return resolveExecutableTrustPath(resolvePolicyTargetResolution(resolution), cwd);
 }
 
 export function resolveApprovalAuditTrustPath(
@@ -377,73 +365,41 @@ export function matchAllowlist(
   return pathOnlyMatch;
 }
 
-type ExecArgvToken =
-  | {
-      kind: "empty";
-      raw: string;
-    }
-  | {
-      kind: "terminator";
-      raw: string;
-    }
-  | {
-      kind: "stdin";
-      raw: string;
-    }
-  | {
-      kind: "positional";
-      raw: string;
-    }
-  | {
-      kind: "option";
-      raw: string;
-      style: "long";
-      flag: string;
-      inlineValue?: string;
-    }
-  | {
-      kind: "option";
-      raw: string;
-      style: "short-cluster";
-      cluster: string;
-      flags: string[];
-    };
-
 /**
  * Tokenizes a single argv entry into a normalized option/positional model.
  * Consumers can share this model to keep argv parsing behavior consistent.
  */
-export function parseExecArgvToken(raw: string): ExecArgvToken {
+export function parseExecArgvToken(raw: string) {
   if (!raw) {
-    return { kind: "empty", raw };
+    return { kind: "empty" as const, raw };
   }
   if (raw === "--") {
-    return { kind: "terminator", raw };
+    return { kind: "terminator" as const, raw };
   }
   if (raw === "-") {
-    return { kind: "stdin", raw };
+    return { kind: "stdin" as const, raw };
   }
   if (!raw.startsWith("-")) {
-    return { kind: "positional", raw };
+    return { kind: "positional" as const, raw };
   }
   if (raw.startsWith("--")) {
     const eqIndex = raw.indexOf("=");
     if (eqIndex > 0) {
       return {
-        kind: "option",
+        kind: "option" as const,
         raw,
-        style: "long",
+        style: "long" as const,
         flag: raw.slice(0, eqIndex),
         inlineValue: raw.slice(eqIndex + 1),
       };
     }
-    return { kind: "option", raw, style: "long", flag: raw };
+    return { kind: "option" as const, raw, style: "long" as const, flag: raw };
   }
   const cluster = raw.slice(1);
   return {
-    kind: "option",
+    kind: "option" as const,
     raw,
-    style: "short-cluster",
+    style: "short-cluster" as const,
     cluster,
     flags: cluster.split("").map((entry) => `-${entry}`),
   };

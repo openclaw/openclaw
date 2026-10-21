@@ -12,11 +12,13 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveConfiguredMcpTransport } from "../config/mcp-config-normalize.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { logWarn } from "../logger.js";
+import type { McpEnterpriseConfig } from "./mcp-enterprise.js";
 import { resolveHttpMcpServerLaunchConfig, type HttpMcpTransportType } from "./mcp-http.js";
 import type { McpOAuthConfig } from "./mcp-oauth-provider.js";
 import {
   describeStdioMcpServerLaunchConfig,
   resolveStdioMcpServerLaunchConfig,
+  type StdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
 
 // Resolves raw MCP server config into the transport shape used by bundle MCP
@@ -29,14 +31,8 @@ type ResolvedBaseMcpTransportConfig = {
   supportsParallelToolCalls: boolean;
 };
 
-type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
-  kind: "stdio";
-  transportType: "stdio";
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-  cwd?: string;
-};
+type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig &
+  StdioMcpServerLaunchConfig & { kind: "stdio"; transportType: "stdio" };
 
 type ResolvedMcpOAuthConfig = McpOAuthConfig & {
   identity?: "shared" | "per-requester";
@@ -48,8 +44,9 @@ export type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
   transportType: HttpMcpTransportType;
   url: string;
   headers?: Record<string, string>;
-  auth?: "oauth";
+  auth?: "oauth" | "enterprise";
   oauth?: ResolvedMcpOAuthConfig;
+  enterprise?: McpEnterpriseConfig;
   sslVerify?: boolean;
   clientCert?: string;
   clientKey?: string;
@@ -78,13 +75,6 @@ function warnDroppedStdioEnvOnce(serverName: string, key: string): void {
   );
 }
 
-function getConnectionTimeoutMs(rawServer: unknown): number {
-  return resolvePositiveTimerTimeoutMs(
-    asOptionalObjectRecord(rawServer)?.connectionTimeoutMs,
-    DEFAULT_CONNECTION_TIMEOUT_MS,
-  );
-}
-
 export function resolveMcpRequestTimeoutMs(
   rawServer: unknown,
   fallbackMs = DEFAULT_REQUEST_TIMEOUT_MS,
@@ -95,17 +85,21 @@ export function resolveMcpRequestTimeoutMs(
   );
 }
 
-function getBooleanField(rawServer: unknown, key: string): boolean | undefined {
-  const value = asOptionalObjectRecord(rawServer)?.[key];
-  return typeof value === "boolean" ? value : undefined;
-}
-
 /** Resolve one MCP server's launch transport config, or null when unsupported. */
 export function resolveMcpTransportConfig(
   serverName: string,
   rawServer: unknown,
   options?: { logWarnings?: boolean },
 ): ResolvedMcpTransportConfig | null {
+  const record = asOptionalObjectRecord(rawServer);
+  const common = () => ({
+    connectionTimeoutMs: resolvePositiveTimerTimeoutMs(
+      record?.connectionTimeoutMs,
+      DEFAULT_CONNECTION_TIMEOUT_MS,
+    ),
+    requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
+    supportsParallelToolCalls: record?.supportsParallelToolCalls === true,
+  });
   const logWarnings = options?.logWarnings !== false;
   const effectiveTransport = resolveConfiguredMcpTransport(rawServer);
   const stdioLaunch = resolveStdioMcpServerLaunchConfig(
@@ -124,14 +118,9 @@ export function resolveMcpTransportConfig(
     return {
       kind: "stdio",
       transportType: "stdio",
-      command: stdioLaunch.config.command,
-      args: stdioLaunch.config.args,
-      env: stdioLaunch.config.env,
-      cwd: stdioLaunch.config.cwd,
+      ...stdioLaunch.config,
       description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
-      connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
-      requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
-      supportsParallelToolCalls: getBooleanField(rawServer, "supportsParallelToolCalls") ?? false,
+      ...common(),
     };
   }
 
@@ -175,9 +164,8 @@ export function resolveMcpTransportConfig(
     }
     return null;
   }
-  const record = asOptionalObjectRecord(rawServer);
   const oauth = record?.oauth;
-  const sslVerify = getBooleanField(rawServer, "sslVerify");
+  const enterprise = record?.enterprise;
   const clientCert = normalizeOptionalString(record?.clientCert);
   const clientKey = normalizeOptionalString(record?.clientKey);
   return {
@@ -185,14 +173,14 @@ export function resolveMcpTransportConfig(
     transportType: launch.config.transportType,
     url: launch.config.url,
     headers: launch.config.headers,
-    ...(record?.auth === "oauth" ? { auth: "oauth" as const } : {}),
+    ...(record?.auth === "oauth" || record?.auth === "enterprise" ? { auth: record.auth } : {}),
     ...(isRecord(oauth) ? { oauth: oauth as ResolvedMcpOAuthConfig } : {}),
-    ...(sslVerify !== undefined ? { sslVerify } : {}),
+    // SAFETY: MCP server config is validated by McpServerSchema before runtime resolution.
+    ...(isRecord(enterprise) ? { enterprise: enterprise as McpEnterpriseConfig } : {}),
+    ...(typeof record?.sslVerify === "boolean" ? { sslVerify: record.sslVerify } : {}),
     ...(clientCert ? { clientCert } : {}),
     ...(clientKey ? { clientKey } : {}),
     description: redactSensitiveUrl(launch.config.url),
-    connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
-    requestTimeoutMs: resolveMcpRequestTimeoutMs(rawServer),
-    supportsParallelToolCalls: getBooleanField(rawServer, "supportsParallelToolCalls") ?? false,
+    ...common(),
   };
 }

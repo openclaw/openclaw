@@ -1,3 +1,4 @@
+import type { buildChannelsTable } from "./channels.js";
 import { formatTimeAgo } from "./format.js";
 
 type AgentStatusLike = {
@@ -11,12 +12,6 @@ type AgentStatusLike = {
     lastActiveAgeMs?: number | null;
     sessionsPath: string;
   }>;
-};
-
-type ChannelDetailLike = {
-  title: string;
-  columns: string[];
-  rows: Array<Record<string, string>>;
 };
 
 export const statusOverviewTableColumns = [
@@ -59,7 +54,7 @@ export function buildStatusAgentTableRows(params: {
 }
 
 export function buildStatusChannelDetailSections(params: {
-  details: ChannelDetailLike[];
+  details: Awaited<ReturnType<typeof buildChannelsTable>>["details"];
   ok: (text: string) => string;
   warn: (text: string) => string;
 }) {

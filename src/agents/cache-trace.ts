@@ -1,6 +1,3 @@
-/**
- * Optional JSONL diagnostics for agent cache/session/prompt tracing.
- */
 import crypto from "node:crypto";
 import path from "node:path";
 import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
@@ -52,16 +49,8 @@ type CacheTracePayload = Partial<Omit<CacheTraceEvent, "messages">> & {
   messages?: AgentMessage[];
 };
 
-type CacheTrace = {
-  filePath: string;
-  recordStage: (stage: CacheTraceStage, payload?: CacheTracePayload) => void;
-  wrapStreamFn: (streamFn: StreamFn) => StreamFn;
-};
-
 type CacheTraceInit = AgentTraceBase & {
   cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  writer?: QueuedFileWriter;
 };
 
 const writers = new Map<string, QueuedFileWriter>();
@@ -88,9 +77,8 @@ function summarizeMessages(messages: AgentMessage[]): {
   };
 }
 
-/** Create a cache trace recorder when diagnostics config/env enables it. */
-export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
-  const env = params.env ?? process.env;
+export function createCacheTrace(params: CacheTraceInit) {
+  const env = process.env;
   const enabled =
     parseBooleanValue(env.OPENCLAW_CACHE_TRACE) ??
     params.cfg?.diagnostics?.cacheTrace?.enabled ??
@@ -106,12 +94,12 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     return null;
   }
 
-  const writer = params.writer ?? getQueuedFileWriter(writers, filePath);
+  const writer = getQueuedFileWriter(writers, filePath);
   let seq = 0;
 
   const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = buildAgentTraceBase(params);
 
-  const recordStage: CacheTrace["recordStage"] = (stage, payload = {}) => {
+  const recordStage = (stage: CacheTraceStage, payload: CacheTracePayload = {}) => {
     const event: CacheTraceEvent = {
       ...base,
       ts: new Date().toISOString(),
@@ -134,7 +122,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     }
 
     const messages = payload.messages;
-    if (Array.isArray(messages)) {
+    if (messages) {
       Object.assign(event, summarizeMessages(messages));
       if (includeMessages) {
         // Full messages are optional; summaries/digests are always recorded when
@@ -157,24 +145,26 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     writer.write(`${line}\n`);
   };
 
-  const wrapStreamFn: CacheTrace["wrapStreamFn"] = (streamFn) => (model, context, options) => {
-    const traceContext = context as {
-      messages?: AgentMessage[];
-      system?: unknown;
-      systemPrompt?: unknown;
+  const wrapStreamFn =
+    (streamFn: StreamFn): StreamFn =>
+    (model, context, options) => {
+      const traceContext = context as {
+        messages?: AgentMessage[];
+        system?: unknown;
+        systemPrompt?: unknown;
+      };
+      recordStage("stream:context", {
+        model: {
+          id: model?.id,
+          provider: model?.provider,
+          api: model?.api,
+        },
+        system: traceContext.systemPrompt ?? traceContext.system,
+        messages: traceContext.messages ?? [],
+        options: (options ?? {}) as Record<string, unknown>,
+      });
+      return streamFn(model, context, options);
     };
-    recordStage("stream:context", {
-      model: {
-        id: model?.id,
-        provider: model?.provider,
-        api: model?.api,
-      },
-      system: traceContext.systemPrompt ?? traceContext.system,
-      messages: traceContext.messages ?? [],
-      options: (options ?? {}) as Record<string, unknown>,
-    });
-    return streamFn(model, context, options);
-  };
 
   return {
     filePath,

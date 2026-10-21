@@ -21,9 +21,9 @@ export function resetRequesterSettleWakeRetry(
     ...wake,
     status: "pending",
     attemptCount: 0,
+    privateInput: undefined,
     replayCount: undefined,
     nextAttemptAt: undefined,
-    deferralCount: undefined,
     lastError: undefined,
   };
 }
@@ -45,6 +45,8 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
     ...(entry.taskRunId !== undefined ? { taskRunId: entry.taskRunId } : {}),
     ...(entry.pauseReason ? { pauseReason: entry.pauseReason } : {}),
     ...(entry.swarmRunId ? { swarmRunId: entry.swarmRunId } : {}),
+    ...(entry.schedulerSlotId ? { schedulerSlotId: entry.schedulerSlotId } : {}),
+    ...(entry.swarmLaunchReplayKey ? { swarmLaunchReplayKey: entry.swarmLaunchReplayKey } : {}),
     childSessionKey: entry.childSessionKey,
     ...(entry.childAgentId ? { childAgentId: entry.childAgentId } : {}),
     ...(entry.controllerSessionKey ? { controllerSessionKey: entry.controllerSessionKey } : {}),
@@ -89,9 +91,7 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
       ? {
           delivery: {
             status: entry.delivery.status,
-            ...(entry.delivery.disposition === "intentional_non_delivery"
-              ? { disposition: entry.delivery.disposition }
-              : {}),
+            ...(entry.delivery.disposition ? { disposition: entry.delivery.disposition } : {}),
             ...(entry.delivery.suspendedAt !== undefined
               ? { suspendedAt: entry.delivery.suspendedAt }
               : {}),
@@ -234,36 +234,6 @@ export function isCompletedRequesterDeliveryBlocked(
   );
 }
 
-/** Delivered child history releases its requester only after every completion owner settles. */
-export function isSettledSubagentRequesterHistory(entry: SubagentRunRecord): boolean {
-  const endedAt = entry.execution.endedAt;
-  const cleanedAt = entry.cleanupCompletedAt;
-  return (
-    entry.execution.status === "terminal" &&
-    typeof endedAt === "number" &&
-    Number.isFinite(endedAt) &&
-    typeof cleanedAt === "number" &&
-    Number.isFinite(cleanedAt) &&
-    cleanedAt >= endedAt &&
-    entry.delivery?.status === "delivered" &&
-    !entry.requesterTurnRunId &&
-    !entry.requesterSettleWake &&
-    !entry.retireAfterRequesterTurn &&
-    !entry.wakeOnDescendantSettle &&
-    !entry.pauseReason &&
-    !entry.killIntent &&
-    !entry.killReconciliation &&
-    !entry.execution.restartRecovery &&
-    !entry.terminalOwner &&
-    !entry.suppressAnnounceReason &&
-    !entry.collect &&
-    !entry.collectorCompletion &&
-    !entry.collectorLaunchCleanupPending &&
-    !entry.swarmLaunchPending &&
-    !entry.queuedLaunch
-  );
-}
-
 /** Returns true when required delivery still owns the row after its child session is gone. */
 export function hasRetainedRequiredCompletionDelivery(
   entry: Pick<
@@ -306,7 +276,7 @@ export const markRequesterSettleWakePending = (
 ) => {
   const existing = entry.requesterSettleWake;
   entry.requesterSettleWake = {
-    ...structuredClone(existing),
+    ...existing,
     status: existing?.status ?? "pending",
     attemptCount: existing?.attemptCount ?? 0,
     ...(existing?.retireAfterSettle === true || options?.retireAfterSettle === true

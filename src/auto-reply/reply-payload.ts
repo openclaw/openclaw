@@ -5,10 +5,13 @@ import {
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { FailoverReason } from "../agents/failover/signal.js";
-/** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
-import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
+import type {
+  HarnessCompletionRecovery,
+  RestartRecoveryTerminalDeliveryEvidence,
+} from "../config/sessions/restart-recovery-types.js";
 import type { ReplyToMode } from "../config/types.base.js";
+import type { AgentAssistantSourceReceipt } from "../infra/agent-events.types.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -42,7 +45,6 @@ export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string 
   return text.startsWith("BTW\nQuestion:") ? text : formatted;
 }
 
-/** True when a payload has visible or playable content for delivery. */
 export function isRenderablePayload(payload: ReplyPayload): boolean {
   return hasReplyPayloadContent(payload, {
     extraContent:
@@ -50,7 +52,6 @@ export function isRenderablePayload(payload: ReplyPayload): boolean {
   });
 }
 
-/** True when a payload should stay internal as reasoning-only output. */
 export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
   return payload.isReasoning === true;
 }
@@ -95,7 +96,6 @@ export function readPairingQrReplyChannelData(
   return setupCode && expiresAtMs ? { setupCode, expiresAtMs } : undefined;
 }
 
-/** Metadata for fast-auto progress notices. */
 export const FAST_MODE_AUTO_PROGRESS_KIND = "fast-mode-auto";
 
 export function isFastModeAutoProgressPayload(payload: Pick<ReplyPayload, "channelData">): boolean {
@@ -152,8 +152,7 @@ export function stripReplyMediaFailureFallback(
 
 function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls">): boolean {
   return Boolean(
-    readNonBlankString(payload.mediaUrl) ||
-    (Array.isArray(payload.mediaUrls) && payload.mediaUrls.some(readNonBlankString)),
+    readNonBlankString(payload.mediaUrl) || payload.mediaUrls?.some(readNonBlankString),
   );
 }
 
@@ -173,7 +172,6 @@ export function getReplyPayloadTtsSupplement(
   };
 }
 
-/** Returns true when the payload is a valid TTS supplement media payload. */
 export function isReplyPayloadTtsSupplement(
   payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls" | "ttsSupplement">,
 ): boolean {
@@ -225,6 +223,16 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type SessionWriterDeliveryAuthority = {
   agentId?: string;
+  /** Current facts from the original actor or its receipt-backed delivery preparation. */
+  readCurrentSession?: () =>
+    | {
+        sessionId: string;
+        lifecycleRevision?: string;
+        activeWriterRunId?: string;
+        restartRecoveryHarnessCompletion?: HarnessCompletionRecovery;
+        restartRecoveryTerminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidence[];
+      }
+    | undefined;
   /** Captured admitted completion authority, retained by the durable queue. */
   harnessCompletion?: HarnessCompletionRecovery;
   expectedLifecycleRevision?: string;
@@ -240,6 +248,10 @@ export type ReplyPayloadMetadata = {
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
   assistantMessageIndex?: number;
+  /** Shares the occurrence receipt so deferred delivery observes its eventual commit. */
+  assistantTranscriptSource?: Readonly<AgentAssistantSourceReceipt>;
+  /** First index of this block's physical assistant message; each content item advances the index. */
+  assistantMessageStartIndex?: number;
   /** Answer to a preceding user input in the same run. */
   precedingInputAnswer?: true;
   /** Visible source represented by this block, excluding synthetic chunk wrappers. */
@@ -262,12 +274,20 @@ export type ReplyPayloadMetadata = {
   assistantMediaFailures?: ReplyMediaFailure[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** The local source observer confirmed this model reply in committed chat history. */
+  localTranscriptDeliveryConfirmed?: true;
+  /** Exact decoration added by normalization, not model-authored text. */
+  responsePrefix?: string;
+  /** Exact usage footer appended by the host. */
+  responseUsageLine?: string;
   /** Exact channel/account transform owner that already accepted this payload. */
   channelReplyTransformOwner?: object;
   /** Exact dispatcher that already ran its full normalization before side effects. */
   replyDispatcherNormalizationOwner?: object;
   /** The command owner produced this terminal reply without starting an agent run. */
   commandReply?: true;
+  /** Inline acknowledgements accompany a model turn and do not own another command input. */
+  inlineCommandReply?: true;
   /** A read-only status command exchange belongs in history, not model context. */
   contextFreeCommand?: true;
   /** Host-owned acknowledgement after this final payload is confirmed delivered. */
@@ -295,6 +315,8 @@ export type ReplyPayloadMetadata = {
     sessionKey: string;
     storePath: string;
   };
+  /** The final-dispatch owner joins cleanup to the core dispatcher's settled receipt. */
+  pendingFinalDeliveryCleanup?: { preserveActivity?: boolean };
   /** replyToId existed before reply threading could inject an implicit target. */
   replyToIdExplicit?: boolean;
   /** The host's single-use reply policy already consumed its target. */
@@ -314,11 +336,13 @@ export type ReplyPayloadMetadata = {
   deliverDespiteSourceReplySuppression?: boolean;
   /** An independently delivered message does not complete the active turn's answer. */
   independentDeliveryIntentId?: string;
+  /** Explicit progress/final marker retained from the source-reply owner. */
+  sourceReplyFinal?: boolean;
   /**
    * A message-tool reply to the active internal UI source. The final payload is
-   * still the live delivery vehicle; this mirror makes the reply durable for
-   * chat.history and page reloads without turning the internal UI into an
-   * outbound channel.
+   * the live delivery vehicle unless transcriptOwner identifies an already
+   * committed reply delivered through session.message/history. The mirror
+   * makes replies durable without turning the internal UI into an outbound channel.
    */
   sourceReplyTranscriptMirror?: {
     sessionKey: string;
@@ -336,13 +360,19 @@ export type ReplyPayloadMetadata = {
   /** Payload preparation generated this provider error; it is not an authored answer. */
   terminalProviderError?: true;
   /** Model fallback uses observed failure facts, never the displayed wording. */
-  providerFailure?: { reason: FailoverReason | null; rawError?: string };
+  providerFailure?: {
+    reason: FailoverReason | null;
+    rawError?: string;
+    rateLimitRetriesExhausted?: number;
+  };
   /** The warning owner observed this tool failure; presentation text is not evidence. */
   toolErrorWarning?: { toolName: string };
   /** Warning synthesized from an observed tool error after the run produced assistant output. */
   nonTerminalToolErrorWarning?: boolean;
   /** Host label or status about the run (truncation, restart, compaction); not the answer. */
   hostNotice?: true;
+  /** Runtime acknowledgment of a committed queue decision, independent of active reply delivery. */
+  queueAdmissionNotice?: true;
   /** Unresolved mutating tool failure that makes a heartbeat run terminally failed. */
   heartbeatTerminalToolFailure?: {
     toolName: string;
@@ -357,7 +387,6 @@ const replyPayloadMetadata = resolveGlobalSingleton(
   () => new WeakMap<object, ReplyPayloadMetadata>(),
 );
 
-/** Adds internal metadata to a reply payload object. */
 export function setReplyPayloadMetadata<T extends object>(
   payload: T,
   metadata: ReplyPayloadMetadata,
@@ -367,9 +396,14 @@ export function setReplyPayloadMetadata<T extends object>(
   return payload;
 }
 
-/** Reads internal metadata attached to a reply payload object. */
 export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
   return replyPayloadMetadata.get(payload);
+}
+
+/** Remove only recorded normalization decoration when appending a preview chunk. */
+export function stripReplyPayloadResponsePrefix(payload: object, text: string): string {
+  const prefix = getReplyPayloadMetadata(payload)?.responsePrefix;
+  return prefix && text.startsWith(prefix) ? text.slice(prefix.length) : text;
 }
 
 /** Records attachment failures after the ones the payload already carries. */
@@ -404,12 +438,11 @@ export function readReplyPayloadSourceOccurrence(
   const sourceText = metadata?.blockSourceText;
   const sourceRange = metadata?.blockSourceRange;
   if (
-    typeof assistantMessageIndex !== "number" ||
+    assistantMessageIndex === undefined ||
     !Number.isSafeInteger(assistantMessageIndex) ||
     assistantMessageIndex < 0 ||
-    typeof sourceText !== "string" ||
-    !Array.isArray(sourceRange) ||
-    sourceRange.length !== 2
+    sourceText === undefined ||
+    !sourceRange
   ) {
     return undefined;
   }
@@ -477,15 +510,25 @@ export function isReplyPayloadSessionWriterDeliveryAuthorized(
   );
 }
 
-/** Returns true when a payload is the synthesized warning for a non-terminal tool error. */
 export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): boolean {
   return getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
 }
 
-/** Copies internal payload metadata when cloning or transforming payload objects. */
 export function copyReplyPayloadMetadata<T extends object>(source: object, payload: T): T {
   const metadata = getReplyPayloadMetadata(source);
   return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;
+}
+
+export function retainSilentFinalPayloads(payloads: readonly ReplyPayload[]): ReplyPayload[] {
+  return payloads.flatMap((payload) => {
+    if (payload.isError) {
+      return [payload];
+    }
+    const nonTextPayload = { ...payload, text: undefined };
+    return hasReplyPayloadContent(nonTextPayload)
+      ? [copyReplyPayloadMetadata(payload, nonTextPayload)]
+      : [];
+  });
 }
 
 /** Marks a host-owned payload as deliverable even when normal source replies are suppressed. */

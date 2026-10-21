@@ -17,7 +17,7 @@ started.
 - **Keyword search** via FTS5 full-text indexing (BM25 scoring).
 - **Vector search** via embeddings from any supported provider.
 - **Hybrid search** that combines both for best results.
-- **Deterministic ranking** by relevance, recency, and write-time importance.
+- **Ranking** by relevance, recency, and write-time importance, using fixed rules.
 - **Diversity-aware ordering** with MMR enabled on hybrid results by default.
 - **Trusted trigger recall** for bounded pre-reply context without a recall model.
 - **CJK support** via trigram tokenization for Chinese, Japanese, and Korean.
@@ -63,7 +63,7 @@ The builtin engine is the right choice for most users:
 The builtin engine can index directories outside the workspace with
 `memory.search.extraPaths`. It uses bounded lexical query expansion to improve
 conversational recall, but it does not provide a learned or model-based relevance
-reranking stage. Its MMR pass is deterministic and local.
+reranking stage. Its MMR pass uses fixed rules and runs locally.
 
 Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory
 with automatic user modeling.
@@ -158,24 +158,110 @@ which support selective deletion after promotion. For coverage and limits, see
   See [provider selection](/reference/memory-config#provider-selection).
 - **Reindex on demand:** `openclaw memory index --force --agent <id>`
 
+When Memory Core owns the memory slot, a fresh Gateway start opens an agent's
+memory manager on its first memory search, flush, or turn that needs it, so an
+idle Gateway does not start index and transcript workers for every agent. Once a
+manager has run in the Gateway process, the Memory Core service schedules each
+configured agent's memory manager to open again whenever the service restarts,
+including after plugin replacement and memory or agent configuration changes. This
+background activation waits for that agent's database preparation, including
+after an upgrade or restart, without delaying Gateway readiness. Failed
+preparation reports the database's repair guidance. Watched file changes can
+then update the index without a search or agent turn. Retiring an
+instance closes its managers, including file watchers, timers, and session
+listeners. A session startup scan still in progress stops after its current
+step, so disabling or replacing the plugin does not wait for it. Plugin reload also stops and restarts the retained Memory Core
+service around publication, so its managers use the current embedding providers,
+including providers loaded on demand, without waiting for a search or turn. If
+reload fails after draining managers, recovery restarts their previous services
+and schedules their index activation before reporting the previous runtime restored.
+Service stop joins pending activation before closing its managers. Memory Core running only as
+another memory plugin's consolidation sidecar does not start these indexes automatically.
+
 When the index identity reports an OpenClaw chunking-implementation change,
 a normal or CLI search rebuilds it before returning results. The rebuild uses
 the agent's current embedding settings; status inspection remains read-only.
 
-Search-triggered maintenance applies pending memory and session changes
-incrementally while searches remain available. A failed full rebuild retains
+Search-triggered maintenance applies pending memory-file changes incrementally
+while searches remain available. Session transcript indexing waits until the
+agent has had no transcript changes or running turns for 30 seconds. While the
+agent is active, pending changes keep their original age. After about five minutes,
+indexing starts in the next gap between turns without waiting for another quiet
+period. It never starts during a running turn. One pass covers the agent's pending
+sessions, sharing transcript preparation, embedding-cache reads, and bounded
+publication transactions. If a turn starts during a pass, indexing finishes its
+current bounded group and resumes after the next quiet period.
+Repeated notifications for an unchanged transcript do not rewrite its source
+metadata; changes to its content, timestamp, or size still update the index.
+
+Failed session passes, including handled embedding-provider fallback failures,
+retain their pending work and retry after 1, 5, and 15 minutes, subject to the same
+idle gate. The last automatic retry also waits for any full-rebuild cooldown to
+end. After those automatic retries, another transcript change or turn activity
+can start a new retry series. A running turn can extend either delay.
+
+New session content becomes searchable after that delay. The current turn already
+has its own content in context; `memory_search` does not force a transcript flush.
+Graceful shutdown does not flush queued indexing. On the next startup, incremental
+catch-up resumes from each source's indexed sequence, including rewrites and
+compaction. Startup compares source metadata; missing transcripts are parsed and
+checked for indexing eligibility once the background pass can run. Explicit source
+diagnostics still inspect content to exclude system-only transcripts from eligible
+counts. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.
+An index built before any content exists remains valid as content arrives;
+restarting does not require a full rebuild just because the index started empty.
+Growing session transcripts and edited memory files retain unchanged indexed
+chunks and embed only new or changed chunks, even when the embedding cache is
+disabled. An edit that changes every chunk of a memory file, such as a line
+inserted at the top, still replaces that file's chunks. An explicit full
+rebuild still replaces the complete index.
 If a memory file changes or disappears during indexing, only that file's
 unfinished work is retried incrementally. Other files finish indexing, and
 the changed file's obsolete chunks are not published.
+
+Automatic full-rebuild retries wait 30 seconds after a failure. Repeated
+failures double that delay up to 30 minutes; a successful rebuild resets it.
+Searches keep reading the published index, and targeted session updates can
+still publish when its identity is valid. Explicit CLI repair bypasses the
+process-local cooldown.
+
+Optional embedding-provider failures also share their 30-second recovery cooldown
+with search-triggered maintenance. Searches retain keyword recall, and existing
+semantic indexes remain intact. An already keyword-only index can still accept
+file updates during the cooldown; semantic indexing resumes after recovery.
+
+Local file observation runs in one shared file worker, including initial directory
+discovery, native watching, and change settling. Large memory trees therefore do
+not require directory traversal on the Gateway's main thread. Indexing stays with
+the memory manager, which receives dirty notifications before debounce and reads
+published watcher health without polling the worker. Startup waits for watcher
+readiness; shutdown joins native cleanup, and the last watcher closes the worker.
+
+If the shared file worker exits unexpectedly, Memory Core reports unavailable
+watcher health and logs a warning. It restarts after 0.5, 2, and 5 seconds,
+restoring live subscriptions and rescanning their scopes to catch missed edits.
+Four failures within one minute stop automatic restarts; health remains unavailable
+and searches refresh memory in the background. Restart the Gateway after resolving
+the worker failure to resume observation. Normal shutdown does not restart the worker.
 
 When native file watching is unavailable, Memory Core uses background polling
 with a 30-second default interval, including when polling is explicitly enabled
 with `CHOKIDAR_USEPOLLING`. A valid `CHOKIDAR_INTERVAL` overrides this default,
 with a 20 ms minimum. Shorter intervals increase background scanning cost,
 especially for large memory trees. Native events
-still trigger prompt, debounced updates. Automatic fallback logs one warning per
-watcher lifetime. A running memory manager exposes each local observation's
+still trigger prompt, debounced updates. Native watchers also perform a full
+recovery scan every five minutes, so a missed native event can take that long to
+be detected. This recovery interval does not change polling cadence. Automatic
+fallback logs one warning per watcher lifetime. Agents in the same process share
+observations of the same admitted root, retaining each agent's file-selection
+rules. Joining or leaving an unchanged selection keeps the existing filesystem
+baseline; changes to the combined scopes or enabled file kinds rescan it.
+More than 128 combined scopes use additional bounded subscriptions. If a
+shared observation fails, its members retry independently for the rest of their
+watcher lifetimes, so one failing scope cannot repeatedly disable healthy peers.
+The last agent to stop observing a root closes its subscription. A running memory
+manager exposes each local observation's
 mode, polling interval, and `pollingFallback` in its status under `custom.watcher`;
 standalone status inspection does not start a watcher. The filesystem
 library does not currently retain the fallback reason or retry native selection;
@@ -189,14 +275,23 @@ background work finishes; subsequent searches see the updated content. Restart
 the Gateway after restoring watch capacity to enable native watching again.
 
 Incremental indexing, stale-source cleanup, and cache pruning wait asynchronously when
-another SQLite writer is active. Cache pruning removes the oldest entries in
-bounded batches, yielding between batches while preserving the existing cache cap.
+another SQLite writer is active. Cache pruning removes entries in bounded
+batches, in the order described below, yielding between batches while preserving
+the existing cache cap.
 
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
 published index; a failed rebuild leaves that index intact. The embedding cache
 is bounded before publication, not after copying excess entries into the
-shared database.
+shared database. When new entries would take the cache past its row cap, or it
+is already over the cap, it removes exactly as many entries as before, but first
+takes entries for the active embedding provider that no published chunk
+references and that were written before the oldest published chunk, oldest
+first. A full reindex rewrites every chunk, so these entries predate the index
+that dropped them. Incremental syncs keep unchanged chunks, so the oldest
+published chunk can be much older and fewer entries qualify. Newer unreferenced
+entries, such as a retry's or another sync's unpublished vectors, keep plain
+oldest-first order. At or below the cap nothing is removed.
 
 Other agent state, including sessions and transcripts in the same database,
 is retained. Use the [memory index command](/cli/memory#memory-index) for
@@ -208,8 +303,9 @@ not total disk usage: embedding cache, FTS/vector tables, SQLite overhead, and
 WAL/free pages are excluded.
 
 Chunk and embedding-cache vectors use little-endian 64-bit floating-point
-BLOBs. The software search fallback reads these full-precision vectors even
-when the optional sqlite-vec accelerator is unavailable; sqlite-vec keeps its
+BLOBs. The software search fallback scores these full-precision BLOBs directly
+in a worker, without allocating a numeric array per chunk, even when the
+optional sqlite-vec accelerator is unavailable; sqlite-vec keeps its
 separate 32-bit vector index. The keyword index uses each chunk's stable integer
 identity, so edits and deletion update the corresponding FTS rows directly.
 
@@ -256,9 +352,9 @@ startup. After backing them up, you can remove old indexes, model downloads,
 collection metadata, and session exports manually if you have confirmed that
 no standalone QMD installation uses them.
 
-Canonical memory remains in `MEMORY.md`, `USER.md`, `memory/*.md`, and the
+The original memory remains in `MEMORY.md`, `USER.md`, `memory/*.md`, and the
 migrated extra paths. Builtin indexes those same Markdown sources on its next
-sync. The cutover is lossless by construction: no canonical memory content is
+sync. The cutover is lossless by construction: no original memory content is
 copied or deleted; only derived state is rebuilt.
 
 Builtin now covers most QMD use cases with:
@@ -266,7 +362,7 @@ Builtin now covers most QMD use cases with:
 - hybrid BM25 and vector retrieval by default, followed by temporal decay,
   importance, and project affinity before MMR diversity,
 - bounded lexical query expansion for conversational searches,
-- string or `{ path, pattern }` entries in `memory.search.extraPaths`, and
+- string or `{ path, pattern, evergreen }` entries in `memory.search.extraPaths`, and
 - optional image and audio indexing under `extraPaths` only.
 
 QMD query mode's learned cross-encoder reranking and HyDE generation are not
@@ -315,7 +411,7 @@ openclaw memory status --agent <agent-id> --deep
 ```
 
 <Warning>
-The index shares `openclaw-agent.sqlite` with canonical sessions, transcripts,
+The index shares `openclaw-agent.sqlite` with stored sessions, transcripts,
 and other durable agent state. Never delete that database or its `-wal`, `-shm`,
 or `-journal` sidecars to reset memory. Memory indexing cannot reconstruct
 conversation history lost this way.
@@ -369,7 +465,7 @@ before/after database and WAL sizes. Compaction needs temporary disk space; on a
 full volume, free space or move a verified backup to a volume with sufficient
 capacity before attempting it. Rebuilding can call the embedding provider and
 incur cost. Restart the Gateway through its deployment owner after verification.
-Neither reset nor compaction removes canonical sessions or changes retention.
+Neither reset nor compaction removes stored sessions or changes retention.
 
 ## Configuration
 

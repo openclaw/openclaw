@@ -1,30 +1,88 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
+  updateAuthProfileStoreWithLock,
+} from "../agents/auth-profiles/store-runtime.js";
 import {
   captureAuthProfileStorePersistenceSnapshot,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
+import type * as OnboardingPluginInstall from "../commands/onboarding-plugin-install.js";
+import { clearConfigCache, readConfigFileSnapshot } from "../config/config.js";
+import {
+  registerConfigWriteListener,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../config/io.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { getRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { diffGatewayReloadPaths } from "../gateway/config-diff.js";
+import {
+  buildGatewayReloadPlan,
+  listConfigReloadRefinementPrefixes,
+} from "../gateway/config-reload-plan.js";
+import type { GatewayClient } from "../gateway/server-methods/client-types.js";
+import { modelsAuthLoginHandlers } from "../gateway/server-methods/models-auth-login.js";
+import { whenAdmittedWizardSessionSettled } from "../gateway/server-methods/setup-admission.js";
+import * as setupExecution from "../gateway/server-methods/system-agent-execution.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+import { createWizardSessionTracker } from "../gateway/server-wizard-sessions.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
+import * as providerChoices from "../plugins/provider-auth-choices.js";
+import * as providerRuntime from "../plugins/providers.runtime.js";
+import type { ProviderPlugin } from "../plugins/types.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { activateSavedSetupCredential } from "./setup-inference-credential-access.js";
+import { WizardCancelledError } from "../wizard/prompts.js";
+import { activateSetupInference } from "./setup-inference-activate.js";
+import { fixture, modelRef, tempDirs } from "./setup-inference-activate.test-support.js";
+import {
+  activateSavedSetupCredential,
+  type SetupCredentialActivationReceipt,
+} from "./setup-inference-credential-access.js";
 import { stageProviderAuthCandidate } from "./setup-inference-credentials.js";
+import { mockPluginRegistry, pluginRecord } from "./verified-inference.test-support.js";
 
-afterEach(() => {
+const installRuntime = vi.hoisted(() =>
+  vi.fn<typeof OnboardingPluginInstall.ensureOnboardingPluginInstalled>(),
+);
+vi.mock("../commands/onboarding-plugin-install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof OnboardingPluginInstall>()),
+  ensureOnboardingPluginInstalled: installRuntime,
+}));
+
+afterEach(async () => {
+  closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  tempDirs.cleanup();
+  clearConfigCache();
   clearPluginMetadataLifecycleCaches();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe("setup inference credential provider lifetime", () => {
@@ -147,9 +205,8 @@ describe("setup inference credential provider lifetime", () => {
             routeAgentId: "main",
             workspace: state.workspaceDir,
             agentDir: state.agentDir(),
-            credentialsSaved: false,
+            effects: { credentialsSaved: false },
             beforePersistentEffect: async () => {},
-            deps: {},
             params: {
               kind: "provider-auth",
               authChoice: id,
@@ -244,7 +301,7 @@ describe("setup inference credential provider lifetime", () => {
   );
 });
 
-it("keeps Gateway setup credential ownership through derived SecretRef publication", async () => {
+it("activates and restores setup credentials off-thread while preserving later neighboring writes", async () => {
   await withOpenClawTestState({ label: "setup-auth-publication" }, async (state) => {
     const profileId = "fixture:setup";
     const source: AuthProfileCredential = {
@@ -261,10 +318,20 @@ it("keeps Gateway setup credential ownership through derived SecretRef publicati
       agentDir: state.agentDir(),
       profileId,
     });
-    const receipt = expectDefined(
-      await activateSavedSetupCredential({ agentDir: state.agentDir(), profileId, credential }),
-      "Expected activation receipt",
-    );
+    await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir());
+    const observation = observeHostDataSql();
+    let receipt: SetupCredentialActivationReceipt;
+    try {
+      receipt = expectDefined(
+        await activateSavedSetupCredential({ agentDir: state.agentDir(), profileId, credential }),
+        "Expected activation receipt",
+      );
+      expect(
+        observation.queries.filter((sql) => /\bauth_profile_(?:store|state)\b/iu.test(sql)),
+      ).toEqual([]);
+    } finally {
+      observation.restore();
+    }
     const persisted = captureAuthProfileStorePersistenceSnapshot(agentDir).credentialsRaw;
     expect(persisted).not.toHaveProperty(["profiles", profileId, "setup"]);
     expect(persisted).not.toHaveProperty(["profiles", profileId, "key"]);
@@ -276,5 +343,343 @@ it("keeps Gateway setup credential ownership through derived SecretRef publicati
     expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBeGreaterThan(revision);
     expect(captureAuthProfileStorePersistenceSnapshot(agentDir).credentialsRaw).toEqual(persisted);
     expect(() => receipt.assertCurrent()).not.toThrow();
+    await updateAuthProfileStoreWithLock({
+      agentDir,
+      saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+      updater(store) {
+        store.profiles.neighbor = { type: "api_key", provider: "neighbor", key: "fixture-next" };
+        store.usageStats = { neighbor: { lastUsed: 42 } };
+        return true;
+      },
+    });
+    await receipt.rollback();
+    const restored = await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir());
+    expect(restored.profiles[profileId]).toMatchObject(credential);
+    expect(restored.profiles.neighbor).toEqual({
+      type: "api_key",
+      provider: "neighbor",
+      key: "fixture-next",
+    });
+    expect(restored.usageStats?.neighbor?.lastUsed).toBe(42);
   });
 });
+
+it.each([
+  {
+    selectedModel: "meta/muse-spark-1.3",
+    modelName: "Muse Spark 1.3",
+    selectModel: undefined,
+    outcome: "success",
+  },
+  {
+    selectedModel: "meta/muse-spark-1.2",
+    modelName: "Muse Spark 1.2",
+    selectModel: undefined,
+    outcome: "success",
+  },
+  {
+    selectedModel: "meta/muse-spark-1.3",
+    modelName: "Muse Spark 1.3",
+    selectModel: true,
+    outcome: "success",
+  },
+  {
+    selectedModel: "meta/muse-spark-1.3",
+    modelName: "Muse Spark 1.3",
+    selectModel: false,
+    outcome: "success",
+  },
+  ...["cancel", "authority", "verification"].map((outcome) => ({
+    selectedModel: "meta/muse-spark-1.3",
+    modelName: "Muse Spark 1.3",
+    selectModel: undefined,
+    outcome,
+  })),
+])(
+  "sets up the Muse route for main (model: $selectedModel, selectModel: $selectModel, $outcome)",
+  async ({ selectedModel, modelName, selectModel, outcome }) => {
+    const setup = await fixture({ codex: true, primaryModel: modelRef });
+    const starter = "meta/muse-spark-1.3";
+    const original = { alias: "Existing Meta API model", agentRuntime: { id: "openclaw" } };
+    const config: OpenClawConfig = {
+      ...setup.config,
+      agents: {
+        ...setup.config.agents,
+        ownership: "explicit",
+        defaults: {
+          ...setup.config.agents?.defaults,
+          models: { ...setup.config.agents?.defaults?.models, [starter]: original },
+        },
+        entries: {
+          main: { model: { primary: modelRef, fallbacks: ["stable/agent-fallback"] } },
+          other: {},
+        },
+      },
+      plugins: {
+        ...setup.config.plugins,
+        entries: { ...setup.config.plugins?.entries, meta: { enabled: true } },
+      },
+      models: {
+        ...setup.config.models,
+        providers: {
+          ...setup.config.models?.providers,
+          openai: {
+            ...setup.config.models?.providers?.openai,
+            baseUrl: "https://provider.example/v1",
+            models: setup.config.models?.providers?.openai?.models ?? [],
+            apiKey: "synthetic-working-primary-key",
+          },
+          meta: {
+            baseUrl: "https://api.meta.ai/v1",
+            models: [],
+            apiKey: "synthetic-existing-meta-api-key",
+          },
+        },
+      },
+    };
+    const previousAgentModel = JSON.stringify(config.agents?.entries?.main?.model);
+    const previousDefaultModel = JSON.stringify(config.agents?.defaults?.model);
+    await fs.writeFile(setup.configPath, `${JSON.stringify(config, null, 2)}\n`);
+    clearConfigCache();
+    const choice: ProviderAuthChoiceMetadata = {
+      pluginId: "meta",
+      providerId: "meta",
+      methodId: "muse-code",
+      choiceId: "muse-code",
+      choiceLabel: "Muse Code",
+      appGuidedAuth: "device-code",
+    };
+    const provider: ProviderPlugin = {
+      id: "meta",
+      pluginId: "meta",
+      label: "Meta",
+      auth: [
+        {
+          id: "muse-code",
+          label: "Muse Code",
+          kind: "device_code",
+          run: async () => ({
+            profiles: [],
+            defaultModel: starter,
+            agentRuntimeId: "muse",
+          }),
+        },
+      ],
+    };
+    setup.resolveManifestProviderAuthChoice.mockReturnValue(choice);
+    vi.spyOn(providerRuntime, "resolvePluginProvidersCore").mockReturnValue([provider]);
+    mockPluginRegistry(["meta", "muse", "codex", "openai"].map((id) => pluginRecord(id)));
+    const phases: string[] = [];
+    const verifySetup = vi.fn(async () => {
+      phases.push("verify");
+    });
+    setup.pluginRegistry.agentHarnesses.push({
+      pluginId: "muse",
+      source: "test",
+      harness: {
+        id: "muse",
+        label: "Muse Code",
+        authBootstrap: "harness",
+        executionEnvironment: "host-only",
+        supports: () => ({ supported: true }),
+        verifySetup,
+        runAttempt: async () => {
+          throw new Error("Native setup verification must not start a turn");
+        },
+      },
+    });
+    const record: PluginInstallRecord = {
+      source: "npm",
+      spec: "@openclaw/muse",
+      installPath: path.join(path.dirname(setup.configPath), "extensions/muse"),
+    };
+    installRuntime.mockImplementation(async ({ cfg, entry, beforePersistentEffect }) => {
+      expect(entry.pluginId).toBe("muse");
+      await beforePersistentEffect?.();
+      phases.push("install");
+      return {
+        installed: true,
+        status: "installed",
+        pluginId: "muse",
+        cfg: {
+          ...cfg,
+          plugins: {
+            ...cfg.plugins,
+            entries: { ...cfg.plugins?.entries, muse: { enabled: true } },
+            installs: { muse: record },
+          },
+        },
+      };
+    });
+    let authorized = true;
+    const activateCandidate = () =>
+      setup.runWithMetadata(() =>
+        activateSetupInference({
+          kind: "provider-auth",
+          authChoice: "muse-code",
+          agentId: "main",
+          modelRef: selectedModel,
+          ...(selectModel === undefined ? {} : { selectModel }),
+          nativeSessionCatalogsEnabled: false,
+          surface: "gateway",
+          runtime: createNonExitingRuntime(),
+          prompter: setup.prompter,
+          onActivationStarted: () => phases.push("activate"),
+          assertCurrent: () => {
+            if (!authorized) {
+              throw new Error("setup authority revoked");
+            }
+          },
+        }),
+      );
+    if (outcome !== "success") {
+      if (outcome === "cancel") {
+        vi.mocked(setup.prompter.select).mockRejectedValueOnce(new WizardCancelledError());
+        await expect(activateCandidate()).rejects.toThrow(WizardCancelledError);
+      } else if (outcome === "authority") {
+        vi.mocked(setup.prompter.select).mockImplementationOnce(async () => {
+          authorized = false;
+          return "continue";
+        });
+        await expect(activateCandidate()).rejects.toThrow("setup authority revoked");
+      } else {
+        verifySetup.mockRejectedValueOnce(new Error("native verification refused"));
+        expect(await activateCandidate()).toMatchObject({ ok: false });
+      }
+      const unchanged = (await readConfigFileSnapshot()).sourceConfig;
+      expect(unchanged.agents).toEqual(config.agents);
+      expect(unchanged.plugins).toEqual(config.plugins);
+      if (outcome !== "verification") {
+        expect(verifySetup).not.toHaveBeenCalled();
+      }
+      return;
+    }
+    if (selectModel === false) {
+      vi.spyOn(providerChoices, "resolveManifestDeclaredProviderAuthChoices").mockReturnValue([
+        choice,
+      ]);
+      const activate = setupExecution.activateGatewaySetupInference;
+      vi.spyOn(setupExecution, "activateGatewaySetupInference").mockImplementation((params) =>
+        setup.runWithMetadata(() =>
+          activate({
+            ...params,
+            nativeSessionCatalogsEnabled: false,
+          }),
+        ),
+      );
+      const tracker = createWizardSessionTracker();
+      const client: GatewayClient = {
+        connId: "muse-access",
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          scopes: ["operator.admin"],
+          client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+        },
+      };
+      const params = { sessionId: "muse-access", authChoice: "meta/muse-code", agentId: "main" };
+      const unsubscribe = registerConfigWriteListener(
+        (event) => {
+          const claim = expectDefined(
+            getRuntimeConfigWriteApplication(event)?.claim(),
+            "runtime activation receipt",
+          );
+          void expectDefined(
+            claim.prepare,
+            "runtime activation preparation",
+          )(() => {}).then(() => claim.settle("applied-restart-required"));
+        },
+        {
+          ownsRuntimeActivationFor: setup.configPath,
+          preCommitRuntimePreflight: async (sourceConfig, runtimeRefresh) => {
+            const plan = buildGatewayReloadPlan(
+              diffGatewayReloadPaths(config, sourceConfig, listConfigReloadRefinementPrefixes()),
+              { previousConfig: config, candidateConfig: sourceConfig },
+            );
+            expect(plan.reloadPlugins).toBe(true);
+            if (runtimeRefresh?.requireImmediateApplication && plan.reloadPlugins) {
+              throw new Error("The new runtime plugin cannot be applied immediately.");
+            }
+            return { runtimeConfig: sourceConfig, compareConfig: sourceConfig };
+          },
+        },
+      );
+      try {
+        setRuntimeConfigSnapshot(config, config);
+        await expectDefined(
+          modelsAuthLoginHandlers["models.authLogin"],
+          "provider login handler",
+        )({
+          req: { type: "req", id: "muse-access", method: "models.authLogin", params },
+          params,
+          respond: vi.fn(),
+          // SAFETY: Provider login uses only the real session tracker and current fixture config.
+          context: { ...tracker, getRuntimeConfig: () => config } as GatewayRequestContext,
+          client,
+          isWebchatConnect: () => false,
+        });
+        const session = expectDefined(
+          tracker.wizardSessions.get(params.sessionId),
+          "login session",
+        );
+        let consent = await session.next();
+        while (consent.step?.type === "progress") {
+          consent = await session.next();
+        }
+        expect(consent.step).toMatchObject({
+          type: "select",
+          message: expect.stringContaining("Use Muse Code’s native permissions?"),
+        });
+        expect(verifySetup).not.toHaveBeenCalled();
+        await session.answer(expectDefined(consent.step, "consent step").id, "continue");
+        await whenAdmittedWizardSessionSettled(session);
+        expect(session.getStatus(), session.getError()).toBe("done");
+        await expect(session.next()).resolves.toMatchObject({
+          done: true,
+          status: "done",
+          modelActivation: { modelRef: selectedModel, modelName },
+        });
+      } finally {
+        unsubscribe();
+        resetConfigRuntimeState();
+      }
+    } else {
+      const result = await activateCandidate();
+      expect(result).toMatchObject({ ok: true, modelRef: selectedModel, modelName });
+    }
+    if (selectModel !== false) {
+      expect(phases.indexOf("activate")).toBeLessThan(phases.indexOf("install"));
+      const verification = phases.indexOf("verify");
+      expect(verification).toBeGreaterThan(phases.indexOf("install"));
+      expect(phases.indexOf("activate", verification + 1)).toBeGreaterThan(verification);
+    }
+    const selected = (await readConfigFileSnapshot()).sourceConfig;
+    expect(selected.agents?.entries?.main?.nativeRuntimeConsent).toEqual(["muse"]);
+    expect(selected.agents?.entries?.other?.nativeRuntimeConsent).toBeUndefined();
+    if (selectModel === false) {
+      expect(JSON.stringify(selected.agents?.entries?.main?.model)).toBe(previousAgentModel);
+    } else {
+      expect(resolveAgentModelPrimaryValue(selected.agents?.entries?.main?.model)).toBe(
+        selectedModel,
+      );
+    }
+    expect(JSON.stringify(selected.agents?.defaults?.model)).toBe(previousDefaultModel);
+    expect(
+      resolveModelRuntimePolicy({ config: selected, modelId: selectedModel, agentId: "main" })
+        .policy?.id,
+    ).toBe("muse");
+    expect(selected.agents?.entries?.main?.models?.[selectedModel]?.agentRuntime?.id).toBe("muse");
+    expect(
+      resolveModelRuntimePolicy({ config: selected, modelId: starter, agentId: "other" }).policy
+        ?.id,
+    ).toBe("openclaw");
+    expect(selected.plugins?.entries?.muse?.enabled).toBe(true);
+    expect(selected.agents?.defaults?.models?.[starter]).toEqual(original);
+    expect(selected.models?.providers?.meta?.apiKey).toBe("synthetic-existing-meta-api-key");
+    expect(verifySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "meta", modelId: selectedModel.slice("meta/".length) }),
+    );
+    expect(loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(1);
+    expect(setup.run).not.toHaveBeenCalled();
+  },
+);

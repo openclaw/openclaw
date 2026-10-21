@@ -25,7 +25,6 @@ import {
   supportBundleContents,
   textSupportBundleFile,
   writeSupportBundleZip,
-  type DiagnosticSupportBundleContent,
   type DiagnosticSupportBundleFile,
 } from "./diagnostic-support-bundle.js";
 import { sanitizeSupportLogRecord } from "./diagnostic-support-log-redaction.js";
@@ -40,8 +39,6 @@ import {
 import { readConfiguredLogTail, type LogTailPayload } from "./log-tail.js";
 import { formatDiagnosticFilenameTimestamp } from "./timestamps.js";
 
-const DIAGNOSTIC_SUPPORT_EXPORT_VERSION = 1;
-
 const DEFAULT_LOG_LIMIT = 5000;
 const DEFAULT_LOG_MAX_BYTES = 1_000_000;
 // Support export must remain usable when the config is corrupt or unexpectedly
@@ -53,39 +50,16 @@ type SupportSnapshotReader = () => unknown;
 
 type DiagnosticSupportExportOptions = {
   outputPath?: string;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  stateDir?: string;
-  now?: Date;
   logLimit?: number;
   logMaxBytes?: number;
   stabilityBundle?: string | false;
-  readLogTail?: typeof readConfiguredLogTail;
   readStatusSnapshot?: SupportSnapshotReader;
   readHealthSnapshot?: SupportSnapshotReader;
 };
 
-type DiagnosticSupportExportManifest = {
-  version: typeof DIAGNOSTIC_SUPPORT_EXPORT_VERSION;
-  generatedAt: string;
-  openclawVersion: string;
-  platform: NodeJS.Platform;
-  arch: string;
-  node: string;
-  stateDir: string;
-  contents: DiagnosticSupportBundleContent[];
-  privacy: {
-    payloadFree: true;
-    rawLogsIncluded: false;
-    notes: string[];
-  };
-};
-
-export type WriteDiagnosticSupportExportResult = {
-  path: string;
-  bytes: number;
-  manifest: DiagnosticSupportExportManifest;
-};
+export type WriteDiagnosticSupportExportResult = Awaited<
+  ReturnType<typeof writeDiagnosticSupportExport>
+>;
 
 type ConfigShape = {
   path: string;
@@ -124,23 +98,7 @@ type ConfigExport = {
   sanitized?: unknown;
 };
 
-type IncludedSanitizedLogTail = {
-  status: "included";
-  file: string;
-  cursor: number;
-  size: number;
-  lineCount: number;
-  truncated: boolean;
-  reset: boolean;
-  lines: Array<Record<string, unknown>>;
-};
-
-type FailedSanitizedLogTail = Omit<IncludedSanitizedLogTail, "status"> & {
-  status: "failed";
-  error: string;
-};
-
-type SanitizedLogTail = IncludedSanitizedLogTail | FailedSanitizedLogTail;
+type SanitizedLogTail = ReturnType<typeof sanitizeLogTail> | ReturnType<typeof failedLogTail>;
 
 type BonjourLogSummary = {
   count: number;
@@ -157,32 +115,7 @@ type BonjourLogSummary = {
   };
 };
 
-type SupportSnapshotStatus =
-  | {
-      status: "included";
-      path: string;
-    }
-  | {
-      status: "failed";
-      path: string;
-      error: string;
-    }
-  | {
-      status: "skipped";
-    };
-
-type CollectedSupportSnapshot = {
-  summary: SupportSnapshotStatus;
-  file?: DiagnosticSupportBundleFile;
-};
-
-function normalizePositiveInteger(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return fallback;
-  }
-  return Math.floor(parsed);
-}
+type SupportSnapshotStatus = Awaited<ReturnType<typeof collectSupportSnapshot>>["summary"];
 
 function safeScalar(value: unknown): unknown {
   if (typeof value === "boolean") {
@@ -306,18 +239,14 @@ function configReadErrorMessage(error: unknown, stat?: fs.Stats): string | undef
   return error instanceof Error ? error.message : String(error);
 }
 
-function readConfigExport(options: {
-  configPath: string;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-}): ConfigExport {
-  const redactedConfigPath = redactPathForSupport(options.configPath, options);
+function readConfigExport(configPath: string, options: SupportRedactionContext): ConfigExport {
+  const redactedConfigPath = redactPathForSupport(configPath, options);
   let stat: fs.Stats | undefined;
   try {
-    assertNotUpdateCapturePath(options.configPath, options.stateDir);
-    stat = fs.statSync(options.configPath);
+    assertNotUpdateCapturePath(configPath, options.stateDir);
+    stat = fs.statSync(configPath);
     const { buffer } = readRegularFileSync({
-      filePath: options.configPath,
+      filePath: configPath,
       maxBytes: SUPPORT_EXPORT_CONFIG_MAX_BYTES,
     });
     const parsed = parseConfigJson5(buffer.toString("utf8"));
@@ -359,15 +288,15 @@ async function collectSupportSnapshot(params: {
   reader?: SupportSnapshotReader;
   generatedAt: string;
   redaction: SupportRedactionContext;
-}): Promise<CollectedSupportSnapshot> {
+}) {
   if (!params.reader) {
-    return { summary: { status: "skipped" } };
+    return { summary: { status: "skipped" as const } };
   }
   try {
     const data = await params.reader();
     return {
       summary: {
-        status: "included",
+        status: "included" as const,
         path: params.path,
       },
       file: jsonSupportBundleFile(params.path, {
@@ -380,7 +309,7 @@ async function collectSupportSnapshot(params: {
     const redactedError = redactErrorForSupport(error, params.redaction);
     return {
       summary: {
-        status: "failed",
+        status: "failed" as const,
         path: params.path,
         error: redactedError,
       },
@@ -417,9 +346,9 @@ function readStabilityBundle(
   }
 }
 
-function sanitizeLogTail(tail: LogTailPayload, options: SupportRedactionContext): SanitizedLogTail {
+function sanitizeLogTail(tail: LogTailPayload, options: SupportRedactionContext) {
   return {
-    status: "included",
+    status: "included" as const,
     file: redactPathForSupport(tail.file, options),
     cursor: tail.cursor,
     size: tail.size,
@@ -430,10 +359,10 @@ function sanitizeLogTail(tail: LogTailPayload, options: SupportRedactionContext)
   };
 }
 
-function failedLogTail(error: unknown, redaction: SupportRedactionContext): SanitizedLogTail {
+function failedLogTail(error: unknown, redaction: SupportRedactionContext) {
   const redactedError = redactErrorForSupport(error, redaction);
   return {
-    status: "failed",
+    status: "failed" as const,
     file: "unavailable",
     cursor: 0,
     size: 0,
@@ -518,13 +447,12 @@ function summarizeBonjourLogs(logTail: SanitizedLogTail): BonjourLogSummary {
 }
 
 async function collectSupportLogTail(params: {
-  readLogTail: typeof readConfiguredLogTail;
   limit: number;
   maxBytes: number;
   redaction: SupportRedactionContext;
 }): Promise<SanitizedLogTail> {
   try {
-    const tail = await params.readLogTail({
+    const tail = await readConfiguredLogTail({
       limit: params.limit,
       maxBytes: params.maxBytes,
     });
@@ -629,22 +557,14 @@ function renderSummary(params: {
   ].join("\n");
 }
 
-function resolveOutputPath(options: {
-  outputPath?: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-  now: Date;
-}): string {
+function resolveOutputPath(options: { outputPath?: string; stateDir: string; now: Date }): string {
   const filename = `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`;
   const raw = options.outputPath?.trim();
   if (!raw) {
     return path.join(options.stateDir, "logs", "support", filename);
   }
   const resolved =
-    path.isAbsolute(raw) || raw.startsWith("~")
-      ? resolveHomeRelativePath(raw, { env: options.env })
-      : path.resolve(options.cwd, raw);
+    path.isAbsolute(raw) || raw.startsWith("~") ? resolveHomeRelativePath(raw) : path.resolve(raw);
   try {
     if (fs.statSync(resolved).isDirectory()) {
       return path.join(resolved, filename);
@@ -655,31 +575,25 @@ function resolveOutputPath(options: {
   return resolved;
 }
 
-export async function writeDiagnosticSupportExport(
-  input: DiagnosticSupportExportOptions = {},
-): Promise<WriteDiagnosticSupportExportResult> {
-  const env = input.env ?? process.env;
-  const stateDir = input.stateDir ?? resolveStateDir(env);
-  const now = input.now ?? new Date();
+export async function writeDiagnosticSupportExport(options: DiagnosticSupportExportOptions) {
+  const env = process.env;
+  const stateDir = resolveStateDir(env);
+  const now = new Date();
   const outputPath = resolveOutputPath({
-    outputPath: input.outputPath,
-    cwd: input.cwd ?? process.cwd(),
-    env,
+    outputPath: options.outputPath,
     stateDir,
     now,
   });
-  const options = { ...input, env, stateDir, now };
   const generatedAt = now.toISOString();
   const configPath = resolveConfigPath(env, stateDir);
   const stability = readStabilityBundle(options.stabilityBundle, stateDir);
   const redaction = { env, stateDir };
   const logTail = await collectSupportLogTail({
-    readLogTail: options.readLogTail ?? readConfiguredLogTail,
-    limit: normalizePositiveInteger(options.logLimit, DEFAULT_LOG_LIMIT),
-    maxBytes: normalizePositiveInteger(options.logMaxBytes, DEFAULT_LOG_MAX_BYTES),
+    limit: options.logLimit ?? DEFAULT_LOG_LIMIT,
+    maxBytes: options.logMaxBytes ?? DEFAULT_LOG_MAX_BYTES,
     redaction,
   });
-  const config = readConfigExport({ configPath, env, stateDir });
+  const config = readConfigExport(configPath, redaction);
   const [statusSnapshot, healthSnapshot] = await Promise.all([
     collectSupportSnapshot({
       path: "status/gateway-status.json",
@@ -751,8 +665,8 @@ export async function writeDiagnosticSupportExport(
     ),
   );
 
-  const manifest: DiagnosticSupportExportManifest = {
-    version: DIAGNOSTIC_SUPPORT_EXPORT_VERSION,
+  const manifest = {
+    version: 1 as const,
     generatedAt,
     openclawVersion: VERSION,
     platform: process.platform,
@@ -761,8 +675,8 @@ export async function writeDiagnosticSupportExport(
     stateDir: redactPathForSupport(stateDir, redaction),
     contents: supportBundleContents(files),
     privacy: {
-      payloadFree: true,
-      rawLogsIncluded: false,
+      payloadFree: true as const,
+      rawLogsIncluded: false as const,
       notes: [
         "Stability bundles are payload-free diagnostic snapshots.",
         "Logs keep operational summaries and safe metadata fields; payload-like fields are omitted.",
@@ -782,4 +696,3 @@ export async function writeDiagnosticSupportExport(
     manifest,
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

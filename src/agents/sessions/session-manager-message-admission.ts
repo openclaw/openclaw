@@ -4,6 +4,7 @@ import {
   type SessionPendingInputWorkerReceipt,
 } from "../../config/sessions/session-accessor.sqlite-pending-inputs.js";
 import type { SessionMetadataMessageControl } from "../../config/sessions/session-manager-write-contract.js";
+import type { SessionPendingInputAuthorityFacts } from "../../config/sessions/session-pending-input-authority.js";
 import type { SqliteWorkerAdmissionRequest } from "../../infra/sqlite-worker-operation-admission.js";
 
 /** Host closures retain authority; worker commands carry only their matching custody facts. */
@@ -30,7 +31,11 @@ export function captureSessionMessageAdmission(
         if (!pendingInput) {
           throw new Error("Session message has no captured pending input owner");
         }
-        pendingInput.assertCurrent();
+        pendingInput.assertCurrent(
+          // SAFETY: This bound worker alone produces the session-message grant.
+          (facts.authority ?? undefined) as SessionPendingInputAuthorityFacts | undefined,
+          facts.authority === null ? undefined : assertCurrent,
+        );
       } else if (facts.check === "fresh") {
         if (!controls?.beforeFreshMessageCommit) {
           throw new Error("Session message has no captured fresh-message assertion");

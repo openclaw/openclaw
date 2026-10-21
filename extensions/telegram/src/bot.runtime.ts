@@ -1,3 +1,2 @@
 export { apiThrottler } from "@grammyjs/transformer-throttler";
-export { Bot } from "grammy";
-export type { ApiClientOptions } from "grammy";
+export { Bot, type ApiClientOptions } from "grammy";

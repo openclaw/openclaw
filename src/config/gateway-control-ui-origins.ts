@@ -17,7 +17,6 @@ export function resolveControlUiAllowedOrigins(
 /** Non-loopback gateway bind modes that require explicit Control UI allowed origins. */
 export type GatewayNonLoopbackBindMode = "lan" | "tailnet" | "custom" | "auto";
 
-/** Narrows arbitrary config/runtime bind values to non-loopback bind modes. */
 export function isGatewayNonLoopbackBindMode(bind: unknown): bind is GatewayNonLoopbackBindMode {
   return bind === "lan" || bind === "tailnet" || bind === "custom" || bind === "auto";
 }
@@ -41,7 +40,6 @@ export function hasConfiguredControlUiAllowedOrigins(params: {
   );
 }
 
-/** Resolves the gateway port used when constructing default Control UI origins. */
 export function resolveGatewayPortWithDefault(
   port: unknown,
   fallback = DEFAULT_GATEWAY_PORT,

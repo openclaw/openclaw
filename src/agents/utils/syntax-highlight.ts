@@ -1,6 +1,4 @@
 /**
- * Syntax highlighting renderer for terminal-friendly formatted output.
- *
  * Highlight.js emits HTML spans; this module walks that small HTML subset and
  * maps active scopes to caller-provided text formatters.
  */
@@ -167,7 +165,6 @@ export function highlight(code: string, language: string, theme: HighlightTheme)
   return renderHighlightedHtml(value, theme);
 }
 
-/** Returns whether highlight.js has a registered language by this name. */
 export function supportsLanguage(name: string): boolean {
   return loadHighlightJsRuntime().getLanguage(name) !== undefined;
 }

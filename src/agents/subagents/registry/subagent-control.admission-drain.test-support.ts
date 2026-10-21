@@ -1,13 +1,12 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import {
-  beginSessionWorkAdmission,
-  getActiveSessionLifecycleMutationCount,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-} from "../../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+} from "../../../sessions/session-controller.lifecycle.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { enqueueControlRun } from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import type { registerLateDescendantControlTests } from "./subagent-control.late-registration.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -35,10 +34,9 @@ export function registerAdmissionDrainControlTests({
       let entry = createSubagentRunRecord({
         runId: "run-kill-admission-timeout",
         childSessionKey,
+        childSessionIdentity: { sessionId, lifecycleRevision: sessionId + "-revision" },
         controllerSessionKey,
-        requesterSessionKey: controllerSessionKey,
         task: "hold admission during kill",
-        createdAt: Date.now() - 2_000,
         collect: queued,
         execution: queued
           ? { status: "queued" }
@@ -50,28 +48,19 @@ export function registerAdmissionDrainControlTests({
         [childSessionKey]: { sessionId, updatedAt: Date.now() },
       });
       const interrupted = createDeferred();
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         scope: storePath,
         identities: [childSessionKey, sessionId],
         assertAllowed: () => {},
         onInterrupt: () => interrupted.resolve(),
       });
       setSubagentControlDepsForTest({
-        isEmbeddedAgentRunActive: () => false,
-        abortEmbeddedAgentRun: () => false,
-        clearSessionLifecycleQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+        clearSessionQueues: () => ({ followupCleared: 0, keys: [] }),
       });
 
       const dispatch = vi.fn(async () => {});
       if (queued) {
-        enqueueSwarmRun({
-          groupId: "drain",
-          runId: entry.runId,
-          maxConcurrent: 1,
-          activeRunIds: ["holder"],
-          start: dispatch,
-          onStartFailure: () => true,
-        });
+        enqueueControlRun("drain", entry.runId, ["holder"], dispatch);
       }
       vi.useFakeTimers();
       const pendingKill = killAllControlledSubagentRuns({
@@ -79,34 +68,36 @@ export function registerAdmissionDrainControlTests({
         controller: controllerFor(controllerSessionKey),
         runs: [entry],
       });
+      const settled = vi.fn();
+      void pendingKill.then(settled, settled);
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           interrupted.promise,
-          pendingKill.then(() => {
-            throw new Error("Cancellation settled before interrupting the held admission");
-          }),
-        ]);
-        expect(getActiveSessionLifecycleMutationCount()).toBeGreaterThan(0);
+          pendingKill,
+          "Cancellation settled before interrupting the held admission",
+        );
+        await Promise.resolve();
+        expect(settled).not.toHaveBeenCalled();
         if (queued) {
           releaseSwarmRun("holder");
         }
         await Promise.resolve();
         expect(dispatch).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
+        await vi.advanceTimersByTimeAsync(SESSION_CONTROLLER_DRAIN_TIMEOUT_MS);
 
         await expect(pendingKill).resolves.toMatchObject({
           status: "error",
           error:
             "hold admission during kill: Subagent is still active; try the kill again in a moment.",
         });
-        expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
-        expect(getSubagentRunByChildSessionKey(childSessionKey)?.killIntent).toBeUndefined();
+        const retained = await getSubagentRunByChildSessionKey(childSessionKey);
+        expect(retained?.execution.endedAt).toBeUndefined();
+        expect(retained?.killIntent).toBeUndefined();
         if (queued) {
           await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
         }
       } finally {
         admission.release();
-        swarmSchedulerTesting.reset();
         vi.useRealTimers();
         await pendingKill;
       }

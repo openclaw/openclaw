@@ -9,8 +9,8 @@ import path from "node:path";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
-import { resolveCommandExecApprovalRoute } from "../auto-reply/reply/commands-private-route.js";
-import type { HandleCommandsParams } from "../auto-reply/reply/commands-types.js";
+import { buildCommandExecApprovalDefaults } from "../auto-reply/reply/commands-private-route.js";
+import { buildCommandTestParams } from "../auto-reply/reply/commands.test-harness.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,11 +23,11 @@ import {
   startClaimedGateway,
 } from "../gateway/test-helpers.listener.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { withTimeout } from "../utils/with-timeout.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { getFinishedSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -157,10 +157,22 @@ describe("gateway-hosted exec approvals", () => {
       cleanup.push(() => disconnectGatewayClient(operator));
 
       const originReviewerIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(stateDir, "test-device-identities", "origin-reviewer.sqlite"),
+        path: path.join(
+          stateDir,
+          "test-device-identities",
+          "origin-reviewer",
+          "client",
+          "credentials.sqlite",
+        ),
       });
       const otherReviewerIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(stateDir, "test-device-identities", "other-reviewer.sqlite"),
+        path: path.join(
+          stateDir,
+          "test-device-identities",
+          "other-reviewer",
+          "client",
+          "credentials.sqlite",
+        ),
       });
       const originReviewer = await connectGatewayClient({
         url: `ws://127.0.0.1:${claim.port}`,
@@ -271,15 +283,27 @@ describe("gateway-hosted exec approvals", () => {
       }
       expect(finished.expiresAt - finished.endedAt).toBe(180_000);
 
-      const commandRoute = resolveCommandExecApprovalRoute({
-        commandParams: {
-          command: { channel: "webchat", from: "owner", to: "owner" },
-          ctx: {
+      const {
+        messageProvider,
+        currentChannelId,
+        currentThreadTs,
+        accountId,
+        approvalReviewerDeviceId,
+      } = buildCommandExecApprovalDefaults(
+        buildCommandTestParams(
+          "/diagnostics",
+          config,
+          {
+            Provider: "webchat",
+            Surface: "webchat",
+            From: "owner",
+            To: "owner",
             ApprovalReviewerDeviceId: originReviewerIdentity.deviceId,
             OriginatingTo: "owner",
           },
-        } as HandleCommandsParams,
-      });
+          { workspaceDir },
+        ),
+      );
       let resolveRoutedOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
       const routedOutcomePromise = new Promise<ExecApprovalFollowupOutcome>((resolve) => {
         resolveRoutedOutcome = resolve;
@@ -298,7 +322,11 @@ describe("gateway-hosted exec approvals", () => {
         cwd: workspaceDir,
         agentId: "main",
         sessionKey: "agent:main:main",
-        ...commandRoute,
+        messageProvider,
+        currentChannelId,
+        currentThreadTs,
+        accountId,
+        approvalReviewerDeviceId,
       });
       const routedPending = await routedTool.execute("exec-approval-device-custody", {
         command: "printf 'device-bound-smoke\\n'",

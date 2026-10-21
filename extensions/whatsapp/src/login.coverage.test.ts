@@ -24,16 +24,15 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
-    getRuntimeConfig: () =>
-      ({
-        channels: {
-          whatsapp: {
-            accounts: {
-              default: { enabled: true, authDir: resolveTestAuthDir() },
-            },
+    captureRuntimeConfigAsyncReader: () => async () => ({
+      channels: {
+        whatsapp: {
+          accounts: {
+            default: { enabled: true, authDir: resolveTestAuthDir() },
           },
         },
-      }) as never,
+      },
+    }),
   };
 });
 

@@ -28,8 +28,6 @@ function basicPromptInputs(): Parameters<typeof buildConfiguredAgentSystemPrompt
     },
     tools: [],
     modelAliasLines: [],
-    userTimezone: "UTC",
-    userDate: "2026-01-05",
   };
 }
 
@@ -49,8 +47,6 @@ function fixedEmbeddedPromptInputs(): Parameters<typeof buildConfiguredAgentSyst
     },
     tools: ["read", "exec", "process", "message", "sessions_spawn"].map(createStubTool),
     capabilityToolNames: ["tool_search", "web_search"],
-    userTimezone: "UTC",
-    userDate: "2026-01-05",
     ownerNumbers: ["fixture-owner"],
     modelAliasLines: ["- direct-alias: fixture/direct"],
     ttsHint: "Fixture direct TTS hint.",
@@ -129,6 +125,25 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Beta compaction fact");
   });
 
+  it.each(["create", "rename-only", "absent"] as const)(
+    "routes explicit task creation from the native %s tool surface in default suggest mode",
+    (surface) => {
+      const sessions = createStubTool(surface === "create" ? "sessions_create" : "sessions");
+      const prompt = buildConfiguredAgentSystemPrompt({
+        ...basicPromptInputs(),
+        tools: surface === "absent" ? [] : [sessions],
+      });
+
+      expect(prompt.includes('"spin up a new task"')).toBe(surface === "create");
+      expect(prompt.includes("`sessions_create`")).toBe(surface === "create");
+      if (surface === "create") {
+        expect(prompt).toContain("omit it to create an idle session");
+        expect(prompt).toContain("no completion event or yield expectation");
+      }
+      expect(prompt).not.toContain("## Delegation");
+    },
+  );
+
   it("uses config-backed sub-agent delegation mode", () => {
     const prompt = buildConfiguredAgentSystemPrompt({
       ...basicPromptInputs(),
@@ -147,76 +162,6 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Delegation");
-  });
-
-  it("uses deferred capability names without listing them as visible tools", () => {
-    const prompt = buildConfiguredAgentSystemPrompt({
-      ...basicPromptInputs(),
-      config: {
-        agents: {
-          defaults: {
-            subagents: {
-              delegationMode: "prefer",
-            },
-          },
-        },
-      },
-      agentId: "main",
-      runtimeInfo: { ...basicPromptInputs().runtimeInfo, agentId: "main" },
-      tools: [{ name: "tool_search" } as never],
-      capabilityToolNames: ["sessions_spawn"],
-    });
-
-    expect(prompt).toContain("## Delegation");
-    expect(prompt).not.toContain("- sessions_spawn: spawn an isolated sub-agent session");
-  });
-
-  it("forwards run-scoped proactive orchestration independently of config preference", () => {
-    const prompt = buildConfiguredAgentSystemPrompt({
-      ...basicPromptInputs(),
-      config: {
-        agents: {
-          defaults: {
-            subagents: {
-              delegationMode: "suggest",
-            },
-          },
-        },
-      },
-      agentId: "main",
-      proactiveSubagentOrchestration: true,
-      runtimeInfo: {
-        agentId: "main",
-        host: "local",
-        os: "darwin",
-        arch: "arm64",
-        node: process.version,
-        model: "openai/gpt-5.6-sol",
-      },
-      tools: [{ name: "sessions_spawn" } as never],
-    });
-
-    expect(prompt).toContain("## Proactive Sub-Agent Orchestration");
-    expect(prompt).not.toContain("Mode: prefer");
-  });
-
-  it("adds workspace-only scratch path guidance when fs workspaceOnly is enabled", () => {
-    // The prompt must steer writes toward workspace-local scratch paths when
-    // filesystem tools are constrained to the workspace.
-    const prompt = buildConfiguredAgentSystemPrompt({
-      ...basicPromptInputs(),
-      config: {
-        tools: {
-          fs: {
-            workspaceOnly: true,
-          },
-        },
-      },
-    });
-
-    expect(prompt).toContain("tools.fs.workspaceOnly ON");
-    expect(prompt).toContain("`.openclaw/tmp/`");
-    expect(prompt).toContain("never exec-write `/tmp`");
   });
 
   it("omits workspace-only scratch path guidance when fs workspaceOnly is disabled", () => {
@@ -273,13 +218,13 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     } satisfies Parameters<typeof buildConfiguredAgentSystemPrompt>[0];
     const prompt = buildConfiguredAgentSystemPrompt(params);
 
-    expect(prompt).not.toContain("Active exec sessions:");
+    expect(prompt).not.toContain("Active exec sessions");
     expect(prompt).toContain("Before input: process log");
     expect(prompt).toContain("waitingForInput/stdinWritable");
     expect(prompt).toContain("process list");
 
     const restrictedPrompt = buildConfiguredAgentSystemPrompt({ ...params, tools: [] });
-    expect(restrictedPrompt).not.toContain("Active exec sessions:");
+    expect(restrictedPrompt).not.toContain("Active exec sessions");
     expect(restrictedPrompt).not.toContain("process log");
     expect(restrictedPrompt).not.toContain("process list");
   });

@@ -1,10 +1,11 @@
 import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { ensureSqliteLibrarySelected } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import type { readTranscriptStatsBatchReadOnlySync } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import { DatabaseSearchCapabilityUnavailableError } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import type {
-  MemoryOriginReadTarget,
   MemoryOriginReadFilters,
+  MemoryOriginReadInput,
 } from "../memory-entry-origins-task.js";
 import type { ForgetIndexReadInput } from "../memory-forget-index-task.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
@@ -12,12 +13,15 @@ import type {
   MemoryIndexPreparationInput,
   prepareMemoryIndexChunks,
 } from "./manager-index-preparation.js";
-import type {
-  MemoryKeywordWorkerQuery,
-  MemorySearchWorkerInput,
-  MemorySearchWorkerOutput,
-  MemoryVectorWorkerQuery,
-} from "./manager-search.worker.js";
+import type { MemoryIndexReadCommand, MemoryIndexReadOperations } from "./manager-index-read.js";
+import type { MemoryKeywordWorkerQuery, MemoryVectorWorkerQuery } from "./manager-search-types.js";
+import type { MemorySearchWorkerInput, MemorySearchWorkerOutput } from "./manager-search.worker.js";
+import {
+  sessionIndexPages,
+  type SessionIndexPreparation,
+  type SessionIndexProgress,
+} from "./manager-session-index-preparation.js";
+import type { MemoryStatusQuery } from "./manager-status-state.js";
 const MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES = 256 * 1024 * 1024;
 
 type MemoryTranscriptStatsScope = Omit<
@@ -26,6 +30,7 @@ type MemoryTranscriptStatsScope = Omit<
 >;
 export type MemoryIndexTask =
   | { kind: "prepare"; input: MemoryIndexPreparationInput }
+  | { kind: "prepare-session"; input: SessionIndexPreparation }
   | {
       kind: "transcript-stats";
       scopes: readonly MemoryTranscriptStatsScope[];
@@ -37,13 +42,13 @@ export type MemoryIndexTaskResult =
 
 const retrieval = new WorkerTaskPool<MemorySearchWorkerInput, MemorySearchWorkerOutput>({
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.search),
-  maxWorkers: 1,
+  workerClass: "reader",
   sharedCompute: true,
 });
 // Background chunk preparation must not occupy the foreground retrieval worker.
 const indexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.index),
-  maxWorkers: 1,
+  workerClass: "compute",
   sharedCompute: true,
   maxPendingBytes: MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES,
 });
@@ -89,60 +94,25 @@ export async function runMemoryForgetIndexPlan(request: ForgetIndexReadInput) {
   return result.plan;
 }
 
-function originReadBytes(target: MemoryOriginReadTarget, filters: MemoryOriginReadFilters = {}) {
-  return (
-    2 *
-    (target.agentId.length +
-      target.databasePath.length +
-      target.stateDir.length +
-      (filters.entryKeys?.reduce((bytes, key) => bytes + key.length, 0) ?? 0) +
-      (filters.sessionIds?.reduce((bytes, key) => bytes + key.length, 0) ?? 0))
-  );
-}
-
-export async function runMemoryOriginRows(
-  target: MemoryOriginReadTarget,
-  filters: MemoryOriginReadFilters,
+export async function runMemoryOriginRead<Kind extends MemoryOriginReadInput["kind"]>(
+  request: MemoryOriginReadInput & MemoryOriginReadFilters & { kind: Kind },
 ) {
-  const result = await runRetrieval(
-    { ...target, ...filters, kind: "origin-rows" },
-    { inputBytes: originReadBytes(target, filters) },
-    "origin rows",
+  return runRetrieval<Kind>(
+    request,
+    {
+      inputBytes:
+        2 *
+        (request.agentId.length +
+          request.databasePath.length +
+          request.stateDir.length +
+          (request.entryKeys?.reduce((bytes, key) => bytes + key.length, 0) ?? 0) +
+          (request.sessionIds?.reduce((bytes, key) => bytes + key.length, 0) ?? 0)),
+    },
+    {
+      "origin-rows": "origin rows",
+      "session-tombstones": "tombstone rows",
+    }[request.kind],
   );
-  return result.rows;
-}
-
-export async function runMemoryTombstoneRows(
-  target: MemoryOriginReadTarget,
-  sessionIds?: readonly string[],
-) {
-  const result = await runRetrieval(
-    { ...target, sessionIds, kind: "session-tombstones" },
-    { inputBytes: originReadBytes(target, { sessionIds }) },
-    "tombstone rows",
-  );
-  return result.rows;
-}
-
-export async function runMemoryOriginExists(
-  target: MemoryOriginReadTarget,
-  filters: MemoryOriginReadFilters & { entryKeys: readonly string[] },
-) {
-  const result = await runRetrieval(
-    { ...target, ...filters, kind: "origin-exists" },
-    { inputBytes: originReadBytes(target, filters) },
-    "origin existence",
-  );
-  return result.exists;
-}
-
-export async function runMemoryIndexedOriginKeys(target: MemoryOriginReadTarget) {
-  const result = await runRetrieval(
-    { ...target, kind: "origin-index-keys" },
-    { inputBytes: originReadBytes(target) },
-    "indexed origin keys",
-  );
-  return result.keys;
 }
 
 export async function prewarmMemorySearchWorker(): Promise<void> {
@@ -153,6 +123,35 @@ export async function prewarmMemorySearchWorker(): Promise<void> {
 export async function runMemoryIndexState(target: MemoryReadTarget, signal?: AbortSignal) {
   const result = await runRetrieval({ ...target, kind: "index-state" }, { signal }, "index state");
   return result.state;
+}
+
+export async function runMemoryDatabaseAdmission(target: MemoryReadTarget) {
+  const result = await runRetrieval({ ...target, kind: "admission" }, {}, "database admission");
+  return result.admission;
+}
+
+export async function runMemoryStatus(target: MemoryReadTarget, query: MemoryStatusQuery) {
+  const result = await runRetrieval({ ...target, kind: "status", query }, {}, "status");
+  return result.snapshot;
+}
+
+export async function runMemoryVectorLoad(
+  target: { agentId?: string; path?: string } | undefined,
+  extensionPath?: string,
+) {
+  if (!target?.agentId || !target.path) {
+    throw new Error("Memory vector inspection requires its captured database target");
+  }
+  const result = await runRetrieval(
+    { agentId: target.agentId, databasePath: target.path, kind: "vector-load", extensionPath },
+    {},
+    "vector capability",
+  );
+  const loaded = result.result;
+  if (!loaded.ok || !loaded.extensionPath) {
+    throw new Error(loaded.error ?? "unknown sqlite-vec load error");
+  }
+  return { extensionPath: loaded.extensionPath, retiredLegacy: false };
 }
 
 export async function runMemoryRecallMetadata(
@@ -176,6 +175,22 @@ export async function runMemoryRecallMetadata(
   );
 }
 
+export async function runMemoryIndexRead<Command extends MemoryIndexReadCommand>(
+  target: MemoryReadTarget,
+  command: Command,
+): Promise<MemoryIndexReadOperations[Command["type"]]["output"]> {
+  const result = await runRetrieval(
+    { ...target, kind: "index-read", command },
+    { inputBytes: JSON.stringify(command).length * 2 },
+    "index read",
+  );
+  if (result.read.type !== command.type) {
+    throw new Error("Memory index reader returned another operation");
+  }
+  // SAFETY: The paired worker returned the result tagged with this command's type.
+  return result.read.value as MemoryIndexReadOperations[Command["type"]]["output"];
+}
+
 export async function runMemoryCuratedCandidates(
   target: MemoryReadTarget,
   query: Omit<
@@ -190,9 +205,12 @@ export async function runMemoryCuratedCandidates(
   );
 }
 
-export async function runMemoryPresenceInspection(databasePath: string): Promise<boolean> {
+export async function runMemoryPresenceInspection(
+  databasePath: string,
+  agentId?: string,
+): Promise<boolean> {
   const result = await runRetrieval(
-    { kind: "presence", databasePath },
+    { kind: "presence", databasePath, agentId },
     { inputBytes: databasePath.length * 2 },
     "presence",
   );
@@ -210,11 +228,15 @@ export async function runMemoryKeywordSearch(
     {
       signal,
       inputBytes:
-        2 *
-        (query.body.query.length +
-          (query.body.rankingQuery?.length ?? 0) +
-          query.path.query.length +
-          (query.path.exactPathQuery?.length ?? 0)),
+        2 * (query.body.query.length + query.path.query.length) +
+        (query.body.sourceFilter.excludedSessionPaths?.reduce(
+          (bytes, path) => bytes + path.length * 2,
+          0,
+        ) ?? 0) +
+        (query.path.sourceFilter.excludedSessionPaths?.reduce(
+          (bytes, path) => bytes + path.length * 2,
+          0,
+        ) ?? 0),
     },
     "keyword",
   );
@@ -229,10 +251,22 @@ export async function runMemoryVectorFallback(
     { ...target, kind: "vector", query },
     {
       signal,
-      inputBytes: query.queryVec.length * 8,
+      inputBytes:
+        query.queryVec.length * 8 +
+        (query.candidateIds?.reduce((bytes, id) => bytes + id.length * 2, 0) ?? 0) +
+        (query.sourceFilter.excludedSessionPaths?.reduce(
+          (bytes, path) => bytes + path.length * 2,
+          0,
+        ) ?? 0),
     },
     "vector",
   );
+  if (result.capabilityError) {
+    throw new DatabaseSearchCapabilityUnavailableError(
+      result.capabilityError.capability,
+      result.capabilityError.message,
+    );
+  }
   return result.rows;
 }
 
@@ -245,6 +279,46 @@ export async function prepareMemoryIndexInWorker(input: MemoryIndexPreparationIn
         (provenance.originClass.length +
           provenance.sessionKind.length +
           (provenance.supersedesKey?.length ?? 0));
+  }
+  if (input.source === "sessions") {
+    const pages = sessionIndexPages(input);
+    const chunks: ReturnType<typeof prepareMemoryIndexChunks>["chunks"] = [];
+    const { content: _content, entry, cutoffLine, ...settings } = input;
+    const cutoffIndex =
+      cutoffLine === undefined
+        ? -1
+        : (entry.lineMap?.findIndex((line) => line >= cutoffLine) ?? -1);
+    const result = await indexing.run(
+      {
+        kind: "prepare-session",
+        input: {
+          ...settings,
+          // Preserve the reset owner's exact map boundary, including an empty or partial map.
+          resetAtLine: cutoffIndex > 0 ? cutoffIndex + 1 : undefined,
+          entry: { path: entry.path, mtimeMs: entry.mtimeMs },
+        },
+      },
+      {
+        // Oversized documents stream alone instead of being permanently rejected by a queue budget.
+        inputBytes: Math.min(inputBytes, MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES),
+        onRequest: (value) => {
+          // The worker exchanges a completed chunk batch for the next immutable source page.
+          // SAFETY: only the paired prepare-session worker sends requests on this task.
+          const progress = value as SessionIndexProgress;
+          for (const chunk of progress.chunks) {
+            chunks.push(chunk);
+          }
+          return Promise.resolve({
+            input: pages.next().value ?? { lines: [], done: true },
+            timeoutMs: 60_000,
+          });
+        },
+      },
+    );
+    if (result.kind !== "prepared") {
+      throw new Error("Invalid memory indexing worker result");
+    }
+    return { contentHash: undefined, chunks };
   }
   const result = await indexing.run({ kind: "prepare", input }, { inputBytes });
   if (result.kind !== "prepared") {

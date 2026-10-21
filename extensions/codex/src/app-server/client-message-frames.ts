@@ -1,4 +1,4 @@
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { RpcRequest, RpcResponse } from "./protocol.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
@@ -11,7 +11,6 @@ export function createCodexAppServerMessageWriter(options: {
     message: RpcRequest | RpcResponse,
     onError?: (error: Error) => void,
     beforeWrite?: () => void,
-    onWriteResult?: (error?: Error | null) => void,
   ): void => {
     if (options.isClosed()) {
       return;
@@ -19,7 +18,10 @@ export function createCodexAppServerMessageWriter(options: {
     const child = options.getTransport();
     const id = "id" in message ? message.id : undefined;
     const method = "method" in message ? message.method : undefined;
-    const frame = stringifyCodexAppServerMessage(message);
+    const frame =
+      JSON.stringify(message, (_key, value) =>
+        typeof value === "string" ? value.replace(UNPAIRED_SURROGATE_RE, "") : value,
+      ) ?? "null";
     // Reject locally before declaring a possible write. Images count toward the
     // transport frame limit even though Codex's text-input limit excludes them.
     if (child.maxFrameBytes && Buffer.byteLength(frame) > child.maxFrameBytes) {
@@ -32,7 +34,6 @@ export function createCodexAppServerMessageWriter(options: {
       options.onNativeExecution();
     }
     child.stdin.write(`${frame}\n`, (error?: Error | null) => {
-      onWriteResult?.(error);
       if (error) {
         embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
         onError?.(error);
@@ -50,7 +51,7 @@ export function listenCodexAppServerLines(
   onLine: (line: Buffer) => void | Promise<void>,
   onError: (error: unknown) => void,
 ): () => void {
-  let fragments: Buffer[] = [];
+  const fragments: Buffer[] = [];
   let length = 0;
   let remainder: Buffer | undefined;
   let waiting = false;
@@ -58,7 +59,7 @@ export function listenCodexAppServerLines(
   let closed = false;
   const close = () => {
     closed = true;
-    fragments = [];
+    fragments.length = 0;
     remainder = undefined;
     input.off("data", onData);
     input.off("end", onEnd);
@@ -68,7 +69,7 @@ export function listenCodexAppServerLines(
     const line = fragments.length
       ? Buffer.concat([...fragments, tail], length + tail.length)
       : tail;
-    fragments = [];
+    fragments.length = 0;
     length = 0;
     const completion = onLine(line);
     if (!completion) {
@@ -103,12 +104,11 @@ export function listenCodexAppServerLines(
           if (closed) {
             return;
           }
-          // Retain only this already-delivered transport chunk, never a page queue.
-          remainder = chunk.subarray(end + 1);
           if (!deliver(chunk.subarray(start, end))) {
+            // Retain this chunk only while an asynchronous decode pauses delivery.
+            remainder = closed ? undefined : chunk.subarray(end + 1);
             return;
           }
-          remainder = undefined;
           start = end + 1;
         }
         if (!closed && start < chunk.length) {
@@ -140,97 +140,4 @@ export function listenCodexAppServerLines(
   input.on("data", onData);
   input.once("end", onEnd);
   return close;
-}
-
-export type CodexCatalogResponseRoute = { id: number; kind: "list" | "thread" };
-export type CodexCatalogDecodeRoute = CodexCatalogResponseRoute | "unresolved";
-
-export function codexCatalogResponseRoute(
-  id: number | string,
-): CodexCatalogResponseRoute | undefined {
-  return typeof id === "number" && Number.isSafeInteger(id) && id >= 2 ** 52
-    ? { id, kind: id % 2 === 1 ? "list" : "thread" }
-    : undefined;
-}
-
-/** Read bounded envelope keys and IDs; skip native payload strings as bytes. */
-export function readCodexCatalogDecodeRoute(line: Buffer): CodexCatalogDecodeRoute | undefined {
-  let depth = 0;
-  let route: CodexCatalogResponseRoute | undefined;
-  let response = false;
-  for (let index = 0; index < line.length; index++) {
-    const byte = line[index];
-    if (byte === 123 || byte === 91) {
-      depth++;
-    } else if (byte === 125 || byte === 93) {
-      depth--;
-    } else if (byte === 34) {
-      const start = index;
-      for (;;) {
-        index = line.indexOf(34, index + 1);
-        if (index < 0) {
-          // A raw newline may precede the ID in a result-first envelope. Keep
-          // recovery off-main until the decoded ID can select its projection.
-          return "unresolved";
-        }
-        let slash = index - 1;
-        while (line[slash] === 92) {
-          slash--;
-        }
-        if ((index - slash) % 2 === 1) {
-          break;
-        }
-      }
-      if (depth !== 1 || index - start > 64) {
-        continue;
-      }
-      let colon = index + 1;
-      while (line[colon] === 32 || line[colon] === 9 || line[colon] === 13) {
-        colon++;
-      }
-      if (line[colon] !== 58) {
-        continue;
-      }
-      const token = line.toString("utf8", start, index + 1);
-      let key: unknown = token.slice(1, -1);
-      if (token.includes("\\")) {
-        try {
-          key = JSON.parse(token);
-        } catch {
-          return "unresolved";
-        }
-      }
-      if (key === "method") {
-        return undefined;
-      }
-      if (key === "result" || key === "error") {
-        response = true;
-        if (route) {
-          return route;
-        }
-      }
-      if (key !== "id") {
-        continue;
-      }
-      const match = /^\s*:\s*(\d+)(?=\s*[,}])/u.exec(
-        line.toString("utf8", index + 1, Math.min(index + 100, line.length)),
-      );
-      if (!match) {
-        continue;
-      }
-      route = codexCatalogResponseRoute(Number(match[1]));
-      if (!route || response) {
-        return route;
-      }
-    }
-  }
-  return response || route ? "unresolved" : undefined;
-}
-
-function stringifyCodexAppServerMessage(message: RpcRequest | RpcResponse): string {
-  return (
-    JSON.stringify(message, (_key, value) =>
-      typeof value === "string" ? value.replace(UNPAIRED_SURROGATE_RE, "") : value,
-    ) ?? "null"
-  );
 }

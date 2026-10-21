@@ -19,6 +19,8 @@ type WorkerConversation = {
 /** A conversation never outlives the pool task or crosses worker generations. */
 export type WorkerTaskChannel = {
   consumeInput: () => void;
+  /** One-way observations do not acknowledge input or participate in request/reply ownership. */
+  notify: (value: unknown) => void;
   request: (
     value: unknown,
     transferList?: readonly Transferable[],
@@ -32,27 +34,35 @@ export type WorkerTaskServerHost<TaskContext> = {
   onMessage: (sampleMemory: boolean) => void;
   installTaskContext: (context: TaskContext) => void;
   onIdle: () => void;
+  /** Release host-owned diagnostics after task and resource receipts settle. */
+  onRetire?: () => void | Promise<void>;
 };
 
+export type WorkerTaskHandler<Output, Input = unknown> = (
+  input: Input,
+  channel: WorkerTaskChannel | undefined,
+  control: WorkerTaskControl,
+) => Output | Promise<Output>;
+
 /** Pool dispatch is serial per worker; resource closures and handlers settle before successors. */
-export function serveOwnedWorkerTasks<Output, TaskContext>(
-  handler: (
-    input: unknown,
-    channel: WorkerTaskChannel | undefined,
-    control: WorkerTaskControl,
-  ) => Output | Promise<Output>,
+export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
+  handler: WorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
-    closeResource?: (key?: string) => void | Promise<void>;
+    closeResource: (key?: string) => void | Promise<void>;
     encodeResourceError?: (error: unknown) => unknown;
+    /** Unknown native state cannot publish a reusable task failure before isolate exit. */
+    retireOnError?: boolean;
   },
   host: WorkerTaskServerHost<TaskContext>,
 ): void {
   if (!parentPort) {
     return;
   }
-  let port = parentPort;
+  const startupPort = parentPort;
+  let port = startupPort;
   let receivedStartup = false;
+  let retiring = false;
   host.initialize(port);
   let active: WorkerConversation | undefined;
   let execution = Promise.resolve();
@@ -61,7 +71,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
   port.on(
     "message",
     function receive(message: {
-      input: unknown;
+      input: Input;
       taskId: number;
       interactive?: boolean;
       responseId?: number;
@@ -72,6 +82,10 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
       resourcePort?: MessagePort;
       sampleMemory?: boolean;
     }) {
+      if (retiring) {
+        message.resourcePort?.close();
+        return;
+      }
       if (!receivedStartup) {
         receivedStartup = true;
         const taskPort = host.selectStartupPort?.(message);
@@ -91,8 +105,8 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
         resourceClosures = resourceClosures
           .then(() => precedingExecution)
           .then(async () => {
-            if (!options.closeResource) {
-              throw new Error("Worker does not own retained resources");
+            if (retiring) {
+              throw new Error("Worker is retiring after a terminal task failure");
             }
             await options.closeResource(message.key);
             receipt.postMessage({ ok: true }, []);
@@ -109,7 +123,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
           })
           .finally(() => {
             receipt.close();
-            if (!active) {
+            if (!active && !retiring) {
               host.onIdle();
             }
           });
@@ -182,6 +196,10 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
         : undefined;
       const channel: WorkerTaskChannel | undefined = message.interactive
         ? {
+            notify: (value) => {
+              control.throwIfCancelled();
+              port.postMessage({ status: "notification", taskId: task.taskId, value });
+            },
             consumeInput: () =>
               port.postMessage({ status: "consumed", taskId: task.taskId, id: 0 }),
             request: (value, transferList) => {
@@ -235,13 +253,45 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
           );
         })
         .catch((error: unknown) => {
+          if (options.retireOnError) {
+            retiring = true;
+            return;
+          }
           port.postMessage({
             status: "failed",
             taskId: task.taskId,
             error: error instanceof Error ? error.message : String(error),
           });
         })
-        .finally(() => host.onIdle());
+        .finally(() => {
+          if (!retiring) {
+            host.onIdle();
+            return;
+          }
+          // Queued resource receipts depend on this execution. Join them after
+          // returning, not from inside the execution they are waiting for.
+          const retire = async () => {
+            try {
+              await resourceClosures;
+            } finally {
+              try {
+                await host.onRetire?.();
+              } finally {
+                process.exitCode = 1;
+                try {
+                  port.close();
+                } finally {
+                  if (port !== startupPort) {
+                    startupPort.close();
+                  }
+                }
+              }
+            }
+          };
+          void retire().catch(() => {
+            process.exitCode = 1;
+          });
+        });
     },
   );
   host.onReady?.();

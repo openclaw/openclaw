@@ -226,7 +226,7 @@ function extractInlineText(items: readonly unknown[]): string {
 }
 
 export function extractMessageText(content: unknown): string {
-  if (!content || !Array.isArray(content)) {
+  if (!Array.isArray(content)) {
     return "";
   }
 
@@ -258,14 +258,18 @@ export function extractMessageText(content: unknown): string {
         if (codeBlock) {
           const lang = readStringField(codeBlock, "lang") ?? "";
           const code = readStringField(codeBlock, "code") ?? "";
-          return `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
+          let fenceLength = 3;
+          for (const match of code.matchAll(/`+/g)) {
+            fenceLength = Math.max(fenceLength, match[0].length + 1);
+          }
+          const fence = "`".repeat(fenceLength);
+          return `\n${fence}${lang}\n${code}\n${fence}\n`;
         }
 
         const header = asNullableRecord(block.header);
         if (header) {
           const headerContent = Array.isArray(header.content) ? header.content : [];
-          const text =
-            headerContent.map((item) => (typeof item === "string" ? item : "")).join("") || "";
+          const text = headerContent.map((item) => (typeof item === "string" ? item : "")).join("");
           return `\n## ${text}\n`;
         }
 
@@ -273,7 +277,6 @@ export function extractMessageText(content: unknown): string {
         if (cite) {
           const chanCite = asNullableRecord(cite.chan);
 
-          // ChanCite - reference to a channel message
           if (chanCite) {
             const nest = readStringField(chanCite, "nest");
             const where = readStringField(chanCite, "where");
@@ -286,13 +289,11 @@ export function extractMessageText(content: unknown): string {
             return `\n> [quoted from ${nest}]\n`;
           }
 
-          // GroupCite - reference to a group
           const group = readStringField(cite, "group");
           if (group) {
             return `\n> [ref: group ${group}]\n`;
           }
 
-          // DeskCite - reference to an app/desk
           const desk = asNullableRecord(cite.desk);
           if (desk) {
             const flag = readStringField(desk, "flag");
@@ -301,7 +302,6 @@ export function extractMessageText(content: unknown): string {
             }
           }
 
-          // BaitCite - reference with group+graph context
           const bait = asNullableRecord(cite.bait);
           if (bait) {
             const graph = readStringField(bait, "graph");

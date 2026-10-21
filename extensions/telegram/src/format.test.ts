@@ -138,21 +138,23 @@ describe("Telegram formatting", () => {
     expect(res).toContain("Nova_Core.md");
   });
 
-  it("preserves Telegram list boundary spacing in chunked rendering", () => {
-    const input = [
-      "2. Main invariants:",
-      "",
-      "  • Raw Log is source of truth.",
-      "  • Autonomy starts only with report/draft.",
-      "3. Cognee is a candidate:",
-    ].join("\n");
+  it.each([".", ")"])(
+    "preserves list boundary spacing before numbered sections using %s",
+    (marker) => {
+      const input = [
+        `2${marker} Synthetic checklist:`,
+        "",
+        "  • Verify sample A.",
+        "  • Verify sample B.",
+        `3${marker} Synthetic next section:`,
+      ].join("\n");
+      const expected =
+        "2. Synthetic checklist:\n\n• Verify sample A.\n• Verify sample B.\n\n3. Synthetic next section:";
 
-    const res = markdownToTelegramChunks(input, 4096)
-      .map((chunk) => chunk.html)
-      .join("");
-
-    expect(res).toContain("report/draft.\n\n3. Cognee");
-  });
+      expect(markdownToTelegramHtml(input)).toBe(expected);
+      expect(markdownToTelegramChunks(input, 4096).map((chunk) => chunk.html)).toEqual([expected]);
+    },
+  );
 
   it("splits long multiline html text without breaking balanced tags", () => {
     const chunks = splitTelegramHtmlChunks(`<b>${"A\n".repeat(2500)}</b>`, 4000);
@@ -364,12 +366,18 @@ describe("Telegram formatting", () => {
     expect(chunks[0]?.text).toContain("| 1   | 2   |");
   });
 
-  it("does not insert list spacing inside a longer code fence", () => {
-    const input = "````\n```\n• literal bullet\n3. literal number\n````";
-    const expected = "<pre><code>```\n• literal bullet\n3. literal number\n</code></pre>";
-    expect(markdownToTelegramHtml(input, { wrapFileRefs: false })).toBe(expected);
-    expect(markdownToTelegramChunks(input, 4096).map((chunk) => chunk.html)).toEqual([expected]);
-  });
+  it.each([".", ")"])(
+    "does not insert list spacing inside a longer code fence using %s",
+    (marker) => {
+      const input = ["````", "```", "• literal bullet", `3${marker} literal number`, "````"].join(
+        "\n",
+      );
+      const expected =
+        "<pre><code>```\n• literal bullet\n3" + marker + " literal number\n</code></pre>";
+      expect(markdownToTelegramHtml(input, { wrapFileRefs: false })).toBe(expected);
+      expect(markdownToTelegramChunks(input, 4096).map((chunk) => chunk.html)).toEqual([expected]);
+    },
+  );
 });
 
 describe("file references", () => {
@@ -416,6 +424,16 @@ describe("file references", () => {
     }
   });
 
+  it("keeps the longest fitting prefix when a longer token stops looking like a file ref", () => {
+    const input = `${"<".repeat(995)}docs/x.mdbar${"<".repeat(1001)}`;
+    const chunks = markdownToTelegramChunks(input, 4000);
+    expect(chunks.map((chunk) => chunk.text)).toEqual([
+      `${"<".repeat(995)}docs/x.mdbar<<`,
+      "<".repeat(999),
+    ]);
+    expect(chunks.map((chunk) => chunk.html.length)).toEqual([4000, 3996]);
+  });
+
   it("handles malformed HTML with stray closing tags (negative depth)", () => {
     const input = "</code>README.md<code>inside</code> after.md";
     const result = wrapFileReferencesInHtml(input);
@@ -449,5 +467,72 @@ describe("file references", () => {
     expect(result).not.toContain("<code>C.sh</code>");
     expect(result).toContain('href="http://A.md"');
     expect(result).toContain('title="C.sh"');
+  });
+
+  it.each([
+    ["compact", "<ul><li>Hero image</li><li>Countdown</li></ul>", "• Hero image\n• Countdown"],
+    [
+      "nested",
+      "<ol><li>Parent<ul><li>Child</li></ul></li><li>Next</li></ol>",
+      "1. Parent\n  • Child\n2. Next",
+    ],
+    [
+      "checkbox attributes",
+      `<ol start='3'><li>First</li><li><input type='checkbox' checked/>Done</li><li><input type=checkbox />Pending</li><li>Last</li></ol>`,
+      "3. First\n[x] Done\n[ ] Pending\n6. Last",
+    ],
+    [
+      "quoted angle brackets and inline formatting",
+      `<ul><li><b>Scope</b></li><li><input title="a > b" type=checkbox checked/>Done</li></ul><hr/><aside>Read <a href="https://example.test">more</a></aside>`,
+      '• <b>Scope</b>\n[x] Done\n<blockquote>Read <a href="https://example.test">more</a></blockquote>',
+    ],
+    [
+      "literal HTML code",
+      "<pre><code><ul><li>literal</li></ul></code></pre>",
+      "<pre><code>&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;</code></pre>",
+    ],
+    ["escaped divider", "Use &lt;hr/&gt; here", "Use &lt;hr/&gt; here"],
+    [
+      "escaped list and aside examples",
+      "<ul><li>&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;</li></ul><aside>&lt;aside&gt;literal&lt;/aside&gt;</aside>",
+      "• &lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;\n<blockquote>&lt;aside&gt;literal&lt;/aside&gt;</blockquote>",
+    ],
+  ])("renders %s captions without leaking rich blocks", (_name, input, expected) => {
+    for (const textMode of ["html", "markdown"] as const) {
+      expect(renderTelegramHtmlText(input, { textMode, downgradeRichPromptTags: true })).toBe(
+        expected,
+      );
+    }
+  });
+
+  it.each([
+    [String.raw`Use \<hr/> here`, "Use &lt;hr/&gt; here"],
+    [String.raw`Use \\<hr/> here`, String.raw`Use \ here`],
+    [
+      String.raw`\<ul>\<li>literal\</li>\</ul> \<aside>quote\</aside>`,
+      "&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt; &lt;aside&gt;quote&lt;/aside&gt;",
+    ],
+  ])("preserves Markdown escape parity in captions: %s", (input, expected) => {
+    expect(renderTelegramHtmlText(input, { downgradeRichPromptTags: true })).toBe(expected);
+  });
+
+  it("downgrades Markdown captions without changing literal code or non-caption rendering", () => {
+    const input = "<ul><li>**Scope**</li><li>Next</li></ul>\n\n`<li>literal</li>`";
+    const html = renderTelegramHtmlText(input, { downgradeRichPromptTags: true });
+    expect(html).toBe("• <b>Scope</b>\n• Next\n\n<code>&lt;li&gt;literal&lt;/li&gt;</code>");
+    expect(renderTelegramHtmlText(input)).toContain("&lt;ul&gt;");
+    expect(
+      renderTelegramHtmlText("```html\n<ul><li>literal</li></ul>\n```", {
+        downgradeRichPromptTags: true,
+      }),
+    ).toBe(
+      '<pre><code class="language-html">&lt;ul&gt;&lt;li&gt;literal&lt;/li&gt;&lt;/ul&gt;\n</code></pre>',
+    );
+    for (const textMode of ["html", "markdown"] as const) {
+      const plain = "A plain caption  \n";
+      expect(renderTelegramHtmlText(plain, { textMode, downgradeRichPromptTags: true })).toBe(
+        renderTelegramHtmlText(plain, { textMode }),
+      );
+    }
   });
 });

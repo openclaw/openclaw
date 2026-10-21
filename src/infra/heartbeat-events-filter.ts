@@ -53,9 +53,9 @@ export function isRelayableExecCompletionEvent(evt: string): boolean {
 
 function formatExecEventPromptText(pendingEvents: string[]): {
   text: string;
-  hasMissingOutputFailure: boolean;
+  hasMissingOutput: boolean;
 } {
-  let hasMissingOutputFailure = false;
+  let hasMissingOutput = false;
   const lines = pendingEvents.flatMap((event) => {
     const parsed = parseStructuredExecCompletionEvent(event);
     if (!parsed) {
@@ -65,14 +65,11 @@ function formatExecEventPromptText(pendingEvents: string[]): {
     if (parsed.output) {
       return [parsed.raw];
     }
-    if (parsed.succeeded) {
-      return [];
-    }
-    hasMissingOutputFailure = true;
+    hasMissingOutput = true;
     const missingOutput = `Exec ${parsed.action} (${parsed.id}, ${parsed.result}) without captured stdout/stderr.`;
     return [parsed.notes ? `${missingOutput}\n\n${parsed.notes}` : missingOutput];
   });
-  return { text: lines.join("\n").trim(), hasMissingOutputFailure };
+  return { text: lines.join("\n").trim(), hasMissingOutput };
 }
 
 export function buildCronEventPrompt(
@@ -89,8 +86,8 @@ export function buildCronEventPrompt(
     const completionInstruction = useHeartbeatResponseTool
       ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
       : deliverToUser
-        ? `Reply ${SILENT_REPLY_TOKEN}.`
-        : `Handle this internally and reply ${SILENT_REPLY_TOKEN} when nothing needs user-facing follow-up.`;
+        ? `Reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`
+        : `Handle this internally. If nothing needs user-facing follow-up, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`;
     return `A scheduled cron event was triggered, but no event content was found. ${completionInstruction}`;
   }
   const instruction = deliverToUser
@@ -110,21 +107,15 @@ export function buildExecEventPrompt(
 ): string {
   const deliverToUser = opts?.deliverToUser ?? true;
   const useHeartbeatResponseTool = opts?.useHeartbeatResponseTool ?? false;
-  const { text: rawEventText, hasMissingOutputFailure } = formatExecEventPromptText(pendingEvents);
+  const { text: rawEventText, hasMissingOutput } = formatExecEventPromptText(pendingEvents);
   const eventText =
     rawEventText.length > MAX_EXEC_EVENT_PROMPT_CHARS
       ? `${truncateUtf16Safe(rawEventText, MAX_EXEC_EVENT_PROMPT_CHARS)}\n\n[truncated]`
       : rawEventText;
-  if (!eventText) {
-    const completionInstruction = useHeartbeatResponseTool
-      ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
-      : `Reply ${SILENT_REPLY_TOKEN} only.`;
-    return `An async command completion event was triggered, but no command output was found. ${completionInstruction} Do not mention, summarize, or reuse output from any earlier run.`;
-  }
   if (!deliverToUser) {
     const completionInstruction = useHeartbeatResponseTool
       ? `Handle the result internally. ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`
-      : `Handle the result internally and reply ${SILENT_REPLY_TOKEN} only.`;
+      : `Handle the result internally and reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`;
     return (
       "An async command completion event was triggered, but user delivery is disabled for this run. " +
       `${completionInstruction} Do not mention, summarize, or reuse command output.`
@@ -133,8 +124,8 @@ export function buildExecEventPrompt(
   // Delivery eligibility permits an update; it does not make every completion news.
   const completionInstruction = useHeartbeatResponseTool
     ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
-    : `If no user-facing update is needed, reply ${SILENT_REPLY_TOKEN} only.`;
-  const missingOutputInstruction = hasMissingOutputFailure
+    : `If no user-facing update is needed, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`;
+  const missingOutputInstruction = hasMissingOutput
     ? " If reporting a failure without captured output, include the exit status or signal. " +
       "Do not ask the user to provide missing logs, and do not try to retrieve logs from an exec/session id."
     : "";
@@ -170,7 +161,7 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
 }
 
 /** Context-key prefix the restart sentinel gives a continuation queued for one session. */
-export const RESTART_CONTINUATION_CONTEXT_PREFIX = "task:restart-sentinel:";
+const RESTART_CONTINUATION_CONTEXT_PREFIX = "task:restart-sentinel:";
 
 /** A restart continuation event resumes a specific session's interrupted turn. */
 export function isRestartContinuationEvent(event: { contextKey?: string | null }): boolean {
@@ -186,13 +177,33 @@ export function isExecCompletionEvent(evt: string): boolean {
   );
 }
 
+/** A command completion started by a conversation turn rather than heartbeat or automation work. */
+export function isConversationExecCompletion(event: {
+  text: string;
+  contextKey?: string | null;
+  fromConversationTurn?: boolean;
+}): boolean {
+  return event.fromConversationTurn === true && isExecCompletionSystemEvent(event);
+}
+
 export function isHeartbeatDeliveryAwarenessEvent(event: { contextKey?: string | null }): boolean {
   return event.contextKey?.startsWith(HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX) ?? false;
 }
 
-export function isCronSystemEvent(evt: string) {
-  if (!evt.trim()) {
+export function isCronSystemEvent(event: { text: string; contextKey?: string | null }) {
+  if (!event.text.trim()) {
     return false;
   }
-  return !isHeartbeatNoiseEvent(evt) && !isExecCompletionEvent(evt);
+  return !isHeartbeatNoiseEvent(event.text) && !isExecCompletionSystemEvent(event);
+}
+
+/** Only the exec producer may select the dedicated completion route. */
+export function isExecCompletionSystemEvent(event: {
+  text: string;
+  contextKey?: string | null;
+}): boolean {
+  return (
+    (!event.contextKey || event.contextKey === "exec" || event.contextKey.startsWith("exec:")) &&
+    isExecCompletionEvent(event.text)
+  );
 }

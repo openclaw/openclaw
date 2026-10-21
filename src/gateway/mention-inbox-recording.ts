@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { createHumanMentionPolicy } from "./human-mention-policy.js";
-import type { MentionCommittedInput } from "./mention-inbox-input.js";
+import { hasValidMentionReferences, type MentionCommittedInput } from "./mention-inbox-input.js";
 import { formatMentionExcerpt } from "./mention-inbox-presentation.js";
 import {
   indexMentionItem,
@@ -14,9 +14,20 @@ import {
   type StoredMention,
 } from "./mention-inbox-projection.js";
 import { MAX_MENTION_SOURCES, MENTION_RETENTION_MS } from "./mention-inbox-store.js";
-import { resolveSessionSharingTarget } from "./session-sharing.js";
+import type { SessionSharingTarget } from "./session-sharing-policy.js";
 
 const log = createSubsystemLogger("gateway/mentions");
+
+export function prepareCommittedMentionInput(input: MentionCommittedInput): boolean {
+  if (input.recipientProfileIds.length === 0 || isIncognitoSessionKey(input.sessionKey)) {
+    return false;
+  }
+  if (!hasValidMentionReferences(input)) {
+    log.warn("Skipped mention delivery with invalid committed references.");
+    return false;
+  }
+  return true;
+}
 
 export function createMentionInputRecorder(params: {
   getRuntimeConfig: () => OpenClawConfig;
@@ -30,14 +41,11 @@ export function createMentionInputRecorder(params: {
     draft: InboxState,
     guards: Array<() => void>,
     bounds: Pick<ReturnType<typeof createMentionMutationProjection>, "sourceIndex" | "itemLimit">,
+    readTarget: () => SessionSharingTarget | null,
   ): StoredMention[] {
     const { processed, head, dirtySources, items } = draft;
     const cfg = params.getRuntimeConfig();
-    const resolved = resolveSessionSharingTarget({
-      cfg,
-      sessionKey: input.sessionKey,
-      agentId: input.agentId,
-    });
+    const resolved = readTarget();
     if (
       !resolved ||
       resolved.entry.sessionId !== input.sessionId ||
@@ -48,11 +56,7 @@ export function createMentionInputRecorder(params: {
       return [];
     }
     guards.push(() => {
-      const current = resolveSessionSharingTarget({
-        cfg: params.getRuntimeConfig(),
-        sessionKey: input.sessionKey,
-        agentId: input.agentId,
-      });
+      const current = readTarget();
       if (
         !current ||
         current.entry.sessionId !== input.sessionId ||

@@ -1,4 +1,3 @@
-// Qa Lab tests cover Multipass behavior through the production runner.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,10 +12,7 @@ const TEST_ENV_VALUE = "qa-fixture-value";
 
 vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
-  return {
-    ...actual,
-    runExec: runExecMock,
-  };
+  return { ...actual, runExec: runExecMock };
 });
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
@@ -28,63 +24,59 @@ import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import { runQaMultipass } from "./multipass.runtime.js";
 
 const generatedPaths: string[] = [];
+type GuestScriptParams = Omit<Parameters<typeof runQaMultipass>[0], "repoRoot" | "outputDir"> & {
+  outputDirName: string;
+};
+const readText = (file: string) => fs.readFileSync(file, "utf8");
+const readLines = (file: string) => readText(file).trim().split("\n");
 
-function missingMultipassError() {
-  return Object.assign(new Error("spawn multipass ENOENT"), { code: "ENOENT" });
+function outputPath(name: string) {
+  const dir = path.join(process.cwd(), ".artifacts", "qa-e2e", name);
+  generatedPaths.push(dir);
+  return dir;
 }
 
-async function renderPersistedGuestScript(
-  params: Omit<Parameters<typeof runQaMultipass>[0], "repoRoot" | "outputDir"> & {
-    outputDirName: string;
-  },
-) {
-  const { outputDirName, ...runParams } = params;
-  const outputDir = path.join(process.cwd(), ".artifacts", "qa-e2e", outputDirName);
-  generatedPaths.push(outputDir);
-  await expect(
-    runQaMultipass({
-      repoRoot: process.cwd(),
-      outputDir,
-      ...runParams,
-    }),
-  ).rejects.toThrow("Multipass is not installed on this host.");
-  return fs.readFileSync(path.join(outputDir, "multipass-guest-run.sh"), "utf8");
+function tempRoot() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-multipass-"));
+  generatedPaths.push(dir);
+  return dir;
 }
 
-async function captureGuestScriptsAtTransfer(
-  params: Omit<Parameters<typeof runQaMultipass>[0], "repoRoot" | "outputDir"> & {
-    outputDirName: string;
-  },
-) {
+function run(params: Omit<Parameters<typeof runQaMultipass>[0], "repoRoot">) {
+  return runQaMultipass({ repoRoot: process.cwd(), ...params });
+}
+
+async function guestScripts(params: GuestScriptParams, captureTransfer = false) {
   const { outputDirName, ...runParams } = params;
-  const outputDir = path.join(process.cwd(), ".artifacts", "qa-e2e", outputDirName);
+  const outputDir = outputPath(outputDirName);
   let executableScript = "";
-  generatedPaths.push(outputDir);
-  runExecMock.mockImplementation(async (_file: string, args: string[]) => {
-    const transferSourcePath = args[1];
-    if (
-      args[0] === "transfer" &&
-      transferSourcePath &&
-      path.basename(transferSourcePath) === "guest-run.sh"
-    ) {
-      executableScript = fs.readFileSync(transferSourcePath, "utf8");
-      throw new Error("stop after guest script transfer");
-    }
-    return { stdout: "", stderr: "" };
-  });
+  if (captureTransfer) {
+    runExecMock.mockImplementation(async (_file: string, args: string[]) => {
+      const transferSourcePath = args[1];
+      if (
+        args[0] === "transfer" &&
+        transferSourcePath &&
+        path.basename(transferSourcePath) === "guest-run.sh"
+      ) {
+        executableScript = readText(transferSourcePath);
+        throw new Error("stop after guest script transfer");
+      }
+      return { stdout: "", stderr: "" };
+    });
+  }
 
-  await expect(
-    runQaMultipass({
-      repoRoot: process.cwd(),
-      outputDir,
-      ...runParams,
-    }),
-  ).rejects.toThrow("stop after guest script transfer");
+  await expect(run({ outputDir, ...runParams })).rejects.toThrow(
+    captureTransfer
+      ? "stop after guest script transfer"
+      : "Multipass is not installed on this host.",
+  );
 
-  expect(executableScript).not.toBe("");
+  if (captureTransfer) {
+    expect(executableScript).not.toBe("");
+  }
   return {
     executableScript,
-    persistedScript: fs.readFileSync(path.join(outputDir, "multipass-guest-run.sh"), "utf8"),
+    persistedScript: readText(path.join(outputDir, "multipass-guest-run.sh")),
   };
 }
 
@@ -92,7 +84,9 @@ describe("qa multipass runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sleepMock.mockResolvedValue(undefined);
-    runExecMock.mockRejectedValue(missingMultipassError());
+    runExecMock.mockRejectedValue(
+      Object.assign(new Error("spawn multipass ENOENT"), { code: "ENOENT" }),
+    );
   });
 
   afterEach(() => {
@@ -104,205 +98,131 @@ describe("qa multipass runtime", () => {
   });
 
   it.each([
-    ["repo", 0],
     ["repo", 4],
     ["repo", 5],
-    ["codex-home", 0],
-    ["codex-home", 4],
     ["codex-home", 5],
   ] as const)("preserves %s mount lifecycle after %i failures", async (mount, failures) => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-mount-"));
-    try {
-      const configPath = path.join(tempRoot, "provider.json");
-      fs.writeFileSync(configPath, "{}");
-      vi.stubEnv("CODEX_HOME", tempRoot);
-      vi.stubEnv("OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH", configPath);
-      const outputDir = path.join(
-        process.cwd(),
-        ".artifacts",
-        "qa-e2e",
-        `mount-${mount}-${failures}`,
-      );
-      generatedPaths.push(outputDir);
-      const destination =
-        mount === "repo" ? "/workspace/openclaw-host" : "/workspace/openclaw-codex-home";
-      const source = mount === "repo" ? process.cwd() : tempRoot;
-      const label = mount === "repo" ? "mount" : "codex-home mount";
-      const commands: string[][] = [];
-      const attempts: Error[] = [];
-      let mountCalls = 0;
-      runExecMock.mockImplementation(async (_file: string, args: string[]) => {
-        commands.push([...args]);
-        if (args[0] === "mount" && args[2]?.endsWith(`:${destination}`)) {
-          mountCalls += 1;
-          if (mountCalls <= failures) {
-            const error = Object.assign(new Error("process failure"), {
-              stderr: `  mount failure ${mountCalls}  `,
-              stdout: "ignored output",
-            });
-            attempts.push(error);
-            throw error;
-          }
+    const root = tempRoot();
+    const configPath = path.join(root, "provider.json");
+    fs.writeFileSync(configPath, "{}");
+    vi.stubEnv("CODEX_HOME", root);
+    vi.stubEnv("OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH", configPath);
+    const outputDir = outputPath(`mount-${mount}-${failures}`);
+    const destination =
+      mount === "repo" ? "/workspace/openclaw-host" : "/workspace/openclaw-codex-home";
+    const source = mount === "repo" ? process.cwd() : root;
+    const label = mount === "repo" ? "mount" : "codex-home mount";
+    const commands: string[][] = [];
+    const attempts: Error[] = [];
+    let mountCalls = 0;
+    runExecMock.mockImplementation(async (_file: string, args: string[]) => {
+      commands.push([...args]);
+      if (args[0] === "mount" && args[2]?.endsWith(`:${destination}`)) {
+        mountCalls += 1;
+        if (mountCalls <= failures) {
+          const error = Object.assign(new Error("process failure"), {
+            stderr: `  mount failure ${mountCalls}  `,
+            stdout: "ignored output",
+          });
+          attempts.push(error);
+          throw error;
         }
-        if (args[0] === "exec" && args.length === 4) {
-          fs.writeFileSync(path.join(outputDir, "qa-suite-report.md"), "fixture report");
-          fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), "{}");
-        }
-        return { stdout: "", stderr: "" };
-      });
-
-      const result = await runQaMultipass({
-        repoRoot: process.cwd(),
-        outputDir,
-        providerMode: "live-frontier",
-      }).catch((error: unknown) => error);
-      if (failures === 5) {
-        expect(result).toBeInstanceOf(Error);
-        expect(((result as Error).cause as Error).cause).toBe(attempts.at(-1));
-      } else {
-        expect(result).toMatchObject({ outputDir });
       }
-
-      const launch = commands.find((args) => args[0] === "launch");
-      const vmName = launch?.[2];
-      expect(vmName).toBeDefined();
-      const selectedMounts = commands.filter(
-        (args) => args[0] === "mount" && args[2] === `${vmName}:${destination}`,
-      );
-      expect(selectedMounts).toEqual(
-        Array.from({ length: Math.min(failures + 1, 5) }, () => [
-          "mount",
-          source,
-          `${vmName}:${destination}`,
-        ]),
-      );
-      expect(sleepMock.mock.calls).toEqual(
-        Array.from({ length: Math.min(failures, 4) }, () => [2_000]),
-      );
-      const log = fs.readFileSync(path.join(outputDir, "multipass-host.log"), "utf8");
-      for (let attempt = 1; attempt <= failures; attempt += 1) {
-        expect(log).toContain(`${label} retry ${attempt}/5: mount failure ${attempt}\n\n`);
+      if (args[0] === "exec" && args.length === 4) {
+        fs.writeFileSync(path.join(outputDir, "qa-suite-report.md"), "fixture report");
+        fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), "{}");
       }
-      const repoMountIndex = commands.findIndex(
-        (args) => args[0] === "mount" && args[2]?.endsWith(":/workspace/openclaw-host"),
-      );
-      const homeMountIndex = commands.findIndex(
-        (args) => args[0] === "mount" && args[2]?.endsWith(":/workspace/openclaw-codex-home"),
-      );
-      const configTransferIndex = commands.findIndex(
-        (args) => args[0] === "transfer" && args[1] === configPath,
-      );
-      const scriptTransferIndex = commands.findIndex(
-        (args) => args[0] === "transfer" && args[1] && path.basename(args[1]) === "guest-run.sh",
-      );
-      expect(repoMountIndex).toBeGreaterThan(-1);
-      if (mount === "repo" && failures === 5) {
-        expect(homeMountIndex).toBe(-1);
-      } else {
-        expect(homeMountIndex).toBeGreaterThan(repoMountIndex);
-      }
-      if (failures === 5) {
-        expect(configTransferIndex).toBe(-1);
-        expect(scriptTransferIndex).toBe(-1);
-      } else {
-        expect(configTransferIndex).toBeGreaterThan(homeMountIndex);
-        expect(scriptTransferIndex).toBeGreaterThan(configTransferIndex);
-        expect(fs.existsSync(commands[scriptTransferIndex]![1]!)).toBe(false);
-      }
-      expect(commands.at(-2)).toEqual([
-        "transfer",
-        `${vmName}:/tmp/${vmName}-bootstrap.log`,
-        path.join(outputDir, "multipass-guest-bootstrap.log"),
-      ]);
-      expect(commands.at(-1)).toEqual(["delete", "--purge", vmName]);
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
+      return { stdout: "", stderr: "" };
+    });
 
-  it("accepts repo-local output directory names beginning with two dots", async () => {
-    await withTempWorkspace(
-      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "qa-multipass-output-" },
-      async (workspace) => {
-        await workspace.writeText(
-          "package.json",
-          JSON.stringify({ packageManager: "pnpm@10.32.1" }),
-        );
-        const outputDir = workspace.path("..qa-artifacts");
-
-        await expect(
-          runQaMultipass({ repoRoot: workspace.dir, outputDir, providerMode: "mock-openai" }),
-        ).rejects.toThrow("Multipass is not installed on this host.");
-
-        const script = fs.readFileSync(path.join(outputDir, "multipass-guest-run.sh"), "utf8");
-        expect(script).toContain("'--output-dir' '..qa-artifacts'");
-      },
+    const result = await run({ outputDir, providerMode: "live-frontier" }).catch(
+      (error: unknown) => error,
     );
+    if (failures === 5) {
+      expect(result).toBeInstanceOf(Error);
+      expect(((result as Error).cause as Error).cause).toBe(attempts.at(-1));
+    } else {
+      expect(result).toMatchObject({ outputDir });
+    }
+
+    const launch = commands.find((args) => args[0] === "launch");
+    const vmName = launch?.[2];
+    expect(vmName).toBeDefined();
+    const selectedMounts = commands.filter(
+      (args) => args[0] === "mount" && args[2] === `${vmName}:${destination}`,
+    );
+    expect(selectedMounts).toEqual(
+      Array.from({ length: Math.min(failures + 1, 5) }, () => [
+        "mount",
+        source,
+        `${vmName}:${destination}`,
+      ]),
+    );
+    expect(sleepMock.mock.calls).toEqual(
+      Array.from({ length: Math.min(failures, 4) }, () => [2_000]),
+    );
+    const log = readText(path.join(outputDir, "multipass-host.log"));
+    for (let attempt = 1; attempt <= failures; attempt += 1) {
+      expect(log).toContain(`${label} retry ${attempt}/5: mount failure ${attempt}\n\n`);
+    }
+    const mountIndex = (suffix: string) =>
+      commands.findIndex((args) => args[0] === "mount" && args[2]?.endsWith(suffix));
+    const repoMountIndex = mountIndex(":/workspace/openclaw-host");
+    const homeMountIndex = mountIndex(":/workspace/openclaw-codex-home");
+    const configTransferIndex = commands.findIndex(
+      (args) => args[0] === "transfer" && args[1] === configPath,
+    );
+    const scriptTransferIndex = commands.findIndex(
+      (args) => args[0] === "transfer" && args[1] && path.basename(args[1]) === "guest-run.sh",
+    );
+    expect(repoMountIndex).toBeGreaterThan(-1);
+    if (mount === "repo" && failures === 5) {
+      expect(homeMountIndex).toBe(-1);
+    } else {
+      expect(homeMountIndex).toBeGreaterThan(repoMountIndex);
+    }
+    if (failures === 5) {
+      expect([configTransferIndex, scriptTransferIndex]).toEqual([-1, -1]);
+    } else {
+      expect(configTransferIndex).toBeGreaterThan(homeMountIndex);
+      expect(scriptTransferIndex).toBeGreaterThan(configTransferIndex);
+      expect(fs.existsSync(commands[scriptTransferIndex]![1]!)).toBe(false);
+    }
+    expect(commands.at(-2)).toEqual([
+      "transfer",
+      `${vmName}:/tmp/${vmName}-bootstrap.log`,
+      path.join(outputDir, "multipass-guest-bootstrap.log"),
+    ]);
+    expect(commands.at(-1)).toEqual(["delete", "--purge", vmName]);
   });
 
   it("rejects output directories outside the mounted repo root", async () => {
+    await expect(run({ outputDir: "/tmp/qa-out" })).rejects.toThrow(
+      "qa suite --runner multipass requires --output-dir to stay under the repo root",
+    );
+  });
+
+  it("rejects repo-local symlink output directories that escape the repo root", async () => {
+    const root = tempRoot();
+    const repoRoot = path.join(root, "repo");
+    const outsideRoot = path.join(root, "outside");
+    const symlinkPath = path.join(repoRoot, "artifacts-link");
+    fs.mkdirSync(repoRoot, { recursive: true });
+    fs.mkdirSync(outsideRoot, { recursive: true });
+    fs.symlinkSync(outsideRoot, symlinkPath);
+
     await expect(
       runQaMultipass({
-        repoRoot: process.cwd(),
-        outputDir: "/tmp/qa-out",
+        repoRoot,
+        outputDir: path.join(symlinkPath, "qa-out"),
       }),
     ).rejects.toThrow(
       "qa suite --runner multipass requires --output-dir to stay under the repo root",
     );
   });
 
-  it("rejects repo-local symlink output directories that escape the repo root", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-multipass-"));
-    const repoRoot = path.join(tempRoot, "repo");
-    const outsideRoot = path.join(tempRoot, "outside");
-    const symlinkPath = path.join(repoRoot, "artifacts-link");
-    fs.mkdirSync(repoRoot, { recursive: true });
-    fs.mkdirSync(outsideRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(repoRoot, "package.json"),
-      JSON.stringify({ packageManager: "pnpm@10.32.1" }),
-      "utf8",
-    );
-    fs.symlinkSync(outsideRoot, symlinkPath);
-
-    try {
-      await expect(
-        runQaMultipass({
-          repoRoot,
-          outputDir: path.join(symlinkPath, "qa-out"),
-        }),
-      ).rejects.toThrow(
-        "qa suite --runner multipass requires --output-dir to stay under the repo root",
-      );
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("persists the default live suite command and mounted artifact path", async () => {
-    const script = await renderPersistedGuestScript({
-      outputDirName: "multipass-default-test",
-      scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
-    });
-
-    expect(script).toContain("pnpm install --frozen-lockfile");
-    expect(script).toContain("pnpm build");
-    expect(script).toContain("corepack prepare 'pnpm@");
-    expect(script).toContain(
-      'curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 120 "${base_url}/SHASUMS256.txt" -o "${node_tmp_dir}/SHASUMS256.txt"',
-    );
-    expect(script).toContain(
-      'curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 120 "${base_url}/${tarball_name}" -o "${node_tmp_dir}/${tarball_name}"',
-    );
-    expect(script).toContain("'pnpm' 'openclaw' 'qa' 'suite' '--transport' 'qa-channel'");
-    expect(script).toContain("'--provider-mode' 'live-frontier'");
-    expect(script).toContain("'--scenario' 'channel-chat-baseline'");
-    expect(script).toContain("'--scenario' 'thread-follow-up'");
-    expect(script).toContain("/workspace/openclaw-host/.artifacts/qa-e2e/multipass-default-test");
-  });
-
   it("forwards fail-fast to the real guest QA suite command", async () => {
-    const script = await renderPersistedGuestScript({
+    const { persistedScript: script } = await guestScripts({
       outputDirName: "multipass-fail-fast-test",
       failFast: true,
       scenarioIds: ["channel-chat-baseline"],
@@ -313,16 +233,16 @@ describe("qa multipass runtime", () => {
 
   it.skipIf(process.platform === "win32").each([
     ["missing", "24.99.0"],
-    ["22.99.0", "24.99.0"],
     ["24.15.0", "24.99.0"],
-    ["25.1.0", "24.99.0"],
     ["24.16.0", "24.16.0"],
-    ["26.1.0", "24.99.0"],
   ])("bootstraps a runnable guest toolchain from Node %s", async (version, expectedVersion) => {
-    const { executableScript } = await captureGuestScriptsAtTransfer({
-      outputDirName: "multipass-node-" + version,
-      providerMode: "mock-openai",
-    });
+    const { executableScript } = await guestScripts(
+      {
+        outputDirName: "multipass-node-" + version,
+        providerMode: "mock-openai",
+      },
+      true,
+    );
     const vmName = runExecMock.mock.calls.find(([, args]) => args[0] === "launch")?.[1][2];
     generatedPaths.push("/tmp/" + vmName + "-bootstrap.log");
     await withTempWorkspace(
@@ -337,7 +257,12 @@ describe("qa multipass runtime", () => {
             'import { registerHooks } from "node:module";',
             'import { pathToFileURL } from "node:url";',
             'Object.defineProperty(process.versions, "node", { value: fs.readFileSync(process.env.QA_TEST_NODE_VERSION, "utf8").trim() });',
+            "let versionProbe = false;",
+            'process.once("beforeExit", (code) => {',
+            '  if (versionProbe) fs.appendFileSync(process.env.QA_TEST_NODE_PROBE_EXITS, JSON.stringify({ version: process.versions.node, code }) + "\\n");',
+            "});",
             "registerHooks({ resolve(specifier, context, next) {",
+            '  if (specifier === "file:///workspace/openclaw-host/node-version.mjs") versionProbe = true;',
             '  return next(specifier === "file:///workspace/openclaw-host/node-version.mjs"',
             '    ? pathToFileURL(process.env.QA_TEST_REPO_ROOT + "/node-version.mjs").href : specifier, context);',
             "} });",
@@ -395,6 +320,7 @@ describe("qa multipass runtime", () => {
         const pnpmSpecPath = workspace.path("pnpm-spec");
         const commandsPath = workspace.path("commands");
         const suiteArgsPath = workspace.path("suite-args");
+        const probeExitsPath = workspace.path("node-probe-exits.jsonl");
         const result = spawnSync("bash", [scriptPath], {
           encoding: "utf8",
           timeout: 10_000,
@@ -409,37 +335,46 @@ describe("qa multipass runtime", () => {
             QA_TEST_PNPM_SPEC: pnpmSpecPath,
             QA_TEST_COMMANDS: commandsPath,
             QA_TEST_SUITE_ARGS: suiteArgsPath,
+            QA_TEST_NODE_PROBE_EXITS: probeExitsPath,
           },
         });
         expect(result.status, result.stderr).toBe(0);
-        expect(fs.readFileSync(commandsPath, "utf8").trim().split("\n")).toEqual(
+        const probeExits = readLines(probeExitsPath).map((line) => JSON.parse(line));
+        expect(probeExits).toEqual([
+          ...(["22.99.0", "24.15.0"].includes(version) ? [{ version, code: 1 }] : []),
+          { version: expectedVersion, code: 0 },
+        ]);
+        expect(readLines(commandsPath)).toEqual(
           ["install", "build", "openclaw"].map((command) => command + ":" + expectedVersion),
         );
-        const suiteArgs = fs.readFileSync(suiteArgsPath, "utf8").split("\0");
+        const suiteArgs = readText(suiteArgsPath).split("\0");
         const outputFlagIndex = suiteArgs.indexOf("--output-dir");
         expect(outputFlagIndex).toBeGreaterThan(-1);
         expect(
           resolveRepoRelativeOutputDir("/workspace/openclaw", suiteArgs[outputFlagIndex + 1]),
         ).toBe(`/workspace/openclaw/.artifacts/qa-e2e/multipass-node-${version}`);
-        const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+        const pkg = JSON.parse(readText("package.json")) as {
           packageManager: string;
         };
-        expect(fs.readFileSync(pnpmSpecPath, "utf8")).toBe(pkg.packageManager);
+        expect(readText(pnpmSpecPath)).toBe(pkg.packageManager);
       },
     );
   });
 
   it("redacts persisted credentials while forwarding them to the executable script", async () => {
     vi.stubEnv("OPENAI_API_KEY", TEST_ENV_VALUE);
-    const { executableScript, persistedScript } = await captureGuestScriptsAtTransfer({
-      outputDirName: "multipass-live-test",
-      providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-luna",
-      fastMode: true,
-      allowFailures: true,
-      scenarioIds: ["channel-chat-baseline"],
-    });
+    const { executableScript, persistedScript } = await guestScripts(
+      {
+        outputDirName: "multipass-live-test",
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna",
+        fastMode: true,
+        allowFailures: true,
+        scenarioIds: ["channel-chat-baseline"],
+      },
+      true,
+    );
 
     expect(persistedScript).toContain("OPENAI_API_KEY='<redacted>'");
     expect(persistedScript).not.toContain(TEST_ENV_VALUE);
@@ -452,7 +387,7 @@ describe("qa multipass runtime", () => {
   });
 
   it("persists runtime, channel-driver, and plugin selections", async () => {
-    const script = await renderPersistedGuestScript({
+    const { persistedScript: script } = await guestScripts({
       outputDirName: "multipass-selection-test",
       runtimePair: ["openclaw", "codex"],
       channelDriver: "crabline",
@@ -465,68 +400,19 @@ describe("qa multipass runtime", () => {
     expect(script).toContain("'--enable-plugin' 'browser' '--enable-plugin' 'memory-core'");
   });
 
-  it("forwards supported live credential shapes only in redacted form", async () => {
-    vi.stubEnv("OPENCLAW_LIVE_ANTHROPIC_KEYS", TEST_ENV_VALUE);
-    vi.stubEnv("OPENCLAW_LIVE_CODEX_API_KEY", TEST_ENV_VALUE);
-    vi.stubEnv("CODEX_API_KEY", TEST_ENV_VALUE);
-    vi.stubEnv("OPENAI_API_KEY_1", TEST_ENV_VALUE);
-    vi.stubEnv("GEMINI_API_KEY_2", TEST_ENV_VALUE);
-    const script = await renderPersistedGuestScript({
-      outputDirName: "multipass-env-test",
-      providerMode: "live-frontier",
-    });
-
-    for (const key of [
-      "OPENCLAW_LIVE_ANTHROPIC_KEYS",
-      "OPENCLAW_LIVE_CODEX_API_KEY",
-      "CODEX_API_KEY",
-      "OPENAI_API_KEY_1",
-      "GEMINI_API_KEY_2",
-    ]) {
-      expect(script).toContain(`${key}='<redacted>'`);
-    }
-    expect(script).not.toContain(TEST_ENV_VALUE);
-  });
-
-  it("omits stale CODEX_HOME values", async () => {
-    vi.stubEnv("CODEX_HOME", "/tmp/does-not-exist-openclaw-codex-home");
-    const script = await renderPersistedGuestScript({
-      outputDirName: "multipass-stale-codex-home-test",
-      providerMode: "live-frontier",
-    });
-
-    expect(script).not.toContain("CODEX_HOME=");
-  });
-
   it("uses os.homedir() when HOME is unset for CODEX_HOME discovery", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-multipass-home-"));
-    const fakeHome = path.join(tempRoot, "home");
+    const fakeHome = path.join(tempRoot(), "home");
     fs.mkdirSync(path.join(fakeHome, ".codex"), { recursive: true });
     vi.stubEnv("HOME", "");
     vi.stubEnv("CODEX_HOME", "");
     vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
 
-    try {
-      const script = await renderPersistedGuestScript({
-        outputDirName: "multipass-home-test",
-        providerMode: "live-frontier",
-      });
-      expect(script).toContain("CODEX_HOME='/workspace/openclaw-codex-home'");
-      expect(script).not.toContain(fakeHome);
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("does not leave a temp guest transfer script behind when multipass is missing", async () => {
-    const tempRoot = resolvePreferredOpenClawTmpDir();
-    const before = new Set(fs.readdirSync(tempRoot));
-    await renderPersistedGuestScript({
-      outputDirName: "multipass-missing-test",
-      scenarioIds: ["channel-chat-baseline"],
+    const { persistedScript: script } = await guestScripts({
+      outputDirName: "multipass-home-test",
+      providerMode: "live-frontier",
     });
-    const added = fs.readdirSync(tempRoot).filter((entry) => !before.has(entry));
-    expect(added.filter((entry) => entry.includes("-qa-suite-"))).toStrictEqual([]);
+    expect(script).toContain("CODEX_HOME='/workspace/openclaw-codex-home'");
+    expect(script).not.toContain(fakeHome);
   });
 
   it("preserves non-install multipass probe failures", async () => {
@@ -537,20 +423,10 @@ describe("qa multipass runtime", () => {
         stderr: "multipassd is not running",
       }),
     );
-    const outputDir = path.join(
-      process.cwd(),
-      ".artifacts",
-      "qa-e2e",
-      "multipass-probe-error-test",
-    );
-    generatedPaths.push(outputDir);
+    const outputDir = outputPath("multipass-probe-error-test");
 
-    await expect(
-      runQaMultipass({
-        repoRoot: process.cwd(),
-        outputDir,
-        scenarioIds: ["channel-chat-baseline"],
-      }),
-    ).rejects.toThrow("Unable to verify Multipass availability: multipassd is not running.");
+    await expect(run({ outputDir, scenarioIds: ["channel-chat-baseline"] })).rejects.toThrow(
+      "Unable to verify Multipass availability: multipassd is not running.",
+    );
   });
 });

@@ -1,25 +1,27 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { setImmediate as immediate } from "node:timers/promises";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { waitForDead } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
-const UPDATER_CLEANUP_GUARD_MS = 5_000;
+const sameProcess = (pid: number, start: number | null) =>
+  start !== null && getFileLockProcessStartTime(pid) === start;
 beforeEach(async () => {
-  // resetModules gives each outcome a fresh owner; install spies on that same module instance.
-  const [tmpOwner, systemdScope] = await Promise.all([
-    import("./tmp-openclaw-dir.js"),
-    import("../daemon/systemd-scope.js"),
-  ]);
-  vi.spyOn(tmpOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+  vi.spyOn(await import("./tmp-openclaw-dir.js"), "resolvePreferredOpenClawTmpDir").mockReturnValue(
     roots.make("openclaw-settlement-coordinator-"),
   );
-  vi.spyOn(systemdScope, "findSystemdGatewayInstallation").mockResolvedValue({
+  vi.spyOn(
+    await import("../daemon/systemd-scope.js"),
+    "findSystemdGatewayInstallation",
+  ).mockResolvedValue({
     kind: "system",
     system: {
       scope: "system",
@@ -33,9 +35,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
-// A real helper can exit 143 while its detached updater remains alive. Keep an
-// independent fixture socket open so helper exit cannot masquerade as updater
-// cleanup. No operator service or installation is used.
+// An independent socket distinguishes helper exit from physical updater cleanup.
 it.runIf(process.platform === "linux").each(["SIGTERM", "success", "failed"] as const)(
   "requires physical helper settlement at the public replacement join (%s)",
   async (outcome) => {
@@ -46,42 +46,35 @@ it.runIf(process.platform === "linux").each(["SIGTERM", "success", "failed"] as 
     server.listen(socketPath);
     await once(server, "listening");
     const updaterPath = path.join(root, "updater.cjs");
+    const resultJson = JSON.stringify({
+      root,
+      mode: "npm",
+      status: outcome === "failed" ? "error" : "skipped",
+      reason: outcome === "failed" ? "candidate-validation-failed" : "already-current",
+    });
     await fs.writeFile(
       updaterPath,
-      [
-        'if (process.argv[2] !== "update") process.exit(0);',
-        'const socket = require("node:net").connect(' + JSON.stringify(socketPath) + ");",
-        'socket.once("connect", () => socket.write(String(process.pid)));',
-        'socket.once("data", () => {',
-        "process.stdout.write(JSON.stringify(" +
-          JSON.stringify({
-            root,
-            status: outcome === "failed" ? "error" : "skipped",
-            reason: outcome === "failed" ? "candidate-validation-failed" : "already-current",
-            mode: "npm",
-          }) +
-          "));",
-        "process.exitCode = " + (outcome === "failed" ? 7 : 0) + ";",
-        "socket.end(); process.disconnect?.(); process.stdin.destroy();",
-        "});",
-      ].join(String.fromCharCode(10)),
+      `if (process.argv[2] !== "update") process.exit(0);
+const socket = require("node:net").connect(${JSON.stringify(socketPath)});
+socket.once("connect", () => socket.write(String(process.pid)));
+process.on("SIGTERM", () => socket.write("interrupted"));
+socket.once("data", () => {
+process.stdout.write(${JSON.stringify(resultJson)});
+process.exitCode = ${outcome === "failed" ? 7 : 0};
+socket.end(); process.disconnect?.(); process.stdin.destroy();
+});`,
     );
-    const {
-      startManagedServiceUpdateHandoff,
-      transferManagedServiceUpdateHandoff,
-      waitForSystemServiceUpdateHandoffs,
-      cancelManagedServiceUpdateHandoff,
-    } = await import("./update-managed-service-handoff.js");
+    const handoff = await import("./update-managed-service-handoff.js");
     const { activeManagedServiceUpdateHandoffs } =
       await import("./update-managed-service-handoff-current.js");
     let helperClosed: Promise<void> | undefined;
     let updater: net.Socket | undefined;
     let updaterPid: number | undefined;
     let updaterStart: number | null = null;
-    let started: Awaited<ReturnType<typeof startManagedServiceUpdateHandoff>> | undefined;
+    let started: Awaited<ReturnType<typeof handoff.startManagedServiceUpdateHandoff>> | undefined;
     let helperStart: number | null = null;
     try {
-      started = await startManagedServiceUpdateHandoff({
+      started = await handoff.startManagedServiceUpdateHandoff({
         root,
         supervisor: "systemd",
         restartDrainTimeoutMs: 300_000,
@@ -94,86 +87,66 @@ it.runIf(process.platform === "linux").each(["SIGTERM", "success", "failed"] as 
         },
         meta: {},
       });
-      if (started.status !== "started" || !started.pid) {
-        throw new Error("expected owned helper");
-      }
-      // Retain the spawn-time close observer before transfer can retire the active owner.
+      assert(started.status === "started" && started.pid, "expected owned helper");
+      // Capture before transfer retires the owner.
       helperClosed = activeManagedServiceUpdateHandoffs.get(started.installRoot)?.closed;
-      if (!helperClosed) {
-        throw new Error("expected owned helper close observer");
-      }
+      assert(helperClosed, "expected owned helper close observer");
       helperStart = getFileLockProcessStartTime(started.pid);
       await expect(
-        transferManagedServiceUpdateHandoff({ kind: "managed-update-handoff", ...started }),
+        handoff.transferManagedServiceUpdateHandoff({ kind: "managed-update-handoff", ...started }),
       ).resolves.toBe(true);
       [updater] = await connected;
-      if (!updater) {
-        throw new Error("expected connected updater");
-      }
+      assert(updater, "expected connected updater");
       const [pid] = await once(updater, "data");
       updaterPid = Number(String(pid));
       updaterStart = getFileLockProcessStartTime(updaterPid);
       expect(updaterStart).not.toBeNull();
-      let settled = false;
-      const join = waitForSystemServiceUpdateHandoffs();
+      let state = "pending";
+      const join = handoff.waitForSystemServiceUpdateHandoffs();
       expect(join).toBeInstanceOf(Promise);
       const result = join!.then(
-        () => {
-          settled = true;
-          return "settled";
-        },
+        () => (state = "settled"),
         (error: unknown) => error,
       );
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(settled).toBe(false);
+      await immediate();
+      expect(state).toBe("pending");
       if (outcome === "SIGTERM") {
+        const interrupted = once(updater, "data");
         process.kill(started.pid, "SIGTERM");
-        const observed = await result;
+        const observed = await Promise.race([interrupted, result]);
+        expect(observed).toEqual([Buffer.from("interrupted")]);
+        expect(state).toBe("pending");
+        expect(isPidAlive(started.pid)).toBe(true);
         expect(isPidAlive(updaterPid)).toBe(true);
         expect(getFileLockProcessStartTime(updaterPid)).toBe(updaterStart);
-        expect(observed).toBeInstanceOf(Error);
-        expect(String(observed)).toContain("settlement could not be confirmed");
-        await expect(waitForSystemServiceUpdateHandoffs()).rejects.toThrow(
-          "settlement could not be confirmed",
-        );
-      } else {
-        updater.write("finish");
-        expect(await result).toBe("settled");
-        expect(isPidAlive(updaterPid)).toBe(false);
-        expect(waitForSystemServiceUpdateHandoffs()).toBeUndefined();
-        expect(await fs.readFile(started.logPath, "utf8")).toContain(
-          "managed update helper completed code=" + (outcome === "failed" ? 7 : 0),
-        );
       }
+      updater.write("finish");
+      expect(await result).toBe("settled");
+      expect(isPidAlive(updaterPid)).toBe(false);
+      expect(handoff.waitForSystemServiceUpdateHandoffs()).toBeUndefined();
+      const code = outcome === "SIGTERM" ? 143 : outcome === "failed" ? 7 : 0;
+      expect(await fs.readFile(started.logPath, "utf8")).toContain(
+        `managed update helper completed code=${code}`,
+      );
     } finally {
       // Captured start identities prevent test cleanup from signalling reused PIDs.
-      if (
-        updaterPid &&
-        updaterStart !== null &&
-        getFileLockProcessStartTime(updaterPid) === updaterStart
-      ) {
+      if (updaterPid && sameProcess(updaterPid, updaterStart)) {
         updater?.write("finish");
-        // Cleanup hang guard after the owner requested updater settlement, not a readiness race.
-        await waitForDead(updaterPid, AbortSignal.timeout(UPDATER_CLEANUP_GUARD_MS));
+        await waitForDead(updaterPid, AbortSignal.timeout(5_000));
       }
       updater?.destroy();
-      if (
-        started?.pid &&
-        helperStart !== null &&
-        getFileLockProcessStartTime(started.pid) === helperStart
-      ) {
+      if (started?.pid && sameProcess(started.pid, helperStart)) {
         process.kill(started.pid, "SIGKILL");
       }
       await helperClosed;
       if (started?.status === "started") {
-        await cancelManagedServiceUpdateHandoff({ kind: "managed-update-handoff", ...started });
+        await handoff.cancelManagedServiceUpdateHandoff({
+          kind: "managed-update-handoff",
+          ...started,
+        });
         await fs.rm(path.dirname(started.logPath), { recursive: true, force: true });
       }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await promisify(server.close.bind(server))();
     }
   },
 );

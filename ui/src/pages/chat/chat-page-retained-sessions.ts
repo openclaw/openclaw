@@ -1,5 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   SESSION_NAVIGATION_INTENT_EVENT,
   type SessionNavigationIntent,
@@ -8,8 +9,9 @@ import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { chatPanesWithin } from "./chat-pane-elements.ts";
+import type { ChatPaneElement } from "./chat-pane-elements.ts";
 import { clearPaneSessionHandoff, clearPaneSessionHandoffs } from "./chat-pane-shared.ts";
-import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
 import type { ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
 import { findPane, visiblePanesOf } from "./split-layout.ts";
 
@@ -18,7 +20,6 @@ export const QUEUED_EDIT_RETENTION_CHANGE_EVENT = "openclaw:queued-edit-retentio
 const RETAINED_SESSIONS_PER_PANE = 3;
 const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
 
-type RetentionHost = HTMLElement & { requestUpdate(): unknown };
 type RetentionBindings = {
   context: () => ApplicationContext | undefined;
   presented: () => boolean;
@@ -30,17 +31,26 @@ type RetentionBindings = {
 };
 
 export class ChatPageRetainedSessions {
+  private render?: () => void;
   private readonly sessionsByPane = new Map<string, Map<string, number>>();
   private readonly unbound = new Set<string>();
   private pendingAtFocus = new WeakSet<AbortController>();
   private preview: (SessionNavigationIntent & { href: string; paneId: string }) | null = null;
   private previewFrame: number | undefined;
   private previewTimer: number | undefined;
+  private stopEvents: (() => void)[] = [];
 
   constructor(
-    private readonly host: RetentionHost,
+    private readonly host: HTMLElement,
     private readonly bindings: RetentionBindings,
   ) {}
+
+  subscribe(listener: () => void): () => void {
+    this.render = listener;
+    return () => {
+      this.render = undefined;
+    };
+  }
 
   get unboundPaneIds(): ReadonlySet<string> {
     return this.unbound;
@@ -86,9 +96,11 @@ export class ChatPageRetainedSessions {
   }
 
   connect(): void {
-    this.host.addEventListener(QUEUED_EDIT_RETENTION_CHANGE_EVENT, this.refreshRetention);
-    window.addEventListener("popstate", this.cancelPreview);
-    window.addEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
+    this.stopEvents = [
+      listen(this.host, QUEUED_EDIT_RETENTION_CHANGE_EVENT, this.refreshRetention),
+      listen(window, "popstate", this.cancelPreview),
+      listen(window, SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent),
+    ];
   }
 
   disconnect(): void {
@@ -97,15 +109,15 @@ export class ChatPageRetainedSessions {
     this.sessionsByPane.clear();
     this.unbound.clear();
     this.pendingAtFocus = new WeakSet();
-    this.host.removeEventListener(QUEUED_EDIT_RETENTION_CHANGE_EVENT, this.refreshRetention);
-    window.removeEventListener("popstate", this.cancelPreview);
-    window.removeEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
+    this.stopEvents.splice(0).forEach((stop) => stop());
     this.cancelPreview();
   }
 
-  private readonly refreshRetention = () => {
-    this.host.requestUpdate();
-  };
+  private publish(): void {
+    this.render?.();
+  }
+
+  private readonly refreshRetention = () => this.publish();
 
   suspend(): void {
     this.cancelPreview();
@@ -195,7 +207,7 @@ export class ChatPageRetainedSessions {
   discardPane(paneId: string): void {
     // Retire every mounted presentation before clearing its handoff so a delayed
     // disconnect cannot restage attachments under a later reused logical pane id.
-    for (const pane of this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")) {
+    for (const pane of chatPanesWithin(this.host)) {
       if (pane.paneId === paneId) {
         pane.discardStagedAttachments?.();
       }
@@ -217,7 +229,7 @@ export class ChatPageRetainedSessions {
   ): void => {
     const context = this.bindings.context();
     if (context && readDeletedSessionStartup(context, sessionKey)) {
-      this.host.requestUpdate();
+      this.publish();
       return;
     }
     const deletedPane = this.findPane(paneId, sessionKey);
@@ -243,12 +255,12 @@ export class ChatPageRetainedSessions {
     if (selectedSessionKey && areUiSessionKeysEquivalent(selectedSessionKey, sessionKey)) {
       this.bindings.selectReplacement(paneId, sessionKey, replacementSessionKey);
     } else {
-      this.host.requestUpdate();
+      this.publish();
     }
   };
 
   findPane(paneId: string, sessionKey: string): ChatPaneElement | undefined {
-    return [...this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
+    return chatPanesWithin(this.host).find(
       (pane) =>
         pane.paneId === paneId && areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey),
     );
@@ -291,7 +303,7 @@ export class ChatPageRetainedSessions {
     if (
       !activePane ||
       !retainedKey ||
-      this.findPane(activePane.id, retainedKey)?.routeFace !== intent.face ||
+      (this.findPane(activePane.id, retainedKey)?.routeFace ?? "chat") !== intent.face ||
       areUiSessionKeysEquivalent(activePane.sessionKey, retainedKey)
     ) {
       return;
@@ -314,7 +326,7 @@ export class ChatPageRetainedSessions {
         this.previewFrame = undefined;
         if (
           this.preview === preview &&
-          (window.location.href !== preview.href || !preview.commit())
+          (!this.host.isConnected || window.location.href !== preview.href || !preview.commit())
         ) {
           this.cancelPreview();
         }
@@ -331,7 +343,7 @@ export class ChatPageRetainedSessions {
     const visible = visiblePanesOf(this.bindings.layout(), this.bindings.narrow()).some(
       (pane) => pane.id === paneId,
     );
-    for (const pane of this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")) {
+    for (const pane of chatPanesWithin(this.host)) {
       if (pane.paneId !== paneId) {
         continue;
       }
@@ -349,7 +361,9 @@ export class ChatPageRetainedSessions {
     }
   }
 
-  private clearPreviewWork(): void {
+  private readonly cancelPreview = () => {
+    const layout = this.bindings.layout();
+    const paneId = this.preview?.paneId ?? layout.activePaneId;
     if (this.previewFrame !== undefined) {
       cancelAnimationFrame(this.previewFrame);
       this.previewFrame = undefined;
@@ -358,12 +372,6 @@ export class ChatPageRetainedSessions {
       window.clearTimeout(this.previewTimer);
       this.previewTimer = undefined;
     }
-  }
-
-  private readonly cancelPreview = () => {
-    const layout = this.bindings.layout();
-    const paneId = this.preview?.paneId ?? layout.activePaneId;
-    this.clearPreviewWork();
     this.preview = null;
     // A commit can focus another split. Restore the pane whose presentation
     // this preview changed using its current authoritative selection.

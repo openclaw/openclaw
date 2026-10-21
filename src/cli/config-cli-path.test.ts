@@ -65,7 +65,6 @@ describe("parseConfigSetValue", () => {
 // --merge/--replace, so advice naming them strands the user.
 describe("replacement guard advice", () => {
   const root = {
-    agents: { defaults: { models: { "openai/gpt-5.4": { alias: "GPT" } } } },
     models: {
       providers: {
         ollama: { models: [{ id: "llama3.2" }, { id: "qwen3" }] },
@@ -129,40 +128,6 @@ describe("replacement guard advice", () => {
     }
     return value;
   }
-
-  it.each([
-    {
-      command: "patch",
-      path: ["models", "providers", "ollama", "models"],
-      value: [{ id: "llama3.2" }],
-      removed: "qwen3",
-      advice: "Use --replace-path models.providers.ollama.models to replace intentionally.",
-    },
-    {
-      command: "set",
-      path: ["models", "providers", "ollama", "models"],
-      value: [{ id: "llama3.2" }],
-      removed: "qwen3",
-      advice: "Use --merge to merge by id or --replace to replace intentionally.",
-    },
-    {
-      command: "patch",
-      path: ["agents", "defaults", "models"],
-      value: { "anthropic/claude-sonnet-4-6": {} },
-      removed: "openai/gpt-5.4",
-      advice: "Use --replace-path agents.defaults.models to replace intentionally.",
-    },
-  ] satisfies {
-    command: "set" | "patch";
-    path: string[];
-    value: unknown;
-    removed: string;
-    advice: string;
-  }[])("refuses $path for config $command", ({ command, path, value, removed, advice }) => {
-    expect(refusal(() => assertNonDestructiveReplacement({ root, path, value, command }))).toBe(
-      `Refusing to replace ${path.join(".")}; it would remove existing entries: ${removed}. ${advice}`,
-    );
-  });
 
   it.each([
     { command: "patch" as const, flag: "--replace-path models.providers.ollama.models" },

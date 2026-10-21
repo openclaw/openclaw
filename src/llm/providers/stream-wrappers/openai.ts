@@ -5,6 +5,7 @@ import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
 } from "@openclaw/ai/internal/openai";
+import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import {
   filterCodeModePayloadTools,
   isCodeModeModelVisibleToolName,
@@ -35,7 +36,7 @@ import {
   resolveProviderRequestPolicyConfig,
 } from "../../../agents/provider-request-config.js";
 import type { StreamFn } from "../../../agents/runtime/index.js";
-import type { SandboxToolPolicy } from "../../../agents/sandbox.js";
+import type { SandboxToolPolicy } from "../../../agents/sandbox/types.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
@@ -274,7 +275,16 @@ export function createOpenAIResponsesContextManagementWrapper(
       ...(replayResponsesItemIds === undefined ? {} : { replayResponsesItemIds }),
     };
     return streamWithPayloadPatch(underlying, model, context, nextOptions, (payload) => {
-      applyOpenAIResponsesPayloadPolicy(payload, policy);
+      const compactThreshold =
+        policy.useServerCompaction && payload.service_tier !== undefined
+          ? resolveOpenAIResponsesServerCompactionPlan(model, {
+              ...extraParams,
+              serviceTier: payload.service_tier,
+              fastMode: undefined,
+              fast_mode: undefined,
+            }).threshold
+          : policy.compactThreshold;
+      applyOpenAIResponsesPayloadPolicy(payload, { ...policy, compactThreshold });
     });
   };
 }
@@ -523,13 +533,9 @@ export function createCodexNativeWebSearchWrapper(
       if (activation?.state === "native_active") {
         allowedHostedToolTypes.add("web_search");
       }
-      if (activation?.state === "native_active" || activation?.codexNativeEnabled) {
-        const outcome =
-          activation.state === "native_active"
-            ? `activating (${activation.codexMode})`
-            : `skipping (${activation.inactiveReason ?? "inactive"})`;
+      if (activation?.codexNativeEnabled && activation.state !== "native_active") {
         log.debug(
-          `${outcome} Codex native web search alongside code mode for ${model.provider ?? "unknown"}/${model.id ?? "unknown"}`,
+          `skipping (${activation.inactiveReason ?? "inactive"}) Codex native web search alongside code mode for ${model.provider ?? "unknown"}/${model.id ?? "unknown"}`,
         );
       }
       const originalOnPayload = options?.onPayload;
@@ -635,12 +641,6 @@ export function createCodexNativeWebSearchWrapper(
       return underlying(model, context, options);
     }
 
-    log.debug(
-      `activating Codex native web search (${activation.codexMode}) for ${
-        model.provider ?? "unknown"
-      }/${model.id ?? "unknown"}`,
-    );
-
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
@@ -653,10 +653,6 @@ export function createCodexNativeWebSearchWrapper(
           log.debug(
             "Skipping Codex native web search injection because provider payload is not an object",
           );
-        } else if (result.status === "native_tool_already_present") {
-          log.debug("Codex native web search tool already present in provider payload");
-        } else if (result.status === "injected") {
-          log.debug("Injected Codex native web search tool into provider payload");
         }
         return originalOnPayload?.(payload, model);
       },

@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
+import { TRIAGE_EXTERNAL_AGENTS } from "../../commands/triage-handoff.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { formatErrorMessage as formatError, runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
@@ -23,8 +24,32 @@ const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
   "generateGatewayToken",
   "allowExec",
   "deep",
+  "fullIntegrityCheck",
   "lint",
   "postUpgrade",
+  "clientCredentials",
+  "sessionSqlite",
+  "sessionSqliteStore",
+  "sessionSqliteAgent",
+  "sessionSqliteAllAgents",
+  "githubIssue",
+  "severityMin",
+  "all",
+  "skip",
+  "only",
+] as const;
+
+const CLIENT_CREDENTIALS_CONFLICTING_OPTION_NAMES = [
+  "workspaceSuggestions",
+  "yes",
+  "force",
+  "generateGatewayToken",
+  "allowExec",
+  "deep",
+  "fullIntegrityCheck",
+  "lint",
+  "postUpgrade",
+  "stateSqlite",
   "sessionSqlite",
   "sessionSqliteStore",
   "sessionSqliteAgent",
@@ -63,6 +88,11 @@ export function registerMaintenanceCommands(
       false,
     )
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
+    .option(
+      "--client-credentials",
+      "Prepare only local client credentials (requires --repair --non-interactive)",
+      false,
+    )
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option(
       "--allow-exec",
@@ -70,6 +100,7 @@ export function registerMaintenanceCommands(
       false,
     )
     .option("--deep", "Scan system services for extra gateway installs", false)
+    .option("--full-integrity-check", "Run full database integrity checks during migrations", false)
     .option("--lint", "Run read-only health checks and report findings", false)
     .option(
       "--post-upgrade",
@@ -119,7 +150,31 @@ export function registerMaintenanceCommands(
           opts.json === true,
         );
       }
-      if (hasSessionSqliteOnlyDoctorOptions(opts)) {
+      if (
+        opts.clientCredentials === true &&
+        (!(opts.repair === true || opts.fix === true) || opts.nonInteractive !== true)
+      ) {
+        return exitDoctorError(
+          "doctor --client-credentials requires --repair (or --fix) and --non-interactive.",
+          opts.json === true,
+        );
+      }
+      if (
+        opts.clientCredentials === true &&
+        hasExplicitOptions(command, CLIENT_CREDENTIALS_CONFLICTING_OPTION_NAMES)
+      ) {
+        return exitDoctorError(
+          "doctor --client-credentials can only be combined with --repair (or --fix), --non-interactive, and --json.",
+          opts.json === true,
+        );
+      }
+      if (
+        typeof opts.sessionSqlite !== "string" &&
+        (typeof opts.sessionSqliteAgent === "string" ||
+          opts.githubIssue === true ||
+          opts.sessionSqliteAllAgents === true ||
+          typeof opts.sessionSqliteStore === "string")
+      ) {
         return exitDoctorError(
           "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
           opts.json === true || (opts.lint === true && !process.stdout.isTTY),
@@ -128,6 +183,7 @@ export function registerMaintenanceCommands(
       const jsonImpliesLint =
         opts.json === true &&
         opts.lint !== true &&
+        opts.clientCredentials !== true &&
         opts.postUpgrade !== true &&
         typeof opts.stateSqlite !== "string" &&
         typeof opts.sessionSqlite !== "string";
@@ -178,13 +234,28 @@ export function registerMaintenanceCommands(
           opts.json === true || (opts.lint === true && !process.stdout.isTTY),
         );
       }
-      if (opts.lint !== true && hasLintOnlyDoctorOptions(opts)) {
+      if (
+        opts.lint !== true &&
+        (typeof opts.severityMin === "string" ||
+          opts.all === true ||
+          (Array.isArray(opts.skip) && opts.skip.length > 0) ||
+          (Array.isArray(opts.only) && opts.only.length > 0))
+      ) {
         return exitDoctorError(
           "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
           opts.json === true,
         );
       }
       try {
+        if (opts.clientCredentials === true) {
+          const { prepareStartupClientCredentials } =
+            await import("../../commands/startup-client-credentials.js");
+          await prepareStartupClientCredentials({ env: process.env, runtime: defaultRuntime });
+          if (opts.json === true) {
+            defaultRuntime.writeJson({ ok: true });
+          }
+          exitCliAfterOutput(defaultRuntime, 0);
+        }
         if (lintMode) {
           const { runDoctorLintCli } = await import("../../commands/doctor-lint.js");
           const exitCode = await runDoctorLintCli(defaultRuntime, {
@@ -211,6 +282,7 @@ export function registerMaintenanceCommands(
               generateGatewayToken: Boolean(opts.generateGatewayToken),
               allowExec: Boolean(opts.allowExec),
               deep: Boolean(opts.deep),
+              ...(opts.fullIntegrityCheck ? { fullIntegrityCheck: true } : {}),
               postUpgrade: Boolean(opts.postUpgrade),
               ...(stateSqlite ? { stateSqlite } : {}),
               ...(sessionSqlite ? { sessionSqlite } : {}),
@@ -251,7 +323,7 @@ export function registerMaintenanceCommands(
     .option("--no-export", "Skip the sanitized diagnostics archive")
     .option(
       "--agent <name>",
-      "Select a coding agent (claude|codex|cursor|grok|kimi|muse|opencode|pi|qwen)",
+      `Select a coding agent (${TRIAGE_EXTERNAL_AGENTS.toSorted().join("|")})`,
     )
     .option("--run", "Run one embedded agent turn after verifying model inference", false)
     .option(
@@ -267,24 +339,14 @@ export function registerMaintenanceCommands(
       if (opts.nonInteractive === true && opts.run === true) {
         return exitDoctorError("triage --non-interactive cannot be combined with --run.", false);
       }
-      const agent: unknown = opts.agent;
-      if (opts.run === true && agent !== undefined) {
+      const requestedAgent: unknown = opts.agent;
+      const agent = TRIAGE_EXTERNAL_AGENTS.find((name) => name === requestedAgent);
+      if (opts.run === true && requestedAgent !== undefined) {
         return exitDoctorError("triage --run cannot be combined with --agent.", opts.json === true);
       }
-      if (
-        agent !== undefined &&
-        agent !== "claude" &&
-        agent !== "codex" &&
-        agent !== "cursor" &&
-        agent !== "grok" &&
-        agent !== "kimi" &&
-        agent !== "muse" &&
-        agent !== "opencode" &&
-        agent !== "pi" &&
-        agent !== "qwen"
-      ) {
+      if (requestedAgent !== undefined && agent === undefined) {
         return exitDoctorError(
-          "Invalid --agent. Use claude, codex, cursor, grok, kimi, muse, opencode, pi, or qwen.",
+          `Invalid --agent. Use ${TRIAGE_EXTERNAL_AGENTS.toSorted().join(", ")}.`,
           opts.json === true,
         );
       }
@@ -356,36 +418,6 @@ export function registerMaintenanceCommands(
         await uninstallCommand(defaultRuntime, opts);
       });
     });
-}
-
-function hasLintOnlyDoctorOptions(opts: {
-  readonly severityMin?: unknown;
-  readonly all?: boolean;
-  readonly skip?: unknown;
-  readonly only?: unknown;
-}): boolean {
-  return (
-    typeof opts.severityMin === "string" ||
-    opts.all === true ||
-    (Array.isArray(opts.skip) && opts.skip.length > 0) ||
-    (Array.isArray(opts.only) && opts.only.length > 0)
-  );
-}
-
-function hasSessionSqliteOnlyDoctorOptions(opts: {
-  readonly sessionSqlite?: unknown;
-  readonly sessionSqliteAgent?: unknown;
-  readonly sessionSqliteAllAgents?: unknown;
-  readonly githubIssue?: unknown;
-  readonly sessionSqliteStore?: unknown;
-}): boolean {
-  return (
-    typeof opts.sessionSqlite !== "string" &&
-    (typeof opts.sessionSqliteAgent === "string" ||
-      opts.githubIssue === true ||
-      opts.sessionSqliteAllAgents === true ||
-      typeof opts.sessionSqliteStore === "string")
-  );
 }
 
 function parseDoctorStateSqliteMode(value: unknown, json: boolean): "compact" | undefined {

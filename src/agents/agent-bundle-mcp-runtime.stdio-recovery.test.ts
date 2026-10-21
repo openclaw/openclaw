@@ -1,46 +1,23 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  bindSessionMcpRuntimeTestScheduler,
-  getOrCreateSessionMcpRuntime,
-} from "./agent-bundle-mcp-manager.test-support.js";
-import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
-import { testing } from "./agent-bundle-mcp-runtime.js";
+import * as processLineage from "../process/supervisor/inherited-process-lineage.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
+import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
+import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import {
   waitForRuntimeState,
-  writeListToolsMcpServer,
+  writeListToolsMcpServer as writeListToolsMcpServerFixture,
 } from "./agent-bundle-mcp-stdio.test-support.js";
-import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-tools.js";
 
-vi.mock("./embedded-agent-mcp.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./embedded-agent-mcp.js")>();
-  return {
-    ...actual,
-    loadEmbeddedAgentMcpConfig: (
-      params: Parameters<typeof actual.loadEmbeddedAgentMcpConfig>[0],
-    ) => ({
-      diagnostics: [],
-      prepareDataDirsByServer: {},
-      mcpServers: params.cfg?.mcp?.servers ?? {},
-    }),
-  };
-});
-
-vi.mock("./mcp-auth-profile.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./mcp-auth-profile.js")>()),
-  resolveMcpAuthProfileId: () => undefined,
-  withMcpAuthProfileBearer: () => {
-    throw new Error("Unexpected auth-profile transport in MCP runtime test");
-  },
-}));
-
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
@@ -48,21 +25,64 @@ beforeAll(async () => {
 afterAll(async () => {
   await receipts.close();
 });
-beforeEach(async () => {
-  await testing.resetSessionMcpRuntimeManager();
-  Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
-  await bindSessionMcpRuntimeTestScheduler();
-});
-const tempDirTracker = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(async () => {
-    await testing.resetSessionMcpRuntimeManager();
-    Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
-    cleanup();
-  });
-});
+
+it.skipIf(process.platform === "win32")(
+  "prepares the same session after removing an unavailable process-group server",
+  async () => {
+    // Exercise the real two-process owner used by macOS and portable workers.
+    vi.spyOn(processLineage, "getInheritedNativeProcessOwner").mockReturnValue(undefined);
+    mockProcessPlatform("darwin");
+    const workspaceDir = tempDirs.make("bundle-mcp-missing-command-");
+    const manager = createSessionMcpRuntimeManager();
+    const params = {
+      sessionId: "missing-command-recovery",
+      sessionKey: "agent:test:missing-command-recovery",
+      workspaceDir,
+      manifestRegistry: { plugins: [] },
+    };
+    const cfg = {
+      plugins: { enabled: false },
+      mcp: { servers: { missing: { command: path.join(workspaceDir, "absent-executable") } } },
+    };
+    let release: (() => void) | undefined;
+    try {
+      const original = await manager.acquire({ ...params, cfg });
+      release = original.releaseLease;
+      const catalog = await original.runtime.getCatalog();
+      expect(catalog.diagnostics).toEqual([
+        expect.objectContaining({
+          serverName: "missing",
+          message: expect.stringContaining("ENOENT"),
+        }),
+      ]);
+      release();
+      release = undefined;
+
+      const removed = { plugins: { enabled: false }, mcp: { servers: {} } };
+      await manager.reloadConfig({ cfg: removed, manifestRegistry: params.manifestRegistry });
+      const next = await manager.acquire({ ...params, cfg: removed });
+      release = next.releaseLease;
+      const prepared = await materializeBundleMcpToolsForRun(next);
+      release = undefined;
+      try {
+        expect(prepared.tools).toEqual([]);
+        expect(prepared.diagnostics ?? []).toEqual([]);
+      } finally {
+        await prepared.dispose();
+      }
+    } finally {
+      release?.();
+      try {
+        await manager.disposeAll();
+      } finally {
+        vi.restoreAllMocks();
+      }
+    }
+  },
+);
 
 it("reconnects after an MCP child process exits", async ({ signal }) => {
-  const tempDir = tempDirTracker.make("bundle-mcp-child-exit-");
+  const tempDir = tempDirs.make("bundle-mcp-child-exit-");
   const serverPath = path.join(tempDir, "server.mjs");
   const logPath = path.join(tempDir, "server.log");
   const pidPath = path.join(tempDir, "server.pid");
@@ -70,7 +90,7 @@ it("reconnects after an MCP child process exits", async ({ signal }) => {
   const healthyServerPath = path.join(tempDir, "healthy.mjs");
   const healthyLogPath = path.join(tempDir, "healthy.log");
   await fs.writeFile(listToolsReleasePath, "release", "utf8");
-  await writeListToolsMcpServer(
+  await writeListToolsMcpServerFixture(
     {
       filePath: serverPath,
       logPath,
@@ -80,16 +100,17 @@ it("reconnects after an MCP child process exits", async ({ signal }) => {
     },
     receipts.endpoint,
   );
-  await writeListToolsMcpServer(
+  await writeListToolsMcpServerFixture(
     { filePath: healthyServerPath, logPath: healthyLogPath },
     receipts.endpoint,
   );
 
-  const runtime = await getOrCreateSessionMcpRuntime({
+  const runtime = createSessionMcpRuntime({
     sessionId: "session-child-exit",
     sessionKey: "agent:test:session-child-exit",
     workspaceDir: "/workspace",
     cfg: {
+      plugins: { enabled: false },
       mcp: {
         servers: {
           child: { command: process.execPath, args: [serverPath] },
@@ -100,7 +121,15 @@ it("reconnects after an MCP child process exits", async ({ signal }) => {
   });
 
   try {
-    await runtime.getCatalog();
+    const originalTools = await materializeBundleMcpToolsForRun({ runtime });
+    const originalBytes = JSON.stringify(
+      originalTools.tools.map(({ name, description, parameters }) => ({
+        name,
+        description,
+        parameters,
+      })),
+    );
+    await originalTools.dispose();
     await expect(runtime.callTool("child", "slow_tool", {})).resolves.toMatchObject({
       isError: false,
     });
@@ -126,9 +155,20 @@ it("reconnects after an MCP child process exits", async ({ signal }) => {
       /^bundle-mcp server "child" is (?:not connected|disconnected: mcp transport closed)$/,
     );
     await withinTest(receipts.waitFor(logPath, "recv tools/list", 2), signal);
+    await expect(runtime.callTool("child", "slow_tool", {})).rejects.toThrow(
+      'bundle-mcp server "child" is not connected',
+    );
     const recoveringTools = await materializeBundleMcpToolsForRun({ runtime });
     try {
-      expect(recoveringTools.tools.map((tool) => tool.name)).toEqual(["healthy__slow_tool"]);
+      expect(
+        JSON.stringify(
+          recoveringTools.tools.map(({ name, description, parameters }) => ({
+            name,
+            description,
+            parameters,
+          })),
+        ),
+      ).toBe(originalBytes);
       expect(recoveringTools.diagnostics).toEqual([
         expect.objectContaining({ serverName: "child", message: "mcp transport closed" }),
       ]);
@@ -155,5 +195,6 @@ it("reconnects after an MCP child process exits", async ({ signal }) => {
     expect(replacementPid).not.toBe(pid);
   } finally {
     await runtime.dispose();
+    await runtime.joinCleanup?.();
   }
 });

@@ -1,7 +1,9 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexServiceTier } from "./protocol.js";
+import type { CodexServiceTier, JsonObject } from "./protocol.js";
 
 export type ThreadOwnerToken = {
+  /** Immutable creation policy follows the exact claim through deferred background cleanup. */
+  configFingerprint?: string;
   invalidated: boolean;
   invalidate: () => void;
   releaseAfterProtection?: () => Promise<void>;
@@ -14,12 +16,32 @@ export type ThreadReleaseTransition = {
   invalidated?: boolean;
 };
 
+/** Background custody can survive projection replacement only under its creation policy. */
+export function isThreadBackgroundOnly(
+  runtime: ThreadOwnershipState | undefined,
+  threadId: string,
+  configFingerprint?: string,
+): boolean {
+  if (!runtime || runtime.closed || !runtime.protectedThreads.has(threadId)) {
+    return false;
+  }
+  const claim = runtime.claimedThreads.get(threadId);
+  const policy =
+    claim?.configFingerprint ?? runtime.retainedThreads.get(threadId)?.configFingerprint;
+  return (
+    (!claim || claim.releaseAfterProtection !== undefined) &&
+    (configFingerprint === undefined || policy === configFingerprint)
+  );
+}
+
 /**
  * Exact lifecycle inputs a live ephemeral thread was told. The generic policy is
  * creation-owned and cannot be refreshed or cold-resumed; skills, persona, and memory
  * share one refreshable section recording what was last delivered to the thread.
  */
 export type CodexEphemeralThreadPolicy = {
+  autoCompactTokenLimit?: number;
+  autoCompactTokenLimitScope?: string;
   developerInstructions?: string;
   refreshableInstructions?: string;
   /**
@@ -49,11 +71,7 @@ export type CodexAppServerLiveThreadOwnership = {
   ephemeralPolicy?: CodexEphemeralThreadPolicy;
   serviceTier?: CodexServiceTier | null;
   /** Releases this active claim or the exact idle record it published. */
-  release: (
-    threadId: string,
-    assertCurrent?: () => void,
-    withCurrent?: (write: () => void) => Promise<void>,
-  ) => Promise<void>;
+  release: RetainedLiveThread["release"];
   /** Forgets this local owner after native shutdown, without unsubscribing a successor. */
   forget: () => void;
 };
@@ -182,14 +200,28 @@ export function revertRetainedThreadInstructions(
   }
 }
 
-export function createCodexEphemeralThreadPolicy({
-  developerInstructions,
-  refreshableInstructions,
-}: Pick<
-  CodexEphemeralThreadPolicy,
-  "developerInstructions" | "refreshableInstructions"
->): CodexEphemeralThreadPolicy {
+export function createCodexEphemeralThreadPolicy(
+  {
+    developerInstructions,
+    refreshableInstructions,
+    config,
+  }: Pick<CodexEphemeralThreadPolicy, "developerInstructions" | "refreshableInstructions"> & {
+    config?: {
+      model_auto_compact_token_limit?: unknown;
+      model_auto_compact_token_limit_scope?: unknown;
+    };
+  },
+  nativeConfig?: JsonObject,
+): CodexEphemeralThreadPolicy {
+  const limit =
+    config?.model_auto_compact_token_limit ?? nativeConfig?.model_auto_compact_token_limit;
+  const scope =
+    config?.model_auto_compact_token_limit_scope ??
+    nativeConfig?.model_auto_compact_token_limit_scope ??
+    "total";
   return {
+    ...(typeof limit === "number" ? { autoCompactTokenLimit: limit } : {}),
+    ...(typeof scope === "string" ? { autoCompactTokenLimitScope: scope } : {}),
     developerInstructions,
     refreshableInstructions,
     nativeRefreshableInstructions: refreshableInstructions,

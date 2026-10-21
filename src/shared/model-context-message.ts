@@ -32,6 +32,8 @@ export function stripToolResultDetails(messages: unknown[]): unknown[] {
 }
 
 /** A transient view; evidence and persistence readers must retain the original messages. */
+export function projectModelContextMessages(messages: AgentMessage[]): AgentMessage[];
+export function projectModelContextMessages(messages: unknown[]): unknown[];
 export function projectModelContextMessages(messages: unknown[]): unknown[] {
   const output: unknown[] = [];
   for (const message of stripToolResultDetails(messages)) {

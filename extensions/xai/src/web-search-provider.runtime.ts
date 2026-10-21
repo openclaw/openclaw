@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   coerceSecretRef,
-  ensureAuthProfileStore,
-  listUsableProviderAuthProfileIds,
+  listUsableProviderAuthProfileIdsAsync,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   isProviderAuthError,
@@ -132,7 +132,7 @@ async function runXaiWebSearch(params: {
 }): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
   const cacheKey = normalizeCacheKey(
-    `grok:${params.endpoint}:${params.model}:${String(params.inlineCitations)}:${params.query}`,
+    `grok:${sha256Hex(params.apiKey)}:${params.endpoint}:${params.model}:${String(params.inlineCitations)}:${params.query}`,
   );
   const cached = readCache(XAI_WEB_SEARCH_CACHE, cacheKey, params.cacheTtlMs);
   if (cached) {
@@ -164,14 +164,15 @@ function resolveXaiToolSearchConfig(ctx: {
   );
 }
 
-function resolveConfiguredXaiWebSearchCredential(
+function resolveConfiguredXaiWebSearchAuth(
   searchConfig?: Record<string, unknown>,
-): string | undefined {
-  return resolveWebSearchProviderCredential({
+): XaiResolvedWebSearchAuth | undefined {
+  const apiKey = resolveWebSearchProviderCredential({
     credentialValue: getScopedCredentialValue(searchConfig, "grok"),
     path: "plugins.entries.xai.config.webSearch.apiKey",
     envVars: [],
   });
+  return apiKey ? { apiKey, mode: "api-key" } : undefined;
 }
 
 function hasConfiguredXaiWebSearchCredentialRef(searchConfig?: Record<string, unknown>): boolean {
@@ -235,23 +236,17 @@ async function resolveXaiProviderApiKeyProfileFallback(params: {
 }): Promise<XaiResolvedWebSearchAuth | undefined> {
   params.signal?.throwIfAborted();
   const config = params.config as OpenClawConfig | undefined;
-  const usableProfiles = listUsableProviderAuthProfileIds({
+  const usableProfiles = await listUsableProviderAuthProfileIdsAsync({
     agentDir: params.agentDir,
     cfg: config,
     provider: XAI_PROVIDER_ID,
+    profileTypes: ["api_key", "token"],
   });
   if (!usableProfiles.agentDir || usableProfiles.profileIds.length === 0) {
     return undefined;
   }
 
-  const store = ensureAuthProfileStore(usableProfiles.agentDir, {
-    allowKeychainPrompt: false,
-  });
   for (const profileId of usableProfiles.profileIds) {
-    const profile = store.profiles[profileId];
-    if (!profile || profile.provider !== XAI_PROVIDER_ID || profile.type === "oauth") {
-      continue;
-    }
     const resolved = await resolveXaiProviderAuthCredential({
       agentDir: usableProfiles.agentDir,
       config: params.config,
@@ -285,9 +280,9 @@ async function resolveXaiWebSearchAuth(
     });
   } catch (error) {
     ctx.signal?.throwIfAborted();
-    const configured = resolveConfiguredXaiWebSearchCredential(searchConfig);
+    const configured = resolveConfiguredXaiWebSearchAuth(searchConfig);
     if (configured) {
-      return { apiKey: configured, mode: "api-key" };
+      return configured;
     }
     throw error;
   }
@@ -295,12 +290,9 @@ async function resolveXaiWebSearchAuth(
     return providerAuth;
   }
 
-  const configured = resolveConfiguredXaiWebSearchCredential(searchConfig);
+  const configured = resolveConfiguredXaiWebSearchAuth(searchConfig);
   if (configured) {
-    return {
-      apiKey: configured,
-      mode: "api-key",
-    };
+    return configured;
   }
   if (hasConfiguredXaiWebSearchCredentialRef(searchConfig)) {
     return undefined;
@@ -314,12 +306,9 @@ async function resolveXaiWebSearchApiKeyFallback(
   searchConfig?: Record<string, unknown>,
 ): Promise<XaiResolvedWebSearchAuth | undefined> {
   ctx.signal?.throwIfAborted();
-  const configured = resolveConfiguredXaiWebSearchCredential(searchConfig);
+  const configured = resolveConfiguredXaiWebSearchAuth(searchConfig);
   if (configured) {
-    return {
-      apiKey: configured,
-      mode: "api-key",
-    };
+    return configured;
   }
   if (hasConfiguredXaiWebSearchCredentialRef(searchConfig)) {
     return undefined;

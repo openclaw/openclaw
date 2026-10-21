@@ -30,6 +30,9 @@ const success = (stdout = ""): ExecResult => ({
   stderr: "",
 });
 const property = (type: string, data: unknown) => ({ type, data });
+const reply = (type: string, data: unknown) => success(JSON.stringify(property(type, data)));
+const execStart = (args: string[]) =>
+  property("a(sasbttttuii)", [[args[0], args, false, 0, 0, 0, 0, 0, 0, 0]]);
 
 type Difference =
   | "account"
@@ -42,13 +45,15 @@ type Difference =
   | "port"
   | "unavailable"
   | "confirmation drift";
-type Installation =
-  | "named"
-  | "reverse aliases"
-  | "default"
-  | "canonical default"
-  | "Compose env ports"
-  | "explicit relocated";
+const installations = {
+  named: ["lisa", "openclaw-gateway-lisa", "openclaw-lisa"],
+  "reverse aliases": ["lisa", "openclaw-lisa", "openclaw-gateway-lisa"],
+  default: [undefined, "openclaw-gateway", "openclaw"],
+  "canonical default": [undefined, "openclaw-gateway", "openclaw-gateway"],
+  "Compose env ports": ["lisa", "openclaw-gateway-lisa", "openclaw-lisa"],
+  "explicit relocated": ["lisa", "operator-gateway", "operator-gateway"],
+} as const;
+type Installation = keyof typeof installations;
 type AfterRemoval = "legacy alias" | "unverifiable alias";
 
 async function exerciseDoctor(
@@ -57,24 +62,10 @@ async function exerciseDoctor(
   afterRemoval?: AfterRemoval,
 ) {
   const home = await fs.realpath(dirs.make("doctor-dueling-identity-"));
-  const profile =
-    installation === "default" || installation === "canonical default" ? undefined : "lisa";
+  const [profile, user, systemUnit] = installations[installation];
   const explicit = installation === "explicit relocated";
-  const userName = explicit
-    ? "operator-gateway.service"
-    : installation === "reverse aliases"
-      ? "openclaw-lisa.service"
-      : profile
-        ? "openclaw-gateway-lisa.service"
-        : "openclaw-gateway.service";
-  const systemName =
-    explicit || installation === "canonical default"
-      ? userName
-      : installation === "reverse aliases"
-        ? "openclaw-gateway-lisa.service"
-        : profile
-          ? "openclaw-lisa.service"
-          : "openclaw.service";
+  const userName = `${user}.service`;
+  const systemName = `${systemUnit}.service`;
   const userPath = path.join(home, ".config/systemd/user", userName);
   const systemPath = `/etc/systemd/system/${systemName}`;
   const systemFile = path.join(home, "system-unit.service");
@@ -105,12 +96,13 @@ async function exerciseDoctor(
     OPENCLAW_SERVICE_KIND: "gateway",
     ...(installation === "Compose env ports" ? { OPENCLAW_GATEWAY_PORT: "127.0.0.1:18789" } : {}),
   };
+  const unitEnvironment = (name: string, patch: Record<string, string> = {}) =>
+    Object.entries({ ...environment, OPENCLAW_SYSTEMD_UNIT: name, ...patch }).map(
+      ([key, value]) => `${key}=${value}`,
+    );
   const unit = (name: string) =>
-    `[Service]\nExecStart=${args.join(" ")}\n${Object.entries({
-      ...environment,
-      OPENCLAW_SYSTEMD_UNIT: name,
-    })
-      .map(([key, value]) => `Environment="${key}=${value}"`)
+    `[Service]\nExecStart=${args.join(" ")}\n${unitEnvironment(name)
+      .map((value) => `Environment="${value}"`)
       .join("\n")}\n`;
   await fs.writeFile(userPath, unit(userName));
   const legacyName = "openclaw-lisa.service";
@@ -154,14 +146,13 @@ async function exerciseDoctor(
     DropInPaths: property("as", []),
     NeedDaemonReload: property("b", false),
     LoadState: property("s", "loaded"),
-    ExecStart: property("a(sasbttttuii)", [[args[0], args, false, 0, 0, 0, 0, 0, 0, 0]]),
+    UnitFileState: property("s", "enabled"),
+    ActiveState: property("s", "active"),
+    CanStart: property("b", true),
+    RefuseManualStart: property("b", false),
+    ExecStart: execStart(args),
     WorkingDirectory: property("s", home),
-    Environment: property(
-      "as",
-      Object.entries({ ...environment, OPENCLAW_SYSTEMD_UNIT: name }).map(
-        ([key, value]) => `${key}=${value}`,
-      ),
-    ),
+    Environment: property("as", unitEnvironment(name)),
     EnvironmentFiles: property("a(sb)", []),
     UnsetEnvironment: property("as", []),
     User: property("s", "gateway"),
@@ -169,12 +160,7 @@ async function exerciseDoctor(
   const userProperties = properties(userName, userPath);
   const systemProperties = properties(systemName, systemPath);
   const setSystemEnv = (patch: Record<string, string>) => {
-    systemProperties.Environment = property(
-      "as",
-      Object.entries({ ...environment, OPENCLAW_SYSTEMD_UNIT: systemName, ...patch }).map(
-        ([key, value]) => `${key}=${value}`,
-      ),
-    );
+    systemProperties.Environment = property("as", unitEnvironment(systemName, patch));
   };
   if (installation === "Compose env ports") {
     setSystemEnv({ OPENCLAW_GATEWAY_PORT: "[::1]:18789" });
@@ -184,11 +170,7 @@ async function exerciseDoctor(
   } else if (difference === "user profile") {
     userProperties.Environment = property(
       "as",
-      Object.entries({
-        ...environment,
-        OPENCLAW_PROFILE: "darlene",
-        OPENCLAW_SYSTEMD_UNIT: userName,
-      }).map(([key, value]) => `${key}=${value}`),
+      unitEnvironment(userName, { OPENCLAW_PROFILE: "darlene" }),
     );
     userProperties.NeedDaemonReload = property("b", true);
   } else if (difference === "profile environment") {
@@ -212,9 +194,7 @@ async function exerciseDoctor(
     if (difference === "node service") {
       setSystemEnv({ OPENCLAW_SERVICE_KIND: "node" });
     }
-    systemProperties.ExecStart = property("a(sasbttttuii)", [
-      [systemArgs[0], systemArgs, false, 0, 0, 0, 0, 0, 0, 0],
-    ]);
+    systemProperties.ExecStart = execStart(systemArgs);
   }
   const unexpected: string[] = [];
   let removed = false;
@@ -231,10 +211,10 @@ async function exerciseDoctor(
         return success('s "257"\n');
       }
       if (commandArgs.includes("GetNameOwner")) {
-        return success(JSON.stringify(property("s", [system ? ":1.42" : ":1.43"])));
+        return reply("s", [system ? ":1.42" : ":1.43"]);
       }
       if (commandArgs.includes("GetConnectionUnixUser")) {
-        return success(JSON.stringify(property("u", [system ? 0 : 2001])));
+        return reply("u", [system ? 0 : 2001]);
       }
       if (commandArgs.includes("GetUnit") || commandArgs.includes("LoadUnit")) {
         if (
@@ -245,11 +225,7 @@ async function exerciseDoctor(
         }
         const selectedUserName = removed && afterRemoval ? legacyName : userName;
         if (commandArgs.at(-1) === (system ? systemName : selectedUserName)) {
-          return success(
-            JSON.stringify(
-              property("o", [`/org/freedesktop/systemd1/unit/${system ? "system" : "user"}`]),
-            ),
-          );
+          return reply("o", [`/org/freedesktop/systemd1/unit/${system ? "system" : "user"}`]);
         }
       }
       const index = commandArgs.findIndex((arg) => /\.(?:Unit|Service)$/.test(arg));

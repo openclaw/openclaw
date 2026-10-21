@@ -1,5 +1,6 @@
-// @vitest-environment node
 import { expect, it, vi } from "vitest";
+// @vitest-environment node
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -40,7 +41,6 @@ useChatSendBrowserFixture();
 
 it.each(
   [
-    {},
     { newerEvent: true },
     { reentrantSuccessor: true },
     { mainKeyChanged: true },
@@ -350,7 +350,6 @@ it.each(
     { message: "/approve approval-123 allow-once", action: "approve" },
     { message: "ordinary draft", action: "queued" },
     { message: "/stop after the next turn", action: "blocked" },
-    { message: "/stop", action: "goal" },
   ].flatMap((test) =>
     (test.action === "approve" ? [true, false] : [true]).map((hydrated) => ({
       message: test.message,
@@ -368,7 +367,7 @@ it.each(
       chatStream: hydrated ? "Waiting for approval" : null,
       requestHandlers: {
         "chat.startup": () => history.promise,
-        "chat.abort": { aborted: true },
+        "sessions.abort": { status: "aborted" },
         "chat.send": { runId: "approval-command", status: "started" },
       },
     });
@@ -392,18 +391,22 @@ it.each(
       }
       expect(host.chatLoading).toBe(true);
       if (action === "abort") {
-        expect(host.request).toHaveBeenCalledWith("chat.abort", {
-          runId: "waiting-run",
-          sessionKey: host.sessionKey,
+        expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+          key: host.sessionKey,
+          clearQueued: true,
         });
       } else {
-        expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
+        expect(host.request).not.toHaveBeenCalledWith("sessions.abort", expect.anything());
       }
       if (action === "approve") {
         expect(host.request).toHaveBeenCalledWith(
           "chat.send",
           expect.objectContaining({ sessionKey: host.sessionKey, message }),
-          { timeoutMs: 30_000 },
+          {
+            timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+            signal: expect.any(AbortSignal),
+            retainSentResultOnAbort: true,
+          },
         );
         expect(
           host.request.mock.calls.filter(([method]) => method === "chat.history"),

@@ -153,7 +153,7 @@ Legacy single-pass setup uses unqualified WhatsApp peer IDs as keys and arrays o
 
 Every listed agent ID must exist in the configured roster: config validation rejects unknown IDs in both arrays and objects. Deleting an agent prunes it from both forms.
 
-Runtime membership uses the canonical `agents.entries` roster. Run `openclaw doctor --fix` to migrate a legacy `agents.list` roster before startup.
+Runtime membership uses the current `agents.entries` roster. Run `openclaw doctor --fix` to migrate a legacy `agents.list` roster before startup.
 
 ### Processing strategy
 

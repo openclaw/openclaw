@@ -4,7 +4,7 @@ import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { createDispatchReplyOperationCoordinator } from "../auto-reply/reply/dispatch-from-config.lifecycle.js";
@@ -16,7 +16,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { tryDispatchAcpReplyHook } from "../plugin-sdk/acpx.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import type { Deferred } from "../shared/deferred.js";
@@ -88,6 +88,15 @@ function acpSessionEntry(sessionId: string) {
   return { sessionId, updatedAt: Date.now(), acp: createAcpSessionMeta({ agent: "main" }) };
 }
 
+function widgetResult(id: string) {
+  const widget = {
+    kind: "canvas",
+    presentation: { target: "assistant_message", title: "Status", sandbox: "scripts" },
+    view: { id, url: `/__openclaw__/canvas/documents/${id}/index.html` },
+  };
+  return { content: [{ type: "text", text: JSON.stringify(widget) }] };
+}
+
 describe("Gateway ACP completion ownership", () => {
   afterEach(() => {
     dispatchInboundMessageMock.mockReset();
@@ -126,11 +135,7 @@ describe("Gateway ACP completion ownership", () => {
     { name: "live block replies", live: true },
     { name: "widget tool progress", widget: true },
     { name: "post-hook widget suppression", widget: true, suppressed: true, transform: () => null },
-    {
-      name: "bound target media",
-      bound: true,
-      media: true,
-    },
+    { name: "bound target media", bound: true, media: true },
     { name: "suppressed runtime errors", fail: true, transform: () => null },
     { name: "suppressed runtime timeout", timeout: true, transform: () => null },
     { name: "persistence errors", persistFail: true },
@@ -143,7 +148,7 @@ describe("Gateway ACP completion ownership", () => {
     },
     { name: "replaced transcript target", rebound: true },
   ];
-  test.each(cases)("completes $name once with truthful transcript ownership", async (scenario) => {
+  test.for(cases)("completes $name once", async (scenario, { signal }) => {
     const storePath = path.join(tempDirs.make(), "sessions.json");
     testState.sessionStorePath = storePath;
     const mediaFile = path.join(path.dirname(storePath), "photo.png");
@@ -160,11 +165,13 @@ describe("Gateway ACP completion ownership", () => {
     const sessionKey = `agent:main:acp-completion-${suffix}`;
     const targetSessionKey = scenario.bound ? `agent:main:bound-${suffix}` : sessionKey;
     const sessionId = `acp-completion-session-${suffix}`;
+    const readTranscript = (key: string, id: string) =>
+      readTranscriptMessages({ agentId: "main", sessionKey: key, sessionId: id, storePath });
     expect((await rpcReq(ws, "sessions.subscribe", {})).ok).toBe(true);
     let turnStarted = createDeferred();
     let releaseTurn = createDeferred();
     let activeRunId = "";
-    type CapturedAdmission = { runId: string; release: Promise<void> | undefined };
+    type CapturedAdmission = { release: Promise<void> | undefined };
     const dispatchAdmissions = new Map<string, Deferred<CapturedAdmission>>();
     const admittedReleases = new Set<Promise<void>>();
     await writeSessionStore({
@@ -191,25 +198,7 @@ describe("Gateway ACP completion ownership", () => {
             data: {
               phase: "result",
               name: "show_widget",
-              result: {
-                content: [
-                  {
-                    type: "text",
-                    text: JSON.stringify({
-                      kind: "canvas",
-                      presentation: {
-                        target: "assistant_message",
-                        title: "Status",
-                        sandbox: "scripts",
-                      },
-                      view: {
-                        id: activeRunId,
-                        url: `/__openclaw__/canvas/documents/${activeRunId}/index.html`,
-                      },
-                    }),
-                  },
-                ],
-              },
+              result: widgetResult(activeRunId),
             },
           });
         }
@@ -243,7 +232,7 @@ describe("Gateway ACP completion ownership", () => {
         replyOptions: inboundReplyOptions,
       } = input as Parameters<typeof dispatchInboundMessage>[0];
       // Gateway admission outlives ACP dispatch and owns source transcript finalization.
-      const release = getSessionWorkAdmissionRelease({
+      const release = captureSessionControllerSettlement({
         scope: storePath,
         identities: [ctx.SessionKey],
       });
@@ -252,7 +241,7 @@ describe("Gateway ACP completion ownership", () => {
       }
       const runId = inboundReplyOptions?.runId;
       if (runId) {
-        dispatchAdmissions.get(runId)?.resolve({ runId, release });
+        dispatchAdmissions.get(runId)?.resolve({ release });
       }
       return actualDispatch.dispatchInboundMessage({
         ctx,
@@ -317,24 +306,42 @@ describe("Gateway ACP completion ownership", () => {
         state?: string;
         seq?: number;
         message?: unknown;
-        reason?: string;
         stream?: string;
         data?: { phase?: string; reason?: string };
         errorKind?: string;
       };
     }> = [];
-    const capture = (data: Buffer) => frames.push(JSON.parse(data.toString()));
+    let lifecycleStarted = createDeferred();
+    let lifecycleDelivered = createDeferred();
+    const capture = (data: Buffer) => {
+      const frame: (typeof frames)[number] = JSON.parse(data.toString());
+      frames.push(frame);
+      if (
+        frame.event === "agent" &&
+        frame.payload?.runId === activeRunId &&
+        frame.payload.stream === "lifecycle"
+      ) {
+        if (frame.payload.data?.phase === "start") {
+          lifecycleStarted.resolve();
+        } else if (frame.payload.data?.phase === "end" || frame.payload.data?.phase === "error") {
+          lifecycleDelivered.resolve();
+        }
+      }
+    };
     ws.on("message", capture);
     try {
       // Preserve the observed order: one cold turn, then the same session and
       // reply through the now-loaded lifecycle subscriber.
       for (const [index, temperature] of ["cold", "warm"].entries()) {
+        const check = (value: unknown) => expect.soft(value, temperature);
         const runId = `acp-completion-${suffix}-${temperature}`;
         activeRunId = runId;
         const admissionCapture = createDeferred<CapturedAdmission>();
         dispatchAdmissions.set(runId, admissionCapture);
         turnStarted = createDeferred();
         releaseTurn = createDeferred();
+        lifecycleStarted = createDeferred();
+        lifecycleDelivered = createDeferred();
         const expectedState = scenario.rpcAbort
           ? "aborted"
           : scenario.fail || scenario.persistFail || scenario.timeout || scenario.rebound
@@ -355,15 +362,16 @@ describe("Gateway ACP completion ownership", () => {
           idempotencyKey: runId,
         };
         const accepted = await rpcReq(ws, "chat.send", sendParameters);
-        expect(accepted.ok).toBe(true);
+        expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
         if (scenario.rpcAbort) {
           await turnStarted.promise;
+          // Stop suppresses a start still awaiting publication; this case aborts after start.
+          await withinTest(lifecycleStarted.promise, signal);
           const aborted = await rpcReq(ws, "chat.abort", { sessionKey, runId });
           expect(aborted.payload).toMatchObject({ aborted: true, runIds: [runId] });
           releaseTurn.resolve();
         }
         const admitted = await admissionCapture.promise;
-        expect(admitted.runId).toBe(runId);
         expect(admitted.release).toBeDefined();
         // Notifications coalesce; the captured owner releases only after post-dispatch cleanup.
         await admitted.release;
@@ -379,51 +387,49 @@ describe("Gateway ACP completion ownership", () => {
           },
           { timeout: 10_000 },
         );
-        expect.soft(replayPayload, JSON.stringify(replayPayload)).toMatchObject({
+        check(replayPayload).toMatchObject({
           runId,
           status: expectedStatus,
         });
         if (scenario.cancel) {
-          expect
-            .soft(replayPayload)
-            .toMatchObject({ summary: "aborted", endedAt: expect.any(Number) });
+          check(replayPayload).toMatchObject({ summary: "aborted", endedAt: expect.any(Number) });
         }
         expect(runtime.runTurn).toHaveBeenCalledTimes(index + 1);
         const waited = await rpcReq(ws, "agent.wait", { runId, timeoutMs: 5_000 });
-        expect.soft(waited.payload).toMatchObject({
+        check(waited.payload).toMatchObject({
           status: scenario.cancel ? "error" : expectedStatus,
         });
-        const finals = frames.filter(
+        // Run settlement does not join the asynchronous lifecycle subscriber.
+        await withinTest(lifecycleDelivered.promise, signal);
+        const runFrames = frames.filter((frame) => frame.payload?.runId === runId);
+        const finals = runFrames.filter(
           (frame) =>
             frame.event === "chat" &&
-            frame.payload?.runId === runId &&
-            ["final", "error", "aborted"].includes(frame.payload.state ?? ""),
+            ["final", "error", "aborted"].includes(frame.payload?.state ?? ""),
         );
-        expect.soft(finals, temperature).toHaveLength(1);
-        expect.soft(finals[0]?.payload?.state).toBe(expectedState);
-        const terminalIndex = frames.findIndex((frame) => frame === finals[0]);
+        check(finals).toHaveLength(1);
+        const final = finals[0]?.payload;
+        check(final?.state).toBe(expectedState);
+        const terminalIndex = runFrames.findIndex((frame) => frame === finals[0]);
         const priorSequence = Math.max(
           0,
-          ...frames
-            .slice(0, terminalIndex)
-            .filter((frame) => frame.payload?.runId === runId)
-            .map((frame) => frame.payload?.seq ?? 0),
+          ...runFrames.slice(0, terminalIndex).map((frame) => frame.payload?.seq ?? 0),
         );
-        expect.soft(finals[0]?.payload?.seq).toBeGreaterThan(priorSequence);
+        check(final?.seq).toBeGreaterThan(priorSequence);
         if (scenario.timeout) {
-          expect.soft(finals[0]?.payload?.errorKind).toBe("timeout");
+          check(final?.errorKind).toBe("timeout");
         }
         if (expectedState !== "error" && !scenario.rpcAbort) {
-          expect
-            .soft(extractFirstTextBlock(finals[0]?.payload?.message), temperature)
-            .toBe(scenario.suppressed ? undefined : (scenario.text ?? "same accepted reply"));
+          check(extractFirstTextBlock(final?.message)).toBe(
+            scenario.suppressed ? undefined : (scenario.text ?? "same accepted reply"),
+          );
         }
         if (scenario.widget) {
-          const content = asOptionalRecord(finals[0]?.payload?.message)?.content;
+          const content = asOptionalRecord(final?.message)?.content;
           if (scenario.suppressed) {
-            expect.soft(content).toBeUndefined();
+            check(content).toBeUndefined();
           } else {
-            expect.soft(content).toEqual([
+            check(content).toEqual([
               { type: "text", text: "same accepted reply" },
               {
                 type: "canvas",
@@ -441,83 +447,61 @@ describe("Gateway ACP completion ownership", () => {
             ]);
           }
         }
-        const lifecycle = frames.filter(
-          (frame) =>
-            frame.event === "agent" &&
-            frame.payload?.runId === runId &&
-            frame.payload.stream === "lifecycle",
+        const lifecycle = runFrames.filter(
+          (frame) => frame.event === "agent" && frame.payload?.stream === "lifecycle",
         );
-        expect
-          .soft(lifecycle.map((frame) => frame.payload?.data?.phase))
-          .toEqual(
-            scenario.rpcAbort
-              ? ["start", "end", scenario.persistFail ? "error" : "end"]
-              : ["start", expectedState === "error" ? "error" : "end"],
-          );
-        expect
-          .soft(
-            frames.filter(
-              (frame) =>
-                frame.payload?.runId === runId && frame.payload?.data?.reason === "seq gap",
+        check(lifecycle.map((frame) => frame.payload?.data?.phase)).toEqual([
+          "start",
+          expectedState === "error" ? "error" : "end",
+        ]);
+        if (scenario.rpcAbort) {
+          check(lifecycle.at(-1)?.payload?.data).toMatchObject({
+            phase: "end",
+            status: "cancelled",
+            aborted: true,
+            stopReason: "rpc",
+          });
+          // This terminal-only reply was never shown; there is no visible partial to save.
+          check(
+            runFrames.filter(
+              (frame) => frame.payload?.stream === "assistant" || frame.payload?.state === "delta",
             ),
-          )
-          .toEqual([]);
-        const messages = readTranscriptMessages({
-          agentId: "main",
-          sessionId: scenario.rebound ? `${sessionId}-replaced-${index + 1}` : sessionId,
-          sessionKey: targetSessionKey,
-          storePath,
-        }).filter((message) => message.role === "user" || message.role === "assistant");
-        if (scenario.widget) {
-          const persisted = messages.findLast((message) => message.role === "assistant");
-          expect
-            .soft(asOptionalRecord(persisted)?.content)
-            .toEqual([{ type: "text", text: "same accepted reply" }]);
+          ).toEqual([]);
+          check(final?.message).toBeUndefined();
         }
-        expect
-          .soft(
-            messages.map((message) => message.role),
-            temperature,
-          )
-          .toEqual(
-            scenario.rebound
-              ? []
-              : Array.from({ length: index + 1 }, () =>
-                  scenario.persistFail ? ["user"] : ["user", "assistant"],
-                ).flat(),
-          );
+        check(runFrames.filter((frame) => frame.payload?.data?.reason === "seq gap")).toEqual([]);
+        const messages = readTranscript(
+          targetSessionKey,
+          scenario.rebound ? `${sessionId}-replaced-${index + 1}` : sessionId,
+        ).filter((message) => message.role === "user" || message.role === "assistant");
+        const assistant = messages.findLast((message) => message.role === "assistant");
+        if (scenario.widget) {
+          check(asOptionalRecord(assistant)?.content).toEqual([
+            { type: "text", text: "same accepted reply" },
+          ]);
+        }
+        check(messages.map((message) => message.role)).toEqual(
+          scenario.rebound
+            ? []
+            : Array.from({ length: index + 1 }, () =>
+                scenario.persistFail ? ["user"] : ["user", "assistant"],
+              ).flat(),
+        );
         if (scenario.cancel && !scenario.rpcAbort) {
-          const assistant = messages.findLast((message) => message.role === "assistant");
-          expect.soft(assistant, temperature).toMatchObject({
+          check(assistant).toMatchObject({
             idempotencyKey: runId,
             model: "acp-runtime",
             stopReason: "aborted",
           });
-          expect.soft(extractFirstTextBlock(assistant), temperature).toBe("same accepted reply");
-          expect.soft(finals[0]?.payload?.message, temperature).toMatchObject({
+          check(extractFirstTextBlock(assistant)).toBe("same accepted reply");
+          check(final?.message).toMatchObject({
             stopReason: "aborted",
           });
         }
-        if (scenario.media) {
-          const assistant = messages.findLast((message) => message.role === "assistant");
-          expect
-            .soft(
-              readAssistantDisplayContent(assistant).some((block: unknown) => {
-                const content = asOptionalRecord(block);
-                return content !== undefined && content.type !== "text";
-              }),
-            )
-            .toBe(true);
-        }
         if (scenario.bound) {
           // The bound target owns ACP history; the dashboard retains each delivered reply too.
-          const sourceMessages = readTranscriptMessages({
-            agentId: "main",
-            sessionId: `source-${sessionId}`,
-            sessionKey,
-            storePath,
-          });
-          expect.soft(sourceMessages).toMatchObject(
+          const sourceMessages = readTranscript(sessionKey, `source-${sessionId}`);
+          check(sourceMessages).toMatchObject(
             ["cold", "warm"].slice(0, index + 1).flatMap((turn) => [
               {
                 role: "user",
@@ -537,24 +521,22 @@ describe("Gateway ACP completion ownership", () => {
           ] as const) {
             // Media is copied into each transcript owner's namespace, not shared by URL.
             const mediaPrefix = `/api/chat/media/outgoing/${encodeURIComponent(ownerKey)}/`;
-            expect
-              .soft(
-                readAssistantDisplayContent(
-                  transcript.findLast((message) => message.role === "assistant"),
-                ),
-              )
-              .toMatchObject([
-                { type: "text", text: "same accepted reply" },
-                {
-                  type: "image",
-                  mimeType: "image/png",
-                  sizeBytes: 68,
-                  width: 1,
-                  height: 1,
-                  url: expect.stringContaining(mediaPrefix),
-                  openUrl: expect.stringContaining(mediaPrefix),
-                },
-              ]);
+            check(
+              readAssistantDisplayContent(
+                transcript.findLast((message) => message.role === "assistant"),
+              ),
+            ).toMatchObject([
+              { type: "text", text: "same accepted reply" },
+              {
+                type: "image",
+                mimeType: "image/png",
+                sizeBytes: 68,
+                width: 1,
+                height: 1,
+                url: expect.stringContaining(mediaPrefix),
+                openUrl: expect.stringContaining(mediaPrefix),
+              },
+            ]);
           }
         }
       }

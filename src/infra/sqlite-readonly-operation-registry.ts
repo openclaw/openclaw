@@ -1,30 +1,33 @@
-import type { createPluginModelCatalogReadOperations } from "../agents/plugin-model-catalog.read-operation.js";
+import type { AgentDeletionSessionStoreAbsentReadOperations } from "../agents/agent-delete-session-store-safety.worker-contract.js";
 import {
   createWorkerOperationRegistry,
   type WorkerOperations,
 } from "../state/worker-operation-registry.js";
-import type { trajectoryRuntimeRetentionReadOperations } from "../trajectory/runtime-retention.worker.js";
+import type { DeferredSessionTranscriptReadOperations } from "./deferred-plugin-session-source-recovery.worker-contract.js";
 import type { immutableInstallReadOperations } from "./package-update-activation-immutable.js";
+import type { pageCacheReadOperations } from "./sqlite-page-cache.worker.js";
 import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation-types.js";
 
 export type SqliteReadOnlyOperations = WorkerOperations<
-  ReturnType<typeof createPluginModelCatalogReadOperations> &
-    typeof immutableInstallReadOperations &
-    typeof trajectoryRuntimeRetentionReadOperations
->;
+  typeof immutableInstallReadOperations & typeof pageCacheReadOperations
+> &
+  DeferredSessionTranscriptReadOperations &
+  AgentDeletionSessionStoreAbsentReadOperations;
 
 export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
   SqliteReadOnlyOperations,
   SqliteReadOnlyOperationContext
 >({
-  trajectoryRetention: () =>
-    import("../trajectory/runtime-retention.worker.js").then(
-      (module) => module.trajectoryRuntimeRetentionReadOperations,
+  deferredSessionImport: () =>
+    import("./deferred-plugin-session-transcript-read.worker.js").then(
+      (module) => module.deferredSessionTranscriptReadOperations,
     ),
-  pluginCatalog: () =>
-    import("../agents/plugin-model-catalog.kernel.js").then(
-      (module) => module.pluginModelCatalogReadOperations,
+  agentRetirement: () =>
+    import("../agents/agent-delete-session-store-safety.kernel.js").then(
+      (module) => module.agentDeletionSessionStoreAbsentReadOperations,
     ),
+  pageCache: () =>
+    import("./sqlite-page-cache.worker.js").then((module) => module.pageCacheReadOperations),
   immutableInstall: () =>
     import("./package-update-activation-immutable.js").then(
       (module) => module.immutableInstallReadOperations,

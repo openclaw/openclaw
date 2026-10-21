@@ -1,23 +1,23 @@
-import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { UpdateRunPhase, UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createUpdateRunFixture } from "./update-run.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI update run E2E" });
 
+function text(root: Page | Locator, value: string, exact = true) {
+  return root.getByText(value, { exact });
+}
+
 suite.define(() => {
   it("resumes the same update after restart and keeps its successful report visible", async () => {
-    const proofDir = createControlUiE2eArtifactDir("update-run", ".artifacts/control-ui-e2e");
-    const viewport = { height: 1100, width: 1440 };
     await suite.withPage(
       {
         locale: "en-US",
-        recordVideo: { dir: proofDir, size: viewport },
         serviceWorkers: "block",
-        viewport,
+        viewport: { height: 1100, width: 1440 },
       },
       async ({ context, page }) => {
         let run = createUpdateRunFixture();
@@ -46,11 +46,7 @@ suite.define(() => {
           communityInvite: false,
           agentModel: "openai/gpt-5.6-luna",
           models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
-          updateAvailable: {
-            channel: "stable",
-            currentVersion: "1.0.0",
-            latestVersion: "2.0.0",
-          },
+          updateAvailable: { channel: "stable", currentVersion: "1.0.0", latestVersion: "2.0.0" },
           methodResponses: {
             "config.get": configResponse,
             "update.run": { ok: true, runId: run.runId, result: { status: "ok" } },
@@ -64,10 +60,6 @@ suite.define(() => {
         const dialog = page.locator("openclaw-modal-dialog");
         await dialog.getByRole("button", { name: "Update and restart", exact: true }).waitFor();
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(proofDir, "01-before-confirm.png"),
-        });
 
         await dialog.getByRole("button", { name: "Update and restart", exact: true }).click();
         await gateway.waitForRequest("update.run");
@@ -75,17 +67,14 @@ suite.define(() => {
           runId: run.runId,
         });
         const runView = dialog.locator("openclaw-update-run-view");
-        await runView
-          .getByText("⬆️ OpenClaw update in progress: staging.", { exact: true })
-          .waitFor();
-        await runView
-          .locator(".update-run-view__details")
-          .getByText("Downloading the update package.", { exact: false })
-          .waitFor();
-        expect(await runView.locator('[data-step="repairing"]').count()).toBe(0);
+        const runDetails = runView.locator(".update-run-view__details");
+        const repairing = runView.locator('[data-step="repairing"]');
+        await text(runView, "⬆️ OpenClaw update in progress: staging.").waitFor();
+        await text(runDetails, "Downloading the update package.", false).waitFor();
+        expect(await repairing.count()).toBe(0);
         const installationSteps = runView.locator(".update-run-view__step-list");
         await installationSteps.locator(":scope > summary").click();
-        await page.screenshot({ path: path.join(proofDir, "02-staging.png") });
+
         const stepList = installationSteps.locator("ol");
         await page.waitForFunction(
           (list) => list && list.scrollHeight - list.scrollTop - list.clientHeight < 2,
@@ -105,7 +94,6 @@ suite.define(() => {
         expect(await details.getAttribute("open")).toBeNull();
         await details.locator("summary").press("Enter");
         expect(await details.getAttribute("open")).not.toBeNull();
-        await page.screenshot({ path: path.join(proofDir, "02-expanded-details.png") });
 
         const advance = async (phase: UpdateRunPhase, detail: string) => {
           run = {
@@ -128,26 +116,20 @@ suite.define(() => {
             updatedAtMs: run.updatedAtMs,
           });
           await gateway.waitForRequest("update.runs.get", { after: reads });
-          await runView
-            .locator(".update-run-view__details")
-            .getByText(detail, { exact: false })
-            .waitFor();
+          await text(runDetails, detail, false).waitFor();
         };
         await advance("validating", "Package integrity and startup checks passed.");
         const snapshotDetails = runView.locator('[data-step="snapshot-space-preflight"] details');
         await snapshotDetails.locator("summary").click();
-        await snapshotDetails
-          .getByText("Recovery backup needs 18 GiB; 32 GiB is available.", { exact: true })
-          .waitFor();
+        await text(snapshotDetails, "Recovery backup needs 18 GiB; 32 GiB is available.").waitFor();
         expect(await snapshotDetails.getAttribute("open")).not.toBeNull();
         await snapshotDetails.locator("summary").click();
         expect(await snapshotDetails.getAttribute("open")).toBeNull();
         await advance("activating", "Activating the verified package.");
         await advance("restarting", "Waiting for the Gateway to reconnect.");
         await gateway.setOnline(false);
-        await runView.getByText("Gateway restarting…", { exact: true }).waitFor();
+        await text(runView, "Gateway restarting…").waitFor();
         expect(await dialog.count()).toBe(1);
-        await page.screenshot({ path: path.join(proofDir, "03-restarting.png") });
 
         run = {
           ...run,
@@ -172,18 +154,12 @@ suite.define(() => {
         expect(
           (await gateway.waitForRequest("update.runs.get", { after: readsBeforeReconnect })).params,
         ).toEqual({ runId: run.runId });
-        await runView
-          .locator(".update-run-view__details")
-          .getByText("Checking channels and readiness.", { exact: false })
-          .waitFor();
-        expect(await runView.locator('[data-step="repairing"]').count()).toBe(0);
-        await page.screenshot({ path: path.join(proofDir, "04-verifying.png") });
+        await text(runDetails, "Checking channels and readiness.", false).waitFor();
+        expect(await repairing.count()).toBe(0);
 
         await advance("repairing", "Repairing the installed candidate after verification failed.");
-        expect(await runView.locator('[data-step="repairing"]').getAttribute("data-status")).toBe(
-          "in_progress",
-        );
-        await page.screenshot({ path: path.join(proofDir, "04-repairing.png") });
+        expect(await repairing.getAttribute("data-status")).toBe("in_progress");
+
         await advance("verifying", "Verifying the repaired candidate.");
 
         const finishedAtMs = run.updatedAtMs + 1000;
@@ -200,10 +176,7 @@ suite.define(() => {
             ...Array.from({ length: 3 }, (_, index) => ({
               step: `warning:doctor:${index + 1}`,
               status: "completed" as const,
-              detail:
-                "An optional integration needs attention. Review its configuration in Settings. ".repeat(
-                  6,
-                ),
+              detail: `Integration ${index + 1}: ${"An optional integration needs attention. Review its configuration in Settings. ".repeat(6)}`,
             })),
           ],
           verification: {
@@ -221,14 +194,12 @@ suite.define(() => {
           status: run.status,
           updatedAtMs: run.updatedAtMs,
         });
-        const headline = "✅ OpenClaw updated to 2.0.0 (from 1.0.0).";
-        await runView.getByText(headline, { exact: true }).first().waitFor();
-        await runView.getByText("Gateway downtime: 1s.", { exact: false }).waitFor();
+        const headline = "✅ OpenClaw updated to 2.0.0 (from 1.0.0); 3 warnings need attention.";
+        await text(runView, headline).first().waitFor();
+        await text(runView, "Gateway downtime: 1s.", false).waitFor();
         expect(await runView.locator('[data-oracle][data-state="pass"]').count()).toBe(4);
-        expect(await runView.locator('[data-step="repairing"]').getAttribute("data-status")).toBe(
-          "completed",
-        );
-        await page.screenshot({ path: path.join(proofDir, "05-after-success.png") });
+        expect(await repairing.getAttribute("data-status")).toBe("completed");
+
         const reportBody = runView.locator(".update-run-view__report-body");
         const reportMetrics = await reportBody.evaluate((element) => ({
           height: element.clientHeight,
@@ -247,13 +218,8 @@ suite.define(() => {
 
         await dialog.getByRole("button", { name: "Close", exact: true }).click();
         await dialog.waitFor({ state: "detached" });
-        await page
-          .locator("openclaw-update-run-view")
-          .getByText(headline, { exact: true })
-          .first()
-          .waitFor();
+        await text(page.locator("openclaw-update-run-view"), headline).first().waitFor();
         await page.locator(".update-run-view__report").scrollIntoViewIfNeeded();
-        await page.screenshot({ path: path.join(proofDir, "06-settings-report.png") });
 
         // A fresh page has no in-memory run ID and must discover the last run from status.
         const freshPage = await context.newPage();
@@ -269,14 +235,9 @@ suite.define(() => {
         });
         await freshPage.goto(`${suite.server.baseUrl}settings/updates`);
         await freshGateway.waitForRequest("update.status");
-        await freshPage
-          .locator("openclaw-update-run-view")
-          .getByText(headline, { exact: true })
-          .first()
-          .waitFor();
+        await text(freshPage.locator("openclaw-update-run-view"), headline).first().waitFor();
         expect(await freshGateway.getRequests("update.run")).toHaveLength(0);
         await freshPage.locator(".update-run-view__report").scrollIntoViewIfNeeded();
-        await freshPage.screenshot({ path: path.join(proofDir, "07-reopened-report.png") });
       },
     );
   });

@@ -81,7 +81,13 @@ async function waitForMSTeamsChannelReady(
     const accounts = payload.channelAccounts?.msteams ?? [];
     lastAccounts = accounts;
     const account = accounts.find((entry) => entry.accountId === DEFAULT_ACCOUNT_ID);
-    if (account?.running === true && account.restartPending !== true) {
+    // Gateway task admission sets running before the Teams monitor registers its route.
+    if (
+      account?.running === true &&
+      account.lifecycle === "ready" &&
+      account.connected === true &&
+      account.restartPending !== true
+    ) {
       return;
     }
     await sleep(pollIntervalMs);
@@ -234,8 +240,7 @@ export async function createMSTeamsQaTransportAdapter(
       conversationKindByNativeId.clear();
       logicalConversationByNativeId.clear();
     },
-    createGatewayConfig: ({ baseUrl }) => {
-      webhookUrl = new URL("/api/messages", baseUrl).toString();
+    createGatewayConfig: () => {
       return {
         channels: {
           msteams: {
@@ -261,8 +266,12 @@ export async function createMSTeamsQaTransportAdapter(
         .join(" "),
     }),
     createRuntimePreloads: () => [bootstrapUrl],
-    waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
-      await waitForMSTeamsChannelReady(gateway, timeoutMs, pollIntervalMs),
+    prepareFlow: async ({ gateway }) => {
+      // createGatewayConfig receives the Lab origin; flow preparation owns the actual Gateway URL.
+      webhookUrl = new URL("/api/messages", gateway.baseUrl).toString();
+    },
+    waitReady: ({ gateway, timeoutMs, pollIntervalMs }) =>
+      waitForMSTeamsChannelReady(gateway, timeoutMs, pollIntervalMs),
     buildAgentDelivery: ({ target }) => ({
       channel: "msteams",
       to: target,

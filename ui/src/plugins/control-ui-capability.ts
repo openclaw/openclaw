@@ -33,8 +33,29 @@ export type ControlUiContributions = {
 // Application consumers use the registry contract; construction and activation
 // ownership stay in the runtime without a dependency back through app context.
 export type ControlUiPluginCapability = {
+  loadSettingsView: {
+    (
+      placement: import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiSettingsView["placement"],
+      signal: AbortSignal,
+    ): Promise<{
+      view: import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiSettingsView;
+      signal: AbortSignal;
+      dispose: () => void;
+    }>;
+    (
+      placement: import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiChannelSettingsView["placement"],
+      signal: AbortSignal,
+    ): Promise<{
+      view: import("../../../src/plugin-sdk/control-ui-settings.js").ControlUiChannelSettingsView;
+      signal: AbortSignal;
+      dispose: () => void;
+    }>;
+  };
   readonly errors: readonly PluginControlUiDiagnostic[];
   readonly hasPlugins: boolean;
+  /** Advances before notifications, including plugin-owned presentation mutations. */
+  readonly revision: number;
+  readonly registryStatus: "pending" | "complete" | "failed";
   readonly canReload: boolean;
   isLoading: (pluginId: string) => boolean;
   reload: () => Promise<void>;

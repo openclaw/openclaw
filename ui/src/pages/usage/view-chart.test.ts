@@ -1,46 +1,67 @@
-/* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+/* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { CostDailyEntry } from "./types.ts";
 import { dailyEntry } from "./usage-chart.test-support.ts";
-import { renderDailyChartCompact } from "./view-chart.ts";
+import { DailyChartCompact } from "./view-chart.tsx";
+import { mountView, texts, usageState } from "./view-render.test-support.ts";
+import { renderUsage } from "./view.tsx";
 
-afterEach(() => document.body.replaceChildren());
+afterEach(() => vi.useRealTimers());
 
-function renderDailyChart(
-  daily: CostDailyEntry[],
-  chartMode: "tokens" | "cost" = "cost",
-  dailyChartMode: "total" | "by-type" = "total",
-) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  const onSelectDay = vi.fn<(day: string, shiftKey: boolean, orderedDays: string[]) => void>();
-  render(
-    renderDailyChartCompact(daily, [], chartMode, dailyChartMode, () => {}, onSelectDay, {
-      startDate: daily[0]?.date ?? "2026-05-01",
-      endDate: daily.at(-1)?.date ?? "2026-05-01",
-      complete: true,
+function renderDailyChart(daily: CostDailyEntry[], stacked: boolean) {
+  return mountView(() =>
+    DailyChartCompact({
+      dailyEntries: daily,
+      selectedDays: [],
+      chartMode: "cost",
+      dailyChartMode: stacked ? "by-type" : "total",
+      onDailyChartModeChange: () => {},
+      onSelectDay: () => {},
+      range: {
+        startDate: daily[0]?.date ?? "2026-05-01",
+        endDate: daily.at(-1)?.date ?? "2026-05-01",
+        complete: true,
+      },
     }),
-    container,
-  );
-  return {
-    container,
-    onSelectDay,
-    bars: Array.from(container.querySelectorAll<HTMLElement>(".daily-bar-wrapper")),
-  };
+  ).container;
 }
 
-describe("renderDailyChartCompact", () => {
+describe("DailyChartCompact", () => {
   it("keeps day selection operable with mouse and keyboard", () => {
-    const { bars, onSelectDay } = renderDailyChart([dailyEntry("2026-05-04", 500, 0.2)], "tokens");
-    const bar = expectDefined(bars[0], "daily usage bar");
+    const entry = dailyEntry("2026-05-04", 500, 0.2);
+    const { usage, setFilters } = usageState(
+      { startDate: entry.date, endDate: entry.date },
+      (data) => ({ ...data, totals: entry, costDaily: [entry] }),
+    );
+    const onSelectDay = vi.fn((day: string, _shiftKey: boolean, _orderedDays: string[]) =>
+      setFilters((current) => ({
+        ...current,
+        selectedDays: current.selectedDays.includes(day) ? [] : [day],
+      })),
+    );
+    usage.callbacks.filters.onSelectDay = onSelectDay;
+    const { container } = mountView(() => renderUsage(usage));
+    const bar = expectDefined(
+      container.querySelector<HTMLElement>(".daily-bar-wrapper"),
+      "daily usage bar",
+    );
+    bar.focus();
+    const expectSelection = (pressed: string) => {
+      flush();
+      expect(container.querySelector(".daily-bar-wrapper")).toBe(bar);
+      expect(document.activeElement).toBe(bar);
+      expect(bar.getAttribute("aria-pressed")).toBe(pressed);
+    };
 
     bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
     expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true, ["2026-05-04"]);
+    expectSelection("true");
 
     bar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
     expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", false, ["2026-05-04"]);
+    expectSelection("false");
 
     const space = new KeyboardEvent("keydown", {
       bubbles: true,
@@ -68,12 +89,8 @@ describe("renderDailyChartCompact", () => {
       ...dailyEntry(`2026-05-${String(index + 1).padStart(2, "0")}`, 1_000, cost),
       ...(stacked ? { inputCost: 0.000004, outputCost: 0.000006 } : {}),
     }));
-    const { container } = renderDailyChart(daily, "cost", stacked ? "by-type" : "total");
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(labels);
+    const container = renderDailyChart(daily, stacked);
+    expect(texts(container, ".daily-chart-scale span")).toEqual(labels);
     const scaleBadge = container.querySelector(".daily-chart-scale-badge");
     if (badge === null) {
       expect(scaleBadge).toBeNull();
@@ -93,5 +110,24 @@ describe("renderDailyChartCompact", () => {
     expect(container.querySelectorAll(".daily-bar-total--placeholder")).toHaveLength(
       costs.length === 15 ? 15 : 0,
     );
+  });
+  it("keeps a range preset focused while applying its dates", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-14T12:00:00.000Z"));
+    const { usage, onDatesChange } = usageState({ timeZone: "utc" });
+    const { container } = mountView(() => renderUsage(usage));
+    const preset = [...container.querySelectorAll<HTMLButtonElement>(".usage-presets button")].find(
+      (button) => button.textContent?.trim() === "7d",
+    )!;
+    preset.focus();
+    preset.click();
+    flush();
+    expect(onDatesChange.mock.calls.map(([patch]) => patch)).toEqual([
+      { startDate: "2026-05-08" },
+      { endDate: "2026-05-14" },
+    ]);
+    expect([...container.querySelectorAll(".usage-presets button")]).toContain(preset);
+    expect(document.activeElement).toBe(preset);
+    expect(preset.getAttribute("aria-pressed")).toBe("true");
   });
 });

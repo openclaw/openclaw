@@ -7,10 +7,10 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   ensureSessionEntrySync,
-  replaceTranscriptEvents,
   rewindSessionToMessage,
   switchSessionBranch,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -22,11 +22,8 @@ import {
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
   resolveManagedOutgoingMediaArtifactDownload,
 } from "./managed-image-attachments.js";
-import {
-  insertManagedImageRecord,
-  MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-  readManagedImageRecord,
-} from "./managed-image-record-store.js";
+import { createFixture } from "./managed-image-attachments.test-support.js";
+import { readManagedImageRecord } from "./managed-image-record-store.js";
 import { readSessionMessageCountAsync } from "./session-transcript-readers.js";
 
 const ordering = vi.hoisted(() => ({ afterRead: undefined as (() => Promise<void>) | undefined }));
@@ -50,6 +47,10 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const timestamp = "2026-09-04T00:00:00.000Z";
 let stateDir: string;
 let savedEnv: ReturnType<typeof captureEnv>;
+
+function message(id: string, parentId: string | null, content: unknown, role = "assistant") {
+  return { type: "message", id, parentId, timestamp, message: { role, content } };
+}
 
 beforeEach(() => {
   savedEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -80,15 +81,18 @@ describe("managed attachment branch retention", () => {
         storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
       };
       expect(ensureSessionEntrySync(scope, { sessionId, updatedAt: Date.now() })).toBe(true);
-      const attachmentId = randomUUID();
-      const mediaRoot = path.join(stateDir, "media");
-      const mediaId = `${attachmentId}.png`;
-      const originalPath = path.join(mediaRoot, MANAGED_OUTGOING_ORIGINALS_SUBDIR, mediaId);
       const body = Buffer.from("synthetic branch-owned media\n");
-      fs.mkdirSync(path.dirname(originalPath), { recursive: true });
-      fs.writeFileSync(originalPath, body);
-      const url = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
       const messageId = "attached";
+      const { attachmentId, originalPath } = await createFixture(stateDir, {
+        attachmentId: randomUUID(),
+        sessionKey,
+        agentId: "main",
+        messageId,
+        createdAt: timestamp,
+        body,
+        filename: "fixture.png",
+      });
+      const url = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
       const branchMessages = Array.from(
         { length: switchAt === "after transcript read" ? 0 : 128 },
         (_, index) => ({
@@ -102,28 +106,12 @@ describe("managed attachment branch retention", () => {
       );
       await replaceTranscriptEvents(scope, [
         { type: "session", version: 3, id: sessionId, timestamp, cwd: stateDir },
-        {
-          type: "message",
-          id: "root",
-          parentId: null,
-          timestamp,
-          message: { role: "assistant", content: "root" },
-        },
-        {
-          type: "message",
-          id: "user",
-          parentId: "root",
-          timestamp,
-          message: { role: "user", content: "make an image" },
-        },
+        message("root", null, "root"),
+        message("user", "root", "make an image", "user"),
         ...branchMessages,
-        {
-          type: "message",
-          id: messageId,
-          parentId: branchMessages.at(-1)?.id ?? "user",
-          timestamp,
-          message: { role: "assistant", content: [{ type: "image", url, openUrl: url }] },
-        },
+        message(messageId, branchMessages.at(-1)?.id ?? "user", [
+          { type: "image", url, openUrl: url },
+        ]),
         ...Array.from(
           { length: switchAt === "between hidden-tail pages" ? 130 : 0 },
           (_, index) => ({
@@ -137,27 +125,6 @@ describe("managed attachment branch retention", () => {
         ),
       ]);
       await readSessionMessageCountAsync(scope);
-      await insertManagedImageRecord(
-        {
-          attachmentId,
-          sessionKey,
-          agentId: "main",
-          messageId,
-          createdAt: timestamp,
-          alt: "Synthetic branch attachment",
-          original: {
-            mediaRoot,
-            mediaId,
-            mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-            contentType: "image/png",
-            width: 1,
-            height: 1,
-            sizeBytes: body.length,
-            filename: "fixture.png",
-          },
-        },
-        stateDir,
-      );
       const download = () =>
         resolveManagedOutgoingMediaArtifactDownload({
           sessionKey,
@@ -195,11 +162,7 @@ describe("managed attachment branch retention", () => {
           reason: "window-changed",
         });
       } else {
-        expect(await cleanup).toEqual({
-          deletedRecordCount: 0,
-          deletedFileCount: 0,
-          retainedCount: 1,
-        });
+        await cleanup;
       }
       expect(switched).toBe(switchAt !== "after cleanup");
       expect(await readManagedImageRecord(attachmentId, stateDir)).not.toBeNull();

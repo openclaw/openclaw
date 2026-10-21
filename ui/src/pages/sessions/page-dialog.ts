@@ -3,24 +3,25 @@ import { formatUiError } from "../../lib/format-error.ts";
 /** Type-only, so the dialog itself stays behind its lazy boundary. */
 type InputDialogOpener = (typeof import("../../components/input-dialog.ts"))["showInputDialog"];
 
-export class SessionsPageDialog {
+export function createSessionsDialog(onError: (message: string) => void) {
   /** Only one dialog is open at a time; disconnect closes whichever it is. */
-  private lifecycle: AbortController | null = null;
+  let currentLifetime: AbortController | null = null;
 
-  constructor(private readonly onError: (message: string) => void) {}
-
-  abort() {
-    this.lifecycle?.abort();
+  function abort() {
+    currentLifetime?.abort();
   }
 
-  async open(options: () => Parameters<InputDialogOpener>[0]): Promise<string | null> {
+  async function open(options: () => Parameters<InputDialogOpener>[0]): Promise<string | null> {
     // Reentrant opens share the live controller but must not retire it on completion.
-    const active = this.lifecycle;
+    const active = currentLifetime;
     const lifecycle = active ?? new AbortController();
-    this.lifecycle = lifecycle;
+    currentLifetime = lifecycle;
     try {
-      const showInputDialog = await this.load();
-      if (!showInputDialog) {
+      let showInputDialog: InputDialogOpener;
+      try {
+        ({ showInputDialog } = await import("../../components/input-dialog.ts"));
+      } catch (error) {
+        onError(formatUiError(error));
         return null;
       }
       const resolved = options();
@@ -33,19 +34,10 @@ export class SessionsPageDialog {
         })) ?? null
       );
     } finally {
-      if (!active && this.lifecycle === lifecycle) {
-        this.lifecycle = null;
+      if (!active && currentLifetime === lifecycle) {
+        currentLifetime = null;
       }
     }
   }
-
-  /** A dialog that never opens still owes the operator a visible outcome. */
-  private async load(): Promise<InputDialogOpener | null> {
-    try {
-      return (await import("../../components/input-dialog.ts")).showInputDialog;
-    } catch (error) {
-      this.onError(formatUiError(error));
-      return null;
-    }
-  }
+  return { abort, open };
 }

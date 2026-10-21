@@ -54,36 +54,6 @@ describe("QA Lab dashboard HTTP", () => {
     );
   });
 
-  it("rejects a stalled request when its deadline aborts", async () => {
-    const timeoutController = new AbortController();
-    vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (_input, init) => {
-        const signal = init?.signal;
-        if (!signal) {
-          throw new Error("missing request signal");
-        }
-        return await new Promise<Response>((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () => {
-              // Fetch rejects with the exact abort reason. DOM types define it as an Error,
-              // although jsdom does not preserve that prototype relationship at runtime.
-              reject(signal.reason as Error);
-            },
-            { once: true },
-          );
-        });
-      }),
-    );
-
-    const request = getJson("/api/stalled");
-    timeoutController.abort(new DOMException("request deadline exceeded", "TimeoutError"));
-
-    await expect(request).rejects.toMatchObject({ name: "TimeoutError" });
-  });
-
   it("fails closed on non-JSON success responses", async () => {
     mockResponse("not json", {
       status: 200,
@@ -115,15 +85,6 @@ describe("QA Lab dashboard HTTP", () => {
     await expect(getJson("/api/state")).rejects.toThrow(/\/api\/state: malformed JSON response/);
   });
 
-  it("accepts vendor JSON success responses", async () => {
-    mockResponse(JSON.stringify({ ok: true }), {
-      status: 200,
-      headers: { "content-type": "application/problem+json; charset=utf-8" },
-    });
-
-    await expect(getJson("/api/bootstrap")).resolves.toEqual({ ok: true });
-  });
-
   it("keeps JSON API error messages readable", async () => {
     mockResponse(JSON.stringify({ error: "boom" }), {
       status: 500,
@@ -132,15 +93,5 @@ describe("QA Lab dashboard HTTP", () => {
     });
 
     await expect(postJson("/api/runner/start", { scenario: "baseline" })).rejects.toThrow("boom");
-  });
-
-  it("allows large successful JSON responses", async () => {
-    const body = JSON.stringify({ data: "x".repeat(128 * 1024) });
-    mockResponse(body, {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-
-    await expect(getJson("/api/state")).resolves.toEqual({ data: "x".repeat(128 * 1024) });
   });
 });

@@ -1,4 +1,3 @@
-// system.run approval sanitizer.
 // Verifies forwarded node exec approvals against stored operator decisions.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
@@ -9,10 +8,7 @@ import {
 import type { ExecApprovalDecision, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
-import {
-  EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS,
-  type ExecApprovalRecord,
-} from "./exec-approval-manager.js";
+import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 import {
   evaluateSystemRunApprovalMatch,
   toSystemRunApprovalMismatchError,
@@ -206,7 +202,6 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
   rawParams: unknown;
   client: ApprovalClient | null;
   execApprovalManager?: ApprovalLookup;
-  nowMs?: number;
 }): Promise<
   | {
       ok: true;
@@ -296,17 +291,6 @@ export async function sanitizeSystemRunParamsForForwarding(opts: {
     snapshot.decision === undefined &&
     snapshot.consumedDecision === undefined &&
     snapshot.askFallbackConsumed !== true;
-  const nowMs = typeof opts.nowMs === "number" ? opts.nowMs : Date.now();
-  const timeoutReplayExpiresAtMs =
-    snapshot.resolvedAtMs === undefined
-      ? snapshot.expiresAtMs
-      : snapshot.resolvedAtMs + EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS;
-  const approvalExpired = timedOut
-    ? nowMs > timeoutReplayExpiresAtMs
-    : nowMs > snapshot.expiresAtMs;
-  if (approvalExpired) {
-    return systemRunApprovalGuardError("APPROVAL_EXPIRED", "approval expired", runId);
-  }
 
   const targetNodeId = normalizeNullableString(opts.nodeId);
   if (!targetNodeId) {

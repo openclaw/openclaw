@@ -1,4 +1,3 @@
-/** Parsing for the /send override command embedded in inbound auto-reply text. */
 import { normalizeCommandBody } from "./commands-registry.js";
 import { parseSendPolicyCommandBody } from "./reply/commands-slash-parse.js";
 import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
@@ -14,7 +13,5 @@ export function parseSendPolicyCommand(raw?: string): {
   if (!trimmed) {
     return { hasCommand: false };
   }
-  const stripped = stripInboundMetadata(trimmed);
-  const normalized = normalizeCommandBody(stripped);
-  return parseSendPolicyCommandBody(normalized);
+  return parseSendPolicyCommandBody(normalizeCommandBody(stripInboundMetadata(trimmed)));
 }

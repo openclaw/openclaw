@@ -1,6 +1,5 @@
 import { normalizeDeviceAuthRole, normalizeDeviceAuthScopes } from "./device-auth.js";
 
-/** Closed purpose codes carried by specialized bootstrap tokens. */
 export type DeviceBootstrapPurpose =
   | "control-ui"
   | "control-ui-owner"
@@ -118,7 +117,6 @@ export function deviceBootstrapProfilesEqual(
   );
 }
 
-/** Return whether an input matches either supported native-mobile setup profile. */
 export function isMobilePairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
@@ -128,7 +126,6 @@ export function isMobilePairingSetupBootstrapProfile(
   );
 }
 
-/** Return whether an input exactly matches the node-only companion setup profile. */
 export function isNodePairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
@@ -150,7 +147,6 @@ export function resolvePairingSetupAccess(
   return "limited";
 }
 
-/** Return whether an input exactly matches the embedded voice-node setup profile. */
 export function isVoiceNodePairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
@@ -190,7 +186,6 @@ export function resolveBootstrapProfileScopesForRoles(
   );
 }
 
-/** Resolve one role's scopes directly from a normalized bootstrap profile. */
 export function resolveDeviceProfileRoleScopes(
   profile: DeviceBootstrapProfile,
   role: string,
@@ -199,7 +194,6 @@ export function resolveDeviceProfileRoleScopes(
   return resolveBootstrapProfileScopesForRole(role, scopes, profile.purpose);
 }
 
-/** Resolve role-set scopes directly from a normalized bootstrap profile. */
 export function resolveDeviceProfileScopes(
   profile: DeviceBootstrapProfile,
   roles: readonly string[],

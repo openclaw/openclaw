@@ -1,12 +1,19 @@
 import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationContextRequest,
+} from "../../../app/context.ts";
 import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
-import "./chat-detail-panel.ts";
+import "../../../styles/chat/side-panel.css";
+import "./chat-detail-panel.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let userEvent: (typeof import("vitest/browser"))["userEvent"];
@@ -57,26 +64,40 @@ async function mount(
     setFileDraft(file, { content: retained, expectedHash: retainedHash });
   }
   const panel = document.createElement("openclaw-chat-detail-panel") as Panel;
-  panel.style.cssText = "width:100%;height:600px";
-  panel.content = file;
-  document.body.append(panel);
-  await panel.updateComplete;
-  await customElements.whenDefined("openclaw-chat-html-preview");
-  await expect.poll(() => panel.querySelector("openclaw-chat-html-preview")).not.toBeNull();
-  const preview = panel.querySelector("openclaw-chat-html-preview")!;
-  preview.embedSandboxMode = "strict";
   const request = vi.fn(async (_method: string, params: { html: string }) => ({
     html: params.html,
     sandboxUrl: "/mcp-app-sandbox",
     sandboxPort: 8444,
   }));
-  Reflect.set(preview, "context", {
+  const previewContext = {
     gateway: {
       snapshot: { client: { request }, phase: "connected" },
       connection: { gatewayUrl: "ws://gateway.example:8443" },
       subscribe: () => () => {},
     },
+  } as unknown as ApplicationContext;
+  // Only the preview consumes this Gateway-only fixture; sibling catalogs need a full app.
+  panel.addEventListener("context-request", (event) => {
+    // SAFETY: This listener handles the native application context protocol.
+    const contextRequest = event as ApplicationContextRequest;
+    if (
+      contextRequest.context === applicationContext &&
+      contextRequest.contextTarget.localName === "openclaw-chat-html-preview"
+    ) {
+      event.stopPropagation();
+      contextRequest.callback(previewContext);
+    }
   });
+  panel.style.cssText = "width:100%;height:600px";
+  panel.content = file;
+  const container = createChatSidebarContainer();
+  container.append(panel);
+  document.body.append(container);
+  await panel.updateComplete;
+  await customElements.whenDefined("openclaw-chat-html-preview");
+  await expect.poll(() => panel.querySelector("openclaw-chat-html-preview")).not.toBeNull();
+  const preview = panel.querySelector("openclaw-chat-html-preview")!;
+  preview.embedSandboxMode = "strict";
   await expect.poll(() => panel.querySelector("iframe")).not.toBeNull();
   return { panel, file, request };
 }
@@ -90,6 +111,12 @@ afterEach(() => {
 });
 
 describe.runIf(browserMode)("HTML file presentation", () => {
+  beforeEach(async () => {
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    onTestFinished(() => page.viewport(viewport.width, viewport.height));
+    await page.viewport(1200, 800);
+  });
+
   it("renders normalized HTML MIME without a filename extension", async () => {
     const { panel, request } = await mount("report", undefined, "Text/HTML; charset=utf-8");
     expect(request.mock.lastCall?.[1]?.html).toBe(source);
@@ -102,7 +129,7 @@ describe.runIf(browserMode)("HTML file presentation", () => {
     expect(request.mock.lastCall?.[1]?.html).toBe(source);
     expect(panel.querySelector(".cm-editor")).toBeNull();
     expect(panel.querySelector("h1")).toBeNull();
-    expect(panel.querySelector(".sidebar-file-view__wrap")).toBeNull();
+    expect(button(panel, "Enable word wrap").disabled).toBe(true);
     await userEvent.click(button(panel, "Edit file"));
     await page.getByRole("textbox", { name: file.name, exact: true }).click();
     await expect
@@ -118,7 +145,7 @@ describe.runIf(browserMode)("HTML file presentation", () => {
     await expect.poll(() => request.mock.lastCall?.[1]?.html).toBe("<h1>Unsaved draft</h1>");
     expect(panel.querySelector(".cm-editor")).toBe(editor);
     expect(input.checkVisibility()).toBe(false);
-    expect(panel.querySelector(".sidebar-file-view__wrap")).toBeNull();
+    expect(button(panel, "Disable word wrap").disabled).toBe(true);
     await userEvent.click(button(panel, "Source"));
     expect(button(panel, "Disable word wrap").getAttribute("aria-pressed")).toBe("true");
     expect(panel.querySelector(".cm-editor")).toBe(editor);
@@ -288,7 +315,9 @@ describe.runIf(browserMode)("HTML file presentation", () => {
       .toBe("<h1>Retained draft</h1>");
     expect(readFileDraft(file)?.content).toBe("<h1>Retained draft</h1>");
     await userEvent.click(button(panel, "Discard"));
-    await userEvent.click(button(panel, "Preview"));
+    await expect
+      .poll(() => panel.querySelector<HTMLElement>(".chat-html-preview")?.checkVisibility())
+      .toBe(true);
     await expect.poll(() => request.mock.lastCall?.[1]?.html).toBe(source);
     expect(readFileDraft(file)).toBeUndefined();
   });

@@ -1,0 +1,48 @@
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { ChatType } from "../../channels/chat-type.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
+import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
+import type { ReplyToMode } from "../../config/types.base.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
+
+export type MessageToolOptions = {
+  agentAccountId?: string;
+  agentSessionKey?: string;
+  runSessionKey?: string;
+  runId?: string;
+  sessionId?: string;
+  agentId?: string;
+  config?: OpenClawConfig;
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
+  admitScheduledInvocation?: () => OpenClawConfig;
+  currentChannelId?: string;
+  currentChatType?: ChatType;
+  currentMessagingTarget?: string;
+  messageActionTurnCapability?: string;
+  currentChannelProvider?: string;
+  currentThreadTs?: string;
+  agentThreadId?: string | number;
+  currentMessageId?: string | number;
+  currentInboundAudio?: boolean;
+  hasCurrentInboundAudio?: () => boolean;
+  replyToMode?: ReplyToMode;
+  hasRepliedRef?: { value: boolean };
+  sameChannelThreadRequired?: boolean;
+  sandboxRoot?: string;
+  sandboxContainerWorkdir?: string;
+  sandboxFsBridge?: SandboxFsBridge;
+  sandboxReadOnlyResourceMounts?: readonly { hostPath: string; containerPath: string }[];
+  sandboxWorkspaceMediaReadAllowed?: boolean;
+  requireExplicitTarget?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  inputProvenance?: import("../../sessions/input-provenance.js").InputProvenance;
+  /** Process-local completion authority: send only to the current source route. */
+  sourceReplyOnly?: boolean;
+  inboundEventKind?: InboundEventKind;
+  requesterSenderId?: string;
+  senderIsOwner?: boolean;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
+  workspaceDir?: string;
+};

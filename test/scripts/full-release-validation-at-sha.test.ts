@@ -63,6 +63,9 @@ describe("full-release-validation-at-sha", () => {
     const callsBefore = fixture.calls().length;
     const reopened = fixture.run(["--reconcile-request", fixture.requestPath()], true);
     expect(reopened.status, reopened.stderr).toBe(0);
+    expect(reopened.stdout).toContain(
+      "release_profile=stable rerun_group=all soak=true telegram_waiver=omitted",
+    );
     expect(readFileSync(fixture.requestPath())).toEqual(before);
     expect(
       fixture
@@ -393,25 +396,6 @@ describe("full-release-validation-at-sha", () => {
     expect(
       calls.filter((args) => ghApiEndpoint(args).endsWith("/actions/workflows/17/runs")),
     ).toHaveLength(4);
-  });
-
-  it("keeps waiting while the exact run is queued before its witness upload", () => {
-    const queued = { conclusion: null, status: "queued" };
-    const fixture = createDispatchFixture({
-      parentRunStates: [
-        ...Array.from({ length: 6 }, () => queued),
-        { conclusion: "success", status: "completed" },
-      ],
-      witnessMissingReads: 6,
-    });
-    const result = fixture.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toContain("dispatch=pending-witness: run 123 (queued)");
-    expect(fixture.readWaits()).toEqual([30_000, 60_000, 120_000, 120_000, 120_000, 120_000]);
-    expect(fixture.record()).toMatchObject({
-      phase: "observed",
-      run: { id: 123, attempt: 1 },
-    });
   });
 
   it("delivers the complete wire body through a private, bounded, short-lived payload", () => {
@@ -881,6 +865,9 @@ describe("full-release-validation-at-sha", () => {
         },
         wireInputs: { run_release_soak: "false", fail_fast: "false", reuse_evidence: "true" },
       });
+      expect(result.stdout).toContain(
+        `release_profile=${profile} rerun_group=all soak=${effectiveSoak} telegram_waiver=omitted`,
+      );
       expect(record.run).toEqual({ id: 123, attempt: 1 });
       expect(record.error).toBe("none");
     },
@@ -905,8 +892,18 @@ describe("full-release-validation-at-sha", () => {
 
   it("does not retain or mutate a request in dry-run mode", () => {
     const fixture = createDispatchFixture();
-    const result = fixture.run(["--dry-run"]);
+    const result = fixture.run([
+      "--dry-run",
+      "-f",
+      "release_profile=stable",
+      "-f",
+      "telegram_waiver=private-waiver-selection",
+    ]);
     expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      "release_profile=stable rerun_group=all soak=true telegram_waiver=selected (redacted)",
+    );
+    expect(result.stdout).not.toContain("private-waiver-selection");
     expect(result.stdout).toContain("(dry run; not written)");
     expect(result.stdout).toContain(`Validation SHA fetchable by bare SHA: ${fixture.targetSha}`);
     expect(result.stdout).not.toContain("validation/target-");

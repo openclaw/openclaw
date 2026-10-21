@@ -7,9 +7,7 @@ export async function readPreparedServerMethodModelCatalog(
   options?: { agentId?: string },
 ): Promise<PreparedGatewayModelCatalog | undefined> {
   try {
-    return context.readPreparedGatewayModelCatalog
-      ? await context.readPreparedGatewayModelCatalog(options)
-      : undefined;
+    return await context.readPreparedGatewayModelCatalog?.(options);
   } catch {
     // Catalog metadata decorates these responses; owner selection or lifecycle
     // races must not make the primary roster/session RPC unavailable.

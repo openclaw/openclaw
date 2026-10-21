@@ -119,17 +119,15 @@ func exactGlossaryMappings(glossary []GlossaryEntry) map[string]string {
 
 func (t *CodexTranslator) translateMasked(ctx context.Context, core string) (string, error) {
 	state := NewPlaceholderState(core)
-	placeholders := make([]string, 0, 8)
-	mapping := map[string]string{}
-	masked := maskMarkdown(core, state.Next, &placeholders, mapping)
+	masked := maskMarkdown(core, state)
 	translated, err := t.translateRaw(ctx, masked)
 	if err != nil {
 		return "", err
 	}
-	if err := validatePlaceholders(translated, placeholders); err != nil {
+	if err := validatePlaceholders(translated, state.placeholders); err != nil {
 		return "", err
 	}
-	return unmaskMarkdown(translated, placeholders, mapping), nil
+	return unmaskMarkdown(translated, state.placeholders, state.mapping), nil
 }
 
 func (t *CodexTranslator) translateRaw(ctx context.Context, core string) (string, error) {

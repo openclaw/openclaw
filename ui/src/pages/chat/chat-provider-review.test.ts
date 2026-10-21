@@ -17,8 +17,9 @@ import {
   requestCalls,
   requireRecord,
 } from "./chat-host.test-support.ts";
+import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
+import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
-import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { flushChatQueueForEvent, retryQueuedChatMessage } from "./chat-send-actions.ts";
 import { deliverChatQueueItem } from "./chat-send-delivery.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
@@ -244,24 +245,28 @@ it("keeps a paused queue input held when its earlier settings wait finishes afte
   expect(
     admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, paused.key, "main"), item),
   ).toBe(true);
-  host.requestUpdate = () => {
+  const stop = subscribeChatOutboxQueue(host, () => {
     if (host.chatQueue[0]?.sendState === "waiting-model") {
       waiting.resolve();
     }
-  };
-  const delivery = deliverChatQueueItem(host, item, { pendingSettings: settings.promise });
-  await waiting.promise;
-  holdProviderReviewQueuedInputs(host);
-  settings.resolve(true);
-  await delivery;
-  await flushChatQueueForEvent(host);
-  expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
-  expect(host.chatQueue[0]).toMatchObject({ text: item.text, sendState: "held" });
-  expect(host.chatQueue[0]?.sendRunId).toBe(item.sendRunId);
+  });
+  try {
+    const delivery = deliverChatQueueItem(host, item, { pendingSettings: settings.promise });
+    await waiting.promise;
+    holdProviderReviewQueuedInputs(host);
+    settings.resolve(true);
+    await delivery;
+    await flushChatQueueForEvent(host);
+    expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+    expect(host.chatQueue[0]).toMatchObject({ text: item.text, sendState: "held" });
+    expect(host.chatQueue[0]?.sendRunId).toBe(item.sendRunId);
+  } finally {
+    stop();
+  }
 });
 
 it.each(["lost-ack", "accepted-unconsumed"] as const)(
-  "holds %s input across pause clearing, reload, and positive interrupted custody until explicit retry",
+  "retains %s input across pause clearing and reload until server consumption",
   async (outcome) => {
     let row: GatewaySessionRow = {
       ...paused,
@@ -271,6 +276,7 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
     };
     let attemptedRunId: string | undefined;
     let attempts = 0;
+    let consumed = false;
     const request = makeRequestMock({
       "sessions.list": () => sessionsResult([row], row.snapshotAt ?? 0),
       "chat.history": () => ({
@@ -278,20 +284,29 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
         sessionId: row.sessionId,
         sessionInfo: { ...row, hasActiveRun: false, status: "done" },
         pendingInputs: {
-          items: attemptedRunId
-            ? [
-                {
-                  id: "accepted-input",
-                  runId: attemptedRunId,
-                  acceptedAt: 1,
-                  state: "interrupted",
-                  message: { role: "user", content: "Keep this delivery identity" },
-                },
-              ]
-            : [],
-          total: attemptedRunId ? 1 : 0,
+          items:
+            attemptedRunId && !consumed
+              ? [
+                  {
+                    id: "accepted-input",
+                    runId: attemptedRunId,
+                    acceptedAt: 1,
+                    state: "interrupted",
+                    message: { role: "user", content: "Keep this delivery identity" },
+                  },
+                ]
+              : [],
+          total: attemptedRunId && !consumed ? 1 : 0,
         },
-        inputReceipts: attemptedRunId ? [{ runId: attemptedRunId, state: "pending" }] : [],
+        inputReceipts: attemptedRunId
+          ? [
+              {
+                runId: attemptedRunId,
+                state: consumed ? "consumed" : "pending",
+                ...(consumed ? { consumedByEventId: "server-recovered-input" } : {}),
+              },
+            ]
+          : [],
       }),
       "chat.send": (params: unknown) => {
         const runId = requireRecord(params, "chat.send").idempotencyKey;
@@ -360,13 +375,19 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
       sessionId: row.sessionId,
     });
     await retryQueuedChatMessage(reloaded, attempted!.id);
-    expect(attempts).toBe(2);
-    const sent = requestCalls(request, "chat.send");
-    expect(sent[1]?.[1]).toMatchObject({
-      idempotencyKey: requireRecord(sent[0]?.[1], "original send").idempotencyKey,
-      message: "Keep this delivery identity",
+    expect(attempts).toBe(1);
+    expect(reloaded.chatQueue[0]).toMatchObject({
+      id: attempted?.id,
+      text: attempted?.text,
+      sendState: "waiting-idle",
+      sendAttempts: 1,
+      sendRunId: attemptedRunId,
     });
+    consumed = true;
+    await loadChatHistory(reloaded, { deferBranches: true });
+    await flushChatQueueForEvent(reloaded);
     expect(listStoredChatOutboxes(reloaded)).toEqual([]);
+    expect(attempts).toBe(1);
   },
 );
 

@@ -1,3 +1,4 @@
+import { engineTextHexSql } from "../../infra/database-engine/text-bytes.js";
 import {
   executeSqliteQuerySync,
   iterateSqliteQuerySync,
@@ -8,11 +9,9 @@ import type {
   ArchivedSessionEvictionBatch,
   ArchivedSessionEvictionQuery,
 } from "./disk-budget.types.js";
+import { collectRecentSessionHistoryIds } from "./session-accessor.sqlite-history-recency.js";
 import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
-import {
-  collectRecentSessionHistoryIds,
-  collectSessionStateIdsForEntry,
-} from "./session-accessor.sqlite-references.js";
+import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
@@ -27,6 +26,7 @@ export function readDiskEvictableArchivedSessionBatchInDatabase(
 ): ArchivedSessionEvictionBatch {
   const limit = Math.max(1, params.limit ?? DISK_EVICTABLE_ARCHIVE_BATCH_SIZE);
   const candidates: ArchivedSessionEvictionBatch["candidates"] = [];
+  const preserveKeys = new Set(params.liveSessionKeys);
   let cursor = params.after;
   while (candidates.length < limit) {
     const db = getSessionKysely(database.db);
@@ -65,6 +65,7 @@ export function readDiskEvictableArchivedSessionBatchInDatabase(
           key: row.session_key,
           entry,
           preserveRecentMs: params.preserveRecentMs,
+          preserveKeys,
         })
       ) {
         candidates.push({ archivedAt: row.archived_at, entry, sessionKey: row.session_key });
@@ -107,7 +108,10 @@ export function collectSessionAdmissionReferences(params: {
     params.database.db,
     db
       .selectFrom("session_nodes")
-      .select(["session_key", db.fn<string>("hex", ["session_key"]).as("key_bytes")]),
+      .select((eb) => [
+        "session_key",
+        engineTextHexSql(params.database.db, eb.ref("session_key")).as("key_bytes"),
+      ]),
   )) {
     if (normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
       admittedKeyBytes.push(row.key_bytes);
@@ -127,10 +131,12 @@ export function collectSessionAdmissionReferences(params: {
             db
               .selectFrom("session_nodes")
               .select("session_key")
-              .where(
-                db.fn<string>("hex", ["session_key"]),
-                "in",
-                sqliteStringSet(admittedKeyBytes),
+              .where((eb) =>
+                eb(
+                  engineTextHexSql(params.database.db, eb.ref("session_key")),
+                  "in",
+                  sqliteStringSet(admittedKeyBytes),
+                ),
               ),
           ),
       )

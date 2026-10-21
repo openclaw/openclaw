@@ -1,6 +1,7 @@
 import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 
 type CanvasSurface = "assistant_message" | "node_panel";
@@ -31,26 +32,18 @@ type CanvasPreview = {
   mcpApp?: McpAppPreviewDescriptor;
 };
 
-function getRecordStringField(
-  record: Record<string, unknown> | undefined,
-  key: string,
-): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 function coerceMcpAppDescriptor(
   record: Record<string, unknown> | undefined,
 ): McpAppPreviewDescriptor | undefined {
-  const viewId = getRecordStringField(record, "viewId");
+  const viewId = readNonBlankString(record?.viewId);
   if (!viewId || viewId.length > 128) {
     return undefined;
   }
-  const serverName = getRecordStringField(record, "serverName");
-  const toolName = getRecordStringField(record, "toolName");
-  const uiResourceUri = getRecordStringField(record, "uiResourceUri");
-  const toolCallId = getRecordStringField(record, "toolCallId");
-  const originSessionKey = getRecordStringField(record, "originSessionKey");
+  const serverName = readNonBlankString(record?.serverName);
+  const toolName = readNonBlankString(record?.toolName);
+  const uiResourceUri = readNonBlankString(record?.uiResourceUri);
+  const toolCallId = readNonBlankString(record?.toolCallId);
+  const originSessionKey = readNonBlankString(record?.originSessionKey);
   const resultMetaState = record?.resultMetaState === "unavailable" ? "unavailable" : undefined;
   const hasCompleteDescriptor = Boolean(
     serverName &&
@@ -85,13 +78,12 @@ export function isCanvasBoardWidgetName(value: unknown): value is string {
   return typeof value === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(value);
 }
 
-function coerceCanvasPreview(
-  record: Record<string, unknown> | undefined,
-): CanvasPreview | undefined {
+export function extractCanvasFromRecord(value: unknown): CanvasPreview | undefined {
+  const record = asOptionalRecord(value);
   if (!record) {
     return undefined;
   }
-  const kind = getRecordStringField(record, "kind")?.trim().toLowerCase();
+  const kind = readNonBlankString(record?.kind)?.trim().toLowerCase();
   if (kind !== "canvas") {
     return undefined;
   }
@@ -101,12 +93,12 @@ function coerceCanvasPreview(
   const mcpApp = coerceMcpAppDescriptor(asOptionalRecord(record.mcpApp));
   const mcpAppViewId = mcpApp?.viewId;
   const requestedSurface =
-    getRecordStringField(presentation, "target") ?? getRecordStringField(record, "target");
+    readNonBlankString(presentation?.target) ?? readNonBlankString(record?.target);
   const surface = requestedSurface ?? "assistant_message";
   if (surface !== "assistant_message" && surface !== "node_panel") {
     return undefined;
   }
-  const title = getRecordStringField(presentation, "title") ?? getRecordStringField(view, "title");
+  const title = readNonBlankString(presentation?.title) ?? readNonBlankString(view?.title);
   const preferredHeight = normalizePreferredHeight(
     asFiniteNumber(presentation?.preferred_height) ??
       asFiniteNumber(presentation?.preferredHeight) ??
@@ -114,13 +106,12 @@ function coerceCanvasPreview(
       asFiniteNumber(view?.preferredHeight),
   );
   const className =
-    getRecordStringField(presentation, "class_name") ??
-    getRecordStringField(presentation, "className");
-  const style = getRecordStringField(presentation, "style");
-  const sandbox = getRecordStringField(presentation, "sandbox");
-  const viewUrl = getRecordStringField(view, "url") ?? getRecordStringField(view, "entryUrl");
-  const viewId = getRecordStringField(view, "id") ?? getRecordStringField(view, "docId");
-  const requestedBoardWidgetName = getRecordStringField(view, "boardWidgetName");
+    readNonBlankString(presentation?.class_name) ?? readNonBlankString(presentation?.className);
+  const style = readNonBlankString(presentation?.style);
+  const sandbox = readNonBlankString(presentation?.sandbox);
+  const viewUrl = readNonBlankString(view?.url) ?? readNonBlankString(view?.entryUrl);
+  const viewId = readNonBlankString(view?.id) ?? readNonBlankString(view?.docId);
+  const requestedBoardWidgetName = readNonBlankString(view?.boardWidgetName);
   const boardWidgetName = isCanvasBoardWidgetName(requestedBoardWidgetName)
     ? requestedBoardWidgetName
     : undefined;
@@ -138,8 +129,8 @@ function coerceCanvasPreview(
   }
   const url =
     viewUrl ??
-    (getRecordStringField(source, "type")?.trim().toLowerCase() === "url"
-      ? getRecordStringField(source, "url")
+    (readNonBlankString(source?.type)?.trim().toLowerCase() === "url"
+      ? readNonBlankString(source?.url)
       : undefined);
   if (!url) {
     return undefined;
@@ -157,7 +148,7 @@ function coerceCanvasPreview(
 /** Extracts an MCP App Canvas preview from sanitized tool-result details. */
 export function extractCanvasFromDetails(value: unknown): CanvasPreview | undefined {
   const details = asOptionalRecord(value);
-  return coerceCanvasPreview(asOptionalRecord(details?.mcpAppPreview));
+  return extractCanvasFromRecord(details?.mcpAppPreview);
 }
 
 function parseCanvasAttributes(raw: string): Record<string, string> {
@@ -165,7 +156,7 @@ function parseCanvasAttributes(raw: string): Record<string, string> {
   const re = /([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(raw))) {
-    const key = match[1]?.trim().toLowerCase();
+    const key = match[1]?.toLowerCase();
     const value = (match[2] ?? match[3] ?? "").trim();
     if (key && value) {
       attrs[key] = value;
@@ -202,11 +193,14 @@ function previewFromShortcode(attrs: Record<string, string>): CanvasPreview | un
 /** Extracts a canvas preview from a JSON-shaped tool or assistant payload. */
 export function extractCanvasFromText(outputText: string | undefined): CanvasPreview | undefined {
   const parsed = outputText ? safeParseJsonRecord(outputText) : undefined;
-  return coerceCanvasPreview(parsed);
+  return extractCanvasFromRecord(parsed);
 }
 
 /** Extracts [embed ...] shortcodes outside Markdown code and returns stripped text. */
-export function extractCanvasShortcodes(text: string | undefined): {
+export function extractCanvasShortcodes(
+  text: string | undefined,
+  includePreview?: (preview: CanvasPreview) => boolean,
+): {
   text: string;
   previews: CanvasPreview[];
 } {
@@ -254,7 +248,7 @@ export function extractCanvasShortcodes(text: string | undefined): {
     }
     stripped += text.slice(cursor, match.start);
     const preview = previewFromShortcode(match.attrs);
-    if (!preview) {
+    if (!preview || (includePreview && !includePreview(preview))) {
       stripped += text.slice(match.start, match.end);
     } else {
       previews.push(preview);

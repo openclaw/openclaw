@@ -1,4 +1,3 @@
-// SSH probe execution for SSH-verified node pairing.
 // Kept as a narrow runtime boundary so gateway tests can mock the probe
 // without touching the eligibility/verification policy.
 import { runUtf8CommandWithTimeout } from "../process/exec.js";

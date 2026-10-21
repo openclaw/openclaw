@@ -4,11 +4,6 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalNativeReplyContext } from "./monitor/event-handler.types.js";
 
-type SignalNativeReplyIdPlan = {
-  peek: () => string | undefined;
-  markSent: () => void;
-};
-
 function resolveSignalNativeReplyId(params: {
   payload: ReplyPayload;
   replyContext?: SignalNativeReplyContext;
@@ -37,7 +32,7 @@ export function createSignalNativeReplyIdPlan(params: {
   payload: ReplyPayload;
   replyContext?: SignalNativeReplyContext;
   replyToMode: ReplyToMode;
-}): SignalNativeReplyIdPlan {
+}) {
   const replyToId = resolveSignalNativeReplyId(params);
   if (!replyToId) {
     return { peek: () => undefined, markSent: () => undefined };

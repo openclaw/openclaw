@@ -14,7 +14,7 @@ import {
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
-import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
+import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import {
@@ -46,7 +46,7 @@ export function readStartupBundledDiscoveryMode(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): "compat" | "allowlist" | undefined {
-  const stateMode = readBundledDiscoveryMode({ env });
+  const stateMode = readBundledDiscoveryModeMemoized(env);
   if (stateMode) {
     return stateMode;
   }
@@ -78,23 +78,6 @@ function listPotentialEnabledChannelIds(
   return sortUniquePluginIds(enabledSignals);
 }
 
-function resolveGatewayStartupDreamingEngineId(config: OpenClawConfig): string | undefined {
-  const dreamingConfig = resolveMemoryDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(config),
-    cfg: config,
-  });
-  return dreamingConfig.enabled && resolveGatewayStartupDreamingSelectedPluginId(config)
-    ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID
-    : undefined;
-}
-
-function resolveGatewayStartupDreamingSelectedPluginId(config: OpenClawConfig): string | undefined {
-  const selectedPluginId = normalizeOptionalLowercaseString(resolveMemoryDreamingPluginId(config));
-  return selectedPluginId && selectedPluginId !== DEFAULT_MEMORY_DREAMING_PLUGIN_ID
-    ? selectedPluginId
-    : undefined;
-}
-
 export function blocksPluginStartup(params: {
   pluginId: string;
   pluginsConfig: NormalizedPluginsConfig;
@@ -121,9 +104,21 @@ export function resolveAuthorizedGatewayStartupDreamingPluginIds(params: {
   index: { plugins: readonly InstalledPluginIndexRecord[] };
   platform?: NodeJS.Platform;
 }): Set<string> {
-  const engineId = resolveGatewayStartupDreamingEngineId(params.config);
-  const dreamingSelectedPluginId = resolveGatewayStartupDreamingSelectedPluginId(params.config);
-  if (!engineId || !params.pluginsConfig.enabled || !params.activationSourcePlugins.enabled) {
+  const dreamingConfig = resolveMemoryDreamingConfig({
+    pluginConfig: resolveMemoryDreamingPluginConfig(params.config),
+    cfg: params.config,
+  });
+  const dreamingSelectedPluginId = normalizeOptionalLowercaseString(
+    resolveMemoryDreamingPluginId(params.config),
+  );
+  const engineId = DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
+  if (
+    !dreamingConfig.enabled ||
+    !dreamingSelectedPluginId ||
+    dreamingSelectedPluginId === engineId ||
+    !params.pluginsConfig.enabled ||
+    !params.activationSourcePlugins.enabled
+  ) {
     return new Set();
   }
   if (
@@ -351,6 +346,10 @@ export function collectValidationConfiguredRefs(config: OpenClawConfig) {
   }
   const shorthandModelRefs: string[] = [];
   for (const ref of collectConfiguredModelRefs(config)) {
+    // Startup resolves Decision providers through their capability contract instead.
+    if (ref.capability === "decision") {
+      continue;
+    }
     const slashIndex = ref.value.indexOf("/");
     if (slashIndex > 0) {
       pushProviderId(ref.value.slice(0, slashIndex));

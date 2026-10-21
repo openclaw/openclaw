@@ -1,4 +1,3 @@
-// Typing indicator lifecycle controller for reply dispatchers.
 import {
   parseFiniteNumber,
   resolveTimerTimeoutMs,

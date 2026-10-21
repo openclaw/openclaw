@@ -1,15 +1,16 @@
-// Pure pose model shared by the mascot animator and canvas renderer.
+export const MASCOT_MOODS = [
+  "idle",
+  "curious",
+  "thinking",
+  "working",
+  "happy",
+  "celebrating",
+  "sad",
+  "sleepy",
+  "attentive",
+] as const;
 
-export type MascotMood =
-  | "idle"
-  | "curious"
-  | "thinking"
-  | "working"
-  | "happy"
-  | "celebrating"
-  | "sad"
-  | "sleepy"
-  | "attentive";
+export type MascotMood = (typeof MASCOT_MOODS)[number];
 
 type MascotEffect = "none" | "sparkles" | "zzz" | "sparks" | "sweat";
 

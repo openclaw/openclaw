@@ -2,14 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
-import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 
 export const triageLeaseFixtureLifetime = createFixtureLifetime();
-
-let triageCoordinatorBootstrap: string | undefined;
 
 export function useTriageLeaseDatabaseFixture() {
   let restoreTempRoot = () => {};
@@ -18,7 +15,6 @@ export function useTriageLeaseDatabaseFixture() {
       await triageLeaseFixtureLifetime.cleanup();
     } finally {
       restoreTempRoot();
-      triageCoordinatorBootstrap = undefined;
     }
   });
   beforeAll(() =>
@@ -36,17 +32,6 @@ export function useTriageLeaseDatabaseFixture() {
 registerSealedRuntime({ json5: undefined, resolveSecureTempRoot: () => ${JSON.stringify(directory)} });
 `,
       );
-      triageCoordinatorBootstrap = bootstrap;
     }),
   );
-}
-
-export function triageRuntimePreloadEnv(): NodeJS.ProcessEnv {
-  // Prepared JavaScript does not need a source loader in every fixing descendant.
-  const env = resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.continuation).pathname.endsWith(
-    ".ts",
-  )
-    ? withRuntimePreload({}, path.resolve("scripts/tsx.mjs"))
-    : {};
-  return triageCoordinatorBootstrap ? withRuntimePreload(env, triageCoordinatorBootstrap) : env;
 }

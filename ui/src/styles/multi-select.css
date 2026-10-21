@@ -141,12 +141,13 @@ openclaw-multi-select {
   cursor: default;
 }
 
-.multi-select__popup::part(popup) {
-  z-index: var(--z-dropdown);
+.multi-select__popup {
+  width: anchor-size(width);
+  --oc-overlay-max-height: 320px;
 }
 
 .multi-select__menu {
-  max-height: min(320px, var(--auto-size-available-height, calc(100vh - 48px)));
+  max-height: min(320px, var(--oc-overlay-available-height, calc(100dvh - 48px)));
   overflow: auto;
   padding: 6px;
   border: 1px solid var(--overlay-border);

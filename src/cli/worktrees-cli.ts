@@ -1,4 +1,5 @@
 import { realpathSync, statSync } from "node:fs";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { Option, type Command } from "commander";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
@@ -74,12 +75,51 @@ export function registerWorktreesCli(program: Command): void {
     .description("List active and restorable managed worktrees")
     .option("--json", "Output JSON", false)
     .action(async (opts: JsonOption) => {
-      const { managedWorktrees } = await import("../agents/worktrees/service.js");
-      const records = await managedWorktrees.list();
+      const result = await runWithLocalStateOwner<{
+        worktrees: ManagedWorktreeRecord[];
+        retirementCandidates?: string[];
+      }>({
+        method: "worktrees.list",
+        params: {},
+        target: "managed worktrees",
+        recoveryCommand: "openclaw worktrees list --json",
+        onForeignOwner: async ({ env, signal, assertCurrent }) => {
+          const [{ readExistingRegistryWorktrees }, { worktreePathExists }] = await Promise.all([
+            import("../agents/worktrees/registry-read.js"),
+            import("../agents/worktrees/git.js"),
+          ]);
+          assertCurrent();
+          const records = await readExistingRegistryWorktrees(env, signal);
+          const visible = records.filter(
+            (record) => record.removedAt === undefined || record.snapshotRef,
+          );
+          const retirementCandidates: string[] = [];
+          for (const record of visible) {
+            assertCurrent();
+            if (record.removedAt === undefined && !(await worktreePathExists(record.path))) {
+              retirementCandidates.push(record.id);
+            }
+          }
+          assertCurrent();
+          return { worktrees: visible, retirementCandidates };
+        },
+        runLocal: async ({ env, config, assertCurrent }) => {
+          const { ManagedWorktreeService } = await import("../agents/worktrees/service.js");
+          assertCurrent();
+          const listed = await new ManagedWorktreeService({
+            env,
+            getConfig: () => config,
+          }).list();
+          assertCurrent();
+          return { worktrees: listed };
+        },
+      });
       if (opts.json) {
-        defaultRuntime.writeJson({ worktrees: records });
+        defaultRuntime.writeJson(result);
         return;
       }
+      const { worktrees: records } = result;
+      const retirementCandidates = new Set(result.retirementCandidates);
       if (records.length === 0) {
         defaultRuntime.log("No managed worktrees.");
         return;
@@ -97,7 +137,11 @@ export function registerWorktreesCli(program: Command): void {
             ID: record.id,
             Repo: record.repoRoot,
             Branch: record.branch,
-            Status: record.removedAt ? "restorable" : "active",
+            Status: retirementCandidates.has(record.id)
+              ? "missing (retirement candidate)"
+              : record.removedAt
+                ? "restorable"
+                : "active",
           })),
         }).trimEnd(),
       );
@@ -251,11 +295,15 @@ export function registerWorktreesCli(program: Command): void {
           retainedOid: string;
         },
       ) => {
+        const removedAt = parseStrictNonNegativeInteger(opts.removedAt);
+        if (removedAt === undefined) {
+          throw new Error("--removed-at must be a non-negative integer (epoch milliseconds).");
+        }
         const input = {
           id,
           expectedSnapshotRef: opts.expectedRef,
           expectedSnapshotOid: opts.expectedOid,
-          expectedRemovedAt: Number(opts.removedAt),
+          expectedRemovedAt: removedAt,
           retainedSourceRef: opts.retainedRef,
           expectedRetainedSourceOid: opts.retainedOid,
         };
@@ -324,6 +372,9 @@ export function registerWorktreesCli(program: Command): void {
     .option("--retry-deferred", "Reinspect deferred checkouts and retry Git maintenance", false)
     .option("--json", "Output JSON", false)
     .action(async (opts: JsonOption & { job?: string; retryDeferred?: boolean }) => {
+      if (opts.job === "") {
+        throw new Error("--job must not be empty.");
+      }
       const { formatWorktreeGcResult } = await import("../agents/worktrees/gc-result.js");
       const result = await mutateWorktree<ManagedWorktreeGcResult | ManagedWorktreeGcReceipt>(
         "worktrees.gc",

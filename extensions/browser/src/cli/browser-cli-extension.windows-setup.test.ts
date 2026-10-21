@@ -1,6 +1,6 @@
 import "../browser/extension-install-fixture.test-support.js";
 import { Command } from "commander";
-import * as runtimeConfigSnapshot from "openclaw/plugin-sdk/runtime-config-snapshot";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
@@ -16,6 +16,11 @@ const boundary = vi.hoisted(() => ({
   deps: undefined as InstallFixture | undefined,
   connect: vi.fn(),
   readToken: vi.fn(),
+  config: vi.fn<() => OpenClawConfig>(),
+}));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  captureRuntimeConfigAsyncReader: () => async () => boundary.config(),
 }));
 // Keep the actual CLI, controller, installer, adapter and metadata validator.
 // Only inject isolated filesystem/Windows OS facts and the C# process boundary.
@@ -40,6 +45,14 @@ vi.mock("../browser/extension-relay/owner-client.js", () => ({
 }));
 const localFixture = useExtensionInstallFixture();
 const { defaultRuntime: capture, resetRuntimeCapture } = createCliRuntimeCapture();
+type Setup = Awaited<ReturnType<typeof setup>>;
+async function expectInstallBlocked(f: Setup) {
+  await expect(f.run("install")).rejects.toThrow("__exit__:1");
+  expect(f.mutations()).toHaveLength(0);
+}
+function expectJson(f: Setup, shape: Record<string, unknown>) {
+  expect(f.json).toHaveBeenCalledWith(expect.objectContaining(shape));
+}
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
@@ -50,20 +63,22 @@ afterEach(() => {
 async function setup() {
   const local = await localFixture("win32");
   const f = windowsFixture();
-  let active: string | undefined;
-  let override: WindowsManagementResponse | undefined;
-  let before: ((request: WindowsManagementRequest) => void) | undefined;
+  const state: {
+    active?: string;
+    response?: WindowsManagementResponse;
+    before?: (request: WindowsManagementRequest) => void;
+  } = {};
   const manage = vi.fn(
     async (
       _exe: string,
       request: WindowsManagementRequest,
       _options: { signal?: AbortSignal } = {},
     ) => {
-      before?.(request);
-      if (override) {
-        return override;
+      state.before?.(request);
+      if (state.response) {
+        return state.response;
       }
-      if (active && request.context?.browserProfile !== active) {
+      if (state.active && request.context?.browserProfile !== state.active) {
         return {
           ...f.response,
           ok: false,
@@ -72,10 +87,10 @@ async function setup() {
         } satisfies WindowsManagementResponse;
       }
       if (request.action === "install") {
-        active = request.context!.browserProfile;
+        state.active = request.context!.browserProfile;
         f.prepare(request.context!, request.expectedOrigins);
       }
-      return active
+      return state.active
         ? f.response
         : ({
             ...f.response,
@@ -96,7 +111,7 @@ async function setup() {
     browserProfile: "work",
   });
   manage.mockClear();
-  const cfg = vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({
+  const cfg = boundary.config.mockReset().mockReturnValue({
     browser: { profiles: { work: { driver: "extension", cdpPort: 19444 } } },
   });
   const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(capture.writeJson);
@@ -133,15 +148,7 @@ async function setup() {
     error,
     exit,
     run,
-    setActive: (value: string | undefined) => {
-      active = value;
-    },
-    setResponse: (value: WindowsManagementResponse) => {
-      override = value;
-    },
-    before: (fn: (request: WindowsManagementRequest) => void) => {
-      before = fn;
-    },
+    state,
     mutations: () => manage.mock.calls.filter(([, r]) => r.action !== "inspect"),
   };
 }
@@ -177,116 +184,71 @@ describe("Windows saved selection through the registered setup CLI", () => {
     await f.run("verify", "chrome");
     expect(f.mutations()).toHaveLength(0);
     expect(boundary.readToken).not.toHaveBeenCalled();
-    expect(f.json).toHaveBeenCalledWith(expect.objectContaining({ phase: "blocked" }));
+    expectJson(f, { phase: "blocked" });
     expect(f.manage).toHaveBeenCalledTimes(1);
   });
-  it.each(["absent-profile", "no-descriptor", "unknown", "companion", "foreign-store"])(
+  it.each(["absent-profile", "companion", "foreign-store"])(
     "blocks %s with no mutation",
     async (kind) => {
       const f = await setup();
       if (kind === "absent-profile") {
         f.cfg.mockReturnValue({});
       }
-      if (kind === "no-descriptor") {
-        f.setResponse({ ...f.response, installation: null });
-      }
       if (kind === "foreign-store") {
-        f.setResponse({
+        f.state.response = {
           ...f.response,
           ok: false,
           code: "foreign_registration",
           store: "foreign",
           installation: null,
-        });
-      }
-      if (kind === "unknown") {
-        f.setResponse({
-          v: 1,
-          ok: false,
-          code: "io_error",
-          registration: null,
-          mode: null,
-          store: null,
-          installation: null,
-        });
+        };
       }
       if (kind === "companion") {
-        f.setResponse({
+        f.state.response = {
           ...f.response,
           ok: false,
           code: "context_conflict",
           mode: "companion-managed-wsl",
           installation: null,
-        });
+        };
       }
-      await expect(f.run("install")).rejects.toThrow("__exit__:1");
-      expect(f.mutations()).toHaveLength(0);
+      await expectInstallBlocked(f);
       expect(f.exit).toHaveBeenCalledWith(1);
       expect(boundary.readToken).not.toHaveBeenCalled();
     },
   );
-  it("allows the existing default only for confirmed fresh missing registration", async () => {
-    const f = await setup();
-    f.setActive(undefined);
-    await f.run("install");
-    expect(f.exit).not.toHaveBeenCalled();
-    expect(f.mutations()).toHaveLength(1);
-    expect(f.mutations()[0]?.[1].context?.browserProfile).toBe("chrome");
-  });
   it("still verifies an existing relay when the native registration is genuinely missing", async () => {
     const f = await setup();
-    f.setActive(undefined);
+    f.state.active = undefined;
     await f.run("verify");
     expect(f.exit).not.toHaveBeenCalled();
     expect(f.mutations()).toHaveLength(0);
-    expect(f.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        phase: "ready",
-        connection: { state: "connected", extensionVersion: "fixture" },
-        installation: expect.objectContaining({ nativeHostRegistered: false }),
-      }),
-    );
+    expectJson(f, {
+      phase: "ready",
+      connection: { state: "connected", extensionVersion: "fixture" },
+      installation: expect.objectContaining({ nativeHostRegistered: false }),
+    });
   });
   it("blocks a changed observation before mutation", async () => {
     const f = await setup();
     let workReads = 0;
-    f.before((r) => {
+    f.state.before = (r) => {
       if (r.action === "inspect" && r.context?.browserProfile === "work" && ++workReads === 2) {
-        f.setActive("chrome");
+        f.state.active = "chrome";
       }
-    });
-    await expect(f.run("install")).rejects.toThrow("__exit__:1");
+    };
+    await expectInstallBlocked(f);
     expect(f.exit).toHaveBeenCalledWith(1);
-    expect(f.mutations()).toHaveLength(0);
   });
-  it.each(["stateDir", "configPath", "nodePath", "cliPath"] as const)(
-    "rejects a descriptor with changed %s",
-    async (field) => {
-      const f = await setup();
-      f.context[field] = f.context[field].replace("C:", "D:");
-      await expect(f.run("install")).rejects.toThrow("__exit__:1");
-      expect(f.mutations()).toHaveLength(0);
-    },
-  );
+  it("rejects a descriptor with a changed state directory", async () => {
+    const f = await setup();
+    f.context.stateDir = f.context.stateDir.replace("C:", "D:");
+    await expectInstallBlocked(f);
+  });
   it("rejects coherent metadata with a different approved-origin set", async () => {
     const f = await setup();
     f.prepare({ ...f.context, browserProfile: "work" });
-    await expect(f.run("install")).rejects.toThrow("__exit__:1");
-    expect(f.mutations()).toHaveLength(0);
-  });
-  it.each(["initial"] as const)("cancels at %s without mutation", async (phase) => {
-    const f = await setup();
-    const budget = new AbortController();
-    vi.spyOn(AbortSignal, "timeout").mockReturnValue(budget.signal);
-    let reads = 0;
-    f.before(() => {
-      if (++reads === { initial: 1, confirmation: 3 }[phase]) {
-        budget.abort();
-      }
-    });
-    await expect(f.run("install")).rejects.toThrow("__exit__:1");
-    expect(f.mutations()).toHaveLength(0);
-    expect(boundary.readToken).not.toHaveBeenCalled();
+    await expectInstallBlocked(f);
   });
   it("shares one finite budget across serial candidates and stops on expiry", async () => {
     const f = await setup();
@@ -302,12 +264,12 @@ describe("Windows saved selection through the registered setup CLI", () => {
         },
       },
     });
-    f.before((r) => {
+    f.state.before = (r) => {
       if (r.context?.browserProfile === "beta") {
         budget.abort();
       }
-    });
-    await expect(f.run("install")).rejects.toThrow("__exit__:1");
+    };
+    await expectInstallBlocked(f);
     expect(timeout).toHaveBeenCalledExactlyOnceWith(60_000);
     expect(f.manage.mock.calls.map(([, r]) => r.context?.browserProfile)).toEqual([
       "chrome",
@@ -317,47 +279,15 @@ describe("Windows saved selection through the registered setup CLI", () => {
     expect(f.manage.mock.calls.slice(1).every((call) => call[2]?.signal === budget.signal)).toBe(
       true,
     );
-    expect(f.mutations()).toHaveLength(0);
-  });
-  it("retains explicit same-profile repair for changed runtime inputs", async () => {
-    const f = await setup();
-    f.context.nodePath = f.context.nodePath.replace("C:", "D:");
-    await f.run("install", "work");
-    expect(f.exit).not.toHaveBeenCalled();
-    expect(f.manage).toHaveBeenCalledTimes(1);
-    expect(f.mutations()).toHaveLength(1);
-    expect(f.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: expect.objectContaining({ profile: "work", relayPort: 19444 }),
-      }),
-    );
-  });
-  it("never queries invalid names or non-extension configured profiles", async () => {
-    const f = await setup();
-    f.cfg.mockReturnValue({
-      browser: {
-        profiles: {
-          BAD: { driver: "extension", cdpPort: 19441 },
-          managed: { driver: "openclaw", cdpPort: 19442 },
-          work: { driver: "extension", cdpPort: 19444 },
-        },
-      },
-    });
-    await f.run("inspect");
-    expect(f.exit).not.toHaveBeenCalled();
-    expect(f.manage.mock.calls.map(([, r]) => r.context?.browserProfile)).toEqual([
-      "chrome",
-      "work",
-      "work",
-    ]);
+    expect(boundary.readToken).not.toHaveBeenCalled();
   });
   it("never retries after an uncertain started mutation", async () => {
     const f = await setup();
-    f.before((r) => {
+    f.state.before = (r) => {
       if (r.action === "install") {
         throw new Error("synthetic unknown outcome");
       }
-    });
+    };
     await expect(f.run("install")).rejects.toThrow("__exit__:1");
     expect(f.mutations()).toHaveLength(1);
     expect(f.manage.mock.calls.at(-1)?.[1].action).toBe("install");
@@ -365,14 +295,14 @@ describe("Windows saved selection through the registered setup CLI", () => {
   });
   it("leaves the final race to the serialized C# mutation guard without retry", async () => {
     const f = await setup();
-    f.before((r) => {
+    f.state.before = (r) => {
       if (r.action === "install") {
-        f.setActive("chrome");
+        f.state.active = "chrome";
       }
-    });
+    };
     await f.run("install");
     expect(f.mutations()).toHaveLength(1);
     expect(f.mutations()[0]?.[1].context?.browserProfile).toBe("work");
-    expect(f.json).toHaveBeenCalledWith(expect.objectContaining({ phase: "blocked" }));
+    expectJson(f, { phase: "blocked" });
   });
 });

@@ -3,9 +3,9 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   type AuthProfileCredential,
   type AuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   listProfilesForProvider,
-  loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
   removeAuthProfilesAcrossOwnerStores,
 } from "../../agents/auth-profiles.js";
 import type { AuthProfileRemovalScope } from "../../agents/auth-profiles/profiles.js";
@@ -30,7 +30,6 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { clearRemovedSessionAuthProfiles } from "../../sessions/auth-profile-removal.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import {
-  excludeReconnectedModelAuthProfiles,
   excludeSurvivingModelAuthProfiles,
   removeModelAuthProfileSelections,
   resolveModelAuthProfileRemoval,
@@ -211,7 +210,7 @@ export async function removeModelAuthCredentials(params: {
             "The key changed while removing it. Nothing was removed. Reload Models and retry removal.",
           );
         }
-        const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+        const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir, {
           allowKeychainPrompt: false,
         });
         if (
@@ -309,7 +308,7 @@ export async function removeModelAuthCredentials(params: {
     // The removal owner reconciles survivors before returning or throwing. Only
     // confirmed deletions retire conversation selections, never expiry/read gaps.
     if (cleanup && confirmedSelections) {
-      const selections = excludeReconnectedModelAuthProfiles(cleanup.after, confirmedSelections);
+      const selections = confirmedSelections;
       await clearRemovedSessionAuthProfiles({
         cfg: cleanup.after,
         removedByAgent: selections.agents,
@@ -341,7 +340,7 @@ export async function modelsAuthLogoutCommand(
   const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, { kind: "mutation" });
   // External CLI overlays (Claude/Codex CLI) are not ours to delete, so the
   // removable set is exactly the persisted store.
-  const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const store = await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
   const credential = store.profiles[profileId];
   if (!credential) {
     throw new Error(

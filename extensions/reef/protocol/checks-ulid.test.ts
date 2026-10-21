@@ -34,6 +34,63 @@ describe("deterministic checks", () => {
     }
   });
 
+  it("keeps entropy checks outside the exact GitHub revision occurrence", () => {
+    const hash = "430f975aacee445525c4663aa88ed1590f2f08b1";
+    const commit = `https://github.com/openclaw/openclaw/commit/${hash}`;
+    for (const text of [
+      hash,
+      `${commit} and token=${hash}`,
+      `${commit}?token=${hash}`,
+      `${commit}#token=${hash}`,
+      `${commit}/${hash}`,
+      `https://user:password@github.com/openclaw/openclaw/commit/${hash}`,
+      `https://github.com:8443/openclaw/openclaw/commit/${hash}`,
+      `https://${hash}@github.com/openclaw/openclaw/commit/${hash}`,
+      `https://user:${hash}@github.com/openclaw/openclaw/commit/${hash}`,
+      `https://github.com.example.org/openclaw/openclaw/commit/${hash}`,
+      `https://github.com@evil.example/openclaw/openclaw/commit/${hash}`,
+      `https://example.org/openclaw/openclaw/commit/${hash}`,
+      `https://example.org/?next=${commit}`,
+      `https://example.org/#${commit}`,
+      `https://example.org/?next='${commit}`,
+      `https://example.org/#'${commit}`,
+      `_https://example.org/?next=${commit}/file_`,
+      `1https://example.org/?next=${commit}`,
+      `.https://example.org/?next=${commit}`,
+      `mailto:review@example.org?next=${commit}`,
+      `data:text/plain,${commit}`,
+      `https://github.com/openclaw/openclaw/issues/${hash}`,
+      `https://github.com/openclaw/openclaw/blob/main/${hash}`,
+      `${commit}abcdef`,
+      `${commit}-secret`,
+      commit.slice(0, -1),
+      `${commit} ${fake("Q7vN2kLm9Pz4Rxa8", "CwT5Yb3Hj6Uf1Ds0GeKqVnM2LX8")}`,
+    ]) {
+      expect(deterministicChecks(text), text).toMatchObject({
+        allowed: false,
+        findings: [{ code: "high_entropy_token", decision: "deny" }],
+      });
+    }
+  });
+
+  it("keeps known credential checks throughout GitHub URLs", () => {
+    const token = fake("ghp", "_", "a".repeat(24));
+    const hash = "430f975aacee445525c4663aa88ed1590f2f08b1";
+    for (const text of [
+      `https://github.com/openclaw/${token}/commit/${hash}`,
+      `https://github.com/openclaw/openclaw/commit/${token}`,
+      `https://github.com/openclaw/openclaw/blob/${hash}/${token}`,
+      `https://github.com/openclaw/openclaw/commit/${hash}?token=${token}`,
+      `https://github.com/openclaw/openclaw/commit/${hash}#${token}`,
+      `https://user:${token}@github.com/openclaw/openclaw/commit/${hash}`,
+    ]) {
+      expect(deterministicChecks(text), text).toMatchObject({
+        allowed: false,
+        findings: expect.arrayContaining([{ code: "github_token", decision: "deny" }]),
+      });
+    }
+  });
+
   it("rejects invalid UTF-8 and oversize input", () => {
     expect(deterministicChecks(Uint8Array.of(0xc3, 0x28)).findings[0]?.code).toBe("invalid_utf8");
     expect(deterministicChecks("x".repeat(32 * 1024 + 1)).findings[0]?.code).toBe("too_large");

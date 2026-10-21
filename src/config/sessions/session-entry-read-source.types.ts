@@ -8,3 +8,16 @@ export type CapturedSessionEntryReadSource = SessionEntryReadSource &
     databaseIdentity: OpenClawAgentDatabaseIdentity;
     databaseBirthtime?: string;
   }>;
+
+export type SessionIdentityEvidenceIdentity = {
+  sessionId: string;
+  sessionKey?: string;
+};
+
+export type SessionIdentityEvidenceResult =
+  | { status: "current"; sessionKey: string }
+  | { status: "absent" }
+  | {
+      status: "unknown";
+      reason: "ambiguous" | "read-failed" | "row-invalid" | "schema-missing";
+    };

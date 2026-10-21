@@ -45,6 +45,13 @@ export const overflowCases = [
       },
     ],
     [
+      "billing-context-dashscope-range",
+      {
+        message:
+          "400 <400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
+      },
+    ],
+    [
       "billing-context-kimi-status",
       {
         message:
@@ -141,6 +148,22 @@ export const overflowCases = [
         message: "400 Prompt has 256468 tokens, but the configured context size is 256000 tokens",
       },
     ],
+    [
+      "patterns-context-tgi-total",
+      {
+        status: 422,
+        message:
+          "422 Input validation error: `inputs` tokens + `max_new_tokens` must be <= 32768. Given: 28897 `inputs` tokens and 3872 `max_new_tokens`",
+      },
+    ],
+    [
+      "patterns-context-tgi-input",
+      {
+        status: 422,
+        message:
+          "422 Input validation error: `inputs` must have less than 32768 tokens. Given: 40000",
+      },
+    ],
   ]),
   ...failoverSignalRows(structuredSource, contextOverflow, [
     [
@@ -194,6 +217,17 @@ export const overflowCases = [
     {
       id: "patterns-context-prompt-token-limit",
       message: "prompt is too long: 150000 tokens > 128000 maximum",
+    },
+    {
+      id: "patterns-context-lmstudio-loaded-length",
+      message:
+        "Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input.",
+    },
+    {
+      id: "patterns-context-lmstudio-loaded-length-400",
+      status: 400,
+      message:
+        '400 " Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input. Error Data: n/a, Additional Data: n/a"',
     },
   ]),
 ] satisfies readonly FailoverClassificationCorpusRow[];

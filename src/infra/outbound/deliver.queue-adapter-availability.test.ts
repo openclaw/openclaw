@@ -1,12 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.adapters.js";
 import { createDefaultDeps } from "../../cli/deps.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
 import { OutboundDeliveryError, PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import {
@@ -31,6 +32,20 @@ type RuntimeSender = (
   options?: Record<string, unknown>,
 ) => Promise<unknown>;
 
+function matrixRegistry(source: string, outbound: ChannelOutboundAdapter) {
+  return createTestRegistry([
+    {
+      pluginId: "matrix",
+      source,
+      plugin: createOutboundTestPlugin({ id: "matrix", outbound }),
+    },
+  ]);
+}
+
+function recover(stateDir: string, deliver: DeliverFn) {
+  return recoverPendingDeliveries({ cfg: {}, deliver, log: createRecoveryLog(), stateDir });
+}
+
 describe("queued lazy outbound adapter availability", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
   let tmpDir: string;
@@ -51,26 +66,11 @@ describe("queued lazy outbound adapter availability", () => {
   it("retries adapter lookup failures without preserving false send evidence", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     const emptyRegistry = createEmptyPluginRegistry();
-    const outerRegistry = createTestRegistry([
-      {
-        pluginId: "matrix",
-        source: "test-outer",
-        plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
-      },
-    ]);
-    const restoredRegistry = createTestRegistry([
-      {
-        pluginId: "matrix",
-        source: "test-restored",
-        plugin: createOutboundTestPlugin({
-          id: "matrix",
-          outbound: {
-            deliveryMode: "direct",
-            sendText: async () => ({ channel: "matrix", messageId: "matrix-recovered" }),
-          },
-        }),
-      },
-    ]);
+    const outerRegistry = matrixRegistry("test-outer", matrixOutboundForQueueTest);
+    const restoredRegistry = matrixRegistry("test-restored", {
+      deliveryMode: "direct",
+      sendText: async () => ({ channel: "matrix", messageId: "matrix-recovered" }),
+    });
     setActivePluginRegistry(outerRegistry);
     const defaultDeps = createDefaultDeps() as Record<string, RuntimeSender>;
     const lazyRuntimeSender = expectDefined(defaultDeps.matrix, "matrix runtime sender");
@@ -118,12 +118,7 @@ describe("queued lazy outbound adapter availability", () => {
       deliverOutboundPayloads({ ...deliveryParams, deps }),
     );
 
-    await recoverPendingDeliveries({
-      cfg: {},
-      deliver: recoveryDeliver,
-      log: createRecoveryLog(),
-      stateDir: tmpDir,
-    });
+    await recover(tmpDir, recoveryDeliver);
 
     expect(recoveryDeliver).toHaveBeenCalledOnce();
     expect(
@@ -152,12 +147,7 @@ describe("queued lazy outbound adapter availability", () => {
       }
     });
 
-    const result = await recoverPendingDeliveries({
-      cfg: {},
-      deliver: recoveryDeliver,
-      log: createRecoveryLog(),
-      stateDir: tmpDir,
-    });
+    const result = await recover(tmpDir, recoveryDeliver);
 
     expect(result).toMatchObject({ failed: 1, recovered: 0, skippedMaxRetries: 0 });
     expect(recoveryDeliver).toHaveBeenCalledOnce();

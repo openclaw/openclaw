@@ -305,18 +305,14 @@ enum SessionMenuPreviewLoader {
     {
         let items = self.previewItems(from: entry, maxItems: maxItems)
         let normalized = entry.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        switch normalized {
-        case "ok":
-            return SessionMenuPreviewSnapshot(items: items, status: items.isEmpty ? .empty : .ready)
-        case "empty":
-            return SessionMenuPreviewSnapshot(items: items, status: .empty)
-        case "missing":
-            return SessionMenuPreviewSnapshot(items: items, status: .error("Thread missing"))
-        case "cold":
-            return SessionMenuPreviewSnapshot(items: [], status: .error("History archived; open chat to restore"))
-        default:
-            return SessionMenuPreviewSnapshot(items: items, status: .error("Preview unavailable"))
+        let status: SessionMenuPreviewView.LoadStatus = switch normalized {
+        case "ok": items.isEmpty ? .empty : .ready
+        case "empty": .empty
+        case "missing": .error("Thread missing")
+        case "cold": .error("History archived; open chat to restore")
+        default: .error("Preview unavailable")
         }
+        return SessionMenuPreviewSnapshot(items: normalized == "cold" ? [] : items, status: status)
     }
 
     private static func normalizeMaxItems(_ maxItems: Int) -> Int {

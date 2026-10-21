@@ -84,33 +84,22 @@ function createLaunchAgentRemovalError(error: unknown): Error {
     `LaunchAgent removal failed${code ? ` (${code})` : ""}. Check permissions and retry.`,
   );
 }
-async function currentGatewayLaunchAgentLabel(
-  targetEnv: Record<string, string | undefined>,
-): Promise<string | undefined> {
-  const configuredCurrentLabel = process.env.OPENCLAW_LAUNCHD_LABEL?.trim();
-  const candidates = new Set([
-    resolveLaunchAgentLabel(targetEnv),
-    ...(configuredCurrentLabel ? [assertValidLaunchAgentLabel(configuredCurrentLabel)] : []),
-  ]);
-  for (const label of candidates) {
-    if (await isCurrentProcessInsideLaunchdService(label)) {
-      return label;
-    }
-  }
-  return undefined;
-}
-
 async function assertExternalLaunchAgentMutation(
   env: Record<string, string | undefined>,
   action: "install" | "uninstall",
 ): Promise<void> {
-  const currentLabel = await currentGatewayLaunchAgentLabel(env);
-  if (!currentLabel) {
-    return;
+  const configuredCurrentLabel = process.env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const candidates = new Set([
+    resolveLaunchAgentLabel(env),
+    ...(configuredCurrentLabel ? [assertValidLaunchAgentLabel(configuredCurrentLabel)] : []),
+  ]);
+  for (const label of candidates) {
+    if (await isCurrentProcessInsideLaunchdService(label)) {
+      throw new Error(
+        `Refusing to ${action} LaunchAgent ${resolveLaunchAgentLabel(env)} from inside ${label}; run this command from an external shell.`,
+      );
+    }
   }
-  throw new Error(
-    `Refusing to ${action} LaunchAgent ${resolveLaunchAgentLabel(env)} from inside ${currentLabel}; run this command from an external shell.`,
-  );
 }
 
 export async function stageLaunchAgent(
@@ -189,6 +178,17 @@ export async function installLaunchAgent(
     },
     async () => false,
   );
+  const bootstrap = (plistPath: string, actionHint: string) =>
+    bootstrapLaunchAgentOrThrow({
+      domain,
+      serviceTarget,
+      plistPath,
+      actionHint,
+      retryPendingTeardown: true,
+      assertCurrent: assertGatewayServiceUpdateCurrent,
+      preserveAutoStart: args.preserveAutoStart,
+      preservedEnabled: enabled,
+    });
   let activationAttempted = false;
   const install = async () => {
     const published = await writeLaunchAgentPlist(
@@ -205,16 +205,7 @@ export async function installLaunchAgent(
     if (loaded) {
       await deactivateLaunchAgentDefinition(domain, published.plistPath);
     }
-    await bootstrapLaunchAgentOrThrow({
-      domain,
-      serviceTarget,
-      plistPath: published.plistPath,
-      actionHint: "openclaw gateway install --force",
-      retryPendingTeardown: true,
-      assertCurrent: assertGatewayServiceUpdateCurrent,
-      preserveAutoStart: args.preserveAutoStart,
-      preservedEnabled: enabled,
-    });
+    await bootstrap(published.plistPath, "openclaw gateway install --force");
     assertGatewayServiceUpdateCurrent();
     return published;
   };
@@ -245,16 +236,7 @@ export async function installLaunchAgent(
           if (activationAttempted && loaded) {
             await files.assertCurrent();
             await assertNoSystemLaunchDaemonOwnership(label);
-            await bootstrapLaunchAgentOrThrow({
-              domain,
-              serviceTarget,
-              plistPath: targetPlistPath,
-              actionHint: "openclaw gateway start",
-              retryPendingTeardown: true,
-              assertCurrent: assertGatewayServiceUpdateCurrent,
-              preserveAutoStart: args.preserveAutoStart,
-              preservedEnabled: enabled,
-            });
+            await bootstrap(targetPlistPath, "openclaw gateway start");
           }
           return restored || activationAttempted;
         });

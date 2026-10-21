@@ -116,7 +116,7 @@ export default definePluginEntry({
     let captureStopped = false;
     const memoryRecallCooldowns = new Map<string, { until: number; error: string }>();
     const resolveRuntimeConfig = (): OpenClawConfig =>
-      (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
+      api.runtime.config.current() as OpenClawConfig;
     const resolveEnabledAgentId = (
       rawAgentId: string | undefined,
       runtimeConfig = resolveRuntimeConfig(),
@@ -152,9 +152,7 @@ export default definePluginEntry({
     };
     const resolveCurrentHookConfig = () => {
       const runtimePluginConfig = resolveLivePluginConfigObject(
-        api.runtime.config?.current
-          ? () => api.runtime.config.current() as OpenClawConfig
-          : undefined,
+        () => api.runtime.config.current() as OpenClawConfig,
         "memory-lancedb",
         api.pluginConfig as Record<string, unknown>,
       );
@@ -197,7 +195,7 @@ export default definePluginEntry({
     };
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
-    api.registerMemoryCapability?.({
+    api.registerMemoryCapability({
       publicArtifacts: {
         async listArtifacts(params) {
           const { listMemoryHostPublicArtifacts } = await loadMemoryHostCoreModule();
@@ -437,7 +435,6 @@ export default definePluginEntry({
             .map((r) => `- [${r.entry.id}] ${truncateUtf16Safe(r.entry.text, 60)}...`)
             .join("\n");
 
-          // Strip vector data for serialization
           const sanitizedCandidates = results.map((r) => ({
             id: r.entry.id,
             text: r.entry.text,

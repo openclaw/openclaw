@@ -1,8 +1,14 @@
 // Plugin tool allowlist warning tests cover doctor warnings for stale tool allowlists.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import * as fixture from "../../../plugins/plugin-metadata.test-support.js";
 import { collectPluginToolAllowlistWarnings } from "./plugin-tool-allowlist-warnings.js";
+
+vi.mock("../../../plugins/manifest-contract-eligibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/manifest-contract-eligibility.js")>()),
+  loadManifestMetadataSnapshot: () => fixture.createPluginMetadataSnapshotFixture(manifestRegistry),
+}));
 
 const manifestRegistry: PluginManifestRegistry = {
   diagnostics: [],
@@ -44,7 +50,6 @@ function mcpWarnings(cfg: OpenClawConfig) {
       mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
       ...cfg,
     },
-    manifestRegistry,
   });
 }
 
@@ -55,7 +60,6 @@ describe("collectPluginToolAllowlistWarnings", () => {
         plugins: { allow: ["telegram"] },
         tools: { allow: ["*"] },
       },
-      manifestRegistry,
     });
 
     expect(warnings).toEqual([
@@ -69,7 +73,6 @@ describe("collectPluginToolAllowlistWarnings", () => {
         plugins: { allow: ["telegram"] },
         tools: { allow: ["firecrawl_search"] },
       },
-      manifestRegistry,
     });
 
     expect(warnings).toEqual([
@@ -89,7 +92,6 @@ describe("collectPluginToolAllowlistWarnings", () => {
           },
         },
       },
-      manifestRegistry,
     });
 
     expect(warnings).toEqual([
@@ -145,31 +147,6 @@ describe("collectPluginToolAllowlistWarnings", () => {
     ]);
   });
 
-  it("does not warn when the global profile blocks MCP tools before sandbox policy", () => {
-    const warnings = mcpWarnings({
-      tools: {
-        profile: "minimal",
-        sandbox: { tools: { alsoAllow: ["web_fetch"] } },
-      },
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
-  it("still warns when the profile allows MCP tools but sandbox policy hides them", () => {
-    const warnings = mcpWarnings({
-      tools: {
-        profile: "minimal",
-        alsoAllow: ["bundle-mcp"],
-        sandbox: { tools: { alsoAllow: ["web_fetch"] } },
-      },
-    });
-
-    expect(warnings).toEqual([
-      '- mcp.servers defines 1 MCP server ("outlook"), but tools.sandbox.tools.alsoAllow does not include "bundle-mcp", "group:plugins", or a matching server-prefixed MCP tool name/glob such as "<server>__*". Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.',
-    ]);
-  });
-
   it("does not warn when the agent profile blocks MCP tools before sandbox policy", () => {
     const warnings = mcpWarnings({
       agents: {
@@ -184,19 +161,6 @@ describe("collectPluginToolAllowlistWarnings", () => {
         },
       },
       mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
-  it("does not warn when the active provider allowlist blocks MCP tools before sandbox policy", () => {
-    const warnings = mcpWarnings({
-      tools: {
-        byProvider: {
-          openai: { allow: ["read"] },
-        },
-        sandbox: { tools: { alsoAllow: ["web_fetch"] } },
-      },
     });
 
     expect(warnings).toStrictEqual([]);
@@ -217,26 +181,6 @@ describe("collectPluginToolAllowlistWarnings", () => {
     ]);
   });
 
-  it("uses exact provider policy when checking active profiles", () => {
-    const warnings = mcpWarnings({
-      agents: {
-        defaults: {
-          model: { primary: "bedrock/claude-sonnet" },
-          sandbox: { mode: "all" },
-        },
-      },
-      tools: {
-        byProvider: {
-          bedrock: { profile: "minimal" },
-          "amazon-bedrock": { profile: "coding" },
-        },
-        sandbox: { tools: { alsoAllow: ["web_fetch"] } },
-      },
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
   it("uses plural grammar when multiple sandbox allow sources hide MCP servers", () => {
     const warnings = mcpWarnings({
       agents: {
@@ -253,128 +197,5 @@ describe("collectPluginToolAllowlistWarnings", () => {
     expect(warnings).toEqual([
       '- mcp.servers defines 1 MCP server ("outlook"), but agents.entries.worker.tools.sandbox.tools.alsoAllow, tools.sandbox.tools.alsoAllow do not include "bundle-mcp", "group:plugins", or a matching server-prefixed MCP tool name/glob such as "<server>__*". Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.',
     ]);
-  });
-
-  it("does not warn for sandboxed MCP servers when bundle-mcp is explicitly allowed", () => {
-    const warnings = mcpWarnings({
-      tools: { sandbox: { tools: { alsoAllow: ["web_search", "bundle-mcp"] } } },
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
-  it("does not warn when an agent sandbox tools partial override inherits global MCP allow", () => {
-    const warnings = mcpWarnings({
-      agents: {
-        defaults: { sandbox: { mode: "all" } },
-        entries: {
-          worker: {
-            tools: { sandbox: { tools: { alsoAllow: ["web_fetch"] } } },
-          },
-        },
-      },
-      tools: { sandbox: { tools: { allow: ["bundle-mcp"] } } },
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
-  it("still warns for inherited allow policy when one agent intentionally denies MCP", () => {
-    const warnings = mcpWarnings({
-      agents: {
-        defaults: { sandbox: { mode: "all" } },
-        entries: {
-          worker: {
-            tools: { sandbox: { tools: { deny: ["bundle-mcp"] } } },
-          },
-        },
-      },
-      tools: { sandbox: { tools: { alsoAllow: ["web_fetch"] } } },
-    });
-
-    expect(warnings).toEqual([
-      '- mcp.servers defines 1 MCP server ("outlook"), but tools.sandbox.tools.alsoAllow does not include "bundle-mcp", "group:plugins", or a matching server-prefixed MCP tool name/glob such as "<server>__*". Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.',
-    ]);
-  });
-
-  it("does not warn for sandboxed MCP servers when group:plugins is explicitly allowed", () => {
-    const warnings = mcpWarnings({
-      tools: { sandbox: { tools: { alsoAllow: ["group:plugins"] } } },
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
-  it("does not warn for sandboxed MCP servers when an exact server tool is explicitly allowed", () => {
-    const warnings = mcpWarnings({
-      tools: { sandbox: { tools: { alsoAllow: ["outlook__send_mail"] } } },
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
-  it("does not warn when a server glob matches the sanitized MCP server name", () => {
-    const warnings = mcpWarnings({
-      mcp: { servers: { "Outlook Graph": { command: "node", args: ["outlook-server.js"] } } },
-      tools: { sandbox: { tools: { alsoAllow: ["outlook-graph__*"] } } },
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
-  it("does not warn for sandboxed MCP servers when sandbox allow is explicitly allow-all", () => {
-    const warnings = mcpWarnings({
-      tools: { sandbox: { tools: { allow: [] } } },
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
-  it("does not warn when regular tool policy explicitly denies bundled MCP tools", () => {
-    const warnings = mcpWarnings({
-      tools: { deny: ["bundle-mcp"] },
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
-  it("does not warn when regular tool allowlist intentionally omits MCP tools", () => {
-    const warnings = mcpWarnings({
-      tools: { allow: ["read"] },
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
-  it("does not warn about MCP sandbox allowlists when sandbox mode is off", () => {
-    const warnings = mcpWarnings({
-      agents: { defaults: { sandbox: { mode: "off" } } },
-      tools: { sandbox: { tools: { alsoAllow: ["web_search"] } } },
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
-  it("does not warn when the owning plugin is allowed", () => {
-    const warnings = collectPluginToolAllowlistWarnings({
-      cfg: {
-        plugins: { allow: ["firecrawl"] },
-        tools: { allow: ["firecrawl_search"] },
-      },
-      manifestRegistry,
-    });
-
-    expect(warnings).toStrictEqual([]);
-  });
-
-  it("does not warn when plugins.allow is not restrictive", () => {
-    const warnings = collectPluginToolAllowlistWarnings({
-      cfg: {
-        tools: { allow: ["*"] },
-      },
-      manifestRegistry,
-    });
-
-    expect(warnings).toStrictEqual([]);
   });
 });

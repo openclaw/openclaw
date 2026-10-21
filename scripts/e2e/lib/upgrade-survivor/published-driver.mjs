@@ -17,6 +17,7 @@ import {
 } from "../../../lib/release-version.mjs";
 import { stampFixtureVersion } from "../update-first-hop-package-fixtures.mjs";
 import { assertNoIncognitoArtifacts } from "./incognito-artifacts.mjs";
+import { provePublishedDriverScopedRestore } from "./published-driver-scoped-restore.mjs";
 import {
   assertPublishedDriverReclaimed,
   inspectPublishedDriverSqlite,
@@ -264,6 +265,21 @@ process.exitCode = await runCancelableCommand(async (signal) => {
 
     const port = await freePort();
     const token = "published-driver-synthetic-token";
+    const probe = async (name, version) => {
+      await run(name, "openclaw", [
+        "gateway",
+        "probe",
+        "--url",
+        `ws://127.0.0.1:${port}`,
+        "--token",
+        token,
+        "--json",
+      ]);
+      const target = output(name).targets.find((entry) => entry.url === `ws://127.0.0.1:${port}`);
+      assert.equal(target?.connect.ok, true);
+      assert.equal(target.server.version, version);
+      return target;
+    };
     const config = {
       gateway: {
         mode: "local",
@@ -274,13 +290,15 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       },
       plugins: { enabled: false },
       agents: {
-        list: [
-          { id: "main", default: true, workspace: path.join(runtime, "workspaces", "main") },
-          { id: "second", workspace: path.join(runtime, "workspaces", "second") },
-        ],
+        ownership: "explicit",
+        defaults: { heartbeat: { every: "0m" } },
+        entries: {
+          main: { workspace: path.join(runtime, "workspaces", "main") },
+          second: { workspace: path.join(runtime, "workspaces", "second") },
+        },
       },
     };
-    for (const agent of config.agents.list) {
+    for (const agent of Object.values(config.agents.entries)) {
       fs.mkdirSync(agent.workspace, { recursive: true });
     }
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, `${JSON.stringify(config)}\n`);
@@ -305,20 +323,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     await run("install-service", "openclaw", ["gateway", "install", "--force", "--json"]);
     await ready("before-ready", port);
     if (legacySqlite) {
-      await run("running-before", "openclaw", [
-        "gateway",
-        "probe",
-        "--url",
-        `ws://127.0.0.1:${port}`,
-        "--token",
-        token,
-        "--json",
-      ]);
-      const serving = output("running-before").targets.find(
-        (entry) => entry.url === `ws://127.0.0.1:${port}`,
-      );
-      assert.equal(serving?.connect.ok, true);
-      assert.equal(serving.server.version, driverVersion);
+      const serving = await probe("running-before", driverVersion);
       const buildComparable =
         typeof serving.server.buildId === "string" && typeof driverBuild.buildId === "string";
       if (buildComparable) {
@@ -389,6 +394,22 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       writeJson(name, assertNoIncognitoArtifacts([state, ...backups], sessions[1].marker));
     };
     inspectIncognito("incognito-artifacts-before");
+    // Seed retained 2026.9.7 state after baseline setup: newer published Doctors
+    // reject these sidecars, while candidate repair must carry them unchanged.
+    const orphanSidecar = path.join(state, "credentials/auth-profiles", `${"e".repeat(32)}.json`);
+    const orphanSidecarBytes = `${JSON.stringify({
+      version: 1,
+      profileId: "openai-codex:default",
+      provider: "openai-codex",
+      encrypted: {
+        algorithm: "aes-256-gcm",
+        iv: "c3ludGg=",
+        tag: "c3ludGg=",
+        ciphertext: "c3ludGg=",
+      },
+    })}\n`;
+    fs.mkdirSync(path.dirname(orphanSidecar), { recursive: true });
+    fs.writeFileSync(orphanSidecar, orphanSidecarBytes, { mode: 0o600 });
     let update;
     let updateFailure;
     const sqliteBefore = legacySqlite ? inspectPublishedDriverSqlite(state, 0) : undefined;
@@ -447,26 +468,14 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     assert.equal(recorded.status, "succeeded");
     assert.equal(result.after?.version, build.version);
     assert.deepEqual(readJson(path.join(packageRoot, "dist/build-info.json")), build);
+    assert.equal(fs.readFileSync(orphanSidecar, "utf8"), orphanSidecarBytes);
     assert.notEqual(
       fs.readFileSync(env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, "utf8"),
       beforePid,
       "Update did not replace the managed service",
     );
     await ready("after-ready", port);
-    await run("running-version", "openclaw", [
-      "gateway",
-      "probe",
-      "--url",
-      `ws://127.0.0.1:${port}`,
-      "--token",
-      token,
-      "--json",
-    ]);
-    const target = output("running-version").targets.find(
-      (entry) => entry.url === `ws://127.0.0.1:${port}`,
-    );
-    assert.equal(target?.connect.ok, true);
-    assert.equal(target.server.version, build.version);
+    const target = await probe("running-version", build.version);
     for (const session of sessions) {
       const history = await gateway(`${session.kind}-after`, "chat.history", {
         ...session.params,
@@ -509,6 +518,21 @@ process.exitCode = await runCancelableCommand(async (signal) => {
           .includes("Enabling incremental SQLite reclamation once:"),
         "Second maintenance repeated conversion",
       );
+    }
+    if (process.env.OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE === "1") {
+      await run("stop-before-scoped-restore", path.join(bin, "systemctl"), [
+        "--user",
+        "stop",
+        "openclaw-gateway.service",
+      ]);
+      await provePublishedDriverScopedRestore({
+        packageRoot,
+        state,
+        env,
+        artifacts,
+        run,
+        writeJson,
+      });
     }
     writeJson("summary", {
       driverVersion,

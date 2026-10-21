@@ -9,9 +9,6 @@ import type { ChannelPlugin } from "./types.plugin.js";
 
 const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
-/**
- * Native command/skill auto-enable defaults exposed by channel manifests.
- */
 type ChannelCommandDefaults = Pick<
   NonNullable<ChannelPlugin["commands"]>,
   "nativeCommandsAutoEnabled" | "nativeSkillsAutoEnabled"
@@ -36,9 +33,6 @@ export function readOwnRecordValue(record: Record<string, unknown>, key: string)
   return record[key];
 }
 
-/**
- * Normalizes manifest command defaults down to supported boolean fields.
- */
 export function normalizeChannelCommandDefaults(
   value: ChannelCommandDefaults | undefined,
 ): ChannelCommandDefaults | undefined {

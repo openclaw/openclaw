@@ -23,9 +23,10 @@ import {
   isInsideCode,
   stripLinesOutsideCode,
 } from "../../shared/text/code-regions.js";
-import { stripFinalTags } from "../../shared/text/final-tags.js";
+import { createFinalTagProbe, stripFinalTags } from "../../shared/text/final-tags.js";
 import {
   applyTextFilters,
+  createConditionalTextProjector,
   duplicateParagraphTextFilter,
   leadingEmptyLinesTextFilter,
   type TextFilter,
@@ -67,12 +68,14 @@ type VerifiedConversationContext = {
   incompleteMarkdownWrapper?: RegExp;
 };
 
+const CONVERSATION_CONTEXT_MARKERS = [
+  HISTORY_CONTEXT_MARKER,
+  RECENT_HISTORY_CONTEXT_MARKER,
+  CURRENT_MESSAGE_MARKER,
+];
+
 function hasConversationContextMarker(text: string): boolean {
-  return (
-    text.includes(HISTORY_CONTEXT_MARKER) ||
-    text.includes(RECENT_HISTORY_CONTEXT_MARKER) ||
-    text.includes(CURRENT_MESSAGE_MARKER)
-  );
+  return CONVERSATION_CONTEXT_MARKERS.some((marker) => text.includes(marker));
 }
 
 function prepareVerifiedConversationContext(
@@ -82,11 +85,7 @@ function prepareVerifiedConversationContext(
     return undefined;
   }
   const sourceCodeRegions = findCodeRegions(source);
-  const ownsConversationContext = [
-    HISTORY_CONTEXT_MARKER,
-    RECENT_HISTORY_CONTEXT_MARKER,
-    CURRENT_MESSAGE_MARKER,
-  ].some((marker) => {
+  const ownsConversationContext = CONVERSATION_CONTEXT_MARKERS.some((marker) => {
     let markerOffset = source.indexOf(marker);
     while (markerOffset !== -1) {
       const markerEnd = markerOffset + marker.length;
@@ -244,7 +243,10 @@ export function userFacingTextFilters(
 ): readonly TextFilter[] {
   const key = `${errorContext ? "error" : "normal"}${streaming ? "-stream" : ""}` as const;
   return (userFacingFilters[key] ??= [
-    { transform: stripFinalTags, activationTokens: ["<"] },
+    {
+      transform: stripFinalTags,
+      create: () => createConditionalTextProjector(stripFinalTags, createFinalTagProbe()),
+    },
     {
       transform: streaming
         ? (text) => stripInternalRuntimeContext(text, { streaming: true })

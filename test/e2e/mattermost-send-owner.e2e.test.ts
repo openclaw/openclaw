@@ -16,7 +16,7 @@ import mattermostEntry from "../../extensions/mattermost/index.js";
 import * as bootstrapRegistry from "../../src/channels/plugins/bootstrap-registry.js";
 import { importBundledChannelContractSourceArtifact } from "../../src/channels/plugins/contracts/test-helpers/runtime-artifacts.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { getDeliveryQueueEntryStatus } from "../../src/infra/delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../../src/infra/delivery-queue-sqlite.test-support.js";
 import { PlatformMessageNotDispatchedError } from "../../src/infra/outbound/deliver-types.js";
 import { deliverOutboundPayloads } from "../../src/infra/outbound/deliver.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../src/infra/outbound/delivery-queue-media-staging.js";
@@ -77,6 +77,10 @@ function createMattermostHttpHandler(params: {
   respondToPost?: (response: ServerResponse) => void;
 }): RequestListener {
   const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
+    const reply = (status: number, body: unknown) => {
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(JSON.stringify(body));
+    };
     const rawBody = await readRequestBody(request);
     const contentType = request.headers["content-type"] ?? "";
     const requestPath = request.url ?? "";
@@ -91,13 +95,11 @@ function createMattermostHttpHandler(params: {
 
     if (requestPath === "/api/v4/files") {
       params.sequence?.push("http:upload");
-      response.writeHead(201, { "content-type": "application/json" });
-      response.end(JSON.stringify({ file_infos: [{ id: "file-1" }] }));
+      reply(201, { file_infos: [{ id: "file-1" }] });
       return;
     }
     if (requestPath === "/api/v4/users/me") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ id: BOT_ID }));
+      reply(200, { id: BOT_ID });
       return;
     }
     if (requestPath === "/api/v4/users/username/alice") {
@@ -107,8 +109,7 @@ function createMattermostHttpHandler(params: {
     }
     if (requestPath === "/api/v4/channels/direct") {
       const result = await params.directChannelResponse?.();
-      response.writeHead(result?.status ?? 201, { "content-type": "application/json" });
-      response.end(JSON.stringify(result?.body ?? { id: CHANNEL_ID }));
+      reply(result?.status ?? 201, result?.body ?? { id: CHANNEL_ID });
       return;
     }
     if (requestPath === "/api/v4/posts") {
@@ -117,21 +118,15 @@ function createMattermostHttpHandler(params: {
         params.respondToPost(response);
         return;
       }
-      response.writeHead(201, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify({
-          id: "post-1",
-          channel_id: CHANNEL_ID,
-          message:
-            jsonBody && typeof jsonBody === "object" && "message" in jsonBody
-              ? jsonBody.message
-              : "",
-        }),
-      );
+      reply(201, {
+        id: "post-1",
+        channel_id: CHANNEL_ID,
+        message:
+          jsonBody && typeof jsonBody === "object" && "message" in jsonBody ? jsonBody.message : "",
+      });
       return;
     }
-    response.writeHead(404, { "content-type": "application/json" });
-    response.end(JSON.stringify({ message: `unexpected request: ${requestPath}` }));
+    reply(404, { message: `unexpected request: ${requestPath}` });
   };
   return (request, response) => {
     void handleRequest(request, response).catch((error: unknown) => {
@@ -173,6 +168,24 @@ function createMattermostConfig(baseUrl: string): OpenClawConfig {
       },
     },
   };
+}
+
+function recoverDeliveries(cfg: OpenClawConfig, stateDir: string, log = createRecoveryLog()) {
+  return drainPendingDeliveriesCore({
+    drainKey: `mattermost:${stateDir}`,
+    logLabel: "Mattermost recovery",
+    cfg,
+    log,
+    stateDir,
+    deliver: deliverOutboundPayloads,
+    selectEntry: (entry) => ({ match: entry.channel === "mattermost", bypassBackoff: true }),
+  });
+}
+
+function reopenState(stateDir: string) {
+  return closeOpenClawStateDatabaseByPathAsync(
+    resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+  );
 }
 
 afterEach(() => {
@@ -254,42 +267,22 @@ describe("Mattermost canonical message action delivery", () => {
             senderCurrent = senderState === "current";
             releaseFirstDm.resolve();
             const settled = await outcome;
-            const statusBeforeReopen = getDeliveryQueueEntryStatus(
-              OUTBOUND_DELIVERY_QUEUE_NAME,
-              queueId,
-              stateDir,
-            );
-
-            await closeOpenClawStateDatabaseByPathAsync(
-              resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
-            );
-            const statusAfterReopen = getDeliveryQueueEntryStatus(
-              OUTBOUND_DELIVERY_QUEUE_NAME,
-              queueId,
-              stateDir,
-            );
-            await drainPendingDeliveriesCore({
-              drainKey: `mattermost:${stateDir}`,
-              logLabel: "Mattermost queued handoff recovery",
-              cfg,
-              log: createRecoveryLog(),
-              stateDir,
-              deliver: deliverOutboundPayloads,
-              selectEntry: (entry) => ({
-                match: entry.channel === "mattermost",
-                bypassBackoff: true,
-              }),
-            });
+            const queueStatus = () =>
+              getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir);
+            const statusBeforeReopen = queueStatus();
+            await reopenState(stateDir);
+            const statusAfterReopen = queueStatus();
+            await recoverDeliveries(cfg, stateDir);
 
             if (senderState === "retired") {
               expect(settled).toMatchObject({
                 error: { message: expect.stringContaining("Mattermost sender retired") },
               });
-              expect(statusBeforeReopen).toBe("failed");
-              expect(statusAfterReopen).toBe("failed");
-              expect(
-                getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir),
-              ).toBe("failed");
+              expect([statusBeforeReopen, statusAfterReopen, queueStatus()]).toEqual([
+                "failed",
+                "failed",
+                "failed",
+              ]);
             } else {
               expect(settled).toMatchObject({
                 result: {
@@ -360,24 +353,11 @@ describe("Mattermost canonical message action delivery", () => {
           platformSendStartedAt: expect.any(Number),
         };
         expect(await loadPendingDeliveries(stateDir)).toMatchObject([ambiguousEntry]);
-        await closeOpenClawStateDatabaseByPathAsync(
-          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
-        );
+        await reopenState(stateDir);
         expect(await loadPendingDeliveries(stateDir)).toMatchObject([ambiguousEntry]);
 
         const recoveryLog = createRecoveryLog();
-        await drainPendingDeliveriesCore({
-          drainKey: `mattermost:${stateDir}`,
-          logLabel: "Mattermost redirect recovery",
-          cfg,
-          log: recoveryLog,
-          stateDir,
-          deliver: deliverOutboundPayloads,
-          selectEntry: (entry) => ({
-            match: entry.channel === "mattermost",
-            bypassBackoff: true,
-          }),
-        });
+        await recoverDeliveries(cfg, stateDir, recoveryLog);
         expect(recoveryLog.warn).toHaveBeenCalledWith(
           expect.stringContaining("refusing blind replay"),
         );

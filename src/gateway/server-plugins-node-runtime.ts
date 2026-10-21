@@ -6,6 +6,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
+import { NodeInvokeNotPendingError } from "./node-registry.invoke-stream.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
 import { getInProcessGatewayRequestContext } from "./server-plugin-in-process-dispatch.js";
@@ -113,12 +114,20 @@ export async function openOwnedGatewayNodeDuplex(options: {
     requireReady: true,
     maxMessageBytes: params.maxMessageBytes,
     maxOutstandingDeliveryBytes: params.maxOutstandingDeliveryBytes,
-    sendFrame(frame) {
+    async sendFrame(frame) {
       assertRuntimeCurrent();
       if (!invokeId || !framedReady) {
         throw new Error("Node duplex command is not ready for binary messages.");
       }
-      context.nodeRegistry.sendInvokeInput(invokeId, frame);
+      try {
+        context.nodeRegistry.sendInvokeInput(invokeId, frame);
+      } catch (error) {
+        if (error instanceof NodeInvokeNotPendingError) {
+          // Settlement can remove input before its typed rejection reaches this channel.
+          await invocation;
+        }
+        throw error;
+      }
     },
     onReady() {
       if (!invokeId) {
@@ -131,7 +140,7 @@ export async function openOwnedGatewayNodeDuplex(options: {
   });
   const onAbort = () => endpoint.close();
   signal.addEventListener("abort", onAbort, { once: true });
-  const closed = invokeNode(
+  const invocation = invokeNode(
     params,
     {
       onProgress: (chunk) => {
@@ -146,13 +155,18 @@ export async function openOwnedGatewayNodeDuplex(options: {
       idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
     },
     signal,
-  )
+  );
+  const closed = invocation
     .then(async (result) => {
       if (!invokeId || !framedReady) {
         throw new Error("Node command completed without opening a ready duplex invocation.");
       }
       await endpoint.drain();
       return result;
+    })
+    .catch((error: unknown) => {
+      controller.abort(error);
+      throw error;
     })
     .finally(() => {
       signal.removeEventListener("abort", onAbort);
@@ -162,7 +176,15 @@ export async function openOwnedGatewayNodeDuplex(options: {
   void closed.catch(ready.reject);
   await ready.promise;
   return {
-    send: (message) => endpoint.send(message),
+    async send(message) {
+      try {
+        await endpoint.send(message);
+      } catch (error) {
+        // Invocation rejection can close framing before the caller resumes setup.
+        assertRuntimeCurrent();
+        throw error;
+      }
+    },
     onMessage: (listener) => {
       assertRuntimeCurrent();
       return endpoint.onMessage(listener);

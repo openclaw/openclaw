@@ -59,12 +59,9 @@ function isCustomOpenAiTtsBaseUrl(baseUrl: string | undefined): boolean {
 }
 
 function firstStatusDetail(
-  record: Record<string, unknown> | undefined,
+  record: Record<string, unknown>,
   keys: readonly string[],
 ): string | undefined {
-  if (!record) {
-    return undefined;
-  }
   for (const key of keys) {
     const value = normalizeStatusDetail(record[key]);
     if (value) {
@@ -77,28 +74,19 @@ function firstStatusDetail(
 function resolveProviderConfigRecord(
   raw: TtsConfig,
   provider: TtsProvider,
-): Record<string, unknown> | undefined {
-  const rawRecord: Record<string, unknown> = isObjectRecord(raw)
-    ? (raw as Record<string, unknown>)
-    : {};
+): Record<string, unknown> {
   const providers: Record<string, unknown> = isObjectRecord(raw.providers) ? raw.providers : {};
   if (provider === "microsoft") {
     return {
-      ...(isObjectRecord(rawRecord.edge) ? rawRecord.edge : {}),
-      ...(isObjectRecord(rawRecord.microsoft) ? rawRecord.microsoft : {}),
       ...(isObjectRecord(providers.edge) ? providers.edge : {}),
       ...(isObjectRecord(providers.microsoft) ? providers.microsoft : {}),
     };
   }
-  const direct = rawRecord[provider];
   const providerScoped = providers[provider];
   if (isObjectRecord(providerScoped)) {
     return providerScoped;
   }
-  if (isObjectRecord(direct)) {
-    return direct;
-  }
-  return rawRecord;
+  return {};
 }
 
 function resolveStatusProviderDetails(raw: TtsConfig, provider: TtsProvider) {
@@ -106,7 +94,7 @@ function resolveStatusProviderDetails(raw: TtsConfig, provider: TtsProvider) {
     return {};
   }
   const record = resolveProviderConfigRecord(raw, provider);
-  const sanitizedBaseUrl = sanitizeBaseUrlForStatus(record?.baseUrl);
+  const sanitizedBaseUrl = sanitizeBaseUrlForStatus(record.baseUrl);
   const customBaseUrl = provider === "openai" && isCustomOpenAiTtsBaseUrl(sanitizedBaseUrl);
   const details: Partial<TtsStatusSnapshot> = {};
   for (const [field, keys] of [

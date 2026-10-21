@@ -410,6 +410,7 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
       return msg;
     }
     const role = (msg as { role?: unknown }).role;
+    let next = msg;
     if (role === "assistant") {
       const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
       if (replaySafeThinking?.preservedIndexes.has(index)) {
@@ -418,26 +419,18 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
         }
         return msg;
       }
-      const next = rewriteAssistantToolCallIds({
+      next = rewriteAssistantToolCallIds({
         message: assistant,
         resolveId: resolveAssistantId,
       });
-      if (next !== msg) {
-        changed = true;
-      }
-      return next;
-    }
-    if (role === "toolResult") {
-      const next = rewriteToolResultIds({
+    } else if (role === "toolResult") {
+      next = rewriteToolResultIds({
         message: msg as Extract<AgentMessage, { role: "toolResult" }>,
         resolveId: resolveToolResultId,
       });
-      if (next !== msg) {
-        changed = true;
-      }
-      return next;
     }
-    return msg;
+    changed ||= next !== msg;
+    return next;
   });
 
   return changed ? out : messages;

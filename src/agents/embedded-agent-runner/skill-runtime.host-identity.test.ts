@@ -12,6 +12,7 @@ import {
 } from "../../skills/runtime/resources.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import { recordSkillFileHost } from "../../skills/skill-file-host.js";
+import type { SkillEntry } from "../../skills/types.js";
 import { resolveWorkspaceSkillSourcePath } from "../../skills/workspace-skill-read-path.js";
 import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { readCodeModeSkill } from "../code-mode-skills.js";
@@ -21,6 +22,12 @@ import { prepareEmbeddedSkills } from "./skill-runtime.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
+
+const skillSources = (entries: SkillEntry[], executionEntries: SkillEntry[] = []) => ({
+  entries,
+  executionEntries,
+  runtime: { platform: process.platform, bins: [] },
+});
 
 function requireNamedSkill<T extends { name: string }>(skills: T[], name: string): T {
   const skill = skills.find((entry) => entry.name === name);
@@ -89,11 +96,7 @@ it("isolates equal-root opposite-host caches through final delivered bytes", asy
   };
   const release = registerAgentWorkspaceAccess(workspace, {
     bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-    loadSkills: async () => ({
-      entries: [],
-      executionEntries: loadRemoteExecutionEntries(),
-      runtime: { platform: process.platform, bins: [] },
-    }),
+    loadSkills: async () => skillSources([], loadRemoteExecutionEntries()),
     skillResources: {
       readInstructions: (filePath, options) =>
         fs.readFile(toRemote(filePath), { ...options, encoding: "utf8" }),
@@ -135,7 +138,10 @@ it("isolates equal-root opposite-host caches through final delivered bytes", asy
   };
   try {
     const workspaceFirst = await resolveReusableWorkspaceSkillSnapshot(params);
-    const workspaceAgain = await resolveReusableWorkspaceSkillSnapshot(params);
+    const workspaceAgain = await resolveReusableWorkspaceSkillSnapshot({
+      ...params,
+      existingSnapshot: workspaceFirst.snapshot,
+    });
     const gatewayAfter = await resolveReusableWorkspaceSkillSnapshot({
       ...params,
       executionWorkspaceFileHost: "gateway",
@@ -224,11 +230,7 @@ it.each([
           );
           const release = registerAgentWorkspaceAccess(workspace, {
             bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-            loadSkills: async () => ({
-              entries: loadNode(),
-              executionEntries: [],
-              runtime: { platform: process.platform, bins: [] },
-            }),
+            loadSkills: async () => skillSources(loadNode()),
             skillResources: {
               readInstructions,
               readSkillFiles: vi.fn(),
@@ -335,11 +337,7 @@ it.each([
             bumpSkillsSnapshotVersion({ workspaceDir: physicalNode, reason: "remote-node" });
             const rebound = registerAgentWorkspaceAccess(workspace, {
               bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-              loadSkills: async () => ({
-                entries: loadNode(),
-                executionEntries: [],
-                runtime: { platform: process.platform, bins: [] },
-              }),
+              loadSkills: async () => skillSources(loadNode()),
               skillResources: {
                 readInstructions,
                 readSkillFiles: vi.fn(),

@@ -3,7 +3,7 @@ import type {
   SystemAgentChatResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
-import { appendTranscriptTurn } from "../../system-agent/transcript-store.js";
+import type { createSystemAgentTranscriptStore } from "../../system-agent/transcript-store.js";
 import type { GatewaySystemAgentSession } from "./shared-types.js";
 
 type SystemAgentChatReply = Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
@@ -126,13 +126,14 @@ export function buildSystemAgentChatResult(params: {
   };
 }
 
-export function persistSystemAgentEngineHistory(
+export async function persistSystemAgentEngineHistory(
   engine: GatewaySystemAgentSession["engine"],
   startIndex: number,
-): void {
+  transcript: ReturnType<typeof createSystemAgentTranscriptStore>,
+): Promise<void> {
   const at = Date.now();
   for (const turn of engine.historySince(startIndex)) {
     // Engine history has already masked sensitive user input.
-    appendTranscriptTurn({ ...turn, at });
+    await transcript.appendTurn({ ...turn, at });
   }
 }

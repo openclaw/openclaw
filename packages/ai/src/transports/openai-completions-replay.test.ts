@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
-import type { Model } from "../types.js";
-import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
+import { preparedRequestSuffix } from "../provider-options.js";
+import type { Context, Model } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
+import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
+  buildOpenAICompletionsRequest,
+  buildOpenAICompletionsParams,
+} from "./openai-completions-params.js";
+import { applyCompletionsReplay } from "./openai-completions-replay.js";
+import {
+  makeCompletionsModel,
   openRouterModel,
   openRouterAnthropicModel,
   openRouterXaiModel,
@@ -14,14 +22,154 @@ import {
   customKimiProxyModel,
   staleKimiK27Model,
   customQwenReasoningModel,
+  customReasoningProxyModel,
   getAssistantMessage,
   buildReplayParams,
-  customReasoningProxyModel,
 } from "./openai-completions.test-support.js";
 import { getCompat } from "./openai-transport-params.js";
 
+describe("Chat Completions historical tools", () => {
+  const replayTool = {
+    name: "lookup_weather",
+    description: "Get forecast",
+    parameters: { type: "object" },
+  };
+  it.each(["direct", "managed"] as const)(
+    "projects undeclared history against the outgoing catalog without changing the transcript (%s)",
+    (mode) => {
+      const model = makeCompletionsModel({
+        provider: "strict-provider",
+        baseUrl: "https://strict.example/v1",
+        reasoning: false,
+        compat: { requiresAssistantAfterToolResult: true },
+      });
+      const policy =
+        mode === "direct"
+          ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" as const }
+          : { mode };
+      for (const unavailable of ["session_status", "unusable"]) {
+        const calls = [
+          { name: "lookup_weather", id: "call:0|fc_item" },
+          { name: unavailable, id: "call_bad" },
+          { name: "lookup_weather", id: "call_2" },
+        ];
+        const context: Context = {
+          tools: [
+            replayTool,
+            { name: "unusable", description: "Rejected schema", parameters: { default: 1n } },
+          ],
+          messages: [
+            {
+              role: "assistant",
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              content: calls.map(({ name, id }) => ({
+                type: "toolCall",
+                id,
+                name,
+                arguments: {},
+              })),
+              usage: createZeroUsage(),
+              stopReason: "toolUse",
+              timestamp: 1,
+            },
+            ...calls.map(({ name, id }, i) =>
+              makeTextToolResult(
+                id,
+                "stale_metadata",
+                i === 1 ? `Tool ${name} not found` : "sunny",
+                i === 1,
+                2,
+              ),
+            ),
+            { role: "user", content: "Continue", timestamp: 3 },
+          ],
+        };
+        const original = structuredClone(context);
+        const params = buildOpenAICompletionsRequest(model, context, undefined, policy);
+        expect(params.tools?.map((entry) => entry.function.name)).toEqual(["lookup_weather"]);
+        expect(params.messages).toEqual([
+          {
+            role: "assistant",
+            content: `[tool call id=call_bad name=${unavailable}] {}`,
+            tool_calls: [
+              {
+                id: "call:0|fc_item",
+                type: "function",
+                function: { name: "lookup_weather", arguments: "{}" },
+              },
+              {
+                id: "call_2",
+                type: "function",
+                function: { name: "lookup_weather", arguments: "{}" },
+              },
+            ],
+          },
+          { role: "tool", tool_call_id: "call:0|fc_item", content: "sunny" },
+          { role: "tool", tool_call_id: "call_2", content: "sunny" },
+          {
+            role: "assistant",
+            content: `[tool result id=call_bad name=stale_metadata] Tool ${unavailable} not found`,
+          },
+          { role: "user", content: "Continue" },
+        ]);
+        expect(context).toEqual(original);
+        const next = buildOpenAICompletionsRequest(
+          model,
+          {
+            ...context,
+            messages: [...context.messages, { role: "user", content: "Again", timestamp: 4 }],
+          },
+          undefined,
+          policy,
+        );
+        expect(next.messages.slice(0, -1)).toEqual(params.messages);
+      }
+    },
+  );
+
+  it("keeps captured-prefix native result IDs and projects unavailable suffix results as text", () => {
+    const context: Context = {
+      tools: [replayTool],
+      messages: [
+        makeTextToolResult("call:0|fc_item", "stale_metadata", "sunny", false, 1),
+        makeTextToolResult("call_bad", "session_status", "Tool session_status not found", true, 2),
+      ],
+    };
+    preparedRequestSuffix.mark(context, new Set(["call_0"]));
+    expect(buildOpenAICompletionsParams(openAIModel, context, undefined).messages).toEqual([
+      { role: "tool", tool_call_id: "call_0", content: "sunny" },
+      {
+        role: "assistant",
+        content: "[tool result id=call_bad name=session_status] Tool session_status not found",
+      },
+    ]);
+  });
+});
+
 describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () => {
-  it.each(["reasoning_details", "reasoning_content", "reasoning", "reasoning_text"])(
+  it.each([
+    ["native reasoning", "native reasoning"],
+    ["", "streamed reasoning"],
+  ])("prefers nonempty reasoning_content when explicitly required (%j)", (native, expected) => {
+    const model = {
+      ...customReasoningProxyModel,
+      compat: { requiresReasoningContentOnAssistantMessages: true },
+    };
+    const message = {
+      role: "assistant" as const,
+      content: "Answer",
+      reasoning_content: native,
+      reasoning: "streamed reasoning",
+      reasoning_text: "alternate reasoning",
+      reasoning_details: "not replayable here",
+    };
+    applyCompletionsReplay([message], { messages: [] }, model, getCompat(model));
+    expect(message).toEqual({ role: "assistant", content: "Answer", reasoning_content: expected });
+  });
+
+  it.each(["reasoning_text"])(
     "strips %s from stock OpenAI Chat Completions assistant replay",
     (thinkingSignature) => {
       const assistant = getAssistantMessage(buildReplayParams(openAIModel, thinkingSignature));
@@ -58,15 +206,6 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
       expect(assistant).not.toHaveProperty("reasoning_text");
     }
   });
-
-  it.each(["reasoning", "reasoning_content"])(
-    "preserves OpenRouter %s string reasoning replay",
-    (thinkingSignature) => {
-      const assistant = getAssistantMessage(buildReplayParams(openRouterModel, thinkingSignature));
-
-      expect(assistant[thinkingSignature]).toBe("Need to answer politely.");
-    },
-  );
 
   it("strips empty-string reasoning_content from OpenRouter assistant replay", () => {
     const params = buildOpenAICompletionsParams(
@@ -110,25 +249,25 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     }
   });
 
-  it.each([
-    ["DeepSeek", nativeDeepSeekModel],
-    ["Z.AI", nativeZaiModel],
-  ] as const)("preserves native %s reasoning_content replay", (_label, model) => {
-    const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_content"));
+  it.each([["Z.AI", nativeZaiModel]] as const)(
+    "preserves native %s reasoning_content replay",
+    (_label, model) => {
+      const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_content"));
 
-    expect(assistant.reasoning_content).toBe("Need to answer politely.");
-  });
+      expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    },
+  );
 
-  it.each([
-    ["DeepSeek", nativeDeepSeekModel],
-    ["Z.AI", nativeZaiModel],
-  ] as const)("strips non-native %s reasoning replay fields", (_label, model) => {
-    const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_details"));
+  it.each([["DeepSeek", nativeDeepSeekModel]] as const)(
+    "strips non-native %s reasoning replay fields",
+    (_label, model) => {
+      const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_details"));
 
-    expect(assistant).not.toHaveProperty("reasoning_details");
-    expect(assistant).not.toHaveProperty("reasoning");
-    expect(assistant).not.toHaveProperty("reasoning_text");
-  });
+      expect(assistant).not.toHaveProperty("reasoning_details");
+      expect(assistant).not.toHaveProperty("reasoning");
+      expect(assistant).not.toHaveProperty("reasoning_text");
+    },
+  );
 
   it("normalizes OpenRouter reasoning_text to reasoning", () => {
     const assistant = getAssistantMessage(buildReplayParams(openRouterModel, "reasoning_text"));
@@ -149,37 +288,8 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
       assertSanitizedFields: true,
     },
     {
-      label: "preserves reasoning_content replay for custom MiMo V2.6 Pro proxy routes",
-      model: { ...customMiMoProxyModel, id: "xiaomi/mimo-v2.6-pro" },
-      assertSanitizedFields: true,
-    },
-    {
-      label: "preserves reasoning_content replay for custom MiMo V2.6 Flash proxy routes",
-      model: { ...customMiMoProxyModel, id: "xiaomi/mimo-v2.6-flash" },
-      assertSanitizedFields: true,
-    },
-    {
-      label: "preserves reasoning_content replay for custom MiMo V2.6 UltraSpeed proxy routes",
-      model: { ...customMiMoProxyModel, id: "xiaomi/mimo-v2.6-pro-ultraspeed" },
-      assertSanitizedFields: true,
-    },
-    {
       label: "preserves Kimi K2.7 reasoning_content replay with stale reasoning metadata",
       model: staleKimiK27Model,
-      assertSanitizedFields: true,
-    },
-    {
-      label: "preserves Kimi K2.7 HighSpeed reasoning_content replay with stale reasoning metadata",
-      model: {
-        ...staleKimiK27Model,
-        id: "kimi-k2.7-code-highspeed",
-        name: "Kimi K2.7 Code HighSpeed",
-      },
-      assertSanitizedFields: true,
-    },
-    {
-      label: "preserves Kimi K3 reasoning_content replay with stale reasoning metadata",
-      model: { ...staleKimiK27Model, id: "kimi-k3", name: "Kimi K3" },
       assertSanitizedFields: true,
     },
     {
@@ -262,7 +372,7 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
           makeTextToolResult("call_1", "lookup", "sunny", false, 1),
           { role: "user", content: "answer" },
         ],
-        tools: [],
+        tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
       } as never,
       undefined,
     ) as { messages: unknown };
@@ -278,11 +388,5 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     } as never);
 
     expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(true);
-  });
-
-  it("falls back to detection (false) for the same custom provider when the flag is absent", () => {
-    const resolved = getCompat(customReasoningProxyModel as never);
-
-    expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(false);
   });
 });

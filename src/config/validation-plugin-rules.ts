@@ -1,5 +1,6 @@
 // Applies metadata defaults and plugin-dependent rules to a core-validated config.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
@@ -13,8 +14,11 @@ import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { collectPluginProviderRequestOwners } from "../plugins/plugin-provider-request-policy.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
+import { collectUtilityModelWarnings } from "../status/utility-model-warnings.js";
 import { isRecord } from "../utils.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import {
   collectChannelDmPolicyMetadata,
@@ -30,7 +34,7 @@ import {
   hasChannelDmPolicyDependencyWarningCandidates,
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
-import { collectHeartbeatOwnerWarnings } from "./validation-core.js";
+import { collectHeartbeatOwnerWarnings, collectRedactPatternWarnings } from "./validation-core.js";
 import {
   formatChannelConfigIssueMessage,
   resolveDeferredChannelConfigWarning,
@@ -41,6 +45,7 @@ import {
   collectSecretRefProviderSourceIssues,
 } from "./validation-plugin-registry.js";
 import {
+  preparePluginSchemaValidations,
   validatePreparedPluginSchemaValue,
   type PreparedPluginSchemaValidations,
 } from "./validation-prepared.js";
@@ -78,7 +83,6 @@ export function validatePreparedConfigWithPlugins(
   opts: ValidateConfigWithPluginsParams & {
     applyDefaults: boolean;
     installedPluginRecordIds?: ReadonlySet<string>;
-    schemaValidations?: PreparedPluginSchemaValidations;
   },
 ): ValidateConfigWithPluginsResult {
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
@@ -96,12 +100,10 @@ export function validatePreparedConfigWithPlugins(
     return registryInfo;
   };
 
-  if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "core-only") {
-    const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(parsedConfig);
-    if (pluginMetadataSnapshot) {
-      registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
-    }
-  }
+  let schemaValidations: PreparedPluginSchemaValidations | undefined;
+  const ensureSchemaValidations = () =>
+    (schemaValidations ??= preparePluginSchemaValidations(ensureLoadedRegistryInfo().registry));
+
   const config = opts.applyDefaults
     ? materializeRuntimeConfig(parsedConfig, {
         env: opts.env,
@@ -135,7 +137,13 @@ export function validatePreparedConfigWithPlugins(
   const deferredPluginIds = new Set(
     opts.deferredPluginMigrations?.map(({ pluginId }) => normalizePluginId(pluginId)),
   );
-  warnings.push(...collectHeartbeatOwnerWarnings(config));
+  warnings.push(
+    ...collectHeartbeatOwnerWarnings(config),
+    ...collectRedactPatternWarnings(config),
+    ...collectUtilityModelWarnings(config, () => ({
+      plugins: ensureLoadedRegistryInfo().registry.plugins,
+    })),
+  );
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
 
   let compatPluginIds: ReadonlySet<string> | null = null;
@@ -372,6 +380,54 @@ export function validatePreparedConfigWithPlugins(
       return;
     }
     const { registry } = ensureRegistry();
+    if (!findUninspectedPluginDiagnostic(registry.diagnostics)) {
+      // Validate authored per-model overrides without filling defaults into these layers.
+      const modelParamsSchemaValidations = ensureSchemaValidations();
+      const scopes = [
+        { path: "agents.defaults", models: config.agents?.defaults?.models },
+        ...listAgentEntriesWithSource(config).map(({ entry, source }) => ({
+          path:
+            source.kind === "entries"
+              ? `agents.entries.${source.key}`
+              : `agents.list.${source.index}`,
+          models: entry.models,
+        })),
+      ];
+      const requestOwners = collectPluginProviderRequestOwners(registry.plugins);
+      for (const [provider, { plugin, policy }] of requestOwners) {
+        if (!policy.modelParamsSchema || deferredPluginIds.has(normalizePluginId(plugin.id))) {
+          continue;
+        }
+        for (const scope of scopes) {
+          for (const [ref, entry] of Object.entries(scope.models ?? {})) {
+            if (!entry.params || parseProviderModelRef(ref)?.provider !== provider) {
+              continue;
+            }
+            const base = `${scope.path}.models.${ref}.params`;
+            const result = validatePreparedPluginSchemaValue(
+              {
+                origin: plugin.origin,
+                schema: policy.modelParamsSchema,
+                cacheKey: `model-params:${plugin.id}:${base}`,
+                value: entry.params,
+                applyDefaults: false,
+              },
+              modelParamsSchemaValidations,
+            );
+            if (!result.ok) {
+              issues.push(
+                ...result.errors.map((error) => ({
+                  path: error.path === "<root>" ? base : `${base}.${error.path}`,
+                  message: `invalid model params: ${error.message}`,
+                  allowedValues: error.allowedValues,
+                  allowedValuesHiddenCount: error.allowedValuesHiddenCount,
+                })),
+              );
+            }
+          }
+        }
+      }
+    }
     const { suppressions } = planManifestModelCatalogSuppressions({ registry });
     const suppressedModels = new Map<string, (typeof suppressions)[number]>();
     for (const suppression of suppressions) {
@@ -431,21 +487,26 @@ export function validatePreparedConfigWithPlugins(
     mutatedConfig.plugins!.entries![pluginId] = { ...currentEntry, config: nextValue };
   };
 
-  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...bundledChannelIds]);
+  const allowedChannels = new Set<string>(bundledChannelIds);
+  let registryChannelsLoaded = false;
+  const isKnownChannel = (channelId: string): boolean => {
+    if (!allowedChannels.has(channelId) && !registryChannelsLoaded) {
+      for (const record of ensureRegistry().registry.plugins) {
+        for (const id of record.channels) {
+          allowedChannels.add(id);
+        }
+      }
+      registryChannelsLoaded = true;
+    }
+    return allowedChannels.has(channelId);
+  };
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
       const trimmed = key.trim();
       if (!trimmed) {
         continue;
       }
-      if (!allowedChannels.has(trimmed)) {
-        for (const record of ensureRegistry().registry.plugins) {
-          for (const channelId of record.channels) {
-            allowedChannels.add(channelId);
-          }
-        }
-      }
-      if (!allowedChannels.has(trimmed)) {
+      if (trimmed !== "defaults" && trimmed !== "modelByChannel" && !isKnownChannel(trimmed)) {
         if (preserveUnavailableConfig(`channels.${trimmed}`)) {
           continue;
         }
@@ -490,7 +551,7 @@ export function validatePreparedConfigWithPlugins(
           applyDefaults: true, // Always apply defaults for plugin schema validation;
           // writeConfigFile persists persistCandidate, not validated.config (#61841)
         },
-        opts.schemaValidations,
+        ensureSchemaValidations(),
       );
       if (!result.ok) {
         for (const error of result.errors) {
@@ -505,6 +566,22 @@ export function validatePreparedConfigWithPlugins(
       } else {
         replaceChannelConfig(trimmed, result.value);
       }
+    }
+  }
+
+  for (const key of ["byChannel", "debounceMsByChannel"] as const) {
+    for (const channelId of Object.keys(config.messages?.queue?.[key] ?? {})) {
+      if (channelId === INTERNAL_MESSAGE_CHANNEL || isKnownChannel(channelId)) {
+        continue;
+      }
+      const path = `messages.queue.${key}.${channelId}`;
+      if (preserveUnavailableConfig(path)) {
+        continue;
+      }
+      warnings.push({
+        path,
+        message: `unknown channel id: ${channelId} (install its channel plugin or correct this setting)`,
+      });
     }
   }
 
@@ -564,8 +641,8 @@ export function validatePreparedConfigWithPlugins(
       config,
       env: opts.env,
       applyDefaults: opts.applyDefaults,
-      schemaValidations: opts.schemaValidations,
       registry,
+      schemaValidations: ensureSchemaValidations(),
       deferredPluginIds,
       ensureCompatPluginIds,
       ensureOverriddenPluginIds,
@@ -587,6 +664,9 @@ export function validatePreparedConfigWithPlugins(
     );
   }
 
+  if (issues.length === 0) {
+    (schemaValidations ?? preparePluginSchemaValidations(registryInfo?.registry)).publish();
+  }
   return issues.length > 0
     ? { ok: false, issues, warnings }
     : { ok: true, config: mutatedConfig, warnings };

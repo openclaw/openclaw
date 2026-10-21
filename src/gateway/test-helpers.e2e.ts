@@ -9,6 +9,8 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
+import { resolvePreauthHandshakeTimeoutMs } from "../../packages/gateway-client/src/timeouts.js";
 import { WebSocket, type RawData } from "../../packages/gateway-client/src/websocket.js";
 import {
   type HelloOk,
@@ -38,7 +40,6 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
-import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import { startGatewayServer, type GatewayServerOptions } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
@@ -93,7 +94,13 @@ export async function connectGatewayClient(params: {
             "_",
           ),
         );
-        return path.join(identityRoot, "test-device-identities", `${safe}.sqlite`);
+        return path.join(
+          identityRoot,
+          "test-device-identities",
+          safe,
+          "client",
+          "credentials.sqlite",
+        );
       })(),
     });
   return await acquireGatewayTestClient(
@@ -131,7 +138,9 @@ export async function connectGatewayClient(params: {
       onHelloOk: params.onHelloOk,
     },
     {
-      timeoutMs: params.timeoutMs ?? 10_000,
+      // The Gateway answers or closes an unfinished handshake at its preauth deadline.
+      // Wait past that verdict instead of racing it with a shorter fixture timer.
+      timeoutMs: params.timeoutMs ?? resolvePreauthHandshakeTimeoutMs() + 5_000,
       timeoutMessage: params.timeoutMessage ?? "gateway connect timeout",
       closeMessage: "gateway closed during connect",
       unrefTimeout: true,

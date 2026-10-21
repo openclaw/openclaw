@@ -1,9 +1,11 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer, type Server } from "node:https";
 import type { Socket } from "node:net";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -90,6 +92,7 @@ function openRequest(
     path?: string;
     host?: string;
     body?: string;
+    authorization?: string;
     owner?: SecretEgressProxyWorkerHandle;
   } = {},
 ): Promise<IncomingMessage> {
@@ -107,7 +110,7 @@ function openRequest(
         path: `https://${options.host ?? "localhost"}:${originPort}${options.path ?? "/"}`,
         headers: {
           "Proxy-Authorization": `Basic ${Buffer.from(`openclaw:${credentials.password}`).toString("base64")}`,
-          Authorization: `Bearer ${sentinel}`,
+          Authorization: options.authorization ?? `Bearer ${sentinel}`,
           "Content-Length": Buffer.byteLength(body),
         },
       },
@@ -180,6 +183,72 @@ afterEach(async () => {
 });
 
 describe("secret egress Worker boundary", () => {
+  it("exports trust that rejects a disclosed eMudhra chain while retaining its local CA", async () => {
+    const grant = await register();
+    const fixture = new URL("./fixtures/emudhra/", import.meta.url);
+    // -trusted disables implicit CA files/directories/stores. Fixed verification
+    // time keeps certificate expiry separate from this trust-export regression.
+    const rejected = spawnSync(
+      "openssl",
+      [
+        "verify",
+        "-trusted",
+        grant.env.SSL_CERT_FILE!,
+        "-purpose",
+        "sslserver",
+        "-verify_hostname",
+        "dv-g3b-emudhra.we-have-a-problem.com",
+        "-attime",
+        String(Date.UTC(2026, 9, 21) / 1000),
+        "-untrusted",
+        fileURLToPath(new URL("untrusted.pem", fixture)),
+        fileURLToPath(new URL("leaf.pem", fixture)),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(rejected.error).toBeUndefined();
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stderr).toContain("unable to get local issuer certificate");
+    expect(() =>
+      execFileSync("openssl", ["verify", "-trusted", grant.env.SSL_CERT_FILE!, proxy.caCertPath], {
+        stdio: "pipe",
+      }),
+    ).not.toThrow();
+    expect(await readResponse(await openRequest(grant))).toEqual({ status: 200, body: "ok" });
+    expect(observed).toEqual([{ authorization: `Bearer ${secret}`, body: "" }]);
+  });
+
+  it("keeps a multi-secret job's Basic credentials scoped to its registered grant", async () => {
+    const password = sealSecretSentinel("synthetic-worker-password", { label: "WORKER_PASSWORD" });
+    const unrelated = sealSecretSentinel("synthetic-unrelated-worker-secret", {
+      label: "UNRELATED_SECRET",
+    });
+    const grant = await proxy.registerProcess([
+      ...bindings,
+      { name: "WORKER_PASSWORD", sentinel: password, allowedHosts: ["localhost"] },
+    ]);
+    grants.add(grant);
+    const authorization = `Basic ${Buffer.from(`${sentinel}:${password}`).toString("base64")}`;
+    expect((await readResponse(await openRequest(grant, { authorization }))).status).toBe(200);
+    expect(observed).toEqual([
+      {
+        authorization: `Basic ${Buffer.from(`${secret}:synthetic-worker-password`).toString("base64")}`,
+        body: "",
+      },
+    ]);
+    expect(
+      (
+        await readResponse(
+          await openRequest(grant, {
+            authorization: `Basic ${Buffer.from(`user:${unrelated}`).toString("base64")}`,
+          }),
+        )
+      ).status,
+    ).toBe(502);
+    grant.revoke();
+    expect((await readResponse(await openRequest(grant, { authorization }))).status).toBe(407);
+    expect(observed).toHaveLength(1);
+  });
   it("acknowledges usable grants while keeping bindings, host policy, and audit data scoped", async () => {
     const grant = await register();
     expect(await readResponse(await openRequest(grant, { body: `${sentinel}:body` }))).toEqual({

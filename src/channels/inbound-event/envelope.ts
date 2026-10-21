@@ -5,7 +5,9 @@ import {
 } from "../../auto-reply/envelope.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionUpdatedAtCore } from "../../config/sessions/session-accessor.js";
+import { readSessionUpdatedAtInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import {
   resolveAgentRoute,
   type ResolvedAgentRoute,
@@ -16,20 +18,50 @@ export type ChannelInboundEnvelopeInput = Omit<AgentEnvelopeParams, "previousTim
   previousTimestamp?: AgentEnvelopeParams["previousTimestamp"] | null;
 };
 
-export function createChannelInboundEnvelopeBuilder(params: {
+type ChannelInboundEnvelopeBuilderParams = {
   cfg: OpenClawConfig;
   route: Pick<ResolvedAgentRoute, "agentId" | "sessionKey">;
-}) {
+};
+
+/** @deprecated Await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+export function createChannelInboundEnvelopeBuilder(params: ChannelInboundEnvelopeBuilderParams) {
+  warnPluginSdkDeprecation({
+    family: "channel-inbound-envelope",
+    method: "createChannelInboundEnvelopeBuilder",
+    replacement: "await createChannelInboundEnvelopeBuilderAsync",
+  });
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.route.agentId,
   });
-  const envelope = resolveEnvelopeFormatOptions(params.cfg);
+  return createEnvelopeFormatter(params.cfg, () =>
+    readSessionUpdatedAtCore({ storePath, sessionKey: params.route.sessionKey }),
+  );
+}
+
+/** Prepare once per inbound message; history formatting remains synchronous and SQL-free. */
+export async function createChannelInboundEnvelopeBuilderAsync(
+  params: ChannelInboundEnvelopeBuilderParams,
+) {
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+    agentId: params.route.agentId,
+  });
+  const previousTimestamp = await readSessionUpdatedAtInWorker({
+    storePath,
+    sessionKey: params.route.sessionKey,
+  });
+  return createEnvelopeFormatter(params.cfg, () => previousTimestamp);
+}
+
+function createEnvelopeFormatter(
+  cfg: OpenClawConfig,
+  readPreviousTimestamp: () => number | undefined,
+) {
+  const envelope = resolveEnvelopeFormatOptions(cfg);
   return (input: ChannelInboundEnvelopeInput): string => {
     const previousTimestamp =
       input.previousTimestamp === null
         ? undefined
-        : (input.previousTimestamp ??
-          readSessionUpdatedAtCore({ storePath, sessionKey: params.route.sessionKey }));
+        : (input.previousTimestamp ?? readPreviousTimestamp());
     return formatAgentEnvelope({
       ...input,
       previousTimestamp,
@@ -38,7 +70,13 @@ export function createChannelInboundEnvelopeBuilder(params: {
   };
 }
 
+/** @deprecated Use resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveChannelInboundRouteEnvelope(params: ResolveAgentRouteInput) {
+  warnPluginSdkDeprecation({
+    family: "channel-inbound-envelope",
+    method: "resolveChannelInboundRouteEnvelope",
+    replacement: "resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync",
+  });
   const route = resolveAgentRoute(params);
   return {
     route,
@@ -79,9 +117,15 @@ type InboundEnvelopeBuilderParams<TConfig, TEnvelope> = {
   formatAgentEnvelope: (params: InboundEnvelopeFormatParams<TEnvelope>) => string;
 };
 
+/** @deprecated Await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(
   params: InboundEnvelopeBuilderParams<TConfig, TEnvelope>,
 ) {
+  warnPluginSdkDeprecation({
+    family: "channel-inbound-envelope",
+    method: "createInboundEnvelopeBuilder",
+    replacement: "await createChannelInboundEnvelopeBuilderAsync",
+  });
   const storePath = params.resolveStorePath(params.sessionStore, {
     agentId: params.route.agentId,
   });
@@ -103,6 +147,7 @@ export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(
   };
 }
 
+/** @deprecated Use resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveInboundRouteEnvelopeBuilder<
   TConfig,
   TEnvelope,
@@ -117,6 +162,11 @@ export function resolveInboundRouteEnvelopeBuilder<
   route: TRoute;
   buildEnvelope: ReturnType<typeof createInboundEnvelopeBuilder<TConfig, TEnvelope>>;
 } {
+  warnPluginSdkDeprecation({
+    family: "channel-inbound-envelope",
+    method: "resolveInboundRouteEnvelopeBuilder",
+    replacement: "resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync",
+  });
   const route = params.resolveAgentRoute({
     cfg: params.cfg,
     channel: params.channel,
@@ -145,7 +195,7 @@ type InboundRouteEnvelopeRuntime<
   >;
 };
 
-/** Runtime-driven compatibility variant for shipped plugin SDK callers. */
+/** @deprecated Use resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveInboundRouteEnvelopeBuilderWithRuntime<
   TConfig,
   TEnvelope,
@@ -160,6 +210,11 @@ export function resolveInboundRouteEnvelopeBuilderWithRuntime<
   route: TRoute;
   buildEnvelope: ReturnType<typeof createInboundEnvelopeBuilder<TConfig, TEnvelope>>;
 } {
+  warnPluginSdkDeprecation({
+    family: "channel-inbound-envelope",
+    method: "resolveInboundRouteEnvelopeBuilderWithRuntime",
+    replacement: "resolveAgentRoute and await createChannelInboundEnvelopeBuilderAsync",
+  });
   return resolveInboundRouteEnvelopeBuilder({
     cfg: params.cfg,
     channel: params.channel,

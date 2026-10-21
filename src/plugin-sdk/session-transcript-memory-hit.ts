@@ -108,7 +108,7 @@ export function resolveSessionTranscriptMemoryHitKeyToSessionKeys(
       return (
         !isIncognitoSessionKey(sessionKey) &&
         entry.sessionId === identity.sessionId &&
-        normalizeAgentId(resolveAgentIdFromSessionKey(sessionKey)) === identity.agentId
+        resolveAgentIdFromSessionKey(sessionKey) === identity.agentId
       );
     })
     .map(([sessionKey]) => sessionKey);

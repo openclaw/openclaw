@@ -17,6 +17,15 @@ export type ManagedHandoffOriginalAdmission = {
   original: ManagedHandoffLease;
 };
 
+export function managedHandoffOriginalGeneration({
+  key,
+  owner,
+  payload,
+  updatedAt,
+}: ManagedHandoffLease) {
+  return { key, owner, payload, updatedAt };
+}
+
 /** Validate the unchanged acquisition object, never a decoded or copied row. */
 export function readManagedHandoffOriginalAdmission(
   original: ManagedHandoffLease,
@@ -69,12 +78,7 @@ export function readOriginalUpdateDependents(
   lease: ManagedHandoffLease,
   db: HandoffDatabase,
 ): string[] {
-  const original = {
-    key: lease.key,
-    owner: lease.owner,
-    payload: lease.payload,
-    updatedAt: lease.updatedAt,
-  };
+  const original = managedHandoffOriginalGeneration(lease);
   return executeSqliteQuerySync(
     db,
     leaseQueries(db).selectFrom("managed_update_handoffs").select(["install_root", "payload_json"]),

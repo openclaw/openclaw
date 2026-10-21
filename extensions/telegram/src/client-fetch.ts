@@ -34,10 +34,6 @@ export function asTelegramClientFetch(
   return fetchImpl as unknown as TelegramClientFetch;
 }
 
-function asTelegramCompatFetch(fetchImpl: TelegramClientFetch): TelegramCompatFetch {
-  return fetchImpl as unknown as TelegramCompatFetch;
-}
-
 function isTelegramAbortSignalLike(value: unknown): value is TelegramAbortSignalLike {
   return (
     typeof value === "object" &&
@@ -58,17 +54,13 @@ const TELEGRAM_TIMEOUT_FALLBACK_METHODS = new Set([
   "setwebhook",
 ]);
 
-function shouldRetryTimedOutTelegramControlRequest(method: string | null): boolean {
-  return method !== null && TELEGRAM_TIMEOUT_FALLBACK_METHODS.has(method);
-}
-
 export function createTelegramClientFetch(params: {
   fetchImpl: TelegramClientFetch;
   timeoutSeconds?: unknown;
   shutdownSignal?: unknown;
   transport?: Partial<Pick<TelegramTransport, "forceFallback" | "sourceFetch">>;
 }): TelegramCompatFetch {
-  const callFetch = asTelegramCompatFetch(params.fetchImpl);
+  const callFetch = params.fetchImpl as unknown as TelegramCompatFetch;
   const isRawSourceFetch =
     params.transport?.sourceFetch !== undefined &&
     params.fetchImpl === asTelegramClientFetch(params.transport.sourceFetch);
@@ -167,15 +159,11 @@ export function createTelegramClientFetch(params: {
         throw err;
       }
       if (
-        requestTimeoutMs &&
-        shouldRetryTimedOutTelegramControlRequest(method) &&
-        canForceTransportFallback("request-timeout")
-      ) {
-        return await runFetch();
-      }
-      if (
-        isTelegramMisdirectedRequestError(err) &&
-        canForceTransportFallback("misdirected-request")
+        (requestTimeoutMs &&
+          method !== null &&
+          TELEGRAM_TIMEOUT_FALLBACK_METHODS.has(method) &&
+          canForceTransportFallback("request-timeout")) ||
+        (isTelegramMisdirectedRequestError(err) && canForceTransportFallback("misdirected-request"))
       ) {
         return await runFetch();
       }

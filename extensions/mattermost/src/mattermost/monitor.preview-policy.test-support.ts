@@ -7,8 +7,11 @@ export function registerMattermostPreviewPolicyTests(harness: {
   receivePost: (post: { id: string; message: string }, config?: OpenClawConfig) => Promise<unknown>;
   mockState: {
     runtimeCore: unknown;
+    abortController: AbortController | undefined;
     createMattermostDraftStream: Mock;
     dispatchInboundMessage: Mock;
+    createReplyDispatcherWithTyping: Mock;
+    sendMessageMattermost: Mock;
     getGlobalHookRunner: Mock;
   };
 }) {
@@ -23,9 +26,23 @@ export function registerMattermostPreviewPolicyTests(harness: {
       },
     };
     mockState.runtimeCore = createRuntimeCore(config);
+    mockState.dispatchInboundMessage.mockImplementation(async (params) => {
+      await params.replyOptions?.onPartialReply?.({ text: "Partial answer" });
+      await params.replyOptions?.onReasoningEnd?.();
+      await params.replyOptions?.onReasoningStream?.({ text: "Private reasoning" });
+      const dispatcherOptions =
+        mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
+      await dispatcherOptions?.deliver({ text: "Complete answer" }, { kind: "final" });
+      mockState.abortController?.abort();
+    });
     await receivePost({ id: "post-streaming-off", message: "stream this in blocks" }, config);
     expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
     expect(mockState.createMattermostDraftStream).not.toHaveBeenCalled();
+    expect(mockState.sendMessageMattermost).toHaveBeenCalledExactlyOnceWith(
+      "channel:chan-1",
+      "Complete answer",
+      expect.objectContaining({ accountId: "default" }),
+    );
     const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
     expect(replyOptions?.disableBlockStreaming).toBe(false);
     expect(replyOptions?.preserveProgressCallbackStartOrder).toBeUndefined();

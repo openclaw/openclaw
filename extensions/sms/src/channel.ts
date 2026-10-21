@@ -119,7 +119,11 @@ const collectSmsOpenDmFindings = createConditionalWarningCollector.findings({
   title: "SMS security warning",
 });
 
-function smsSetupPatch(input: SmsSetupInput): Record<string, unknown> {
+function applySmsAccountConfig(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  input: SmsSetupInput;
+}): OpenClawConfig {
   const patch: Record<string, unknown> = {};
   for (const key of [
     "accountSid",
@@ -132,19 +136,10 @@ function smsSetupPatch(input: SmsSetupInput): Record<string, unknown> {
     "dmPolicy",
     "allowFrom",
   ] as const) {
-    if (input[key] !== undefined) {
-      patch[key] = input[key];
+    if (params.input[key] !== undefined) {
+      patch[key] = params.input[key];
     }
   }
-  return patch;
-}
-
-function applySmsAccountConfig(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  input: SmsSetupInput;
-}): OpenClawConfig {
-  const patch = smsSetupPatch(params.input);
   const channels = { ...params.cfg.channels };
   const current = { ...(channels[CHANNEL_ID] as Record<string, unknown> | undefined) };
   if (params.accountId === DEFAULT_ACCOUNT_ID) {
@@ -204,16 +199,6 @@ const smsSetupContract = defineChannelSetupContract({
   },
   adapter: { applyAccountConfig: applySmsAccountConfig },
 });
-
-function resolveSmsTextChunkLimit(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  fallbackLimit?: number;
-}): number {
-  return (
-    resolveSmsAccount(params.cfg, params.accountId).textChunkLimit || params.fallbackLimit || 1500
-  );
-}
 
 async function sendSmsText(ctx: {
   cfg: OpenClawConfig;
@@ -524,7 +509,8 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
     chunker: chunkTextForOutbound,
     chunkerMode: "text",
     textChunkLimit: 1500,
-    resolveEffectiveTextChunkLimit: resolveSmsTextChunkLimit,
+    resolveEffectiveTextChunkLimit: ({ cfg, accountId }) =>
+      resolveSmsAccount(cfg, accountId).textChunkLimit,
     resolveTarget: ({ cfg, to, accountId }) => {
       const explicit = normalizeSmsPhoneNumber(to ?? "");
       if (explicit) {

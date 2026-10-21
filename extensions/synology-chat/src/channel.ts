@@ -1,4 +1,5 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
   createHybridChannelConfigAdapter,
   createScopedDmSecurityResolver,
@@ -11,7 +12,6 @@ import {
   defineChannelMessageAdapter,
   type ChannelMessageSendTextContext,
   type ChannelMessageSendMediaContext,
-  type MessageReceipt,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createTextPairingAdapter } from "openclaw/plugin-sdk/channel-pairing";
@@ -38,7 +38,6 @@ import {
   sanitizeAssistantVisibleText,
 } from "openclaw/plugin-sdk/text-chunking";
 import { listAccountIds, resolveAccount } from "./accounts.js";
-import { synologyChatApprovalAuth } from "./approval-auth.js";
 import { SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT, sendHostedFileUrl, sendMessage } from "./client.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import { synologyChatDoctor } from "./doctor.js";
@@ -57,6 +56,20 @@ import type { ResolvedSynologyChatAccount } from "./types.js";
 const CHANNEL_ID = "synology-chat";
 const SYNOLOGY_MARKDOWN_LINK_RE =
   /(?<!!)\[((?:\\[^\n]|[^\\\]\n])+)\]\((https?:\/\/(?:\\[^\n]|[^()\s<>\\])+(?:\((?:\\[^\n]|[^()\s<>\\])*\)(?:\\[^\n]|[^()\s<>\\])*)*)(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?\)/g;
+
+function normalizeSynologyChatApproverId(value: string | number): string | undefined {
+  const trimmed = String(value).trim();
+  return /^\d+$/.test(trimmed) ? trimmed : undefined;
+}
+
+const synologyChatApprovalAuth = createChannelApprovalAuth({
+  channelLabel: "Synology Chat",
+  resolveInputs: ({ cfg, accountId }) => {
+    const account = resolveAccount(cfg ?? {}, accountId);
+    return { allowFrom: account.allowedUserIds };
+  },
+  normalizeApprover: normalizeSynologyChatApproverId,
+}).approvalAuth;
 
 function areSynologyAttachmentsReady(account: ResolvedSynologyChatAccount): boolean {
   try {
@@ -153,13 +166,6 @@ const collectSynologyChatCriticalFindings = createConditionalWarningCollector.fi
   title: "Synology Chat security warning",
 });
 
-type SynologyChatOutboundResult = {
-  channel: typeof CHANNEL_ID;
-  messageId: string;
-  target: { kind: "chat"; id: string };
-  receipt: MessageReceipt;
-};
-
 function requireIncomingUrl(account: ResolvedSynologyChatAccount): string {
   if (!account.incomingUrl) {
     throw new Error("Synology Chat incoming URL not configured");
@@ -180,24 +186,26 @@ function normalizeSynologyChatTarget(target: string): string | undefined {
 function createSynologyChatSendResult(params: {
   chatId: string;
   kind: MessageReceiptPartKind;
-}): SynologyChatOutboundResult {
+  messageIds: string[];
+}) {
   return {
     channel: CHANNEL_ID,
-    // The webhook acknowledges delivery without returning a platform message id.
-    // Keep the empty receipt so a chat id cannot become a fabricated message id.
-    messageId: "",
-    target: { kind: "chat", id: params.chatId },
+    // A bare acknowledgment stays identityless; only recipient-matched post IDs confirm a send.
+    messageId: params.messageIds[0] ?? "",
+    target: { kind: "chat" as const, id: params.chatId },
     receipt: createMessageReceiptFromOutboundResults({
-      results: [],
+      results: params.messageIds.map((messageId) => ({
+        channel: CHANNEL_ID,
+        messageId,
+        target: { kind: "chat" as const, id: params.chatId },
+      })),
       threadId: params.chatId,
       kind: params.kind,
     }),
   };
 }
 
-async function sendSynologyChatText(
-  ctx: Omit<ChannelMessageSendTextContext, "onDeliveryResult">,
-): Promise<SynologyChatOutboundResult> {
+async function sendSynologyChatText(ctx: Omit<ChannelMessageSendTextContext, "onDeliveryResult">) {
   const account = resolveAccount(ctx.cfg ?? {}, ctx.accountId);
   const incomingUrl = requireIncomingUrl(account);
   const codeRegions = findCodeRegions(ctx.text);
@@ -209,25 +217,24 @@ async function sendSynologyChatText(
     return `<${url.replace(/\\([()])/g, "$1")}|${label.replace(/\\([[\]])/g, "$1")}>`;
   });
   const dispatch = ctx.onPlatformSendDispatch;
-  const ok = await sendMessage(
+  const result = await sendMessage(
     incomingUrl,
     text,
     ctx.to,
     account.allowInsecureSsl,
     ...(dispatch ? [dispatch] : []),
   );
-  if (!ok) {
+  if (!result) {
     throw new Error("Failed to send message to Synology Chat");
   }
   return createSynologyChatSendResult({
     chatId: ctx.to,
     kind: "text",
+    messageIds: result.messageIds,
   });
 }
 
-async function sendSynologyChatMedia(
-  ctx: SynologyMediaContext & { mediaUrl: string },
-): Promise<SynologyChatOutboundResult> {
+async function sendSynologyChatMedia(ctx: SynologyMediaContext & { mediaUrl: string }) {
   const account = resolveAccount(ctx.cfg ?? {}, ctx.accountId);
   const incomingUrl = requireIncomingUrl(account);
   const prepared = await prepareSynologyHostedMedia({
@@ -266,6 +273,7 @@ async function sendSynologyChatMedia(
   return createSynologyChatSendResult({
     chatId: ctx.to,
     kind: "media",
+    messageIds: sendResult.messageId ? [sendResult.messageId] : [],
   });
 }
 

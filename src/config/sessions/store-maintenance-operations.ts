@@ -1,4 +1,3 @@
-// Storage-neutral session maintenance operations for the file-backed session store.
 import path from "node:path";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
@@ -11,11 +10,6 @@ import {
   type ResolvedSessionMaintenanceConfigInput,
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
-
-type SessionMaintenanceLogger = {
-  warn: (message: string, context?: Record<string, unknown>) => void;
-  info: (message: string, context?: Record<string, unknown>) => void;
-};
 
 type RemovedSessionFiles = Map<string, string | undefined>;
 
@@ -37,7 +31,7 @@ type FileBackedSessionStoreMaintenanceParams = {
   storePath: string;
   store: Record<string, SessionEntry>;
   maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
-  log: SessionMaintenanceLogger;
+  log: NonNullable<Parameters<typeof enforceSessionDiskBudget>[0]["log"]>;
   artifacts: RemovedSessionArtifactCleanup;
   commitReducedStore?: () => Promise<void>;
 };
@@ -104,7 +98,7 @@ export async function applyFileBackedSessionStoreMaintenance(
   const maintenance = params.maintenanceConfig
     ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
     : resolveMaintenanceConfig();
-  const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
+  const preserveSessionKeys = await collectSessionMaintenancePreserveKeysForStore({
     storePath: params.storePath,
     store: params.store,
   });

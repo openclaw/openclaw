@@ -1,14 +1,16 @@
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   getSubagentRunByChildSessionKey,
   registerSubagentRun,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
-import { testing as swarmSchedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { observeSwarmSchedulerWork } from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import {
   getAgentTestMocks,
   operatorWriteCliClient,
@@ -57,12 +59,21 @@ export function registerAgentAbortSubagentTests() {
     "chat.abort by runId kills only registered children of its non-admin owner: $name",
     async ({ expectsCompletionMessage, collect, releaseOnParent, partialFailure, cascade }) => {
       prime();
-      mocks.registryCallGateway.mockImplementation(async () => await new Promise(() => {}));
-      const pending = new Promise(() => {});
+      const schedulerWork = observeSwarmSchedulerWork();
+      const registryResult = createDeferred<{ status: "timeout" }>();
+      mocks.registryCallGateway.mockReturnValue(registryResult.promise);
+      const agentResult = createDeferred<{
+        payloads: Array<{ text: string }>;
+        meta: { durationMs: number };
+      }>();
+      let parentSettlement: Promise<unknown> | undefined;
+      let abort: Promise<void> | undefined;
+      const abortObserved = createDeferred();
       let capturedSignal: AbortSignal | undefined;
       mocks.agentCommand.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
         capturedSignal = opts.abortSignal;
-        return pending;
+        capturedSignal?.addEventListener("abort", () => abortObserved.resolve(), { once: true });
+        return agentResult.promise;
       });
 
       const context = makeContext();
@@ -74,90 +85,103 @@ export function registerAgentAbortSubagentTests() {
       const ownedChildSessionKey = "agent:main:subagent:owned-by-aborted-turn";
       const queuedChildSessionKey = "agent:main:subagent:queued-by-aborted-turn";
       const unrelatedChildSessionKey = "agent:main:subagent:owned-by-other-turn";
-      await invokeAgent(
-        {
-          message: "hi",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          idempotencyKey: runId,
-        },
-        { context, reqId: runId, client },
-      );
-      for (const [childSessionKey, requesterTurnRunId, queued] of [
-        [ownedChildSessionKey, runId, false],
-        ...(collect ? [[queuedChildSessionKey, runId, true] as const] : []),
-        [unrelatedChildSessionKey, "other-parent-turn", false],
-      ] as const) {
-        await registerSubagentRun({
-          runId: childSessionKey,
-          childSessionKey,
-          controllerSessionKey:
-            cascade && requesterTurnRunId !== runId ? "agent:main:other" : "agent:main:main",
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          requesterAgentId: "main",
-          requesterTurnRunId,
-          task: requesterTurnRunId,
-          cleanup: "keep",
-          expectsCompletionMessage,
-          collect,
-          queued,
-        });
-      }
-
-      const queuedDispatch = vi.fn(async () => {});
-      const unselectedDispatch = vi.fn(async () => {});
       let childOperation: ReturnType<typeof createReplyOperation> | undefined;
-      if (collect) {
-        const sessionId = "active-collector-session";
-        await replaceSessionEntry(
-          {
-            storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-            sessionKey: ownedChildSessionKey,
-          },
-          { sessionId, updatedAt: Date.now() },
-        );
-        childOperation = createReplyOperation({
-          sessionKey: ownedChildSessionKey,
-          sessionId,
-          resetTriggered: false,
-        });
-        childOperation.attachBackend({
-          kind: "embedded",
-          isStreaming: () => true,
-          cancel: () => {
-            if (!releaseOnParent) {
-              expect(releaseSwarmRun(ownedChildSessionKey)).toBe(true);
-            }
-          },
-        });
-        if (releaseOnParent) {
-          capturedSignal?.addEventListener(
-            "abort",
-            () => {
-              expect(releaseSwarmRun(ownedChildSessionKey)).toBe(true);
-            },
-            { once: true },
-          );
-        }
-        enqueueSwarmRun({
-          groupId: "abort-owned-collectors",
-          runId: queuedChildSessionKey,
-          maxConcurrent: 1,
-          activeRunIds: [ownedChildSessionKey],
-          start: queuedDispatch,
-          onStartFailure: () => true,
-        });
-        enqueueSwarmRun({
-          groupId: "abort-owned-collectors",
-          runId: unrelatedChildSessionKey,
-          maxConcurrent: 1,
-          activeRunIds: [],
-          start: unselectedDispatch,
-          onStartFailure: () => true,
-        });
-      }
       try {
+        await invokeAgent(
+          {
+            message: "hi",
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            idempotencyKey: runId,
+          },
+          { context, reqId: runId, client },
+        );
+        const parentSource = rpcSourceTesting.get(runId);
+        expect(parentSource).toBeDefined();
+        parentSettlement = Promise.all([
+          parentSource?.input.settlement.promise,
+          parentSource?.input.claim?.operation?.ownerSettlement,
+        ]);
+        for (const [childSessionKey, requesterTurnRunId, queued, sessionId] of [
+          [ownedChildSessionKey, runId, false, "active-collector-session"],
+          ...(collect
+            ? [[queuedChildSessionKey, runId, true, "queued-collector-session"] as const]
+            : []),
+          [unrelatedChildSessionKey, "other-parent-turn", false, "unrelated-child-session"],
+        ] as const) {
+          await registerSubagentRun({
+            runId: childSessionKey,
+            childSessionKey,
+            childAgentId: "main",
+            sessionEntry: { sessionId },
+            controllerSessionKey:
+              cascade && requesterTurnRunId !== runId ? "agent:main:other" : "agent:main:main",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            requesterAgentId: "main",
+            requesterTurnRunId,
+            task: requesterTurnRunId,
+            cleanup: "keep",
+            expectsCompletionMessage,
+            collect,
+            queued,
+          });
+        }
+
+        const queuedDispatch = vi.fn(async () => {});
+        const unselectedDispatch = vi.fn(async () => {});
+        if (collect) {
+          const sessionId = "active-collector-session";
+          await replaceSessionEntry(
+            {
+              storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+              sessionKey: ownedChildSessionKey,
+            },
+            { sessionId, updatedAt: Date.now() },
+          );
+          childOperation = createReplyOperation({
+            sessionKey: ownedChildSessionKey,
+            sessionId,
+            resetTriggered: false,
+          });
+          childOperation.attachBackend({
+            kind: "embedded",
+            runId: ownedChildSessionKey,
+            isStreaming: () => true,
+            cancel: () => {
+              if (!releaseOnParent) {
+                expect(releaseSwarmRun(ownedChildSessionKey)).toBe(true);
+              }
+              // A cooperative producer settles after accepting cancellation.
+              void Promise.resolve().then(() => childOperation?.complete());
+            },
+          });
+          if (releaseOnParent) {
+            capturedSignal?.addEventListener(
+              "abort",
+              () => {
+                expect(releaseSwarmRun(ownedChildSessionKey)).toBe(true);
+              },
+              { once: true },
+            );
+          }
+          enqueueSwarmRun({
+            groupId: "abort-owned-collectors",
+            runId: queuedChildSessionKey,
+            maxConcurrent: 1,
+            activeRunIds: [ownedChildSessionKey],
+            start: queuedDispatch,
+            onStartFailure: () => true,
+          });
+          enqueueSwarmRun({
+            groupId: "abort-owned-collectors",
+            runId: unrelatedChildSessionKey,
+            maxConcurrent: 1,
+            activeRunIds: [],
+            start: unselectedDispatch,
+            onStartFailure: () => true,
+          });
+        }
         const foreignRespond = vi.fn();
         await handleChatAbortRequest({
           params: { sessionKey: "agent:main:main", runId },
@@ -169,13 +193,13 @@ export function registerAgentAbortSubagentTests() {
         });
         expect(mockCallArg(foreignRespond)).toBe(false);
         expect(capturedSignal?.aborted).toBe(false);
-        expect(getSubagentRunByChildSessionKey(ownedChildSessionKey)?.execution.status).toBe(
-          "running",
-        );
+        expect(
+          (await getSubagentRunByChildSessionKey(ownedChildSessionKey))?.execution.status,
+        ).toBe("running");
         if (collect) {
-          expect(getSubagentRunByChildSessionKey(queuedChildSessionKey)?.execution.status).toBe(
-            "queued",
-          );
+          expect(
+            (await getSubagentRunByChildSessionKey(queuedChildSessionKey))?.execution.status,
+          ).toBe("queued");
           expect(queuedDispatch).not.toHaveBeenCalled();
         }
         const abortRespond = vi.fn();
@@ -186,7 +210,7 @@ export function registerAgentAbortSubagentTests() {
             throw partialPersistenceError;
           });
         }
-        const abort = handleChatAbortRequestWithLifecycle(
+        abort = handleChatAbortRequestWithLifecycle(
           {
             params: { sessionKey: "agent:main:main", ...(cascade ? {} : { runId }) },
             respond: abortRespond as never,
@@ -198,6 +222,12 @@ export function registerAgentAbortSubagentTests() {
           cascade ? { cascadeDescendants: true } : {},
         );
 
+        await Promise.race([abortObserved.promise, abort]);
+        expect(capturedSignal?.aborted).toBe(true);
+        expect(rpcSourceTesting.get(runId)).toBe(parentSource);
+        expect(abortRespond).not.toHaveBeenCalled();
+        agentResult.resolve({ payloads: [], meta: { durationMs: 1 } });
+
         if (partialFailure) {
           await expect(abort).rejects.toBe(partialPersistenceError);
           await expect(abort).rejects.toThrow("partial persistence failed");
@@ -207,15 +237,15 @@ export function registerAgentAbortSubagentTests() {
           expectRecordFields(mockCallArg(abortRespond, 0, 1), { aborted: true, runIds: [runId] });
         }
         expect(capturedSignal?.aborted).toBe(true);
-        expect(getSubagentRunByChildSessionKey(ownedChildSessionKey)).toMatchObject({
+        expect(await getSubagentRunByChildSessionKey(ownedChildSessionKey)).toMatchObject({
           endedReason: "subagent-killed",
           killReconciliation: { suppressTaskDelivery: true },
         });
         expect(
-          getSubagentRunByChildSessionKey(unrelatedChildSessionKey)?.execution.endedAt,
+          (await getSubagentRunByChildSessionKey(unrelatedChildSessionKey))?.execution.endedAt,
         ).toBeUndefined();
         if (collect) {
-          expect(getSubagentRunByChildSessionKey(queuedChildSessionKey)).toMatchObject({
+          expect(await getSubagentRunByChildSessionKey(queuedChildSessionKey)).toMatchObject({
             execution: { status: "terminal" },
             endedReason: "subagent-killed",
           });
@@ -225,14 +255,30 @@ export function registerAgentAbortSubagentTests() {
           await waitForAssertion(() => expect(unselectedDispatch).toHaveBeenCalledOnce());
         }
       } finally {
+        const parentSource = rpcSourceTesting.get(runId);
+        const remaining = Promise.all([
+          parentSource?.input.settlement.promise,
+          parentSource?.input.claim?.operation?.ownerSettlement,
+        ]);
+        agentResult.resolve({ payloads: [], meta: { durationMs: 1 } });
+        registryResult.resolve({ status: "timeout" });
         childOperation?.complete();
-        swarmSchedulerTesting.reset();
-        await resetSubagentRegistryForTests();
+        try {
+          await Promise.allSettled([abort]);
+          await Promise.all([parentSettlement, remaining, childOperation?.ownerSettlement]);
+          expect(rpcSourceTesting.has(runId)).toBe(false);
+          await registryResult.promise;
+        } finally {
+          await schedulerWork.close();
+          await resetSubagentRegistryForTests();
+        }
       }
     },
   );
 
-  it("starts the next abort fixture without previously registered child runs", () => {
-    expect(getSubagentRunByChildSessionKey("agent:main:subagent:owned-by-other-turn")).toBeNull();
+  it("starts the next abort fixture without previously registered child runs", async () => {
+    expect(
+      await getSubagentRunByChildSessionKey("agent:main:subagent:owned-by-other-turn"),
+    ).toBeNull();
   });
 }

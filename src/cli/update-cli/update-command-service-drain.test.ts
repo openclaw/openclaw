@@ -8,14 +8,13 @@ import type {
   GatewaySuspendBlocker,
   GatewaySuspendPrepareResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { HelloOk } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import type { CallGatewayCliOptions } from "../../gateway/call.js";
 import { GATEWAY_STALE_INSTALL_CLOSE_REASON } from "../../gateway/stale-install.js";
 import { createGatewayCloseTransportError } from "../../gateway/transport-error.js";
 import type { PortUsage } from "../../infra/ports-types.js";
-import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
+import { gatewayHello } from "./update-command-service-fixtures.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   call: vi.fn(),
@@ -36,14 +35,38 @@ vi.mock("../../gateway/local-http-probe.js", () => ({
     resolveWebSocketTarget: async () => ({ url: "ws://127.0.0.1:18789" }),
   }),
 }));
+// mock-isolation: Drain policy uses explicit fixture credentials, independent of device storage.
 vi.mock("../daemon-cli/restart-health-probe.js", () => ({
-  resolveGatewayRestartProbeContext: async () => ({ config: {}, auth: {} }),
+  resolveGatewayRestartProbeContext: async () => ({
+    config: {},
+    auth: { token: "fixture-token" },
+  }),
 }));
 vi.mock("./update-command-service-plan.js", () => ({
   resolveUpdatedGatewayRestartPort: async () => 18789,
 }));
 
 const { withGatewayMaintenanceDrain } = await import("./update-command-service-drain.js");
+
+function wrapCall(
+  wrap: (
+    request: CallGatewayCliOptions,
+    call: (request: CallGatewayCliOptions) => unknown,
+  ) => unknown,
+) {
+  const call = expectDefined(mocks.call.getMockImplementation(), "Missing Gateway call fixture");
+  mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => wrap(request, call));
+}
+
+function failLaterObservations() {
+  let observations = 0;
+  wrapCall((request, call) => {
+    if (request.method === "gateway.suspend.prepare" && observations++ > 0) {
+      throw new Error("resident unavailable");
+    }
+    return call(request);
+  });
+}
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
@@ -62,7 +85,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function ready(): GatewaySuspendPrepareResult {
+function ready(): Extract<GatewaySuspendPrepareResult, { status: "ready" }> {
   return {
     status: "ready",
     suspensionId: "resident-suspension",
@@ -77,7 +100,7 @@ function draining(
   kind: GatewaySuspendBlocker["kind"],
   message: string,
   retryAfterMs = 100,
-): GatewaySuspendPrepareResult {
+): Extract<GatewaySuspendPrepareResult, { status: "draining" }> {
   return {
     status: "draining",
     suspensionId: "resident-suspension",
@@ -89,23 +112,6 @@ function draining(
       kind === "session-mutation" || kind === "terminal-persistence"
         ? [{ phase: kind, count: 1 }]
         : [],
-  };
-}
-
-function hello(bootId: string): HelloOk {
-  return {
-    type: "hello-ok",
-    protocol: 3,
-    server: { version: "fixture", connId: "fixture-connection", bootId },
-    features: { methods: [], events: [] },
-    snapshot: {
-      presence: [],
-      health: {},
-      stateVersion: { presence: 0, health: 0 },
-      uptimeMs: 0,
-    },
-    auth: { role: "operator", scopes: ["operator.admin"] },
-    policy: { maxPayload: 1_000_000, maxBufferedBytes: 1_000_000, tickIntervalMs: 60_000 },
   };
 }
 
@@ -145,7 +151,9 @@ function fixture(
   mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
     // The real client swallows hello observer errors before checking dispatch authority.
     try {
-      request.onHelloOk?.(hello(options.bootId?.(request.method) ?? "resident-boot"));
+      request.onHelloOk?.(
+        gatewayHello(options.bootId?.(request.method) ?? "resident-boot", "fixture-connection"),
+      );
     } catch {}
     request.assertDispatchCurrent?.();
     if (request.method === "status") {
@@ -179,11 +187,24 @@ function fixture(
     }
     throw new Error(`Unexpected Gateway method: ${request.method}`);
   });
+  const params = { state, assertCurrent, warn, timeoutMs: 1_000 };
+  const run = (overrides: Partial<Parameters<typeof withGatewayMaintenanceDrain>[0]> = {}) =>
+    withGatewayMaintenanceDrain({ ...params, ...overrides }, stop);
   return {
     events,
     warn,
     stop,
-    params: { state, assertCurrent, warn, timeoutMs: 1_000 },
+    params,
+    run,
+    interrupt: (overrides: Partial<Parameters<typeof withGatewayMaintenanceDrain>[0]> = {}) =>
+      run({ drainPolicy: "interrupt-after-drain", ...overrides }),
+    async outcome(interrupt = true, extraMs = 0) {
+      const work = run(interrupt ? { drainPolicy: "interrupt-after-drain" } : {}).catch(
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(params.timeoutMs + extraMs);
+      return work;
+    },
     loseAuthority: () => {
       current = false;
     },
@@ -207,7 +228,7 @@ it.each([
       },
     });
     mocks.managerTimeout.mockResolvedValue(managerTimeout);
-    await expect(withGatewayMaintenanceDrain(f.params, f.stop)).resolves.toBe("stopped");
+    await expect(f.run()).resolves.toBe("stopped");
     expect(f.events.filter((event) => !event.startsWith("warning:"))).toEqual(
       drain ? ["status", "observe:ready", "stop"] : ["status", "stop"],
     );
@@ -220,16 +241,64 @@ it.each([
   },
 );
 
-it("waits for admitted work to become idle before stopping", async () => {
-  const f = fixture({ observations: [draining("embedded-run", "1 active agent turn"), ready()] });
-  const running = withGatewayMaintenanceDrain(f.params, f.stop);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.events).toEqual(["status", "observe:draining"]);
+it.each(["running", "stopped"] as const)(
+  "waits for resident work even when the service reports %s",
+  async (status) => {
+    const f = fixture({ observations: [draining("embedded-run", "1 active agent turn"), ready()] });
+    f.params.state.running = status === "running";
+    f.params.state.runtime = { status, pid: 42 };
+    const running = withGatewayMaintenanceDrain(f.params, f.stop);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.events).toEqual(["status", "observe:draining"]);
+    expect(f.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(running).resolves.toBe("stopped");
+    expect(f.events).toEqual(["status", "observe:draining", "observe:ready", "stop"]);
+    expect(f.warn).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  { status: "stopped", port: "free", skip: true },
+  { status: "running", port: "free", skip: false },
+  { status: "unknown", port: "free", skip: false },
+  { status: "stopped", port: "busy", skip: false },
+  { status: "stopped", port: "unknown", skip: false },
+] as const)(
+  "handles connection refusal with a $status service and $port port (skip=$skip)",
+  async ({ status, port, skip }) => {
+    const f = fixture();
+    f.params.state.running = status === "running";
+    f.params.state.runtime = { status };
+    mocks.call.mockRejectedValue(
+      Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+    );
+    mocks.portUsage.mockResolvedValue({ port: 18789, status: port, listeners: [], hints: [] });
+    if (!skip) {
+      await expectNormalDeadline(f);
+      return;
+    }
+    const running = f.run({ timeoutMs: undefined });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.stop).toHaveBeenCalledOnce();
+    await expect(running).resolves.toBe("stopped");
+    expect(f.warn).not.toHaveBeenCalled();
+  },
+);
+
+it("retains stop authority after checking an offline Gateway port", async () => {
+  const f = fixture();
+  f.params.state.running = false;
+  f.params.state.runtime = { status: "stopped" };
+  mocks.call.mockRejectedValue(
+    Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+  );
+  mocks.portUsage.mockImplementation(async () => {
+    f.loseAuthority();
+    return { port: 18789, status: "free", listeners: [], hints: [] };
+  });
+  expect(await f.outcome(false)).toMatchObject({ message: "service operation authority lost" });
   expect(f.stop).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(100);
-  await expect(running).resolves.toBe("stopped");
-  expect(f.events).toEqual(["status", "observe:draining", "observe:ready", "stop"]);
-  expect(f.warn).not.toHaveBeenCalled();
 });
 
 it.each(["admitted work", "published resident", "expired observation"] as const)(
@@ -237,7 +306,7 @@ it.each(["admitted work", "published resident", "expired observation"] as const)
   async (scenario) => {
     const observation: GatewaySuspendPrepareResult =
       scenario === "admitted work"
-        ? draining("embedded-run", "1 active agent turn", DEFAULT_UPDATE_STEP_TIMEOUT_MS)
+        ? draining("embedded-run", "1 active agent turn", 60_000)
         : scenario === "published resident"
           ? {
               ...draining("root-request", "2 active gateway requests"),
@@ -257,23 +326,13 @@ it.each(["admitted work", "published resident", "expired observation"] as const)
       ...(scenario === "published resident" ? { resident: { pid: 42 } } : {}),
     });
     if (scenario === "expired observation") {
-      const call = expectDefined(
-        mocks.call.getMockImplementation(),
-        "Missing Gateway call fixture",
-      );
-      let observations = 0;
-      mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
-        if (request.method === "gateway.suspend.prepare" && observations++ > 0) {
-          throw new Error("resident unavailable");
-        }
-        return await call(request);
-      });
+      failLaterObservations();
     }
     const timeoutMs = scenario === "admitted work" ? undefined : f.params.timeoutMs;
-    const running = withGatewayMaintenanceDrain({ ...f.params, timeoutMs }, f.stop);
+    const running = f.run({ timeoutMs });
     await vi.advanceTimersByTimeAsync(0);
     expect(f.stop).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(timeoutMs ?? 30_000);
     await expect(running).resolves.toBe("stopped");
     expect(f.warn).toHaveBeenCalledOnce();
     expect(f.warn).toHaveBeenCalledWith(
@@ -302,11 +361,7 @@ it.each(["session-mutation", "backup"] as const)(
       ],
     });
     if (phase === "backup") {
-      const call = expectDefined(
-        mocks.call.getMockImplementation(),
-        "Missing Gateway call fixture",
-      );
-      mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
+      wrapCall(async (request, call) => {
         if (request.method === "gateway.suspend.prepare") {
           if ((request.timeoutMs ?? 0) < 2) {
             throw new Error("observation timed out during connection");
@@ -318,9 +373,7 @@ it.each(["session-mutation", "backup"] as const)(
         return await call(request);
       });
     }
-    const outcome = withGatewayMaintenanceDrain(f.params, f.stop).catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(f.params.timeoutMs + (phase === "backup" ? 100 : 0));
-    const error = await outcome;
+    const error = await f.outcome(false, phase === "backup" ? 100 : 0);
     expect(error).toBeInstanceOf(GatewayServiceStopUnsafeError);
     expect(error).toMatchObject({ message: expect.stringContaining(`owner phase ${phase} (1)`) });
     expect(f.stop).not.toHaveBeenCalled();
@@ -342,10 +395,7 @@ it.each(["ready", "draining"] as const)(
       resident: { pid: 42, shutdownBudget: { timeoutMs: 325_000 } },
       observations: [phase === "ready" ? ready() : draining("embedded-run", "1 active turn")],
     });
-    const running = withGatewayMaintenanceDrain(
-      { ...f.params, drainPolicy: "interrupt-after-drain" },
-      f.stop,
-    );
+    const running = f.interrupt();
     await vi.advanceTimersByTimeAsync(0);
     if (phase === "draining") {
       expect(f.stop).not.toHaveBeenCalled();
@@ -366,6 +416,87 @@ it.each(["ready", "draining"] as const)(
     expect(f.events.indexOf("handoff")).toBeLessThan(f.events.indexOf("stop"));
     expect(f.events[1]).toBe(`observe:${phase}`);
     expect(f.stop).toHaveBeenCalledOnce();
+  },
+);
+
+it.each([
+  { timeoutMs: undefined, drainMs: 30_000 },
+  { timeoutMs: 60_000, drainMs: 30_000 },
+  { timeoutMs: 200, drainMs: 200 },
+])("leaves handoff grace with an update timeout of $timeoutMs", async ({ timeoutMs, drainMs }) => {
+  const f = fixture({
+    observations: [
+      { ...draining("embedded-run", "1 active turn", 60_000), expiresAtMs: Date.now() + 45_000 },
+    ],
+  });
+  const running = f.interrupt({ timeoutMs });
+  await vi.advanceTimersByTimeAsync(drainMs - 1);
+  expect(f.stop).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(f.events).toContain("handoff");
+  await expect(running).resolves.toBe("stopped");
+});
+
+it.each([
+  { stage: "status", delayMs: 5_000, timeoutMs: 1_000, elapsedMs: 6_000 },
+  { stage: "gateway.suspend.prepare", delayMs: 8_000, timeoutMs: undefined, elapsedMs: 30_000 },
+])(
+  "anchors the drain to its lease after slow $stage",
+  async ({ stage, delayMs, timeoutMs, elapsedMs }) => {
+    const observation = draining("embedded-run", "1 active turn", 60_000);
+    const f = fixture({ observations: [observation] });
+    let prepared = false;
+    let delayed = false;
+    wrapCall(async (request, call) => {
+      if (request.method === "gateway.suspend.prepare" && !prepared) {
+        prepared = true;
+        observation.expiresAtMs = Date.now() + 45_000;
+      }
+      if (request.method === stage && !delayed) {
+        delayed = true;
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, delayMs);
+        });
+      }
+      return await call(request);
+    });
+    const running = f.interrupt({ timeoutMs });
+    await vi.advanceTimersByTimeAsync(elapsedMs - 1);
+    expect(f.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.events).toContain("handoff");
+    await expect(running).resolves.toBe("stopped");
+  },
+);
+
+it.each(["expired", "replaced"] as const)(
+  "does not reacquire or stop after its suspension is %s",
+  async (reason) => {
+    const initial = {
+      ...draining("embedded-run", "1 active turn"),
+      expiresAtMs: Date.now() + 45_000,
+    };
+    const f = fixture({
+      observations: [initial, { ...ready(), suspensionId: "replacement-suspension" }],
+    });
+    const outcome = f.interrupt().catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    if (reason === "expired") {
+      vi.setSystemTime(Date.now() + 45_000);
+    }
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await outcome).toBeInstanceOf(GatewayServiceStopUnsafeError);
+    expect(f.stop).not.toHaveBeenCalled();
+    expect(f.events).not.toContain("handoff");
+    expect(f.events.filter((event) => event.startsWith("observe:"))).toHaveLength(
+      reason === "expired" ? 1 : 2,
+    );
+    expect(mocks.call).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "gateway.suspend.resume",
+        params: { suspensionId: "resident-suspension" },
+      }),
+    );
   },
 );
 
@@ -391,21 +522,9 @@ it.each(["busy", "expired", "unknown-custody", "held-custody", "unavailable"] as
           };
     const f = fixture({ observations: [observation] });
     if (reason === "unavailable") {
-      const call = expectDefined(mocks.call.getMockImplementation(), "Missing Gateway fixture");
-      let observations = 0;
-      mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
-        if (request.method === "gateway.suspend.prepare" && observations++ > 0) {
-          throw new Error("resident unavailable");
-        }
-        return await call(request);
-      });
+      failLaterObservations();
     }
-    const outcome = withGatewayMaintenanceDrain(
-      { ...f.params, drainPolicy: "interrupt-after-drain" },
-      f.stop,
-    ).catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
-    expect(await outcome).toBeInstanceOf(GatewayServiceStopUnsafeError);
+    expect(await f.outcome()).toBeInstanceOf(GatewayServiceStopUnsafeError);
     expect(f.stop).not.toHaveBeenCalled();
     expect(f.events).not.toContain("handoff");
     expect(f.events.includes("resume")).toBe(reason !== "busy");
@@ -416,8 +535,7 @@ it.each(["refused", "legacy", "foreign", "mismatched-expiry", "stop-failed"] as 
   "releases its reversible suspension when native handoff is %s",
   async (failure) => {
     const f = fixture({ observations: [draining("embedded-run", "1 active turn")] });
-    const call = expectDefined(mocks.call.getMockImplementation(), "Missing Gateway fixture");
-    mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
+    wrapCall(async (request, call) => {
       if (request.method === "gateway.suspend.handoff") {
         if (failure === "refused") {
           throw new Error("handoff refused");
@@ -435,12 +553,7 @@ it.each(["refused", "legacy", "foreign", "mismatched-expiry", "stop-failed"] as 
     if (failure === "stop-failed") {
       f.stop.mockRejectedValue(new Error("native stop failed"));
     }
-    const outcome = withGatewayMaintenanceDrain(
-      { ...f.params, drainPolicy: "interrupt-after-drain" },
-      f.stop,
-    ).catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
-    expect(await outcome).toBeInstanceOf(Error);
+    expect(await f.outcome()).toBeInstanceOf(Error);
     expect(f.stop).toHaveBeenCalledOnce();
     expect(f.events).not.toContain("stop");
     expect(f.events.at(-1)).toBe("resume");
@@ -461,6 +574,24 @@ it.each([25_000, 325_000])(
   },
 );
 
+it("warns when resume fails without replacing the native stop error", async () => {
+  const f = fixture();
+  const failure = new Error("native stop failed");
+  f.stop.mockRejectedValue(failure);
+  wrapCall(async (request, call) => {
+    if (request.method === "gateway.suspend.resume") {
+      throw new Error("resume transport failed");
+    }
+    return await call(request);
+  });
+  await expect(f.run()).rejects.toBe(failure);
+  expect(f.warn).toHaveBeenCalledWith(
+    expect.stringMatching(
+      /resident-suspension.*resume transport failed.*the Gateway reopens admission automatically when the drain lease expires/,
+    ),
+  );
+});
+
 it.each(["authority", "boot"] as const)(
   "refuses a changed %s while observing the resident",
   async (change) => {
@@ -469,7 +600,7 @@ it.each(["authority", "boot"] as const)(
         ? { afterObservation: () => f.loseAuthority() }
         : { bootId: (method) => (method === "status" ? "resident" : "replacement") },
     );
-    await expect(withGatewayMaintenanceDrain(f.params, f.stop)).rejects.toThrow(
+    await expect(f.run()).rejects.toThrow(
       change === "authority" ? "service operation authority lost" : "Gateway process changed",
     );
     expect(f.events).toEqual(change === "authority" ? ["status", "observe:ready"] : ["status"]);
@@ -481,7 +612,7 @@ const juneStaleConnection = "gateway closed (1011): gateway message handler unav
 const legacyResident = { pid: 42, state: "alive", path: "/tmp/openclaw-fixture/gateway.lock" };
 
 async function expectNormalDeadline(f: ReturnType<typeof fixture>) {
-  const running = withGatewayMaintenanceDrain(f.params, f.stop);
+  const running = f.run();
   await vi.advanceTimersByTimeAsync(0);
   expect(f.stop).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
@@ -514,17 +645,13 @@ it.each(
   );
   mocks.legacyLock.mockResolvedValue(legacyResident);
   let calls = 0;
-  const base = mocks.call.getMockImplementation();
-  mocks.call.mockImplementation(async (request) => {
+  wrapCall(async (request, call) => {
     if (phase === "before" || (request.method === "gateway.suspend.prepare" && ++calls > 1)) {
       throw staleConnectionError(reason);
     }
-    return base?.(request);
+    return call(request);
   });
-  const running = withGatewayMaintenanceDrain(
-    { ...f.params, timeoutMs: phase === "before" ? undefined : f.params.timeoutMs },
-    f.stop,
-  );
+  const running = f.run({ timeoutMs: phase === "before" ? undefined : f.params.timeoutMs });
   await vi.advanceTimersByTimeAsync(0);
   if (phase === "during") {
     expect(f.events).toEqual(["status", "observe:draining"]);
@@ -647,7 +774,7 @@ it.each([
         return legacyResident;
       });
     }
-    await expect(withGatewayMaintenanceDrain(f.params, f.stop)).rejects.toThrow(
+    await expect(f.run()).rejects.toThrow(
       change === "authority"
         ? "service operation authority lost"
         : phase === "listener"

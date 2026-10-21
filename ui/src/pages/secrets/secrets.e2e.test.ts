@@ -5,6 +5,7 @@ import { beforeEach, expect, it } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 
@@ -26,41 +27,24 @@ beforeEach(() => {
   }
 });
 
-const envEntry: SecretStoreEntry = {
-  name: "SERVICE_URL",
-  kind: "env",
-  value: "https://service.test",
-  scopeKind: "team",
-  scopeId: "",
-  createdAtMs: 1_786_352_400_000,
-  updatedAtMs: 1_786_352_400_000,
-  updatedBy: "E2E Operator",
-};
-
-const secretEntry: SecretStoreEntry = {
-  name: "SERVICE_API_KEY",
-  kind: "secret",
-  scopeKind: "team",
-  scopeId: "",
-  createdAtMs: 1_786_352_400_000,
-  updatedAtMs: 1_786_352_400_000,
-  updatedBy: "E2E Operator",
-  allowedHosts: ["api.example.com"],
-};
-
-const bulkEnvEntry: SecretStoreEntry = {
-  ...envEntry,
-  name: "BULK_URL",
-  value: "https://bulk.test",
-};
-
-const bulkSecretEntry: SecretStoreEntry = {
-  ...secretEntry,
-  name: "BULK_PRIVATE_KEY",
-  allowedHosts: [],
-};
-
-const longNameSecretEntry: SecretStoreEntry = {
+function entry(name: string, content: string | string[]): SecretStoreEntry {
+  return {
+    name,
+    scopeKind: "team",
+    scopeId: "",
+    updatedBy: "E2E Operator",
+    createdAtMs: 1_786_352_400_000,
+    updatedAtMs: 1_786_352_400_000,
+    ...(typeof content === "string"
+      ? { kind: "env", value: content }
+      : { kind: "secret", allowedHosts: content }),
+  };
+}
+const envEntry = entry("SERVICE_URL", "https://service.test");
+const secretEntry = entry("SERVICE_API_KEY", ["api.example.com"]);
+const bulkEnvEntry = entry("BULK_URL", "https://bulk.test");
+const bulkSecretEntry = entry("BULK_PRIVATE_KEY", []);
+const longNameSecretEntry = {
   ...secretEntry,
   name: "REUTERS_OUTLOOK_CALENDAR_ICS_PRODUCTION_ACCESS_TOKEN",
 };
@@ -113,37 +97,74 @@ async function tableBodyContrast(page: Page): Promise<number> {
     });
 }
 
-async function activeGatewayIdentity(page: Page) {
-  return await page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: {
-        context: {
-          gateway: {
-            connection: { gatewayUrl: string };
-            snapshot: { client: { instanceId: string } | null; phase: string };
-          };
-        };
-      };
-    };
-    const gateway = app.runtime?.context.gateway;
+async function gatewayIdentity(page: Page) {
+  return await evaluateControlUiContext(page, (context) => {
+    const gateway = context.gateway;
     return {
-      clientInstanceId: gateway?.snapshot.client?.instanceId,
-      gatewayUrl: gateway?.connection.gatewayUrl,
-      phase: gateway?.snapshot.phase,
+      clientInstanceId: gateway.snapshot.client?.instanceId,
+      gatewayUrl: gateway.connection.gatewayUrl,
+      phase: gateway.snapshot.phase,
     };
   });
+}
+
+const button = (scope: Page | Locator, name: string) =>
+  scope.getByRole("button", { name, exact: true });
+const field = (scope: Locator, name: string) => scope.getByLabel(name, { exact: true });
+const bulkValue = (scope: Locator) => scope.getByRole("textbox", { name: "Value", exact: true });
+const modal = (page: Page, label: string) =>
+  page.locator(`openclaw-modal-dialog[label="${label}"]`);
+const notice = (page: Page, text: string | RegExp) =>
+  page.getByRole("status").getByText(text).waitFor();
+const openSecrets = (page: Page) => page.goto(`${suite.server.baseUrl}settings/secrets`);
+const listResponse = (...snapshots: SecretStoreEntry[][]) => ({
+  sequence: snapshots.map((entries) => ({ entries })),
+});
+const saved = { ok: true, reloaded: false };
+
+async function openStore(
+  page: Page,
+  responses: { list: unknown; set?: unknown; delete?: unknown },
+  advertisedOnly: string[] = [],
+) {
+  const methodResponses = Object.fromEntries(
+    Object.entries(responses).map(([method, response]) => [`secrets.store.${method}`, response]),
+  );
+  const gateway = await installMockGateway(page, {
+    featureMethods: [...Object.keys(methodResponses), ...advertisedOnly],
+    methodResponses,
+  });
+  await openSecrets(page);
+  return gateway;
+}
+
+async function expectMode(dialog: Locator, name: RegExp) {
+  expect(await dialog.getByRole("radio", { name }).isChecked()).toBe(true);
+}
+
+async function captureDialog(page: Page, file: string, dialog: Locator, content: Locator) {
+  await capture(page, file, dialog.locator("dialog"), [content]);
+}
+
+async function openDialog(page: Page, label: string) {
+  await button(page, label).click();
+  return modal(page, label);
+}
+
+async function rowAction(page: Page, name: string, action: "edit" | "delete") {
+  const row = page.getByRole("row", { name: new RegExp(name, "u") });
+  await button(row, `Actions: ${name}`).click();
+  await row.locator(`.oc-menu-item[data-value="${action}"]`).click();
+  return row;
 }
 
 suite.define(() => {
   it.each([false, true])("keeps narrow row actions visible (touch: %s)", async (hasTouch) => {
     await suite.withPage({ viewport: { width: 1000, height: 900 }, hasTouch }, async ({ page }) => {
-      await installMockGateway(page, {
-        featureMethods: ["secrets.store.list", "secrets.store.set", "secrets.store.delete"],
-        methodResponses: {
-          "secrets.store.list": { entries: [secretEntry] },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}settings/secrets`);
+      await openStore(page, { list: { entries: [secretEntry] } }, [
+        "secrets.store.set",
+        "secrets.store.delete",
+      ]);
       const row = page.getByRole("row", { name: secretEntry.name });
       const trigger = row.getByRole("button", { name: `Actions: ${secretEntry.name}` });
       await trigger.waitFor({ state: "visible" });
@@ -160,86 +181,51 @@ suite.define(() => {
     });
   });
 
-  it("keeps long secret names inside the Name column", async () => {
-    await suite.withPage(
-      {
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          featureMethods: ["secrets.store.list"],
-          methodResponses: {
-            "secrets.store.list": { entries: [longNameSecretEntry] },
-          },
-        });
-
-        await page.goto(`${suite.server.baseUrl}settings/secrets`);
-        const row = page.getByRole("row", { name: longNameSecretEntry.name });
-        const name = row.locator(".secrets-store__name");
-        const access = row.locator(".secrets-store__mode");
-
+  it.each([
+    { width: 1440, height: 900, phone: false },
+    { width: 390, height: 844, phone: true },
+  ])("contains long secret names (phone: $phone)", async ({ width, height, phone }) => {
+    await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
+      await openStore(page, { list: { entries: [longNameSecretEntry] } });
+      const row = page.getByRole("row", { name: longNameSecretEntry.name });
+      const name = row.locator(".secrets-store__name");
+      if (phone) {
+        expect(await name.textContent()).toBe(longNameSecretEntry.name);
+      } else {
         expect(await name.getAttribute("title")).toBe(longNameSecretEntry.name);
-        const layout = await Promise.all([name.boundingBox(), access.boundingBox()]);
-        const nameBox = layout[0];
-        const accessBox = layout[1];
+        const [nameBox, accessBox] = await Promise.all([
+          name.boundingBox(),
+          row.locator(".secrets-store__mode").boundingBox(),
+        ]);
         if (!nameBox || !accessBox) {
           throw new Error("Expected Name and Access cells to have layout boxes");
         }
         expect(nameBox.x + nameBox.width).toBeLessThanOrEqual(accessBox.x);
-        const nameStyle = await name.evaluate((element) => {
-          const style = getComputedStyle(element);
-          return {
-            overflowX: style.overflowX,
-            textOverflow: style.textOverflow,
-            whiteSpace: style.whiteSpace,
-            overflows: element.scrollWidth > element.clientWidth,
-          };
-        });
-        expect(nameStyle).toEqual({
-          overflowX: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          overflows: true,
-        });
-      },
-    );
-  });
-
-  it("wraps long secret names in the stacked phone layout", async () => {
-    await suite.withPage(
-      {
-        viewport: { height: 844, width: 390 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          featureMethods: ["secrets.store.list"],
-          methodResponses: {
-            "secrets.store.list": { entries: [longNameSecretEntry] },
-          },
-        });
-
-        await page.goto(`${suite.server.baseUrl}settings/secrets`);
-        const row = page.getByRole("row", { name: longNameSecretEntry.name });
-        const name = row.locator(".secrets-store__name");
-
-        expect(await name.textContent()).toBe(longNameSecretEntry.name);
-        const nameStyle = await name.evaluate((element) => {
-          const style = getComputedStyle(element);
-          const text = document.createRange();
-          text.selectNodeContents(element);
-          return {
-            overflowWrap: style.overflowWrap,
-            whiteSpace: style.whiteSpace,
-            fitsHorizontally: element.scrollWidth <= element.clientWidth,
-            wraps: text.getClientRects().length > 1,
-          };
-        });
-        expect(nameStyle).toEqual({
-          overflowWrap: "anywhere",
-          whiteSpace: "normal",
-          fitsHorizontally: true,
-          wraps: true,
-        });
+      }
+      const layout = await name.evaluate((element) => {
+        const style = getComputedStyle(element);
+        const text = document.createRange();
+        text.selectNodeContents(element);
+        return {
+          overflowX: style.overflowX,
+          textOverflow: style.textOverflow,
+          overflowWrap: style.overflowWrap,
+          whiteSpace: style.whiteSpace,
+          fitsHorizontally: element.scrollWidth <= element.clientWidth,
+          wraps: text.getClientRects().length > 1,
+        };
+      });
+      expect(layout).toMatchObject(
+        phone
+          ? { overflowWrap: "anywhere", whiteSpace: "normal", fitsHorizontally: true, wraps: true }
+          : {
+              overflowX: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fitsHorizontally: false,
+            },
+      );
+      if (phone) {
         for (const selector of ["html", ".secrets-store__table-wrap", ".secrets-store__table"]) {
           const fits = await page.locator(selector).evaluate((element) => {
             const box = element.getBoundingClientRect();
@@ -251,93 +237,55 @@ suite.define(() => {
           });
           expect(fits, `${selector} stays inside the phone viewport`).toBe(true);
         }
-      },
-    );
+      }
+    });
   });
 
   it("blocks empty protected values without rejecting empty environment entries", async () => {
     await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["secrets.store.list", "secrets.store.set"],
-        methodResponses: {
-          "secrets.store.list": {
-            sequence: [
-              { entries: [secretEntry] },
-              { entries: [secretEntry] },
-              { entries: [secretEntry] },
-            ],
-          },
-          "secrets.store.set": {
-            sequence: [
-              { ok: true, reloaded: false },
-              { ok: true, reloaded: false },
-            ],
-          },
-        },
+      const gateway = await openStore(page, {
+        list: listResponse([secretEntry], [secretEntry], [secretEntry]),
+        set: { sequence: [saved, saved] },
       });
 
-      await page.goto(`${suite.server.baseUrl}settings/secrets`);
-      await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
+      async function reject(dialog: Locator, text = "Enter a value.", proof?: string) {
+        await button(dialog, "Save").click();
+        await dialog.getByRole("alert").getByText(text).waitFor();
+        expect(await gateway.getRequests("secrets.store.set")).toHaveLength(0);
+        if (proof) {
+          await capture(page, proof);
+        }
+        await button(dialog, "Cancel").click();
+      }
+      await rowAction(page, "SERVICE_API_KEY", "edit");
+      const editSecret = modal(page, "Edit");
+      await reject(editSecret);
 
-      const existingSecretRow = page.getByRole("row", { name: /SERVICE_API_KEY/u });
-      await existingSecretRow.getByRole("button", { name: "Actions: SERVICE_API_KEY" }).click();
-      await existingSecretRow.locator('wa-dropdown-item[value="edit"]').click();
-      const editSecretDialog = page.locator('openclaw-modal-dialog[label="Edit"]');
-      await editSecretDialog.getByRole("button", { name: "Save", exact: true }).click();
-      await editSecretDialog.getByRole("alert").getByText("Enter a value.").waitFor();
-      expect(await gateway.getRequests("secrets.store.set")).toHaveLength(0);
-      await editSecretDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      const addSecret = await openDialog(page, "Add");
+      await field(addSecret, "Name").fill("EMPTY_API_KEY");
+      await expectMode(addSecret, /Protected secret/u);
+      await reject(addSecret, "Enter a value.", "04-empty-secret-local-validation.png");
 
-      await page.getByRole("button", { name: "Add", exact: true }).click();
-      const addSecretDialog = page.locator('openclaw-modal-dialog[label="Add"]');
-      await addSecretDialog.getByLabel("Name", { exact: true }).fill("EMPTY_API_KEY");
-      expect(
-        await addSecretDialog.getByRole("radio", { name: /Protected secret/u }).isChecked(),
-      ).toBe(true);
-      await addSecretDialog.getByRole("button", { name: "Save", exact: true }).click();
-      await addSecretDialog.getByRole("alert").getByText("Enter a value.").waitFor();
-      expect(await gateway.getRequests("secrets.store.set")).toHaveLength(0);
-      await capture(page, "04-empty-secret-local-validation.png");
-      await addSecretDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      const protectedBulk = await openDialog(page, "Bulk Add");
+      await bulkValue(protectedBulk).fill("EMPTY_API_KEY=\nEMPTY_ENV=");
+      await protectedBulk.getByText("1 protected secret detected").waitFor();
+      await reject(
+        protectedBulk,
+        "EMPTY_API_KEY: Enter a value.",
+        "05-empty-bulk-local-validation.png",
+      );
 
-      await page.getByRole("button", { name: "Bulk Add", exact: true }).click();
-      const protectedBulkDialog = page.locator('openclaw-modal-dialog[label="Bulk Add"]');
-      await protectedBulkDialog
-        .getByRole("textbox", { name: "Value", exact: true })
-        .fill("EMPTY_API_KEY=\nEMPTY_ENV=");
-      await protectedBulkDialog.getByText("1 protected secret detected").waitFor();
-      await protectedBulkDialog.getByRole("button", { name: "Save", exact: true }).click();
-      await protectedBulkDialog
-        .getByRole("alert")
-        .getByText("EMPTY_API_KEY: Enter a value.")
-        .waitFor();
-      expect(await gateway.getRequests("secrets.store.set")).toHaveLength(0);
-      await capture(page, "05-empty-bulk-local-validation.png");
-      await protectedBulkDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      const addEnv = await openDialog(page, "Add");
+      await field(addEnv, "Name").fill("EMPTY_ENV");
+      await expectMode(addEnv, /Agent-readable environment/u);
+      await button(addEnv, "Save").click();
+      await notice(page, /Saved EMPTY_ENV/u);
 
-      await page.getByRole("button", { name: "Add", exact: true }).click();
-      const addEnvDialog = page.locator('openclaw-modal-dialog[label="Add"]');
-      await addEnvDialog.getByLabel("Name", { exact: true }).fill("EMPTY_ENV");
-      expect(
-        await addEnvDialog.getByRole("radio", { name: /Agent-readable environment/u }).isChecked(),
-      ).toBe(true);
-      await addEnvDialog.getByRole("button", { name: "Save", exact: true }).click();
-      await page
-        .getByRole("status")
-        .getByText(/Saved EMPTY_ENV/u)
-        .waitFor();
-
-      await page.getByRole("button", { name: "Bulk Add", exact: true }).click();
-      const envBulkDialog = page.locator('openclaw-modal-dialog[label="Bulk Add"]');
-      await envBulkDialog
-        .getByRole("textbox", { name: "Value", exact: true })
-        .fill("EMPTY_BULK_ENV=");
-      await envBulkDialog.getByText("0 protected secrets detected").waitFor();
-      await envBulkDialog.getByRole("button", { name: "Save", exact: true }).click();
-      await page
-        .getByRole("status")
-        .getByText(/Saved 1 entries/u)
-        .waitFor();
+      const envBulk = await openDialog(page, "Bulk Add");
+      await bulkValue(envBulk).fill("EMPTY_BULK_ENV=");
+      await envBulk.getByText("0 protected secrets detected").waitFor();
+      await button(envBulk, "Save").click();
+      await notice(page, /Saved 1 entries/u);
 
       expect(await gateway.getRequests("secrets.store.set")).toEqual([
         expect.objectContaining({
@@ -365,107 +313,73 @@ suite.define(() => {
           : {}),
       },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          featureMethods: ["secrets.store.list", "secrets.store.set", "secrets.store.delete"],
-          methodResponses: {
-            "secrets.store.list": {
-              sequence: [
-                { entries: [] },
-                { entries: [envEntry] },
-                { entries: [envEntry, secretEntry] },
-                { entries: [envEntry, secretEntry, bulkSecretEntry] },
-                { entries: [envEntry, secretEntry, bulkSecretEntry, bulkEnvEntry] },
-                { entries: [envEntry, secretEntry, bulkSecretEntry] },
-              ],
-            },
-            "secrets.store.set": {
-              sequence: [
-                { ok: true, reloaded: false },
-                { ok: true, reloaded: true, warningCount: 2 },
-                { ok: true, reloaded: false },
-                { ok: true, reloaded: false },
-              ],
-            },
-            "secrets.store.delete": { ok: true, reloaded: false },
-          },
+        const gateway = await openStore(page, {
+          list: listResponse(
+            [],
+            [envEntry],
+            [envEntry, secretEntry],
+            [envEntry, secretEntry, bulkSecretEntry],
+            [envEntry, secretEntry, bulkSecretEntry, bulkEnvEntry],
+            [envEntry, secretEntry, bulkSecretEntry],
+          ),
+          set: { sequence: [saved, { ok: true, reloaded: true, warningCount: 2 }, saved, saved] },
+          delete: saved,
         });
 
-        await page.goto(`${suite.server.baseUrl}settings/secrets`);
-        await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
-
-        await page.getByRole("button", { name: "Add", exact: true }).click();
-        const addDialog = page.locator('openclaw-modal-dialog[label="Add"]');
+        const addDialog = await openDialog(page, "Add");
         await addDialog.getByText("Agent-readable environment", { exact: true }).waitFor();
-        expect(
-          await addDialog.getByRole("radio", { name: /Agent-readable environment/u }).isChecked(),
-        ).toBe(true);
+        await expectMode(addDialog, /Agent-readable environment/u);
         await addDialog.getByText(/The agent can print, transmit, or persist it/u).waitFor();
-        await addDialog.getByLabel("Name", { exact: true }).fill("SERVICE_URL");
-        await addDialog.getByLabel("Value", { exact: true }).fill("https://service.test");
-        await capture(page, "02-add-dialog.png", addDialog.locator("dialog"), [
-          addDialog.getByLabel("Value", { exact: true }),
-        ]);
-        await addDialog.getByRole("button", { name: "Save", exact: true }).click();
-        await page
-          .getByRole("status")
-          .getByText(
-            "Saved SERVICE_URL as Agent-readable environment. It is available to Gateway-hosted agent commands from the next run.",
-          )
-          .waitFor();
+        await field(addDialog, "Name").fill("SERVICE_URL");
+        await field(addDialog, "Value").fill("https://service.test");
+        await captureDialog(page, "02-add-dialog.png", addDialog, field(addDialog, "Value"));
+        await button(addDialog, "Save").click();
+        await notice(
+          page,
+          "Saved SERVICE_URL as Agent-readable environment. It is available to Gateway-hosted agent commands from the next run.",
+        );
 
-        await page.getByRole("button", { name: "Add", exact: true }).click();
-        const secretDialog = page.locator('openclaw-modal-dialog[label="Add"]');
-        await secretDialog.getByLabel("Name", { exact: true }).fill("SERVICE_API_KEY");
-        expect(
-          await secretDialog.getByRole("radio", { name: /Protected secret/u }).isChecked(),
-        ).toBe(true);
-        await secretDialog.getByLabel("Value", { exact: true }).fill("super-secret-material");
+        const secretDialog = await openDialog(page, "Add");
+        await field(secretDialog, "Name").fill("SERVICE_API_KEY");
+        await expectMode(secretDialog, /Protected secret/u);
+        await field(secretDialog, "Value").fill("super-secret-material");
         await secretDialog.locator('textarea[name="allowed-hosts"]').fill("api.example.com");
-        await capture(page, "02-secret-allowed-hosts.png", secretDialog.locator("dialog"), [
+        await captureDialog(
+          page,
+          "02-secret-allowed-hosts.png",
+          secretDialog,
           secretDialog.locator('textarea[name="allowed-hosts"]'),
-        ]);
-        await secretDialog.getByLabel("Name", { exact: true }).press("Enter");
-        await page
-          .getByRole("status")
-          .getByText(
-            "Saved SERVICE_API_KEY as Protected secret. Add a SecretRef or enable destination-bound Gateway egress to use it. 2 runtime warnings.",
-          )
-          .waitFor();
+        );
+        await field(secretDialog, "Name").press("Enter");
+        await notice(
+          page,
+          "Saved SERVICE_API_KEY as Protected secret. Add a SecretRef or enable destination-bound Gateway egress to use it. 2 runtime warnings.",
+        );
         expect(await page.content()).not.toContain("super-secret-material");
         await page.getByRole("columnheader", { name: "Access" }).waitFor();
         expect(await page.getByRole("row", { name: /SERVICE_URL/u }).textContent()).toContain(
           "Agent-readable environment",
         );
-        expect(await page.getByRole("row", { name: /SERVICE_API_KEY/u }).textContent()).toContain(
-          "Protected secret",
-        );
-        expect(await page.getByRole("row", { name: /SERVICE_API_KEY/u }).textContent()).toContain(
-          "api.example.com",
-        );
+        const secretRow = await page.getByRole("row", { name: /SERVICE_API_KEY/u }).textContent();
+        expect(secretRow).toContain("Protected secret");
+        expect(secretRow).toContain("api.example.com");
 
-        await page.getByRole("button", { name: "Bulk Add", exact: true }).click();
-        const bulkDialog = page.locator('openclaw-modal-dialog[label="Bulk Add"]');
-        await bulkDialog
-          .getByRole("textbox", { name: "Value", exact: true })
-          .fill('BULK_PRIVATE_KEY="line one\nline two"\nBULK_URL=https://bulk.test');
+        const bulkDialog = await openDialog(page, "Bulk Add");
+        await bulkValue(bulkDialog).fill(
+          'BULK_PRIVATE_KEY="line one\nline two"\nBULK_URL=https://bulk.test',
+        );
         await bulkDialog.getByText("1 protected secret detected").waitFor();
-        await capture(page, "03-bulk-add-dialog.png", bulkDialog.locator("dialog"), [
-          bulkDialog.getByRole("textbox", { name: "Value", exact: true }),
-        ]);
-        await bulkDialog.getByRole("button", { name: "Save", exact: true }).click();
-        await page
-          .getByRole("status")
-          .getByText(
-            "Saved 2 entries (1 protected, 1 agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next run.",
-          )
-          .waitFor();
+        await captureDialog(page, "03-bulk-add-dialog.png", bulkDialog, bulkValue(bulkDialog));
+        await button(bulkDialog, "Save").click();
+        await notice(
+          page,
+          "Saved 2 entries (1 protected, 1 agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next run.",
+        );
 
-        const bulkRow = page.getByRole("row", { name: /BULK_URL/u });
-        await bulkRow.getByRole("button", { name: "Actions: BULK_URL" }).click();
-        await bulkRow.locator('wa-dropdown-item[value="delete"]').click();
-        const confirm = page.locator('openclaw-modal-dialog[label="Delete"]');
-        await confirm.getByRole("button", { name: "Delete", exact: true }).click();
-        await page.getByRole("status").getByText("Deleted BULK_URL.").waitFor();
+        await rowAction(page, "BULK_URL", "delete");
+        const confirm = modal(page, "Delete");
+        await button(confirm, "Delete").click();
+        await notice(page, "Deleted BULK_URL.");
         expect(await page.getByRole("row", { name: /BULK_URL/u }).count()).toBe(0);
 
         expect(await gateway.getRequests("secrets.store.set")).toHaveLength(4);
@@ -481,128 +395,72 @@ suite.define(() => {
     );
   });
 
-  it("rejects a confirmed deletion after same-URL credentials replace the Gateway client", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["secrets.store.list", "secrets.store.delete"],
-        methodResponses: {
-          "secrets.store.list": {
-            sequence: [{ entries: [envEntry] }, { entries: [envEntry] }, { entries: [] }],
-          },
-          "secrets.store.delete": { ok: true, reloaded: false },
-        },
-      });
-
-      await page.goto(`${suite.server.baseUrl}settings/secrets`);
-      const entryRow = page.getByRole("row", { name: /SERVICE_URL/u });
-      await entryRow.getByRole("button", { name: "Actions: SERVICE_URL" }).click();
-      await entryRow.locator('wa-dropdown-item[value="delete"]').click();
-      const confirmation = page.locator('openclaw-modal-dialog[label="Delete"]');
-      await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
-
-      const socketCount = await gateway.getSocketCount();
-      const listCount = (await gateway.getRequests("secrets.store.list")).length;
-      const originalGateway = await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              gateway: {
-                connection: { gatewayUrl: string };
-                connect: (options: { token: string }) => void;
-                snapshot: { client: { instanceId: string } | null };
-              };
-            };
-          };
-        };
-        const activeGateway = app.runtime?.context.gateway;
-        const client = activeGateway?.snapshot.client;
-        if (!activeGateway || !client) {
-          throw new Error("Expected a connected Gateway client before confirmation");
+  it.each([false, true])(
+    "handles confirmed deletion after reconnect (replace client: %s)",
+    async (replace) => {
+      await suite.withPage({}, async ({ page }) => {
+        const gateway = await openStore(page, {
+          list: listResponse([envEntry], [envEntry], []),
+          delete: saved,
+        });
+        const entryRow = await rowAction(page, "SERVICE_URL", "delete");
+        const confirmation = modal(page, "Delete");
+        await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
+        const original = await gatewayIdentity(page);
+        expect(original.clientInstanceId).toBeDefined();
+        const socketCount = await gateway.getSocketCount();
+        const listCount = (await gateway.getRequests("secrets.store.list")).length;
+        if (replace) {
+          await evaluateControlUiContext(page, (context) => {
+            context.gateway.connect({ token: "replacement-secret-delete-proof" });
+          });
+        } else {
+          await gateway.closeLatest(1012, "secret delete confirmation reconnect proof");
         }
-        const identity = {
-          clientInstanceId: client.instanceId,
-          gatewayUrl: activeGateway.connection.gatewayUrl,
-        };
-        activeGateway.connect({ token: "replacement-secret-delete-proof" });
-        return identity;
+        await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+        await expect
+          .poll(async () => (await gateway.getRequests("secrets.store.list")).length)
+          .toBeGreaterThan(listCount);
+        await expect
+          .poll(() => gatewayIdentity(page))
+          .toMatchObject({
+            gatewayUrl: original.gatewayUrl,
+            phase: "connected",
+            ...(replace ? {} : { clientInstanceId: original.clientInstanceId }),
+          });
+        if (replace) {
+          expect((await gatewayIdentity(page)).clientInstanceId).not.toBe(
+            original.clientInstanceId,
+          );
+          await expect.poll(() => button(entryRow, "Actions: SERVICE_URL").isEnabled()).toBe(true);
+        }
+        await button(confirmation, "Delete").click();
+        if (replace) {
+          await expect
+            .poll(
+              async () =>
+                (await page.getByRole("alert").count()) +
+                (await gateway.getRequests("secrets.store.delete")).length,
+            )
+            .toBeGreaterThan(0);
+          expect(await gateway.getRequests("secrets.store.delete")).toHaveLength(0);
+          await page
+            .getByRole("alert")
+            .getByText("The secret was not deleted. Reload the list and try again.", {
+              exact: true,
+            })
+            .waitFor();
+          await capture(page, "06-client-replacement-delete-rejected.png");
+          await entryRow.waitFor();
+        } else {
+          await expect
+            .poll(async () => (await gateway.getRequests("secrets.store.delete")).length)
+            .toBe(1);
+          await expect.poll(() => entryRow.count()).toBe(0);
+        }
       });
-      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
-      await expect
-        .poll(async () => (await gateway.getRequests("secrets.store.list")).length)
-        .toBeGreaterThan(listCount);
-      await expect
-        .poll(() => activeGatewayIdentity(page))
-        .toMatchObject({
-          gatewayUrl: originalGateway.gatewayUrl,
-          phase: "connected",
-        });
-      const replacementGateway = await activeGatewayIdentity(page);
-      expect(replacementGateway.clientInstanceId).not.toBe(originalGateway.clientInstanceId);
-      await expect
-        .poll(() => entryRow.getByRole("button", { name: "Actions: SERVICE_URL" }).isEnabled())
-        .toBe(true);
-
-      await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
-
-      await expect
-        .poll(async () => ({
-          alerts: await page.getByRole("alert").count(),
-          deletes: (await gateway.getRequests("secrets.store.delete")).length,
-        }))
-        .not.toEqual({ alerts: 0, deletes: 0 });
-      expect(await gateway.getRequests("secrets.store.delete")).toHaveLength(0);
-      await page
-        .getByRole("alert")
-        .getByText("The secret was not deleted. Reload the list and try again.", { exact: true })
-        .waitFor();
-      await capture(page, "06-client-replacement-delete-rejected.png");
-      await entryRow.waitFor();
-    });
-  });
-
-  it("deletes a confirmed entry after the same Gateway client reconnects", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["secrets.store.list", "secrets.store.delete"],
-        methodResponses: {
-          "secrets.store.list": {
-            sequence: [{ entries: [envEntry] }, { entries: [envEntry] }, { entries: [] }],
-          },
-          "secrets.store.delete": { ok: true, reloaded: false },
-        },
-      });
-
-      await page.goto(`${suite.server.baseUrl}settings/secrets`);
-      const entryRow = page.getByRole("row", { name: /SERVICE_URL/u });
-      await entryRow.getByRole("button", { name: "Actions: SERVICE_URL" }).click();
-      await entryRow.locator('wa-dropdown-item[value="delete"]').click();
-      const confirmation = page.locator('openclaw-modal-dialog[label="Delete"]');
-      await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
-
-      const originalGateway = await activeGatewayIdentity(page);
-      const socketCount = await gateway.getSocketCount();
-      const listCount = (await gateway.getRequests("secrets.store.list")).length;
-      await gateway.closeLatest(1012, "secret delete confirmation reconnect proof");
-      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
-      await expect
-        .poll(async () => (await gateway.getRequests("secrets.store.list")).length)
-        .toBeGreaterThan(listCount);
-      await expect
-        .poll(() => activeGatewayIdentity(page))
-        .toMatchObject({
-          clientInstanceId: originalGateway.clientInstanceId,
-          gatewayUrl: originalGateway.gatewayUrl,
-          phase: "connected",
-        });
-
-      await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
-
-      await expect
-        .poll(async () => (await gateway.getRequests("secrets.store.delete")).length)
-        .toBe(1);
-      await expect.poll(() => entryRow.count()).toBe(0);
-    });
-  });
+    },
+  );
 
   it("keeps optional store actions hidden when the Gateway omits method discovery", async () => {
     await suite.withPage({}, async ({ page }) => {
@@ -613,11 +471,11 @@ suite.define(() => {
         },
       });
 
-      await page.goto(`${suite.server.baseUrl}settings/secrets`);
+      await openSecrets(page);
       await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
       await page.getByText(/Gateway\/admin required/u).waitFor();
-      expect(await page.getByRole("button", { name: "Add", exact: true }).count()).toBe(0);
-      expect(await page.getByRole("button", { name: "Bulk Add", exact: true }).count()).toBe(0);
+      expect(await button(page, "Add").count()).toBe(0);
+      expect(await button(page, "Bulk Add").count()).toBe(0);
       expect(await gateway.getRequests("secrets.store.list")).toHaveLength(0);
     });
   });

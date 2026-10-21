@@ -3,8 +3,11 @@ import type { AssistantMessage } from "../types.js";
 
 const CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE =
   /prompt has [\d,]+ tokens?, but the configured context size is [\d,]+ tokens?/i;
+const REQUEST_BUDGET_OVERFLOW_RE =
+  /context window exceeded: estimated input \d+ leaves only \d+ output tokens within the \d+-token context\./i;
 
 const ASSISTANT_OVERFLOW_PATTERNS = [
+  REQUEST_BUDGET_OVERFLOW_RE,
   /prompt is too long/i, // Anthropic token overflow
   /request_too_large/i, // Anthropic request byte-size overflow (HTTP 413)
   /input length and `?max_tokens`? exceed context limit: [\d,]+ \+ [\d,]+ > [\d,]+/i, // Anthropic direct API
@@ -19,11 +22,14 @@ const ASSISTANT_OVERFLOW_PATTERNS = [
   /input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)/i, // Together AI
   /exceeds the limit of \d+/i, // GitHub Copilot
   /(?:exceeds the available context size|context size has been exceeded)/i, // llama.cpp server
-  /greater than the context length/i, // LM Studio
+  /`?inputs`? tokens \+ `?max_new_tokens`? must be <= [\d,]+/i, // Hugging Face TGI
+  /`?inputs`? must have less than [\d,]+ tokens/i, // Hugging Face TGI
+  /greater than the context length|model is loaded with context length of only \d[\d,]* tokens, which is not enough/i, // LM Studio
   /context window exceeds limit/i, // MiniMax
   /exceeded model token limit/i, // Kimi For Coding
   /tokens? in request more than max tokens? allowed/i, // Z.AI / Zhipu GLM error 1210
   /prompt exceeds max(?:imum)? length/i, // Z.AI / Zhipu GLM error 1261
+  /range of input length should be \[1, [\d,]+\]/i, // DashScope (Model Studio) input-length limit
   /too large for model with \d+ maximum context length/i, // Mistral
   CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE, // DS4 server
   /model_context_window_exceeded/i, // z.ai non-standard finish_reason surfaced as error text
@@ -35,6 +41,7 @@ const ASSISTANT_OVERFLOW_PATTERNS = [
 ];
 
 const FAILOVER_EXPLICIT_OVERFLOW_PATTERNS = [
+  REQUEST_BUDGET_OVERFLOW_RE,
   /request_too_large/i, // Anthropic request byte-size overflow
   /context_overflow/i,
   CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE, // DS4 server
@@ -57,6 +64,8 @@ const FAILOVER_EXPLICIT_OVERFLOW_PATTERNS = [
   /413[\s\S]*too large/i,
   /context_window_exceeded/i,
   /input length [\d,]+\s+tokens? exceeds the model limit/i,
+  /`?inputs`? tokens \+ `?max_new_tokens`? must be <= [\d,]+/i, // Hugging Face TGI
+  /`?inputs`? must have less than [\d,]+ tokens/i, // Hugging Face TGI
   /上下文过长|上下文超出|上下文长度超|超出最大上下文|请压缩上下文/,
 ];
 

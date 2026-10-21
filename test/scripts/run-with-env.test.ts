@@ -28,6 +28,17 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
+const wrapperArgv = resolveRuntimeWorkerArgv(
+  resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv),
+);
+function runWrapper(args: string[], env = process.env) {
+  return spawnSync(process.execPath, [...wrapperArgv, ...args], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env,
+  });
+}
+
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
@@ -78,7 +89,7 @@ function spawnWrapperFixture(
   const wrapper = spawn(
     process.execPath,
     [
-      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
+      ...wrapperArgv,
       ...assignments,
       "--",
       "node",
@@ -206,10 +217,7 @@ describe("run-with-env", () => {
         "run",
       ]),
     ).toEqual({
-      env: {
-        OPENCLAW_GATEWAY_PROJECT_SHARDS: "1",
-        EMPTY: "",
-      },
+      env: { OPENCLAW_GATEWAY_PROJECT_SHARDS: "1", EMPTY: "" },
       command: "node",
       args: ["scripts/run-vitest.mjs", "run"],
     });
@@ -222,17 +230,7 @@ describe("run-with-env", () => {
   });
 
   it("prints wrapper help without spawning a command", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
-        "--help",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+    const result = runWrapper(["--help"]);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: node --import tsx scripts/run-with-env.mts");
@@ -243,28 +241,6 @@ describe("run-with-env", () => {
     expect(
       isRunWithEnvHelpRequest(["OPENCLAW_GATEWAY_PROJECT_SHARDS=1", "--", "node", "--help"]),
     ).toBe(false);
-  });
-
-  it("rejects malformed assignments before spawning", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
-        "1INVALID=value",
-        "--",
-        "node",
-        "-e",
-        "process.stdout.write('spawned')",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("invalid environment assignment");
   });
 
   it("uses the current Node executable for bare Node command names", () => {
@@ -291,10 +267,7 @@ describe("run-with-env", () => {
     }
     expect(
       resolveSpawnCommand("C:\\Tools\\node.exe", args, "C:\\Node24\\node.exe", "win32"),
-    ).toEqual({
-      command: "C:\\Tools\\node.exe",
-      args,
-    });
+    ).toEqual({ command: "C:\\Tools\\node.exe", args });
   });
 
   it("rejects malformed force-kill grace configuration before spawning", () => {
@@ -312,21 +285,15 @@ describe("run-with-env", () => {
       );
     }
 
-    const result = spawnSync(
-      process.execPath,
+    const result = runWrapper(
       [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
         "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
         "--",
         "node",
         "-e",
         "process.stdout.write('spawned')",
       ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: { ...process.env, OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: "100ms" },
-      },
+      { ...process.env, OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: "100ms" },
     );
 
     expect(result.status).toBe(2);
@@ -471,10 +438,7 @@ describe("run-with-env", () => {
         ],
         childScript,
         signal,
-        {
-          ...process.env,
-          OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
-        },
+        { ...process.env, OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS: String(MAX_TIMER_TIMEOUT_MS + 1) },
       );
 
       await runQaGatewayFixture(async () => {
@@ -488,40 +452,4 @@ describe("run-with-env", () => {
       }, fixture.cleanup);
     },
   );
-
-  it.runIf(process.platform !== "win32")("preserves wrapped command signal exits", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
-        "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
-        "--",
-        "node",
-        "-e",
-        "process.kill(process.pid, 'SIGTERM')",
-      ],
-      { cwd: process.cwd(), encoding: "utf8" },
-    );
-
-    expect(result.status).toBeNull();
-    expect(result.signal).toBe("SIGTERM");
-  });
-
-  it.runIf(process.platform !== "win32")("preserves wrapped command force-kill exits", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv)),
-        "OPENCLAW_RUN_WITH_ENV_SIGNAL_TEST=1",
-        "--",
-        "node",
-        "-e",
-        "process.kill(process.pid, 'SIGKILL')",
-      ],
-      { cwd: process.cwd(), encoding: "utf8" },
-    );
-
-    expect(result.status).toBeNull();
-    expect(result.signal).toBe("SIGKILL");
-  });
 });

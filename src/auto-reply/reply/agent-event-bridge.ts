@@ -1,5 +1,3 @@
-// Generic agent-event bridge machinery shared by the CLI runner's per-stream
-// delivery bridges (assistant, reasoning, commentary, plan).
 import { type AgentEventPayload, onAgentEventForRun } from "../../infra/agent-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 

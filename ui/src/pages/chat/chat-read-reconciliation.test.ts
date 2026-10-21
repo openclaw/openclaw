@@ -11,7 +11,9 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import {
@@ -93,13 +95,15 @@ it("publishes a real recovery-owner change to subscribed panes during a foreign 
   const host = pageHost(makeChatHost({ sessionKey: selected, requestHandlers: {} }));
   const client = expectDefined(host.client, "shared client");
   const peer = pageHost(makeChatHost({ client, sessions: host.sessions, sessionKey: selected }));
-  const paint = vi.fn();
-  const peerPaint = vi.fn();
-  host.requestUpdate = paint;
-  peer.requestUpdate = peerPaint;
+  const publish = vi.fn();
+  const peerPublish = vi.fn();
+  const stopPublication = subscribeChatOutboxQueue(host, publish);
+  const stopPeerPublication = subscribeChatOutboxQueue(peer, peerPublish);
   const stopHost = chatOutboxOwner(host).subscribe(host);
   const stopPeer = chatOutboxOwner(peer).subscribe(peer);
   onTestFinished(() => {
+    stopPeerPublication();
+    stopPublication();
     stopPeer();
     stopHost();
     host.sessions.dispose();
@@ -132,15 +136,15 @@ it("publishes a real recovery-owner change to subscribed panes during a foreign 
     ),
   ).toBe(true);
   expect(host.chatQueue.map((row) => row.id)).toEqual(["old-owner"]);
-  paint.mockClear();
-  peerPaint.mockClear();
+  publish.mockClear();
+  peerPublish.mockClear();
 
   vi.spyOn(client, "recoveryScope", "get").mockReturnValue("replacement-scope");
   handlePageGatewayEvent(host, sessionEvent(foreign), () => false);
   expect(host.chatQueue.map((row) => row.id)).toEqual(["new-owner"]);
   expect(peer.chatQueue.map((row) => row.id)).toEqual(["new-owner"]);
-  expect(paint).toHaveBeenCalledTimes(1);
-  expect(peerPaint).toHaveBeenCalledTimes(1);
+  expect(publish).toHaveBeenCalledTimes(1);
+  expect(peerPublish).toHaveBeenCalledTimes(1);
 });
 
 it.each(
@@ -148,13 +152,17 @@ it.each(
     [false, true].map((matching) => ({ event, matching })),
   ),
 )(
-  "renders only its scoped $event change in a retained pane (matching: $matching)",
+  "publishes only its scoped $event change in a retained pane (matching: $matching)",
   ({ event, matching }) => {
     const host = pageHost(makeChatHost({ sessionKey: selected, requestHandlers: {} }));
     onTestFinished(() => host.sessions.dispose());
-    const requestUpdate = vi.fn();
-    const frame = vi.fn(() => 1);
-    host.requestUpdate = requestUpdate;
+    const published = vi.fn();
+    onTestFinished(chatRunPresentation(host).subscribe(published));
+    let commitFrame: FrameRequestCallback | undefined;
+    const frame = vi.fn((callback: FrameRequestCallback) => {
+      commitFrame = callback;
+      return 1;
+    });
     vi.stubGlobal("requestAnimationFrame", frame);
     handlePageGatewayEvent(
       host,
@@ -165,13 +173,24 @@ it.each(
           sessionKey: matching ? selected : foreign,
           runId: "event-run",
           ...(event === "chat"
-            ? { state: "delta", deltaText: "Streaming result" }
+            ? {
+                state: "delta",
+                deltaText: "Streaming result",
+                message: { role: "assistant", content: "Streaming result" },
+              }
             : { reason: "label" }),
         },
       },
       () => false,
     );
-    expect(frame.mock.calls.length + requestUpdate.mock.calls.length).toBe(matching ? 1 : 0);
+    expect(frame).toHaveBeenCalledTimes(matching ? 1 : 0);
+    expect(published).not.toHaveBeenCalled();
+    commitFrame?.(0);
+    expect(published).toHaveBeenCalledTimes(matching ? 1 : 0);
+    if (matching && event === "chat") {
+      expect(host.chatStream).toBe("Streaming result");
+      expect(host.chatRunId).toBe("event-run");
+    }
     if (!matching) {
       expect(host.chatMessages).toEqual([]);
       expect(host.chatRunId).toBeNull();
@@ -269,7 +288,13 @@ it("keeps global outbox event recovery bound to the event's agent", async () => 
   expect(host.request.mock.calls.filter(([method]) => method === "chat.history")).toEqual([
     [
       "chat.history",
-      { sessionKey: "global", agentId: "work", inputRunIds: ["work-run"], limit: 1000 },
+      {
+        sessionKey: "global",
+        agentId: "work",
+        inputRunIds: ["work-run"],
+        limit: 1000,
+        toolResultMaxChars: 2_000,
+      },
       { timeoutMs: 30_000 },
     ],
   ]);
@@ -300,6 +325,7 @@ it.each(["session", "connection"])(
 );
 
 it("waits for raw history settlement and coalesces custody events into one fresh read", async () => {
+  const replacementStarted = createDeferred();
   const reads: Array<{
     pending: ReturnType<typeof createDeferred<ChatHistoryResult>>;
     signal?: AbortSignal;
@@ -313,6 +339,9 @@ it("waits for raw history settlement and coalesces custody events into one fresh
     }
     const pending = createDeferred<ChatHistoryResult>();
     reads.push({ pending, signal: options?.signal, params });
+    if (reads.length === 2) {
+      replacementStarted.resolve();
+    }
     return pending.promise;
   });
   const initial = loadChatHistory(host, { deferBranches: true });
@@ -347,12 +376,12 @@ it("waits for raw history settlement and coalesces custody events into one fresh
       { id: "new-custody", sendRunId: "new-run", text: "new", createdAt: 3, sendAttempts: 1 },
     ];
     reads[0]!.pending.resolve(response("Stale history"));
-    await initial;
-    await vi.waitFor(() => expect(reads).toHaveLength(2));
+    await replacementStarted.promise;
+    expect(reads).toHaveLength(2);
     expect(host.chatMessages).toEqual([]);
     expect(reads[1]?.params).toMatchObject({ inputRunIds: ["new-run"] });
     reads[1]!.pending.resolve(response("Fresh history"));
-    await fresh;
+    await Promise.all([initial, fresh]);
     expect(host.chatMessages).toEqual([{ role: "assistant", content: "Fresh history" }]);
   } finally {
     for (const read of reads) {

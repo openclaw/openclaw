@@ -24,6 +24,7 @@ function buildLocalProxyCaOpenSslConfig(commonName: string): string {
     "[v3_ca]",
     "basicConstraints = critical, CA:TRUE",
     "keyUsage = critical, keyCertSign, cRLSign",
+    "subjectKeyIdentifier = hash",
     "",
   ].join("\n");
 }
@@ -203,7 +204,13 @@ async function generateLocalProxyLeafQueued(params: {
     const sanKind = parseCanonicalIpAddress(params.hostname) ? "IP" : "DNS";
     fs.writeFileSync(
       extPath,
-      `subjectAltName=${sanKind}:${params.hostname}\nextendedKeyUsage=serverAuth\n`,
+      [
+        `subjectAltName=${sanKind}:${params.hostname}`,
+        "extendedKeyUsage=serverAuth",
+        "subjectKeyIdentifier=hash",
+        "authorityKeyIdentifier=keyid,issuer",
+        "",
+      ].join("\n"),
       { mode: LOCAL_PROXY_PRIVATE_KEY_MODE },
     );
     await runExec(

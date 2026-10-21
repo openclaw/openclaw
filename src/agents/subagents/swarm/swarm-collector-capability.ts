@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import {
   bindAgentToolAvailability,
   getAgentToolAvailabilityBinding,
@@ -21,6 +22,10 @@ type SpawnCapability = {
 };
 const spawnCapabilities = new WeakMap<AgentToolAvailabilityBinding, SpawnCapability>();
 const collectorFieldsBySchema = new WeakMap<object, Record<string, unknown>>();
+const collectorSchemaVariants = new WeakMap<
+  object,
+  { fields: Record<string, unknown>; schema: AnyAgentTool["parameters"] }
+>();
 type JoinedSpawn = {
   owner: AgentToolAvailabilityBinding;
   assertCurrent: () => void;
@@ -45,11 +50,22 @@ function collectorSchema(
   if (COLLECTOR_FIELDS.every((field) => previousProperties[field] === fields[field])) {
     return schema;
   }
+  const cached = collectorSchemaVariants.get(schema);
+  if (cached && COLLECTOR_FIELDS.every((field) => cached.fields[field] === fields[field])) {
+    return cached.schema;
+  }
   const properties = { ...previousProperties };
   for (const field of COLLECTOR_FIELDS) {
     delete properties[field];
   }
-  return { ...schema, properties: { ...properties, ...fields } };
+  const variant = { ...schema, properties: { ...properties, ...fields } };
+  // Mutable custom schemas retain their existing projection behavior.
+  if (Object.isFrozen(schema)) {
+    Object.freeze(variant.properties);
+    Object.freeze(variant);
+    collectorSchemaVariants.set(schema, { fields: { ...fields }, schema: variant });
+  }
+  return variant;
 }
 
 function selectCollectorFields(properties: Record<string, unknown>): Record<string, unknown> {
@@ -77,18 +93,21 @@ export function bindCollectorSpawnTool<T extends AnyAgentTool>(
   const fields = selectCollectorFields(properties);
   const capability: SpawnCapability = { nativeReader: undefined, signal };
   const binding: AgentToolAvailabilityBinding = {
-    prepare(current, callableTools) {
+    prepare(current, callableTools, offeredTools) {
       const schema = current.parameters;
       const retainedFields = collectorFieldsBySchema.get(schema);
       const currentFields = retainedFields ?? collectorFieldsFromSchema(schema) ?? fields;
-      const reader = callableTools.get("agents_wait");
-      capability.nativeReader =
+      const nativeReader = (reader: ReturnType<typeof callableTools.get>) =>
         reader &&
         getAgentToolAvailabilityBinding(reader) === readerBinding &&
         filterRuntimeCompatibleTools([reader]).tools.length === 1
           ? reader
           : undefined;
-      const preparedSchema = collectorSchema(schema, capability.nativeReader ? currentFields : {});
+      // An offered reader keeps the collector definition stable across turns; only a
+      // callable reader lets this turn start a collector (see the spawn guard).
+      const offeredReader = nativeReader(offeredTools.get("agents_wait"));
+      capability.nativeReader = nativeReader(callableTools.get("agents_wait"));
+      const preparedSchema = collectorSchema(schema, offeredReader ? currentFields : {});
       // Hook wrappers share schemas, not tool objects, while collector fields are hidden.
       if (preparedSchema !== schema || !retainedFields) {
         collectorFieldsBySchema.set(preparedSchema, currentFields);
@@ -99,7 +118,7 @@ export function bindCollectorSpawnTool<T extends AnyAgentTool>(
         .replace(SESSIONS_SPAWN_COLLECTOR_GUIDANCE, "")
         .trim();
       current.description =
-        capability.nativeReader && Object.keys(fields).length > 0
+        offeredReader && Object.keys(fields).length > 0
           ? `${description} ${WAIT_GUIDANCE}`
           : description;
     },
@@ -114,7 +133,7 @@ export function bindCollectorSpawnTool<T extends AnyAgentTool>(
   };
   spawnCapabilities.set(binding, capability);
   bindAgentToolAvailability(tool, binding);
-  binding.prepare(tool, new Map());
+  binding.prepare(tool, new Map(), new Map());
   return tool;
 }
 
@@ -171,26 +190,25 @@ export function captureCollectorSpawnGuard(
 ): () => void {
   const owner = getAgentToolAvailabilityBinding(tool);
   const capability = owner && spawnCapabilities.get(owner);
-  const joined = joinedSpawns.getStore();
-  if (joined && joined.owner === owner && joined.toolCallId === toolCallId) {
+  const current = joinedSpawns.getStore();
+  const joined =
+    current && current.owner === owner && current.toolCallId === toolCallId ? current : undefined;
+  if (joined) {
     assertJoinedSpawn(joined);
     if (joined.claimed) {
       throw new ToolInputError("Joined collector spawn was already claimed.");
     }
     joined.claimed = true;
-    return () => {
-      assertActive();
-      capability?.signal?.throwIfAborted();
-      assertJoinedSpawn(joined);
-    };
   }
-  return () => {
-    assertActive();
+  return composeSessionSourceAssertion([assertActive], (assertSource) => {
+    assertSource();
     capability?.signal?.throwIfAborted();
-    if (!capability?.nativeReader) {
+    if (joined) {
+      assertJoinedSpawn(joined);
+    } else if (!capability?.nativeReader) {
       throw new ToolInputError(
         "Collector results are unavailable in this tool surface. Omit collect, outputSchema, and groupId to start an ordinary announcing child.",
       );
     }
-  };
+  });
 }

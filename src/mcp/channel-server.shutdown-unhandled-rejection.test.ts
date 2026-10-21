@@ -17,7 +17,7 @@ const bridgeState = vi.hoisted(() => ({
   handleClaudePermissionRequest: vi.fn(async (_payload: unknown) => {}),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
+vi.mock("@modelcontextprotocol/server/stdio", () => ({
   StdioServerTransport: class MockStdioServerTransport {
     onclose?: () => void;
 
@@ -27,8 +27,10 @@ vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
   },
 }));
 
-vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
+vi.mock("@modelcontextprotocol/server", () => ({
   McpServer: class MockMcpServer {
+    registerTool() {}
+
     server = {
       setNotificationHandler: vi.fn(),
     };
@@ -43,8 +45,10 @@ vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
   },
 }));
 
+// mock-isolation: Shutdown fixtures use empty config without starting a real config owner.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
+  captureRuntimeConfigAsyncReader: () => async () => ({}),
 }));
 
 vi.mock("../version.js", async () => ({
@@ -70,15 +74,6 @@ vi.mock("./channel-bridge.js", () => ({
       return bridgeState.handleClaudePermissionRequest(payload);
     }
   },
-}));
-
-vi.mock("./channel-shared.js", () => ({
-  ClaudePermissionRequestSchema: {},
-}));
-
-vi.mock("./channel-tools.js", () => ({
-  getChannelMcpCapabilities: vi.fn(() => undefined),
-  registerChannelMcpTools: vi.fn(),
 }));
 
 async function waitForTransport(): Promise<{ onclose?: (() => void) | undefined }> {

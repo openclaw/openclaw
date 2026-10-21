@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "openclaw/plugin-sdk/test-fixtures";
-import type { SourceFile } from "typescript/unstable/ast";
+import type { SourceFile } from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { getChangedPathFacts } from "../scripts/lib/changed-path-facts.mjs";
 import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";

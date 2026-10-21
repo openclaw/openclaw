@@ -5,6 +5,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { expect, vi } from "vitest";
+import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -19,7 +20,6 @@ import {
 import { listNodePairing } from "../infra/device-pairing-node.js";
 import { getPairedDevice, resolveNodePairingState } from "../infra/device-pairing.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { NodeRegistry } from "./node-registry.js";
 import { createWatchNodeHttpRuntime } from "./watch-node-http.js";
 

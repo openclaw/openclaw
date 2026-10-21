@@ -18,6 +18,7 @@ export function createQueue<T>(
   const pending = new Map<string, ChannelIngressQueueRecord<T>>();
   const claims = new Map<string, ChannelIngressQueueClaim<T>>();
   const completed = new Map<string, typeof scope & { id: string; completedAt: number }>();
+  const stores = [pending, claims, completed];
   let sequence = 0;
   const queue: ChannelIngressQueue<T> = {
     async enqueue(id, payload, params) {
@@ -48,12 +49,8 @@ export function createQueue<T>(
       options.onEnqueued?.(id);
       return { kind: "accepted", duplicate: false, record };
     },
-    async listPending() {
-      return [...pending.values()];
-    },
-    async listClaims() {
-      return [...claims.values()];
-    },
+    listPending: async () => [...pending.values()],
+    listClaims: async () => [...claims.values()],
     async claim(id, params) {
       const record = pending.get(id);
       if (!record) {
@@ -80,9 +77,7 @@ export function createQueue<T>(
       );
       return record ? queue.claim(record.id, params) : null;
     },
-    async refreshClaim(ref) {
-      return claims.get(ref.id)?.claim.token === ref.claim.token;
-    },
+    refreshClaim: async (ref) => claims.get(ref.id)?.claim.token === ref.claim.token,
     async complete(ref) {
       const id = typeof ref === "string" ? ref : ref.id;
       if (typeof ref !== "string" && claims.get(id)?.claim.token !== ref.claim.token) {
@@ -112,82 +107,116 @@ export function createQueue<T>(
       options.onReleased?.(id);
       return true;
     },
-    async fail(ref) {
-      return queue.delete(ref);
-    },
+    fail: async (ref) => queue.delete(ref),
     async delete(ref) {
       const id = typeof ref === "string" ? ref : ref.id;
-      const removedPending = pending.delete(id);
-      const removedClaim = claims.delete(id);
-      const removedCompleted = completed.delete(id);
-      return removedPending || removedClaim || removedCompleted;
+      return stores.map((store) => store.delete(id)).some(Boolean);
     },
-    async recoverStaleClaims() {
-      return 0;
-    },
-    async prune() {
-      return 0;
-    },
+    recoverStaleClaims: async () => 0,
+    prune: async () => 0,
     async purge() {
-      const count = pending.size + claims.size + completed.size;
-      pending.clear();
-      claims.clear();
-      completed.clear();
-      return count;
+      return stores.reduce((count, store) => {
+        const size = store.size;
+        store.clear();
+        return count + size;
+      }, 0);
     },
   };
   return queue;
 }
 
-export function createKeyedState(onRegister?: (namespace: string, value: unknown) => void) {
+export function createKeyedState(
+  onRegister?: (namespace: string, value: unknown) => void,
+  beforeWrite?: () => Promise<void>,
+) {
   const namespaces = new Map<string, Map<string, string>>();
+  const unsupported = async () => {
+    throw new Error("Unexpected keyed-state operation in X fixture");
+  };
   return <T>({ namespace }: { namespace: string }): PluginStateKeyedStore<T> => {
-    let data = namespaces.get(namespace);
-    if (!data) {
-      data = new Map();
-      namespaces.set(namespace, data);
-    }
-    const rows = data;
+    const rows = namespaces.get(namespace) ?? new Map<string, string>();
+    namespaces.set(namespace, rows);
     const read = (key: string): T | undefined => {
       const serialized = rows.get(key);
       // The host store's JSON boundary is represented without sharing mutable fixture objects.
       return serialized === undefined ? undefined : (JSON.parse(serialized) as T);
     };
-    return {
-      async register(key, value, options) {
-        options?.assertCurrent?.();
-        rows.set(key, JSON.stringify(value));
-        onRegister?.(namespace, value);
-      },
-      async registerIfAbsent(key, value) {
-        if (rows.has(key)) {
-          return false;
+    const observe = (key: string) => ({
+      value: read(key),
+      comparison: JSON.stringify([namespace, key, rows.get(key)]),
+    });
+    const entries = () =>
+      [...rows].map(([key, value]) => ({ key, value: JSON.parse(value) as T, createdAt: 0 }));
+    const bind = (assertCurrent = () => {}): PluginStateKeyedStore<T, 2> => {
+      const inspect = async <Result>(query: () => Result) => {
+        assertCurrent();
+        return query();
+      };
+      const mutate = async <Result>(write: () => Result, assertWriteCurrent?: () => void) => {
+        if (beforeWrite) {
+          await beforeWrite();
         }
-        rows.set(key, JSON.stringify(value));
-        return true;
-      },
-      async lookup(key) {
-        return read(key);
-      },
-      async consume(key) {
-        const value = read(key);
-        rows.delete(key);
-        return value;
-      },
-      async delete(key, options) {
-        options?.assertCurrent?.();
-        return rows.delete(key);
-      },
-      async entries() {
-        return [...rows].map(([key, value]) => ({
-          key,
-          value: JSON.parse(value) as T,
-          createdAt: 0,
-        }));
-      },
-      async clear() {
-        rows.clear();
-      },
+        assertCurrent();
+        assertWriteCurrent?.();
+        return write();
+      };
+      return {
+        observe: (key) => inspect(() => observe(key)),
+        async compareAndApply(key, comparison, intent) {
+          return mutate(() => {
+            const current = observe(key);
+            if (comparison !== current.comparison) {
+              return { status: "conflict" as const, current };
+            }
+            if (intent.action === "keep") {
+              return { status: "unchanged" as const };
+            }
+            if (intent.action === "delete") {
+              return { status: rows.delete(key) ? ("applied" as const) : ("unchanged" as const) };
+            }
+            rows.set(key, JSON.stringify(intent.value));
+            onRegister?.(namespace, intent.value);
+            return { status: "applied" as const };
+          });
+        },
+        async register(key, value, options) {
+          await mutate(() => {
+            rows.set(key, JSON.stringify(value));
+            onRegister?.(namespace, value);
+          }, options?.assertCurrent);
+        },
+        registerIfAbsent: async (key, value) =>
+          mutate(() => {
+            if (rows.has(key)) {
+              return false;
+            }
+            rows.set(key, JSON.stringify(value));
+            return true;
+          }),
+        lookup: (key) => inspect(() => read(key)),
+        lookupMany: unsupported,
+        consume: unsupported,
+        delete: async (key, options) => mutate(() => rows.delete(key), options?.assertCurrent),
+        deleteIfEqual: unsupported,
+        entries: () => inspect(entries),
+        entriesInKeyRange: (range) =>
+          inspect(() =>
+            entries()
+              .filter(
+                (entry) =>
+                  entry.key >= range.keyStartInclusive && entry.key < range.keyEndExclusive,
+              )
+              .toSorted((a, b) => {
+                const order = a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+                return range.order === "desc" ? -order : order;
+              })
+              .slice(0, range.limit),
+          ),
+        count: unsupported,
+        moveEntriesFrom: unsupported,
+        clear: unsupported,
+      };
     };
+    return { ...bind(), withCurrent: ({ assertCurrent }) => bind(assertCurrent) };
   };
 }

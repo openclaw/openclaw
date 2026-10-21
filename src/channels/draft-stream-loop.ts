@@ -1,19 +1,12 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
 /** Throttled draft-stream sender used by channels that edit in-progress replies. */
-export type DraftStreamLoop<T = string> = {
-  update: (value: T) => void;
-  flush: () => Promise<void>;
-  stop: () => void;
-  resetPending: () => void;
-  resetThrottleWindow: () => void;
-  waitForInFlight: () => Promise<void>;
+export type DraftStreamLoop<T = string> = Omit<
+  ReturnType<typeof createDraftStreamLoop<T>>,
+  "takePending"
+> & {
   /** Removes queued (not in-flight) text atomically and cancels its scheduled flush. */
   takePending?: () => T;
-};
-
-type CreatedDraftStreamLoop<T> = DraftStreamLoop<T> & {
-  takePending: () => T;
 };
 
 export function createDraftStreamLoop<T = string>(params: {
@@ -26,7 +19,7 @@ export function createDraftStreamLoop<T = string>(params: {
   emptyValue?: T;
   isEmpty?: (value: T) => boolean;
   onBackgroundFlushError?: (err: unknown) => void;
-}): CreatedDraftStreamLoop<T> {
+}) {
   const throttleMs = resolveTimerTimeoutMs(params.throttleMs, 0, 0);
   const emptyValue = params.emptyValue ?? ("" as T);
   const isEmpty =
@@ -70,16 +63,12 @@ export function createDraftStreamLoop<T = string>(params: {
         return;
       }
       pendingValue = emptyValue;
-      let current: Promise<void | boolean> | undefined;
       let sent: void | boolean;
       try {
-        current = Promise.resolve(params.sendOrEditStreamMessage(value)).finally(() => {
-          if (inFlightPromise === current) {
-            inFlightPromise = undefined;
-          }
+        inFlightPromise = Promise.resolve(params.sendOrEditStreamMessage(value)).finally(() => {
+          inFlightPromise = undefined;
         });
-        inFlightPromise = current;
-        sent = await current;
+        sent = await inFlightPromise;
       } catch (err) {
         retainUnsentValue(value, background);
         throw err;
@@ -101,11 +90,7 @@ export function createDraftStreamLoop<T = string>(params: {
 
   const startBackgroundFlush = () => {
     void flush(true).catch((err: unknown) => {
-      try {
-        params.onBackgroundFlushError?.(err);
-      } catch {
-        // Error reporting must not recreate the unhandled background rejection path.
-      }
+      params.onBackgroundFlushError?.(err);
     });
   };
 

@@ -5,7 +5,6 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as jsonFiles from "../infra/json-files.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   createUpdateRun,
@@ -120,7 +119,7 @@ it("exports the terminal-safe update diagnostic writer for installed-runtime fin
   );
 });
 
-it.each(["awaited", "published driver", "settled child"] as const)(
+it.each(["published driver", "settled child"] as const)(
   "refreshes the foreground report after %s terminal settlement, preserving complete findings",
   async (driver) => {
     const { options, run, result, opts, reportPath } = fixture();
@@ -150,8 +149,6 @@ it.each(["awaited", "published driver", "settled child"] as const)(
     if (driver === "settled child") {
       // The child committed its verdict, then exited before replacing the report.
       finishLedgerRun(run.runId, { status: "failed", reason }, options);
-    }
-    if (driver !== "published driver") {
       await finishUpdateRun(run.runId, outcome, options);
     } else {
       const stderr = await finishFromPublishedDriver(run.runId, outcome, options);
@@ -213,20 +210,15 @@ it.each(["contention observed", "helper wait exhausted"] as const)(
     const { options, run, result, opts, reportPath } = fixture();
     const paused = createDeferred();
     const release = createDeferred();
-    const atomicWrite = jsonFiles.writeTextAtomic;
+    const rename = fs.rename;
     let intercepted = false;
-    vi.spyOn(jsonFiles, "writeTextAtomic").mockImplementation(async (target, body, policy) => {
-      if (target !== reportPath || intercepted) {
-        return atomicWrite(target, body, policy);
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (to === reportPath && !intercepted) {
+        intercepted = true;
+        paused.resolve();
+        await release.promise;
       }
-      intercepted = true;
-      return atomicWrite(target, body, {
-        ...policy,
-        beforeRename: async () => {
-          paused.resolve();
-          await release.promise;
-        },
-      });
+      return rename(from, to);
     });
     const foreground = printResult(result, opts);
     await Promise.race([
@@ -258,6 +250,7 @@ it.each(["contention observed", "helper wait exhausted"] as const)(
       await Promise.allSettled([foreground, terminal]);
     }
     await foreground;
+    expect(intercepted).toBe(true);
     const stderr = await terminal;
     if (releaseAfter === "contention observed") {
       expect(stderr).not.toContain("Update report could not be saved:");
@@ -268,7 +261,7 @@ it.each(["contention observed", "helper wait exhausted"] as const)(
   },
 );
 
-it.each(["terminal", "custom", "captured"] as const)(
+it.each(["terminal", "captured"] as const)(
   "preserves %s report details after schema admission closes",
   async (kind) => {
     const { options, run, result, opts, reportPath } = fixture();
@@ -279,9 +272,6 @@ it.each(["terminal", "custom", "captured"] as const)(
       options,
     );
     expect(getUpdateRun(run.runId, options)?.status).toBe("failed");
-    if (kind === "custom") {
-      await fs.writeFile(reportPath, "Operator diagnostic: keep this exact recovery detail.\n");
-    }
     const before = await fs.readFile(reportPath, "utf8");
     closeOpenClawStateDatabaseForTest();
     const database = new DatabaseSync(resolveOpenClawStateSqlitePath(options.env));

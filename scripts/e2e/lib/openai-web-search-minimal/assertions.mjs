@@ -1,4 +1,3 @@
-// Assertions for minimal OpenAI web-search E2E scenarios.
 import fs from "node:fs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 

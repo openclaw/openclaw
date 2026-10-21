@@ -55,34 +55,6 @@ export function assignPositiveNumberAttr(
   }
 }
 
-export function assignModelCallSizeTimingAttrs(
-  attrs: Record<string, string | number | boolean>,
-  evt: {
-    requestPayloadBytes?: number;
-    responseStreamBytes?: number;
-    timeToFirstByteMs?: number;
-  },
-): void {
-  assignPositiveNumberAttr(attrs, "openclaw.model_call.request_bytes", evt.requestPayloadBytes);
-  assignPositiveNumberAttr(attrs, "openclaw.model_call.response_bytes", evt.responseStreamBytes);
-  assignPositiveNumberAttr(
-    attrs,
-    "openclaw.model_call.time_to_first_byte_ms",
-    evt.timeToFirstByteMs,
-  );
-}
-
-function assignNumberAttr(
-  attrs: Record<string, string | number | boolean>,
-  key: string,
-  value: number | undefined,
-): void {
-  const normalized = asFiniteNumber(value);
-  if (normalized !== undefined) {
-    attrs[key] = normalized;
-  }
-}
-
 function modelCallPromptTokens(usage: {
   promptTokens?: number;
   input?: number;
@@ -118,7 +90,10 @@ export function assignModelCallPromptStatsAttrs(
     ["openclaw.model_call.prompt.tool_definitions_chars", stats.toolDefinitionsChars],
     ["openclaw.model_call.prompt.total_chars", stats.totalChars],
   ] as const) {
-    assignNumberAttr(attrs, key, value);
+    const normalized = asFiniteNumber(value);
+    if (normalized !== undefined) {
+      attrs[key] = normalized;
+    }
   }
 }
 
@@ -126,11 +101,24 @@ export function assignModelCallUsageAttrs(
   attrs: Record<string, string | number | boolean>,
   evt: Pick<ModelCallLifecycleDiagnosticEvent, "usage">,
 ): void {
-  const usage = evt.usage;
+  assignModelUsageAttrs(attrs, evt.usage, evt.usage && modelCallPromptTokens(evt.usage));
+}
+
+export function assignModelResponseUsageAttrs(
+  attrs: Record<string, string | number | boolean>,
+  evt: Pick<Extract<DiagnosticEventPayload, { type: "model.response.observed" }>, "usage">,
+): void {
+  assignModelUsageAttrs(attrs, evt.usage, evt.usage?.promptTokens);
+}
+
+function assignModelUsageAttrs(
+  attrs: Record<string, string | number | boolean>,
+  usage: ModelCallLifecycleDiagnosticEvent["usage"],
+  promptTokens: number | undefined,
+): void {
   if (!usage) {
     return;
   }
-  const promptTokens = modelCallPromptTokens(usage);
   for (const [key, value] of [
     ["openclaw.model_call.usage.input_tokens", usage.input],
     ["openclaw.model_call.usage.output_tokens", usage.output],
@@ -186,13 +174,7 @@ export function assignGenAiModelCallAttrs(
   },
 ): void {
   assignGenAiSpanIdentityAttrs(attrs, evt);
-  attrs["openclaw.model_call.observation_unit"] = modelCallObservationUnit(evt);
-}
-
-export function modelCallObservationUnit(evt: {
-  observationUnit?: "request" | "turn";
-}): "request" | "turn" {
-  return evt.observationUnit ?? "request";
+  attrs["openclaw.model_call.observation_unit"] = evt.observationUnit ?? "request";
 }
 
 export function modelCallSpanName(evt: {

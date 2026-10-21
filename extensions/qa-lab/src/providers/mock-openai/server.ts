@@ -21,6 +21,7 @@ import {
   normalizeAnthropicMessagesRequest,
 } from "./mock-anthropic-messages.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
+import { resolveAfterToolHttpFailure } from "./mock-openai-after-tool-failures.js";
 import {
   buildAssistantText,
   buildImageInspectionReply,
@@ -57,7 +58,6 @@ import {
   QA_BLOCK_STREAMING_PROMPT_RE,
   QA_TOOL_PROGRESS_PROMPT_RE,
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
-  QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
   QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
   QA_THREAD_REPLY_RECEIPT_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
@@ -121,6 +121,7 @@ import {
 } from "./mock-openai-contracts.js";
 import { planCronBlockedOutcomeTurn } from "./mock-openai-cron-blocked-outcome.js";
 import { planCronFailureRepairTurn } from "./mock-openai-cron-failure-repair.js";
+import { planCronSendContinueTurn } from "./mock-openai-cron-send-continue.js";
 import {
   extractExactReplyDirective,
   extractExactMarkerDirective,
@@ -139,7 +140,6 @@ import {
   buildRemoteCompactionV2Events,
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
-  extractPlannedToolIdentity,
   splitMockStreamingText,
   buildChannelStreamingFixtureEvents,
   resolveTelegramChannelStreamingPause,
@@ -212,7 +212,6 @@ import {
   isSnackRecallPrompt,
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
-import { createQaMockScenarioStateStore } from "./scenario-state.js";
 import type { QaMockOpenAiServerOptions } from "./server-options.js";
 import {
   createQaSessionIdentityResolver,
@@ -330,9 +329,13 @@ const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
 // Complete ordinary retries inside their diagnostic request allowance, then
 // leave the fifth request active so recovery can honor both the cumulative
-// no-progress bound and the current request's own allowance.
+// no-progress bound and the current request's own allowance. The stalled
+// request starts its response, then stays live with SSE keepalives, which reset
+// the client's idle watchdog but not its progress deadline, so it outlives that
+// allowance.
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
 const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
+const QA_REPEATED_REQUEST_STALLED_KEEPALIVE_MS = 5_000;
 const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
 // Stalled-turn recovery mirrors the repeated-request e2e timings: short failing
 // retries, then one held request the QA-tuned stuck detector must abort.
@@ -348,25 +351,14 @@ function resolveCompactionSummaryFaultMode(params: {
     return "none";
   }
   const emptyMarker = QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE.exec(params.allInputText)?.[0];
-  const reasoningMarker = QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(
-    params.allInputText,
-  )?.[0];
-  const selected = emptyMarker
-    ? {
-        key: emptyMarker,
-        mode: "empty-output-once" as const,
-      }
-    : reasoningMarker
-      ? {
-          key: reasoningMarker,
-          mode: "reasoning-only-output-once" as const,
-        }
-      : undefined;
-  if (!selected?.key || params.servedFaultMarkers.has(selected.key)) {
+  const marker =
+    emptyMarker ??
+    QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(params.allInputText)?.[0];
+  if (!marker || params.servedFaultMarkers.has(marker)) {
     return "none";
   }
-  params.servedFaultMarkers.add(selected.key);
-  return selected.mode;
+  params.servedFaultMarkers.add(marker);
+  return emptyMarker ? "empty-output-once" : "reasoning-only-output-once";
 }
 
 function buildMemoryGetArgs(result: Record<string, unknown>) {
@@ -377,6 +369,21 @@ function buildMemoryGetArgs(result: Record<string, unknown>) {
         ? Math.max(1, result.endLine)
         : 1;
   return { path: result.path, from, lines: 4 };
+}
+
+function isSessionMemoryResult(result: Record<string, unknown>) {
+  return (
+    result.source === "sessions" ||
+    (typeof result.path === "string" && result.path.startsWith("sessions/"))
+  );
+}
+
+function memoryResultText(result: Record<string, unknown> | undefined) {
+  return typeof result?.snippet === "string"
+    ? result.snippet
+    : typeof result?.text === "string"
+      ? result.text
+      : "";
 }
 
 const PERSONAL_FOLLOWTHROUGH_FIXTURES = [
@@ -451,9 +458,9 @@ async function buildResponsesPayload(
   scenarioState: MockScenarioState,
   options: {
     subagentTurn: ReturnType<typeof resolveMockSubagentTurn>;
-    waitForTerminalRequesterSettled?: (caseName: string, childSessionKey: string) => Promise<void>;
-    requestKind?: MockOpenAiRequestKind;
-    compactionSummaryFaultMode?: MockCompactionSummaryFaultMode;
+    waitForTerminalRequesterSettled: (caseName: string, childSessionKey: string) => Promise<void>;
+    requestKind: MockOpenAiRequestKind;
+    compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
   },
 ) {
   const model = typeof body.model === "string" ? body.model : "";
@@ -505,8 +512,7 @@ async function buildResponsesPayload(
     QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
     hasCompactionRetryDurableContext ||
     allInputText.includes(QA_COMPACTION_RETRY_BULKY_MARKER);
-  const requestKind = options.requestKind ?? classifyMockOpenAiRequest(input, body);
-  if (requestKind === "compaction-summary") {
+  if (options.requestKind === "compaction-summary") {
     if (options.compactionSummaryFaultMode === "empty-output-once") {
       return buildAssistantEvents("");
     }
@@ -536,6 +542,15 @@ async function buildResponsesPayload(
   const cronFailureRepairTurn = planCronFailureRepairTurn(prompt, input);
   if (cronFailureRepairTurn) {
     return cronFailureRepairTurn;
+  }
+  const cronSendContinueTurn = planCronSendContinueTurn({
+    prompt,
+    input,
+    body: toolDeclarationBody,
+    buildToolCall: buildToolCallEventsWithArgs,
+  });
+  if (cronSendContinueTurn) {
+    return cronSendContinueTurn;
   }
   const cronBlockedOutcomeTurn = planCronBlockedOutcomeTurn(prompt);
   if (cronBlockedOutcomeTurn) {
@@ -663,6 +678,9 @@ async function buildResponsesPayload(
     toolJson?.unavailable === true ||
     toolJson?.disabled === true ||
     (typeof toolJson?.error === "string" && toolJson.error.trim().length > 0);
+  const memoryResults = Array.isArray(toolJson?.results)
+    ? (toolJson.results as Array<Record<string, unknown>>)
+    : [];
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const allUserTexts = extractUserTurnTexts(input);
@@ -738,9 +756,9 @@ async function buildResponsesPayload(
       completedToolName === "tool_search" &&
       !toolOutput.includes("FAKE_PLUGIN_OK") &&
       toolSearchOutputHasCandidate(parseToolOutputJson(toolOutput), targetTool) &&
-      hasDeclaredTool(body, "tool_call")
+      hasDeclaredTool(body, "dispatch_action")
     ) {
-      return buildToolCallEventsWithArgs("tool_call", { id: targetTool, args: plannedArgs });
+      return buildToolCallEventsWithArgs("dispatch_action", { id: targetTool, args: plannedArgs });
     }
     if (
       !hasCompletedToolOutput &&
@@ -857,7 +875,7 @@ async function buildResponsesPayload(
   if (privateWorker) {
     const childSessionKey = resolveQaChildSessionKey(input, body);
     if (privateWorker === "first" && childSessionKey) {
-      await options.waitForTerminalRequesterSettled?.("private", childSessionKey);
+      await options.waitForTerminalRequesterSettled("private", childSessionKey);
     }
     return buildAssistantEvents(
       privateWorker === "first"
@@ -911,11 +929,7 @@ async function buildResponsesPayload(
   }
   if (terminalCompletionCase && terminalTurn?.kind === "completion") {
     const visibleRepresentation =
-      terminalCompletionCase === "silent"
-        ? QA_SUBAGENT_TERMINAL_MARKERS.silent
-        : terminalCompletionCase === "empty"
-          ? QA_SUBAGENT_TERMINAL_MARKERS.empty
-          : undefined;
+      terminalCompletionCase === "silent" ? QA_SUBAGENT_TERMINAL_MARKERS.silent : undefined;
     if (visibleRepresentation) {
       if (completedToolName === "message") {
         return buildAssistantEvents("");
@@ -937,15 +951,14 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents(visibleRepresentation);
     }
-    // The direct delivery fallback owns visible, restart, and sanitized fallback
-    // results. Use explicit silence so generic empty-response recovery cannot
-    // replay the historical spawn before that fallback runs.
-    return buildAssistantEvents("NO_REPLY");
+    // Empty output exercises direct fallback. Exact NO_REPLY is intentional
+    // silence and must not be used as a missing-answer fixture.
+    return buildAssistantEvents("");
   }
   const terminalWorkerCase = terminalTurn?.kind === "worker" ? terminalTurn.caseName : undefined;
   if (terminalWorkerCase) {
     const childSessionKey = resolveQaChildSessionKey(input, body);
-    if (options.waitForTerminalRequesterSettled && childSessionKey) {
+    if (childSessionKey) {
       await options.waitForTerminalRequesterSettled(terminalWorkerCase, childSessionKey);
     }
   }
@@ -979,7 +992,11 @@ async function buildResponsesPayload(
       ].join("\n"),
     );
   }
-  if (terminalWorkerCase === "visible" || terminalWorkerCase === "restart") {
+  if (
+    terminalWorkerCase === "visible" ||
+    terminalWorkerCase === "restart" ||
+    terminalWorkerCase === "race"
+  ) {
     return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS[terminalWorkerCase]);
   }
   if (terminalCompletionCase && terminalTurn?.kind === "kickoff") {
@@ -1568,10 +1585,7 @@ async function buildResponsesPayload(
         maxResults: 3,
       });
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const first = results[0];
+    const first = memoryResults[0];
     if (typeof first?.path === "string") {
       return buildToolCallEventsWithArgs("memory_get", buildMemoryGetArgs(first));
     }
@@ -1609,10 +1623,7 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents("NONE");
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const first = results[0];
+    const first = memoryResults[0];
     if (typeof first?.path === "string" && hasDeclaredTool(body, "memory_get")) {
       return buildToolCallEventsWithArgs("memory_get", buildMemoryGetArgs(first));
     }
@@ -1635,41 +1646,19 @@ async function buildResponsesPayload(
     if (memoryToolUnavailable) {
       return buildAssistantEvents("NONE");
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const preferredSessionResult = results.find((result) => {
-      const resultPath = typeof result.path === "string" ? result.path : undefined;
-      if (result.source !== "sessions" && !resultPath?.startsWith("sessions/")) {
-        return false;
-      }
-      const memoryText =
-        typeof result.snippet === "string"
-          ? result.snippet
-          : typeof result.text === "string"
-            ? result.text
-            : "";
-      return extractOrbitCode(memoryText) !== null;
-    });
-    const sessionMemoryText =
-      typeof preferredSessionResult?.snippet === "string"
-        ? preferredSessionResult.snippet
-        : typeof preferredSessionResult?.text === "string"
-          ? preferredSessionResult.text
-          : "";
+    const preferredSessionResult = memoryResults.find(
+      (result) =>
+        isSessionMemoryResult(result) && extractOrbitCode(memoryResultText(result)) !== null,
+    );
     const retrievedOrbitCode =
-      extractOrbitCode(sessionMemoryText) ??
+      extractOrbitCode(memoryResultText(preferredSessionResult)) ??
       (typeof toolJson?.text === "string" ? extractOrbitCode(toolJson.text) : null);
     if (retrievedOrbitCode) {
       return buildAssistantEvents(
         `Protocol note: I checked memory and the current Project Nebula codename is ${retrievedOrbitCode}.`,
       );
     }
-    const first =
-      results.find((result) => {
-        const resultPath = typeof result.path === "string" ? result.path : undefined;
-        return result.source === "sessions" || resultPath?.startsWith("sessions/");
-      }) ?? results[0];
+    const first = memoryResults.find(isSessionMemoryResult) ?? memoryResults[0];
     if (
       typeof first?.path === "string" &&
       (typeof first.startLine === "number" || typeof first.endLine === "number")
@@ -2016,7 +2005,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     params?.repeatedRequestStalledResponsePauseMs ?? QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS;
   const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
   const servedCompactionSummaryFaultMarkers = new Set<string>();
-  const scenarioStateFor = createQaMockScenarioStateStore();
+  const scenarioStates = new Map<string, MockScenarioState>();
   const requestLog = createMockOpenAiRequestLog();
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
@@ -2046,7 +2035,20 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     const prompt = extractLastUserText(input);
     const allInputText = extractAllRequestTexts(input, body);
     const sessionId = sessionIdentity.resolve(request, normalized);
-    const scenarioState = scenarioStateFor(sessionId);
+    // Transport identity survives prompt edits, provider switches, and cache boundaries.
+    const scenarioState = scenarioStates.get(sessionId ?? "") ?? {
+      anthropicThinkingErrorScenarioKeys: new Set<string>(),
+      compactionOverflowInjected: false,
+      compactionRetryActive: false,
+      subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
+      subagentFanoutPhase: 0,
+      subagentHandoffSpawned: false,
+      repeatedRequestRecoveryAttempts: 0,
+      stalledTurnRecoveryAttempts: 0,
+      toolLoopReadAttempts: 0,
+      rateLimitAfterToolInjected: false,
+    };
+    scenarioStates.set(sessionId ?? "", scenarioState);
     const compactionSummaryFaultMode = resolveCompactionSummaryFaultMode({
       allInputText,
       requestKind,
@@ -2145,7 +2147,6 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     if (request.route === "anthropic-messages") {
       events = adaptAnthropicToolCallIds(events);
     }
-    const plannedToolIdentity = extractPlannedToolIdentity(events);
     const plannedTool = extractScenarioPlannedTool(events);
     const terminalRequesterCase =
       subagentTurn?.kind === "kickoff" ? subagentTurn.caseName : undefined;
@@ -2169,24 +2170,19 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         : undefined;
     const failure =
       injectedFailure ??
-      (QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input)
-        ? {
-            status: 503,
-            type: "server_error",
-            message: "Service Unavailable",
-            retryAfterSeconds: 120,
-          }
-        : undefined);
+      resolveAfterToolHttpFailure(allInputText, hasToolOutput(input), scenarioState);
     const recorded = requestLog.record({
       ...requestSnapshotBase,
       outcome:
         failure || events.some((event) => event.type === "response.failed") ? "error" : "success",
       ...(events.some((event) => event.type === "response.failed")
         ? { errorCode: "response_failed_no_details" }
-        : {}),
-      plannedToolCallId: plannedToolIdentity.callId,
-      ...(request.route === "responses" && plannedToolIdentity.itemId
-        ? { plannedToolItemId: plannedToolIdentity.itemId }
+        : failure?.code
+          ? { errorCode: failure.code }
+          : {}),
+      plannedToolCallId: plannedTool.callId,
+      ...(request.route === "responses" && plannedTool.itemId
+        ? { plannedToolItemId: plannedTool.itemId }
         : {}),
       plannedToolName: plannedTool.name,
       ...(plannedTool.wireName && plannedTool.wireName !== plannedTool.name
@@ -2235,12 +2231,12 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       // Stall one request; later failures let the normal retry budget settle the turn.
       ...(repeatedRequestRecovery &&
       scenarioState.repeatedRequestRecoveryAttempts <= QA_REPEATED_REQUEST_STALL_ATTEMPT
-        ? {
-            responsePauseMs:
-              scenarioState.repeatedRequestRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
-                ? repeatedRequestStalledResponsePauseMs
-                : repeatedRequestResponsePauseMs,
-          }
+        ? scenarioState.repeatedRequestRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
+          ? {
+              responsePauseMs: repeatedRequestStalledResponsePauseMs,
+              responseKeepaliveMs: QA_REPEATED_REQUEST_STALLED_KEEPALIVE_MS,
+            }
+          : { responsePauseMs: repeatedRequestResponsePauseMs }
         : {}),
       ...(stalledTurnAttempt
         ? {
@@ -2249,6 +2245,11 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
                 ? QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS
                 : QA_STALLED_TURN_RESPONSE_PAUSE_MS,
           }
+        : {}),
+      // Hold the silent requester completion so a queued follow-up turn is
+      // admitted behind it before direct fallback mirrors the child result.
+      ...(subagentTurn?.kind === "completion" && subagentTurn.caseName === "race"
+        ? { responsePauseMs: 5_000 }
         : {}),
     };
   };

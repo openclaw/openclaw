@@ -1,10 +1,13 @@
 /** Projects effective configured model refs, aliases, and role tags for one agent. */
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentConfig } from "./agent-scope-config.js";
+import { listAgentEntriesWithSource, resolveAgentConfig } from "./agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { type ModelManifestNormalizationContext, modelKey } from "./model-ref-shared.js";
 import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
@@ -24,6 +27,64 @@ type ConfiguredModelEntry = {
   aliasDisabled: boolean;
   pickerRuntimes?: string[];
 };
+
+/** Resolve authored refs once at discovery; providers own server membership and aliases. */
+export function collectConfiguredCatalogModels(cfg: OpenClawConfig) {
+  const models = new Map<string, { provider: string; modelId: string; baseUrl?: string }>();
+  for (const [providerId, providerConfig] of Object.entries(cfg.models?.providers ?? {})) {
+    const provider = normalizeProviderId(providerId);
+    for (const model of providerConfig.models ?? []) {
+      models.set(modelKey(provider, model.id), {
+        provider,
+        modelId: model.id,
+        baseUrl: model.baseUrl ?? providerConfig.baseUrl,
+      });
+    }
+  }
+  const agents = listAgentEntriesWithSource(cfg).map(({ entry, source }) => ({
+    agentId: entry.id,
+    prefix:
+      source.kind === "entries" ? `agents.entries.${source.key}.` : `agents.list.${source.index}.`,
+  }));
+  const aliases = new Map<string | undefined, ModelAliasIndex>();
+  for (const { path, value, kind } of collectConfiguredModelRefs(cfg)) {
+    if (value.endsWith("/*")) {
+      continue;
+    }
+    const agentId = agents.find(({ prefix }) => path.startsWith(prefix))?.agentId;
+    const params = {
+      cfg,
+      agentId,
+      defaultProvider: DEFAULT_PROVIDER,
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    };
+    let aliasIndex = aliases.get(agentId);
+    if (!aliasIndex) {
+      aliasIndex = buildModelAliasIndex(params);
+      aliases.set(agentId, aliasIndex);
+    }
+    const literal = kind === "literal" ? parseModelCatalogRef(value) : null;
+    const ref = literal
+      ? { provider: literal.provider, model: literal.modelId }
+      : resolveModelRefFromString({
+          ...params,
+          raw: value,
+          defaultProvider:
+            inferUniqueProviderFromConfiguredModels({ ...params, model: value }) ??
+            DEFAULT_PROVIDER,
+          ...(kind === "selector" ? { aliasIndex } : {}),
+        })?.ref;
+    if (ref && !models.has(modelKey(ref.provider, ref.model))) {
+      models.set(modelKey(ref.provider, ref.model), {
+        provider: ref.provider,
+        modelId: ref.model,
+        baseUrl: cfg.models?.providers?.[ref.provider]?.baseUrl,
+      });
+    }
+  }
+  return [...models.values()];
+}
 
 export function resolveConfiguredModelEntries(
   params: {
@@ -60,29 +121,25 @@ export function resolveConfiguredModelEntries(
     const canonicalRef = params.canonicalizeRef?.(ref) ?? ref;
     const key = modelKey(canonicalRef.provider, canonicalRef.model);
     const originalKey = modelKey(ref.provider, ref.model);
-    const existing = entriesByKey.get(key);
-    const aliases = [
-      ...(existing?.aliases ?? []),
-      ...(aliasIndex.byKey.get(key) ?? []),
-      ...(originalKey === key ? [] : (aliasIndex.byKey.get(originalKey) ?? [])),
-    ];
-    const aliasDisabled =
-      existing?.aliasDisabled === true ||
-      aliasIndex.disabledKeys?.has(key) === true ||
-      aliasIndex.disabledKeys?.has(originalKey) === true;
-    if (existing) {
-      existing.tags.add(tag);
-      existing.aliases = [...new Set(aliases)];
-      existing.aliasDisabled = aliasDisabled;
-      return existing;
-    }
-    const entry: ConfiguredModelEntry = {
+    const entry: ConfiguredModelEntry = entriesByKey.get(key) ?? {
       key,
       ref: canonicalRef,
-      tags: new Set([tag]),
-      aliases: [...new Set(aliases)],
-      aliasDisabled,
+      tags: new Set<string>(),
+      aliases: [],
+      aliasDisabled: false,
     };
+    entry.tags.add(tag);
+    entry.aliases = [
+      ...new Set([
+        ...entry.aliases,
+        ...(aliasIndex.byKey.get(key) ?? []),
+        ...(originalKey === key ? [] : (aliasIndex.byKey.get(originalKey) ?? [])),
+      ]),
+    ];
+    entry.aliasDisabled =
+      entry.aliasDisabled ||
+      aliasIndex.disabledKeys?.has(key) === true ||
+      aliasIndex.disabledKeys?.has(originalKey) === true;
     entriesByKey.set(key, entry);
     return entry;
   };

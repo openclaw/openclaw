@@ -27,12 +27,25 @@ import { installGatewayTestHooks, startServer } from "./test-helpers.js";
 installGatewayTestHooks({ scope: "suite" });
 
 const gatewayVersion = resolveRuntimeServiceVersion(process.env);
+const pairingScopes = { callerScopes: ["operator.pairing", "operator.write"] };
+const nodePlatform = { platform: "macos", deviceFamily: "Mac" };
+const stopClient = (client: Awaited<ReturnType<typeof connectGatewayClient>>) =>
+  client.stopAndWait({ timeoutMs: 2_000 });
 
 describe("node host version mismatch guard", () => {
   let port: number;
   let server: Awaited<ReturnType<typeof startServer>>["server"];
   let localIdentity: DeviceIdentity;
   let instanceId: string;
+
+  async function pairSurface(identity: DeviceIdentity, commands: string[] = []) {
+    const { request } = await requestNodePairing({
+      nodeId: identity.deviceId,
+      ...nodePlatform,
+      commands,
+    });
+    return approveNodePairing(request.requestId, pairingScopes);
+  }
 
   async function pairNode(identity: DeviceIdentity) {
     const request = await requestDevicePairing({
@@ -42,20 +55,11 @@ describe("node host version mismatch guard", () => {
       scopes: [],
       clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
       clientMode: GATEWAY_CLIENT_MODES.NODE,
-      platform: "macos",
-      deviceFamily: "Mac",
+      ...nodePlatform,
     });
     const approved = await approveDevicePairing(request.request.requestId, { callerScopes: [] });
     expect(approved?.status).toBe("approved");
-    const surface = await requestNodePairing({
-      nodeId: identity.deviceId,
-      platform: "macos",
-      deviceFamily: "Mac",
-      commands: [],
-    });
-    const node = await approveNodePairing(surface.request.requestId, {
-      callerScopes: ["operator.pairing", "operator.write"],
-    });
+    const node = await pairSurface(identity);
     expect(node && "node" in node).toBe(true);
   }
 
@@ -68,14 +72,19 @@ describe("node host version mismatch guard", () => {
       clientDisplayName: "test-node",
       clientVersion: gatewayVersion,
       instanceId,
-      platform: "macos",
-      deviceFamily: "Mac",
+      ...nodePlatform,
       mode: GATEWAY_CLIENT_MODES.NODE,
       scopes: [],
       commands: [],
       deviceIdentity: localIdentity,
       ...overrides,
     });
+  }
+
+  async function pendingNode() {
+    return (await listNodePairing()).pending.find(
+      (entry) => entry.nodeId === localIdentity.deviceId,
+    );
   }
 
   beforeAll(async () => {
@@ -110,7 +119,7 @@ describe("node host version mismatch guard", () => {
         try {
           expect(helloProtocol).toBe(PROTOCOL_VERSION);
         } finally {
-          await client.stopAndWait({ timeoutMs: 2_000 });
+          await stopClient(client);
         }
       }),
   );
@@ -126,66 +135,35 @@ describe("node host version mismatch guard", () => {
       expect(identity.deviceId).not.toBe(localIdentity.deviceId);
       await pairNode(identity);
       clients.push(await connectNode());
-      clients.push(await connectNode({ deviceIdentity: identity }));
+      clients.push(await connectNode({ deviceIdentity: identity, clientVersion: "2020.1.1" }));
       const operator = await connectGatewayClient({
         url: `ws://127.0.0.1:${port}`,
         token: "secret",
         scopes: ["operator.read"],
       });
       clients.push(operator);
+      const localNode = {
+        nodeId: localIdentity.deviceId,
+        gatewayLocal: true,
+        paired: true,
+        connected: true,
+      };
       const list = await operator.request<{ nodes: NodeListNode[] }>("node.list", {});
       expect(list.nodes.filter((node) => node.gatewayLocal)).toEqual([
-        expect.objectContaining({
-          nodeId: localIdentity.deviceId,
-          gatewayLocal: true,
-          paired: true,
-          connected: true,
-        }),
+        expect.objectContaining(localNode),
       ]);
       const remote = list.nodes.find((node) => node.nodeId === identity.deviceId);
       expect(remote).toMatchObject({ paired: true, connected: true, displayName: "test-node" });
       expect(remote).not.toHaveProperty("gatewayLocal");
       await expect(
         operator.request("node.describe", { nodeId: localIdentity.deviceId }),
-      ).resolves.toMatchObject({
-        nodeId: localIdentity.deviceId,
-        gatewayLocal: true,
-        paired: true,
-        connected: true,
-      });
+      ).resolves.toMatchObject(localNode);
       const described = await operator.request("node.describe", { nodeId: identity.deviceId });
       expect(described).toMatchObject({ nodeId: identity.deviceId, paired: true, connected: true });
       expect(described).not.toHaveProperty("gatewayLocal");
     } finally {
       try {
-        await Promise.all(clients.map((client) => client.stopAndWait({ timeoutMs: 2_000 })));
-      } finally {
-        await independent.cleanup();
-      }
-    }
-  });
-
-  test("independently paired stale node connects with the same-install instanceId", async () => {
-    const independent = await createOpenClawTestState({
-      label: "node-independent-stale",
-      applyEnv: false,
-    });
-    let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-    try {
-      const identity = loadOrCreateDeviceIdentity({ env: independent.env });
-      await pairNode(identity);
-      const onHelloOk = vi.fn();
-      client = await connectNode({
-        deviceIdentity: identity,
-        clientVersion: "2020.1.1",
-        onHelloOk,
-      });
-      expect(onHelloOk).toHaveBeenCalledWith(
-        expect.objectContaining({ protocol: PROTOCOL_VERSION }),
-      );
-    } finally {
-      try {
-        await client?.stopAndWait({ timeoutMs: 2_000 });
+        await Promise.all(clients.map(stopClient));
       } finally {
         await independent.cleanup();
       }
@@ -193,15 +171,7 @@ describe("node host version mismatch guard", () => {
   });
 
   test("rejected local reconnects preserve the active node pending reapproval", async () => {
-    const initial = await requestNodePairing({
-      nodeId: localIdentity.deviceId,
-      platform: "macos",
-      deviceFamily: "Mac",
-      commands: ["screen.snapshot"],
-    });
-    await approveNodePairing(initial.request.requestId, {
-      callerScopes: ["operator.pairing", "operator.write"],
-    });
+    await pairSurface(localIdentity, ["screen.snapshot"]);
 
     const upgraded = await connectNode({ commands: ["screen.snapshot", "system.run"] });
     try {
@@ -216,12 +186,10 @@ describe("node host version mismatch guard", () => {
           timeoutMs: 5_000,
           timeoutMessage: "expected rejected reconnect",
         }).then(async (client) => {
-          await client.stopAndWait({ timeoutMs: 2_000 });
+          await stopClient(client);
           return "connected";
         });
-      const pendingBefore = (await listNodePairing()).pending.find(
-        (entry) => entry.nodeId === localIdentity.deviceId,
-      );
+      const pendingBefore = await pendingNode();
       expect(pendingBefore?.commands).toEqual(["screen.snapshot", "system.run"]);
 
       await expect(connectReverted("2020.1.1", "test-node-reverted-stale")).rejects.toMatchObject({
@@ -235,11 +203,13 @@ describe("node host version mismatch guard", () => {
       });
       expect(onHelloOk).not.toHaveBeenCalled();
 
-      const pendingAfterVersionMismatch = (await listNodePairing()).pending.find(
-        (entry) => entry.nodeId === localIdentity.deviceId,
-      );
-      expect(pendingAfterVersionMismatch?.requestId).toBe(pendingBefore?.requestId);
-      expect(pendingAfterVersionMismatch?.commands).toEqual(["screen.snapshot", "system.run"]);
+      const expectPendingUnchanged = async () => {
+        expect(await pendingNode()).toMatchObject({
+          requestId: pendingBefore?.requestId,
+          commands: ["screen.snapshot", "system.run"],
+        });
+      };
+      await expectPendingUnchanged();
 
       const originalSend = Reflect.get(WebSocket.prototype, "send");
       let failNextHelloOk = true;
@@ -260,19 +230,17 @@ describe("node host version mismatch guard", () => {
       try {
         await expect(
           connectReverted(gatewayVersion, "test-node-reverted-hello-failure"),
-        ).rejects.toThrow(/gateway closed during connect/i);
+        ).rejects.toThrow(
+          /gateway closed(?: during connect)? \(1011\): gateway hello delivery failed/i,
+        );
         expect(failNextHelloOk).toBe(false);
       } finally {
         sendSpy.mockRestore();
       }
 
-      const pendingAfterHelloFailure = (await listNodePairing()).pending.find(
-        (entry) => entry.nodeId === localIdentity.deviceId,
-      );
-      expect(pendingAfterHelloFailure?.requestId).toBe(pendingBefore?.requestId);
-      expect(pendingAfterHelloFailure?.commands).toEqual(["screen.snapshot", "system.run"]);
+      await expectPendingUnchanged();
     } finally {
-      await upgraded.stopAndWait({ timeoutMs: 2_000 });
+      await stopClient(upgraded);
     }
   });
 });

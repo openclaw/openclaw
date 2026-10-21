@@ -72,7 +72,8 @@ export async function waitForUpdateCandidateReadiness(
   let lastProgress: { milestone: string; completedAt: number } | undefined;
   let deadlineFailure: Error | undefined;
   let warned = false;
-  let warningPending = Promise.resolve();
+  // No warning means no async work to fence; each check may snapshot shared state.
+  let warningPending: Promise<void> | undefined;
   const recordProgress = (milestone: string, completedAt: number) => {
     if (milestones.has(milestone)) {
       return;
@@ -134,8 +135,9 @@ export async function waitForUpdateCandidateReadiness(
       throw new Error(params.getExitReason() ?? "The updated Gateway exited before it was ready");
     }
     if (Date.now() >= hardDeadline) {
-      throw new Error(
+      throw new DOMException(
         `Candidate still starting after ${(Date.now() - waitStarted) / 1_000} s; milestones reached: ${[...milestones].join(", ") || "none"}`,
+        "TimeoutError",
       );
     }
   };
@@ -154,16 +156,19 @@ export async function waitForUpdateCandidateReadiness(
         while (true) {
           assertRunning();
           refreshDeadline();
-          await warningPending;
-          assertRunning();
+          if (warningPending) {
+            await warningPending;
+            assertRunning();
+          }
           if (Date.now() >= workDeadline) {
             if (lastProgress && (candidatePending || !proxy)) {
-              throw new Error(
+              throw new DOMException(
                 `Candidate Gateway startup stalled for ${stallBudgetMs}ms after ${lastProgress.milestone}`,
+                "TimeoutError",
               );
             }
             if (!failure) {
-              throw new Error("Update validation deadline exceeded");
+              throw new DOMException("Update validation deadline exceeded", "TimeoutError");
             }
             params.capture(failure.message);
             probeFailure = failure;
@@ -195,8 +200,10 @@ export async function waitForUpdateCandidateReadiness(
           }
           assertRunning();
           refreshDeadline();
-          await warningPending;
-          assertRunning();
+          if (warningPending) {
+            await warningPending;
+            assertRunning();
+          }
           if (ready && Date.now() < workDeadline) {
             params.capture(
               `${endpoint}: ${endpoint === "startupz" ? "started" : "ready"} (${Date.now() - params.started}ms)`,
@@ -211,14 +218,14 @@ export async function waitForUpdateCandidateReadiness(
             const nextStep = "Check Gateway logs and proxy.loopbackMode; rerun openclaw update.";
             failure = {
               message: redactSupportString(
-                `Readiness probe ${url} failed: ${detail}${proxy ? ` (via proxy ${proxy.origin})` : ""}. ${nextStep}`,
+                `Readiness check ${url} failed: ${detail}${proxy ? ` (via proxy ${proxy.origin})` : ""}. ${nextStep}`,
                 params,
               ),
               fact: createUpdateFailureFact(
                 {
                   check: endpoint,
                   code: "candidate-readiness-probe-failed",
-                  message: `Readiness probe ${endpoint} failed: ${detail}. ${nextStep}`,
+                  message: `Readiness check ${endpoint} failed: ${detail}. ${nextStep}`,
                 },
                 params.env,
               ),

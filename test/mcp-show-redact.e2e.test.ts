@@ -1,18 +1,15 @@
-// E2E: ephemeral gateway must not leak MCP secrets via /mcp show replies.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { afterAll, describe, expect, it } from "vitest";
 import { REDACTED_SENTINEL } from "../src/config/redact-snapshot.js";
-import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import type { OpenClawConfig } from "../src/config/types.js";
 import { extractFirstTextBlock } from "../src/shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
+import { connectProofClient } from "./helpers/gateway-integration-fixtures.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
-
-const E2E_TIMEOUT_MS = 180_000;
-const CHAT_FINAL_TIMEOUT_MS = 45_000;
 
 const HEADER_SECRET = "Bearer e2e-live-mcp-header-secret-value";
 const ENV_SECRET = "e2e-live-mcp-env-secret-value";
@@ -20,6 +17,45 @@ const ARG_SECRET = "e2e-live-mcp-argv-secret-value";
 const ARG_INLINE_SECRET = "e2e-live-mcp-inline-argv-secret-value";
 const ARG_POSITIONAL_SECRET = "ghp_e2elivemcpargvtoken1234567890ABCD";
 const SERVER_NAME = "billing-server";
+const serverConnection = {
+  command: "uvx",
+  transport: "streamable-http",
+  url: "https://billing.example.com/mcp",
+} as const;
+
+const serverSecrets = (redacted = false) => ({
+  headers: { Authorization: redacted ? REDACTED_SENTINEL : HEADER_SECRET },
+  env: { BILLING_TOKEN: redacted ? REDACTED_SENTINEL : ENV_SECRET },
+});
+const serverArgs = (redacted = false) => [
+  "billing-mcp",
+  "--api-key",
+  redacted ? REDACTED_SENTINEL : ARG_SECRET,
+  `--token=${redacted ? REDACTED_SENTINEL : ARG_INLINE_SECRET}`,
+  redacted ? REDACTED_SENTINEL : ARG_POSITIONAL_SECRET,
+  "--region",
+  "us-east-1",
+];
+
+async function readServer(instance: OpenClawTestInstance) {
+  const config = JSON.parse(await fs.readFile(instance.configPath, "utf8")) as OpenClawConfig;
+  return config.mcp?.servers?.[SERVER_NAME];
+}
+
+function expectRedacted(text: string) {
+  expect(text).toContain(REDACTED_SENTINEL);
+  for (const secret of [
+    HEADER_SECRET,
+    ENV_SECRET,
+    ARG_SECRET,
+    ARG_INLINE_SECRET,
+    ARG_POSITIONAL_SECRET,
+    "e2e-live-mcp-header-secret-value",
+    "e2e-live-mcp-env-secret-value",
+  ]) {
+    expect(text).not.toContain(secret);
+  }
+}
 
 type ChatEventPayload = {
   runId?: string;
@@ -28,26 +64,18 @@ type ChatEventPayload = {
   errorMessage?: string;
 };
 
-function collectFinalText(payload: ChatEventPayload | undefined): string {
-  if (!payload) {
-    return "";
-  }
-  const fromMessage = extractFirstTextBlock(payload.message);
-  if (fromMessage) {
-    return fromMessage;
-  }
-  if (typeof payload.errorMessage === "string") {
-    return payload.errorMessage;
-  }
-  return JSON.stringify(payload);
+function collectFinalText(payload: ChatEventPayload): string {
+  return (
+    extractFirstTextBlock(payload.message) ||
+    (typeof payload.errorMessage === "string" ? payload.errorMessage : JSON.stringify(payload))
+  );
 }
 
 async function waitForChatFinal(
   events: Array<{ event?: string; payload?: unknown }>,
   runId: string,
-  timeoutMs = CHAT_FINAL_TIMEOUT_MS,
 ): Promise<ChatEventPayload> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
     for (const event of events) {
       if (event.event !== "chat" || !event.payload || typeof event.payload !== "object") {
@@ -63,11 +91,7 @@ async function waitForChatFinal(
     });
   }
   throw new Error(
-    `timed out waiting for chat final runId=${runId}; events=${JSON.stringify(
-      events.slice(-12),
-      null,
-      2,
-    )}`,
+    `timed out waiting for chat final runId=${runId}; events=${JSON.stringify(events.slice(-12))}`,
   );
 }
 
@@ -82,46 +106,24 @@ describe("mcp show redaction e2e", () => {
 
   it(
     "starts an ephemeral gateway and redacts MCP secrets from /mcp show chat replies",
-    { timeout: E2E_TIMEOUT_MS },
+    { timeout: 180_000 },
     async () => {
       const instance = await createOpenClawTestInstance({
         name: "mcp-show-redact",
-        env: {
-          OPENCLAW_TEST_FAST: "1",
-        },
+        env: { OPENCLAW_TEST_FAST: "1" },
         config: {
-          commands: {
-            text: true,
-            mcp: true,
-          },
+          commands: { text: true, mcp: true },
           mcp: {
             servers: {
               [SERVER_NAME]: {
-                command: "uvx",
-                args: [
-                  "billing-mcp",
-                  "--api-key",
-                  ARG_SECRET,
-                  `--token=${ARG_INLINE_SECRET}`,
-                  ARG_POSITIONAL_SECRET,
-                  "--region",
-                  "us-east-1",
-                ],
-                transport: "streamable-http",
-                url: "https://billing.example.com/mcp",
-                headers: {
-                  Authorization: HEADER_SECRET,
-                },
-                env: {
-                  BILLING_TOKEN: ENV_SECRET,
-                },
+                ...serverConnection,
+                args: serverArgs(),
+                ...serverSecrets(),
               },
               "local-tools": {
                 command: "uvx",
                 args: ["local-mcp"],
-                env: {
-                  TOOL_API_KEY: "second-env-secret-value",
-                },
+                env: { TOOL_API_KEY: "second-env-secret-value" },
               },
             },
           },
@@ -130,15 +132,10 @@ describe("mcp show redaction e2e", () => {
       instances.push(instance);
       await instance.startGateway();
 
-      const onDiskBefore = JSON.parse(await fs.readFile(instance.configPath, "utf8")) as {
-        mcp?: { servers?: Record<string, { headers?: Record<string, string> }> };
-      };
-      expect(onDiskBefore.mcp?.servers?.[SERVER_NAME]?.headers?.Authorization).toBe(HEADER_SECRET);
+      expect((await readServer(instance))?.headers?.Authorization).toBe(HEADER_SECRET);
 
       const events: Array<{ event?: string; payload?: unknown }> = [];
-      const client = await connectGatewayClient({
-        url: instance.url,
-        token: instance.gatewayToken,
+      const client = await connectProofClient(instance, {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
         role: "operator",
@@ -148,167 +145,65 @@ describe("mcp show redaction e2e", () => {
         },
       });
 
-      try {
-        const namedRunId = randomUUID();
+      async function chat(message: string) {
+        const runId = randomUUID();
         await client.request("chat.send", {
           sessionKey: "agent:main:main",
-          message: `/mcp show ${SERVER_NAME}`,
+          message,
           deliver: false,
-          idempotencyKey: namedRunId,
+          idempotencyKey: runId,
         });
-        const namedFinal = await waitForChatFinal(events, namedRunId);
-        const namedText = collectFinalText(namedFinal);
+        return collectFinalText(await waitForChatFinal(events, runId));
+      }
+
+      async function cliSet(payload: object) {
+        const result = await instance.cli(["mcp", "set", SERVER_NAME, JSON.stringify(payload)]);
+        expect(result.code).toBe(0);
+        expect(result.stdout + result.stderr).toContain(`Saved MCP server "${SERVER_NAME}"`);
+        return await readServer(instance);
+      }
+
+      try {
+        const namedText = await chat(`/mcp show ${SERVER_NAME}`);
 
         expect(namedText).toContain(`MCP server "${SERVER_NAME}"`);
         expect(namedText).toContain('"command": "uvx"');
-        expect(namedText).toContain(REDACTED_SENTINEL);
-        expect(namedText).not.toContain(HEADER_SECRET);
-        expect(namedText).not.toContain(ENV_SECRET);
-        expect(namedText).not.toContain(ARG_SECRET);
-        expect(namedText).not.toContain(ARG_INLINE_SECRET);
-        expect(namedText).not.toContain(ARG_POSITIONAL_SECRET);
+        expectRedacted(namedText);
         expect(namedText).toContain('"billing-mcp"');
         expect(namedText).toContain('"--api-key"');
         expect(namedText).toContain(`"--token=${REDACTED_SENTINEL}"`);
         expect(namedText).toContain('"--region"');
         expect(namedText).toContain('"us-east-1"');
-        expect(namedText).not.toContain("e2e-live-mcp-header-secret-value");
-        expect(namedText).not.toContain("e2e-live-mcp-env-secret-value");
-
-        const listRunId = randomUUID();
-        await client.request("chat.send", {
-          sessionKey: "agent:main:main",
-          message: "/mcp show",
-          deliver: false,
-          idempotencyKey: listRunId,
-        });
-        const listFinal = await waitForChatFinal(events, listRunId);
-        const listText = collectFinalText(listFinal);
+        const listText = await chat("/mcp show");
 
         expect(listText).toContain(`"${SERVER_NAME}"`);
         expect(listText).toContain('"local-tools"');
-        expect(listText).toContain(REDACTED_SENTINEL);
-        expect(listText).not.toContain(HEADER_SECRET);
-        expect(listText).not.toContain(ENV_SECRET);
-        expect(listText).not.toContain(ARG_SECRET);
-        expect(listText).not.toContain(ARG_INLINE_SECRET);
-        expect(listText).not.toContain(ARG_POSITIONAL_SECRET);
+        expectRedacted(listText);
         expect(listText).not.toContain("second-env-secret-value");
 
-        // CLI show → set can safely round-trip redacted argv because it preserves JSON arrays.
-        // The chat set below intentionally omits args to avoid chat body bracket normalization.
-        const cliArgSet = await instance.cli([
-          "mcp",
-          "set",
-          SERVER_NAME,
-          JSON.stringify({
-            command: "uvx",
-            args: [
-              "billing-mcp",
-              "--api-key",
-              REDACTED_SENTINEL,
-              `--token=${REDACTED_SENTINEL}`,
-              REDACTED_SENTINEL,
-              "--region",
-              "us-east-1",
-            ],
-            headers: { Authorization: REDACTED_SENTINEL },
-            env: { BILLING_TOKEN: REDACTED_SENTINEL },
-          }),
-        ]);
-        expect(cliArgSet.code).toBe(0);
-        expect(cliArgSet.stdout + cliArgSet.stderr).toContain(`Saved MCP server "${SERVER_NAME}"`);
-        const afterCliArgSet = JSON.parse(await fs.readFile(instance.configPath, "utf8")) as {
-          mcp?: {
-            servers?: Record<
-              string,
-              {
-                args?: string[];
-                headers?: Record<string, string>;
-                env?: Record<string, string>;
-              }
-            >;
-          };
-        };
-        const argvRestored = afterCliArgSet.mcp?.servers?.[SERVER_NAME];
-        expect(argvRestored?.args).toEqual([
-          "billing-mcp",
-          "--api-key",
-          ARG_SECRET,
-          `--token=${ARG_INLINE_SECRET}`,
-          ARG_POSITIONAL_SECRET,
-          "--region",
-          "us-east-1",
-        ]);
-        expect(argvRestored?.headers?.Authorization).toBe(HEADER_SECRET);
-        expect(argvRestored?.env?.BILLING_TOKEN).toBe(ENV_SECRET);
+        // CLI preserves JSON argv arrays; chat normalization requires the array-free payload below.
+        const argvRestored = await cliSet({
+          command: "uvx",
+          args: serverArgs(true),
+          ...serverSecrets(true),
+        });
+        expect(argvRestored).toMatchObject({ args: serverArgs(), ...serverSecrets() });
         expect(JSON.stringify(argvRestored)).not.toContain(REDACTED_SENTINEL);
 
-        // show → set with redacted secrets must restore live values, not write the sentinel.
-        // Keep the JSON free of array brackets so chat body normalization cannot mangle it.
         const setPayload = {
-          command: "uvx",
-          transport: "streamable-http",
-          url: "https://billing.example.com/mcp",
-          headers: {
-            Authorization: REDACTED_SENTINEL,
-          },
-          env: {
-            BILLING_TOKEN: REDACTED_SENTINEL,
-          },
+          ...serverConnection,
+          ...serverSecrets(true),
         };
-        const setRunId = randomUUID();
-        await client.request("chat.send", {
-          sessionKey: "agent:main:main",
-          message: `/mcp set ${SERVER_NAME}=${JSON.stringify(setPayload)}`,
-          deliver: false,
-          idempotencyKey: setRunId,
-        });
-        const setFinal = await waitForChatFinal(events, setRunId);
-        const setText = collectFinalText(setFinal);
+        const setText = await chat(`/mcp set ${SERVER_NAME}=${JSON.stringify(setPayload)}`);
         expect(setText).toContain(`MCP server "${SERVER_NAME}" saved`);
 
-        const onDiskAfter = JSON.parse(await fs.readFile(instance.configPath, "utf8")) as {
-          mcp?: {
-            servers?: Record<
-              string,
-              {
-                command?: string;
-                headers?: Record<string, string>;
-                env?: Record<string, string>;
-              }
-            >;
-          };
-        };
-        const saved = onDiskAfter.mcp?.servers?.[SERVER_NAME];
-        expect(saved?.command).toBe("uvx");
-        expect(saved?.headers?.Authorization).toBe(HEADER_SECRET);
-        expect(saved?.env?.BILLING_TOKEN).toBe(ENV_SECRET);
+        const saved = await readServer(instance);
+        expect(saved).toMatchObject({ command: "uvx", ...serverSecrets() });
         expect(JSON.stringify(saved)).not.toContain(REDACTED_SENTINEL);
 
-        // Same process, same config: CLI set with sentinel also restores (write path e2e).
-        const cliSet = await instance.cli([
-          "mcp",
-          "set",
-          SERVER_NAME,
-          JSON.stringify({
-            command: "uvx",
-            headers: { Authorization: REDACTED_SENTINEL },
-            env: { BILLING_TOKEN: REDACTED_SENTINEL },
-          }),
-        ]);
-        expect(cliSet.code).toBe(0);
-        expect(cliSet.stdout + cliSet.stderr).toContain(`Saved MCP server "${SERVER_NAME}"`);
-        const onDiskCli = JSON.parse(await fs.readFile(instance.configPath, "utf8")) as {
-          mcp?: {
-            servers?: Record<
-              string,
-              { headers?: Record<string, string>; env?: Record<string, string> }
-            >;
-          };
-        };
-        expect(onDiskCli.mcp?.servers?.[SERVER_NAME]?.headers?.Authorization).toBe(HEADER_SECRET);
-        expect(onDiskCli.mcp?.servers?.[SERVER_NAME]?.env?.BILLING_TOKEN).toBe(ENV_SECRET);
+        expect(await cliSet({ command: "uvx", ...serverSecrets(true) })).toMatchObject(
+          serverSecrets(),
+        );
       } finally {
         client.stop();
       }

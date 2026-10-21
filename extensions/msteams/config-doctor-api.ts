@@ -31,22 +31,34 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...streamingAliasMigration.legacyConfigRules,
 ];
 
-export function normalizeCompatibilityConfig({
+export function normalizeHistoricalWebhookConfig({
   cfg,
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const webhook = webhookMigration.normalizeCompatibilityConfig({ cfg });
   return {
-    ...streamingAliasMigration.normalizeChannelConfig({
-      cfg: webhook.config,
-      changes: webhook.changes,
-    }),
+    ...webhook,
     historicalWebhookAccountIds:
       cfg.channels?.msteams === undefined && !resolveMSTeamsCredentials()
         ? null
         : cfg.channels?.msteams?.enabled === false
           ? []
           : [undefined],
+  };
+}
+
+export function normalizeCompatibilityConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const webhook = normalizeHistoricalWebhookConfig({ cfg });
+  return {
+    ...streamingAliasMigration.normalizeChannelConfig({
+      cfg: webhook.config,
+      changes: webhook.changes,
+    }),
+    historicalWebhookAccountIds: webhook.historicalWebhookAccountIds,
   };
 }

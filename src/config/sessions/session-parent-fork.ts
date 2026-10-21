@@ -1,20 +1,13 @@
 import path from "node:path";
-import { isMainThread } from "node:worker_threads";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { retainSqliteWorkerErrorCode } from "../../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { getChildLogger } from "../../logging/logger.js";
-import {
-  isIncognitoSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
-import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-registry-listing.js";
-import {
-  captureOpenClawAgentDatabaseExecution,
-  supportsOpenClawAgentDatabaseExecution,
-} from "../../state/openclaw-agent-execution.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { forkCliSessionBindings } from "./cli-session-binding.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
@@ -34,36 +27,22 @@ import type {
   ParentForkEntryParams,
   ParentForkEntryPatch,
 } from "./session-parent-fork.types.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import { captureSessionStoreCandidateIdentities } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 type ForkStoreScope = { agentId?: string; sessionKey: string; storePath: string };
+type ForkOwner = Pick<
+  ReturnType<typeof captureForkWorker>,
+  "scope" | "database" | "assertCurrent" | "prepareEntry" | "readSource" | "restore" | "commit"
+>;
 type ForkDiscoveryOwner = Parameters<Parameters<typeof withSessionStoreTarget>[1]>[1];
-
-/** Native callbacks, incognito, and maintenance retain their existing owner. */
-export function supportsParentForkWorker(scope: ForkStoreScope): boolean {
-  if (!isMainThread || isIncognitoSessionKey(scope.sessionKey)) {
-    return false;
-  }
-  const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(scope.storePath);
-  return supportsOpenClawAgentDatabaseExecution({
-    agentId: normalizeAgentId(
-      scope.agentId ?? parseAgentSessionKey(scope.sessionKey)?.agentId ?? target.agentId,
-    ),
-    path: target.path,
-  });
-}
 
 function withForkWorkers<T>(
   scopes: { source: ForkStoreScope; target?: ForkStoreScope },
   guard: (() => void) | undefined,
-  run: (
-    source: ReturnType<typeof captureForkWorker>,
-    target?: ReturnType<typeof captureForkWorker>,
-  ) => Promise<T>,
+  run: (source: ForkOwner, target?: ForkOwner) => Promise<T>,
 ): Promise<T> {
   guard?.();
   const env = captureSessionTranscriptStorageEnvironment(process.env);
@@ -142,7 +121,7 @@ function withForkWorkers<T>(
           captured ?? observed,
         );
         owners.push(owner);
-        return settleForkOwners([owner], () => operation(owner));
+        return settleForkOwner(owner, () => operation(owner));
       },
       guard,
     );
@@ -184,42 +163,58 @@ function captureForkWorker(
   const database = { ...toDatabaseOptions(scope), path: scope.path };
   const execution = captureOpenClawAgentDatabaseExecution(
     database,
-    identity.key.startsWith("file:")
-      ? {
-          expectedIdentity: {
-            kind: "file",
-            physicalIdentity: identity.key.slice("file:".length),
-            nativeLocation: identity.canonicalPath,
-            birthtime: identity.birthtime,
-          },
-        }
-      : { expectedCreationIdentity: identity },
+    toAgentExecutionConstraints(identity),
   );
   const assertCurrent = () => {
     execution.assertCurrent();
     discovery.assertCurrent();
+  };
+  const read = <T>(consume: Parameters<typeof withSessionEntryWorker<T>>[3]) => {
+    return withSessionEntryWorker(
+      database,
+      undefined,
+      assertCurrent,
+      async (reader, source, context) => {
+        source.onRegistryChange = discovery.onRegistryChange;
+        await discovery.refreshBeforeDispatch(() => reader.assertCurrent());
+        const result = await consume(reader, source, context);
+        await discovery.revalidateTarget();
+        return result;
+      },
+      undefined,
+      execution,
+    );
   };
   return {
     scope,
     database,
     execution,
     assertCurrent,
-    read<T>(read: Parameters<typeof withSessionEntryWorker<T>>[3]) {
-      return withSessionEntryWorker(
-        database,
-        undefined,
+    prepareEntry: (input: ParentForkEntryParams) =>
+      read(async (reader, source) => {
+        await reader.prepare(source);
+        return reader.runExisting(source, (worker) =>
+          executeSessionForkOperation(worker, database.agentId, {
+            type: "session.parentFork.prepare",
+            input,
+          }),
+        );
+      }),
+    readSource: (input: { sessionId: string; forkFrom?: "last-completed" }) =>
+      read(async (reader, source) => {
+        await reader.prepare(source);
+        return reader.runExisting(source, (worker) =>
+          executeSessionForkOperation(worker, database.agentId, {
+            type: "session.parentFork.source",
+            input,
+          }),
+        );
+      }),
+    restore: (sessionId: string) =>
+      restoreSessionColdTranscript(
+        { ...scope, storePath: database.path, sessionId },
         assertCurrent,
-        async (reader, source, context) => {
-          source.onRegistryChange = discovery.onRegistryChange;
-          await discovery.refreshBeforeDispatch(() => reader.assertCurrent());
-          const result = await read(reader, source, context);
-          await discovery.revalidateTarget();
-          return result;
-        },
-        undefined,
-        execution,
-      );
-    },
+      ),
     commit(input: ParentForkCommit) {
       return runSessionEntryWorkerOperation<ParentForkCandidate, ParentForkCandidate["result"]>({
         database,
@@ -267,18 +262,16 @@ export async function forkParentEntryInWorker(
   const planned = structuredClone(serializable);
   const plannedPatch = patch ? structuredClone(patch) : undefined;
   return withForkWorkers(
-    { source: { agentId: params.agentId, sessionKey: "", storePath: params.storePath } },
+    {
+      source: {
+        agentId: params.agentId,
+        sessionKey: "",
+        storePath: params.storePath,
+      },
+    },
     params.commitGuard,
     async (owner) => {
-      const prepared = await owner.read(async (execution, source) => {
-        await execution.prepare(source);
-        return execution.runExisting(source, (worker) =>
-          executeSessionForkOperation(worker, owner.database.agentId, {
-            type: "session.parentFork.prepare",
-            input: planned,
-          }),
-        );
-      });
+      const prepared = await owner.prepareEntry(planned);
       owner.assertCurrent();
       if (!prepared?.parentEntry?.sessionId) {
         return { status: "missing-parent" as const };
@@ -287,30 +280,21 @@ export async function forkParentEntryInWorker(
         return { status: "missing-entry" as const };
       }
       const skipExisting = plannedPatch?.skipExisting && prepared.base.sessionId?.trim();
-      let cliSessionBindings;
+      let cliForkProviders: string[] | undefined;
       if (!skipExisting) {
-        await restoreSessionColdTranscript(
-          {
-            ...owner.scope,
-            storePath: owner.database.path,
-            sessionId: prepared.parentEntry.sessionId,
-          },
-          owner.assertCurrent,
-        );
+        await owner.restore(prepared.parentEntry.sessionId);
         const { cliBackendSupportsSessionFork } = await import("../../agents/cli-backends.js");
         owner.assertCurrent();
-        cliSessionBindings = forkCliSessionBindings(
-          prepared.parentEntry,
-          cliBackendSupportsSessionFork,
+        cliForkProviders = Object.keys(
+          forkCliSessionBindings(prepared.parentEntry, cliBackendSupportsSessionFork) ?? {},
         );
       }
       const result = await owner.commit({
         kind: "entry",
         agentId: owner.scope.agentId,
         params: planned,
-        prepared,
         patch: plannedPatch,
-        cliSessionBindings,
+        cliForkProviders,
       });
       if (result.status === "created" || result.status === "too-large") {
         throw new Error("Parent entry fork returned a transcript-only result");
@@ -344,24 +328,12 @@ export async function forkParentTranscriptInWorker(params: ForkSessionFromParent
       if (!planned.parentEntry.sessionId) {
         return { status: "missing-parent" as const };
       }
-      await restoreSessionColdTranscript(
-        {
-          ...source.scope,
-          storePath: source.database.path,
-          sessionId: planned.parentEntry.sessionId,
-        },
-        source.assertCurrent,
-      );
+      await source.restore(planned.parentEntry.sessionId);
       source.assertCurrent();
       const snapshot = crossDatabase
-        ? await source.read(async (execution, authority) => {
-            await execution.prepare(authority);
-            return execution.runExisting(authority, (worker) =>
-              executeSessionForkOperation(worker, source.database.agentId, {
-                type: "session.parentFork.source",
-                input: { sessionId: planned.parentEntry.sessionId, forkFrom: planned.forkFrom },
-              }),
-            );
+        ? await source.readSource({
+            sessionId: planned.parentEntry.sessionId,
+            forkFrom: planned.forkFrom,
           })
         : undefined;
       source.assertCurrent();
@@ -388,34 +360,28 @@ export async function forkParentTranscriptInWorker(params: ForkSessionFromParent
   );
 }
 
-async function settleForkOwners<T>(
-  owners: Array<ReturnType<typeof captureForkWorker>>,
+async function settleForkOwner<T>(
+  owner: ReturnType<typeof captureForkWorker>,
   run: () => Promise<T>,
 ): Promise<T> {
   const outcome = await run().then(
     (value) => ({ ok: true as const, value }),
     (error: unknown) => ({ ok: false as const, error }),
   );
-  const failures: unknown[] = outcome.ok ? [] : [outcome.error];
-  for (const owner of owners) {
-    try {
-      await owner.execution.release();
-    } catch (error) {
-      failures.push(error);
+  try {
+    await owner.execution.release();
+  } catch (error) {
+    if (outcome.ok) {
+      throw error;
     }
-  }
-  if (failures.length > 1) {
     throw retainSqliteWorkerErrorCode(
       createSqliteLifecycleAggregateError(
-        failures,
+        [outcome.error, error],
         "Session fork and executor cleanup failed",
-        failures[0],
+        outcome.error,
       ),
-      failures[0],
+      outcome.error,
     );
-  }
-  if (failures.length) {
-    throw failures[0];
   }
   if (!outcome.ok) {
     throw outcome.error;

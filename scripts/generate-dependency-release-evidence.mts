@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Generates release dependency evidence artifacts and summaries.
 import { execFileSync } from "node:child_process";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -10,7 +9,7 @@ import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { REPORT_CLI_PARSE_OPTIONS } from "./lib/report-cli-helpers.mts";
 import type { generateNpmPackageLocksReport } from "./npm-package-locks-report.mts";
 
-export const DEPENDENCY_EVIDENCE_REPORTS = [
+const DEPENDENCY_EVIDENCE_REPORTS = [
   {
     name: "Dependency advisory vulnerability gate",
     command: "pnpm deps:vuln:gate",
@@ -178,7 +177,7 @@ export function resolvePreviousReleaseTag({
   );
 }
 
-export function createDependencyEvidenceManifest({
+function createDependencyEvidenceManifest({
   generatedAt = new Date().toISOString(),
   releaseTag,
   releaseRef,
@@ -209,7 +208,7 @@ async function readJson<T>(filePath: string): Promise<T> {
   return JSON.parse(await readFile(filePath, "utf8")) as T;
 }
 
-export async function collectDependencyEvidenceSummaryCounts(evidenceDir: string) {
+async function collectDependencyEvidenceSummaryCounts(evidenceDir: string) {
   const [vulnerability, transitiveRisk, ownershipSurface, dependencyChanges, npmLocks] =
     await Promise.all([
       readJson<Awaited<ReturnType<typeof runDependencyVulnerabilityGate>>>(
@@ -310,7 +309,7 @@ function renderNonBlockingAdvisories(heading: string, { advisories }: EvidenceSu
   ];
 }
 
-export function renderDependencyEvidenceSummary({
+function renderDependencyEvidenceSummary({
   releaseTag,
   releaseSha,
   baseRef,
@@ -343,7 +342,7 @@ export function renderDependencyEvidenceSummary({
   ].join("\n")}\n`;
 }
 
-export function renderDependencyEvidenceStepSummary({
+function renderDependencyEvidenceStepSummary({
   evidenceArtifactName,
   baseRef,
   counts,

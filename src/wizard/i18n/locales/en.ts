@@ -33,7 +33,7 @@ export const en = {
       compatibilityOpenAiResponses: "OpenAI Responses-compatible",
       compatibilityOpenAiResponsesHint: "Uses /responses",
       compatibilityUnknown: "Unknown (detect automatically)",
-      compatibilityUnknownHint: "Probes OpenAI Chat, OpenAI Responses, then Anthropic endpoints",
+      compatibilityUnknownHint: "Checks OpenAI Chat, OpenAI Responses, then Anthropic endpoints",
       detectionFailed: "Could not detect endpoint type.",
       detectionFailedNote:
         "This endpoint did not respond to OpenAI Chat, OpenAI Responses, or Anthropic style requests.",
@@ -51,8 +51,15 @@ export const en = {
       modelAlias: "Model alias (optional)",
       modelAliasPlaceholder: "e.g. local, ollama",
       modelId: "Model ID",
+      modelIdManual: "Enter a model ID manually",
+      modelDiscoveryUnavailable:
+        "Could not discover models from this endpoint. Check the base URL and credentials, or enter a model ID manually.",
       modelIdPlaceholder: "e.g. llama3, claude-3-7-sonnet",
       modelIdRequired: "Model ID is required",
+      noAuthConfirm:
+        "No API key entered. Use no-auth mode for this endpoint (requests send no Authorization header)?",
+      noAuthCompatKeyRequired:
+        "No-auth mode supports OpenAI Chat Completions endpoints only. Enter an API key (a placeholder works if the server ignores keys).",
       retryChoice: "What would you like to change?",
       verifying: "Verifying...",
       verificationFailedError: "Verification failed: {error}",
@@ -200,6 +207,8 @@ export const en = {
       installedPlugin: "Installed {plugin} plugin",
       installingPlugin: "Installing {plugin} plugin…",
       installTitle: "Plugin install",
+      invalidInteger: "Enter a JSON integer.",
+      invalidNumber: "Enter a valid JSON number.",
       noRemoteInstallSource:
         "No remote install source is available for {plugin}. Returning to selection.",
       officialInstall: "Install optional plugins",
@@ -466,7 +475,7 @@ export const en = {
       riskNotAccepted: "risk not accepted",
       searchTitle: "Search",
       setupMode: "Setup mode",
-      secretRefProbeFailed: "Could not resolve {field} SecretRef for setup probe.",
+      secretRefProbeFailed: "Could not resolve {field} SecretRef for setup check.",
       skillsTitle: "Skills",
       skipChannels: "Skipping channel setup.",
       skipSearch: "Skipping search setup.",
@@ -867,8 +876,7 @@ export const en = {
       delegatedAuthTitle: "MS Teams delegated auth",
       delegatedOAuthProgress: "MSTeams Delegated OAuth",
       enterAtLeastOneUser: "Enter at least one user.",
-      envPrompt:
-        "MSTEAMS_APP_ID + MSTEAMS_APP_PASSWORD + MSTEAMS_TENANT_ID detected. Use env vars?",
+      envPrompt: "Microsoft Teams environment credentials detected. Use env vars?",
       examples: "Examples:",
       graphLookupUnavailable: "Graph lookup unavailable. Use user IDs only.",
       helpAzureBot: "1) Azure Bot registration -> get App ID + Tenant ID",
@@ -1191,8 +1199,8 @@ export const en = {
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
       daemonRuntimeNodeHint: "Primary and recommended runtime for managed services.",
-      daemonRuntimeBun: "Bun 1.4+",
-      daemonRuntimeBunHint: "Requires Bun 1.4 or newer with WAL-reset-safe node:sqlite.",
+      daemonRuntimeBun: "Bun 1.4.3+",
+      daemonRuntimeBunHint: "Requires Bun 1.4.3 or newer with WAL-reset-safe node:sqlite.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',
@@ -1255,7 +1263,7 @@ export const en = {
       securityReminder:
         "Running agents on your computer is risky — harden your setup: https://docs.openclaw.ai/security",
       secretRefAuthFailed: "Could not resolve {field} SecretRef for setup auth.",
-      skipHealthNextTime: "Or skip this probe next time: {command}",
+      skipHealthNextTime: "Or skip this check next time: {command}",
       skipControlUi: "Skipping Control UI/TUI prompts.",
       startGatewayNow: "Start now: {command}",
       systemdInstallSkipped:

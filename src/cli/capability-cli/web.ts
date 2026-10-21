@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
@@ -70,12 +71,12 @@ export function registerWebCapabilityCommands(capability: Command): void {
         const query = String(opts.query);
         const provider = opts.provider as string | undefined;
         const limit = parseOptionalPositiveInteger(opts.limit, "--limit");
-        const { getRuntimeConfig } = await import("../../config/config.js");
+        const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         const { getCapabilityWebSearchCommandSecretTargets } =
           await import("../command-secret-targets.js");
         const { resolveLocalCapabilityRuntimeConfig } = await import("./shared.js");
         const { runWebSearch } = await import("../../web-search/runtime.js");
-        const rawConfig = getRuntimeConfig();
+        const rawConfig = await captureRuntimeConfigAsyncReader()();
         const scopedTargets = getCapabilityWebSearchCommandSecretTargets(rawConfig, {
           providerId: provider,
         });
@@ -108,12 +109,11 @@ export function registerWebCapabilityCommands(capability: Command): void {
         const url = String(opts.url);
         const provider = opts.provider as string | undefined;
         const format = opts.format as string | undefined;
-        const { getRuntimeConfig } = await import("../../config/config.js");
+        const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         const { getCapabilityWebFetchCommandSecretTargets } =
           await import("../command-secret-targets.js");
         const { resolveLocalCapabilityRuntimeConfig } = await import("./shared.js");
-        const { resolveWebFetchDefinition } = await import("../../web-fetch/runtime.js");
-        const rawConfig = getRuntimeConfig();
+        const rawConfig = await captureRuntimeConfigAsyncReader()();
         const scopedTargets = getCapabilityWebFetchCommandSecretTargets(rawConfig, {
           providerId: provider,
         });
@@ -122,12 +122,41 @@ export function registerWebCapabilityCommands(capability: Command): void {
           ...scopedTargets,
           config: rawConfig,
         });
+        const disabledMessage =
+          "web.fetch is disabled. Set tools.web.fetch.enabled=true to enable it.";
+        if (provider === undefined) {
+          const { createWebFetchTool } = await import("../../agents/tools/web-fetch.js");
+          const tool = createWebFetchTool({ config: cfg });
+          if (!tool) {
+            throw new Error(disabledMessage);
+          }
+          const { details: result } = await tool.execute("infer-web-fetch", {
+            url,
+            extractMode: format,
+          });
+          if (!isRecord(result)) {
+            throw new Error("web.fetch returned no structured result.");
+          }
+          const resultProvider = isRecord(result.externalContent)
+            ? result.externalContent.provider
+            : undefined;
+          return {
+            provider: typeof resultProvider === "string" ? resultProvider : "direct",
+            result,
+          };
+        }
+        // A provider flag pins execution, rather than selecting the tool's fallback.
+        const { resolveWebFetchDefinition } = await import("../../web-fetch/runtime.js");
         const resolved = resolveWebFetchDefinition({
           config: cfg,
           providerId: provider,
         });
         if (!resolved) {
-          throw new Error("web.fetch is disabled or no provider is available.");
+          throw new Error(
+            cfg.tools?.web?.fetch?.enabled === false
+              ? disabledMessage
+              : `web.fetch provider "${provider}" is not available; check it with \`openclaw infer web providers\`.`,
+          );
         }
         const result = await resolved.definition.execute({
           url,
@@ -141,17 +170,20 @@ export function registerWebCapabilityCommands(capability: Command): void {
     const { resolveAgentDir } = await import("../../agents/agent-scope.js");
     const { isWebFetchProviderConfigured, listWebFetchProviders } =
       await import("../../web-fetch/runtime.js");
-    const { isWebSearchProviderConfigured, listWebSearchProviders } =
+    const { isWebSearchProviderConfigured, listWebSearchProvidersAsync } =
       await import("../../web-search/runtime.js");
     const agentDir = resolveAgentDir(cfg, agentId);
+    const { ensureAuthProfileStoreWithoutExternalProfilesAsync } =
+      await import("../../agents/auth-profiles/store-runtime.js");
+    const authStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
     const selectedSearchProvider = normalizeLowercaseStringOrEmpty(
       cfg.tools?.web?.search?.provider,
     );
     const selectedFetchProvider = normalizeLowercaseStringOrEmpty(cfg.tools?.web?.fetch?.provider);
     return {
-      search: listWebSearchProviders({ config: cfg }).map((provider) => ({
+      search: (await listWebSearchProvidersAsync({ config: cfg })).map((provider) => ({
         available: true,
-        configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir }),
+        configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir, authStore }),
         selected: provider.id === selectedSearchProvider,
         id: provider.id,
         envVars: provider.envVars,

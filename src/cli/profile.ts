@@ -115,10 +115,7 @@ export function applyCliProfileEnv(params: {
     }) === path.join(inheritedProfileStateDir, "openclaw.json"),
   );
   const inheritedManagedServiceSelectors =
-    switchesInheritedProfile &&
-    isGatewayServiceEnv(env) &&
-    switchesInheritedProfileState &&
-    replacesInheritedProfileConfig;
+    isGatewayServiceEnv(env) && switchesInheritedProfileState && replacesInheritedProfileConfig;
 
   if (inheritedManagedServiceSelectors) {
     for (const key of GATEWAY_SERVICE_SELECTOR_ENV_KEYS) {
@@ -130,10 +127,9 @@ export function applyCliProfileEnv(params: {
   // Switch them together so an explicit profile cannot mutate the service's profile.
   env.OPENCLAW_PROFILE = profile;
 
-  const retainedStateDir = inheritedManagedServiceSelectors ? undefined : existingStateDir;
   const stateDir =
-    retainedStateDir && !switchesInheritedProfileState ? retainedStateDir : selectedProfileStateDir;
-  if (!retainedStateDir || switchesInheritedProfileState) {
+    existingStateDir && !switchesInheritedProfileState ? existingStateDir : selectedProfileStateDir;
+  if (!existingStateDir || switchesInheritedProfileState) {
     env.OPENCLAW_STATE_DIR = stateDir;
   }
 

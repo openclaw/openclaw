@@ -34,10 +34,7 @@ async function makeSessionStore(entries: Record<string, SessionEntry>) {
 function config(storePath: string, requireMention: boolean): OpenClawConfig {
   return {
     channels: {
-      whatsapp: {
-        groups: { "*": { requireMention } },
-        accounts: { Default: {}, work: {} },
-      },
+      whatsapp: { groups: { "*": { requireMention } }, accounts: { Default: {}, work: {} } },
     },
     session: { store: storePath },
   };
@@ -49,6 +46,20 @@ function readEntries(storePath: string) {
   );
 }
 
+function session(sessionId: string, updatedAt: number, groupActivation?: "always" | "mention") {
+  return { sessionId, updatedAt, ...(groupActivation ? { groupActivation } : {}) };
+}
+
+function resolve(cfg: OpenClawConfig, accountId = "work", sessionKey = WORK_GROUP_SESSION_KEY) {
+  return resolveGroupActivationFor({
+    cfg,
+    accountId,
+    sessionKey,
+    agentId: "main",
+    conversationId: GROUP_CONVERSATION_ID,
+  });
+}
+
 describe("resolveGroupActivationFor", () => {
   it.each([
     { requireMention: true, scoped: false },
@@ -58,32 +69,21 @@ describe("resolveGroupActivationFor", () => {
     async ({ requireMention, scoped }) => {
       const storePath = await makeSessionStore({
         [DEFAULT_GROUP_SESSION_KEY]: {
-          sessionId: "older-unscoped-session",
-          updatedAt: 123,
-          groupActivation: requireMention ? "always" : "mention",
+          ...session("older-unscoped-session", 123, requireMention ? "always" : "mention"),
           label: "retained unscoped metadata",
         },
-        ...(scoped
-          ? {
-              [WORK_GROUP_SESSION_KEY]: {
-                sessionId: "work-session",
-                updatedAt: 456,
-                label: "retained scoped metadata",
-              },
-            }
-          : {}),
+        ...(scoped && {
+          [WORK_GROUP_SESSION_KEY]: {
+            ...session("work-session", 456),
+            label: "retained scoped metadata",
+          },
+        }),
       });
       const before = readEntries(storePath);
 
-      expect(
-        await resolveGroupActivationFor({
-          cfg: config(storePath, requireMention),
-          accountId: "work",
-          agentId: "main",
-          sessionKey: WORK_GROUP_SESSION_KEY,
-          conversationId: GROUP_CONVERSATION_ID,
-        }),
-      ).toBe(requireMention ? "mention" : "always");
+      expect(await resolve(config(storePath, requireMention))).toBe(
+        requireMention ? "mention" : "always",
+      );
       expect(readEntries(storePath)).toEqual(before);
     },
   );
@@ -92,54 +92,32 @@ describe("resolveGroupActivationFor", () => {
     "preserves canonical named and default activation %s",
     async (activation) => {
       const storePath = await makeSessionStore({
-        [DEFAULT_GROUP_SESSION_KEY]: {
-          sessionId: "default-session",
-          updatedAt: 123,
-          groupActivation: activation,
-        },
-        [WORK_GROUP_SESSION_KEY]: {
-          sessionId: "work-session",
-          updatedAt: 456,
-          groupActivation: activation,
-        },
+        [DEFAULT_GROUP_SESSION_KEY]: session("default-session", 123, activation),
+        [WORK_GROUP_SESSION_KEY]: session("work-session", 456, activation),
       });
       const before = readEntries(storePath);
       const cfg = config(storePath, activation === "always");
-      for (const scope of [
-        { accountId: "default", sessionKey: DEFAULT_GROUP_SESSION_KEY },
-        { accountId: "work", sessionKey: WORK_GROUP_SESSION_KEY },
-      ]) {
-        expect(
-          await resolveGroupActivationFor({
-            cfg,
-            ...scope,
-            agentId: "main",
-            conversationId: GROUP_CONVERSATION_ID,
-          }),
-        ).toBe(activation);
-      }
+      expect(await resolve(cfg, "default", DEFAULT_GROUP_SESSION_KEY)).toBe(activation);
+      expect(await resolve(cfg)).toBe(activation);
       expect(readEntries(storePath)).toEqual(before);
+      const updatedActivation = activation === "always" ? "mention" : "always";
+      await upsertSessionEntry({
+        storePath,
+        sessionKey: WORK_GROUP_SESSION_KEY,
+        entry: session("work-session", 789, updatedActivation),
+      });
+      expect(await resolve(cfg)).toBe(updatedActivation);
     },
   );
 
   it("does not use a named account's activation for the default account", async () => {
     const storePath = await makeSessionStore({
-      [WORK_GROUP_SESSION_KEY]: {
-        sessionId: "work-session",
-        updatedAt: 123,
-        groupActivation: "always",
-      },
+      [WORK_GROUP_SESSION_KEY]: session("work-session", 123, "always"),
     });
     const before = readEntries(storePath);
-    expect(
-      await resolveGroupActivationFor({
-        cfg: config(storePath, true),
-        accountId: "default",
-        agentId: "main",
-        sessionKey: DEFAULT_GROUP_SESSION_KEY,
-        conversationId: GROUP_CONVERSATION_ID,
-      }),
-    ).toBe("mention");
+    expect(await resolve(config(storePath, true), "default", DEFAULT_GROUP_SESSION_KEY)).toBe(
+      "mention",
+    );
     expect(readEntries(storePath)).toEqual(before);
   });
 });

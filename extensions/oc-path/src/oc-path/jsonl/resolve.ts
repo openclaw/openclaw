@@ -29,13 +29,11 @@ type JsonlOcPathMatch =
       readonly kind: "value";
       readonly node: JsoncValue;
       readonly line: number;
-      readonly path: readonly string[];
     }
   | {
       readonly kind: "object-entry";
       readonly node: JsoncEntry;
       readonly line: number;
-      readonly path: readonly string[];
     };
 
 export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatch | null {
@@ -50,7 +48,6 @@ export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatc
     return null;
   }
 
-  // No further descent — return the line entry itself.
   if (path.item === undefined && path.field === undefined) {
     return { kind: "line", node: lineEntry };
   }
@@ -63,5 +60,5 @@ export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatc
   if (match === null) {
     return null;
   }
-  return { ...match, path: match.path.map(String), line: lineEntry.line };
+  return { ...match, line: lineEntry.line };
 }

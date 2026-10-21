@@ -1,3 +1,4 @@
+import { realpathSync, statSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import type { Readable, Writable } from "node:stream";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
@@ -8,12 +9,17 @@ import {
 } from "../agents/bash-process-observation.js";
 import {
   getActiveBackgroundExecSessionCount,
+  onBackgroundProcessesChanged,
   waitForExecScope,
 } from "../agents/bash-process-registry.js";
 import { toErrorObject } from "../infra/errors.js";
 import { createBoundedLineFramer } from "../process/bounded-line-framer.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { parseWorkerLaunchDescriptor, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import {
+  takeNativeInferenceStartup,
+  type NativeInferenceStartup,
+} from "./native-inference-startup.js";
 import {
   parseWorkerProcessRequest,
   type WorkerProcessMessage,
@@ -27,6 +33,7 @@ type RunWorkerCommandOptions = {
   output: Writable;
   browserRuntime?: WorkerBrowserRuntime;
   managed?: boolean;
+  nativeInference?: NativeInferenceStartup;
 };
 
 export type WorkerCommandLifetime = {
@@ -59,6 +66,8 @@ async function runManagedWorkerCommand(
   let idleCleanup: Promise<void> | undefined;
   let draining: Promise<void> | undefined;
   let closed = false;
+  let processChanges = false;
+  let unsubscribeProcesses = () => {};
   const framer = createBoundedLineFramer(
     WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
     "managed worker request exceeds the protocol payload limit",
@@ -101,6 +110,19 @@ async function runManagedWorkerCommand(
             }
           });
         });
+      // The command owns retained processes after the per-turn Gateway connection closes.
+      unsubscribeProcesses = onBackgroundProcessesChanged((target) => {
+        const owner = processBinding;
+        if (
+          !closed &&
+          processChanges &&
+          owner &&
+          target.sessionKey === "worker:" + owner.sessionId &&
+          (target.agentId === undefined || target.agentId === owner.agentId)
+        ) {
+          void write({ type: "processes-changed" }).catch(finish);
+        }
+      });
       const onLine = (line: Buffer) => {
         let value: unknown;
         try {
@@ -151,15 +173,34 @@ async function runManagedWorkerCommand(
         const current = { turnId: request.turnId, controller: new AbortController() };
         active = current;
         running = (async (descriptor: WorkerLaunchDescriptor, idleRetention?: true) => {
+          // Device-folder admission binds a canonical path. Do not independently
+          // resolve a replacement symlink into a different execution target.
+          const assignedWorkspace = descriptor.assignment.workspaceDir;
+          const identity = request.canonicalWorkspace ? statSync(assignedWorkspace) : undefined;
+          const assertWorkspaceCurrent = identity
+            ? () => {
+                const currentStat = statSync(assignedWorkspace);
+                if (
+                  realpathSync.native(assignedWorkspace) !== assignedWorkspace ||
+                  currentStat.dev !== identity.dev ||
+                  currentStat.ino !== identity.ino
+                ) {
+                  throw new Error("managed worker canonical workspace changed before execution");
+                }
+              }
+            : undefined;
+          assertWorkspaceCurrent?.();
           const workspaceDir = await realpath(descriptor.assignment.workspaceDir);
           const workerContainmentRoot = await realpath(
             descriptor.assignment.workerContainmentRoot ?? workspaceDir,
           );
+          assertWorkspaceCurrent?.();
           const nextBinding = JSON.stringify({
             environmentId: descriptor.admission.environmentId,
             sessionId: descriptor.admission.sessionId,
             ownerEpoch: descriptor.admission.ownerEpoch,
             agentId: descriptor.assignment.agentId,
+            inference: descriptor.assignment.inference,
             permissionMode: descriptor.assignment.permissionMode,
             workspaceDir,
             workerContainmentRoot,
@@ -174,6 +215,7 @@ async function runManagedWorkerCommand(
             ownerEpoch: descriptor.admission.ownerEpoch,
             agentId: descriptor.assignment.agentId,
           };
+          processChanges = request.processChanges === true;
           if (closed) {
             return;
           }
@@ -182,6 +224,7 @@ async function runManagedWorkerCommand(
           if (closed) {
             return;
           }
+          assertWorkspaceCurrent?.();
           const result = await runWorkerDescriptor(
             {
               ...descriptor,
@@ -192,6 +235,8 @@ async function runManagedWorkerCommand(
             },
             {
               environmentStateDir: environment.stateDir,
+              ...(assertWorkspaceCurrent ? { assertWorkspaceCurrent } : {}),
+              nativeInference: options.nativeInference,
               signal: current.controller.signal,
               ...(options.lifetime
                 ? { onConnectionFailure: options.lifetime.reportConnectionFailure }
@@ -208,7 +253,9 @@ async function runManagedWorkerCommand(
             const { disposeWorkerGitHubEnvironment } = await import("./github-binding.runtime.js");
             await disposeWorkerGitHubEnvironment(stateDir, descriptor.assignment.turnId);
           };
-          const canRetain = result.status === "completed" || result.status === "failed";
+          const canRetain =
+            result.status === "completed" ||
+            (result.status === "failed" && result.reason === "turn-failed");
           let retention: WorkerProcessResult["retention"] =
             canRetain && getActiveBackgroundExecSessionCount() > 0
               ? "background"
@@ -294,6 +341,7 @@ async function runManagedWorkerCommand(
       }
     });
   } finally {
+    unsubscribeProcesses();
     framer.clear();
     try {
       await running;
@@ -326,7 +374,9 @@ async function readLaunchDescriptor(input: Readable): Promise<WorkerLaunchDescri
 }
 
 /** Process shell for `openclaw worker`: stdin descriptor in, JSON result out, signals abort the run. */
-export async function runWorkerCommand(options: RunWorkerCommandOptions): Promise<void> {
+export async function runWorkerCommand(input: RunWorkerCommandOptions): Promise<void> {
+  const startup = takeNativeInferenceStartup();
+  const options = { ...input, nativeInference: input.nativeInference ?? startup };
   const abortController = new AbortController();
   const stop = () => abortController.abort(new Error("worker interrupted"));
   let lifetimeEnded = false;
@@ -359,6 +409,7 @@ export async function runWorkerCommand(options: RunWorkerCommandOptions): Promis
       return;
     }
     const result = await runWorkerDescriptor(descriptor, {
+      nativeInference: options.nativeInference,
       signal: abortController.signal,
       ...(options.lifetime
         ? { onConnectionFailure: options.lifetime.reportConnectionFailure }

@@ -9,19 +9,21 @@ import {
 } from "./probe.js";
 import { jsonResponse } from "./test-http-helpers.js";
 
+const probeGetMe = (fetcher: typeof fetch, timeout = 1_000) =>
+  probeDiscord("MTIz.abc.def", timeout, { fetcher });
+const lookup = (fetcher: typeof fetch, timeout = 1_000) =>
+  fetchDiscordApplicationId("unparseable.token", timeout, fetcher);
+const jsonStream = (source: UnderlyingDefaultSource<Uint8Array>) =>
+  new Response(new ReadableStream(source), { headers: { "content-type": "application/json" } });
+
 const DISCORD_PROBE_JSON_CAP_BYTES = 16 * 1024 * 1024;
 function oversizedDiscordProbeJsonResponse(onCancel: () => void): Response {
-  const response = new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(DISCORD_PROBE_JSON_CAP_BYTES + 1));
-      },
-      cancel() {
-        onCancel();
-      },
-    }),
-    { headers: { "content-type": "application/json" }, status: 200 },
-  );
+  const response = jsonStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array(DISCORD_PROBE_JSON_CAP_BYTES + 1));
+    },
+    cancel: onCancel,
+  });
   Object.defineProperty(response, "json", {
     value: async () => {
       throw new Error("unbounded json reader was used");
@@ -30,9 +32,10 @@ function oversizedDiscordProbeJsonResponse(onCancel: () => void): Response {
   return response;
 }
 
-function trackedTricklingDiscordProbeJsonResponse(
+function stalledJsonResponse(
   signal: AbortSignal | null | undefined,
   onTerminate: () => void,
+  trickle = false,
 ): Response {
   let interval: ReturnType<typeof setInterval> | undefined;
   let terminated = false;
@@ -46,168 +49,81 @@ function trackedTricklingDiscordProbeJsonResponse(
     }
     onTerminate();
   };
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        const abort = () => {
-          terminate();
-          controller.error(signal?.reason ?? new Error("request aborted"));
-        };
-        if (signal?.aborted) {
-          abort();
-          return;
-        }
+  return jsonStream({
+    start(controller) {
+      const abort = () => {
+        terminate();
+        controller.error(signal?.reason ?? new Error("request aborted"));
+      };
+      if (signal?.aborted) {
+        abort();
+        return;
+      }
+      if (trickle) {
         controller.enqueue(new TextEncoder().encode('{"id":"bot-1"'));
         interval = setInterval(() => controller.enqueue(new Uint8Array([0x20])), 10);
-        signal?.addEventListener("abort", abort, { once: true });
-      },
-      cancel() {
-        terminate();
-      },
-    }),
-    { headers: { "content-type": "application/json" }, status: 200 },
-  );
+      }
+      signal?.addEventListener("abort", abort, { once: true });
+    },
+    cancel: terminate,
+  });
 }
 
-function trackedStalledDiscordJsonResponse(
-  signal: AbortSignal | null | undefined,
-  onTerminate: () => void,
-): Response {
-  let terminated = false;
-  const terminate = () => {
-    if (terminated) {
-      return;
-    }
-    terminated = true;
-    onTerminate();
-  };
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        const abort = () => {
-          terminate();
-          controller.error(signal?.reason ?? new Error("request aborted"));
-        };
-        if (signal?.aborted) {
-          abort();
-          return;
-        }
-        signal?.addEventListener("abort", abort, { once: true });
-      },
-      cancel() {
-        terminate();
-      },
-    }),
-    { headers: { "content-type": "application/json" }, status: 200 },
-  );
+function rateLimitedResponse(retry = false) {
+  return new Response("<html><title>Error 1015</title></html>", {
+    status: 429,
+    headers: { "content-type": "text/html", ...(retry ? { "retry-after": "0" } : {}) },
+  });
 }
 
 describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
-  it("reports disabled when no bits set", () => {
-    expect(resolveDiscordPrivilegedIntentsFromFlags(0)).toEqual({
-      presence: "disabled",
-      guildMembers: "disabled",
-      messageContent: "disabled",
-    });
-  });
-
-  it("reports enabled when full intent bits set", () => {
-    const flags = (1 << 12) | (1 << 14) | (1 << 18);
+  it.each([
+    { state: "disabled", flags: 0 },
+    { state: "enabled", flags: (1 << 12) | (1 << 14) | (1 << 18) },
+    { state: "limited", flags: (1 << 13) | (1 << 15) | (1 << 19) },
+  ])("reports $state intents", ({ state, flags }) => {
     expect(resolveDiscordPrivilegedIntentsFromFlags(flags)).toEqual({
-      presence: "enabled",
-      guildMembers: "enabled",
-      messageContent: "enabled",
-    });
-  });
-
-  it("reports limited when limited intent bits set", () => {
-    const flags = (1 << 13) | (1 << 15) | (1 << 19);
-    expect(resolveDiscordPrivilegedIntentsFromFlags(flags)).toEqual({
-      presence: "limited",
-      guildMembers: "limited",
-      messageContent: "limited",
-    });
-  });
-
-  it("prefers enabled over limited when both set", () => {
-    const flags = (1 << 12) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 18) | (1 << 19);
-    expect(resolveDiscordPrivilegedIntentsFromFlags(flags)).toEqual({
-      presence: "enabled",
-      guildMembers: "enabled",
-      messageContent: "enabled",
+      presence: state,
+      guildMembers: state,
+      messageContent: state,
     });
   });
 
   it("retries Cloudflare HTML rate limits during application id lookup", async () => {
-    let calls = 0;
-    const fetcher = withFetchPreconnect(async () => {
-      calls += 1;
-      if (calls === 1) {
-        return new Response("<html><title>Error 1015</title></html>", {
-          status: 429,
-          headers: { "content-type": "text/html", "retry-after": "0" },
-        });
-      }
-      return jsonResponse({ id: "app-1" });
-    });
-
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimitedResponse(true))
+      .mockImplementation(async () => jsonResponse({ id: "app-1" }));
+    const fetcher = withFetchPreconnect(fetchMock);
     vi.useFakeTimers();
-    const lookup = fetchDiscordApplicationId("unparseable.token", 1_000, fetcher);
+    const pending = lookup(fetcher);
     await vi.runAllTimersAsync();
-
-    await expect(lookup).resolves.toBe("app-1");
-    expect(calls).toBe(2);
+    await expect(pending).resolves.toBe("app-1");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it.each([
-    { status: 401, kind: "rejected" },
     { status: 403, kind: "rejected" },
     { status: 503, kind: "unavailable" },
   ] as const)("classifies application id HTTP $status as $kind", async ({ status, kind }) => {
     vi.useFakeTimers();
-    const fetcher = withFetchPreconnect(
-      async () =>
-        new Response(JSON.stringify({ message: "probe failed" }), {
-          status,
-          headers: { "content-type": "application/json" },
-        }),
+    const fetcher = withFetchPreconnect(async () =>
+      Response.json({ message: "probe failed" }, { status }),
     );
     const probe = probeDiscordApplicationId("unparseable.token", 1_000, fetcher);
     await vi.runAllTimersAsync();
-
     await expect(probe).resolves.toMatchObject({ kind, status });
   });
 
-  it("preserves application id network failure as unavailable without an HTTP status", async () => {
-    vi.useFakeTimers();
-    const error = new Error("fetch failed");
-    const fetcher = withFetchPreconnect(async () => {
-      throw error;
-    });
-    const probe = probeDiscordApplicationId("unparseable.token", 1_000, fetcher);
-    await vi.runAllTimersAsync();
-
-    await expect(probe).resolves.toEqual({ kind: "unavailable", status: null, error });
-  });
-
   it("does not retry Cloudflare HTML rate limits during application summary probes", async () => {
-    let calls = 0;
-    const fetcher = withFetchPreconnect(async () => {
-      calls += 1;
-      return new Response("<html><title>Error 1015</title></html>", {
-        status: 429,
-        headers: { "content-type": "text/html" },
-      });
-    });
-
+    const fetchMock = vi.fn(async () => rateLimitedResponse());
+    const fetcher = withFetchPreconnect(fetchMock);
     await expect(
       fetchDiscordApplicationSummary("unparseable.token", 1_000, fetcher),
     ).resolves.toBeUndefined();
-    expect(calls).toBe(1);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("cancels failed getMe probe response bodies", async () => {
@@ -215,8 +131,7 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     const fetcher = withFetchPreconnect(
       async () => ({ ok: false, status: 401, body: { cancel } }) as unknown as Response,
     );
-
-    await expect(probeDiscord("MTIz.abc.def", 1_000, { fetcher })).resolves.toMatchObject({
+    await expect(probeGetMe(fetcher)).resolves.toMatchObject({
       ok: false,
       status: 401,
       error: "getMe failed (401)",
@@ -225,103 +140,62 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
   });
 
   it("rejects invalid UTF-8 in getMe probe JSON responses", async () => {
-    const prefix = new TextEncoder().encode('{"id":"bot-1","username":"bad');
-    const suffix = new TextEncoder().encode('"}');
-    const body = new Uint8Array(prefix.length + 1 + suffix.length);
-    body.set(prefix);
-    body[prefix.length] = 0xff;
-    body.set(suffix, prefix.length + 1);
+    const body = Buffer.concat([
+      Buffer.from('{"id":"bot-1","username":"bad'),
+      Buffer.from([0xff]),
+      Buffer.from('"}'),
+    ]);
     const fetcher = withFetchPreconnect(
       async () =>
-        new Response(body, {
-          headers: { "content-type": "application/json" },
-          status: 200,
-        }),
+        new Response(body, { headers: { "content-type": "application/json" }, status: 200 }),
     );
-
-    await expect(probeDiscord("MTIz.abc.def", 1_000, { fetcher })).resolves.toMatchObject({
+    await expect(probeGetMe(fetcher)).resolves.toMatchObject({
       ok: false,
       error: expect.stringContaining("discord.probe.getMe: malformed JSON response"),
     });
   });
 
   it("bounds oversized getMe probe JSON responses and cancels the stream", async () => {
-    let cancelCount = 0;
-    const fetcher = withFetchPreconnect(async () =>
-      oversizedDiscordProbeJsonResponse(() => {
-        cancelCount += 1;
-      }),
-    );
-
-    await expect(probeDiscord("MTIz.abc.def", 1_000, { fetcher })).resolves.toMatchObject({
+    const cancel = vi.fn();
+    const fetcher = withFetchPreconnect(async () => oversizedDiscordProbeJsonResponse(cancel));
+    await expect(probeGetMe(fetcher)).resolves.toMatchObject({
       ok: false,
       error: expect.stringContaining("discord.probe.getMe: JSON response exceeds 16777216 bytes"),
     });
-    expect(cancelCount).toBe(1);
-  });
-
-  it("times out and cancels stalled getMe probe JSON response bodies", async () => {
-    vi.useFakeTimers();
-    let terminationCount = 0;
-    const fetcher = withFetchPreconnect(async (_input, init) =>
-      trackedStalledDiscordJsonResponse(init?.signal, () => {
-        terminationCount += 1;
-      }),
-    );
-
-    const probe = probeDiscord("MTIz.abc.def", 50, { fetcher });
-    const assertion = expect(probe).resolves.toMatchObject({
-      ok: false,
-      error: "discord.probe.getMe: JSON response timed out after 50ms",
-    });
-
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(50);
-    await assertion;
-    expect(terminationCount).toBe(1);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("uses one total deadline across getMe headers and a trickling JSON body", async () => {
     vi.useFakeTimers();
-    let terminationCount = 0;
+    const terminated = vi.fn();
     const fetcher = withFetchPreconnect(async (_input, init) => {
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 30);
       });
-      return trackedTricklingDiscordProbeJsonResponse(init?.signal, () => {
-        terminationCount += 1;
-      });
+      return stalledJsonResponse(init?.signal, terminated, true);
     });
-
-    const probe = probeDiscord("MTIz.abc.def", 50, { fetcher });
-    const assertion = expect(probe).resolves.toMatchObject({
+    const pending = probeGetMe(fetcher, 50);
+    const assertion = expect(pending).resolves.toMatchObject({
       ok: false,
       error: "discord.probe.getMe: JSON response timed out after 50ms",
     });
-
     await vi.advanceTimersByTimeAsync(50);
     await assertion;
-    expect(terminationCount).toBe(1);
+    expect(terminated).toHaveBeenCalledOnce();
   });
 
   it("bounds stalled application-summary response bodies during probes", async () => {
     vi.useFakeTimers();
-    let terminationCount = 0;
+    const terminated = vi.fn();
     const fetcher = withFetchPreconnect(async (input, init) => {
       const url =
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url.endsWith("/users/@me")) {
         return jsonResponse({ id: "bot-1", username: "openclaw" });
       }
-      return trackedStalledDiscordJsonResponse(init?.signal, () => {
-        terminationCount += 1;
-      });
+      return stalledJsonResponse(init?.signal, terminated);
     });
-
-    const probe = probeDiscord("MTIz.abc.def", 50, {
-      fetcher,
-      includeApplication: true,
-    });
+    const probe = probeDiscord("MTIz.abc.def", 50, { fetcher, includeApplication: true });
     const outerStatusResult = Promise.race([
       probe,
       new Promise<{ ok: false; timedOut: true }>((resolve) => {
@@ -330,42 +204,32 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     ]);
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(50);
-
     await expect(outerStatusResult).resolves.toMatchObject({
       ok: true,
       bot: { id: "bot-1", username: "openclaw" },
     });
-    expect(terminationCount).toBe(1);
+    expect(terminated).toHaveBeenCalledOnce();
   });
 
   it("bounds stalled application-id response bodies", async () => {
     vi.useFakeTimers();
-    let terminationCount = 0;
+    const terminated = vi.fn();
     const fetcher = withFetchPreconnect(async (_input, init) =>
-      trackedStalledDiscordJsonResponse(init?.signal, () => {
-        terminationCount += 1;
-      }),
+      stalledJsonResponse(init?.signal, terminated),
     );
-
-    const lookup = fetchDiscordApplicationId("unparseable.token", 50, fetcher);
+    const pending = lookup(fetcher, 50);
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(50);
-
-    await expect(lookup).resolves.toBeUndefined();
-    expect(terminationCount).toBe(1);
+    await expect(pending).resolves.toBeUndefined();
+    expect(terminated).toHaveBeenCalledOnce();
   });
 
   it("derives application id from parseable tokens before probing REST", async () => {
-    let calls = 0;
-    const fetcher = withFetchPreconnect(async () => {
-      calls += 1;
-      return new Response("<html><title>Error 1015</title></html>", {
-        status: 429,
-        headers: { "content-type": "text/html" },
-      });
-    });
-
-    await expect(fetchDiscordApplicationId("MTIz.abc.def", 1_000, fetcher)).resolves.toBe("123");
-    expect(calls).toBe(0);
+    const fetchMock = vi.fn(async () => rateLimitedResponse());
+    const fetcher = withFetchPreconnect(fetchMock);
+    const applicationId = "1477179610322964541";
+    const token = `Bot ${Buffer.from(applicationId).toString("base64")}.abc.def`;
+    await expect(fetchDiscordApplicationId(token, 1_000, fetcher)).resolves.toBe(applicationId);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

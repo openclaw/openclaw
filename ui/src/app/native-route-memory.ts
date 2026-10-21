@@ -74,10 +74,6 @@ export function persistRoute(
   }
 }
 
-/**
- * Returns the stored route to restore, or null when the boot route is an
- * explicit deep link, matches the stored route, or no valid entry exists.
- */
 export function considerRouteRestore(
   routeId: RouteId,
   pathname: string,

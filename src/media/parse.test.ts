@@ -923,6 +923,53 @@ describe("splitMediaFromOutput", () => {
     );
   });
 
+  it.each(["\n", "\r\n", "\r"])(
+    "extracts multiline Markdown images across %j line endings",
+    (newline) => {
+      const url = "https://example.com/chart.png";
+      for (const image of [
+        `![chart](${newline}${url}${newline})`,
+        `![quarterly${newline}chart](${url})`,
+        `![chart](${url}${newline}"Quarterly chart")`,
+      ]) {
+        const input = `Before${newline}${image}${newline}After`;
+        expect(splitMediaFromOutput(input, extractMarkdownImages)).toEqual(
+          splitMediaFromOutput(
+            `Before${newline}![chart](${url})${newline}After`,
+            extractMarkdownImages,
+          ),
+        );
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves multiline image captions and media order (whitespace=%s)",
+    (preserveTrailingWhitespace) => {
+      const url = "https://example.com/chart.png";
+      const options = { ...extractMarkdownImages, preserveTrailingWhitespace };
+      expect(
+        splitMediaFromOutput(
+          `Before ![chart](\n${url}\n) after\nMEDIA:/tmp/next.png\nTail`,
+          options,
+        ),
+      ).toEqual(
+        splitMediaFromOutput(`Before ![chart](${url}) after\nMEDIA:/tmp/next.png\nTail`, options),
+      );
+    },
+  );
+
+  it("applies the image allowlist to complete multiline spans", () => {
+    const selected = "file:///tmp/selected.png";
+    const unselected = "![other](\nhttps://example.com/other.png\n)";
+    expect(
+      splitMediaFromOutput(`![selected](\n${selected}\n)\n${unselected}`, {
+        markdownImageAllowlist: [selected],
+        preserveTrailingWhitespace: true,
+      }),
+    ).toMatchObject({ text: unselected, mediaUrls: [selected] });
+  });
+
   it("strips markdown image title suffixes from extracted urls", () => {
     expectParsedMediaOutputCase(
       'Caption ![chart](https://example.com/chart.png "Quarterly chart")',

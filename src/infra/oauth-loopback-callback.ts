@@ -2,6 +2,8 @@ import type { LookupAddress } from "node:dns";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createDeferredCore } from "../shared/deferred.js";
 import { oauthErrorHtml, renderOAuthPage } from "../shared/oauth-page.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
+import { closeHttpServers } from "./http-server-lifecycle.js";
 import { OAUTH_PAGE_CSP } from "./oauth-page-csp.js";
 
 type OAuthLoopbackCallbackResult =
@@ -86,20 +88,6 @@ function resolveBindAddresses(
   ]);
 }
 
-async function waitForAbortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return await promise;
-  }
-  return await new Promise<T>((resolve, reject) => {
-    const abort = () => reject(new Error("OAuth callback cancelled"));
-    signal.addEventListener("abort", abort, { once: true });
-    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
-    if (signal.aborted) {
-      abort();
-    }
-  });
-}
-
 function resolveOAuthLoopbackPort(redirectUrl: URL): number {
   const port = redirectUrl.port ? Number(redirectUrl.port) : 80;
   if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
@@ -136,22 +124,6 @@ function prepareResponse(
   );
   response.setHeader("Access-Control-Allow-Private-Network", "true");
   response.setHeader("Access-Control-Max-Age", "600");
-}
-
-async function closeServers(servers: readonly Server[]): Promise<void> {
-  await Promise.all(
-    servers.map(
-      (server) =>
-        new Promise<void>((resolve) => {
-          if (!server.listening) {
-            resolve();
-            return;
-          }
-          server.close(() => resolve());
-          server.closeAllConnections?.();
-        }),
-    ),
-  );
 }
 
 /** Binds the authoritative loopback redirect before returning, then waits separately. */
@@ -199,7 +171,11 @@ export async function startOAuthLoopbackCallbackServer(params: {
   );
   const addresses = Array.isArray(resolvedAddresses)
     ? resolvedAddresses
-    : await waitForAbortable(resolvedAddresses, params.signal);
+    : await racePromiseWithAbortSignal(
+        resolvedAddresses,
+        params.signal,
+        () => new Error("OAuth callback cancelled"),
+      );
   const port = resolveOAuthLoopbackPort(redirectUrl);
   const callbackPath = redirectUrl.pathname || "/";
   const createServer = params.createServer ?? (await import("node:http")).createServer;
@@ -212,7 +188,8 @@ export async function startOAuthLoopbackCallbackServer(params: {
   let closePromise: Promise<void> | undefined;
   const callback = createDeferredCore<OAuthLoopbackCallbackResult>();
   void callback.promise.catch(() => undefined);
-  const close = () => (binding ? Promise.resolve() : (closePromise ??= closeServers(servers)));
+  const close = () =>
+    binding ? Promise.resolve() : (closePromise ??= closeHttpServers(servers, { force: true }));
   const cleanup = () => {
     if (timeout) {
       clearTimeout(timeout);
@@ -384,7 +361,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
   } catch (error) {
     binding = false;
     cleanup();
-    await closeServers(servers);
+    await closeHttpServers(servers, { force: true });
     throw error;
   }
   binding = false;

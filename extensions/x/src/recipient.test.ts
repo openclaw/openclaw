@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createXApiClient, type XPost } from "./api.js";
 import { resolveXRecipient } from "./recipient.js";
+import { createXTestSpend } from "./test-support/spend.js";
 
 describe("X reply recipients", () => {
   it.each([
@@ -30,6 +31,7 @@ describe("X reply recipients", () => {
     async ({ mention, resolvedId, expected, lookups }) => {
       let userLookups = 0;
       const api = createXApiClient({
+        spend: createXTestSpend(),
         clientId: "client",
         clientSecret: "secret",
         refreshToken: "seed",
@@ -78,6 +80,7 @@ describe("X reply recipients", () => {
       };
       const requested: string[] = [];
       const api = createXApiClient({
+        spend: createXTestSpend(),
         clientId: "client",
         clientSecret: "secret",
         refreshToken: "seed",

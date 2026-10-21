@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
+import { prepareHeadersForSimpleCompletion } from "@openclaw/ai/transports";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import { requireApiKey, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
@@ -20,12 +23,13 @@ import {
   hasImageReasoningOnlyResponse,
 } from "../agents/tools/image-tool.helpers.js";
 import { isSecretRef } from "../config/types.secrets.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { complete } from "../llm/stream.js";
 import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "../llm/types.js";
 import { runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import { getResolvedImageRuntimeContext, resolveImageRuntime } from "./image-model-runtime.js";
+import { resolveImageRuntime } from "./image-model-runtime.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
@@ -297,52 +301,28 @@ async function withImageDescriptionTimeout<T>(params: {
   createTimeoutError: (timeoutMs: number) => Error;
 }): Promise<T> {
   params.signal?.throwIfAborted();
-  if (params.timeoutMs === undefined && !params.signal) {
-    return await params.task;
+  const abortError = (signal: AbortSignal) =>
+    signal.reason instanceof Error
+      ? signal.reason
+      : new Error("image description aborted", { cause: signal.reason });
+  if (params.timeoutMs === undefined) {
+    return await racePromiseWithAbortSignal(params.task, params.signal, abortError);
   }
-  let timeout: NodeJS.Timeout | undefined;
-  let removeAbortListener: (() => void) | undefined;
-  const races: Promise<T>[] = [params.task];
-  if (params.timeoutMs !== undefined) {
-    races.push(
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          params.controller.abort();
-          reject(params.createTimeoutError(params.timeoutMs!));
-        }, params.timeoutMs);
-      }),
-    );
-  }
-  if (params.signal) {
-    races.push(
-      new Promise<never>((_, reject) => {
-        const onAbort = () => {
-          try {
-            params.signal?.throwIfAborted();
-          } catch (error) {
-            reject(
-              error instanceof Error
-                ? error
-                : new Error("image description aborted", { cause: error }),
-            );
-          }
-        };
-        params.signal?.addEventListener("abort", onAbort, { once: true });
-        removeAbortListener = () => params.signal?.removeEventListener("abort", onAbort);
-        if (params.signal?.aborted) {
-          onAbort();
-        }
-      }),
-    );
-  }
-  try {
-    return await Promise.race(races);
-  } finally {
-    removeAbortListener?.();
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+  const timeoutMs = params.timeoutMs;
+  return await raceWithTimeout(
+    params.task,
+    timeoutMs,
+    () => {
+      params.controller.abort();
+      throw params.createTimeoutError(timeoutMs);
+    },
+    {
+      signal: params.signal,
+      onAbort: (signal) => {
+        throw abortError(signal);
+      },
+    },
+  );
 }
 
 export async function describeImagesWithModelPayloadTransformCore(
@@ -363,8 +343,7 @@ export async function describeImagesWithModelPayloadTransformCore(
       params.cfg,
       params.provider,
     );
-    let runtimeValue: string;
-    let model: Model | undefined;
+    let resolved: Awaited<ReturnType<typeof resolveImageRuntime>>;
     const resolutionTask = trackAsyncWork(() =>
       resolveImageRuntime({ ...params, signal: requestSignal }, (resources) => {
         onAcquired({ release: async () => await resources[Symbol.asyncDispose]() });
@@ -373,7 +352,7 @@ export async function describeImagesWithModelPayloadTransformCore(
     );
 
     try {
-      const resolved = await withImageDescriptionTimeout({
+      resolved = await withImageDescriptionTimeout({
         controller,
         signal: params.signal,
         timeoutMs: configuredTimeoutMs,
@@ -381,8 +360,6 @@ export async function describeImagesWithModelPayloadTransformCore(
           buildImageDescriptionTimeoutError({ phase: "setup", timeoutMs }),
         task: resolutionTask,
       });
-      runtimeValue = resolved.runtimeValue;
-      model = resolved.model;
     } catch (err) {
       params.signal?.throwIfAborted();
       if (!isMinimaxVlmModel(params.provider, params.model) || !isUnknownModelError(err)) {
@@ -410,6 +387,7 @@ export async function describeImagesWithModelPayloadTransformCore(
       });
     }
 
+    const { runtimeValue, model, cfg, agentDir, workspaceDir } = resolved;
     const apiKey = runtimeValue;
     params.signal?.throwIfAborted();
     assertResourcesOpen?.();
@@ -430,7 +408,6 @@ export async function describeImagesWithModelPayloadTransformCore(
       });
     }
 
-    const resolvedRuntimeContext = getResolvedImageRuntimeContext(model);
     // Prepared auth may carry sentinel-protected request headers. Resolve them only at this
     // final direct-completion boundary so provider SDKs never receive sentinel placeholders.
     const requestModel = unwrapModelHeaderSentinelsForProviderEgress(
@@ -439,14 +416,10 @@ export async function describeImagesWithModelPayloadTransformCore(
     );
     const providerStreamFn = registerProviderStreamForModel({
       model: requestModel,
-      cfg: resolvedRuntimeContext?.cfg ?? params.cfg,
-      agentDir: resolvedRuntimeContext?.agentDir ?? params.agentDir,
+      cfg,
+      agentDir,
       wrapProviderStream: true,
-      ...(resolvedRuntimeContext?.workspaceDir
-        ? { workspaceDir: resolvedRuntimeContext.workspaceDir }
-        : params.workspaceDir
-          ? { workspaceDir: params.workspaceDir }
-          : {}),
+      ...(workspaceDir ? { workspaceDir } : {}),
     });
 
     const promptInUserContent = shouldPlaceImagePromptInUserContent(model);
@@ -469,6 +442,16 @@ export async function describeImagesWithModelPayloadTransformCore(
     };
 
     const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
+    // One image request carries one routing identity across the reasoning-only retry: re-rolling
+    // it per attempt would split a single image request across two provider conversations. The
+    // identity stays a routing header because a stream sessionId would also give unrelated
+    // providers prompt-cache affinity and retained WebSocket sessions.
+    const imageRequestHeaders = prepareHeadersForSimpleCompletion(requestModel, {
+      sessionId: randomUUID(),
+      ...(requestModel.provider === "github-copilot"
+        ? { headers: { "x-initiator": "user", "Copilot-Vision-Request": "true" } }
+        : {}),
+    });
     const completeImage = async (retry = false) => {
       params.signal?.throwIfAborted();
       assertResourcesOpen?.();
@@ -479,9 +462,7 @@ export async function describeImagesWithModelPayloadTransformCore(
         maxTokens,
         signal: requestSignal,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        ...(requestModel.provider === "github-copilot"
-          ? { headers: { "x-initiator": "user", "Copilot-Vision-Request": "true" } }
-          : {}),
+        ...(imageRequestHeaders ? { headers: imageRequestHeaders } : {}),
         ...(payloadHandler ? { onPayload: payloadHandler } : {}),
       };
       const task: Promise<AssistantMessage> = trackAsyncWork(() => {

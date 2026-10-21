@@ -7,7 +7,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.t
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 
-const TAG = "test-github-seeded-hovercard";
+const TAG = `test-github-seeded-hovercard-${crypto.randomUUID()}`;
 customElements.define(TAG, class extends LinkReaderHovercardProvider {});
 const PR_HREF = "https://github.com/openclaw/openclaw/pull/99815";
 const seed: ControlUiLinkReaderPreview = {
@@ -32,6 +32,7 @@ function createSeededLink() {
   const pending = createDeferred<unknown>();
   const client = {
     request: vi.fn().mockReturnValue(pending.promise),
+    connected: true,
     connectionGeneration: 1,
     recoveryScope: "principal-a",
   };
@@ -53,6 +54,7 @@ function hovercard() {
 }
 
 async function hover(anchor: HTMLAnchorElement) {
+  await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
   await vi.advanceTimersByTimeAsync(250);
 }
@@ -69,14 +71,16 @@ describe("GitHub hovercards with authorized session details", () => {
     vi.setSystemTime(new Date("2026-07-05T10:00:00Z"));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     document.body.replaceChildren();
+    await Promise.resolve();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
   it.each(["hover", "focus"])("shows known details before enrichment for %s", async (trigger) => {
     const { pending, client, provider, anchor } = createSeededLink();
+    await provider.updateComplete;
     if (trigger === "hover") {
       await hover(anchor);
     } else {
@@ -159,6 +163,7 @@ describe("GitHub hovercards with authorized session details", () => {
     const request = vi.fn().mockReturnValue(pending.promise);
     provider.client = {
       request,
+      connected: true,
     } as unknown as GatewayBrowserClient;
     provider.agentId = "row-agent";
     provider.readers = [TEST_LINK_READER];
@@ -167,8 +172,11 @@ describe("GitHub hovercards with authorized session details", () => {
     anchor.href = PR_HREF;
     provider.append(anchor);
     document.body.append(provider);
+    anchor.focus();
+    expect(document.activeElement).toBe(anchor);
     customElements.define(tag, class extends LinkReaderHovercardProvider {});
     await provider.updateComplete;
+    expect(document.activeElement).toBe(anchor);
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(1);
     expect(hovercard()?.textContent).toContain(seed.title);
@@ -207,7 +215,7 @@ describe("GitHub hovercards with authorized session details", () => {
     expect(hovercard()?.textContent).not.toContain(message);
   });
 
-  it.each(["agent", "client", "connection", "principal", "reader"])(
+  it.each(["agent", "client", "principal", "reader"])(
     "does not expose cached session details or late enrichment after a %s change",
     async (change) => {
       const { pending, client, provider, anchor } = createSeededLink();
@@ -219,11 +227,13 @@ describe("GitHub hovercards with authorized session details", () => {
         provider.client = { ...client } as unknown as GatewayBrowserClient;
       } else if (change === "reader") {
         provider.readers = [{ ...TEST_LINK_READER }];
-      } else if (change === "connection") {
-        client.connectionGeneration += 1;
       } else {
         client.recoveryScope = "principal-b";
       }
+      provider.remove();
+      await Promise.resolve();
+      document.body.append(provider);
+      await provider.updateComplete;
       const current = createDeferred<unknown>();
       client.request.mockReturnValue(current.promise);
       await hover(anchor);

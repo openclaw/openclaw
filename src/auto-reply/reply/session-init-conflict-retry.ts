@@ -9,12 +9,13 @@ const log = createSubsystemLogger("session-init");
  */
 export class ReplySessionInitConflictError extends Error {
   constructor(sessionKey: string) {
-    super(`reply session initialization conflicted for ${sessionKey}`);
+    super(`reply session initialization conflicted for ${sessionKey}; please retry your message.`);
     this.name = "ReplySessionInitConflictError";
   }
 }
 
-const SESSION_INIT_CONFLICT_MESSAGE_RE = /^reply session initialization conflicted for \S+$/u;
+const SESSION_INIT_CONFLICT_MESSAGE_RE =
+  /^reply session initialization conflicted for \S+(?:; please retry your message\.)?$/u;
 
 function isReplySessionInitConflictError(error: unknown): boolean {
   return (

@@ -5,14 +5,12 @@ import {
   stripHeartbeatToken,
 } from "../../../../src/auto-reply/heartbeat.js";
 
-export function stripHeartbeatTokenForDisplay(
-  raw: string,
-  maxAckChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-): { shouldSkip: boolean; text: string } {
+export function stripHeartbeatTokenForDisplay(raw: string): { shouldSkip: boolean; text: string } {
   const result = stripHeartbeatToken(raw, { mode: "message" });
   const text = result.didStrip && /^[*`~_]+$/.test(result.text) ? "" : result.text;
   return {
-    shouldSkip: result.shouldSkip || (result.didStrip && text.length <= maxAckChars),
+    shouldSkip:
+      result.shouldSkip || (result.didStrip && text.length <= DEFAULT_HEARTBEAT_ACK_MAX_CHARS),
     text,
   };
 }
@@ -42,11 +40,7 @@ function resolveDisplayContent(content: unknown): {
 
 export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
   const entry = asOptionalObjectRecord(message);
-  if (!entry) {
-    return false;
-  }
-  const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role !== "assistant") {
+  if (!entry || normalizeLowercaseStringOrEmpty(entry.role) !== "assistant") {
     return false;
   }
   if (typeof entry.senderLabel === "string" && entry.senderLabel.trim()) {

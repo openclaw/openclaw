@@ -17,29 +17,7 @@ describe("A2A task store", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns protocol-shaped submitted, working, and completed task snapshots", async () => {
-    const store = createTaskStore();
-    const task = store.create("ctx-alice");
-
-    expect(task).toMatchObject({
-      contextId: "ctx-alice",
-      status: { state: "TASK_STATE_SUBMITTED" },
-      artifacts: [],
-      history: [],
-    });
-    expect(task.status.timestamp).toMatch(/\.\d{3}Z$/);
-    expect(store.start(task.id)?.status.state).toBe("TASK_STATE_WORKING");
-
-    const waiting = store.wait(task.id, 10_000);
-    store.completeNext("ctx-alice", "hello back");
-
-    await expect(waiting).resolves.toMatchObject({
-      status: { state: "TASK_STATE_COMPLETED" },
-      artifacts: [{ parts: [{ text: "hello back" }] }],
-    });
-  });
-
-  it("correlates concurrent replies by conversation FIFO without cross-talk", () => {
+  it("correlates concurrent replies by task identity without cross-talk", () => {
     const store = createTaskStore();
     const aliceFirst = store.create("ctx-alice");
     const bobOnly = store.create("ctx-bob");
@@ -48,31 +26,18 @@ describe("A2A task store", () => {
       store.start(task.id);
     }
 
-    expect(store.completeNext("ctx-alice", "first")?.id).toBe(aliceFirst.id);
-    expect(store.completeNext("ctx-bob", "bob")?.id).toBe(bobOnly.id);
-    expect(store.completeNext("ctx-alice", "second")?.id).toBe(aliceSecond.id);
+    expect(store.complete(aliceFirst.id, "first")?.id).toBe(aliceFirst.id);
+    expect(store.complete(bobOnly.id, "bob")?.id).toBe(bobOnly.id);
+    expect(store.complete(aliceSecond.id, "second")?.id).toBe(aliceSecond.id);
     expect(aliceFirst.artifacts[0]?.parts).toEqual([{ text: "first" }]);
     expect(aliceSecond.artifacts[0]?.parts).toEqual([{ text: "second" }]);
-  });
-
-  it("isolates same-context tasks and task access between authenticated peers", () => {
-    const store = createTaskStore();
-    const alice = store.create("ctx-shared", "alice");
-    const bob = store.create("ctx-shared", "bob");
-
-    expect(store.get(alice.id, "bob")).toBeUndefined();
-    expect(store.get(bob.id, "alice")).toBeUndefined();
-    expect(store.completeNext("ctx-shared", "bob only", "bob")?.id).toBe(bob.id);
-    expect(alice.status.state).toBe("TASK_STATE_SUBMITTED");
-    expect(store.completeNext("ctx-shared", "alice only", "alice")?.id).toBe(alice.id);
-    expect(alice.artifacts[0]?.parts).toEqual([{ text: "alice only" }]);
   });
 
   it("completes empty replies without inventing an artifact", () => {
     const store = createTaskStore();
     const task = store.create("ctx-alice");
 
-    expect(store.completeNext(task.contextId, undefined)).toMatchObject({
+    expect(store.complete(task.id, undefined)).toMatchObject({
       status: {
         state: "TASK_STATE_COMPLETED",
         message: { role: "ROLE_AGENT", parts: [{ text: "Agent completed without reply text" }] },
@@ -87,22 +52,13 @@ describe("A2A task store", () => {
     const rejected = store.create("ctx-alice");
     const active = store.create("ctx-alice");
 
-    expect(store.fail(failed.id, new Error("x".repeat(1000)))).toMatchObject({
-      status: { state: "TASK_STATE_FAILED", message: { parts: [{ text: "x".repeat(512) }] } },
+    expect(store.fail(failed.id, new Error(`${"x".repeat(511)}😀tail`))).toMatchObject({
+      status: { state: "TASK_STATE_FAILED", message: { parts: [{ text: "x".repeat(511) }] } },
     });
     expect(store.reject(rejected.id, "peer blocked")).toMatchObject({
       status: { state: "TASK_STATE_REJECTED", message: { parts: [{ text: "peer blocked" }] } },
     });
-    expect(store.completeNext("ctx-alice", "active reply")?.id).toBe(active.id);
-  });
-
-  it("does not split surrogate pairs when bounding status messages", () => {
-    const store = createTaskStore();
-    const task = store.create("ctx-alice");
-
-    expect(store.fail(task.id, new Error(`${"x".repeat(511)}😀tail`))).toMatchObject({
-      status: { message: { parts: [{ text: "x".repeat(511) }] } },
-    });
+    expect(store.complete(active.id, "active reply")?.id).toBe(active.id);
   });
 
   it("returns working tasks after timeout and accepts the eventual final reply", async () => {
@@ -110,25 +66,53 @@ describe("A2A task store", () => {
     const task = store.create("ctx-alice");
     store.start(task.id);
 
-    await expect(store.wait(task.id, 0)).resolves.toMatchObject({
+    await expect(store.wait(task, 0)).resolves.toMatchObject({
       status: { state: "TASK_STATE_WORKING" },
     });
-    expect(store.completeNext("ctx-alice", "late reply")).toMatchObject({
+    expect(store.complete(task.id, "late reply")).toMatchObject({
       status: { state: "TASK_STATE_COMPLETED" },
       artifacts: [{ parts: [{ text: "late reply" }] }],
     });
   });
 
-  it("resolves outstanding HTTP waits with their working snapshot on shutdown", async () => {
+  it("fails outstanding HTTP waits on shutdown", async () => {
     const store = createTaskStore();
     const task = store.create("ctx-alice");
     store.start(task.id);
-    const waiting = store.wait(task.id, 120_000);
+    const waiting = store.wait(task, 120_000);
 
     store.stop();
 
-    await expect(waiting).resolves.toMatchObject({ status: { state: "TASK_STATE_WORKING" } });
+    await expect(waiting).resolves.toMatchObject({ status: { state: "TASK_STATE_FAILED" } });
     expect(store.get(task.id)).toBeUndefined();
+  });
+
+  it("keeps a later observer waiting after a sibling times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = createTaskStore();
+      const task = store.create("ctx-alice");
+      store.start(task.id);
+      const first = store.wait(task, 10);
+      await vi.advanceTimersByTimeAsync(5);
+      const second = store.wait(task, 20);
+      const secondSettled = vi.fn();
+      void second.then(secondSettled);
+
+      await vi.advanceTimersByTimeAsync(5);
+      const timedOut = await first;
+      expect(timedOut).toBe(task);
+      expect(timedOut?.status.state).toBe("TASK_STATE_WORKING");
+      expect(secondSettled).not.toHaveBeenCalled();
+
+      store.complete(task.id, "final reply");
+      await expect(second).resolves.toBe(task);
+      expect(timedOut?.status.state).toBe("TASK_STATE_COMPLETED");
+      expect(task.artifacts[0]?.parts).toEqual([{ text: "final reply" }]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("evicts the oldest completed tasks after the 500-entry retention cap", () => {
@@ -136,27 +120,29 @@ describe("A2A task store", () => {
     const completedIds: string[] = [];
     for (let index = 0; index <= 500; index += 1) {
       const contextId = `ctx-${index}`;
-      const task = store.create(contextId);
+      const task = store.create(contextId, "alice", `message-${index}`);
       completedIds.push(task.id);
-      store.completeNext(contextId, "done");
+      store.complete(task.id, "done");
     }
 
     expect(store.get(completedIds[0]!)).toBeUndefined();
     expect(store.get(completedIds[1]!)).toBeDefined();
     expect(store.get(completedIds[500]!)).toBeDefined();
+    expect(store.create("ctx-0", "alice", "message-0").id).not.toBe(completedIds[0]);
   });
 
   it("expires completed tasks after 24 hours without evicting active tasks", () => {
     const store = createTaskStore();
     const currentTime = 1_800_000_000_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(currentTime);
-    const completed = store.create("ctx-completed");
-    store.completeNext(completed.contextId, "done");
+    const completed = store.create("ctx-completed", "alice", "expired-message");
+    store.complete(completed.id, "done");
     const active = store.create("ctx-active");
 
     clock.mockReturnValue(currentTime + 24 * 60 * 60 * 1000);
 
     expect(store.get(completed.id)).toBeUndefined();
     expect(store.get(active.id)).toBe(active);
+    expect(store.create("ctx-completed", "alice", "expired-message").id).not.toBe(completed.id);
   });
 });

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObject } from "../config/validation.js";
 import { exitCodeFromFindings, runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
 import type { HealthCheck } from "../flows/health-checks.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
@@ -24,6 +25,7 @@ it.each(["token", "password"] as const)(
       policyPath,
       JSON.stringify({ gateway: { auth: { requireAuth: true, requireExplicitRateLimit: true } } }),
     );
+    const user = "operator@example.invalid";
     const config: OpenClawConfig = {
       plugins: { entries: { policy: { enabled: true, config: { path: policyPath } } } },
       gateway: {
@@ -35,11 +37,8 @@ it.each(["token", "password"] as const)(
           password: { source: "env", provider: "default", id: "SYNTHETIC_SERVING_PASSWORD" },
           allowTailscale: true,
           rateLimit: { maxAttempts: 5, windowMs: 30_000, lockoutMs: 60_000, exemptLoopback: false },
-          identityScopes: { "operator@example.invalid": ["operator.read"] },
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            allowUsers: ["operator@example.invalid"],
-          },
+          identityScopes: { [user]: ["operator.read"] },
+          trustedProxy: { userHeader: "x-forwarded-user", allowUsers: [user] },
         },
         trustedProxies: ["192.0.2.1"],
       },
@@ -79,9 +78,9 @@ it.each(["token", "password"] as const)(
           identityScopes: config.gateway?.auth?.identityScopes,
           trustedProxy: config.gateway?.auth?.trustedProxy,
           allowTailscale: false,
+          token: expect.any(String),
         },
       });
-      expect(copied.gateway?.auth?.token).toEqual(expect.any(String));
       expect(copied.gateway?.auth?.token).not.toBe(config.gateway?.auth?.token);
       expect(copied.gateway?.auth?.password).toBeUndefined();
       expect(rehearsal.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
@@ -103,3 +102,54 @@ it.each(["token", "password"] as const)(
     }
   },
 );
+
+it("keeps workspace-confined avatars as valid as the serving config", async () => {
+  const root = tempDirs.make("candidate-avatar-");
+  await materializeUpdateCandidateStateWorker(root);
+  const workspace = (id: string) => path.join(root, "workspaces", id);
+  const avatar = (id: string, value: string) => ({
+    workspace: workspace(id),
+    identity: { avatar: value },
+  });
+  const config: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      entries: {
+        main: avatar("main", `${workspace("main")}/a.png`),
+        relative: avatar("relative", "avatars/a.png"),
+        // Explicit local syntax must not be rewritten into a home or URI-like value.
+        tilde: avatar("tilde", "./~a.png"),
+        colon: avatar("colon", "./custom:a.png"),
+        absoluteTilde: avatar("absoluteTilde", `${workspace("absoluteTilde")}/~a.png`),
+        remote: { identity: { avatar: "https://example.invalid/a.png" } },
+        escaped: avatar("escaped", `${root}/a.png`),
+        // The candidate names workspaces by id, so ../<id> would land back inside it.
+        renamed: avatar("other", `${workspace("renamed")}/a.png`),
+        aliased: avatar("main", "../main/a.png"),
+        climbed: avatar("climbed", "../../workspaces/climbed/a.png"),
+        relativeRenamed: avatar("other", "../relativeRenamed/a.png"),
+      },
+    },
+  };
+  const issuePaths = (cfg: unknown) => {
+    const result = validateConfigObject(cfg);
+    return result.ok ? [] : result.issues.map((issue) => issue.path);
+  };
+  expect(issuePaths(config)).toEqual([
+    "agents.entries.escaped.identity.avatar",
+    "agents.entries.renamed.identity.avatar",
+    "agents.entries.relativeRenamed.identity.avatar",
+  ]);
+
+  const rehearsal = await prepareUpdateCandidateRehearsal({
+    config,
+    stateDir: path.join(root, "source"),
+    candidateRoot: root,
+  });
+  try {
+    const copied: unknown = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
+    expect(issuePaths(copied)).toEqual(issuePaths(config));
+  } finally {
+    await rehearsal.cleanup();
+  }
+});

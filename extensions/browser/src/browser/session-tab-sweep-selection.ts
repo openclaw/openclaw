@@ -1,10 +1,10 @@
+import { browserSessionTabNativeIdentity } from "./session-tab-identity.js";
 import {
   activeDurableStorageKeys,
   readColdNativeActivity,
   volatileSessionTabTargetKey,
   type VolatileSessionTab,
 } from "./session-tab-process-state.js";
-import { browserSessionTabNativeIdentity } from "./session-tab-store.js";
 import type { DurableTab } from "./session-tab-tracking.js";
 
 type TrackedTab = VolatileSessionTab | DurableTab;

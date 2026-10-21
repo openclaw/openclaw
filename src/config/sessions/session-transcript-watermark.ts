@@ -1,15 +1,22 @@
 import path from "node:path";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
-import { readSessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 
 export function readSessionTranscriptWatermarkAsync(scope: SessionTranscriptReadScope) {
+  const memory = captureSessionActorTranscriptRead(scope);
+  if (memory) {
+    if (memory.missing) {
+      memory.assertCurrent();
+      return Promise.resolve({ generation: null, maxSeq: null });
+    }
+    return memory.read("session.history.watermark", {}).then((result) => result.watermark);
+  }
   return withSessionTranscriptReadSource(
     scope,
-    readSessionTranscriptWatermark,
-    ({ scope: captured, owner, expectedIdentity }) =>
-      owner.readWatermark({ scope: captured, expectedIdentity }),
+    ({ scope: captured, owner, preparedReads, expectedIdentity }) =>
+      (preparedReads ?? owner).readWatermark({ scope: captured, expectedIdentity }),
   );
 }
 

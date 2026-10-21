@@ -37,29 +37,40 @@ print_plugins_stderr_log() {
 run_plugins_openclaw_logged() {
   local label="$1"
   shift
-  run_plugins_command_logged "$label" openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@"
+  run_plugins_command_output command "$label" "" openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@"
 }
 
 run_plugins_fixture_logged() {
   local label="$1"
   shift
-  run_plugins_command_logged "$label" openclaw_e2e_fixture_plugin_command openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" -- "$@"
+  run_plugins_command_output command "$label" "" openclaw_e2e_fixture_plugin_command openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" -- "$@"
 }
 
-run_plugins_command_logged() {
-  local label="$1"
+run_plugins_openclaw_capture() {
+  local output_file="$1"
   shift
-  local output_file
-  output_file="$(mktemp "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-stdout.XXXXXX")" || return $?
+  run_plugins_command_output capture "${output_file##*/}" "$output_file" openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@"
+}
+
+run_plugins_command_output() {
+  local mode="$1"
+  local label="$2"
+  local output_file="$3"
+  shift 3
+  if [[ "$mode" == "command" ]]; then
+    output_file="$(mktemp "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-stdout.XXXXXX")" || return $?
+  fi
   local error_file
   error_file="$(mktemp "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-stderr.XXXXXX")" || {
     local create_status=$?
-    rm -f "$output_file"
+    if [[ "$mode" == "command" ]]; then
+      rm -f "$output_file"
+    fi
     return "$create_status"
   }
   local status=0
   if "$@" >"$output_file" 2>"$error_file"; then
-    if docker_e2e_lifecycle_trace_enabled; then
+    if [[ "$mode" == "capture" ]] || docker_e2e_lifecycle_trace_enabled; then
       print_plugins_stderr_log "$error_file" || status=$?
     fi
   else
@@ -68,39 +79,18 @@ run_plugins_command_logged() {
       printf 'Plugin sweep stderr redaction failed: %s\n' "$label" >&2
     fi
     if [[ "$status" -eq 124 ]]; then
-      printf 'Plugin sweep command timed out after %s: %s\n' \
-        "$OPENCLAW_PLUGINS_CLI_TIMEOUT" "$label" >&2
+      printf 'Plugin sweep %s timed out after %s: %s\n' \
+        "$mode" "$OPENCLAW_PLUGINS_CLI_TIMEOUT" "$label" >&2
     else
-      printf 'Plugin sweep command failed with status %s: %s\n' \
-        "$status" "$label" >&2
+      printf 'Plugin sweep %s failed with status %s: %s\n' \
+        "$mode" "$status" "$label" >&2
     fi
   fi
-  rm -f "$error_file" "$output_file"
-  return "$status"
-}
-
-run_plugins_openclaw_capture() {
-  local output_file="$1"
-  shift
-  local error_file
-  error_file="$(mktemp "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-stderr.XXXXXX")" || return $?
-  local status=0
-  if openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$output_file" 2>"$error_file"; then
-    print_plugins_stderr_log "$error_file" || status=$?
+  if [[ "$mode" == "command" ]]; then
+    rm -f "$error_file" "$output_file"
   else
-    status=$?
-    if ! print_plugins_stderr_log "$error_file"; then
-      printf 'Plugin sweep stderr redaction failed: %s\n' "${output_file##*/}" >&2
-    fi
-    if [[ "$status" -eq 124 ]]; then
-      printf 'Plugin sweep capture timed out after %s: %s\n' \
-        "$OPENCLAW_PLUGINS_CLI_TIMEOUT" "${output_file##*/}" >&2
-    else
-      printf 'Plugin sweep capture failed with status %s: %s\n' \
-        "$status" "${output_file##*/}" >&2
-    fi
+    rm -f "$error_file"
   fi
-  rm -f "$error_file"
   return "$status"
 }
 
@@ -144,7 +134,7 @@ node scripts/e2e/lib/plugins/assertions.mjs demo-plugin
 
 echo "Testing tgz install flow..."
 pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-pack.XXXXXX")"
-pack_fixture_plugin "$pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-tgz.tgz" demo-plugin-tgz 0.0.1 demo.tgz "Demo Plugin TGZ"
+pack_fixture_archive plugin "$pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-tgz.tgz" demo-plugin-tgz 0.0.1 demo.tgz "Demo Plugin TGZ"
 
 run_plugins_fixture_logged install-tgz plugins install "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-tgz.tgz" --force
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins2.json" plugins list --json
@@ -206,8 +196,8 @@ npm_pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-npm-pack.XX
 npm_dep_pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-npm-dep-pack.XXXXXX")"
 invalid_npm_pack_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-invalid-metadata-pack.XXXXXX")"
 npm_registry_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-plugin-npm-registry.XXXXXX")"
-pack_fixture_plugin_with_cli_registry_dependency "$npm_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-npm.tgz" demo-plugin-npm 0.0.1 demo.npm "Demo Plugin NPM" demo-npm "demo-plugin-npm:pong"
-pack_fake_is_number_package "$npm_dep_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/is-number-7.0.0.tgz"
+pack_fixture_archive plugin-cli-registry-dep "$npm_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-npm.tgz" demo-plugin-npm 0.0.1 demo.npm "Demo Plugin NPM" demo-npm "demo-plugin-npm:pong"
+pack_fixture_archive fake-is-number-package "$npm_dep_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/is-number-7.0.0.tgz"
 pack_fixture_plugin_with_invalid_extension_entry "$invalid_npm_pack_dir" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-invalid-metadata.tgz" demo-plugin-invalid-metadata 0.0.1 demo.invalid.metadata "Demo Plugin Invalid Metadata"
 start_npm_fixture_registry "@openclaw/demo-plugin-npm" "0.0.1" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-npm.tgz" "$npm_registry_dir" "is-number" "7.0.0" "$OPENCLAW_PLUGINS_TMP_DIR/is-number-7.0.0.tgz" "@openclaw/demo-plugin-invalid-metadata" "0.0.1" "$OPENCLAW_PLUGINS_TMP_DIR/demo-plugin-invalid-metadata.tgz"
 

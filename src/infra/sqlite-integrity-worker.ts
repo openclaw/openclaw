@@ -5,11 +5,16 @@ import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { assertChildRuntimeAvailable, observeChildRuntime } from "./child-runtime-viability.js";
+import { restoreNativeErrorResponse } from "./native-error-response.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { readSqliteIntegrityFileIdentity } from "./sqlite-file-generation.js";
 import { SqliteIntegrityWorkerInterruptedError } from "./sqlite-integrity-worker-error.js";
-import type { SqliteIntegrityCheckTiming } from "./sqlite-integrity.js";
+import type {
+  SqliteIntegrityCheckOptions,
+  SqliteIntegrityCheckTiming,
+} from "./sqlite-integrity.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import {
   isSqliteInspectionDeadlineOwnedByCaller,
@@ -24,6 +29,7 @@ export type SqliteIntegrityWorkerInput = {
   identity: FileIdentityStat;
   busyTimeoutMs: number;
   reuse?: true;
+  integrity?: SqliteIntegrityCheckOptions;
 };
 
 export type SqliteIntegrityWorkerResult =
@@ -52,6 +58,7 @@ type IntegrityProcess = {
   retired: boolean;
   closeBudgetMs: number;
   failure?: Error;
+  runtimeFailure?: Error;
 };
 type IntegrityQueue = { process?: IntegrityProcess; tail: Promise<void> };
 type IntegrityScope = {
@@ -142,6 +149,7 @@ export function assertSqliteIntegrityInWorker(
   callerSignal: AbortSignal,
   databaseLabel = pathname,
   timing?: SqliteIntegrityCheckTiming,
+  integrity?: SqliteIntegrityCheckOptions,
 ): Promise<void> {
   const scope = integrityScope.getStore();
   const run = async (heldScope?: IntegrityScope) =>
@@ -152,6 +160,7 @@ export function assertSqliteIntegrityInWorker(
       databaseLabel,
       timing,
       heldScope,
+      integrity,
     );
   if (!scope) {
     return run();
@@ -185,6 +194,7 @@ function assertSqliteIntegrityWithProcess(
   databaseLabel: string,
   timing?: SqliteIntegrityCheckTiming,
   scope?: IntegrityScope,
+  integrity?: SqliteIntegrityCheckOptions,
 ): Promise<void> {
   const signal = resolveSqliteInspectionSignal(callerSignal) ?? callerSignal;
   if (timing) {
@@ -205,14 +215,16 @@ function assertSqliteIntegrityWithProcess(
   let active = scope?.queue.process;
   if (!active || active.retired) {
     const entry = resolveRuntimeProcessEntrypointUrl("sqliteIntegrity");
+    assertChildRuntimeAvailable();
     const child = fork(entry, [], {
       execArgv: resolveRuntimeWorkerArgv(entry).slice(0, -1),
       serialization: "advanced",
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
       timeout: scope || isSqliteInspectionDeadlineOwnedByCaller() ? undefined : timeoutMs,
       killSignal: "SIGKILL",
       ...(scope ? {} : { signal }),
     });
+    const runtimeFailure = observeChildRuntime(child);
     const { promise: closed, resolve: onClosed } = createDeferredCore();
     active = {
       child,
@@ -227,6 +239,7 @@ function assertSqliteIntegrityWithProcess(
       child.kill("SIGKILL");
     });
     child.once("close", () => {
+      launched.runtimeFailure = runtimeFailure();
       launched.retired = true;
       onClosed();
     });
@@ -266,7 +279,7 @@ function assertSqliteIntegrityWithProcess(
       clearInterval(heartbeat);
       signal.removeEventListener("abort", onAbort);
       worker.off("message", onMessage);
-      worker.off("close", onClose);
+      worker.off("close", finish);
       if (timing) {
         // In a reused child, lifetime measures this request through native close.
         timing.workerLifetimeElapsedMs = performance.now() - startedAt;
@@ -282,7 +295,7 @@ function assertSqliteIntegrityWithProcess(
       try {
         signal.throwIfAborted();
         scope?.assertCurrent();
-        const workerFailure = failure ?? reader.failure;
+        const workerFailure = reader.runtimeFailure ?? failure ?? reader.failure;
         if (workerFailure) {
           throw workerFailure;
         }
@@ -299,14 +312,7 @@ function assertSqliteIntegrityWithProcess(
         }
         readSqliteIntegrityFileIdentity(pathname, identity);
         if (!result.ok) {
-          const cause = result.error.cause
-            ? Object.assign(new Error(result.error.cause.message), result.error.cause)
-            : undefined;
-          throw Object.assign(new Error(result.error.message, cause ? { cause } : undefined), {
-            name: result.error.name,
-            code: result.error.code,
-            errcode: result.error.errcode,
-          });
+          throw restoreNativeErrorResponse(result.error);
         }
         resolve();
       } catch (error) {
@@ -318,8 +324,6 @@ function assertSqliteIntegrityWithProcess(
         }
       }
     };
-    const onClose = (code: number | null, closeSignal: NodeJS.Signals | null) =>
-      finish(code, closeSignal);
     const onMessage = (message: SqliteIntegrityWorkerMessage) => {
       if ("type" in message && message.type === "phase") {
         if (
@@ -344,7 +348,7 @@ function assertSqliteIntegrityWithProcess(
       }
     };
     worker.on("message", onMessage);
-    worker.once("close", onClose);
+    worker.once("close", finish);
     if (scope) {
       signal.addEventListener("abort", onAbort, { once: true });
       if (!isSqliteInspectionDeadlineOwnedByCaller()) {
@@ -365,6 +369,7 @@ function assertSqliteIntegrityWithProcess(
           databaseLabel,
           identity,
           busyTimeoutMs,
+          integrity,
           ...(scope ? { reuse: true as const } : {}),
         } satisfies SqliteIntegrityWorkerInput,
         (error) => {

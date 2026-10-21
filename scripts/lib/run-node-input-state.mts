@@ -327,11 +327,11 @@ export function resolveRunNodeInputSignature(
     const capture = (file: string, optional = false, identity = file) => {
       hash.update(`\0${identity}\0`);
       const absolute = path.resolve(deps.cwd, file);
+      const generatedManifest = generatedControlUiManifest(deps, file);
       try {
-        const before = deps.fs.statSync(absolute);
-        const link = deps.fs.lstatSync(absolute);
+        const link = deps.fs.lstatSync(absolute, { bigint: true });
         let contents = deps.fs.readFileSync(absolute);
-        if (generatedControlUiManifest(deps, file)) {
+        if (generatedManifest) {
           const manifest: unknown = JSON.parse(contents.toString());
           if (!isRecord(manifest)) {
             throw new Error(`Invalid plugin manifest: ${file}`);
@@ -341,20 +341,12 @@ export function resolveRunNodeInputSignature(
         }
         hash.update(
           JSON.stringify([
-            link.mode,
+            Number(link.mode),
             contents.length,
             link.isSymbolicLink() ? deps.fs.readlinkSync(absolute) : null,
           ]),
         );
         hash.update(contents);
-        const after = deps.fs.statSync(absolute);
-        if (
-          before.ctimeMs !== after.ctimeMs ||
-          before.size !== after.size ||
-          before.ino !== after.ino
-        ) {
-          throw new Error(`Build input changed while reading: ${file}`);
-        }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !optional) {
           throw error;
@@ -373,52 +365,6 @@ export function resolveRunNodeInputSignature(
       capture(require.resolve(name), false, `${name}/entry`);
     }
     return hash.digest("hex");
-  } catch {
-    return null;
-  }
-}
-
-export type RunNodeInputState = { signature: string; generation: string };
-
-/** Transient mutation evidence includes clean inputs that can change and revert during a build. */
-export function captureRunNodeInputState(
-  deps: RunNodeInputDeps,
-  scope: "build" | "runtime",
-  options: { assetPhase?: boolean } = {},
-): RunNodeInputState | null {
-  const signature = resolveRunNodeInputSignature(deps, scope);
-  if (!signature) {
-    return null;
-  }
-  try {
-    const files = listRunNodeInputFiles(deps, scope);
-    if (!files) {
-      return null;
-    }
-    const generation = createHash("sha256");
-    for (const file of files) {
-      generation.update(`${file}\0`);
-      // The asset writer atomically replaces these files. Their authored fields
-      // remain guarded by the signature; later compiler phases also guard stat identity.
-      if (options.assetPhase && generatedControlUiManifest(deps, file)) {
-        continue;
-      }
-      try {
-        const absolute = path.resolve(deps.cwd, file);
-        const link = deps.fs.lstatSync(absolute, { bigint: true });
-        const stat = deps.fs.statSync(absolute, { bigint: true });
-        generation.update(
-          [link.dev, link.ino, link.ctimeNs, stat.dev, stat.ino, stat.ctimeNs, stat.size].join(":"),
-        );
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          throw error;
-        }
-        generation.update("missing");
-      }
-      generation.update("\0");
-    }
-    return { signature, generation: generation.digest("hex") };
   } catch {
     return null;
   }

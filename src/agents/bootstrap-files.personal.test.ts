@@ -4,12 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { linkEmail } from "../state/user-profile-writes.worker.js";
-import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { resolveBootstrapContextForRun } from "./bootstrap-files.js";
+import * as workspaceFiles from "./workspace-file-read.js";
+import { loadPersonalUserBootstrapFile } from "./workspace-personal-bootstrap.js";
 vi.mock("../plugins/memory-runtime.js", () => ({
   classifyActiveMemoryWorkspacePaths: vi.fn(async () => ({ status: "unavailable" })),
 }));
@@ -26,28 +28,29 @@ afterEach(async () => {
   await state.cleanup();
 });
 describe("personal bootstrap", () => {
-  it.each(["owner", "named"])(
-    "keeps only workspace USER.md for a single %s identity",
-    async (kind) => {
-      const workspaceDir = tempDirs.make("bootstrap-single-user-");
-      const owner = ensureGatewayOwnerProfile("Local Owner");
-      const profile = kind === "owner" ? owner : ensureProfileForEmail("solo@example.test");
-      const personalDir = path.join(workspaceDir, "users", profile.id);
-      await fs.mkdir(personalDir, { recursive: true });
-      await fs.writeFile(path.join(workspaceDir, "USER.md"), "Only workspace preferences");
-      await fs.writeFile(path.join(personalDir, "USER.md"), "Legacy personal preferences");
-      const context = await resolveBootstrapContextForRun({
-        workspaceDir,
-        bootstrapUserProfileId: profile.id,
+  it("rejects a retired profile's overlay after worker preparation and a merge during the file read", async () => {
+    const workspaceDir = tempDirs.make("bootstrap-profile-retired-");
+    const alice = ensureProfileForEmail("alice@example.test");
+    const bob = ensureProfileForEmail("bob@example.test");
+    ensureProfileForEmail("third@example.test");
+    const personalDir = path.join(workspaceDir, "users", alice.id);
+    await fs.mkdir(personalDir, { recursive: true });
+    await fs.writeFile(path.join(personalDir, "USER.md"), "Alice private preferences");
+    const read = workspaceFiles.readWorkspaceFileWithGuards;
+    const intercepted = vi
+      .spyOn(workspaceFiles, "readWorkspaceFileWithGuards")
+      .mockImplementationOnce(async (params) => {
+        const loaded = await read(params);
+        linkEmail("alice@example.test", bob.id);
+        return loaded;
       });
-      expect(context.contextFiles.filter((file) => file.path.endsWith("USER.md"))).toEqual([
-        { path: path.join(workspaceDir, "USER.md"), content: "Only workspace preferences" },
-      ]);
-      expect(await fs.readFile(path.join(personalDir, "USER.md"), "utf8")).toBe(
-        "Legacy personal preferences",
-      );
-    },
-  );
+    try {
+      expect(await loadPersonalUserBootstrapFile(workspaceDir, alice.id)).toBeUndefined();
+      expect(intercepted).toHaveBeenCalledOnce();
+    } finally {
+      intercepted.mockRestore();
+    }
+  });
 
   it("refreshes the selected overlay without retaining a previous selection", async () => {
     const workspaceDir = path.join(tempDirs.make("bootstrap-people-"), "users", "arbitrary");
@@ -62,6 +65,10 @@ describe("personal bootstrap", () => {
     await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared defaults");
     await writePersonal(alice.id, "Alice preferences");
     await writePersonal(bob.id, "Bob preferences");
+    expect((await loadPersonalUserBootstrapFile(workspaceDir, alice.id))?.origin).toEqual({
+      kind: "personal",
+      rootPath: path.join(workspaceDir, "users", alice.id),
+    });
     const load = async (bootstrapUserProfileId?: string) => {
       const context = await resolveBootstrapContextForRun({
         workspaceDir,

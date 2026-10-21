@@ -153,7 +153,6 @@ async function maybeRepairRepointedWorkspaceAliases(params: {
 /** Stop migration discovery if its workspace owner still needs an operator decision. */
 export function createWorkspaceAliasMigrationRepair(
   prompter: DoctorPrompter | undefined,
-  beforePrompt: () => void,
 ): ((cfg: OpenClawConfig) => Promise<void>) | undefined {
   if (!prompter?.shouldRepair) {
     return undefined;
@@ -162,7 +161,6 @@ export function createWorkspaceAliasMigrationRepair(
     if ((await collectRepointedWorkspaceAliasFindings(cfg)).length === 0) {
       return;
     }
-    beforePrompt();
     await maybeRepairRepointedWorkspaceAliases({ cfg, prompter });
     const unresolved = await collectRepointedWorkspaceAliasFindings(cfg);
     if (unresolved.length > 0) {

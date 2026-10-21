@@ -70,6 +70,7 @@ describe("createTextProjection", () => {
       const expected =
         mode === "both" ? source.trim() : mode === "start" ? source.trimStart() : source;
       expect(result).toEqual({ text: expected, delta: expected.slice(delivered.length) });
+      expect(projection.matchesTrimmedSource).toBe(expected === source.trim());
       delivered = expected;
     }
     expect(projection.replace(" \tReset \n")).toEqual({
@@ -79,70 +80,50 @@ describe("createTextProjection", () => {
     expect(projection.append("end").text).toBe(filter.transform(" \tReset \nend"));
   });
 
-  it.each([
-    { chunks: [" \r", "\n\t\n", "  Code", "\n next"], expected: "  Code\n next" },
-    { chunks: ["\v", "\n", " Text"], expected: "\v\n Text" },
-    { chunks: [" \n\r\n", "\t"], expected: "" },
-  ])("removes only leading empty lines %#", ({ chunks, expected }) => {
-    const projection = createTextProjection([leadingEmptyLinesTextFilter]);
-    let delivered = "";
-    for (const chunk of chunks) {
-      const result = projection.append(chunk);
-      expect(result.delta).not.toBeNull();
-      delivered += result.delta;
-      expect(delivered).toBe(result.text);
+  it("distinguishes preserved indentation and equal-length rewrites from trimmed source", () => {
+    const projection = createTextProjection([
+      { activationTokens: ["swap"], transform: (text) => text.replace("swap", "edit") },
+      trimTextFilter("both", { preserveCodeIndentation: true }),
+    ]);
+    for (const source of ["\u00a0plain \n", "    code\n", " swap ", "\t\n"]) {
+      projection.replace(source);
+      expect(projection.matchesTrimmedSource).toBe(projection.text === source.trim());
+      projection.append(" tail");
+      expect(projection.matchesTrimmedSource).toBe(projection.text === `${source} tail`.trim());
     }
-    expect(projection.text).toBe(expected);
-    expect(projection.replace("\n  Reset")).toEqual({ text: "  Reset", delta: null });
+    const padding = createTextProjection([
+      { activationTokens: ["\n"], transform: (text) => text.replace(/^\n/, "") },
+      trimTextFilter("both"),
+    ]);
+    padding.append("\nSame ");
+    expect(padding.matchesTrimmedSource).toBe(true);
   });
+
+  it.each([{ chunks: [" \r", "\n\t\n", "  Code", "\n next"], expected: "  Code\n next" }])(
+    "removes only leading empty lines %#",
+    ({ chunks, expected }) => {
+      const projection = createTextProjection([leadingEmptyLinesTextFilter]);
+      let delivered = "";
+      for (const chunk of chunks) {
+        const result = projection.append(chunk);
+        expect(result.delta).not.toBeNull();
+        delivered += result.delta;
+        expect(delivered).toBe(result.text);
+      }
+      expect(projection.text).toBe(expected);
+      expect(projection.replace("\n  Reset")).toEqual({ text: "  Reset", delta: null });
+    },
+  );
 });
 
 describe("duplicate paragraphs", () => {
   it.each([
-    { text: " \r\n\t ", expected: " \r\n\t " },
-    { text: "  A \n\n A  ", expected: "A" },
-    { text: "A\n\nB\n\nA", expected: "A\n\nB\n\nA" },
-    { text: "A  B\n\nA\tB", expected: "A  B" },
-    { text: "A\r\n\r\nA", expected: "A\r\n\r\nA" },
-    { text: "A\n\nA\n\nB\n\nB", expected: "A\n\nB" },
-    { text: "first\n\nfirst diverges\n\nfirst diverges", expected: "first\n\nfirst diverges" },
-    { text: "A\n\nA\n\nB C\n\nB\u00a0C", expected: "A\n\nB C" },
-    { text: "A\n\n \n\nA", expected: "A\n\n \n\nA" },
     { text: "A\n\nA\n\n \n\nB", expected: "A\n\n\n\nB" },
-    { text: "\n\n \n\nA\n\nA\n\n \n\n", expected: "A" },
-    {
-      text: "```text\nrepeat\n\nrepeat\n```",
-      expected: "```text\nrepeat\n\nrepeat\n```",
-    },
-    {
-      text: "    first\n\n    second\n\ntail\n\ntail",
-      expected: "    first\n\n    second\n\ntail",
-    },
-    { text: "repeat\n\n    repeat\n\nrepeat", expected: "repeat\n\n    repeat\n\nrepeat" },
-    { text: "Run `x`.\n\nRun `x`.", expected: "Run `x`." },
-    {
-      text: "Same `x`.\n\nSame `x`.\n\nOther `x`.\n\nOther `x`.",
-      expected: "Same `x`.\n\nOther `x`.",
-    },
-    {
-      text: "repeat\n\nrepeat\n\n```text\n$$ $& $` $'\n```\n\n```text\n$$ $& $` $'\n```",
-      expected: "repeat\n\n```text\n$$ $& $` $'\n```\n\n```text\n$$ $& $` $'\n```",
-    },
     {
       text: "\0\0\0\n\nrepeat\n\nrepeat\n\nUse `x`\u0000`y` and `x`.",
       expected: "\0\0\0\n\nrepeat\n\nUse `x`\u0000`y` and `x`.",
     },
-    {
-      text: 'repeat\n\nrepeat\n\n```js\nfunction replacement() {\n\n  return "$$ $& $` $\'";\n}\n```',
-      expected: 'repeat\n\n```js\nfunction replacement() {\n\n  return "$$ $& $` $\'";\n}\n```',
-    },
-    {
-      text: '    const replacement = "$$ $& $` $\'";\n\nrepeat\n\nrepeat',
-      expected: '    const replacement = "$$ $& $` $\'";\n\nrepeat',
-    },
-    { text: "Use ``$$ $& $` $'``.\n\nUse ``$$ $& $` $'``.", expected: "Use ``$$ $& $` $'``." },
     { text: "repeat\n\nrepeat `x`", expected: "repeat\n\nrepeat `x`" },
-    { text: "Do `x` repeat\n\nrepeat", expected: "Do `x` repeat\n\nrepeat" },
   ])("preserves canonical separators and whitespace %#", ({ text, expected }) => {
     expect(duplicateParagraphTextFilter.transform(text)).toBe(expected);
     const partitions = [

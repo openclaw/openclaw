@@ -48,7 +48,7 @@ function browserCommandGroups(
         command("create-profile", "Create a new browser profile"),
         command("delete-profile", "Delete a browser profile"),
         command("doctor", "Check browser plugin readiness", [
-          { flags: "--deep", description: "Run a live snapshot probe" },
+          { flags: "--deep", description: "Run a live snapshot check" },
         ]),
       ],
       register: async () => {

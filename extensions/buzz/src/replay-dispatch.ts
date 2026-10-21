@@ -11,15 +11,7 @@ export type BuzzReplayDispatchReservation = {
   release: () => void;
 };
 
-type BuzzReplayDispatchQueue = {
-  enqueue: (task: () => Promise<void>) => BuzzReplayDispatchAdmission;
-  reserveCapacity: (slots: number) => Promise<BuzzReplayDispatchReservation | undefined>;
-  close: () => Promise<void>;
-};
-
-export function createBuzzReplayDispatchQueue(params: {
-  onTaskError: (error: unknown) => void;
-}): BuzzReplayDispatchQueue {
+export function createBuzzReplayDispatchQueue(params: { onTaskError: (error: unknown) => void }) {
   const pending: Array<() => Promise<void>> = [];
   let pendingHead = 0;
   let active = 0;
@@ -127,7 +119,7 @@ export function createBuzzReplayDispatchQueue(params: {
 
   return {
     enqueue: enqueueTask,
-    async reserveCapacity(slots) {
+    async reserveCapacity(slots: number) {
       if (closed) {
         return undefined;
       }
@@ -151,8 +143,5 @@ export function createBuzzReplayDispatchQueue(params: {
 
 export function resolveBuzzRoomHistoryLimit(roomCount: number): number {
   const totalCapacity = BUZZ_REPLAY_DISPATCH_MAX_PENDING + REPLAY_DISPATCH_CONCURRENCY;
-  return Math.min(
-    REPLAY_HISTORY_MAX_PER_ROOM,
-    Math.max(1, Math.floor(totalCapacity / Math.max(1, roomCount))),
-  );
+  return Math.min(REPLAY_HISTORY_MAX_PER_ROOM, Math.floor(totalCapacity / roomCount));
 }

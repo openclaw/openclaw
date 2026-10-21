@@ -10,7 +10,7 @@ import type {
 } from "../process/command-process-custody.types.js";
 import type { CommandProcessOutcome } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "./update-doctor-result.js";
 import {
@@ -73,9 +73,7 @@ export async function retainUpdateDoctorProcesses(
   try {
     raw = fs.readFileSync(file, "utf8");
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
     // Shipped parents do not join this channel, but the candidate still retains
     // its writer inventory if killed. Only the reserving owner may remove it.
     ownedByDoctor = true;
@@ -125,7 +123,29 @@ export async function retainUpdateDoctorProcesses(
       cwd: process.cwd(),
     });
   }
-  let nativeCustody: ReturnType<typeof createManagedCommandProcessCustody> | undefined;
+  const namespace = receipt.namespace ?? (root ? { roots: [root] } : undefined);
+  let nativeCustody: Awaited<ReturnType<typeof createManagedCommandProcessCustody>> | undefined;
+  let preparationFailure: { error: unknown } | undefined;
+  if (namespace) {
+    try {
+      nativeCustody = await createManagedCommandProcessCustody({
+        ...namespace,
+        runId: receipt.runId,
+        anchorOwner: `doctor:${receipt.nonce}`,
+        parents: authority?.parents,
+        assertCurrent,
+      });
+    } catch (error) {
+      // Diagnostics without native children do not depend on command storage.
+      preparationFailure = { error };
+    }
+  }
+  if (nativeCustody && namespace) {
+    receipt.namespace ??= {
+      roots: namespace.roots,
+      databaseIdentity: nativeCustody.databaseIdentity,
+    };
+  }
   let sequence = 0;
   return {
     [Symbol.dispose]() {
@@ -137,24 +157,13 @@ export async function retainUpdateDoctorProcesses(
       }
     },
     reserve(argv) {
+      if (preparationFailure) {
+        throw preparationFailure.error;
+      }
       // Root discovery may be unavailable during otherwise useful diagnostics.
       // Native installation custody is required before dispatching a child.
       if (!nativeCustody) {
-        const namespace = receipt.namespace ?? (root ? { roots: [root] } : undefined);
-        if (!namespace) {
-          throw new Error("Doctor process custody requires its installation root.");
-        }
-        nativeCustody = createManagedCommandProcessCustody({
-          ...namespace,
-          runId: receipt.runId,
-          anchorOwner: `doctor:${receipt.nonce}`,
-          parents: authority?.parents,
-          assertCurrent,
-        });
-        receipt.namespace ??= {
-          roots: namespace.roots,
-          databaseIdentity: nativeCustody.databaseIdentity,
-        };
+        throw new Error("Doctor process custody requires its installation root.");
       }
       const retained = nativeCustody.custody.reserve(argv);
       const slot: Receipt["slots"][number] = { id: ++sequence };
@@ -163,21 +172,20 @@ export async function retainUpdateDoctorProcesses(
         writeReceipt(file, receipt);
       } catch (error) {
         retained.settled();
+        receipt.slots.splice(receipt.slots.indexOf(slot), 1);
         throw error;
       }
       return {
         spawned(identity: CommandProcessIdentity) {
-          retained.spawned(identity);
+          // Publish the owned PID before binding so a failed bind cannot leave anonymous custody.
           slot.identity = identity;
           writeReceipt(file, receipt);
+          retained.spawned(identity);
         },
         settled() {
           retained.settled();
-          const index = receipt.slots.indexOf(slot);
-          if (index >= 0) {
-            receipt.slots.splice(index, 1);
-            writeReceipt(file, receipt);
-          }
+          receipt.slots.splice(receipt.slots.indexOf(slot), 1);
+          writeReceipt(file, receipt);
         },
       };
     },
@@ -189,7 +197,7 @@ export type UpdateDoctorProcessNamespace = {
   databaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
 };
 
-export function createUpdateDoctorProcessCustody(
+export async function createUpdateDoctorProcessCustody(
   runId: string,
   root: string,
   resultPath: string,
@@ -205,7 +213,7 @@ export function createUpdateDoctorProcessCustody(
   const nativeCustody =
     process.platform === "win32"
       ? undefined
-      : createManagedCommandProcessCustody({
+      : await createManagedCommandProcessCustody({
           roots,
           runId,
           anchorOwner: `doctor:${descriptor.nonce}`,

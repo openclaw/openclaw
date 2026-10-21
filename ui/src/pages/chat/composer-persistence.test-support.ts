@@ -15,10 +15,10 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   ChatComposerPersistence,
   admitStoredChatComposerQueueItem,
-  loadChatComposerSnapshot,
+  loadChatComposerState,
   listStoredChatOutboxes,
   persistChatComposerState,
-  removeStoredChatComposerQueueItem,
+  updateStoredChatComposerQueueItems,
 } from "./composer-persistence.ts";
 
 type ComposerState = Parameters<typeof persistChatComposerState>[0] & {
@@ -77,7 +77,7 @@ export function admitItem(
 }
 
 export function reviewLegacyItem(state: ComposerState, id: string) {
-  expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
+  expect(loadChatComposerState(state, state.sessionKey).snapshot).toBeNull();
   expect(listStoredChatOutboxes(state)).toEqual([]);
   const entry = readChatOutboxRecovery(state).entries.find((candidate) =>
     candidate.session.queue?.some((item) => item.id === id),
@@ -89,7 +89,7 @@ export function reviewLegacyItem(state: ComposerState, id: string) {
   );
   expect(destination).not.toBeNull();
   expect(restoreChatOutboxRecovery(state, entry!, destination!)).toBe("restored");
-  return loadChatComposerSnapshot(state, state.sessionKey)!.queue[0]!;
+  return loadChatComposerState(state, state.sessionKey).snapshot!.queue[0]!;
 }
 
 export function fillOutboxes(prefix: string, count = 20) {
@@ -102,7 +102,9 @@ export function fillOutboxes(prefix: string, count = 20) {
 }
 
 export function releaseOutbox({ state, item }: ReturnType<typeof fillOutboxes>[number]) {
-  expect(removeStoredChatComposerQueueItem(state, state.sessionKey, item.id, item)).toBe(true);
+  expect(
+    updateStoredChatComposerQueueItems(state, state.sessionKey, [{ expected: item, next: null }]),
+  ).toBe(true);
 }
 
 export function startPersistence(state: ComposerState) {

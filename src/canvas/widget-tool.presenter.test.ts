@@ -1,16 +1,35 @@
 import { access } from "node:fs/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { WidgetHtmlInputError } from "../plugin-sdk/widget-html.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
+import { registerTestWidgetContentKind } from "./widget-tool.content-kinds.test-support.js";
 import { createShowWidgetTool } from "./widget-tool.js";
+import { createBoardPutCaller } from "./widget-tool.test-support.js";
 import { buildWidgetDocument } from "./wrap.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const widget = { title: "Status", widget_code: "<p>ready</p>" };
+const scheduled = { title: "Scheduled status", widget_code: "<main>ready</main>" };
+const payload = (result: Awaited<ReturnType<ReturnType<typeof createShowWidgetTool>["execute"]>>) =>
+  JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "null");
+beforeEach(() => resetPluginRuntimeStateForTest());
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  resetPluginRuntimeStateForTest();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("show_widget current-channel presentation", () => {
   it.each([false, true])("prefers the channel presenter (inline=%s)", async (inlineClient) => {
     const stateDir = tempDirs.make("openclaw-widget-presenter-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const present = vi.fn(async () => ({
       ok: true as const,
       value: {
@@ -40,7 +59,6 @@ describe("show_widget current-channel presentation", () => {
       present,
     };
     const tool = createShowWidgetTool({
-      stateDir,
       sessionId: "current-channel",
       inlineClientAvailable: inlineClient,
       presenters: [presenter],
@@ -53,13 +71,7 @@ describe("show_widget current-channel presentation", () => {
     expect(
       (tool.parameters as { properties?: { kind?: { enum?: string[] } } }).properties?.kind?.enum,
     ).toEqual(["html"]);
-    const result = await tool.execute("current-channel", {
-      title: "Status",
-      widget_code: "<p>ready</p>",
-    });
-    const parsed = JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "null");
-
-    expect(parsed).toMatchObject({
+    expect(payload(await tool.execute("current-channel", widget))).toMatchObject({
       kind: "widget",
       presentation: {
         target: "current_channel",
@@ -74,5 +86,136 @@ describe("show_widget current-channel presentation", () => {
       context,
     });
     await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+  });
+  it.each(["pending", "rejected", "granted"] as const)(
+    "reports the owner's %s capability outcome",
+    async (grantState) => {
+      const { mock } = createBoardPutCaller();
+      const original = mock.getMockImplementation()!;
+      mock.mockImplementation(async (...args) => {
+        const snapshot = await original(...args);
+        snapshot.widgets[0]!.grantState = grantState;
+        return snapshot;
+      });
+      const tool = createShowWidgetTool({
+        agentSessionKey: "agent:main:approval",
+        inlineHostEnabled: false,
+      });
+      const result = await tool.execute("pin", {
+        title: "Runs",
+        widget_code: "<p>runs</p>",
+        pin: true,
+        capabilities: { tools: ["github.actions.runs:owner/repo"] },
+      });
+      const parsed = payload(result);
+      expect(parsed).toMatchObject({ boardWidgetName: "runs", capabilityState: grantState });
+      expect(parsed.text).toContain(grantState);
+      if (grantState !== "granted") {
+        expect(parsed.text).toMatch(/approve|review/i);
+      }
+    },
+  );
+  it("keeps scheduled widget authoring pinned-only without an inline client", async () => {
+    const { mock: callGatewayMock } = createBoardPutCaller();
+    const stateDir = tempDirs.make("openclaw-scheduled-widget-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const tool = createShowWidgetTool({
+      sessionId: "scheduled-board-only",
+      agentSessionKey: "agent:main:dashboard:scheduled",
+      inlineClientAvailable: false,
+      pinnedOnly: true,
+    });
+    const schema = tool.parameters as {
+      properties?: {
+        pin?: { const?: boolean };
+        presentation?: { properties?: { target?: unknown } };
+      };
+      required?: string[];
+    };
+
+    expect(tool.requiredClientCaps).toBeUndefined();
+    expect(schema.required).toContain("pin");
+    expect(schema.properties?.pin?.const).toBe(true);
+    expect(schema.properties?.presentation?.properties).not.toHaveProperty("target");
+    expect(tool.description).toContain("This surface is pinned-only");
+
+    await expect(tool.execute("scheduled-unpinned", scheduled)).rejects.toThrow(
+      "pin=true is required for this pinned-only widget surface",
+    );
+    await expect(
+      tool.execute("scheduled-target", {
+        ...scheduled,
+        pin: true,
+        presentation: { target: "assistant_message" },
+      }),
+    ).rejects.toThrow("presentation.target is unavailable for this pinned-only widget surface");
+
+    const result = await tool.execute("scheduled-pinned", {
+      ...scheduled,
+      widget_code: "<button onclick=\"this.textContent='updated'\">Update</button>",
+      name: "scheduled-status",
+      pin: true,
+    });
+    expect(payload(result)).toEqual({
+      status: "pinned",
+      boardWidgetName: "scheduled-status",
+      capabilityState: "none",
+      text: "Widget pinned to dashboard tab main as scheduled-status. Open this dashboard tab in Control UI to view it.",
+    });
+    expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
+      "board.widget.put",
+      expect.objectContaining({
+        sessionKey: "agent:main:dashboard:scheduled",
+        name: "scheduled-status",
+        content: {
+          kind: "html",
+          html: "<button onclick=\"this.textContent='updated'\">Update</button>",
+        },
+      }),
+    );
+    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+  });
+  it("rejects broken scripts before any side effect", async () => {
+    const stateDir = tempDirs.make("openclaw-widget-syntax-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const { mock: gateway } = createBoardPutCaller();
+    const present = vi.fn<WidgetPresenter["present"]>();
+    const availability = vi.fn<WidgetPresenter["availability"]>();
+    const tool = createShowWidgetTool({
+      sessionId: "syntax",
+      agentSessionKey: "agent:main:syntax",
+      presenters: [{ target: "node_panel", description: "Test panel", availability, present }],
+    });
+    const result = tool.execute("broken", {
+      title: "Broken widget",
+      widget_code: "<p>Widget</p>\n<script>const a='x\n'+b;</script>",
+      pin: true,
+    });
+    await expect(result).rejects.toThrow(WidgetHtmlInputError);
+    await expect(result).rejects.toThrow(
+      "widget_code has a JavaScript syntax error in inline script 1 at line 2, column 16: Unterminated string constant. Offending line: <script>const a='x. Fix the script and call show_widget again.",
+    );
+    expect(gateway).not.toHaveBeenCalled();
+    expect(present).not.toHaveBeenCalled();
+    expect(availability).not.toHaveBeenCalled();
+    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+  });
+
+  it("leaves registered source validation to the content kind", async () => {
+    registerTestWidgetContentKind("diagram", () => "<p>Rendered diagram</p>");
+    const stateDir = tempDirs.make("openclaw-widget-syntax-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const tool = createShowWidgetTool({ sessionId: "registered-syntax" });
+    expect(tool.description).toContain(
+      "Keep one-off visualizations inline; pin for explicit dashboard requests or multiple non-code visualizations.",
+    );
+    expect(tool.description).toContain('Default videos to controls playsinline preload="auto"');
+    expect(tool.description).toContain("do not autoplay");
+    const result = await tool.execute("registered", {
+      title: "Diagram",
+      kind: "diagram",
+      widget_code: "diagram:<script>const =</script>",
+    });
+    expect(payload(result)).toMatchObject({ kind: "canvas" });
   });
 });

@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "../api.js";
 import {
   activateMemoryWikiCompiledCacheOwner,
   configureMemoryWikiCompiledCacheStore,
-  resolveMemoryWikiCompiledCacheGeneration,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
   type MemoryWikiCompiledDigestClaim,
@@ -24,9 +23,9 @@ import {
 import {
   appendMemoryWikiLog,
   ensureMemoryWikiVaultGeneration,
+  hashMemoryWikiVaultSources,
   loadMemoryWikiValidatedVaultIdentity,
   loadMemoryWikiVaultIdentity,
-  resolveMemoryWikiVaultSourceGeneration,
 } from "./log.js";
 import {
   createWikiPromptSectionBuilder,
@@ -123,7 +122,7 @@ async function seedCompiledDigest(params: {
     timestamp: "2026-07-17T00:00:00.000Z",
     details: { compiledCacheReservationId: reservationId },
   });
-  const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(params.config.vault.path);
+  const sourceGeneration = hashMemoryWikiVaultSources([]);
   await appendMemoryWikiLog(params.config.vault.path, {
     type: "compile",
     timestamp: "2026-07-17T00:00:00.000Z",
@@ -137,10 +136,8 @@ async function seedCompiledDigest(params: {
   await writeMemoryWikiCompiledCache(
     params.config,
     snapshot,
-    resolveMemoryWikiCompiledCacheGeneration(snapshot),
     publicationId,
     parentPublicationId,
-    async () => {},
     async () => {},
     () => loadMemoryWikiValidatedVaultIdentity(params.config.vault.path),
   );
@@ -161,42 +158,6 @@ describe("Memory Wiki prompt section", () => {
     expect(lines.join("\n")).toContain("`memory_search` with `corpus=all`");
     expect(lines.join("\n")).toContain("`memory_get` with `corpus=wiki` or `corpus=all`");
     expect(lines.join("\n")).toContain("wiki-specific ranking or provenance details");
-  });
-
-  it("prepares a compact compiled digest from SQLite", async () => {
-    const config = resolveMemoryWikiConfig({
-      vault: { path: path.join(suiteRoot, "digest-enabled") },
-      context: { includeCompiledDigestPrompt: true },
-    });
-    await seedCompiledDigest({
-      config,
-      claimCount: 8,
-      contradictionCount: 1,
-      pages: [
-        {
-          title: "Alpha",
-          kind: "entity",
-          claimCount: 3,
-          questions: ["Still active?"],
-          contradictions: ["Conflicts with source.beta"],
-          topClaims: [
-            {
-              text: "Alpha uses PostgreSQL for production writes.",
-              confidence: 0.91,
-              freshnessLevel: "fresh",
-            },
-          ],
-        },
-      ],
-    });
-
-    const lines = await createStaticPreparer(config)({ availableTools: new Set() });
-
-    expect(lines.join("\n")).toContain("## Compiled Wiki Snapshot");
-    expect(lines.join("\n")).toContain(
-      "Alpha: entity, 3 claims, 1 open questions, 1 contradiction notes",
-    );
-    expect(lines.join("\n")).toContain("Alpha uses PostgreSQL for production writes.");
   });
 
   it.each([

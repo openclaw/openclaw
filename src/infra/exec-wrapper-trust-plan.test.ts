@@ -12,10 +12,12 @@ test.each(["darwin", "linux", "win32"] as const)(
   },
 );
 
-const defaultPolicyPlan: Omit<
-  ReturnType<typeof resolveExecWrapperTrustPlan>,
-  "argv" | "policyArgv" | "dispatchChain"
-> = {
+const posix = process.platform !== "win32";
+const opaqueShell = { shellWrapperExecutable: true };
+const inlineShell = { ...opaqueShell, shellInlineCommand: "echo hi" };
+
+type TrustPlan = ReturnType<typeof resolveExecWrapperTrustPlan>;
+const defaultPolicyPlan: Omit<TrustPlan, "argv" | "policyArgv" | "dispatchChain"> = {
   wrapperChain: [],
   wrapperInvocations: [],
   policyBlocked: false,
@@ -23,193 +25,142 @@ const defaultPolicyPlan: Omit<
   shellInlineCommand: null,
 };
 
+// Explicit suffix offsets keep expected argv independent of wrapper parsing.
+function unwrapped(
+  argv: string[],
+  target: number,
+  wrappers: [string, number][],
+  extra: Partial<TrustPlan> = {},
+): [string[], Partial<TrustPlan>] {
+  return [
+    argv,
+    {
+      argv: argv.slice(target),
+      policyArgv: argv.slice(target),
+      wrapperChain: wrappers.map(([wrapper]) => wrapper),
+      wrapperInvocations: wrappers.map(([wrapper, offset]) => ({
+        wrapper,
+        sourceArgv: argv.slice(offset),
+      })),
+      ...extra,
+    },
+  ];
+}
+
+type TrustCase = [
+  string,
+  boolean,
+  string[],
+  Partial<TrustPlan>,
+  { depth?: number; platform?: NodeJS.Platform }?,
+];
+
 describe("resolveExecWrapperTrustPlan", () => {
-  test.each([
-    {
-      name: "unwraps command argv carriers before evaluating allowlist policy",
-      enabled: process.platform !== "win32",
-      argv: ["command", "curl", "https://example.invalid"],
-      expected: {
-        argv: ["curl", "https://example.invalid"],
-        policyArgv: ["curl", "https://example.invalid"],
-        wrapperChain: ["command"],
-        wrapperInvocations: [
-          { wrapper: "command", sourceArgv: ["command", "curl", "https://example.invalid"] },
-        ],
-      },
-    },
-    {
-      name: "does not unwrap path-qualified command tokens as shell builtins",
-      enabled: process.platform !== "win32",
-      argv: ["/tmp/openclaw-test/command", "curl", "https://example.invalid"],
-      expected: {},
-    },
-    {
-      name: "does not unwrap command tokens on Windows",
-      enabled: true,
-      argv: ["command", "curl", "https://example.invalid"],
-      platform: "win32" as const,
-      expected: {},
-    },
-    {
-      name: "unwraps command argv carriers through transparent dispatch wrappers",
-      enabled: process.platform !== "win32",
-      argv: ["env", "command", "--", "python3", "/tmp/run.py"],
-      expected: {
-        argv: ["python3", "/tmp/run.py"],
-        policyArgv: ["python3", "/tmp/run.py"],
-        wrapperChain: ["env", "command"],
-        wrapperInvocations: [
-          { wrapper: "env", sourceArgv: ["env", "command", "--", "python3", "/tmp/run.py"] },
-          { wrapper: "command", sourceArgv: ["command", "--", "python3", "/tmp/run.py"] },
-        ],
-      },
-    },
-    {
-      name: "unwraps builtin argv carriers before evaluating allowlist policy",
-      enabled: process.platform !== "win32",
-      argv: ["builtin", "printf", "ok"],
-      expected: {
-        argv: ["printf", "ok"],
-        policyArgv: ["printf", "ok"],
-        wrapperChain: ["builtin"],
-        wrapperInvocations: [{ wrapper: "builtin", sourceArgv: ["builtin", "printf", "ok"] }],
-      },
-    },
-    {
-      name: "unwraps exec argv carriers before evaluating allowlist policy",
-      enabled: process.platform !== "win32",
-      argv: ["exec", "-a", "friendly-name", "bash", "/tmp/run.sh"],
-      expected: {
-        argv: ["bash", "/tmp/run.sh"],
-        policyArgv: ["bash", "/tmp/run.sh"],
-        wrapperChain: ["exec"],
-        wrapperInvocations: [
-          { wrapper: "exec", sourceArgv: ["exec", "-a", "friendly-name", "bash", "/tmp/run.sh"] },
-        ],
-        shellWrapperExecutable: true,
-      },
-    },
-    {
-      name: "keeps startup-file shell wrappers opaque before evaluating allowlist policy",
-      enabled: true,
-      argv: ["tcsh", "-c", "echo hi"],
-      expected: {
-        shellWrapperExecutable: true,
-      },
-    },
-    {
-      name: "recognizes nushell command flags before evaluating allowlist policy",
-      enabled: true,
-      argv: ["nu", "--commands", "echo hi"],
-      expected: {
-        shellWrapperExecutable: true,
-        shellInlineCommand: "echo hi",
-      },
-    },
-    {
-      name: "recognizes nushell execute flags before evaluating allowlist policy",
-      enabled: true,
-      argv: ["nu", "--execute", "echo hi"],
-      expected: {
-        shellWrapperExecutable: true,
-        shellInlineCommand: "echo hi",
-      },
-    },
-    {
-      name: "omits nushell config inline-value startup payloads from trust plans",
-      enabled: true,
-      argv: ["nu", "--config=/tmp/evil.nu", "--commands", "echo hi"],
-      expected: {
-        shellWrapperExecutable: true,
-      },
-    },
-    {
-      name: "omits nushell env-config startup payloads from trust plans",
-      enabled: true,
-      argv: ["nu", "--env-config", "/tmp/evil.nu", "--commands", "echo hi"],
-      expected: {
-        shellWrapperExecutable: true,
-      },
-    },
-    {
-      name: "recognizes yash cmdline flags before evaluating allowlist policy",
-      enabled: true,
-      argv: ["yash", "--cmdline", "echo hi"],
-      expected: {
-        shellWrapperExecutable: true,
-        shellInlineCommand: "echo hi",
-      },
-    },
-    {
-      name: "recognizes clustered yash command flags before evaluating allowlist policy",
-      enabled: true,
-      argv: ["yash", "-xc", "echo hi"],
-      expected: {
-        shellWrapperExecutable: true,
-        shellInlineCommand: "echo hi",
-      },
-    },
-    {
-      name: "fails closed for non-executing command argv carrier queries",
-      enabled: process.platform !== "win32",
-      argv: ["command", "-v", "curl"],
-      expected: {
+  test.each<TrustCase>([
+    [
+      "command carrier",
+      posix,
+      ...unwrapped(["command", "curl", "https://example.invalid"], 1, [["command", 0]]),
+    ],
+    [
+      "path-qualified command stays opaque",
+      posix,
+      ["/tmp/openclaw-test/command", "curl", "https://example.invalid"],
+      {},
+    ],
+    [
+      "Windows command stays opaque",
+      true,
+      ["command", "curl", "https://example.invalid"],
+      {},
+      { platform: "win32" as const },
+    ],
+    [
+      "env plus command carrier",
+      posix,
+      ...unwrapped(["env", "command", "--", "python3", "/tmp/run.py"], 3, [
+        ["env", 0],
+        ["command", 1],
+      ]),
+    ],
+    ["builtin carrier", posix, ...unwrapped(["builtin", "printf", "ok"], 1, [["builtin", 0]])],
+    [
+      "exec -a carrier",
+      posix,
+      ...unwrapped(
+        ["exec", "-a", "friendly-name", "bash", "/tmp/run.sh"],
+        3,
+        [["exec", 0]],
+        opaqueShell,
+      ),
+    ],
+    ["tcsh startup stays opaque", true, ["tcsh", "-c", "echo hi"], opaqueShell],
+    ["nushell --commands", true, ["nu", "--commands", "echo hi"], inlineShell],
+    ["nushell --execute", true, ["nu", "--execute", "echo hi"], inlineShell],
+    [
+      "nushell --config stays opaque",
+      true,
+      ["nu", "--config=/tmp/evil.nu", "--commands", "echo hi"],
+      opaqueShell,
+    ],
+    [
+      "nushell --env-config stays opaque",
+      true,
+      ["nu", "--env-config", "/tmp/evil.nu", "--commands", "echo hi"],
+      opaqueShell,
+    ],
+    ["yash --cmdline", true, ["yash", "--cmdline", "echo hi"], inlineShell],
+    ["yash -xc", true, ["yash", "-xc", "echo hi"], inlineShell],
+    [
+      "command -v blocked",
+      posix,
+      ["command", "-v", "curl"],
+      {
         policyBlocked: true,
         blockedWrapper: "command",
       },
-    },
-    {
-      name: "fails closed for command carriers that request default PATH lookup",
-      enabled: process.platform !== "win32",
-      argv: ["command", "-p", "curl", "https://example.invalid"],
-      expected: {
+    ],
+    [
+      "command -p blocked",
+      posix,
+      ["command", "-p", "curl", "https://example.invalid"],
+      {
         policyBlocked: true,
         blockedWrapper: "command",
       },
-    },
-    {
-      name: "unwraps transparent caffeinate wrappers before shell policy checks",
-      enabled: process.platform !== "win32",
-      argv: ["/usr/bin/caffeinate", "-d", "-w", "42", "sh", "-c", "echo hi"],
-      expected: {
-        argv: ["sh", "-c", "echo hi"],
-        policyArgv: ["sh", "-c", "echo hi"],
-        wrapperChain: ["caffeinate"],
-        wrapperInvocations: [
-          {
-            wrapper: "caffeinate",
-            sourceArgv: ["/usr/bin/caffeinate", "-d", "-w", "42", "sh", "-c", "echo hi"],
-          },
+    ],
+    [
+      "caffeinate unwraps",
+      posix,
+      ...unwrapped(
+        ["/usr/bin/caffeinate", "-d", "-w", "42", "sh", "-c", "echo hi"],
+        4,
+        [["caffeinate", 0]],
+        inlineShell,
+      ),
+    ],
+    [
+      "time plus busybox",
+      posix,
+      ...unwrapped(
+        ["/usr/bin/time", "-p", "busybox", "sh", "-c", "echo hi"],
+        3,
+        [
+          ["time", 0],
+          ["busybox", 2],
         ],
-        shellWrapperExecutable: true,
-        shellInlineCommand: "echo hi",
-      },
-    },
-    {
-      name: "unwraps dispatch wrappers and shell multiplexers into one trust plan",
-      enabled: process.platform !== "win32",
-      argv: ["/usr/bin/time", "-p", "busybox", "sh", "-c", "echo hi"],
-      expected: {
-        argv: ["sh", "-c", "echo hi"],
-        policyArgv: ["busybox", "sh", "-c", "echo hi"],
-        wrapperChain: ["time", "busybox"],
-        wrapperInvocations: [
-          {
-            wrapper: "time",
-            sourceArgv: ["/usr/bin/time", "-p", "busybox", "sh", "-c", "echo hi"],
-          },
-          { wrapper: "busybox", sourceArgv: ["busybox", "sh", "-c", "echo hi"] },
-        ],
-        shellWrapperExecutable: true,
-        shellInlineCommand: "echo hi",
-      },
-    },
-    {
-      name: "blocks script wrappers before evaluating nested shell payloads",
-      enabled: process.platform === "darwin" || process.platform === "freebsd",
-      argv: ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
-      expected: {
+        {
+          policyArgv: ["busybox", "sh", "-c", "echo hi"],
+          shellWrapperExecutable: true,
+          shellInlineCommand: "echo hi",
+        },
+      ),
+    ],
+    [
+      "script blocked",
+      process.platform === "darwin" || process.platform === "freebsd",
+      ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
+      {
         wrapperInvocations: [
           {
             wrapper: "script",
@@ -219,79 +170,53 @@ describe("resolveExecWrapperTrustPlan", () => {
         policyBlocked: true,
         blockedWrapper: "script",
       },
-    },
-    {
-      name: "unwraps sandbox-exec wrappers before evaluating nested shell payloads",
-      enabled: process.platform !== "win32",
-      argv: ["/usr/bin/sandbox-exec", "-p", "(allow default)", "sh", "-c", "echo hi"],
-      expected: {
-        argv: ["sh", "-c", "echo hi"],
-        policyArgv: ["sh", "-c", "echo hi"],
-        wrapperChain: ["sandbox-exec"],
-        wrapperInvocations: [
-          {
-            wrapper: "sandbox-exec",
-            sourceArgv: ["/usr/bin/sandbox-exec", "-p", "(allow default)", "sh", "-c", "echo hi"],
-          },
-        ],
-        shellWrapperExecutable: true,
-        shellInlineCommand: "echo hi",
-      },
-    },
-    {
-      name: "keeps package-manager exec argv as the execution trust target",
-      enabled: true,
-      argv: ["pnpm", "--reporter", "silent", "exec", "--", "tsx", "./run.ts"],
-      expected: {},
-    },
-    {
-      name: "keeps package-manager shell-call mode outside generic wrapper policy",
-      enabled: true,
-      argv: ["npx", "--call", "sh -c 'echo hi'"],
-      expected: {},
-    },
-    {
-      name: "omits startup shell inline payloads from trust plans",
-      enabled: process.platform !== "win32",
-      argv: ["bash", "--login", "-c", "echo hi"],
-      expected: {
-        shellWrapperExecutable: true,
-      },
-    },
-    {
-      name: "fails closed for unsupported shell multiplexer applets",
-      enabled: true,
-      argv: ["busybox", "sed", "-n", "1p"],
-      expected: {
+    ],
+    [
+      "sandbox-exec unwraps",
+      posix,
+      ...unwrapped(
+        ["/usr/bin/sandbox-exec", "-p", "(allow default)", "sh", "-c", "echo hi"],
+        3,
+        [["sandbox-exec", 0]],
+        inlineShell,
+      ),
+    ],
+    [
+      "pnpm exec stays opaque",
+      true,
+      ["pnpm", "--reporter", "silent", "exec", "--", "tsx", "./run.ts"],
+      {},
+    ],
+    ["npx --call stays opaque", true, ["npx", "--call", "sh -c 'echo hi'"], {}],
+    ["bash login stays opaque", posix, ["bash", "--login", "-c", "echo hi"], opaqueShell],
+    [
+      "busybox non-shell blocked",
+      true,
+      ["busybox", "sed", "-n", "1p"],
+      {
         policyBlocked: true,
         blockedWrapper: "busybox",
       },
-    },
-    {
-      name: "fails closed when outer-wrapper depth overflows",
-      enabled: true,
-      argv: ["nohup", "timeout", "5s", "busybox", "sh", "-lc", "echo hi"],
-      depth: 2,
-      expected: {
-        argv: ["busybox", "sh", "-lc", "echo hi"],
-        policyArgv: ["busybox", "sh", "-lc", "echo hi"],
-        wrapperChain: ["nohup", "timeout"],
-        wrapperInvocations: [
-          {
-            wrapper: "nohup",
-            sourceArgv: ["nohup", "timeout", "5s", "busybox", "sh", "-lc", "echo hi"],
-          },
-          { wrapper: "timeout", sourceArgv: ["timeout", "5s", "busybox", "sh", "-lc", "echo hi"] },
+    ],
+    [
+      "outer-wrapper depth overflow",
+      true,
+      ...unwrapped(
+        ["nohup", "timeout", "5s", "busybox", "sh", "-lc", "echo hi"],
+        3,
+        [
+          ["nohup", 0],
+          ["timeout", 1],
         ],
-        policyBlocked: true,
-        blockedWrapper: "busybox",
-      },
-    },
-    {
-      name: "keeps the blocked dispatch argv as the policy target after transparent unwraps",
-      enabled: process.platform !== "win32",
-      argv: ["/usr/bin/time", "-p", "/usr/bin/env", "FOO=bar", "sh", "-lc", "echo hi"],
-      expected: {
+        { policyBlocked: true, blockedWrapper: "busybox" },
+      ),
+      { depth: 2 },
+    ],
+    [
+      "time plus blocked env",
+      posix,
+      ["/usr/bin/time", "-p", "/usr/bin/env", "FOO=bar", "sh", "-lc", "echo hi"],
+      {
         argv: ["/usr/bin/env", "FOO=bar", "sh", "-lc", "echo hi"],
         policyArgv: ["/usr/bin/env", "FOO=bar", "sh", "-lc", "echo hi"],
         wrapperInvocations: [
@@ -304,16 +229,19 @@ describe("resolveExecWrapperTrustPlan", () => {
         policyBlocked: true,
         blockedWrapper: "env",
       },
+    ],
+  ])(
+    "trust plan: %s",
+    (_name, enabled, argv, expected, { depth, platform }: NonNullable<TrustCase[4]> = {}) => {
+      if (!enabled) {
+        return;
+      }
+      const { dispatchChain: _dispatchChain, ...policyPlan } = resolveExecWrapperTrustPlan(
+        argv,
+        depth,
+        platform,
+      );
+      expect(policyPlan).toEqual({ argv, policyArgv: argv, ...defaultPolicyPlan, ...expected });
     },
-  ])("$name", ({ enabled, argv, depth, platform, expected }) => {
-    if (!enabled) {
-      return;
-    }
-    const { dispatchChain: _dispatchChain, ...policyPlan } = resolveExecWrapperTrustPlan(
-      argv,
-      depth,
-      platform,
-    );
-    expect(policyPlan).toEqual({ argv, policyArgv: argv, ...defaultPolicyPlan, ...expected });
-  });
+  );
 });

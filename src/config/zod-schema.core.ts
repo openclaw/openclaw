@@ -120,7 +120,6 @@ const EgressProxyExactHostSchema = z
     }
   });
 
-/** Schema for one configured env/file/exec/store secret provider entry. */
 export const SecretProviderSchema = z.union([
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
@@ -128,7 +127,6 @@ export const SecretProviderSchema = z.union([
   SecretsStoreProviderSchema,
 ]);
 
-/** Schema for the top-level `secrets` config block. */
 export const SecretsConfigSchema = z
   .strictObject({
     egressProxy: z
@@ -248,7 +246,6 @@ const ThinkingLevelMapSchema = z.strictObject({
 const ModelDefinitionSchema = z.strictObject({
   /** Provider-facing model id. */
   id: z.string().min(1),
-  /** Human-readable display name. */
   name: z.string().min(1),
   /** Optional API adapter override for this model. */
   api: ModelApiSchema.optional(),
@@ -298,6 +295,8 @@ const ModelDefinitionSchema = z.strictObject({
   compat: ModelCompatSchema,
   /** Media input limits used by routing and preflight compression. */
   mediaInput: ModelMediaInputSchema.optional(),
+  /** Custom authored rows may accept endpoint-selected response ids; official policy still wins. */
+  responseModelEquivalent: z.boolean().optional(),
   /** Metadata source marker for models added by CLI/catalog tooling. */
   metadataSource: z.literal("models-add").optional(),
 });
@@ -308,13 +307,11 @@ const ModelProviderLocalServiceSchema = z
     command: z.string().min(1),
     /** Arguments passed without shell expansion. */
     args: z.array(z.string()).optional(),
-    /** Working directory for the local service process. */
     cwd: z.string().min(1).optional(),
     /** Environment variables added to the service process. */
     env: z.record(z.string(), z.string().register(sensitive)).optional(),
     /** Optional health endpoint polled before the provider is considered ready. */
     healthUrl: z.string().min(1).optional(),
-    /** Startup readiness timeout in milliseconds. */
     readyTimeoutMs: z.number().int().positive().optional(),
     /** Idle timeout in milliseconds before stopping the local service. */
     idleStopMs: z.number().int().nonnegative().optional(),
@@ -329,13 +326,18 @@ const ModelProviderSchema = z.strictObject({
   apiKey: SecretInputSchema.optional().register(sensitive),
   /** Authentication mode used when resolving credentials for this provider. */
   auth: z
-    .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
+    .union([
+      z.literal("api-key"),
+      z.literal("aws-sdk"),
+      z.literal("oauth"),
+      z.literal("token"),
+      z.literal("none"),
+    ])
     .optional(),
   /** Default API adapter for models under this provider. */
   api: ModelApiSchema.optional(),
   /** Provider-level default max output tokens. */
   maxTokens: z.number().positive().optional(),
-  /** Provider request timeout in seconds. */
   timeoutSeconds: z.number().int().positive().optional(),
   /** Optional provider deployment/API region used by provider plugins that expose regional endpoints. */
   region: z.string().min(1).optional(),
@@ -411,7 +413,6 @@ export const ModelsConfigSchema = z
     /** Merge provider config with bundled catalogs or replace bundled catalogs entirely. */
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: ModelProvidersSchema.optional(),
-    /** Hosted model catalog refresh settings. */
     catalogRefresh: ModelCatalogRefreshConfigSchema,
   })
   .optional();
@@ -481,11 +482,9 @@ export const BlockStreamingChunkSchema = z.strictObject({
     .optional(),
 });
 
-const MarkdownTableModeSchema = z.enum(["off", "bullets", "code", "block"]);
-
 export const MarkdownConfigSchema = z
   .strictObject({
-    tables: MarkdownTableModeSchema.optional(),
+    tables: z.enum(["off", "bullets", "code", "block"]).optional(),
   })
   .optional();
 
@@ -618,20 +617,17 @@ const MediaUnderstandingAttachmentsSchema = z
     mode: z.union([z.literal("first"), z.literal("all")]).optional(),
     /** Max number of attachments to process (default: 1). */
     maxAttachments: z.number().int().positive().optional(),
-    /** Attachment ordering preference. */
     prefer: z
       .union([z.literal("first"), z.literal("last"), z.literal("path"), z.literal("url")])
       .optional(),
   })
   .optional();
 
-const MediaUnderstandingCapabilitiesSchema = z
-  .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
-  .optional();
-
-const ProviderOptionValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 const ProviderOptionsSchema = z
-  .record(z.string(), z.record(z.string(), ProviderOptionValueSchema))
+  .record(
+    z.string(),
+    z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.string())])),
+  )
   .optional();
 
 const MediaUnderstandingRuntimeFields = {
@@ -658,7 +654,9 @@ const MediaUnderstandingModelSchema = z
     /** Model id for provider-based understanding. */
     model: z.string().optional(),
     /** Optional capability tags for shared model lists. */
-    capabilities: MediaUnderstandingCapabilitiesSchema,
+    capabilities: z
+      .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
+      .optional(),
     /** Use a CLI command instead of provider API. */
     type: z.union([z.literal("provider"), z.literal("cli")]).optional(),
     /** CLI binary (required when type=cli). */
@@ -667,7 +665,6 @@ const MediaUnderstandingModelSchema = z
     args: z.array(z.string()).optional(),
     /** Optional max output characters for this model entry. */
     maxChars: z.number().int().positive().optional(),
-    /** Optional max bytes for this model entry. */
     maxBytes: z.number().int().positive().optional(),
     ...MediaUnderstandingRuntimeFields,
     /** Auth profile id to use for this provider. */
@@ -690,7 +687,6 @@ const ToolsMediaCapabilitySchema = z
     /** Default max output characters. */
     maxChars: z.number().int().positive().optional(),
     ...MediaUnderstandingRuntimeFields,
-    /** Attachment selection policy. */
     attachments: MediaUnderstandingAttachmentsSchema,
   })
   .optional();

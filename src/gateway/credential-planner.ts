@@ -1,5 +1,3 @@
-// Gateway credential planning helpers.
-// Classifies local/remote auth inputs before SecretRef resolution.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { containsEnvVarReference } from "../config/env-substitution.js";
 import {
@@ -11,42 +9,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 import type { SupportedGatewaySecretInputPath } from "./secret-input-paths.js";
 
-type GatewayConfiguredCredentialInput = {
-  path: SupportedGatewaySecretInputPath;
-  configured: boolean;
-  value?: string;
-  refPath?: SupportedGatewaySecretInputPath;
-  hasSecretRef: boolean;
-};
+export type GatewayCredentialPlan = ReturnType<typeof createGatewayCredentialPlan>;
 
-/** Precomputed Gateway credential surfaces used by startup, secret resolution, and clients. */
-export type GatewayCredentialPlan = {
-  configuredMode: "local" | "remote";
-  authMode?: string;
-  envToken?: string;
-  envPassword?: string;
-  localToken: GatewayConfiguredCredentialInput;
-  localPassword: GatewayConfiguredCredentialInput;
-  remoteToken: GatewayConfiguredCredentialInput;
-  remotePassword: GatewayConfiguredCredentialInput;
-  localTokenCanWin: boolean;
-  localPasswordCanWin: boolean;
-  localTokenSurfaceActive: boolean;
-  tokenCanWin: boolean;
-  passwordCanWin: boolean;
-  remoteMode: boolean;
-  remoteUrlConfigured: boolean;
-  tailscaleRemoteExposure: boolean;
-  remoteConfiguredSurface: boolean;
-  remoteTokenFallbackActive: boolean;
-  remoteTokenActive: boolean;
-  remotePasswordFallbackActive: boolean;
-  remotePasswordActive: boolean;
-};
-
-type GatewaySecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
-
-/** Normalize optional Gateway credential strings to nonempty values. */
 export const trimToUndefined = normalizeOptionalString;
 
 /**
@@ -64,12 +28,11 @@ export function trimCredentialToUndefined(value: unknown): string | undefined {
   return trimmed;
 }
 
-/** Build the shared credential plan for Gateway startup, local auth, and remote client auth. */
 export function createGatewayCredentialPlan(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  defaults?: GatewaySecretDefaults;
-}): GatewayCredentialPlan {
+  defaults?: NonNullable<OpenClawConfig["secrets"]>["defaults"];
+}) {
   const env = params.env ?? process.env;
   const gateway = params.config.gateway;
   const remote = gateway?.remote;
@@ -78,10 +41,7 @@ export function createGatewayCredentialPlan(params: {
   const envToken = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
   const envPassword = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
 
-  function resolveInput(
-    path: SupportedGatewaySecretInputPath,
-    value: unknown,
-  ): GatewayConfiguredCredentialInput {
+  function resolveInput(path: SupportedGatewaySecretInputPath, value: unknown) {
     const resolutionFacts = getConfigResolutionFacts(params.config);
     if (
       hasUnresolvedConfigPath(params.config, path) ||
@@ -145,7 +105,7 @@ export function createGatewayCredentialPlan(params: {
     authMode !== "trusted-proxy" && !envPassword && !localPassword.configured && passwordCanWin;
 
   return {
-    configuredMode: gateway?.mode === "remote" ? "remote" : "local",
+    configuredMode: gateway?.mode === "remote" ? ("remote" as const) : ("local" as const),
     authMode,
     envToken,
     envPassword,

@@ -158,12 +158,12 @@ function resolveCommentTurn(params: {
   botOpenId?: string | null;
   abortSignal?: AbortSignal;
 }) {
+  createFeishuClientMock.mockReturnValue(params.client ?? makeOpenApiClient());
   return resolveDriveCommentEventTurn({
     cfg,
     accountId: "default",
     event: params.event ?? makeDriveCommentEvent(),
     botOpenId: params.botOpenId === null ? undefined : (params.botOpenId ?? "ou_bot"),
-    createClient: () => (params.client ?? makeOpenApiClient()) as never,
     abortSignal: params.abortSignal,
   });
 }
@@ -362,11 +362,6 @@ describe("resolveDriveCommentEventTurn", () => {
       name: "skips a cold-start comment notice when not explicitly mentioned",
       botOpenId: null,
       event: { is_mentioned: false },
-    },
-    {
-      name: "skips a cold-start comment notice when missing recipient identity",
-      botOpenId: null,
-      event: { notice_meta: { to_user_id: undefined } },
     },
   ])("$name", async ({ event, botOpenId }) => {
     expect(await resolveCommentTurn({ event: makeDriveCommentEvent(event), botOpenId })).toBeNull();

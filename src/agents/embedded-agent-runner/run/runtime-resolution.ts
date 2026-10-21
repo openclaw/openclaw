@@ -3,7 +3,12 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import { resolveRunModelFallbacksOverride } from "../../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
+import type { AgentHarnessPluginSelection } from "../../harness/runtime-plugin-load-plan.js";
+import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
@@ -12,11 +17,42 @@ import {
 import { resolveThinkingDefault } from "../../model-thinking-default.js";
 import { OPENAI_PROVIDER_ID } from "../../openai-routing.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
+import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 export const CODEX_HARNESS_ID = "codex";
 const OPENAI_RESPONSES_API = "openai-responses";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
+
+export function resolveEmbeddedRuntimePluginSelections(input: {
+  run: RunEmbeddedAgentParamsWithSessionFile;
+  config: OpenClawConfig;
+  agentId: string;
+  manifestPlugins: PluginMetadataSnapshot;
+  requestedModel: ReturnType<typeof resolveInitialEmbeddedRunModel>;
+}): AgentHarnessPluginSelection[] {
+  const { run, config, agentId, manifestPlugins, requestedModel } = input;
+  const explicitHarness = run.agentHarnessId ?? run.agentHarnessRuntimeOverride;
+  const requestedHarness = explicitHarness ?? run.agentHarnessRuntimePreparationHint;
+  return resolveModelCandidateChain({
+    cfg: config,
+    agentId,
+    manifestPlugins,
+    provider: requestedModel.provider,
+    model: requestedModel.modelId,
+    requestedRouteResolution: run.requestedRouteResolution,
+    fallbacksOverride:
+      run.modelFallbacksOverride ??
+      resolveRunModelFallbacksOverride({ cfg: config, agentId, sessionKey: run.sessionKey }),
+  }).map((candidate, index): AgentHarnessPluginSelection =>
+    Object.assign(
+      { provider: candidate.provider, modelId: candidate.model },
+      // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
+      requestedHarness && (index === 0 || explicitHarness) ? { runtime: requestedHarness } : {},
+      { agentId },
+    ),
+  );
+}
 
 export function resolveAttemptTrajectoryAttribution(params: {
   model: { api?: string; provider?: string };
@@ -90,18 +126,15 @@ export function resolveInitialEmbeddedRunModel(params: {
   provider?: string;
   model?: string;
 }): { provider: string; modelId: string } {
-  const cfg = params.config ?? {};
   // Preliminary route identification stays static; prepared metadata owns
   // plugin and workspace normalization once the runtime context exists.
-  const staticPreliminaryNormalization = {
+  const resolutionContext = {
+    cfg: params.config ?? {},
+    agentId: params.agentId,
     allowManifestNormalization: false,
     allowPluginNormalization: false,
   } as const;
-  const configuredDefault = resolveDefaultModelForAgent({
-    cfg,
-    agentId: params.agentId,
-    ...staticPreliminaryNormalization,
-  });
+  const configuredDefault = resolveDefaultModelForAgent(resolutionContext);
   const explicitProvider = normalizeOptionalString(params.provider);
   const explicitModel = normalizeOptionalString(params.model);
   const defaultProvider = configuredDefault.provider || DEFAULT_PROVIDER;
@@ -112,18 +145,14 @@ export function resolveInitialEmbeddedRunModel(params: {
 
   if (explicitModel) {
     const aliasIndex = buildModelAliasIndex({
-      cfg,
-      agentId: params.agentId,
+      ...resolutionContext,
       defaultProvider,
-      ...staticPreliminaryNormalization,
     });
     const resolved = resolveModelRefFromString({
-      cfg,
-      agentId: params.agentId,
+      ...resolutionContext,
       raw: explicitModel,
       defaultProvider,
       aliasIndex,
-      ...staticPreliminaryNormalization,
     });
     return {
       provider: resolved?.ref.provider ?? defaultProvider,

@@ -66,6 +66,26 @@ private struct SlashPanelHeightKey: PreferenceKey {
     }
 }
 
+/// The card takes its natural height, at least the resting height. The draft row stretches, so any
+/// room the minimum leaves sits under a short draft, and rows above the draft use it first.
+private struct CleanComposerRestingHeight: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(minHeight: CleanChatComposerMetrics.restingMinHeight, alignment: .bottom)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Evaluates part of the composer in its own body. Debug builds keep every nested `some View` temporary on
+/// the stack, and the whole composer evaluated in one body nearly fills the 1 MB main-thread stack of a device.
+struct ChatComposerSection<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        self.content()
+    }
+}
+
 struct OpenClawChatComposerPresentationOwner: Equatable {
     let viewModelID: ObjectIdentifier
     let session: OpenClawChatViewModel.SessionSnapshot
@@ -90,6 +110,7 @@ struct OpenClawChatComposer: View {
     }
 
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @Environment(\.dynamicTypeSize) var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Bindable var viewModel: OpenClawChatViewModel
@@ -105,18 +126,6 @@ struct OpenClawChatComposer: View {
     let voiceNoteControl: OpenClawChatVoiceNoteControl?
     var focusRequest = 0
     var resolveInputModel: (@MainActor () -> OpenClawChatViewModel?)?
-
-    private var inputModel: OpenClawChatViewModel? {
-        // Resolve synchronous input at delivery time, including callbacks from the previous render.
-        if let resolveInputModel { return resolveInputModel() }
-        return self.viewModel
-    }
-
-    private var inputText: Binding<String> {
-        Binding(
-            get: { self.inputModel?.input ?? "" },
-            set: { self.inputModel?.input = $0 })
-    }
 
     @State private var isSlashPopoverPresented = false
     @State private var suppressNextSlashPopoverUpdate = false
@@ -135,10 +144,14 @@ struct OpenClawChatComposer: View {
     @State private var fileImporterOwner: OpenClawChatAttachmentCaptureOwner?
     #if canImport(UIKit)
     @State private var cameraEncodingTask: Task<Void, Never>?
-    @State private var cameraEncodingGeneration = UUID()
     @State private var cameraCaptureOwner: OpenClawChatAttachmentCaptureOwner?
     #endif
+    #if os(iOS)
+    /// UIKit owns first responder; its bridge needs stored state, not an unbound SwiftUI FocusState.
+    @State private var isFocused = false
+    #else
     @FocusState private var isFocused: Bool
+    #endif
     #else
     @State private var shouldFocusTextView = false
     #endif
@@ -183,13 +196,13 @@ struct OpenClawChatComposer: View {
                 .accessibilityIdentifier("chat-composer-model-sign-in-notice")
             }
             self.lifecycleComposer
-            if self.viewModel.modelCatalogMessage != nil || !self.usesDesktopModelMenu {
+            if self.viewModel.modelCatalogMessage != nil || self.showsModelSignInRow {
                 HStack {
                     if let message = self.viewModel.modelCatalogMessage {
                         Text(message).font(OpenClawChatTypography.caption)
                     }
                     Spacer()
-                    if !self.usesDesktopModelMenu {
+                    if self.showsModelSignInRow {
                         self.modelSignInButton
                     }
                 }
@@ -275,7 +288,7 @@ struct OpenClawChatComposer: View {
     }
 
     private var styledComposer: some View {
-        self.composerContent
+        ChatComposerSection { self.composerContent }
             .padding(composerPadding)
             .background { self.composerBackground }
     }
@@ -620,7 +633,7 @@ struct OpenClawChatComposer: View {
     }
 
     private var editor: some View {
-        self.editorContent
+        ChatComposerSection { self.editorContent }
             .overlay(alignment: .top) {
                 if self.isSlashPopoverPresented {
                     self.slashCommandPanel
@@ -718,7 +731,7 @@ struct OpenClawChatComposer: View {
             }
         }
         #if os(iOS)
-        .frame(minHeight: CleanChatComposerMetrics.restingMinHeight, alignment: .bottom)
+        .modifier(CleanComposerRestingHeight())
         #else
             .padding(.horizontal, self.isDesktopLayout ? 0 : 6)
             .padding(.vertical, self.isDesktopLayout ? 0 : 2)
@@ -1214,6 +1227,18 @@ extension OpenClawChatComposer {
 }
 
 extension OpenClawChatComposer {
+    private var inputText: Binding<String> {
+        Binding(
+            get: { self.inputModel?.input ?? "" },
+            set: { self.inputModel?.input = $0 })
+    }
+
+    private var inputModel: OpenClawChatViewModel? {
+        // Resolve synchronous input at delivery time, including callbacks from the previous render.
+        if let resolveInputModel { return resolveInputModel() }
+        return self.viewModel
+    }
+
     @ViewBuilder
     private var sendButton: some View {
         if self.viewModel.pendingRunCount > 0, self.shouldShowStopButton {
@@ -1224,7 +1249,7 @@ extension OpenClawChatComposer {
                     ProgressView().controlSize(.mini)
                 } else {
                     Image(systemName: "stop.fill")
-                        .font(OpenClawChatTypography.display(size: 17, weight: .semibold, relativeTo: .body))
+                        .font(.system(size: OpenClawChatTypography.scaled(17), weight: .semibold))
                 }
             }
             .buttonStyle(.plain)
@@ -1245,7 +1270,7 @@ extension OpenClawChatComposer {
                     ProgressView().controlSize(.mini)
                 } else {
                     Image(systemName: "arrow.up")
-                        .font(OpenClawChatTypography.display(size: 18, weight: .semibold, relativeTo: .body))
+                        .font(.system(size: OpenClawChatTypography.scaled(18), weight: .semibold))
                 }
             }
             .buttonStyle(.plain)
@@ -1279,6 +1304,18 @@ extension OpenClawChatComposer {
 
     private var composerPadding: CGFloat {
         self.style == .onboarding ? 5 : (self.composerChrome == .clean ? 4 : 6)
+    }
+
+    #if os(iOS)
+    func focusDraft() {
+        guard self.isComposerEnabled else { return }
+        self.isFocused = true
+    }
+    #endif
+
+    /// A third of a text line above the draft, so the first line does not sit on the border.
+    var draftTopInset: CGFloat {
+        CleanChatComposerMetrics.editorBlockInset + self.scaledBodyLineHeight * OpenClawChatTypography.scale / 3
     }
 
     var textMinHeight: CGFloat {
@@ -1465,8 +1502,6 @@ extension OpenClawChatComposer {
         let fileName = "camera-\(UUID().uuidString.prefix(8)).jpg"
         let viewModel = owner.viewModel
         let session = owner.session
-        let generation = UUID()
-        self.cameraEncodingGeneration = generation
         // Pin routing before JPEG encoding suspends so an external agent or
         // session update cannot adopt this camera result under a new owner.
         viewModel.beginAttachmentStaging()
@@ -1476,7 +1511,6 @@ extension OpenClawChatComposer {
                 sendableImage.value.jpegData(compressionQuality: 0.92)
             }.value
             guard !Task.isCancelled,
-                  self.cameraEncodingGeneration == generation,
                   self.viewModel === viewModel,
                   viewModel.isCurrentSession(session),
                   self.isAttachmentInputEnabled,
@@ -1505,7 +1539,6 @@ extension OpenClawChatComposer {
 
     private func cancelActiveCameraEncoding() {
         #if canImport(UIKit)
-        self.cameraEncodingGeneration = UUID()
         self.cameraEncodingTask?.cancel()
         self.cameraEncodingTask = nil
         #endif

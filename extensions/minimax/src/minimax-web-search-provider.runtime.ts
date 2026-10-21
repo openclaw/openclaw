@@ -4,16 +4,14 @@ import {
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  externalContentStamp,
   DEFAULT_SEARCH_COUNT,
   buildSearchCacheKey,
   formatCliCommand,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
-  readConfiguredSecretString,
-  readPositiveIntegerParam,
-  readProviderEnvValue,
-  readStringParam,
-  MAX_SEARCH_COUNT,
+  readWebSearchApiKey,
+  readWebSearchQueryAndCount,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
@@ -56,15 +54,6 @@ type MiniMaxSearchResponse = {
     status_msg?: string;
   };
 };
-
-function resolveMiniMaxApiKey(searchConfig?: SearchConfigRecord): string | undefined {
-  return (
-    readConfiguredSecretString(
-      searchConfig?.apiKey,
-      "plugins.entries.minimax.config.webSearch.apiKey",
-    ) ?? readProviderEnvValue([...MINIMAX_TOKEN_PLAN_ENV_VARS, "MINIMAX_API_KEY"])
-  );
-}
 
 function isMiniMaxCnHost(value: string | undefined): boolean {
   const trimmed = normalizeOptionalString(value);
@@ -110,30 +99,62 @@ function resolveMiniMaxEndpoint(
     : MINIMAX_SEARCH_ENDPOINT_GLOBAL;
 }
 
-async function runMiniMaxSearch(params: {
-  query: string;
-  count: number;
-  apiKey: string;
-  endpoint: string;
-  timeoutSeconds: number;
-  signal?: AbortSignal;
-}): Promise<{
-  results: Array<Record<string, unknown>>;
-  relatedSearches?: string[];
-}> {
-  return withTrustedWebSearchEndpoint(
+function missingMiniMaxKeyPayload() {
+  return {
+    error: "missing_minimax_api_key",
+    message: `web_search (minimax) needs a MiniMax Token Plan key or OAuth token. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set MINIMAX_CODE_PLAN_KEY, MINIMAX_CODING_API_KEY, MINIMAX_OAUTH_TOKEN, or MINIMAX_API_KEY in the Gateway environment.`,
+    docs: "https://docs.openclaw.ai/tools/web",
+  };
+}
+
+export async function executeMiniMaxWebSearchProviderTool(
+  ctx: { config?: Record<string, unknown>; searchConfig?: SearchConfigRecord },
+  args: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const searchConfig = mergeScopedSearchConfig(
+    ctx.searchConfig,
+    "minimax",
+    resolveProviderWebSearchPluginConfig(ctx.config, "minimax"),
+    { mirrorApiKeyToTopLevel: true },
+  );
+  const apiKey = readWebSearchApiKey(
+    searchConfig?.apiKey,
+    "plugins.entries.minimax.config.webSearch.apiKey",
+    [...MINIMAX_TOKEN_PLAN_ENV_VARS, "MINIMAX_API_KEY"],
+  );
+  if (!apiKey) {
+    return missingMiniMaxKeyPayload();
+  }
+
+  const { query, count } = readWebSearchQueryAndCount(args, searchConfig);
+
+  const resolvedCount = resolveSearchCount(count, DEFAULT_SEARCH_COUNT);
+  const endpoint = resolveMiniMaxEndpoint(searchConfig, ctx.config);
+
+  const cacheKey = buildSearchCacheKey(["minimax", endpoint, query, resolvedCount]);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
+  if (cached) {
+    return cached;
+  }
+
+  const start = Date.now();
+  const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
+
+  const { results, relatedSearches } = await withTrustedWebSearchEndpoint(
     {
-      url: params.endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
+      url: endpoint,
+      timeoutSeconds,
+      signal,
       init: {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${params.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-        body: JSON.stringify({ q: params.query }),
+        body: JSON.stringify({ q: query }),
       },
     },
     async (res) => {
@@ -157,7 +178,7 @@ async function runMiniMaxSearch(params: {
       }
 
       const organic = Array.isArray(data.organic) ? data.organic : [];
-      const results = organic.slice(0, params.count).map((entry) => {
+      const searchResults = organic.slice(0, resolvedCount).map((entry) => {
         const title = entry.title ?? "";
         const url = entry.link ?? "";
         const snippet = entry.snippet ?? "";
@@ -170,72 +191,16 @@ async function runMiniMaxSearch(params: {
         };
       });
 
-      const relatedSearches = Array.isArray(data.related_searches)
+      const relatedQueries = Array.isArray(data.related_searches)
         ? data.related_searches
             .map((r) => r.query)
             .filter((q): q is string => typeof q === "string" && q.length > 0)
             .map((q) => wrapWebContent(q, "web_search"))
         : undefined;
 
-      return { results, relatedSearches };
+      return { results: searchResults, relatedSearches: relatedQueries };
     },
   );
-}
-
-function missingMiniMaxKeyPayload() {
-  return {
-    error: "missing_minimax_api_key",
-    message: `web_search (minimax) needs a MiniMax Token Plan key or OAuth token. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set MINIMAX_CODE_PLAN_KEY, MINIMAX_CODING_API_KEY, MINIMAX_OAUTH_TOKEN, or MINIMAX_API_KEY in the Gateway environment.`,
-    docs: "https://docs.openclaw.ai/tools/web",
-  };
-}
-
-export async function executeMiniMaxWebSearchProviderTool(
-  ctx: { config?: Record<string, unknown>; searchConfig?: SearchConfigRecord },
-  args: Record<string, unknown>,
-  signal?: AbortSignal,
-): Promise<Record<string, unknown>> {
-  const searchConfig = mergeScopedSearchConfig(
-    ctx.searchConfig,
-    "minimax",
-    resolveProviderWebSearchPluginConfig(ctx.config, "minimax"),
-    { mirrorApiKeyToTopLevel: true },
-  );
-  const apiKey = resolveMiniMaxApiKey(searchConfig);
-  if (!apiKey) {
-    return missingMiniMaxKeyPayload();
-  }
-
-  const query = readStringParam(args, "query", { required: true });
-  const count =
-    readPositiveIntegerParam(args, "count", {
-      max: MAX_SEARCH_COUNT,
-      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
-    }) ??
-    searchConfig?.maxResults ??
-    undefined;
-
-  const resolvedCount = resolveSearchCount(count, DEFAULT_SEARCH_COUNT);
-  const endpoint = resolveMiniMaxEndpoint(searchConfig, ctx.config);
-
-  const cacheKey = buildSearchCacheKey(["minimax", endpoint, query, resolvedCount]);
-  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
-  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
-  if (cached) {
-    return cached;
-  }
-
-  const start = Date.now();
-  const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
-
-  const { results, relatedSearches } = await runMiniMaxSearch({
-    query,
-    count: resolvedCount,
-    apiKey,
-    endpoint,
-    timeoutSeconds,
-    signal,
-  });
 
   signal?.throwIfAborted();
   const payload: Record<string, unknown> = {
@@ -243,12 +208,7 @@ export async function executeMiniMaxWebSearchProviderTool(
     provider: "minimax",
     count: results.length,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "minimax",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("minimax"),
     results,
   };
 

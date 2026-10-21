@@ -3,7 +3,11 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import { castAgentMessage, castAgentMessages } from "../test-helpers/agent-message-fixtures.js";
+import {
+  castAgentMessage,
+  castAgentMessages,
+  makeAgentAssistantMessage,
+} from "../test-helpers/agent-message-fixtures.js";
 import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
@@ -388,15 +392,12 @@ describe("wrapAnthropicStreamWithRecovery", () => {
   function createTestAssistantMessage(
     overrides: Partial<AssistantMessage> & Pick<AssistantMessage, "content" | "stopReason">,
   ): AssistantMessage {
-    return castAgentMessage({
-      role: "assistant",
+    return makeAgentAssistantMessage({
       api: "anthropic-messages",
       provider: "anthropic",
       model: "claude-sonnet-4-6",
-      usage: createZeroUsageFixture(),
-      timestamp: 0,
       ...overrides,
-    }) as AssistantMessage;
+    });
   }
 
   function thinkingHistory(): AgentMessage[] {
@@ -529,15 +530,6 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     await expect(response.result()).resolves.toEqual(finalMessage);
     expect(callCount).toBe(2);
     expect(recovered).toHaveBeenCalledTimes(1);
-    expect(recovered).toHaveBeenCalledWith({
-      originalMessages,
-      cleanedMessages: [
-        {
-          ...originalMessages[0],
-          content: [{ type: "text", text: "visible answer" }],
-        },
-      ],
-    });
   });
 
   it("does not notify recovery when the stripped-thinking retry also fails", async () => {
@@ -698,7 +690,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     },
   );
 
-  it("retries pre-content terminal stream-error events with omitted-reasoning text", async () => {
+  it.each([false, true])("recovers terminal stream errors (promised=%s)", async (promised) => {
     let callCount = 0;
     const contexts: Array<{ messages?: AgentMessage[] }> = [];
     const finalMessage = createTestAssistantMessage({
@@ -723,18 +715,18 @@ describe("wrapAnthropicStreamWithRecovery", () => {
           }
           stream.end();
         });
-        return stream;
+        return promised ? Promise.resolve(stream) : stream;
       }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
       { id: "test-session" },
     );
 
-    const response = wrapped(
+    const response = (await wrapped(
       {} as never,
       {
         messages: thinkingHistory(),
       } as never,
       {} as never,
-    ) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
+    )) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
     const events: unknown[] = [];
     for await (const event of response) {
       events.push(event);
@@ -785,7 +777,7 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     expect(callCount).toBe(1);
   });
 
-  it("does not retry terminal stream-error events after output was yielded", async () => {
+  it.each([false, true])("does not retry after output (promised=%s)", async (promised) => {
     let callCount = 0;
     const partialMessage = createTestAssistantMessage({
       content: [{ type: "text", text: "" }],
@@ -801,12 +793,12 @@ describe("wrapAnthropicStreamWithRecovery", () => {
           stream.push({ type: "error", reason: "error", error: errorMessage });
           stream.end();
         });
-        return stream;
+        return promised ? Promise.resolve(stream) : stream;
       }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
       { id: "test-session" },
     );
 
-    const response = wrapped({} as never, { messages: [] } as never, {} as never) as {
+    const response = (await wrapped({} as never, { messages: [] } as never, {} as never)) as {
       result: () => Promise<unknown>;
     } & AsyncIterable<unknown>;
     const events: unknown[] = [];

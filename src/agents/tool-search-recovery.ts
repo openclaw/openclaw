@@ -1,8 +1,10 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
+import type { JsonSchemaValidationError } from "../plugins/schema-validator.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
@@ -87,16 +89,48 @@ export function formatUnknownToolIdError(
   const recoveryText =
     options.recoverySurface === "catalog"
       ? "Use catalog.search to find a callable tool handle, then call the handle or use its describe method."
-      : "Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.";
+      : "Use tool_search to find a tool, tool_describe to inspect it, then dispatch_action with the exact id or name.";
   if (suggestions.length === 0) {
     return `Unknown tool id: ${needle}. ${recoveryText}`;
   }
   return `Unknown tool id: ${needle}. Did you mean: ${suggestions.join(", ")}? ${recoveryText}`;
 }
 
+const MAX_INPUT_ERROR_DETAILS = 5;
+const SENSITIVE_INPUT_PATH =
+  /(?:auth|card|code|cookie|credential|cvc|cvv|key|pass|pin|secret|session|signature|token)/iu;
+const SCALAR_STRING = /^(?:-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)$/u;
+
+function receivedInputHint(value: unknown, path: readonly string[]): string {
+  let received = value;
+  for (const segment of path) {
+    const record = asOptionalObjectRecord(received);
+    received = record && Object.hasOwn(record, segment) ? record[segment] : undefined;
+  }
+  const type = received === null ? "null" : Array.isArray(received) ? "array" : typeof received;
+  let preview = "[redacted]";
+  if (!path.some((segment) => SENSITIVE_INPUT_PATH.test(segment))) {
+    // Arbitrary text and container contents can carry secrets under innocuous names.
+    // Only short JSON scalar strings are useful enough to echo (notably quoted numbers).
+    if (typeof received === "string") {
+      if (received.length <= 64 && SCALAR_STRING.test(received)) {
+        preview = JSON.stringify(received);
+      }
+    } else if (received === null || ["number", "boolean", "undefined"].includes(type)) {
+      preview = String(received);
+    } else if (type === "array" || type === "object") {
+      preview = `[${type}]`;
+    }
+  }
+  if (redactRegisteredSecretValues(preview, () => "[redacted]") !== preview) {
+    preview = "[redacted]";
+  }
+  return `received ${preview} (${type})`;
+}
+
 export function formatCatalogInputError(
   entry: ToolSearchCatalogEntry,
-  errors: import("../plugins/schema-validator.js").JsonSchemaValidationError[],
+  errors: JsonSchemaValidationError[],
   value: unknown,
 ): string {
   const executionSchema = resolveAgentToolExecutionSchema(entry.tool, entry.parameters);
@@ -108,23 +142,41 @@ export function formatCatalogInputError(
       ? Object.keys(value).filter((name) => !knownProperties.has(name))
       : errors.flatMap((error) => (error.additionalProperty ? [error.additionalProperty] : []));
   const suggestions = uniqueStrings(
-    unexpectedProperties.flatMap((unexpected) => {
+    unexpectedProperties.slice(0, MAX_INPUT_ERROR_DETAILS).flatMap((unexpected) => {
+      if (unexpected.length > 128) {
+        return [];
+      }
+      const maxDistance = Math.min(3, Math.max(1, Math.ceil(unexpected.length / 3)));
       const nearest = propertyNames
-        .map((name) => ({ name, distance: levenshteinDistance(unexpected, name) }))
-        .filter(
-          ({ distance }) => distance <= Math.min(3, Math.max(1, Math.ceil(unexpected.length / 3))),
-        )
+        .filter((name) => name.length <= 128)
+        .map((name) => ({
+          name,
+          distance: levenshteinDistance(unexpected, name, maxDistance) ?? Number.POSITIVE_INFINITY,
+        }))
+        .filter(({ distance }) => distance <= maxDistance)
         .toSorted(
           (left, right) => left.distance - right.distance || left.name.localeCompare(right.name),
         )[0];
       return nearest ? [nearest.name] : [];
     }),
   ).slice(0, 3);
-  const details = errors.map((error) => error.text).join("; ");
+  const details = errors.slice(0, MAX_INPUT_ERROR_DETAILS).map((error) => {
+    const expected = error.text.replace(
+      /: must be (integer|string|number|boolean|object|array|null)$/u,
+      ": expected $1",
+    );
+    const received = error.valuePath ? `; ${receivedInputHint(value, error.valuePath)}` : "";
+    const detail = redactRegisteredSecretValues(`${expected}${received}`, () => "[redacted]");
+    const prefix = truncateUtf8Prefix(detail, 256);
+    return prefix === detail ? detail : `${prefix} [truncated]`;
+  });
+  if (errors.length > details.length) {
+    details.push(`${errors.length - details.length} additional validation issues omitted`);
+  }
   const hint = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
   const input = compactToolInputHint(schema);
   const signature = input === "unknown" ? "" : ` Expected input: ${input}.`;
-  return `Invalid arguments for tool "${entry.id}": ${details}.${hint}${signature}`;
+  return `Invalid arguments for tool "${entry.id}": ${details.join("; ")}.${hint}${signature}`;
 }
 
 export function formatCatalogOutputError(

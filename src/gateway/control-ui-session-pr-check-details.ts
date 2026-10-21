@@ -10,13 +10,9 @@ import {
 } from "./control-ui-session-pr-request.js";
 import {
   fetchSessionPullRequestCheckDetails,
-  sessionPullRequestRepositoryApiUrl,
   type SessionPullRequestCheckTarget,
 } from "./control-ui-session-prs-checks.js";
-import {
-  parsePullListItem,
-  type ControlUiSessionPullRequestsParams,
-} from "./control-ui-session-prs.js";
+import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 
 const checkDetailsCache = createRetainedCache<{
@@ -41,10 +37,8 @@ type LoadSessionCheckDetailsDeps = {
   /** The request handler binds and rechecks session visibility, generation, and workspace. */
   sessionScope: string;
   assertCurrent: () => void;
-  fetchImpl?: typeof fetch;
   loadPullRequests: (
     params: ControlUiSessionPullRequestsParams,
-    deps: { fetchImpl?: typeof fetch },
   ) => Promise<ControlUiSessionPullRequests>;
 };
 
@@ -69,21 +63,17 @@ export async function loadControlUiSessionPullRequestChecks(
     candidate.number === number &&
     candidate.headSha === headSha;
   const { loadPullRequests } = deps;
-  const snapshot = await loadPullRequests(
-    { sessionKey: params.sessionKey, agentId: params.agentId },
-    { fetchImpl: deps.fetchImpl },
-  );
+  const snapshot = await loadPullRequests({
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
   deps.assertCurrent();
   const pull = snapshot.pullRequests.find(matchesTarget);
   if (!pull || (pull.state !== "open" && pull.state !== "draft")) {
     return unavailable("The session pull request or head changed; reopen CI details");
   }
   const host = new URL(pull.url).hostname;
-  const read = prepareSessionPullRequestGitHubRead(
-    host,
-    deps.fetchImpl ?? fetch,
-    deps.assertCurrent,
-  );
+  const read = prepareSessionPullRequestGitHubRead(host, deps.assertCurrent);
   const assertCurrent = read.assertCurrent;
   const checkTarget = { ...target, host, apiBaseUrl: read.apiBaseUrl };
   const key = JSON.stringify([
@@ -110,12 +100,9 @@ export async function loadControlUiSessionPullRequestChecks(
       access: createGitHubReadGroup(),
     };
     releaseReader = pending.access.add(deps.assertCurrent);
-    const transportRead = prepareSessionPullRequestGitHubRead(
-      host,
-      deps.fetchImpl ?? fetch,
-      pending.access.assertCurrent,
-      { signal: pending.access.signal },
-    );
+    const transportRead = prepareSessionPullRequestGitHubRead(host, pending.access.assertCurrent, {
+      signal: pending.access.signal,
+    });
     activeCheckDetails += 1;
     const load = async (): Promise<ControlUiSessionPullRequestCheckDetails> => {
       const deadline = Date.now() + 25_000;
@@ -137,37 +124,9 @@ export async function loadControlUiSessionPullRequestChecks(
           );
         });
       };
-      const assertHead = async () => {
-        const value = parsePullListItem(
-          await request(`${sessionPullRequestRepositoryApiUrl(checkTarget)}/pulls/${number}`),
-        );
-        if (
-          !value ||
-          value.owner.toLowerCase() !== owner.toLowerCase() ||
-          value.repo.toLowerCase() !== repo.toLowerCase() ||
-          new URL(value.url).hostname !== host ||
-          value.number !== number ||
-          value.headSha?.toLowerCase() !== headSha ||
-          (value.state !== "open" && value.state !== "draft")
-        ) {
-          throw new gitHubPublicApi.ControlUiGitHubError(
-            409,
-            "The pull request head changed; reopen CI details",
-          );
-        }
-      };
       try {
-        await assertHead();
+        // CI details describe the chip's exact head until the session PR snapshot refreshes.
         const details = await fetchSessionPullRequestCheckDetails(checkTarget, request);
-        // Do not label old-head job steps as current after a push during the request.
-        if (
-          !(
-            details.error instanceof gitHubPublicApi.ControlUiGitHubError &&
-            details.error.statusCode === 429
-          )
-        ) {
-          await assertHead();
-        }
         const result: ControlUiSessionPullRequestCheckDetails = {
           ...target,
           checks: details.checks,
@@ -230,22 +189,6 @@ export async function loadControlUiSessionPullRequestChecks(
   try {
     const result = await entry.promise;
     assertCurrent();
-    // A summary refresh can replace the PR while this details request is in flight.
-    const current = await loadPullRequests(
-      { sessionKey: params.sessionKey, agentId: params.agentId },
-      { fetchImpl: deps.fetchImpl },
-    );
-    assertCurrent();
-    if (
-      !current.pullRequests.some(
-        (candidate) =>
-          matchesTarget(candidate) &&
-          new URL(candidate.url).hostname === host &&
-          (candidate.state === "open" || candidate.state === "draft"),
-      )
-    ) {
-      return unavailable("The session pull request or head changed; reopen CI details");
-    }
     return structuredClone({
       ...result,
       ...(result.retryAfterMs === undefined

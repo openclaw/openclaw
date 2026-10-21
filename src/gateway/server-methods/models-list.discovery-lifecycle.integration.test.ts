@@ -1,23 +1,27 @@
-import { once } from "node:events";
 import { createServer } from "node:http";
 import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { disconnectGatewayClient } from "../test-helpers.e2e.js";
+import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
+import {
+  closeCatalogServer,
+  catalogAgents,
+  catalogModelDefaults,
+  catalogModelIds,
+  createCatalogAuthProfiles,
+  createCatalogModel,
+  createCatalogState,
+  listenCatalogServer,
+  startCatalogGateway,
+} from "./models-catalog-fixture.test-support.js";
 
-it("models.list preserves provider starters and retires unavailable account rows after an authoritative empty refresh", async () => {
-  const state = await createOpenClawTestState({
-    label: "models-list-discovery-lifecycle",
-    env: {
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-    },
+it("models.list preserves provider starters and retires unavailable account rows after an authoritative empty refresh", async ({
+  signal,
+}) => {
+  const state = await createCatalogState("models-list-discovery-lifecycle", {
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
   });
   const providers = ["lifecycle-a", "lifecycle-b", "lifecycle-c"];
   const rows = new Map([
@@ -42,13 +46,7 @@ it("models.list preserves provider starters and retires unavailable account rows
     response.end(JSON.stringify(rows.get(provider)!.map((id) => ({ id, name: id }))));
   });
   try {
-    endpoint.listen(0, "127.0.0.1");
-    await once(endpoint, "listening");
-    const address = endpoint.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Discovery fixture did not bind a TCP port");
-    }
-    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const baseUrl = await listenCatalogServer(endpoint);
     await state.writeJson("bundled/lifecycle-catalog/openclaw.plugin.json", {
       id: "lifecycle-catalog",
       providers,
@@ -58,17 +56,7 @@ it("models.list preserves provider starters and retires unavailable account rows
           "lifecycle-c": {
             baseUrl,
             api: "openai-completions",
-            models: [
-              {
-                id: "starter",
-                name: "Starter",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 32768,
-                maxTokens: 4096,
-              },
-            ],
+            models: [createCatalogModel("starter", "Starter")],
           },
         },
       },
@@ -100,11 +88,7 @@ it("models.list preserves provider starters and retires unavailable account rows
                   const rows = await response.json();
                   return { provider: {
                     baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
-                    models: rows.map((row) => ({
-                      ...row, reasoning: false, input: ["text"],
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      contextWindow: 32768, maxTokens: 4096,
-                    })),
+                    models: rows.map((row) => ({ ...row, ...${JSON.stringify(catalogModelDefaults())} })),
                   }, outcomes: [{ provider, profileId: auth.profileId, status: "ready" }] };
                 },
               },
@@ -127,10 +111,7 @@ it("models.list preserves provider starters and retires unavailable account rows
           },
         },
       },
-      agents: {
-        defaults: { modelPolicy: { allow: providers.map((provider) => `${provider}/*`) } },
-        entries: { main: { workspace: state.workspaceDir } },
-      },
+      agents: catalogAgents(state, { modelPolicy: { allow: providers.map((id) => `${id}/*`) } }),
       plugins: {
         allow: ["lifecycle-catalog"],
         entries: { "lifecycle-catalog": { enabled: true } },
@@ -139,42 +120,37 @@ it("models.list preserves provider starters and retires unavailable account rows
       gateway: { mode: "local", auth: { mode: "token", token } },
     };
     await state.writeConfig(cfg);
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: Object.fromEntries(
-        providers
-          .filter((provider) => provider !== "lifecycle-c")
-          .map((provider) => [
-            `${provider}:default`,
-            { type: "api_key", provider, key: `${provider}-key` },
-          ]),
-      ),
-    });
-    const { client, server } = await startGatewayWithClient({
-      cfg,
-      configPath: state.configPath,
-      token,
-      scopes: ["operator.admin"],
-    });
+    await state.writeAuthProfiles(
+      createCatalogAuthProfiles({
+        "lifecycle-a": "lifecycle-a-key",
+        "lifecycle-b": "lifecycle-b-key",
+      }),
+    );
+    const { client, server } = await startCatalogGateway(state, cfg, token);
     try {
       await server.startupSettled;
-      const list = (provider?: string) =>
+      const read = (refresh = false, provider?: string) =>
         client.request<ModelsListResult>("models.list", {
           agentId: "main",
           view: "all",
-          refresh: true,
+          refresh,
           ...(provider ? { provider } : {}),
         });
+      const list = (provider?: string) => read(true, provider);
       const ids = (result: ModelsListResult, provider: string) =>
-        result.models
-          .filter((model) => model.provider === provider)
-          .map((model) => model.id)
-          .toSorted();
+        catalogModelIds(result, provider).toSorted();
+      const startup = await waitForCatalogPublication({
+        signal,
+        read,
+        ready: (result) =>
+          ids(result, "lifecycle-a").includes("learned") && !result.pendingProviders?.length,
+      });
+      expect(ids(startup, "lifecycle-a")).toEqual(["Learned", "learned"]);
+      expect(requests.filter((provider) => provider === "lifecycle-c")).toHaveLength(1);
+      const beforeManualRefresh = requests.length;
       expect(ids(await list("lifecycle-b"), "lifecycle-b")).toEqual([]);
       const firstUnavailable = await list("lifecycle-c");
-      expect(requests.indexOf("lifecycle-b")).toBeGreaterThanOrEqual(0);
-      expect(requests.indexOf("lifecycle-c")).toBeGreaterThan(requests.indexOf("lifecycle-b"));
-      expect(requests.filter((provider) => provider === "lifecycle-c")).toHaveLength(1);
+      expect(requests.slice(beforeManualRefresh)).toEqual(["lifecycle-b", "lifecycle-c"]);
       expect(ids(firstUnavailable, "lifecycle-c")).toEqual(["starter"]);
       expect(firstUnavailable.refreshFailed).toBe(true);
       unavailable.delete("lifecycle-c");
@@ -194,10 +170,7 @@ it("models.list preserves provider starters and retires unavailable account rows
       const empty = await list("lifecycle-a");
       expect(ids(empty, "lifecycle-a")).toEqual([]);
       expect(requests.slice(beforeEmpty)).toEqual(["lifecycle-a"]);
-      const afterEmpty = await client.request<ModelsListResult>("models.list", {
-        agentId: "main",
-        view: "all",
-      });
+      const afterEmpty = await read();
       expect(ids(afterEmpty, "lifecycle-b")).toEqual(["sibling-new"]);
       expect(afterEmpty.refreshFailed).not.toBe(true);
 
@@ -212,11 +185,8 @@ it("models.list preserves provider starters and retires unavailable account rows
       expect(ids(recovered, "lifecycle-a")).toEqual(["recovered"]);
       expect(recovered.refreshFailed).not.toBe(true);
       const afterRecovery = requests.length;
-      for (let read = 0; read < 3; read++) {
-        const published = await client.request<ModelsListResult>("models.list", {
-          agentId: "main",
-          view: "all",
-        });
+      for (let index = 0; index < 3; index++) {
+        const published = await read();
         expect(ids(published, "lifecycle-a")).toEqual(["recovered"]);
         expect(ids(published, "lifecycle-b")).toEqual(["sibling-new"]);
       }
@@ -226,10 +196,7 @@ it("models.list preserves provider starters and retires unavailable account rows
       await server.close();
     }
   } finally {
-    endpoint.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      endpoint.close((error) => (error ? reject(error) : resolve()));
-    });
+    await closeCatalogServer(endpoint, true);
     await state.cleanup();
   }
 }, 120_000);

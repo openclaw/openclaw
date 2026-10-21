@@ -1,10 +1,10 @@
-/** Builds minimal, portable environment blocks for managed daemon services. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
+import { omitSecretEgressProxyEnvironment } from "../secrets/egress-proxy/environment.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
@@ -20,9 +20,7 @@ type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
   extraDirs?: string[];
   home?: string;
-  cwd?: string;
   env?: Record<string, string | undefined>;
-  existsSync?: (candidate: string) => boolean;
   includeMissingUserBinDefaults?: boolean;
 };
 
@@ -37,36 +35,6 @@ export const SERVICE_PROXY_ENV_KEYS = [
   "no_proxy",
   "all_proxy",
 ] as const;
-
-function readServiceSqliteEnvironment(
-  env: Record<string, string | undefined>,
-  platform: NodeJS.Platform,
-  runtime: GatewayDaemonRuntime | undefined,
-): { OPENCLAW_SQLITE_LIBRARY?: string; HOMEBREW_PREFIX?: string } {
-  // Match the library selected by the installing shell and judged by the daemon
-  // probe (src/daemon/runtime-paths.ts RUNTIME_PROBE_ENV_KEYS); wrappers hide the runtime.
-  if (
-    platform !== "darwin" ||
-    (runtime !== "bun" && !normalizeOptionalString(env.OPENCLAW_WRAPPER))
-  ) {
-    return {};
-  }
-  const library = normalizeOptionalString(env.OPENCLAW_SQLITE_LIBRARY);
-  const prefix = normalizeOptionalString(env.HOMEBREW_PREFIX);
-  return {
-    ...(library ? { OPENCLAW_SQLITE_LIBRARY: library } : {}),
-    ...(prefix && path.posix.isAbsolute(prefix) ? { HOMEBREW_PREFIX: prefix } : {}),
-  };
-}
-
-function readServiceProxyEnvironment(
-  env: Record<string, string | undefined>,
-): Record<string, string | undefined> {
-  // Service env intentionally preserves only the canonical OpenClaw proxy knob;
-  // generic shell proxy vars are audited but not frozen into services.
-  const proxyUrl = normalizeOptionalString(env.OPENCLAW_PROXY_URL);
-  return proxyUrl ? { OPENCLAW_PROXY_URL: proxyUrl } : {};
-}
 
 function normalizeServicePathDir(dir: string | undefined): string | undefined {
   const trimmed = dir?.trim();
@@ -109,19 +77,16 @@ function isSameOrChildPath(candidate: string, parent: string): boolean {
   return candidate === parent || candidate.startsWith(`${parent}/`);
 }
 
-function isWorkspaceDerivedPath(
-  dir: string,
-  options: Pick<MinimalServicePathOptions, "cwd" | "home">,
-): boolean {
+function isWorkspaceDerivedPath(dir: string, homeDir: string): boolean {
   // Install-time workspace env vars must not become durable service PATH entries.
   if (isSameOrChildPath(dir, "/proc")) {
     return true;
   }
-  const cwd = normalizeServicePathDir(options.cwd ?? process.cwd());
+  const cwd = normalizeServicePathDir(process.cwd());
   if (!cwd) {
     return false;
   }
-  const home = normalizeServicePathDir(options.home);
+  const home = normalizeServicePathDir(homeDir);
   if (home && cwd === home) {
     return false;
   }
@@ -134,13 +99,9 @@ function isWorkspaceDerivedPath(
   return Boolean(realDir && realCwd && realHome !== realCwd && isSameOrChildPath(realDir, realCwd));
 }
 
-function addEnvConfiguredBinDir(
-  dirs: string[],
-  dir: string | undefined,
-  options: Pick<MinimalServicePathOptions, "cwd" | "home">,
-): void {
+function addEnvConfiguredBinDir(dirs: string[], dir: string | undefined, home: string): void {
   const normalized = normalizeServicePathDir(dir);
-  if (!normalized || isWorkspaceDerivedPath(normalized, options)) {
+  if (!normalized || isWorkspaceDerivedPath(normalized, home)) {
     return;
   }
   dirs.push(normalized);
@@ -153,38 +114,9 @@ function appendSubdir(base: string | undefined, subdir: string): string | undefi
   return base.endsWith(`/${subdir}`) ? base : path.posix.join(base, subdir);
 }
 
-function addExistingDir(
-  dirs: string[],
-  candidate: string,
-  existsSync: (candidate: string) => boolean,
-): void {
-  if (existsSync(candidate)) {
+function addExistingDir(dirs: string[], candidate: string): void {
+  if (fs.existsSync(candidate)) {
     dirs.push(candidate);
-  }
-}
-
-// Nix shell precedence: rightmost profile in NIX_PROFILES = highest priority.
-// When NIX_PROFILES is absent, fall back to the default single-user profile.
-function addNixProfileBinDirs(
-  dirs: string[],
-  home: string,
-  env: Record<string, string | undefined> | undefined,
-  options: Pick<MinimalServicePathOptions, "cwd" | "home">,
-  includeMissingDefault: boolean,
-  existsSync: (candidate: string) => boolean,
-): void {
-  const nixProfiles = env?.NIX_PROFILES?.trim();
-  if (nixProfiles) {
-    for (const profile of nixProfiles.split(/\s+/).toReversed()) {
-      addEnvConfiguredBinDir(dirs, appendSubdir(profile, "bin"), options);
-    }
-  } else {
-    const defaultProfileBin = `${home}/.nix-profile/bin`;
-    if (includeMissingDefault) {
-      dirs.push(defaultProfileBin);
-    } else {
-      addExistingDir(dirs, defaultProfileBin, existsSync);
-    }
   }
 }
 
@@ -209,37 +141,44 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
 /** Resolve Linux user bin directories after trusted system directories. */
 function resolveUserBinDirs(
   home: string | undefined,
-  env?: Record<string, string | undefined>,
-  existsSync: (candidate: string) => boolean = fs.existsSync,
-  options: Pick<MinimalServicePathOptions, "cwd" | "home" | "includeMissingUserBinDefaults"> = {},
+  env: Record<string, string | undefined>,
+  includeMissingUserBinDefaults = true,
 ): string[] {
   if (!home) {
     return [];
   }
 
   const dirs: string[] = [];
-  const pathOptions = { ...options, home };
-  const includeMissingUserBinDefaults = options.includeMissingUserBinDefaults ?? true;
-
-  addEnvConfiguredBinDir(dirs, env?.PNPM_HOME, pathOptions);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.PNPM_HOME, "bin"), pathOptions);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"), pathOptions);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.BUN_INSTALL, "bin"), pathOptions);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.VOLTA_HOME, "bin"), pathOptions);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"), pathOptions);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.NVM_DIR, "current/bin"), pathOptions);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"), pathOptions);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"), pathOptions);
+  addEnvConfiguredBinDir(dirs, env.PNPM_HOME, home);
+  addEnvConfiguredBinDir(dirs, appendSubdir(env.PNPM_HOME, "bin"), home);
+  addEnvConfiguredBinDir(dirs, appendSubdir(env.NPM_CONFIG_PREFIX, "bin"), home);
+  addEnvConfiguredBinDir(dirs, appendSubdir(env.BUN_INSTALL, "bin"), home);
+  addEnvConfiguredBinDir(dirs, appendSubdir(env.VOLTA_HOME, "bin"), home);
+  addEnvConfiguredBinDir(dirs, appendSubdir(env.ASDF_DATA_DIR, "shims"), home);
+  addEnvConfiguredBinDir(dirs, appendSubdir(env.NVM_DIR, "current/bin"), home);
+  addEnvConfiguredBinDir(dirs, appendSubdir(env.FNM_DIR, "aliases/default/bin"), home);
+  addEnvConfiguredBinDir(dirs, appendSubdir(env.FNM_DIR, "current/bin"), home);
   for (const directory of [".local/bin", ".npm-global/bin", "bin"]) {
     const candidate = `${home}/${directory}`;
-    if (includeMissingUserBinDefaults || existsSync(candidate)) {
+    if (includeMissingUserBinDefaults || fs.existsSync(candidate)) {
       dirs.push(candidate);
     }
   }
   for (const directory of [".volta/bin", ".asdf/shims", ".bun/bin"]) {
-    addExistingDir(dirs, `${home}/${directory}`, existsSync);
+    addExistingDir(dirs, `${home}/${directory}`);
   }
-  addNixProfileBinDirs(dirs, home, env, pathOptions, includeMissingUserBinDefaults, existsSync);
+  // Nix gives the rightmost profile highest priority; otherwise use the default profile.
+  const nixProfiles = env.NIX_PROFILES?.trim();
+  if (nixProfiles) {
+    for (const profile of nixProfiles.split(/\s+/).toReversed()) {
+      addEnvConfiguredBinDir(dirs, appendSubdir(profile, "bin"), home);
+    }
+  } else {
+    const defaultProfileBin = `${home}/.nix-profile/bin`;
+    if (includeMissingUserBinDefaults || fs.existsSync(defaultProfileBin)) {
+      dirs.push(defaultProfileBin);
+    }
+  }
   // Preserve both the pnpm root (v10) and its bin subdirectory (v11) in order.
   for (const directory of [
     ".nvm/current/bin",
@@ -250,7 +189,7 @@ function resolveUserBinDirs(
     ".local/share/pnpm/bin",
     ".local/share/pnpm",
   ]) {
-    addExistingDir(dirs, `${home}/${directory}`, existsSync);
+    addExistingDir(dirs, `${home}/${directory}`);
   }
   return dirs;
 }
@@ -269,10 +208,9 @@ export function getMinimalServicePathPartsFromEnv(
   const extraDirs = options.extraDirs ?? [];
   const systemDirs = resolveSystemPathDirs(platform);
 
-  const existsSync = options.existsSync ?? fs.existsSync;
   const userDirs =
     platform === "linux"
-      ? resolveUserBinDirs(options.home ?? env.HOME, env, existsSync, options)
+      ? resolveUserBinDirs(options.home ?? env.HOME, env, options.includeMissingUserBinDefaults)
       : [];
 
   return [...new Set([...extraDirs, ...systemDirs, ...userDirs].filter(Boolean))];
@@ -286,24 +224,24 @@ function resolveGatewaySystemdUnitEnv(env: Record<string, string | undefined>): 
   return `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
 }
 
-export function buildServiceEnvironment(params: {
+type ServiceEnvironmentParams = {
   env: Record<string, string | undefined>;
-  port: number;
-  existingNodeOptions?: string;
   runtime?: GatewayDaemonRuntime;
-  launchdLabel?: string;
   platform?: NodeJS.Platform;
   extraPathDirs?: string[];
   execPath?: string;
-}): Record<string, string | undefined> {
-  const { env, port, launchdLabel, extraPathDirs } = params;
+};
+
+export function buildServiceEnvironment(
+  params: ServiceEnvironmentParams & {
+    port: number;
+    existingNodeOptions?: string;
+    launchdLabel?: string;
+  },
+): Record<string, string | undefined> {
+  const { env, port, launchdLabel } = params;
   const platform = params.platform ?? process.platform;
-  const commonEnvironment = buildCommonServiceEnvironment(
-    env,
-    platform,
-    extraPathDirs,
-    params.execPath,
-  );
+  const commonEnvironment = buildCommonServiceEnvironment(params, platform);
   const profile = env.OPENCLAW_PROFILE;
   const wrapperPath = normalizeOptionalString(env.OPENCLAW_WRAPPER);
   const resolvedLaunchdLabel =
@@ -311,7 +249,6 @@ export function buildServiceEnvironment(params: {
   const systemdUnit = resolveGatewaySystemdUnitEnv(env);
   return {
     ...commonEnvironment,
-    ...readServiceSqliteEnvironment(env, platform, params.runtime),
     // An empty assignment clears supervisor ambient options; omission would
     // allow preloads/debug flags to bypass the heap-only service boundary.
     NODE_OPTIONS: resolveGatewayHeapNodeOptions(
@@ -333,24 +270,14 @@ export function buildServiceEnvironment(params: {
   };
 }
 
-export function buildNodeServiceEnvironment(params: {
-  env: Record<string, string | undefined>;
-  runtime?: GatewayDaemonRuntime;
-  platform?: NodeJS.Platform;
-  extraPathDirs?: string[];
-  execPath?: string;
-}): Record<string, string | undefined> {
-  const { env, extraPathDirs } = params;
+export function buildNodeServiceEnvironment(
+  params: ServiceEnvironmentParams,
+): Record<string, string | undefined> {
+  const { env } = params;
   const platform = params.platform ?? process.platform;
-  const commonEnvironment = buildCommonServiceEnvironment(
-    env,
-    platform,
-    extraPathDirs,
-    params.execPath,
-  );
+  const commonEnvironment = buildCommonServiceEnvironment(params, platform);
   return {
     ...commonEnvironment,
-    ...readServiceSqliteEnvironment(env, platform, params.runtime),
     OPENCLAW_GATEWAY_TOKEN: normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN),
     OPENCLAW_GATEWAY_PASSWORD: normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD),
     CF_ACCESS_CLIENT_ID: normalizeOptionalString(env.CF_ACCESS_CLIENT_ID),
@@ -380,11 +307,10 @@ function resolveServiceTmpDir(
 }
 
 function buildCommonServiceEnvironment(
-  env: Record<string, string | undefined>,
+  { env: invocationEnv, extraPathDirs, execPath, runtime }: ServiceEnvironmentParams,
   platform: NodeJS.Platform,
-  extraPathDirs: string[] | undefined,
-  execPath?: string,
 ): Record<string, string | undefined> {
+  const env = omitSecretEgressProxyEnvironment(invocationEnv, platform);
   const tmpDir = resolveServiceTmpDir(env, platform);
   // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
   // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
@@ -402,14 +328,31 @@ function buildCommonServiceEnvironment(
       : getMinimalServicePathPartsFromEnv({ env, platform, extraDirs: extraPathDirs }).join(
           path.posix.delimiter,
         );
-  return {
+  // Generic shell proxy vars are audited but never frozen into services.
+  const proxyUrl = normalizeOptionalString(env.OPENCLAW_PROXY_URL);
+  const environment: Record<string, string | undefined> = {
     HOME: env.HOME,
     TMPDIR: tmpDir,
     NODE_EXTRA_CA_CERTS: startupTlsEnv.NODE_EXTRA_CA_CERTS,
     NODE_USE_SYSTEM_CA: startupTlsEnv.NODE_USE_SYSTEM_CA,
     OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR,
     OPENCLAW_CONFIG_PATH: env.OPENCLAW_CONFIG_PATH,
-    ...readServiceProxyEnvironment(env),
+    ...(proxyUrl ? { OPENCLAW_PROXY_URL: proxyUrl } : {}),
     ...(minimalPath ? { PATH: minimalPath } : {}),
   };
+  // Match the installing shell's probed SQLite library; wrappers hide the runtime.
+  if (
+    platform === "darwin" &&
+    (runtime === "bun" || normalizeOptionalString(env.OPENCLAW_WRAPPER))
+  ) {
+    const library = normalizeOptionalString(env.OPENCLAW_SQLITE_LIBRARY);
+    const prefix = normalizeOptionalString(env.HOMEBREW_PREFIX);
+    if (library) {
+      environment.OPENCLAW_SQLITE_LIBRARY = library;
+    }
+    if (prefix && path.posix.isAbsolute(prefix)) {
+      environment.HOMEBREW_PREFIX = prefix;
+    }
+  }
+  return environment;
 }

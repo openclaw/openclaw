@@ -17,7 +17,7 @@ import {
   resetDoctorPluginState,
   type RawLegacyDoctorConfig,
 } from "./doctor-contract-api.test-support.js";
-import { runVectorKnnQuery } from "./src/memory/manager-search-knn.js";
+import { runVectorKnnQuery } from "./src/memory/manager-search-knn.test-support.js";
 import { searchKeyword } from "./src/memory/manager-search.js";
 import { resetMemoryCoreDreamingStateForTests } from "./src/test-helpers.js";
 
@@ -268,6 +268,14 @@ function readMemoryCacheRows(agentPath: string) {
     .all();
 }
 
+function readMemoryIndexRevision(agentPath: string): number {
+  using db = new DatabaseSync(agentPath);
+  const row = db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
+    revision: number;
+  };
+  return row.revision;
+}
+
 function readMemoryFtsSql(agentPath: string): string | undefined {
   using db = new DatabaseSync(agentPath);
   const row = db
@@ -280,14 +288,14 @@ async function searchMigratedVectorRows(agentPath: string) {
   using db = new DatabaseSync(agentPath, { allowExtension: true });
   const loaded = await loadSqliteVecExtension({ db });
   expect(loaded.ok, loaded.error).toBe(true);
-  return runVectorKnnQuery(db, {
-    vectorTable: "memory_index_chunks_vec",
+  const { rows } = await runVectorKnnQuery(db, {
     providerModels: ["embed-model"],
     queryVec: [1, 0, 0],
     limit: 1,
     snippetMaxChars: 200,
     sourceFilter: { sql: "", params: [] },
-  }).rows;
+  });
+  return rows;
 }
 
 async function searchMigratedKeywordRows(agentPath: string, query: string) {
@@ -1291,10 +1299,12 @@ describe("memory-core doctor dreaming migration", () => {
     } finally {
       canonicalDb.close();
     }
+    const revision = readMemoryIndexRevision(agentPath);
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
     expect(result.warnings).toEqual([]);
+    expect(readMemoryIndexRevision(agentPath)).toBe(revision);
     expect(readMemoryRows(agentPath)).toEqual({
       sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
       chunks: [{ id: "chunk-1", text: "canonical memory remains authoritative" }],
@@ -1421,7 +1431,7 @@ describe("memory-core doctor dreaming migration", () => {
 
       expect(result.warnings).toEqual([]);
       expect(result.changes).toEqual([
-        "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+        "Resolved Memory Core legacy memory index conflict for agent main by keeping existing per-agent SQLite rows",
         expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
       ]);
       expect(readMemoryRows(agentPath)).toEqual({
@@ -1453,7 +1463,7 @@ describe("memory-core doctor dreaming migration", () => {
 
     expect(result.warnings).toEqual([
       expect.stringContaining(
-        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory chunks_vec dimensions 3 do not match canonical memory chunks_vec dimensions 4",
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory chunks_vec dimensions 3 do not match current memory chunks_vec dimensions 4",
       ),
     ]);
     expect(result.changes).toEqual([]);
@@ -1469,7 +1479,7 @@ describe("memory-core doctor dreaming migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([
-      "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+      "Resolved Memory Core legacy memory index conflict for agent main by keeping existing per-agent SQLite rows",
       expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
     await expect(fs.access(legacyPath)).rejects.toThrow();
@@ -1512,10 +1522,13 @@ describe("memory-core doctor dreaming migration", () => {
       legacyDb.close();
     }
     await createCanonicalMemoryIndex(agentPath, env, "matching", { ftsText: "stale text" });
+    const revision = readMemoryIndexRevision(agentPath);
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
     expect(result.warnings).toEqual([]);
+    // Import and the subsequent provenance backfill each commit one index batch.
+    expect(readMemoryIndexRevision(agentPath)).toBe(revision + 2);
     expect(await searchMigratedKeywordRows(agentPath, "stale")).toEqual([]);
     expect((await searchMigratedKeywordRows(agentPath, "remember")).map((row) => row.id)).toEqual([
       "chunk-1",
@@ -1536,6 +1549,11 @@ describe("memory-core doctor dreaming migration", () => {
     });
     await expect(fs.access(legacyPath)).rejects.toThrow();
     await fs.access(`${legacyPath}.migrated`);
+    expect(await legacyMemoryIndexMigration().migrateLegacyState(migrationParams())).toEqual({
+      changes: [],
+      warnings: [],
+    });
+    expect(readMemoryIndexRevision(agentPath)).toBe(revision + 2);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -38,7 +38,6 @@ describe("Gravatar HTTP waiter lifetimes", () => {
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     const promise = handleUserProfileAvatarHttpRequest(req, res, pathname, {
       auth: { mode: "none", allowTailscale: false },
-      fetchImpl,
     });
     handled.set(pathname, { response: res, promise });
     void promise.catch((error: unknown) => {
@@ -65,6 +64,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
 
   beforeEach(() => {
     fetchImpl.mockReset();
+    vi.stubGlobal("fetch", fetchImpl);
     profileFixture.mockReset();
     authorizeControlUiReadRequestOrReply
       .mockReset()
@@ -85,6 +85,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
     producers.length = 0;
     handled.clear();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   function startRequest(profileId: string) {

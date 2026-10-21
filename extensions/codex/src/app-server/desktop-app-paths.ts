@@ -1,4 +1,3 @@
-/** Shared path candidates for Codex's macOS desktop app bundle. */
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -33,9 +32,7 @@ const MACOS_DESKTOP_CODEX_APP_PATH_CANDIDATES: readonly MacOSDesktopCodexAppPath
     {
       ...candidate,
       appServerCommandPath: path.join(
-        appBundlePath,
-        "Contents",
-        "Resources",
+        resources,
         "codex-cli",
         "CodexCLI.app",
         "Contents",
@@ -87,11 +84,11 @@ export function resolveMacOSDesktopCodexComputerUseServiceAppCandidates(
           path.resolve(candidate.appServerCommandPath) === path.resolve(appServerCommand),
       )
     : undefined;
-  const orderedCandidates = matchingCandidate
-    ? [matchingCandidate, ...candidates.filter((candidate) => candidate !== matchingCandidate)]
-    : candidates;
   return [
-    ...new Set(orderedCandidates.flatMap((candidate) => candidate.computerUseServiceAppPaths)),
+    ...new Set([
+      ...(matchingCandidate?.computerUseServiceAppPaths ?? []),
+      ...candidates.flatMap((candidate) => candidate.computerUseServiceAppPaths),
+    ]),
   ];
 }
 

@@ -42,6 +42,8 @@ describe("FaceTime runtime admission", () => {
         expect((await runtime.status()).calls).toEqual([]);
         expect(mocks.startTalk).not.toHaveBeenCalled();
         expect(mocks.helper.answerCall).not.toHaveBeenCalled();
+        await expect(runtime.installDriver()).rejects.toThrow("during an active or pending call");
+        expect(mocks.installDriver).not.toHaveBeenCalled();
 
         await mocks.helperParams?.onMessage(outbound);
         await activated;
@@ -50,6 +52,8 @@ describe("FaceTime runtime admission", () => {
           expect.objectContaining({ callUUID: "approved-call", senderId: "owner@example.com" }),
         );
         expect((await runtime.status()).calls).toMatchObject([{ callUUID: "approved-call" }]);
+        await expect(runtime.installDriver()).rejects.toThrow("during an active or pending call");
+        expect(mocks.installDriver).not.toHaveBeenCalled();
       } finally {
         await mocks.helperParams?.onMessage(incomingCall(6));
         await mocks.helperParams?.onMessage({

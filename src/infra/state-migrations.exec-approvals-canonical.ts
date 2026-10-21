@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
@@ -8,14 +7,16 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sanitizeOpenClawStateLeaseRows } from "../state/openclaw-state-snapshot-sanitizer.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
 import { parseLegacyExecApprovals, parsePersistedExecApprovals } from "./exec-approvals-config.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
-function readRow(db: DatabaseSync) {
+function readRow(db: EngineConnection) {
   return executeSqliteQueryTakeFirstSync(
     db,
     getNodeSqliteKysely<Pick<DB, "exec_approvals_config">>(db)
@@ -85,6 +86,17 @@ export async function repairLegacySqliteExecApprovals(
       const current = readRow(db);
       if (!isDeepStrictEqual(current, row)) {
         throw new Error("Exec approval policy changed during Doctor repair; source retained.");
+      }
+      if (parsed.value.socket?.path || parsed.value.socket?.token) {
+        runClientCredentialOperation(env, {
+          kind: "socket.ensure",
+          fallback: {
+            socket_key: "current",
+            socket_path: parsed.value.socket.path ?? null,
+            socket_token: parsed.value.socket.token ?? null,
+            updated_at_ms: row.updated_at_ms,
+          },
+        });
       }
       writeExecApprovalsConfigRow({ db, file: parsed.value, now: row.updated_at_ms });
     },

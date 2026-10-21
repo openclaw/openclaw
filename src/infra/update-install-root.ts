@@ -8,17 +8,11 @@ export function resolveUpdateInstallRoot(root: string): string {
     return fs.realpathSync.native(absolute);
   } catch {
     try {
-      if (fs.lstatSync(absolute, { throwIfNoEntry: false })) {
-        return absolute;
+      if (!fs.lstatSync(absolute, { throwIfNoEntry: false })) {
+        return path.join(fs.realpathSync.native(path.dirname(absolute)), path.basename(absolute));
       }
-    } catch {
-      return absolute;
-    }
-    try {
-      return path.join(fs.realpathSync.native(path.dirname(absolute)), path.basename(absolute));
-    } catch {
-      return absolute;
-    }
+    } catch {}
+    return absolute;
   }
 }
 

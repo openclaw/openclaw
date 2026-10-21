@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   observeParentSqlite,
   sqliteMethods as methods,
@@ -30,6 +30,28 @@ import { readSessionBindingSelectionCurrent, testing } from "./session-binding-s
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const stateKey = Symbol("binding-routing-worker-proof");
+function mainRoute(channel: string): ResolvedAgentRoute {
+  return {
+    agentId: "main",
+    channel,
+    accountId: "default",
+    sessionKey: "agent:main:main",
+    mainSessionKey: "agent:main:main",
+    lastRoutePolicy: "main",
+    matchedBy: "default",
+  };
+}
+function accountManager(channel: string) {
+  return createAccountScopedConversationBindingManager({
+    channel,
+    accountId: "default",
+    stateKey,
+    cfg: { session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } } },
+    toStoredTargetKind: (targetKind) => targetKind,
+    toSessionBindingTargetKind: (targetKind) => targetKind,
+  });
+}
+
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-binding-route-worker-"));
   testing.resetSessionBindingAdaptersForTests();
@@ -41,90 +63,71 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-describe("awaited conversation routing storage ownership", () => {
-  it.each(["generic", "account"] as const)(
-    "routes and records activity for %s bindings without parent SQLite calls",
-    async (kind) => {
-      const channel = kind === "generic" ? "webchat" : "imessage";
-      const conversation = { channel, accountId: "default", conversationId: "worker-route" };
-      const service = getSessionBindingService();
-      const route: ResolvedAgentRoute = {
-        agentId: "main",
-        channel,
-        accountId: "default",
-        sessionKey: "agent:main:main",
-        mainSessionKey: "agent:main:main",
-        lastRoutePolicy: "main",
-        matchedBy: "default",
-      };
-      const observer = observeParentSqlite();
-      let manager: ReturnType<typeof createAccountScopedConversationBindingManager> | undefined;
-      try {
-        const calibration = openNodeSqliteDatabase(":memory:");
-        calibration.exec("CREATE TABLE calibration (value INTEGER)");
-        calibration.prepare("INSERT INTO calibration VALUES (?)").run(7);
-        const query = calibration.prepare("SELECT value FROM calibration");
-        expect(query.get()).toEqual({ value: 7 });
-        expect(query.all()).toEqual([{ value: 7 }]);
-        expect([...query.iterate()]).toEqual([{ value: 7 }]);
-        calibration.close();
-        for (const method of methods) {
-          expect(observer.counts[method], `${method} calibration`).toBeGreaterThan(0);
-        }
-        observer.reset();
-        if (kind === "account") {
-          manager = createAccountScopedConversationBindingManager({
-            channel,
-            accountId: "default",
-            cfg: { session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } } },
-            stateKey,
-            toStoredTargetKind: (targetKind) => targetKind,
-            toSessionBindingTargetKind: (targetKind) => targetKind,
-          });
-        }
-        const binding = await service.bind({
-          conversation,
-          targetSessionKey: "agent:target:main",
-          targetKind: "session",
-        });
-        expect(observer.counts.run, "fixture binding writes are observable").toBeGreaterThan(0);
-        observer.reset();
-        const result = await resolveRuntimeConversationBindingRouteAsync({ route, conversation });
-        expect(result.bindingRecord?.bindingId).toBe(binding.bindingId);
-        expect(result.route.sessionKey).toBe(binding.targetSessionKey);
-        expect(result.bindingOwnerAvailable).toBe(true);
-        const selection = await readSessionBindingSelectionCurrent([
-          { ...conversation, conversationId: "missing" },
-          {
-            ...conversation,
-            accountId: " DEFAULT ",
-            conversationId: " worker-route ",
-            parentConversationId: kind === "account" ? "account-ignored-parent" : undefined,
-          },
-        ]);
-        expect(selection[0]).toBeNull();
-        expect(selection[1]?.bindingId).toBe(binding.bindingId);
-        if (manager) {
-          const pending = readSessionBindingSelectionCurrent([conversation]);
-          manager.stop();
-          await expect(pending).rejects.toThrow("no longer active");
-        }
-        expect(observer.counts).toEqual(emptyCounts());
-      } finally {
-        observer.restore();
+it.each(["generic", "account"] as const)(
+  "routes and records activity for %s bindings without parent SQLite calls",
+  async (kind) => {
+    const channel = kind === "generic" ? "webchat" : "imessage";
+    const conversation = { channel, accountId: "default", conversationId: "worker-route" };
+    const service = getSessionBindingService();
+    const observer = observeParentSqlite();
+    try {
+      const calibration = openNodeSqliteDatabase(":memory:");
+      calibration.exec("CREATE TABLE calibration (value INTEGER)");
+      calibration.prepare("INSERT INTO calibration VALUES (?)").run(7);
+      const query = calibration.prepare("SELECT value FROM calibration");
+      expect(query.get()).toEqual({ value: 7 });
+      expect(query.all()).toEqual([{ value: 7 }]);
+      expect([...query.iterate()]).toEqual([{ value: 7 }]);
+      calibration.close();
+      for (const method of methods) {
+        expect(observer.counts[method], `${method} calibration`).toBeGreaterThan(0);
       }
-      expect(
-        inspectCurrentConversationBindingRecord(conversation)?.metadata?.lastActivityAt,
-      ).toEqual(expect.any(Number));
-    },
-  );
-});
+      observer.reset();
+      const manager = kind === "account" ? accountManager(channel) : undefined;
+      const binding = await service.bind({
+        conversation,
+        targetSessionKey: "agent:target:main",
+        targetKind: "session",
+      });
+      observer.reset();
+      const result = await resolveRuntimeConversationBindingRouteAsync({
+        route: mainRoute(channel),
+        conversation,
+      });
+      expect(result.bindingRecord?.bindingId).toBe(binding.bindingId);
+      expect(result.route.sessionKey).toBe(binding.targetSessionKey);
+      expect(result.bindingOwnerAvailable).toBe(true);
+      const selection = await readSessionBindingSelectionCurrent([
+        { ...conversation, conversationId: "missing" },
+        {
+          ...conversation,
+          accountId: " DEFAULT ",
+          conversationId: " worker-route ",
+          parentConversationId: kind === "account" ? "account-ignored-parent" : undefined,
+        },
+      ]);
+      expect(selection[0]).toBeNull();
+      expect(selection[1]?.bindingId).toBe(binding.bindingId);
+      if (manager) {
+        const pending = readSessionBindingSelectionCurrent([conversation]);
+        manager.stop();
+        await expect(pending).rejects.toThrow("no longer active");
+      }
+      expect(observer.counts).toEqual(emptyCounts());
+    } finally {
+      observer.restore();
+    }
+    expect(inspectCurrentConversationBindingRecord(conversation)?.metadata?.lastActivityAt).toEqual(
+      expect.any(Number),
+    );
+  },
+);
 
 it.each(
   (["generic", "account"] as const).flatMap((kind) =>
     (["owner-retired", "database-closed"] as const).map((change) => ({ kind, change })),
   ),
-)("preserves bounded ingress classification for $kind native $change", async ({ kind, change }) => {
+)("retries native $kind $change under the ingress age gate", async ({ kind, change }) => {
   const previousRegistry = captureActivePluginRegistrySnapshot();
   const channel = kind === "generic" ? "native-binding-regression" : "imessage";
   const conversation = { channel, accountId: "default", conversationId: "native-admission" };
@@ -140,17 +143,7 @@ it.each(
         },
       },
     ]);
-  const manager =
-    kind === "account"
-      ? createAccountScopedConversationBindingManager({
-          channel,
-          accountId: conversation.accountId,
-          cfg: { session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } } },
-          stateKey,
-          toStoredTargetKind: (targetKind) => targetKind,
-          toSessionBindingTargetKind: (targetKind) => targetKind,
-        })
-      : undefined;
+  const manager = kind === "account" ? accountManager(channel) : undefined;
   try {
     if (kind === "generic") {
       setActivePluginRegistry(supportedRegistry());
@@ -162,20 +155,11 @@ it.each(
     });
     const resolved = await resolveRuntimeConversationBindingRouteAsync({
       conversation,
-      route: {
-        agentId: "main",
-        channel,
-        accountId: conversation.accountId,
-        sessionKey: "agent:main:main",
-        mainSessionKey: "agent:main:main",
-        lastRoutePolicy: "main",
-        matchedBy: "default",
-      },
+      route: mainRoute(channel),
     });
     const ctx = buildChannelInboundEventContext({
       channel,
       accountId: conversation.accountId,
-      messageId: `native-${kind}-${change}`,
       from: "synthetic-user",
       sender: { id: "synthetic-user" },
       conversation: { kind: "direct", id: conversation.conversationId },
@@ -209,16 +193,11 @@ it.each(
         now,
       });
     expect(disposition(6)).toMatchObject({ kind: "release", attempt: 7 });
+    expect(disposition(7)).toMatchObject({ kind: "release", attempt: 8 });
     if (change === "owner-retired") {
-      expect(disposition(7)).toMatchObject({
-        kind: "fail",
-        reason: "session-start-conflict-retry-limit",
-        attempt: 8,
-      });
       expect(failure).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
     } else {
       expect(failure).toMatchObject({ code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" });
-      expect(disposition(7)).toMatchObject({ kind: "release", attempt: 8 });
     }
   } finally {
     manager?.stop();

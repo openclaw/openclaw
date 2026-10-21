@@ -11,18 +11,14 @@ function validMcpAppDeepLink(value: string): boolean {
   return (
     value.startsWith("/") &&
     !value.startsWith("//") &&
-    !value.includes("#") &&
-    !value.includes("\\") &&
-    !value.includes(" ") &&
+    !/[#\\ ]/u.test(value) &&
     !containsAsciiControlCharacter(value)
   );
 }
 
 export function parseMcpAppLink(value: string): McpAppRoute | null {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
+  const url = URL.parse(value);
+  if (!url) {
     return null;
   }
   const native =

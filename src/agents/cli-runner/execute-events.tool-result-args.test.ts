@@ -79,6 +79,45 @@ function displayParser(handlers: ReturnType<typeof createCliEventHandlers>) {
 }
 
 describe("cli tool result events", () => {
+  it.each([undefined, "side-question"] as const)(
+    "keeps input progress separate from execution in %s mode",
+    (executionMode) => {
+      const context = buildContext(`input-${executionMode ?? "normal"}`);
+      context.params.executionMode = executionMode;
+      context.params.onExecutionPhase = vi.fn();
+      const tracking = buildToolTracking();
+      const { handlers, events, dispose } = eventFixture(context, tracking);
+      try {
+        handlers.emitCliToolInputDelta({
+          toolCallId: "write",
+          name: "write",
+          diff: { added: 2, removed: 0 },
+        });
+        handlers.finalizeParsedTools();
+        expect(context.params.onExecutionPhase).not.toHaveBeenCalled();
+        expect(tracking.handleCliToolUseStart).not.toHaveBeenCalled();
+        expect(handlers.hasObservedCliActivity()).toBe(true);
+        expect(events.map(({ stream, data }) => ({ stream, data }))).toEqual(
+          executionMode
+            ? []
+            : [
+                {
+                  stream: "tool",
+                  data: {
+                    phase: "input_delta",
+                    toolCallId: "write",
+                    name: "write",
+                    diff: { added: 2, removed: 0 },
+                  },
+                },
+              ],
+        );
+      } finally {
+        dispose();
+      }
+    },
+  );
+
   it.each([
     ["poll", "kill", false],
     ["kill", "poll", true],
@@ -91,7 +130,7 @@ describe("cli tool result events", () => {
       const { handlers, events, dispose } = eventFixture(context, tracking);
       const args = { action: requested, sessionId: "job" };
       try {
-        handlers.emitCliToolUseStart({
+        handlers.emitParsedToolUseStart({
           toolCallId: "call",
           name: "mcp__openclaw__process",
           kind: "mcp_tool_use",
@@ -109,7 +148,7 @@ describe("cli tool result events", () => {
           toolName: "process",
           args: { ...args, action: executed },
         });
-        handlers.emitCliToolResult({
+        handlers.emitParsedToolResult({
           toolCallId: "call",
           name: "mcp__openclaw__process",
           isError: false,
@@ -197,7 +236,7 @@ describe("cli tool result events", () => {
         toolTracking: createCliToolTracking(context),
         getRunState: () => ({ failed: false, error: undefined }),
       });
-      handlers.emitCliToolUseStart({
+      handlers.emitParsedToolUseStart({
         toolCallId: "native-exec",
         name: "Bash",
         kind: "tool_use",
@@ -209,8 +248,8 @@ describe("cli tool result events", () => {
         isError: false,
         result: "/workspace",
       };
-      handlers.emitCliToolResult(completed);
-      handlers.emitCliToolResult(completed);
+      handlers.emitParsedToolResult(completed);
+      handlers.emitParsedToolResult(completed);
       handlers.emitCliDisplayToolUseStart({
         toolCallId: "native-fetch",
         name: "WebFetch",
@@ -224,15 +263,15 @@ describe("cli tool result events", () => {
         result: { error: "request failed" },
       });
       for (const name of ["mcp__openclaw__exec", "mcp_openclaw_exec"]) {
-        handlers.emitCliToolUseStart({
+        handlers.emitParsedToolUseStart({
           toolCallId: name,
           name,
           kind: "mcp_tool_use",
           args: { command: "pwd" },
         });
-        handlers.emitCliToolResult({ ...completed, toolCallId: name, name });
+        handlers.emitParsedToolResult({ ...completed, toolCallId: name, name });
       }
-      handlers.emitCliToolResult({ ...completed, toolCallId: "unknown-call", name: "" });
+      handlers.emitParsedToolResult({ ...completed, toolCallId: "unknown-call", name: "" });
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -317,19 +356,19 @@ describe("cli tool result events", () => {
     const { handlers, events, dispose } = eventFixture(buildContext(runId));
 
     try {
-      handlers.emitCliToolUseStart({
+      handlers.emitParsedToolUseStart({
         toolCallId: "call-1",
         name: "Bash",
         kind: "tool_use",
         args: { command: "nope-not-a-command" },
       });
-      handlers.emitCliToolResult({
+      handlers.emitParsedToolResult({
         toolCallId: "call-1",
         name: "Bash",
         isError: true,
         result: "bash: nope-not-a-command: command not found",
       });
-      handlers.emitCliToolResult({
+      handlers.emitParsedToolResult({
         toolCallId: "call-1",
         name: "Bash",
         isError: false,
@@ -348,7 +387,7 @@ describe("cli tool result events", () => {
         result: "wrote note.txt",
       });
       // The display result also releases correlation state for this call id.
-      handlers.emitCliToolResult({
+      handlers.emitParsedToolResult({
         toolCallId: "call-2",
         name: "write",
         isError: false,
@@ -385,14 +424,14 @@ describe("CLI progress-card plan projection", () => {
       const executed = mode === "clear" ? {} : plan;
       const name = "mcp__openclaw__progress_card";
       try {
-        handlers.emitCliToolUseStart({
+        handlers.emitParsedToolUseStart({
           toolCallId: "card",
           name,
           kind: "mcp_tool_use",
           args: requested,
         });
         if (mode === "ambiguous") {
-          handlers.emitCliToolUseStart({
+          handlers.emitParsedToolUseStart({
             toolCallId: "peer",
             name,
             kind: "mcp_tool_use",
@@ -415,7 +454,7 @@ describe("CLI progress-card plan projection", () => {
           outcome: "completed",
         });
         markMcpLoopbackToolCallFinished(capture);
-        handlers.emitCliToolResult({ toolCallId: "card", name, isError: false });
+        handlers.emitParsedToolResult({ toolCallId: "card", name, isError: false });
         const result = events.find(
           (event) => event.stream === "tool" && event.data.phase === "result",
         );
@@ -459,34 +498,34 @@ describe("CLI progress-card plan projection", () => {
       const { handlers, events, dispose } = eventFixture(buildContext(runId), tracking);
       const parser = displayParser(handlers);
       try {
-        handlers.emitCliToolUseStart({
+        handlers.emitParsedToolUseStart({
           toolCallId: "tracked-plan",
           name,
           kind: "mcp_tool_use",
           args: { plan: [{ step: "Keep working", status: "in_progress" }] },
         });
-        handlers.emitCliToolResult({ toolCallId: "tracked-plan", name, isError: false });
+        handlers.emitParsedToolResult({ toolCallId: "tracked-plan", name, isError: false });
         parser.push(startRecord("display-clear", name, {}));
         if (trackedResultFirst) {
-          handlers.emitCliToolResult({ toolCallId: "display-clear", name, isError: false });
+          handlers.emitParsedToolResult({ toolCallId: "display-clear", name, isError: false });
         }
         parser.push(resultRecord("display-clear", "done"));
         // Neither ordering may promote a display-only start into authoritative plan state.
         if (!trackedResultFirst) {
-          handlers.emitCliToolResult({ toolCallId: "display-clear", name, isError: false });
+          handlers.emitParsedToolResult({ toolCallId: "display-clear", name, isError: false });
         }
         const plans = () => events.filter((event) => event.stream === "plan");
         expect(plans()).toHaveLength(1);
         expect(plans()[0]?.data.steps).toEqual([{ step: "Keep working", status: "in_progress" }]);
         expect(tracking.handleCliToolUseStart).toHaveBeenCalledTimes(1);
         expect(tracking.handleCliToolResult).toHaveBeenCalledTimes(2);
-        handlers.emitCliToolUseStart({
+        handlers.emitParsedToolUseStart({
           toolCallId: "tracked-clear",
           name,
           kind: "mcp_tool_use",
           args: {},
         });
-        handlers.emitCliToolResult({ toolCallId: "tracked-clear", name, isError: false });
+        handlers.emitParsedToolResult({ toolCallId: "tracked-clear", name, isError: false });
         expect(plans()).toHaveLength(2);
         expect(plans()[1]?.data.steps).toEqual([]);
         expect(handlers.getToolSummary()).toEqual({ calls: 3, tools: [name], failures: 0 });
@@ -542,14 +581,14 @@ describe("CLI progress-card plan projection", () => {
           if (displayOnly) {
             handlers.emitCliDisplayToolUseStart(start);
           } else {
-            handlers.emitCliToolUseStart(start);
+            handlers.emitParsedToolUseStart(start);
           }
         }
         const result = { toolCallId: "card", name, isError: failed === true, result: "receipt" };
         if (displayOnly) {
           handlers.emitCliDisplayToolResult(result);
         } else {
-          handlers.emitCliToolResult(result);
+          handlers.emitParsedToolResult(result);
         }
         expect(events.filter((event) => event.stream === "plan")).toEqual([]);
         if (sideQuestion) {
@@ -704,6 +743,53 @@ describe("CLI plan channel bridge", () => {
         expect(lifecycle).toEqual(["start"]);
       } finally {
         progress.cancel();
+        dispose();
+      }
+    },
+  );
+});
+
+describe("CLI prepared live output", () => {
+  it.each(["NO_REPLY.", '"NO_REPLY"', '{"action":"NO_REPLY"}', "NO_REPLY\nNO_REPLY"])(
+    "preserves ordinary producer output %j",
+    (raw) => {
+      const { handlers, events, dispose } = eventFixture(buildContext("cli-visible-control"));
+      const text = raw.startsWith("NO_REPLY\n") ? raw.slice(9) : raw;
+      try {
+        handlers.emitCliAssistantDelta({ text: raw, delta: raw });
+        handlers.emitCliCompletedReply(raw, 0);
+        handlers.emitCliCommentaryText(raw);
+        expect(events.map((event) => event.data)).toEqual([
+          expect.objectContaining({ text, delta: text }),
+          expect.objectContaining({ completedText: text }),
+          expect.objectContaining({ progressText: text }),
+        ]);
+      } finally {
+        dispose();
+      }
+    },
+  );
+
+  it.each(["NO_REPLY", "no_reply", "No_Reply"])(
+    "withholds possible %s controls before releasing the full leading-line suffix",
+    (token) => {
+      const { handlers, events, dispose } = eventFixture(buildContext("cli-control-prefix"));
+      try {
+        handlers.emitCliAssistantDelta({ text: token.slice(0, 2), delta: token.slice(0, 2) });
+        handlers.emitCliAssistantDelta({ text: token, delta: token.slice(2) });
+        handlers.emitCliCompletedReply(token, 0);
+        handlers.emitCliCommentaryText(` \t${token}\n`);
+        expect(events).toEqual([]);
+        handlers.emitCliAssistantDelta({
+          text: `${token}\n  Answer.\n`,
+          delta: `${token}\n  Answer.\n`,
+        });
+        expect(events).toEqual([
+          expect.objectContaining({
+            data: expect.objectContaining({ text: "  Answer.\n", delta: "  Answer.\n" }),
+          }),
+        ]);
+      } finally {
         dispose();
       }
     },

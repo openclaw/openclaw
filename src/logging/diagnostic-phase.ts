@@ -5,6 +5,7 @@ import {
   type DiagnosticPhaseDetails,
   type DiagnosticPhaseSnapshot,
 } from "../infra/diagnostic-events.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 
 const RECENT_PHASE_CAPACITY = 40;
 
@@ -38,21 +39,10 @@ export function getCurrentDiagnosticPhase(): string | undefined {
   return activePhaseStack.at(-1)?.name;
 }
 
-export function getRecentDiagnosticPhases(
-  limit = 8,
-  options?: { completedAfter?: number },
-): DiagnosticPhaseSnapshot[] {
-  if (!Number.isFinite(limit) || limit <= 0) {
-    return [];
-  }
-  const completedAfter = options?.completedAfter;
-  const eligiblePhases =
-    completedAfter === undefined
-      ? recentPhases
-      : recentPhases.filter(
-          (phase) => phase.endedAt !== undefined && phase.endedAt >= completedAfter,
-        );
-  return eligiblePhases.slice(-Math.floor(limit)).map((phase) => Object.assign({}, phase));
+export function getRecentDiagnosticPhases(completedAfter: number): DiagnosticPhaseSnapshot[] {
+  return recentPhases
+    .filter((phase) => phase.endedAt !== undefined && phase.endedAt >= completedAfter)
+    .slice(-6);
 }
 
 function recordDiagnosticPhase(snapshot: DiagnosticPhaseSnapshot): void {
@@ -81,7 +71,7 @@ export async function withDiagnosticPhase<T>(
   };
   activePhaseStack.push(active);
   try {
-    return await run();
+    return await runWithMainThreadTask(name, run);
   } finally {
     // Remove by identity so nested or overlapping phases do not corrupt the active stack.
     const endedAt = Date.now();
@@ -105,6 +95,7 @@ export async function withDiagnosticPhase<T>(
   }
 }
 
+/** @internal Test-support reset; see diagnostic.test-support.ts. */
 export function resetDiagnosticPhasesForTest(): void {
   activePhaseStack = [];
   recentPhases = [];

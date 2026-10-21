@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
@@ -25,7 +25,7 @@ import {
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
-import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
+import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
 type WorkspaceFileSnapshot =
   | { type: "file"; mode: number; size: number; sha256: string }
@@ -123,7 +123,6 @@ async function readWorkspaceFile(
         metrics.memoHitCount += 1;
       }
     } else {
-      const hashStartedAt = performance.now();
       if (params.contents) {
         buffer = Buffer.allocUnsafe(Number(before.size) + 1);
         size = await readFileWindowFully(handle, buffer, 0, { signal });
@@ -152,7 +151,6 @@ async function readWorkspaceFile(
       }
       if (metrics) {
         metrics.contentHashCount += 1;
-        metrics.contentHashDurationMs += performance.now() - hashStartedAt;
       }
     }
     const after = await handle.stat({ bigint: true });
@@ -180,6 +178,7 @@ export async function readActualWorkspaceManifestImpl(params: {
   baseCommit: string | null;
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
+  buildCacheInputs?: ReadonlySet<string>;
   signal?: AbortSignal;
 }): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string; rawManifest: string }> {
   params.signal?.throwIfAborted();
@@ -192,6 +191,7 @@ export async function readActualWorkspaceManifestImpl(params: {
     params.signal?.throwIfAborted();
     throw error;
   }
+  const retained = buildCacheInputPaths(params.buildCacheInputs);
   const entries: WorkerWorkspaceManifestEntry[] = [];
   const directories: string[] = [];
   let totalBytes = 0;
@@ -287,12 +287,32 @@ export async function readActualWorkspaceManifestImpl(params: {
     }
     throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
   };
+  const addLeaf = async (relative: string, absolute: string, stats: Stats): Promise<boolean> => {
+    if (stats.isSymbolicLink()) {
+      const target = await fs.readlink(absolute);
+      if (!isPortableRootContainedSymlink(root, relative, target)) {
+        return false;
+      }
+      addEntry({ path: relative, type: "symlink", mode: 0o777, target }, Buffer.byteLength(target));
+    } else if (stats.isFile()) {
+      filePaths.push(relative);
+    } else {
+      return false;
+    }
+    return true;
+  };
   const addIncludedPath = async (
     relative: string,
     includedNodes: ReadonlySet<string>,
     derivedOnlyDirectories: ReadonlySet<string>,
   ): Promise<"included" | "derived-only" | "absent"> => {
-    if (isDerivedWorkspacePath(relative, await isStagedInput(relative))) {
+    if (
+      isDerivedWorkspacePath(
+        relative,
+        retained.has(relative) || (await isStagedInput(relative)),
+        params.buildCacheInputs !== undefined,
+      )
+    ) {
       return "derived-only";
     }
     checkTraversal(relative);
@@ -317,7 +337,11 @@ export async function readActualWorkspaceManifestImpl(params: {
         scanSignal.throwIfAborted();
         const child = `${relative}/${entry.name}`;
         if (
-          isDerivedWorkspacePath(child, await isStagedInput(child)) ||
+          isDerivedWorkspacePath(
+            child,
+            retained.has(child) || (await isStagedInput(child)),
+            params.buildCacheInputs !== undefined,
+          ) ||
           derivedOnlyDirectories.has(child)
         ) {
           hasDerivedEntry = true;
@@ -331,22 +355,7 @@ export async function readActualWorkspaceManifestImpl(params: {
       }
       return "derived-only";
     }
-    if (stats.isSymbolicLink()) {
-      const target = await fs.readlink(absolute);
-      if (isPortableRootContainedSymlink(root, relative, target)) {
-        addEntry(
-          { path: relative, type: "symlink", mode: 0o777, target },
-          Buffer.byteLength(target),
-        );
-        return "included";
-      }
-      return "absent";
-    }
-    if (stats.isFile()) {
-      filePaths.push(relative);
-      return "included";
-    }
-    return "absent";
+    return (await addLeaf(relative, absolute, stats)) ? "included" : "absent";
   };
   const walk = async (
     relativeDirectory: string,
@@ -361,7 +370,13 @@ export async function readActualWorkspaceManifestImpl(params: {
       if (!relativeDirectory && name === ".git") {
         continue;
       }
-      if (isDerivedWorkspacePath(relative, await isStagedInput(relative))) {
+      if (
+        isDerivedWorkspacePath(
+          relative,
+          retained.has(relative) || (await isStagedInput(relative)),
+          params.buildCacheInputs !== undefined,
+        )
+      ) {
         hasDerivedEntry = true;
         continue;
       }
@@ -375,32 +390,11 @@ export async function readActualWorkspaceManifestImpl(params: {
         } else {
           hasDerivedEntry ||= child.hasDerivedEntry;
         }
-      } else if (stats.isSymbolicLink()) {
-        hasNonDerivedEntry = true;
-        const target = await fs.readlink(absolute);
-        if (!isPortableRootContainedSymlink(root, relative, target)) {
-          // Like other unsupported local nodes, an escaping symlink is retained
-          // as a conflict but omitted from the canonical cloud manifest.
-          continue;
-        }
-        addEntry(
-          {
-            path: relative,
-            type: "symlink",
-            mode: 0o777,
-            target,
-          },
-          Buffer.byteLength(target),
-        );
-      } else if (stats.isFile()) {
-        hasNonDerivedEntry = true;
-        filePaths.push(relative);
       } else {
+        // Unsupported nodes and escaping links still make their directory nonempty;
+        // they stay local and become conflicts if a worker changes the same path.
         hasNonDerivedEntry = true;
-        // Special local nodes cannot be represented in a cloud manifest. They
-        // remain in place and are surfaced as conflicts when the worker changed
-        // the same path; omitting them lets that conflicted turn still finish.
-        continue;
+        await addLeaf(relative, absolute, stats);
       }
     }
     return {
@@ -448,6 +442,7 @@ export async function readActualWorkspaceManifestImpl(params: {
   const manifest: WorkerWorkspaceManifest = {
     version: 1,
     baseCommit: params.baseCommit,
+    ...(params.buildCacheInputs !== undefined ? { buildCacheInputs: [...retained] } : {}),
     entries: entries.toSorted((left, right) => left.path.localeCompare(right.path)),
     directories: directories.toSorted((left, right) => left.localeCompare(right)),
   };

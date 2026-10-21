@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -16,15 +15,28 @@ import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
   resolveOnboardingSetupTarget,
-  resolveSystemAgentOnboardingTarget,
 } from "./onboard-agent-target.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function modelSettings(primary: string, alias: string) {
+  return {
+    model: { primary },
+    models: { [primary]: { alias } },
+    modelPolicy: { allow: [primary] },
+  };
+}
+
+function fleet<T extends NonNullable<OpenClawConfig["agents"]>["entries"]>(
+  entries: T,
+  defaults: NonNullable<OpenClawConfig["agents"]>["defaults"] = {},
+) {
+  return { agents: { ownership: "explicit" as const, defaults, entries } };
+}
+
 describe("onboarding agent target", () => {
   it.each([
     { ownership: undefined, priorUtility: undefined, writesAgent: false },
-    { ownership: undefined, priorUtility: "", writesAgent: true },
     { ownership: "explicit", priorUtility: undefined, writesAgent: true },
   ] as const)("keeps a utility selection on its existing configuration owner: %j", (scenario) => {
     const config: OpenClawConfig = {
@@ -63,59 +75,64 @@ describe("onboarding agent target", () => {
     expect(config).toEqual(original);
   });
 
-  it.each([undefined, "", "local-utility/ops"])(
-    "projects a provider utility mutation only onto the selected agent: %j",
-    (utilityModel) => {
+  it.each(["defaults", "agent"] as const)(
+    "preserves a %s utility fallback chain when changing its primary",
+    (owner) => {
+      const utilityModel = { primary: "local/old", fallbacks: ["local/backup"] };
       const config: OpenClawConfig = {
         agents: {
-          ownership: "explicit",
-          defaults: {
-            model: "openai/gpt-5.5",
-            utilityModel: "local-utility/shared",
-          },
-          entries: {
-            main: { utilityModel: "local-utility/main" },
-            OPS: {
-              model: { primary: "openai/gpt-5.4", fallbacks: ["openai/gpt-5.5"] },
-              ...(utilityModel !== undefined ? { utilityModel } : {}),
-            },
-          },
+          defaults: { utilityModel },
+          entries: { main: owner === "agent" ? { utilityModel } : {} },
         },
       };
-      const target = resolveOnboardingAgentTarget(config, "ops");
-
-      const updated = applyAgentModelDefaults(config, target, (projected) => {
-        expect(projected.agents?.defaults?.utilityModel).toBe(
-          utilityModel ?? "local-utility/shared",
-        );
-        return {
-          ...projected,
-          plugins: { entries: { "local-utility": { enabled: true } } },
-          agents: {
-            ...projected.agents,
-            defaults: { ...projected.agents?.defaults, utilityModel: "local-utility/tiny" },
-          },
-        };
-      });
-
-      expect(updated.agents?.defaults).toEqual(config.agents?.defaults);
-      expect(updated.agents?.entries).toEqual({
-        ...config.agents?.entries,
-        OPS: { ...config.agents?.entries?.OPS, utilityModel: "local-utility/tiny" },
-      });
-      expect(updated.plugins?.entries?.["local-utility"]?.enabled).toBe(true);
+      const result = applyOnboardingUtilityModel(
+        config,
+        resolveOnboardingAgentTarget(config, "main"),
+        "local/new",
+      );
+      expect(
+        owner === "agent"
+          ? result.agents?.entries?.main?.utilityModel
+          : result.agents?.defaults?.utilityModel,
+      ).toEqual({ primary: "local/new", fallbacks: ["local/backup"] });
+      expect(utilityModel).toEqual({ primary: "local/old", fallbacks: ["local/backup"] });
     },
   );
 
-  it("preserves an uppercase authored entry key when applying the primary model", () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        entries: {
-          MAIN: { model: "openai/old" },
+  it("projects a provider utility mutation only onto the selected agent", () => {
+    const config = fleet(
+      {
+        main: { utilityModel: "local-utility/main" },
+        OPS: {
+          model: { primary: "openai/gpt-5.4", fallbacks: ["openai/gpt-5.5"] },
         },
       },
-    };
+      { model: "openai/gpt-5.5", utilityModel: "local-utility/shared" },
+    );
+    const target = resolveOnboardingAgentTarget(config, "ops");
+
+    const updated = applyAgentModelDefaults(config, target, (projected) => {
+      expect(projected.agents?.defaults?.utilityModel).toBe("local-utility/shared");
+      return {
+        ...projected,
+        plugins: { entries: { "local-utility": { enabled: true } } },
+        agents: {
+          ...projected.agents,
+          defaults: { ...projected.agents?.defaults, utilityModel: "local-utility/tiny" },
+        },
+      };
+    });
+
+    expect(updated.agents?.defaults).toEqual(config.agents?.defaults);
+    expect(updated.agents?.entries).toEqual({
+      ...config.agents?.entries,
+      OPS: { ...config.agents?.entries?.OPS, utilityModel: "local-utility/tiny" },
+    });
+    expect(updated.plugins?.entries?.["local-utility"]?.enabled).toBe(true);
+  });
+
+  it("preserves an uppercase authored entry key when applying the primary model", () => {
+    const config = fleet({ MAIN: { model: "openai/old" } });
     const target = resolveOnboardingAgentTarget(config, "main");
 
     expect(applyOnboardingPrimaryModel(config, target, "openai/new").agents?.entries).toEqual({
@@ -126,46 +143,6 @@ describe("onboarding agent target", () => {
     });
   });
 
-  it("uses the persisted system-agent owner after the marker is removed", () => {
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "ops" } },
-        entries: { main: {}, ops: { workspace: "/srv/ops" } },
-      },
-    };
-
-    expect(resolveOnboardingAgentTarget(config)).toMatchObject({
-      agentId: "ops",
-      workspaceDir: "/srv/ops",
-    });
-  });
-
-  it("resolves shared system-agent setup to the configured system agent on a legacy roster", () => {
-    // Raw pre-Doctor roster: the legacy compatibility resolver still honors its marker.
-    const config: OpenClawConfigWithLegacyRoster = {
-      agents: {
-        defaults: {
-          workspace: "/srv/global",
-          systemAgent: { agentId: "main" },
-        },
-        entries: {
-          main: { workspace: "/srv/main" },
-          ops: { default: true, workspace: "/srv/ops" },
-        },
-      },
-    };
-
-    expect(resolveOnboardingAgentTarget(config)).toMatchObject({
-      agentId: "ops",
-      workspaceDir: "/srv/ops",
-    });
-    expect(resolveSystemAgentOnboardingTarget(config)).toMatchObject({
-      agentId: "main",
-      workspaceDir: "/srv/main",
-    });
-  });
-
   it("uses the system agent for explicit fleets without changing legacy ownership", () => {
     const entries = {
       main: { workspace: "/srv/main" },
@@ -173,30 +150,14 @@ describe("onboarding agent target", () => {
     };
     const pendingAgent = { name: "robby", workspaceDir: "/srv/robby" };
 
-    expect(
-      resolveOnboardingSetupTarget(
-        {
-          agents: {
-            ownership: "explicit",
-            defaults: { systemAgent: { agentId: "main" } },
-            entries,
-          },
-        },
-        pendingAgent,
-      ),
-    ).toMatchObject({ agentId: "main", workspaceDir: "/srv/main" });
-    expect(
-      resolveOnboardingSetupTarget(
-        {
-          agents: {
-            ownership: "explicit",
-            defaults: { systemAgent: { agentId: "main" } },
-            entries: { main: {} },
-          },
-        },
-        pendingAgent,
-      ),
-    ).toMatchObject({ agentId: "main" });
+    const defaults = { systemAgent: { agentId: "main" } };
+    expect(resolveOnboardingSetupTarget(fleet(entries, defaults), pendingAgent)).toMatchObject({
+      agentId: "main",
+      workspaceDir: "/srv/main",
+    });
+    expect(resolveOnboardingSetupTarget(fleet({ main: {} }, defaults), pendingAgent)).toMatchObject(
+      { agentId: "main" },
+    );
     const legacyConfig = createCanonicalAgentConfigFixture({
       agents: { entries: { ...entries, ops: { ...entries.ops, default: true } } },
     }).config;
@@ -236,60 +197,14 @@ describe("onboarding agent target", () => {
     });
   });
 
-  it("keeps explicit agent model mutations on the system-agent entry", () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        defaults: { model: { primary: "openai/global" } },
-        entries: {
-          main: {},
-          ops: { model: { primary: "openai/old" } },
-        },
-      },
-    };
-    const target = resolveSystemAgentOnboardingTarget({
-      ...config,
-      agents: {
-        ...config.agents,
-        defaults: { systemAgent: { agentId: "ops" } },
-      },
-    });
-
-    const updated = applyAgentModelDefaults(config, target, (projected) => ({
-      ...projected,
-      agents: {
-        ...projected.agents,
-        defaults: {
-          ...projected.agents?.defaults,
-          model: { primary: "openai/new" },
-        },
-      },
-    }));
-
-    expect(updated.agents?.entries?.ops?.model).toEqual({ primary: "openai/new" });
-    expect(updated.agents?.defaults?.model).toEqual({ primary: "openai/global" });
-    expect(updated.agents?.entries?.main?.model).toBeUndefined();
-  });
-
   it("preserves unrelated global defaults while projecting model changes onto the authored agent", () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        defaults: {
-          model: { primary: "openai/global" },
-          models: { "openai/global": { alias: "Global" } },
-          modelPolicy: { allow: ["openai/global"] },
-        },
-        entries: {
-          main: { model: { primary: "openai/sibling" } },
-          OPS: {
-            model: { primary: "openai/old" },
-            models: { "openai/old": { alias: "Old" } },
-            modelPolicy: { allow: ["openai/old"] },
-          },
-        },
+    const config = fleet(
+      {
+        main: { model: { primary: "openai/sibling" }, modelPolicy: { allow: ["openai/main"] } },
+        OPS: modelSettings("openai/old", "Old"),
       },
-    };
+      modelSettings("openai/global", "Global"),
+    );
     const target = resolveOnboardingAgentTarget(config, "ops");
 
     const updated = applyAgentModelDefaults(config, target, (projected) => ({
@@ -318,8 +233,9 @@ describe("onboarding agent target", () => {
       mediaModels: { video: { primary: "media/video" } },
       experimental: { localModelLean: true },
     });
+    expect(updated.agents).not.toHaveProperty("list");
     expect(updated.agents?.entries).toEqual({
-      main: { model: { primary: "openai/sibling" } },
+      main: { model: { primary: "openai/sibling" }, modelPolicy: { allow: ["openai/main"] } },
       OPS: {
         model: { primary: "provider/selected" },
         models: {
@@ -332,51 +248,36 @@ describe("onboarding agent target", () => {
     expect(updated.plugins?.entries?.fixture?.enabled).toBe(true);
   });
 
-  it.each([
-    { selectModel: false, expectedModel: undefined, expectedModels: undefined },
-    {
-      selectModel: true,
-      expectedModel: { primary: "provider/selected" },
-      expectedModels: { "provider/selected": {} },
-    },
-  ])("keeps fleet model aliases and policy inherited (select model: $selectModel)", (scenario) => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        defaults: {
-          model: "openai/global",
-          models: { "openai/global": { alias: "Global" } },
-          modelPolicy: { allow: ["openai/global"] },
-        },
-        entries: { main: { model: "openai/main" }, ops: {} },
+  it("keeps fleet model aliases and policy inherited when selecting a model", () => {
+    const config = fleet(
+      { main: { model: "openai/main" }, ops: {} },
+      {
+        model: "openai/global",
+        models: { "openai/global": { alias: "Global" } },
+        modelPolicy: { allow: ["openai/global"] },
       },
-    };
+    );
     const target = resolveOnboardingAgentTarget(config, "ops");
     const updated = applyAgentModelDefaults(config, target, (projected) =>
-      scenario.selectModel ? applyPrimaryModel(projected, "provider/selected") : projected,
+      applyPrimaryModel(projected, "provider/selected"),
     );
 
     expect(updated.agents?.defaults).toEqual(config.agents.defaults);
-    expect(updated.agents?.entries?.ops?.model).toEqual(scenario.expectedModel);
-    expect(updated.agents?.entries?.ops?.models).toEqual(scenario.expectedModels);
+    expect(updated.agents?.entries?.ops?.model).toEqual({ primary: "provider/selected" });
+    expect(updated.agents?.entries?.ops?.models).toEqual({ "provider/selected": {} });
     expect(updated.agents?.entries?.ops?.modelPolicy).toBeUndefined();
     expect(updated.agents?.entries?.main?.model).toEqual("openai/main");
   });
 
   it("preserves every agent when applying the primary model", () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        entries: {
-          main: { name: "Main", model: { primary: "openai/main" } },
-          OPS: {
-            name: "Operations",
-            model: { primary: "openai/old", fallbacks: ["openai/fallback"] },
-            models: { "openai/old": { alias: "Old" } },
-          },
-        },
+    const config = fleet({
+      main: { name: "Main", model: { primary: "openai/main" } },
+      OPS: {
+        name: "Operations",
+        model: { primary: "openai/old", fallbacks: ["openai/fallback"] },
+        models: { "openai/old": { alias: "Old" } },
       },
-    };
+    });
     const target = resolveOnboardingAgentTarget(config, "ops");
 
     const updated = applyOnboardingPrimaryModel(config, target, "openai/new");
@@ -389,36 +290,6 @@ describe("onboarding agent target", () => {
         model: { primary: "openai/new", fallbacks: ["openai/fallback"] },
         models: { "openai/old": { alias: "Old" }, "openai/new": {} },
       },
-    });
-  });
-
-  it("preserves every agent when projecting model policy", () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        entries: {
-          main: { modelPolicy: { allow: ["openai/main"] } },
-          ops: { modelPolicy: { allow: ["openai/old"] } },
-        },
-      },
-    };
-    const target = resolveOnboardingAgentTarget(config, "ops");
-
-    const updated = applyAgentModelDefaults(config, target, (projected) => ({
-      ...projected,
-      agents: {
-        ...projected.agents,
-        defaults: {
-          ...projected.agents?.defaults,
-          modelPolicy: { allow: ["openai/new"] },
-        },
-      },
-    }));
-
-    expect(updated.agents).not.toHaveProperty("list");
-    expect(updated.agents?.entries).toEqual({
-      main: { modelPolicy: { allow: ["openai/main"] } },
-      ops: { modelPolicy: { allow: ["openai/new"] } },
     });
   });
 

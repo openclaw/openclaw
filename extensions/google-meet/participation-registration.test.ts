@@ -1,3 +1,4 @@
+import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import type { GoogleMeetRuntime } from "./src/runtime.js";
@@ -6,7 +7,6 @@ import {
   invokeGoogleMeetGatewayMethodForTest,
   setupGoogleMeetPlugin,
 } from "./src/test-support/plugin-harness.js";
-import { testing } from "./test-api.js";
 
 const runtime = vi.hoisted(() => ({
   reconcileTranscriptPolicy: vi.fn<GoogleMeetRuntime["reconcileTranscriptPolicy"]>(),
@@ -29,7 +29,9 @@ const request = {
 
 function setup() {
   const harness = setupGoogleMeetPlugin(plugin);
-  testing.setCallGatewayFromCliForTests(createGoogleMeetToolGatewayForTest(harness.methods));
+  vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(
+    createGoogleMeetToolGatewayForTest(harness.methods),
+  );
   const tool = harness.tools[0];
   if (!tool) {
     throw new Error("Expected Google Meet tool");
@@ -44,7 +46,7 @@ describe("Google Meet participation and tool registration", () => {
   });
 
   afterEach(() => {
-    testing.setCallGatewayFromCliForTests();
+    vi.restoreAllMocks();
   });
 
   it("returns structured gateway errors for missing session ids", async () => {
@@ -123,7 +125,7 @@ describe("Google Meet participation and tool registration", () => {
   it("rejects malformed tool input before sending a Gateway request", async () => {
     const { tool } = setup();
     const callGateway = vi.fn(async () => ({}));
-    testing.setCallGatewayFromCliForTests(callGateway);
+    vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(callGateway);
 
     const result = await tool.execute("invalid-call", {
       ...request,

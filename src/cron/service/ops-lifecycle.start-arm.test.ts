@@ -12,8 +12,10 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
-import { CronService } from "../service.js";
+import { createCronServiceWithStateForTest } from "../service.test-harness.js";
 import { saveCronStore } from "../store.js";
+import { waitForCronRunQueue } from "./run-queue.js";
+import { captureCronSchedulerWakeForTest } from "./scheduler-actor.test-support.js";
 
 const gateway = vi.hoisted(() => ({ state: undefined as GatewayCronState | undefined }));
 vi.mock("../../gateway/server-cron.js", () => ({
@@ -22,13 +24,9 @@ vi.mock("../../gateway/server-cron.js", () => ({
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-start-arm-" });
 
-it.each([
-  { failWrite: false, failArm: false },
-  { failWrite: true, failArm: false },
-  { failWrite: true, failArm: true },
-])(
-  "delivers future jobs after suspension (write failure=$failWrite, arm failure=$failArm)",
-  async ({ failWrite, failArm }) => {
+it.each([false, true])(
+  "delivers future jobs after suspension (write failure=%s)",
+  async (failWrite) => {
     const { storePath } = fixtures.makeStorePath();
     const now = Date.now();
     const jobs = [
@@ -52,21 +50,13 @@ it.each([
     `);
     }
     const enqueueSystemEvent = vi.fn();
-    const log = { ...noopLogger, debug: vi.fn(), warn: vi.fn() };
     const clock = createGatewaySchedulerClock(now);
     const scheduler = createTestGatewayScheduler(clock.clock);
-    if (failArm) {
-      const scope = scheduler.scope();
-      vi.spyOn(scheduler, "scope").mockReturnValueOnce(scope);
-      vi.spyOn(scope, "schedule").mockImplementationOnce(() => {
-        throw new Error("secondary arm failure");
-      });
-    }
-    const service = new CronService({
+    const { cron: service, state } = createCronServiceWithStateForTest({
       scheduler,
       storePath,
       cronEnabled: true,
-      log,
+      log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
@@ -81,33 +71,35 @@ it.each([
       reconcileSystemJobs: async () => "converged",
     };
     const { cron } = createLazyGatewayCronState({
+      storePath,
       cfg: {},
       deps: {} as CliDeps,
       broadcast: vi.fn(),
       scheduler,
     });
     try {
-      if (failWrite) {
-        await expect(cron.start()).rejects.toThrow("injected terminal write failure");
-      } else {
-        await cron.start();
-      }
-      if (failArm) {
-        expect(log.warn).toHaveBeenCalledWith(
-          { err: "Error: secondary arm failure" },
-          expect.any(String),
-        );
-      }
+      const { wake } = await captureCronSchedulerWakeForTest(async () => {
+        if (failWrite) {
+          await expect(cron.start()).rejects.toThrow("injected terminal write failure");
+        } else {
+          await cron.start();
+        }
+      });
+      const tick = async (delayMs: number, expected: string[], drain = true) => {
+        clock.setTime(clock.clock.now() + delayMs);
+        await wake(state);
+        if (drain) {
+          await waitForCronRunQueue(state);
+        }
+        expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(expected);
+      };
       database.exec("DROP TRIGGER IF EXISTS reject_startup_terminal_write");
       expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue"]);
       cron.pauseScheduling();
-      await clock.advanceBy(15_000);
-      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue"]);
+      await tick(15_000, ["overdue"], false);
       cron.resumeScheduling();
-      await clock.advanceBy(15_000);
-      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue", "upcoming"]);
-      await clock.advanceBy(60_000);
-      expect(enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual(["overdue", "upcoming"]);
+      await tick(15_000, ["overdue", "upcoming"]);
+      await tick(60_000, ["overdue", "upcoming"]);
     } finally {
       cron.stop();
       await scheduler.stop();

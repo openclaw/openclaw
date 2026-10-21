@@ -8,14 +8,10 @@ import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { fetchClawHubPromotion, type ClawHubPromotion } from "../../infra/clawhub-promotions.js";
-import { markPromotionSlugsNotified, recordPromotionClaim } from "../../infra/promotions-feed.js";
 import { enablePluginWithCapabilityConsent } from "../../plugins/enable.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../../plugins/provider-auth-choice.js";
-import {
-  resolveManifestProviderAuthChoice,
-  type ProviderAuthChoiceMetadata,
-} from "../../plugins/provider-auth-choices.js";
+import { resolveManifestProviderAuthChoice } from "../../plugins/provider-auth-choices.js";
 import {
   resolveProviderInstallCatalogEntry,
   type ProviderInstallCatalogEntry,
@@ -104,11 +100,7 @@ function requireUnchangedClaimContract(
 }
 
 // Catalog-only choices still need installation, even when credentials are available.
-type ResolvedAuthChoice = {
-  entry: ProviderAuthChoiceMetadata;
-  installed: boolean;
-  packageNames: string[];
-};
+type ResolvedAuthChoice = ReturnType<typeof resolveAuthChoice>;
 
 function resolveManifestPluginPackageNames(pluginId: string, cfg: OpenClawConfig): string[] {
   const snapshot = loadManifestMetadataSnapshot({ config: cfg });
@@ -134,11 +126,7 @@ function resolveCatalogPluginPackageNames(entry: ProviderInstallCatalogEntry): s
   ];
 }
 
-function resolveAuthChoice(
-  promotion: ClawHubPromotion,
-  provider: string,
-  cfg: OpenClawConfig,
-): ResolvedAuthChoice | undefined {
+function resolveAuthChoice(promotion: ClawHubPromotion, provider: string, cfg: OpenClawConfig) {
   const authChoiceId = promotion.authChoiceId?.trim();
   if (!authChoiceId) {
     return undefined;
@@ -365,16 +353,6 @@ export async function promosClaimCommand(
     }
     return next;
   });
-
-  // Config has no promo marker; the state DB owns provenance for model-list annotations.
-  await recordPromotionClaim({
-    slug: promotion.slug,
-    provider,
-    modelKeys: [...new Set(registered)],
-    endsAtMs: promotion.endsAt,
-    claimedAtMs: Date.now(),
-  });
-  await markPromotionSlugsNotified([promotion.slug]);
 
   if (makeDefault && suggested) {
     // Keep default-change runtime repair aligned with `models set`.

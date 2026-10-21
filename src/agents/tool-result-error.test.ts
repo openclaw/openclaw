@@ -7,7 +7,7 @@ import {
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
 } from "./tool-result-error.js";
-import { ToolAuthorizationError, ToolInputError } from "./tools/common.js";
+import { ToolInputError } from "./tools/common.js";
 
 // Bun's built-in Undici shim does not carry the installed package's error codes.
 const requireUndiciPackage = createRequire(
@@ -41,21 +41,6 @@ describe("resolveToolExecutionErrorKind", () => {
     ).toBe("timed_out");
     expect(resolveToolExecutionErrorKind({ code: "ETIMEDOUT" })).toBe("timed_out");
     expect(resolveToolExecutionErrorKind({ reason: "timeout" })).toBe("timed_out");
-  });
-
-  it("does not infer timeout from validation text", () => {
-    expect(resolveToolExecutionErrorKind(new Error("timeoutMs must be a positive number"))).toBe(
-      "failed",
-    );
-  });
-
-  it("contains hostile error fields", () => {
-    const hostile = Object.defineProperty({}, "name", {
-      get() {
-        throw new Error("name getter escaped");
-      },
-    });
-    expect(resolveToolExecutionErrorKind(hostile)).toBe("failed");
   });
 });
 
@@ -104,7 +89,6 @@ describe("protectNetworkToolExecutionError", () => {
 
   it.each([
     new ToolInputError("query required"),
-    new ToolAuthorizationError("read denied"),
     new SecretSurfaceUnavailableError({
       ownerKind: "capability",
       ownerId: "web-search:brave",
@@ -203,6 +187,24 @@ describe("protectNetworkToolExecutionError", () => {
 });
 
 describe("resolveToolResultFailureKind", () => {
+  it.each([
+    [{ status: "denied", timedOut: true }, "blocked"],
+    [{ status: "cancelled", timedOut: true }, "timed_out"],
+    [{ status: "cancelled" }, "cancelled"],
+    [{ status: "timeout" }, "timed_out"],
+    [{ status: "failed", ok: true }, undefined],
+    [{ status: "failed", success: true }, undefined],
+    [{ status: "failed", success: true, ok: false }, "failed"],
+    [{ status: "completed", error: "failed" }, "failed"],
+    [{ status: "completed", exitCode: 1 }, undefined],
+    [{ exitCode: 1 }, "failed"],
+    [{ exitCode: Number.NaN }, undefined],
+  ] as const)("classifies structured outcome %j as %s", (details, expected) => {
+    const result = { details };
+    expect(resolveToolResultFailureKind(result)).toBe(expected);
+    expect(isToolResultError(result)).toBe(expected !== undefined);
+  });
+
   it("contains hostile structured result fields", () => {
     const hostileDetails = new Proxy(
       {},

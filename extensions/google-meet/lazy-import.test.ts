@@ -51,6 +51,7 @@ describe("google-meet lazy imports", () => {
         createMeetFromParams: async () => ({ meetingUri: "https://meet.google.com/abc-defg-hij" }),
       };
     });
+    // mock-isolation: Keep the real runtime graph cold while observing its first lazy import.
     vi.doMock("./src/runtime.js", () => {
       runtimeImports += 1;
       return {
@@ -65,12 +66,8 @@ describe("google-meet lazy imports", () => {
             return { ok: true };
           }
 
-          transcriptSourceRuntime() {
-            return {
-              startTranscriptSource: async () => ({ ok: true }),
-              stopTranscriptSource: async () => ({ ok: true }),
-            };
-          }
+          startTranscriptSource = async () => ({ ok: true });
+          stopTranscriptSource = async () => ({ ok: true });
         },
       };
     });
@@ -247,19 +244,21 @@ describe("google-meet lazy imports", () => {
     const delegateHandle = vi.fn<OpenClawPluginNodeInvokePolicy["handle"]>(async () => ({
       ok: true,
     }));
-    const loadPolicy = vi.fn(
-      async (_config: GoogleMeetConfig): Promise<OpenClawPluginNodeInvokePolicy> => ({
-        commands: [GOOGLE_MEET_NODE_COMMAND],
-        dangerous: true,
-        handle: delegateHandle,
-      }),
-    );
+    const createPolicy = vi.fn((): OpenClawPluginNodeInvokePolicy => ({
+      commands: [GOOGLE_MEET_NODE_COMMAND],
+      dangerous: true,
+      handle: delegateHandle,
+    }));
+    // mock-isolation: Keep the real policy graph cold while observing lazy delegate creation.
+    vi.doMock("./src/node-invoke-policy.js", () => ({
+      createGoogleMeetChromeNodeInvokePolicy: createPolicy,
+    }));
     const { createLazyGoogleMeetNodeInvokePolicy } = await import("./src/plugin-registration.js");
-    const policy = createLazyGoogleMeetNodeInvokePolicy({} as GoogleMeetConfig, loadPolicy);
+    const policy = createLazyGoogleMeetNodeInvokePolicy({} as GoogleMeetConfig);
 
     expect(policy.commands).toEqual([GOOGLE_MEET_NODE_COMMAND]);
     expect(policy.dangerous).toBe(true);
-    expect(loadPolicy).not.toHaveBeenCalled();
+    expect(createPolicy).not.toHaveBeenCalled();
 
     await expect(policy.handle({} as OpenClawPluginNodeInvokePolicyContext)).resolves.toEqual({
       ok: true,
@@ -267,15 +266,17 @@ describe("google-meet lazy imports", () => {
     await expect(policy.handle({} as OpenClawPluginNodeInvokePolicyContext)).resolves.toEqual({
       ok: true,
     });
-    expect(loadPolicy).toHaveBeenCalledTimes(1);
+    expect(createPolicy).toHaveBeenCalledTimes(1);
     expect(delegateHandle).toHaveBeenCalledTimes(2);
   });
 
   it("fails closed when the node policy cannot load", async () => {
-    const { createLazyGoogleMeetNodeInvokePolicy } = await import("./src/plugin-registration.js");
-    const policy = createLazyGoogleMeetNodeInvokePolicy({} as GoogleMeetConfig, async () => {
+    // mock-isolation: Model a module-load failure before the real policy can initialize.
+    vi.doMock("./src/node-invoke-policy.js", () => {
       throw new Error("load failed");
     });
+    const { createLazyGoogleMeetNodeInvokePolicy } = await import("./src/plugin-registration.js");
+    const policy = createLazyGoogleMeetNodeInvokePolicy({} as GoogleMeetConfig);
 
     await expect(policy.handle({} as OpenClawPluginNodeInvokePolicyContext)).resolves.toMatchObject(
       {
@@ -288,10 +289,9 @@ describe("google-meet lazy imports", () => {
 
   it("does not rewrite node policy delegate failures", async () => {
     const delegateError = new Error("delegate failed");
-    const { createLazyGoogleMeetNodeInvokePolicy } = await import("./src/plugin-registration.js");
-    const policy = createLazyGoogleMeetNodeInvokePolicy(
-      {} as GoogleMeetConfig,
-      async () =>
+    // mock-isolation: Exercise delegate failure without initializing the real node policy.
+    vi.doMock("./src/node-invoke-policy.js", () => ({
+      createGoogleMeetChromeNodeInvokePolicy: () =>
         ({
           commands: [GOOGLE_MEET_NODE_COMMAND],
           dangerous: true,
@@ -299,7 +299,9 @@ describe("google-meet lazy imports", () => {
             throw delegateError;
           },
         }) satisfies OpenClawPluginNodeInvokePolicy,
-    );
+    }));
+    const { createLazyGoogleMeetNodeInvokePolicy } = await import("./src/plugin-registration.js");
+    const policy = createLazyGoogleMeetNodeInvokePolicy({} as GoogleMeetConfig);
 
     await expect(policy.handle({} as OpenClawPluginNodeInvokePolicyContext)).rejects.toBe(
       delegateError,

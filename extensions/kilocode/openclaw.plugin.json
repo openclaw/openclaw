@@ -5,6 +5,7 @@
     "onStartup": false
   },
   "enabledByDefault": true,
+  "managesOwnAvailability": true,
   "providers": ["kilocode"],
   "modelPricing": {
     "providers": {
@@ -52,6 +53,12 @@
     "properties": {}
   },
   "modelCatalog": {
+    "aliases": {
+      "kilo": {
+        "provider": "kilocode",
+        "api": "openai-completions"
+      }
+    },
     "modelsDev": {
       "kilocode": "kilo"
     },

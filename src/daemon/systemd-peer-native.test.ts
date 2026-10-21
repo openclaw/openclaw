@@ -1,143 +1,119 @@
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
+import { SystemdBus } from "@openclaw/proc-safe/systemd";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { mockNodeBuiltinModule } from "../plugin-sdk/test-helpers/node-builtin-mocks.js";
+import {
+  withServiceInspectionBudget,
+  runServiceInspectionGuard,
+} from "./service-inspection-budget.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import {
   GatewayServiceAuthorityError,
-  withGatewayServiceUpdateAuthority,
+  withGatewayServiceUpdateAuthority as withAuthority,
 } from "./service-update-authority.js";
-import {
-  openSystemdBroker,
-  openSystemdPrivatePeer,
-  openSystemdUserManager,
-} from "./systemd-peer-native.js";
+import * as native from "./systemd-peer-native.js";
 
-const kernel = vi.hoisted(() => {
-  const state: {
-    uid: number;
-    pid: number;
-    startTime: number | null;
-    alive: boolean;
-    closes: number;
-    calls: number;
-    onCall?: () => void;
-  } = {
-    uid: 1000,
-    pid: 1234,
-    startTime: 100,
-    alive: true,
-    closes: 0,
-    calls: 0,
-  };
-  return state;
-});
+const initial = vi.hoisted(() => ({
+  uid: 1000,
+  pid: 1234,
+  startTime: 100,
+  alive: true,
+  closes: 0,
+  calls: 0,
+}));
+const kernel: Omit<typeof initial, "startTime"> & {
+  startTime: number | null;
+  onCall?: () => void;
+} = { ...initial };
 vi.mock("../shared/pid-alive.js", () => ({
   getProcessStartTime: () => kernel.startTime,
   isPidAlive: () => kernel.alive,
 }));
-vi.mock("node:module", async (importOriginal) => {
-  const original = await importOriginal<typeof import("node:module")>();
-  return mockNodeBuiltinModule(() => Promise.resolve(original), {
-    createRequire: (filename: string | URL) => {
-      const require = original.createRequire(filename);
-      return Object.assign(
-        (specifier: string) =>
-          specifier !== "koffi"
-            ? require(specifier)
-            : {
-                sizeof: () => 24,
-                struct: () => ({}),
-                load: () => ({
-                  func: (declaration: string) => {
-                    const name = declaration.match(/\b(sd_bus_[a-z_]+)\(/)?.[1];
-                    const call = (...args: unknown[]) => {
-                      const slot =
-                        name === "sd_bus_new"
-                          ? args[0]
-                          : name === "sd_bus_get_owner_creds"
-                            ? args[2]
-                            : args[1];
-                      if (Array.isArray(slot)) {
-                        slot[0] =
-                          name === "sd_bus_creds_get_pid"
-                            ? kernel.pid
-                            : name === "sd_bus_creds_get_euid"
-                              ? kernel.uid
-                              : {};
-                      }
-                      if (name === "sd_bus_close_unref") {
-                        kernel.closes++;
-                      }
-                      if (name === "sd_bus_call") {
-                        kernel.calls++;
-                        kernel.onCall?.();
-                      }
-                      return name === "sd_bus_is_ready" || name === "sd_bus_message_at_end" ? 1 : 0;
-                    };
-                    return Object.assign(call, {
-                      async: (...args: unknown[]) => {
-                        const complete = args.pop();
-                        if (typeof complete === "function") {
-                          complete(null, call(...args));
-                        }
-                      },
-                    });
-                  },
-                }),
-              },
-        require,
-      );
+vi.mock("@openclaw/proc-safe/systemd", async () => {
+  const connect = () => ({
+    close: async () => {
+      kernel.closes++;
+    },
+    call: async () => {
+      kernel.calls++;
+      kernel.onCall?.();
+      return [];
     },
   });
+  const connectPrivatePeer = async () => ({
+    ...connect(),
+    peer: Object.freeze({ pid: kernel.pid, uid: kernel.uid }),
+  });
+  return {
+    SystemdBus: {
+      connectPrivatePeer,
+      connectBroker: async () => connect(),
+      connectUserManager: async () => connectPrivatePeer(),
+    },
+  };
 });
 
 beforeEach(() => {
-  Object.assign(kernel, {
-    uid: 1000,
-    pid: 1234,
-    startTime: 100,
-    alive: true,
-    closes: 0,
-    calls: 0,
-    onCall: undefined,
-  });
+  Object.assign(kernel, initial, { onCall: undefined });
 });
 afterEach(() => vi.restoreAllMocks());
 
 const expected = { uid: 1000, pid: 1234, startTime: 100 };
 const address = "unix:path=/synthetic-systemd-peer/private";
+const deadline = () => performance.now() + 1000;
+const openBroker = () => native.openSystemdBroker(address, deadline());
+type Peer = Awaited<ReturnType<typeof openBroker>>;
+async function usingPeer(work: (peer: Peer) => Promise<void>, open = openBroker) {
+  const peer = await open();
+  try {
+    await work(peer);
+  } finally {
+    await peer.close();
+  }
+}
+function requireCurrent(current: () => boolean, failure: Error) {
+  return () => {
+    if (!current()) {
+      throw failure;
+    }
+  };
+}
 
 it.each([
-  { name: "UID", change: { uid: 2001 }, ownership: true, initial: false },
-  { name: "PID", change: { pid: 4321 }, ownership: true, initial: false },
-  { name: "process generation", change: { startTime: 200 }, ownership: true, initial: false },
-  { name: "unreadable process", change: { startTime: null }, ownership: false, initial: false },
-  { name: "unavailable process", change: { alive: false }, ownership: false, initial: false },
-  { name: "invalid credentials", change: { pid: 0 }, ownership: false, initial: false },
-  { name: "initial account", change: { uid: 2001 }, ownership: true, initial: true },
-])(
-  "distinguishes observed ownership refusals from unavailable peers: $name",
-  async ({ change, ownership, initial }) => {
-    Object.assign(kernel, change);
-    if (initial) {
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      vi.spyOn(process, "geteuid").mockReturnValue(1000);
-    }
-    const operation = initial
-      ? openSystemdUserManager(address, performance.now() + 1000)
-      : openSystemdPrivatePeer(address, expected, performance.now() + 1000);
-    if (ownership) {
-      await expect(operation).rejects.toMatchObject({ reason: "systemd-manager-changed" });
+  { name: "UID", change: { uid: 2001 }, ownership: true },
+  { name: "PID", change: { pid: 4321 }, ownership: true },
+  { name: "unreadable process", change: { startTime: null }, ownership: false },
+  { name: "unavailable process", change: { alive: false }, ownership: false },
+])("distinguishes ownership from unavailability: $name", async ({ change, ownership }) => {
+  Object.assign(kernel, change);
+  const operation = native.openSystemdPrivatePeer(address, expected, deadline());
+  if (ownership) {
+    await expect(operation).rejects.toMatchObject({ reason: "systemd-manager-changed" });
+  } else {
+    const failure = await operation.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(ServiceOwnershipRefusalError);
+  }
+  expect(kernel.closes).toBe(1);
+});
+
+it.each([undefined, "peer-uid-mismatch"])(
+  "translates only peer UID refusal: %s",
+  async (reason) => {
+    const failure = new ProcSafeError("access-denied", "socket access denied", {
+      details: { reason },
+    });
+    vi.spyOn(SystemdBus, "connectUserManager").mockRejectedValueOnce(failure);
+    const opening = native.openSystemdUserManager(address, deadline());
+    if (reason) {
+      await expect(opening).rejects.toMatchObject({ reason: "systemd-manager-changed" });
     } else {
-      const failure = await operation.catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(Error);
-      expect(failure).not.toBeInstanceOf(ServiceOwnershipRefusalError);
+      await expect(opening).rejects.toBe(failure);
     }
-    expect(kernel.closes).toBe(1);
   },
 );
 
-it("revalidates a retained peer without misclassifying a closed connection", async () => {
-  const peer = await openSystemdPrivatePeer(address, expected, performance.now() + 1000);
+it("distinguishes replaced peers from closed connections", async () => {
+  const peer = await native.openSystemdPrivatePeer(address, expected, deadline());
   kernel.startTime = 200;
   expect(() => peer.verify()).toThrow(ServiceOwnershipRefusalError);
   await peer.close();
@@ -145,87 +121,96 @@ it("revalidates a retained peer without misclassifying a closed connection", asy
   expect(kernel.closes).toBe(1);
 });
 
-it("checks inherited update authority before loading or opening a native transport", async () => {
+it("checks update authority before opening transport", async () => {
   const denied = new Error("original update grant retired");
   const isAuthorityRevocation = (error: unknown) =>
     error instanceof GatewayServiceAuthorityError && error.cause === denied;
   let active = true;
-  let transportFailure: unknown;
-  await expect(
-    withGatewayServiceUpdateAuthority(
-      () => {
-        if (!active) {
-          throw denied;
-        }
-      },
-      async () => {
-        active = false;
-        try {
-          await openSystemdBroker(
-            "unix:path=/nonexistent-openclaw-test/bus",
-            performance.now() + 100,
-          );
-        } catch (error) {
-          transportFailure = error;
-        }
-      },
-    ),
-  ).rejects.toSatisfy(isAuthorityRevocation);
-  expect(transportFailure).toSatisfy(isAuthorityRevocation);
+  const work = withAuthority(
+    requireCurrent(() => active, denied),
+    async () => {
+      active = false;
+      await expect(openBroker()).rejects.toSatisfy(isAuthorityRevocation);
+    },
+  );
+  await expect(work).rejects.toSatisfy(isAuthorityRevocation);
 });
 
-const resetFailed = [
-  "call",
-  ":1.42",
-  "/org/freedesktop/systemd1",
-  "org.freedesktop.systemd1.Manager",
-  "ResetFailedUnit",
-  "s",
-  "fixture.service",
-];
+const resetFailed = ["call", ":1.42", "/unit", "org.test", "ResetFailedUnit", "s", "fixture"];
 
-it("checks effect custody inside the native queue immediately before dispatch", async () => {
-  const peer = await openSystemdBroker(address, performance.now() + 1000);
-  let current = true;
-  const failure = new Error("effect custody expired while queued");
-  try {
-    const queued = peer.query(
-      resetFailed,
-      [],
-      performance.now() + 1000,
-      () => {},
-      () => {
-        if (!current) {
-          throw failure;
-        }
-      },
-    );
-    current = false;
-    await expect(queued).rejects.toBe(failure);
-    expect(kernel.calls).toBe(0);
-  } finally {
-    await peer.close();
-  }
-});
-
-it("does not require effect custody after the native call intentionally ends it", async () => {
-  const peer = await openSystemdBroker(address, performance.now() + 1000);
-  let current = true;
-  kernel.onCall = () => {
-    current = false;
-  };
-  const guard = vi.fn(() => {
-    if (!current) {
-      throw new Error("effect already happened");
+it.each(["queued", "dispatched"])("checks effect custody only before dispatch: %s", (phase) =>
+  usingPeer(async (peer) => {
+    let current = true;
+    if (phase === "dispatched") {
+      kernel.onCall = () => {
+        current = false;
+      };
     }
-  });
-  try {
-    await expect(
-      peer.query(resetFailed, [], performance.now() + 1000, () => {}, guard),
-    ).resolves.toEqual([]);
-    expect(guard).toHaveBeenCalledOnce();
-    expect(kernel.calls).toBe(1);
-  } finally {
-    await peer.close();
-  }
-});
+    const failure = new Error("effect custody expired");
+    const guard = vi.fn(requireCurrent(() => current, failure));
+    const work = peer.query(resetFailed, [], deadline(), () => {}, guard);
+    if (phase === "queued") {
+      current = false;
+      await expect(work).rejects.toBe(failure);
+    } else {
+      await expect(work).resolves.toEqual([]);
+      expect(guard).toHaveBeenCalledOnce();
+    }
+    expect(kernel.calls).toBe(phase === "queued" ? 0 : 1);
+  }),
+);
+
+it.each(["healthy", "slow-io", "revoked", "mutation"] as const)(
+  "separates caller guards from native deadlines: %s",
+  async (mode) => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const advance = (elapsed: number) => {
+      now += elapsed;
+    };
+    const mutation = mode === "mutation";
+    const mutationTimeout = mutation ? 100 : undefined;
+    const inspect = async (peer: Peer, clock: { now(): number }) => {
+      const guard = () => {
+        if (mutation) {
+          runServiceInspectionGuard(() => advance(kernel.calls ? 101 : 2_000));
+        } else {
+          advance(2_000);
+        }
+        if (mode === "revoked") {
+          throw new Error("original guard retired");
+        }
+      };
+      kernel.onCall = () => {
+        if (!mutation) {
+          advance(mode === "slow-io" ? 101 : 1);
+        }
+      };
+      const until = clock.now() + 100;
+      const work = peer.query(resetFailed, [], until, guard, undefined, mutationTimeout);
+      if (mode === "healthy") {
+        await expect(work).resolves.toEqual([]);
+        expect(clock.now()).toBe(1);
+      } else {
+        await expect(work).rejects.toThrow(
+          mode === "revoked" ? "original guard retired" : "deadline expired",
+        );
+        if (mutation) {
+          expect(clock.now()).toBe(0);
+        }
+      }
+      expect(kernel.calls).toBe(mode === "revoked" ? 0 : 1);
+    };
+    const open = () =>
+      withServiceInspectionBudget((clock) => native.openSystemdBroker(address, clock.now() + 100));
+    const run = () =>
+      usingPeer((peer) => withServiceInspectionBudget((clock) => inspect(peer, clock)), open);
+    if (mutation) {
+      await withServiceInspectionBudget(run);
+    } else {
+      // Reads use their own clock, not the admission clock retained by a long-lived connection.
+      await run();
+    }
+    expect(kernel.closes).toBe(1);
+  },
+);

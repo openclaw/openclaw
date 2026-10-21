@@ -1,68 +1,53 @@
 import { deepStrictEqual } from "node:assert/strict";
-import { execFile, fork, spawn } from "node:child_process";
+import { fork } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as sqliteInspection from "../infra/sqlite-readonly-worker.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "./openclaw-agent-db.js";
-import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "./openclaw-state-db.js";
+  compatible,
+  databaseFixture,
+  supportedVersions,
+  expectFiles,
+  closeDatabases,
+  execSql,
+  trackSettlement,
+} from "./database-preflight-fixtures.test-support.js";
+import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  const { promisify } = await import("node:util");
-  const execFileSpy = vi.fn(actual.execFile);
-  Object.defineProperty(
-    execFileSpy,
-    promisify.custom,
-    Object.getOwnPropertyDescriptor(actual.execFile, promisify.custom)!,
-  );
-  return { ...actual, execFile: execFileSpy, fork: vi.fn(actual.fork), spawn: vi.fn(actual.spawn) };
+  return { ...actual, fork: vi.fn(actual.fork) };
 });
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, availableParallelism: () => 2 };
 });
 
-const supportedVersions = {
-  state: OPENCLAW_STATE_SCHEMA_VERSION,
-  agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-};
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    closeDatabases();
     cleanup();
   });
 });
 beforeEach(() => {
-  vi.mocked(execFile).mockReset();
   vi.stubEnv("XDG_CACHE_HOME", tempDirs.make("openclaw-preflight-lifecycle-cache-"));
 });
 
 function createPreflightState(stateDir: string) {
-  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const fixture = databaseFixture(stateDir);
   // Reader lifecycle fixtures need known empty deletion history; missing history holds stores.
-  const statePath = fs.realpathSync.native(openOpenClawStateDatabase({ env }).path);
+  const statePath = fs.realpathSync.native(fixture.state().path);
   closeOpenClawStateDatabaseForTest();
-  return { env, statePath };
+  return { ...fixture, statePath };
 }
 
 it.each([
@@ -81,28 +66,20 @@ it.each([
   "joins all $source children and closes their readers before $outcome settlement (owner=$owner)",
   async ({ source, outcome, owner }) => {
     const root = tempDirs.make("openclaw-preflight-reader-lifecycle-");
-    const initializedEnv = { OPENCLAW_STATE_DIR: path.join(root, "initialized") };
-    const paths = [
-      openOpenClawAgentDatabase({ agentId: "first", env: initializedEnv }).path,
-      openOpenClawAgentDatabase({ agentId: "second", env: initializedEnv }).path,
-      openOpenClawAgentDatabase({ agentId: "queued", env: initializedEnv }).path,
-    ] as const;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    const { env, statePath } = createPreflightState(path.join(root, "active-state"));
-    const { DatabaseSync } = requireNodeSqlite();
+    const initialized = databaseFixture(path.join(root, "initialized"));
+    const paths = ["first", "second", "queued"].map((id) => initialized.agent(id).path);
+    closeDatabases();
+    const { inspect: inspectDatabases, statePath } = createPreflightState(
+      path.join(root, "active-state"),
+    );
     for (const [index, pathname] of paths.entries()) {
-      const database = new DatabaseSync(pathname);
-      try {
-        database.exec(`PRAGMA journal_mode=${source === "snapshot" ? "WAL" : "DELETE"};`);
-        if (outcome === "failure" && index === 0) {
-          database.exec(
-            "PRAGMA foreign_keys=OFF; CREATE TABLE lifecycle_parent(id INTEGER PRIMARY KEY); CREATE TABLE lifecycle_child(parent_id REFERENCES lifecycle_parent(id)); INSERT INTO lifecycle_child VALUES (42);",
-          );
-        }
-      } finally {
-        database.close();
-      }
+      execSql(
+        pathname,
+        `PRAGMA journal_mode=${source === "snapshot" ? "WAL" : "DELETE"};` +
+          (outcome === "failure" && index === 0
+            ? "PRAGMA foreign_keys=OFF; CREATE TABLE lifecycle_parent(id INTEGER PRIMARY KEY); CREATE TABLE lifecycle_child(parent_id REFERENCES lifecycle_parent(id)); INSERT INTO lifecycle_child VALUES (42);"
+            : ""),
+      );
     }
 
     const marker = (name: string) => path.join(root, name);
@@ -191,10 +168,8 @@ it.each([
         size: "fixture",
       });
     }
-    let settled = false;
     const inspect = () =>
-      preflightOpenClawDatabaseSchemas({
-        env,
+      inspectDatabases({
         supportedVersions,
         configuredAgentDatabaseCandidatePaths: paths,
         verifyCurrentSchemaShape: true,
@@ -211,24 +186,16 @@ it.each([
               deadlineOwnedByCaller: true,
             })
           : inspect();
-    void run.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const settled = trackSettlement(run);
     let childClosures: Promise<void>[] = [];
     try {
       await vi.waitFor(
         () => {
-          expect(fs.existsSync(marker("close-0"))).toBe(true);
-          expect(fs.existsSync(marker("close-1"))).toBe(true);
+          expectFiles([marker("close-0"), marker("close-1")], true);
         },
         { timeout: 10_000 },
       );
-      expect(settled).toBe(false);
+      expect(settled()).toBe(false);
       expect(
         prepare.mock.calls.filter(([pathname]) =>
           sources.includes(path.toNamespacedPath(pathname)),
@@ -243,9 +210,7 @@ it.each([
       if (firstReadLocation === undefined || secondReadLocation === undefined) {
         throw new Error("Both paused readers must have a prepared database path");
       }
-      for (const pathname of readLocations.slice(0, 2)) {
-        expect(fs.existsSync(pathname)).toBe(true);
-      }
+      expectFiles(readLocations.slice(0, 2), true);
 
       const children = vi
         .mocked(fork)
@@ -272,7 +237,7 @@ it.each([
           await vi.waitFor(() => expect(fs.existsSync(marker("retired-0"))).toBe(true), {
             timeout: 10_000,
           });
-          expect(settled).toBe(false);
+          expect(settled()).toBe(false);
           expect(closedChildren).toBe(0);
           expect(cleanedSnapshots.size).toBe(0);
           expect(fs.existsSync(firstReadLocation)).toBe(true);
@@ -289,7 +254,7 @@ it.each([
           }
           // Drain the first child's result before checking the still-owned peer.
           await setImmediate();
-          expect(settled).toBe(false);
+          expect(settled()).toBe(false);
           if (source === "snapshot") {
             expect(cleanedSnapshots).toEqual(new Set([0]));
             expect(fs.existsSync(secondReadLocation)).toBe(true);
@@ -302,7 +267,7 @@ it.each([
         } else if (outcome === "close-failure") {
           await expect(run).rejects.toThrow("native snapshot close failure");
         } else {
-          await expect(run).resolves.toEqual({ incompatible: [], indeterminate: [] });
+          await expect(run).resolves.toEqual(compatible);
         }
       }
       expect(closedChildren).toBe(2);
@@ -315,15 +280,20 @@ it.each([
           schemaSnapshotCount: 0,
         });
       }
-      for (const location of locations) {
-        expect(fs.existsSync(path.dirname(location))).toBe(false);
-      }
-      for (const [index, databasePath] of paths.entries()) {
-        deepStrictEqual(fs.readFileSync(databasePath), originalBytes[index], databasePath);
-        for (const suffix of ["-wal", "-shm", "-journal"]) {
-          expect(fs.existsSync(databasePath + suffix)).toBe(false);
-        }
-      }
+      expectFiles(
+        locations.map((location) => path.dirname(location)),
+        false,
+      );
+      deepStrictEqual(
+        paths.map((pathname) => fs.readFileSync(pathname)),
+        originalBytes,
+      );
+      expectFiles(
+        paths.flatMap((pathname) =>
+          ["-wal", "-shm", "-journal"].map((suffix) => pathname + suffix),
+        ),
+        false,
+      );
     } finally {
       fs.writeFileSync(marker("release-0"), "resume");
       fs.writeFileSync(marker("release-1"), "resume");
@@ -335,312 +305,149 @@ it.each([
 );
 
 function createSnapshotCandidates() {
-  const { env } = createPreflightState(tempDirs.make("openclaw-preflight-lifecycle-state-"));
+  const { inspect } = createPreflightState(tempDirs.make("openclaw-preflight-lifecycle-state-"));
   const directory = tempDirs.make("openclaw-preflight-lifecycle-agents-");
-  const { DatabaseSync } = requireNodeSqlite();
   const paths = [0, 1, 2].map((index) => path.join(directory, `agent-${index}.sqlite`));
 
   // Closed WAL families retain the private snapshot recovery path.
   for (const pathname of paths) {
-    const database = new DatabaseSync(pathname);
-    database.exec(`PRAGMA journal_mode=WAL; PRAGMA user_version = ${supportedVersions.agent + 1};`);
-    database.close();
-    expect(fs.existsSync(`${pathname}-wal`)).toBe(false);
-    expect(fs.existsSync(`${pathname}-shm`)).toBe(false);
+    execSql(
+      pathname,
+      `PRAGMA journal_mode=WAL; PRAGMA user_version = ${supportedVersions.agent + 1};`,
+    );
+    expectFiles([`${pathname}-wal`, `${pathname}-shm`], false);
   }
 
-  return { env, paths };
+  return { inspect, paths };
 }
 
-it.each(["header", "startup"])(
-  "bounds %s readers for closed WAL fleets without changing source artifacts",
-  async (mode) => {
-    const root = tempDirs.make("openclaw-preflight-closed-wal-");
-    const initializedEnv = { OPENCLAW_STATE_DIR: path.join(root, "initialized") };
-    const targets = Array.from({ length: 6 }, (_, index) => {
-      const agentId = `worker-${index}`;
-      return { agentId, path: openOpenClawAgentDatabase({ agentId, env: initializedEnv }).path };
-    });
-    const paths = targets.map((target) => target.path);
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    const { env, statePath } = createPreflightState(path.join(root, "active-state"));
-    const originalBytes = paths.map((pathname) => fs.readFileSync(pathname));
-    for (const pathname of paths) {
-      expect(fs.existsSync(`${pathname}-wal`)).toBe(false);
-      expect(fs.existsSync(`${pathname}-shm`)).toBe(false);
-      expect(fs.existsSync(`${pathname}-journal`)).toBe(false);
-    }
-    const locations: string[] = [];
+it.each(["cancel", "failure"] as const)(
+  "drains started snapshots before propagating %s",
+  async (outcome) => {
+    const fixture = createSnapshotCandidates();
+    const cancel = outcome === "cancel";
+    const secondPrepared = createDeferred();
+    const cleanupStarted = createDeferred();
+    const firstCleaned = createDeferred();
+    const release = createDeferred();
+    const cleaned: string[] = [];
+    let active = 0,
+      peak = 0,
+      cleanupCount = 0;
+    let peerCleanupFinished = false;
+    const sourcePaths = new Set(fixture.paths.map((pathname) => fs.realpathSync.native(pathname)));
     const prepare = snapshots.prepareSqliteReadOnlyLocation;
+    const preparedPaths: string[] = [],
+      locations: string[] = [];
     vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
       async (pathname, options) => {
         const prepared = await prepare(pathname, options);
-        if (paths.includes(pathname)) {
-          locations.push(prepared.location);
+        if (!sourcePaths.has(pathname)) {
+          return prepared;
         }
-        return prepared;
+        const ordinal = preparedPaths.length;
+        preparedPaths.push(pathname);
+        locations.push(prepared.location);
+        active += 1;
+        peak = Math.max(peak, active);
+        if (!cancel && ordinal === 0) {
+          await secondPrepared.promise;
+        }
+        if (ordinal === 1) {
+          secondPrepared.resolve();
+        }
+        return {
+          ...prepared,
+          ...(!cancel && ordinal === 0
+            ? { location: path.join(path.dirname(prepared.location), "missing.sqlite") }
+            : {}),
+          cleanupAsync: async () => {
+            cleanupCount += 1;
+            if (cancel ? cleanupCount === 2 : ordinal === 1) {
+              cleanupStarted.resolve();
+            }
+            if (cancel || ordinal === 1) {
+              await release.promise;
+            }
+            const removed = await prepared.cleanupAsync();
+            active -= 1;
+            cleaned.push(pathname);
+            if (ordinal === 0) {
+              firstCleaned.resolve();
+            }
+            if (ordinal === 1) {
+              peerCleanupFinished = true;
+            }
+            return removed;
+          },
+        };
       },
     );
-    vi.mocked(fork).mockClear();
-    vi.mocked(execFile).mockClear();
-    vi.mocked(spawn).mockClear();
-    const onAgentInspection = vi.fn();
-
-    await expect(
-      preflightOpenClawDatabaseSchemas({
-        env,
-        supportedVersions,
-        configuredAgentDatabaseTargets: targets,
-        verifyCurrentSchemaShape: mode !== "header",
-        requireStartupMigrationReadiness: mode === "startup",
-        onAgentInspection,
-      }),
-    ).resolves.toEqual({ incompatible: [], indeterminate: [] });
-
-    expect(fork).toHaveBeenCalledTimes(2);
-    const oneShotReaders = vi
-      .mocked(execFile)
-      .mock.calls.filter(
-        ([, args]) =>
-          Array.isArray(args) &&
-          ["schema-header", "sync", "async"].some((readerMode) => args.includes(readerMode)),
-      );
-    expect(oneShotReaders).toHaveLength(1);
-    expect(oneShotReaders[0]?.[1]).toContain(statePath);
-    expect(spawn).toHaveBeenCalledTimes(2);
-    expect(onAgentInspection).toHaveBeenCalledExactlyOnceWith({
-      schemaProcessCount: 2,
-      schemaInspectionCount: paths.length,
-      schemaSnapshotCount: paths.length,
+    const controller = new AbortController();
+    const run = fixture.inspect({
+      supportedVersions,
+      requireStartupMigrationReadiness: true,
+      configuredAgentDatabaseCandidatePaths: fixture.paths,
+      signal: cancel ? controller.signal : undefined,
     });
-    const children = vi
-      .mocked(fork)
-      .mock.results.filter((result) => result.type === "return")
-      .map(({ value }) => value);
-    expect(children).toHaveLength(2);
-    for (const child of children) {
-      expect(child.exitCode).toBe(0);
-      expect(child.connected).toBe(false);
-    }
-    expect(locations).toHaveLength(paths.length);
-    for (const location of locations) {
-      expect(fs.existsSync(path.dirname(location))).toBe(false);
-    }
-    for (const [index, pathname] of paths.entries()) {
-      deepStrictEqual(fs.readFileSync(pathname), originalBytes[index], pathname);
-      for (const suffix of ["-wal", "-shm", "-journal"]) {
-        expect(fs.existsSync(pathname + suffix)).toBe(false);
+    const settled = trackSettlement(run);
+    let settledBeforeRelease = true,
+      preparedBeforeRelease = -1;
+    try {
+      await withTestTimeout(cleanupStarted.promise, 10_000, "snapshot cleanup did not start");
+      if (cancel) {
+        expect({ active, peak, paths: preparedPaths.length, locations: locations.length }).toEqual({
+          active: 2,
+          peak: 2,
+          paths: 2,
+          locations: 2,
+        });
+        expectFiles(
+          locations.map((location) => path.dirname(location)),
+          true,
+        );
+        controller.abort(new Error("intentional preflight cancellation"));
+      } else {
+        await withTestTimeout(firstCleaned.promise, 10_000, "failing snapshot did not clean up");
       }
+      await Promise.resolve();
+      settledBeforeRelease = settled();
+      preparedBeforeRelease = preparedPaths.length;
+    } finally {
+      secondPrepared.resolve();
+      release.resolve();
+      if (cancel) {
+        controller.abort(new Error("intentional preflight cancellation"));
+      }
+      await Promise.allSettled([run]);
     }
+    if (cancel) {
+      await expect(run).rejects.toThrow("intentional preflight cancellation");
+    } else {
+      await expect(run).rejects.toThrow();
+    }
+    expect({
+      settledBeforeRelease,
+      preparedBeforeRelease,
+      prepared: preparedPaths.length,
+      cleaned: cleaned.length,
+      active,
+      peak,
+      peerCleanupFinished,
+      locations: locations.length,
+    }).toEqual({
+      settledBeforeRelease: false,
+      preparedBeforeRelease: 2,
+      prepared: 2,
+      cleaned: 2,
+      active: 0,
+      peak: 2,
+      peerCleanupFinished: true,
+      locations: 2,
+    });
+    expectFiles(
+      locations.map((location) => path.dirname(location)),
+      false,
+    );
   },
 );
-
-it("drains started agent snapshots before rejecting cancellation", async () => {
-  const fixture = createSnapshotCandidates();
-  const agentPaths = new Set(fixture.paths.map((pathname) => fs.realpathSync.native(pathname)));
-  const prepare = snapshots.prepareSqliteReadOnlyLocation;
-  const cleanupRelease = createDeferred();
-  const twoCleanupsStarted = createDeferred();
-  const preparedAgentPaths: string[] = [];
-  const preparedAgentLocations: string[] = [];
-  const cleanedAgentPaths: string[] = [];
-  let cleanupCount = 0;
-  let activeAgentSnapshots = 0;
-  let peakAgentSnapshots = 0;
-
-  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
-    async (pathname, options) => {
-      const prepared = await prepare(pathname, options);
-      if (!agentPaths.has(pathname)) {
-        return prepared;
-      }
-
-      preparedAgentPaths.push(pathname);
-      preparedAgentLocations.push(prepared.location);
-      activeAgentSnapshots += 1;
-      peakAgentSnapshots = Math.max(peakAgentSnapshots, activeAgentSnapshots);
-
-      return {
-        ...prepared,
-        cleanupAsync: async () => {
-          cleanupCount += 1;
-          if (cleanupCount === 2) {
-            twoCleanupsStarted.resolve();
-          }
-          await cleanupRelease.promise;
-          const removed = await prepared.cleanupAsync();
-          activeAgentSnapshots -= 1;
-          cleanedAgentPaths.push(pathname);
-          return removed;
-        },
-      };
-    },
-  );
-
-  const controller = new AbortController();
-  const cancellation = new Error("intentional preflight cancellation");
-  let settled = false;
-  const run = preflightOpenClawDatabaseSchemas({
-    env: fixture.env,
-    supportedVersions,
-    requireStartupMigrationReadiness: true,
-    configuredAgentDatabaseCandidatePaths: fixture.paths,
-    signal: controller.signal,
-  });
-
-  void run.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
-
-  let settledBeforeCleanupRelease = true;
-  let preparedBeforeCleanupRelease = -1;
-  try {
-    await withTestTimeout(
-      twoCleanupsStarted.promise,
-      10_000,
-      "two agent snapshots did not reach cleanup",
-    );
-
-    expect(preparedAgentPaths).toHaveLength(2);
-    expect(activeAgentSnapshots).toBe(2);
-    expect(peakAgentSnapshots).toBe(2);
-    expect(preparedAgentLocations).toHaveLength(2);
-    for (const location of preparedAgentLocations) {
-      expect(fs.existsSync(path.dirname(location))).toBe(true);
-    }
-
-    controller.abort(cancellation);
-    await Promise.resolve();
-
-    settledBeforeCleanupRelease = settled;
-    preparedBeforeCleanupRelease = preparedAgentPaths.length;
-  } finally {
-    cleanupRelease.resolve();
-    controller.abort(cancellation);
-    await Promise.allSettled([run]);
-  }
-
-  await expect(run).rejects.toThrow("intentional preflight cancellation");
-
-  expect(settledBeforeCleanupRelease).toBe(false);
-  expect(preparedBeforeCleanupRelease).toBe(2);
-  expect(preparedAgentPaths).toHaveLength(2);
-  expect(cleanedAgentPaths).toHaveLength(2);
-  expect(activeAgentSnapshots).toBe(0);
-  expect(peakAgentSnapshots).toBe(2);
-  for (const location of preparedAgentLocations) {
-    expect(fs.existsSync(path.dirname(location))).toBe(false);
-  }
-});
-
-it("drains a concurrent agent snapshot before propagating readiness failure", async () => {
-  const fixture = createSnapshotCandidates();
-  const agentPaths = new Set(fixture.paths.map((pathname) => fs.realpathSync.native(pathname)));
-  const prepare = snapshots.prepareSqliteReadOnlyLocation;
-  const secondPrepared = createDeferred();
-  const peerCleanupStarted = createDeferred();
-  const peerCleanupRelease = createDeferred();
-  const failingCleanupDone = createDeferred();
-  const preparedAgentPaths: string[] = [];
-  const preparedAgentLocations: string[] = [];
-  let peerCleanupFinished = false;
-
-  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
-    async (pathname, options) => {
-      const prepared = await prepare(pathname, options);
-      if (!agentPaths.has(pathname)) {
-        return prepared;
-      }
-
-      const ordinal = preparedAgentPaths.length;
-      preparedAgentPaths.push(pathname);
-      preparedAgentLocations.push(prepared.location);
-
-      if (ordinal === 0) {
-        await secondPrepared.promise;
-        return {
-          ...prepared,
-          location: path.join(path.dirname(prepared.location), "missing.sqlite"),
-          cleanupAsync: async () => {
-            const removed = await prepared.cleanupAsync();
-            failingCleanupDone.resolve();
-            return removed;
-          },
-        };
-      }
-
-      if (ordinal === 1) {
-        secondPrepared.resolve();
-        return {
-          ...prepared,
-          cleanupAsync: async () => {
-            peerCleanupStarted.resolve();
-            await peerCleanupRelease.promise;
-            const removed = await prepared.cleanupAsync();
-            peerCleanupFinished = true;
-            return removed;
-          },
-        };
-      }
-
-      return prepared;
-    },
-  );
-
-  let settled = false;
-  const run = preflightOpenClawDatabaseSchemas({
-    env: fixture.env,
-    supportedVersions,
-    requireStartupMigrationReadiness: true,
-    configuredAgentDatabaseCandidatePaths: fixture.paths,
-  });
-
-  void run.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
-
-  let settledBeforePeerCleanupRelease = true;
-  let preparedBeforePeerCleanupRelease = -1;
-  try {
-    await withTestTimeout(
-      peerCleanupStarted.promise,
-      10_000,
-      "concurrent agent snapshot did not reach cleanup",
-    );
-    await withTestTimeout(
-      failingCleanupDone.promise,
-      10_000,
-      "failing agent snapshot did not clean up",
-    );
-    await Promise.resolve();
-
-    settledBeforePeerCleanupRelease = settled;
-    preparedBeforePeerCleanupRelease = preparedAgentPaths.length;
-  } finally {
-    secondPrepared.resolve();
-    peerCleanupRelease.resolve();
-    await Promise.allSettled([run]);
-  }
-
-  await expect(run).rejects.toThrow();
-
-  expect(settledBeforePeerCleanupRelease).toBe(false);
-  expect(preparedBeforePeerCleanupRelease).toBe(2);
-  expect(preparedAgentPaths).toHaveLength(2);
-  expect(peerCleanupFinished).toBe(true);
-  expect(preparedAgentLocations).toHaveLength(2);
-  for (const location of preparedAgentLocations) {
-    expect(fs.existsSync(path.dirname(location))).toBe(false);
-  }
-});

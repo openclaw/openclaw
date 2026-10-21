@@ -10,6 +10,7 @@ import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { reportLimitViolations, type LimitViolation } from "./lib/check-limits.mts";
 import { readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
 import {
@@ -179,7 +180,7 @@ export function updateWatchBuildDetection(
 ): { buffer: string; triggered: boolean; reason: string | null } {
   const combined = `${state.buffer ?? ""}${String(chunk)}`;
   const next = appendBoundedWatchLog("", combined, WATCH_BUILD_DETECTION_MAX_CHARS);
-  const reason = detectWatchBuildReason(combined, "");
+  const reason = combined.match(/Building TypeScript \(dist is stale: ([a-z_]+)/)?.[1] ?? null;
   const triggered = state.triggered || combined.includes("Building TypeScript (dist is stale");
   return {
     buffer: next.text,
@@ -458,7 +459,6 @@ export function buildTimedWatchCommand(
   } = {},
 ) {
   const isolatedStateDir = path.join(isolatedHomeDir, ".openclaw");
-  const isolatedConfigPath = path.join(isolatedStateDir, "openclaw.json");
   const configJson = JSON.stringify({
     gateway: { controlUi: { enabled: false } },
     logging: { file: path.join(isolatedStateDir, "gateway.log") },
@@ -477,12 +477,8 @@ export function buildTimedWatchCommand(
   const nodeBinDir = path.dirname(nodeExecPath);
   const env = {
     OPENCLAW_WATCH_PID_FILE: pidFilePath,
-    HOME: isolatedHomeDir,
-    OPENCLAW_HOME: isolatedHomeDir,
-    OPENCLAW_CONFIG_PATH: isolatedConfigPath,
-    OPENCLAW_STATE_DIR: isolatedStateDir,
+    ...createBuildSmokeEnv(isolatedHomeDir, {}),
     PATH: `${nodeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
-    XDG_CONFIG_HOME: path.join(isolatedHomeDir, ".config"),
     ...WATCH_GATEWAY_SKIP_ENV,
   };
 
@@ -875,17 +871,11 @@ function warn(message: string) {
   console.error(`WARN: ${message}`);
 }
 
-function detectWatchBuildReason(stdout: string, stderr: string): string | null {
-  const combined = `${stdout}\n${stderr}`;
-  const match = combined.match(/Building TypeScript \(dist is stale: ([a-z_]+)/);
-  return match?.[1] ?? null;
-}
-
-function buildRunNodeDeps(env: NodeJS.ProcessEnv) {
+function buildRunNodeDeps() {
   const cwd = process.cwd();
   return {
     cwd,
-    env,
+    env: process.env,
     fs,
     spawnSync,
     distRoot: path.join(cwd, "dist"),
@@ -1051,7 +1041,7 @@ async function main() {
     refreshLocalBuildStampTimes();
   }
 
-  let preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+  let preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps());
   if (
     shouldRefreshBuildStampForRestoredArtifacts({
       skipBuild: options.skipBuild,
@@ -1062,7 +1052,7 @@ async function main() {
     // Refresh the stamps so checkout mtimes for package/config files do not
     // force a duplicate build during the bounded gateway:watch window.
     refreshLocalBuildStampTimes();
-    preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+    preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps());
   }
   if (preflightBuildRequirement.shouldBuild) {
     const summary = {

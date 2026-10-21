@@ -106,6 +106,22 @@ export function printBrowserJsonResult(parent: BrowserParentOpts, payload: unkno
   return true;
 }
 
+export function printBrowserList<T>(
+  entries: T[],
+  emptyMessage: string,
+  format: (entry: T, index: number) => string,
+  header?: string,
+): void {
+  if (entries.length === 0) {
+    defaultRuntime.log(emptyMessage);
+    return;
+  }
+  if (header !== undefined) {
+    defaultRuntime.log(header);
+  }
+  defaultRuntime.log(entries.map(format).join("\n"));
+}
+
 export function resolveBrowserProfileQuery(
   profile?: string,
   extra?: BrowserRequestParams["query"],
@@ -147,7 +163,7 @@ export function parseBrowserNonNegativeIntegerOption(raw: string, flag: string):
 export async function callBrowserRequest<T>(
   opts: BrowserParentOpts,
   params: BrowserRequestParams,
-  extra?: { timeoutMs?: number; progress?: boolean },
+  extra?: { timeoutMs?: number },
 ): Promise<T> {
   const resolvedTimeout =
     typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)
@@ -167,7 +183,7 @@ export async function callBrowserRequest<T>(
       body: params.body,
       timeoutMs: budgets?.proxyTimeoutMs,
     },
-    { progress: extra?.progress, scopes: [...BROWSER_REQUEST_GATEWAY_SCOPES] },
+    { scopes: [...BROWSER_REQUEST_GATEWAY_SCOPES] },
   );
   if (payload === undefined) {
     throw new Error("Unexpected browser.request response");

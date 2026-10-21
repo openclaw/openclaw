@@ -6,6 +6,7 @@ import type { WorkerInstallationArtifact } from "./bundle.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
+import type { createWorkerProviderOwnerLifecycle } from "./provider-owner-lifecycle.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
 export type WorkerRuntimeRefreshInFlight = {
@@ -34,19 +35,11 @@ type WorkerRuntimeRefreshOptions = Pick<
   | "ensureNodeWorkerBundle"
   | "bootstrapWorker"
   | "credentialBroker"
-> & {
-  requireCurrentOwner: (record: WorkerEnvironmentRecord) => WorkerEnvironmentRecord;
-  stopOwner: (
-    record: WorkerEnvironmentRecord,
-    reason: undefined,
-    runtimeRefresh: { assertCurrent: () => void },
-  ) => Promise<WorkerEnvironmentRecord>;
-  identityResolverFor: (
-    record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
-    leaseId: string,
-  ) => Parameters<WorkerProviderLifecycleOptions["bootstrapWorker"]>[0]["resolveIdentity"];
-};
+> &
+  Pick<
+    ReturnType<typeof createWorkerProviderOwnerLifecycle>,
+    "requireCurrentOwner" | "stopOwner" | "identityResolverFor"
+  >;
 
 export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOptions) {
   const { store, callBootstrap, requireCurrentOwner, stopOwner, identityResolverFor } = options;
@@ -103,11 +96,9 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
         placementAuthority?.assertCurrent();
       };
       try {
-        assertCurrent();
         // Stop the old process and revoke its credential, but retain the epoch: it also owns
         // the node workspace directory. A new turn gets a new claim and credential below.
         await stopOwner(record, undefined, { assertCurrent });
-        assertCurrent();
         const receipt = await callBootstrap(installation, async (timeoutSignal) => {
           const refreshSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
           assertCurrent();
@@ -138,7 +129,6 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
             assertCurrent,
           });
         });
-        assertCurrent();
         if (!sameWorkerBuild(receipt, installation)) {
           throw new Error("Worker runtime refresh returned a mismatched build receipt");
         }
@@ -157,15 +147,12 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
           bootstrapReceipt: { ...receipt, installKind: "bundle" },
           assertCurrent,
         });
-        assertCurrent();
         await ensurePendingCredential(refreshed, sessionId ?? null);
       } finally {
         placementAuthority?.release();
       }
     } finally {
-      if (inFlight.get(record.environmentId) === fact) {
-        inFlight.delete(record.environmentId);
-      }
+      inFlight.delete(record.environmentId);
       settled.resolve();
     }
   };

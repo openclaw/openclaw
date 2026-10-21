@@ -1,7 +1,4 @@
-import {
-  isFutureDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
@@ -27,13 +24,11 @@ function resolveIdentityKeys(identity: OutboundMessageIdentity): string[] {
   }
   const scope = [channel, normalizeAccountId(identity.accountId), conversationId];
   const keys: string[] = [];
-  const messageId = identity.messageId?.trim();
-  if (messageId) {
-    keys.push(JSON.stringify([...scope, "message", messageId]));
-  }
-  const sourceId = identity.sourceId?.trim();
-  if (sourceId) {
-    keys.push(JSON.stringify([...scope, "source", sourceId]));
+  for (const kind of ["message", "source"] as const) {
+    const id = identity[`${kind}Id`]?.trim();
+    if (id) {
+      keys.push(JSON.stringify([...scope, kind, id]));
+    }
   }
   return keys;
 }
@@ -54,13 +49,7 @@ export function recordOutboundMessageIdentity(identity: OutboundMessageIdentity)
     return;
   }
   const nowMs = Date.now();
-  const expiresAt = resolveExpiresAtMsFromDurationMs(OUTBOUND_ECHO_WINDOW_MS, { nowMs });
-  if (expiresAt === undefined) {
-    for (const key of keys) {
-      outboundMessageIdentities.delete(key);
-    }
-    return;
-  }
+  const expiresAt = nowMs + OUTBOUND_ECHO_WINDOW_MS;
   pruneExpiredEntries(nowMs);
   for (const key of keys) {
     outboundMessageIdentities.delete(key);

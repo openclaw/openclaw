@@ -8,8 +8,8 @@ import {
   imageFileExtensionForMimeType,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { resolveGeneratedImageDownloadMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
@@ -141,10 +141,7 @@ type FalImageModelSchema = {
   supportsCount: boolean;
   supportsOutputFormat: boolean;
 };
-function parseFalImageGenerationResponse(payload: unknown): {
-  images: Record<string, unknown>[];
-  prompt?: string;
-} {
+function parseFalImageGenerationResponse(payload: unknown) {
   if (!isRecord(payload)) {
     throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
   }
@@ -487,11 +484,7 @@ function applyFalReferenceImages(
     }));
     return;
   }
-  const [input] = encoded;
-  if (!input) {
-    throw new Error("fal image edit request missing reference image");
-  }
-  requestBody.image_url = input;
+  requestBody.image_url = encoded[0];
 }
 
 function formatFalReferenceLimitError(
@@ -544,7 +537,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       FAL_KREA_2_LARGE_MODEL,
       ...FAL_GPT_IMAGE_25_MODELS,
     ],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "fal", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "fal", ...ctx }),
     capabilities: {
       generate: {
         maxCount: 4,
@@ -680,7 +673,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         req,
         capability: "image",
       });
-      const maxImageBytes = resolveGeneratedMediaMaxBytes(req.cfg, "image");
+      const maxImageBytes = resolveGeneratedImageDownloadMaxBytes(req.cfg);
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
         ...(schema.supportsCount ? { num_images: req.count ?? 1 } : {}),

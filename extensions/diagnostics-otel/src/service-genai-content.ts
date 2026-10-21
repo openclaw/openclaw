@@ -13,8 +13,8 @@ import type {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  assignOtelContentAttr,
   MAX_OTEL_CONTENT_ARRAY_ITEMS,
-  MAX_OTEL_CONTENT_ATTRIBUTE_CHARS,
   normalizeOtelContentValue,
   safeJsonString,
 } from "./service-content-normalization.js";
@@ -84,7 +84,7 @@ function contentParts(value: unknown): Record<string, unknown>[] {
     if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
       return [textPart(String(value))];
     }
-    const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
+    const json = safeJsonString(value);
     return json ? [textPart(json)] : [];
   }
   const parts: Record<string, unknown>[] = [];
@@ -194,7 +194,7 @@ function redactInternalReasoningFromMessages(value: unknown): unknown {
 
 function normalizeGenAiMessage(
   value: unknown,
-  fallbackRole = "user",
+  fallbackRole: "user" | "assistant",
 ): Record<string, unknown> | undefined {
   if (typeof value === "string") {
     return { role: fallbackRole, parts: [textPart(value)] };
@@ -274,20 +274,9 @@ function assignJsonAttribute(
   key: string,
   value: unknown,
 ): void {
-  const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
+  const json = safeJsonString(value);
   if (json) {
     attributes[key] = json;
-  }
-}
-
-function assignOtelContentAttribute(
-  attributes: Record<string, string | number | boolean>,
-  key: string,
-  value: unknown,
-): void {
-  const normalized = normalizeOtelContentValue(value);
-  if (normalized) {
-    attributes[key] = normalized;
   }
 }
 
@@ -334,13 +323,9 @@ export function assignOtelModelContentAttributes(
     assignJsonAttribute(attributes, "output.value", outputMessages);
     attributes["output.mime_type"] = "application/json";
   }
-  assignOtelContentAttribute(attributes, "openclaw.content.input_messages", redactedInput);
-  assignOtelContentAttribute(
-    attributes,
-    "openclaw.content.tool_definitions",
-    content?.toolDefinitions,
-  );
-  assignOtelContentAttribute(attributes, "openclaw.content.output_messages", redactedOutput);
+  assignOtelContentAttr(attributes, "openclaw.content.input_messages", redactedInput);
+  assignOtelContentAttr(attributes, "openclaw.content.tool_definitions", content?.toolDefinitions);
+  assignOtelContentAttr(attributes, "openclaw.content.output_messages", redactedOutput);
 }
 
 export function assignOtelToolContentAttributes(

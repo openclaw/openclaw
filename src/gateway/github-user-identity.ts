@@ -4,15 +4,21 @@ import {
   normalizeLowercaseStringOrEmpty,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { parseEnterpriseGitHubPrincipal } from "../shared/enterprise-github-principal.js";
 import { createLazyPromise, getOrCreatePromise } from "../shared/lazy-promise.js";
+import { normalizeVerifiedEmail } from "../shared/verified-email.js";
 import { resolveCanonicalCachedGitHubIdentity } from "../state/user-profile-reads.js";
 import {
+  ensureCanonicalEnterpriseGitHubProfile,
   ensureCanonicalUserProfileForEmail,
   syncCanonicalGitHubIdentity,
 } from "../state/user-profile-writes.js";
 import { classifyTailscaleLogin } from "../state/user-profiles-tailscale-login.js";
+import type { CachedGitHubIdentityBinding } from "../state/user-profiles.types.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { gitHubPublicApi, githubApiToken } from "./github-public-api.js";
@@ -145,8 +151,9 @@ async function resolveCloudflareAccessIdentity(
   };
 }
 
-async function resolveGitHubUserIdentityByLogin(
+export async function resolveGitHubUserIdentityByLogin(
   username: string,
+  options?: { signal?: AbortSignal; allowAnonymousRetry?: boolean },
 ): Promise<ResolvedGitHubUserIdentity> {
   const requestedLogin = normalizeGitHubLogin(username);
   if (!requestedLogin) {
@@ -155,13 +162,24 @@ async function resolveGitHubUserIdentityByLogin(
   const token = githubApiToken(process.env, undefined, "github.com");
   let payload: unknown;
   try {
-    payload = await gitHubPublicApi.fetchGitHubJson(
-      `${gitHubPublicApi.GITHUB_API_ORIGIN}/users/${encodeURIComponent(requestedLogin)}`,
-      fetch,
-      token,
-      undefined,
-      gitHubPublicApi.GITHUB_API_ORIGIN,
-    );
+    const request = async (requestToken: string | undefined) => {
+      const response = await gitHubPublicApi.fetchGitHubApi(
+        `${gitHubPublicApi.GITHUB_API_ORIGIN}/users/${encodeURIComponent(requestedLogin)}`,
+        fetch,
+        requestToken,
+        undefined,
+        undefined,
+        undefined,
+        options?.signal,
+        undefined,
+        gitHubPublicApi.GITHUB_API_ORIGIN,
+      );
+      return await gitHubPublicApi.readGitHubJsonResponse(response);
+    };
+    payload =
+      options?.allowAnonymousRetry === false
+        ? await request(token)
+        : await gitHubPublicApi.withOptionalGitHubAuth(token, request);
   } catch (error) {
     if (error instanceof gitHubPublicApi.ControlUiGitHubError) {
       throw error;
@@ -267,6 +285,7 @@ function resolveGitHubUserIdentityById(
 function cloudflareAccessAssertion(params: {
   authResult: GatewayAuthResult;
   authConfig?: GatewayAuthConfig;
+  config?: OpenClawConfig;
   requestHeaders?: IncomingHttpHeaders;
 }): { assertion: string; principal: string } | undefined {
   const trustedProxy = params.authConfig?.trustedProxy;
@@ -288,20 +307,131 @@ function cloudflareAccessAssertion(params: {
   return principal && assertion ? { assertion, principal } : undefined;
 }
 
+/** An Enterprise GitHub principal is authoritative only after trusted-proxy admission. */
+export function resolveTrustedEnterpriseGitHubAccountId(params: {
+  authResult: Pick<GatewayAuthResult, "ok" | "method" | "user">;
+  authConfig?: GatewayAuthConfig;
+  config?: OpenClawConfig;
+}): number | undefined {
+  if (
+    !params.authResult.ok ||
+    params.authResult.method !== "trusted-proxy" ||
+    params.authConfig?.mode !== "trusted-proxy" ||
+    normalizeLowercaseStringOrEmpty(params.authConfig.trustedProxy?.userHeader) !==
+      "x-factory-principal"
+  ) {
+    return undefined;
+  }
+  const principal = parseEnterpriseGitHubPrincipal(params.authResult.user ?? "");
+  return principal?.host === resolveConfiguredGitHubHost(params.config)
+    ? principal.accountId
+    : undefined;
+}
+
+/** Metadata is accepted only from the same trusted hop that asserted the immutable account. */
+function resolveTrustedEnterpriseGitHubMetadata(params: {
+  authResult: Pick<GatewayAuthResult, "ok" | "method" | "user">;
+  authConfig?: GatewayAuthConfig;
+  config?: OpenClawConfig;
+  requestHeaders?: IncomingHttpHeaders;
+}) {
+  const accountId = resolveTrustedEnterpriseGitHubAccountId(params);
+  if (!accountId) {
+    return undefined;
+  }
+  const rawLogin = firstHeaderValue(params.requestHeaders?.["x-factory-github-login"]);
+  const login = rawLogin && rawLogin.length <= 39 ? normalizeGitHubLogin(rawLogin) : undefined;
+  const rawName = firstHeaderValue(params.requestHeaders?.["x-factory-github-name"]);
+  const name =
+    rawName && rawName.length <= 128 && !/[\p{Cc}\p{Cf}]/u.test(rawName)
+      ? rawName.trim()
+      : undefined;
+  const rawAvatar = firstHeaderValue(params.requestHeaders?.["x-factory-github-avatar-url"]);
+  const email = normalizeVerifiedEmail(params.requestHeaders?.["x-factory-github-email"]);
+  let avatarUrl: string | undefined;
+  if (rawAvatar && rawAvatar.length <= 512) {
+    try {
+      const url = new URL(rawAvatar);
+      if (
+        url.origin === `https://${resolveConfiguredGitHubHost(params.config)}` &&
+        url.pathname === `/avatars/u/${accountId}` &&
+        !url.username &&
+        !url.password &&
+        !url.hash
+      ) {
+        avatarUrl = url.href;
+      }
+    } catch {
+      /* Invalid metadata never grants authority. */
+    }
+  }
+  return login
+    ? {
+        accountId,
+        login,
+        ...(email ? { email } : {}),
+        ...(name ? { name } : {}),
+        ...(avatarUrl ? { avatarUrl } : {}),
+      }
+    : undefined;
+}
+
 export function createAuthenticatedGitHubIdentitySync(params: {
   authResult: GatewayAuthResult;
   authConfig?: GatewayAuthConfig;
+  config?: OpenClawConfig;
   requestHeaders?: IncomingHttpHeaders;
   assertCurrent?: () => void;
 }): AuthenticatedGitHubIdentitySync | undefined {
   const options = { assertCurrent: params.assertCurrent };
+  // A retryable GitHub outage may reuse only an exact binding verified earlier.
+  const reuseVerifiedBinding = async (error: unknown, binding: CachedGitHubIdentityBinding) => {
+    if (!(error instanceof gitHubPublicApi.ControlUiGitHubError && error.retryable)) {
+      return undefined;
+    }
+    params.assertCurrent?.();
+    const cached = await resolveCanonicalCachedGitHubIdentity(binding);
+    params.assertCurrent?.();
+    return cached;
+  };
+  const enterprise = resolveTrustedEnterpriseGitHubMetadata(params);
+  if (enterprise) {
+    return createLazyPromise(async () => {
+      params.assertCurrent?.();
+      const profile = await ensureCanonicalEnterpriseGitHubProfile(
+        params.authResult.user!,
+        enterprise.name ?? enterprise.login,
+        options,
+        { login: enterprise.login, email: enterprise.email },
+      );
+      params.assertCurrent?.();
+      return {
+        profileId: profile.id,
+        updatedAt: profile.updatedAt,
+        enterprise: {
+          accountId: enterprise.accountId,
+          login: enterprise.login,
+          ...(enterprise.avatarUrl ? { avatarUrl: enterprise.avatarUrl } : {}),
+        },
+      };
+    });
+  }
   const tailscaleLogin = params.authResult.tailscaleIdentity
     ? classifyTailscaleLogin(params.authResult.tailscaleIdentity.login)
     : undefined;
   if (tailscaleLogin?.kind === "provider" && tailscaleLogin.provider === "github") {
     return createLazyPromise(async () => {
       params.assertCurrent?.();
-      const identity = await resolveGitHubUserIdentityByLogin(tailscaleLogin.subject);
+      let identity: ResolvedGitHubUserIdentity;
+      try {
+        identity = await resolveGitHubUserIdentityByLogin(tailscaleLogin.subject);
+      } catch (error) {
+        const cached = await reuseVerifiedBinding(error, { login: tailscaleLogin.subject });
+        if (cached) {
+          return cached;
+        }
+        throw error;
+      }
       params.assertCurrent?.();
       const profile = await syncCanonicalGitHubIdentity(
         {
@@ -343,14 +473,9 @@ export function createAuthenticatedGitHubIdentitySync(params: {
         resolveGitHubUserIdentityById(accountId, requestToken, fetch),
       );
     } catch (error) {
-      if (error instanceof gitHubPublicApi.ControlUiGitHubError && error.retryable) {
-        // Retry failures may reuse only the exact verified email + immutable-account binding.
-        params.assertCurrent?.();
-        const cached = await resolveCanonicalCachedGitHubIdentity(identityBinding);
-        params.assertCurrent?.();
-        if (cached) {
-          return cached;
-        }
+      const cached = await reuseVerifiedBinding(error, identityBinding);
+      if (cached) {
+        return cached;
       }
       if (accessIdentity.provider === "oidc") {
         params.assertCurrent?.();

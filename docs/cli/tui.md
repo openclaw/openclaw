@@ -78,6 +78,12 @@ Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
 - With no explicit URL or port, `tui` follows the active local Gateway port
   recorded by the running Gateway. Explicit `--url`, `OPENCLAW_GATEWAY_URL`,
   `OPENCLAW_GATEWAY_PORT`, and remote Gateway config keep precedence.
+- With no explicit target and no running local Gateway, `tui` stops before
+  connecting and points to `openclaw chat` instead of asking for a token. A
+  local Gateway started with a generated token pairs this CLI automatically.
+  A node host has no local Gateway: its pairing has the node role, so
+  operator chat with its Gateway uses `openclaw tui <Gateway URL>` with
+  `--token` or `--password` once, plus a one-time pairing approval.
 - Launched from inside a configured agent workspace directory, TUI auto-selects
   that agent for the session key default (unless `--session` is explicitly
   `agent:<id>:...`).

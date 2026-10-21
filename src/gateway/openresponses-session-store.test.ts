@@ -1,6 +1,8 @@
+import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createCorePluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -10,7 +12,6 @@ import { lookupResponseSession, rememberResponseSession } from "./openresponses-
 import {
   MAX_RESPONSE_SESSION_ENTRIES,
   RESPONSE_SESSION_RETENTION_MS,
-  type ResponseSessionScope,
 } from "./openresponses-session-store.types.js";
 
 const scope = {
@@ -58,20 +59,16 @@ it("keeps reads and Incognito noncreating, and scoped continuity survives reopen
     ]) {
       expect(await lookupResponseSession({ ...input, ...mismatch }, env)).toBeUndefined();
     }
-    const store = createCorePluginStateKeyedStore<ResponseSessionScope & { sessionKey: string }>({
-      ...storeOptions,
-      env,
-    });
+    const store = createCorePluginStateKeyedStore({ ...storeOptions, env });
     const [entry] = await store.entries();
     expect(entry).toMatchObject({ key: input.responseId, value: { ...scope, sessionKey } });
     expect(entry!.expiresAt).toBe(entry!.createdAt + RESPONSE_SESSION_RETENTION_MS);
     const expiredAt = Date.now() - 1;
     seedPluginStateEntriesForTests([
       {
+        ...entry!,
         pluginId: storeOptions.ownerId,
         namespace: storeOptions.namespace,
-        key: input.responseId,
-        value: entry!.value,
         createdAt: expiredAt - RESPONSE_SESSION_RETENTION_MS,
         expiresAt: expiredAt,
       },
@@ -83,29 +80,18 @@ it("keeps reads and Incognito noncreating, and scoped continuity survives reopen
 
 it("rolls back when caller authority expires before commit", async () => {
   await withOpenClawTestState({ label: "openresponses-authority" }, async ({ env }) => {
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
     let authorized = true;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            authorized = false;
-          }
-          admit(request, grant);
-        }, attachment),
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        authorized = false;
+      }
+      admit(request, grant);
+    });
+    const input = { ...scope, responseId: "resp_revoked", sessionKey: "revoked-session" };
+    const assertCurrent = () => assert(authorized, "synthetic requester revoked");
+    await expect(rememberResponseSession(input, assertCurrent, env)).rejects.toThrow(
+      /plugin state/,
     );
-    const input = { ...scope, responseId: "resp_revoked" };
-    await expect(
-      rememberResponseSession(
-        { ...input, sessionKey: "revoked-session" },
-        () => {
-          if (!authorized) {
-            throw new Error("synthetic requester revoked");
-          }
-        },
-        env,
-      ),
-    ).rejects.toThrow(/plugin state/);
     expect(authorized).toBe(false);
     expect(await lookupResponseSession(input, env)).toBeUndefined();
   });

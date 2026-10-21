@@ -94,7 +94,7 @@ standalone managed installation and its daemon is not running, start it with:
 codex app-server daemon start
 ```
 
-That command is idempotent and reports the control socket in its JSON response.
+That command is safe to repeat and reports the control socket in its JSON response.
 For other installations, use the existing local App Server's Unix socket;
 do not start another App Server against a thread already owned by a different
 process.
@@ -195,8 +195,8 @@ The same `codex` plugin can list non-archived Codex sessions from the Gateway
 computer and opted-in paired nodes. A stored or idle Gateway-local session can
 create a model-locked Chat that mirrors its bounded persisted user and assistant
 history. Its private binding uses the supervision connection for the native
-snapshot, canonical branch, and later turns while ordinary Codex sessions remain
-agent-scoped. The first canonical start uses exactly the model and provider that
+snapshot, primary branch, and later turns while ordinary Codex sessions remain
+agent-scoped. The first primary-thread start uses exactly the model and provider that
 Codex returns for the snapshot fork. Later resumes leave selection to Codex's
 native configuration; the outer OpenClaw model and fallback chain never replace
 it. Stored and idle local rows can be archived after explicit no-other-runner

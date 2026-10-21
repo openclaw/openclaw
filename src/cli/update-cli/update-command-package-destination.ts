@@ -4,11 +4,12 @@ import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { resolveCanonicalPath } from "../../infra/package-update-manager-preflight.js";
+import { pathEntryExists } from "../../infra/path-existence.js";
 import { isPathStrictlyInside } from "../../infra/path-guards.js";
 import {
   UPDATE_DESTINATION_RECOVERY,
   type UpdateDestinationFailure,
-} from "../../infra/update-destination-failure.js";
+} from "../../infra/update-failure-facts-format.js";
 import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import {
@@ -68,18 +69,8 @@ export async function inspectNpmGlobalDestination(
     const { launcher, launcherTarget } = await inspectNpmLauncher(destinationLayout);
     destination.launcher = launcher;
     destination.launcherTarget = launcherTarget;
-    const present = (target: string) =>
-      fs.lstat(target).then(
-        () => true,
-        (error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return false;
-          }
-          throw error;
-        },
-      );
-    const packagePresent = await present(packageRoot);
-    const launcherPresent = await present(launcher);
+    const packagePresent = await pathEntryExists(packageRoot);
+    const launcherPresent = await pathEntryExists(launcher);
     if (!packagePresent && !launcherPresent) {
       return { kind: "empty" as const, prefix };
     }
@@ -87,8 +78,7 @@ export async function inspectNpmGlobalDestination(
     if (launcherPresent && !launcherTarget) {
       return unknown(prefix, "unreadable-layout");
     }
-    const manageable = isGatewayServiceManagementAllowedForUpdate(process.env);
-    const serviceInspection = manageable
+    const serviceInspection = isGatewayServiceManagementAllowedForUpdate(process.env)
       ? await readManagedGatewayServiceForUpdate(process.env)
       : null;
     const command = serviceInspection?.command ?? null;

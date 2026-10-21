@@ -57,10 +57,11 @@ export class RealtimeAudioPacer {
 
   constructor(
     private readonly params: {
-      maxQueuedAudioBytes?: number;
       onBackpressure?: () => void;
       /** Fires whenever queued audio and playback state are discarded. */
       onPlaybackReset?: () => void;
+      /** Fires for each audio chunk actually written to the carrier stream. */
+      onAudioSent?: (audio: Buffer) => void;
       send: (message: string) => boolean;
       serializer: Pick<StreamFrameAdapter, "serializeMedia" | "serializeClear" | "serializeMark">;
     },
@@ -71,10 +72,9 @@ export class RealtimeAudioPacer {
     if (this.closed || muLaw.length === 0) {
       return;
     }
-    const maxQueuedAudioBytes = this.params.maxQueuedAudioBytes ?? DEFAULT_MAX_QUEUED_AUDIO_BYTES;
     for (let offset = 0; offset < muLaw.length; offset += TELEPHONY_CHUNK_BYTES) {
       const chunk = Buffer.from(muLaw.subarray(offset, offset + TELEPHONY_CHUNK_BYTES));
-      if (this.queuedAudioBytes + chunk.length > maxQueuedAudioBytes) {
+      if (this.queuedAudioBytes + chunk.length > DEFAULT_MAX_QUEUED_AUDIO_BYTES) {
         this.failBackpressure();
         return;
       }
@@ -301,6 +301,7 @@ export class RealtimeAudioPacer {
       this.params.serializer.serializeMedia(item.chunk.toString("base64")),
     );
     if (sent) {
+      this.params.onAudioSent?.(item.chunk);
       item.segment.sentMs += item.durationMs;
       this.sentAudioMs += item.durationMs;
       item.segment.lastSentEndMs = this.sentAudioMs;

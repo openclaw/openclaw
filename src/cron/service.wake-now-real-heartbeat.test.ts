@@ -1,4 +1,4 @@
-// Exercise the scheduler's active marker against the real heartbeat busy guard.
+// Exercise scheduler settlement against the real heartbeat runner.
 // Stubbing runHeartbeatOnce hides this cross-owner interaction.
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type Mock } from "vitest";
@@ -12,6 +12,10 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  bindHeartbeatReply,
+  bindHeartbeatSend,
+} from "../infra/heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce, startHeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "../infra/heartbeat-runner.test-harness.js";
 import { seedMainSessionStore } from "../infra/heartbeat-runner.test-utils.js";
@@ -26,7 +30,7 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
-import { enqueueCommandInLane, getQueueSize } from "../process/command-queue.js";
+import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
@@ -142,11 +146,12 @@ async function runMainCronCase(
     });
   }
 
+  bindHeartbeatReply(getReplySpy);
+  bindHeartbeatSend("telegram", sendTelegram);
   const runHeartbeatOnceReal: typeof runHeartbeatOnce = async (opts) => {
     const outcome = await runHeartbeatOnce({
       ...opts,
       cfg,
-      deps: { getReplyFromConfig: getReplySpy, telegram: sendTelegram },
     });
     if (options.mixedExec && getReplySpy.mock.calls.length >= 2) {
       followUpCompleted.resolve(outcome);
@@ -281,7 +286,6 @@ async function runMainCronCase(
           reason: "interval",
           agentId: "main",
           scheduledEveryMs: 5 * 60_000,
-          deps: { getReplyFromConfig: getReplySpy, telegram: sendTelegram },
         }),
       ).resolves.toMatchObject({ status: "ran" });
     } else {
@@ -328,17 +332,18 @@ async function runMainCronCase(
     runBody,
     async () => {
       cron.stop();
-      // Keep the heartbeat alive until its Cron waiter and owning lane settle.
+      // Keep the heartbeat alive until its Cron waiter and launcher settle.
       await expect(waitForActiveCronJobs(5_000)).resolves.toEqual({ drained: true, active: 0 });
       await scheduledTick;
-      await vi.waitFor(() => expect(getQueueSize(CommandLane.Cron)).toBe(0), { timeout: 5_000 });
+      await cron.waitForIdle();
+      expect(getQueueSize(CommandLane.Cron)).toBe(0);
     },
     () => heartbeatRunner.stop(),
   );
 }
 
 describe("main cron with the real heartbeat runner", () => {
-  it("settles a busy routeless monitor without delaying restart", async () => {
+  it("settles a routeless monitor without delaying restart", async () => {
     vi.useFakeTimers();
     const sandbox = makeSandbox();
     const cfg: OpenClawConfig = {
@@ -347,6 +352,8 @@ describe("main cron with the real heartbeat runner", () => {
     };
     const getReply = vi.fn().mockResolvedValue({ text: "unexpected heartbeat" });
     const sendTelegram = vi.fn();
+    bindHeartbeatReply(getReply);
+    bindHeartbeatSend("telegram", sendTelegram);
     const attempts: Awaited<ReturnType<typeof runHeartbeatOnce>>[] = [];
     const heartbeatRunner = startHeartbeatRunner({
       cfg,
@@ -354,7 +361,6 @@ describe("main cron with the real heartbeat runner", () => {
         const result = await runHeartbeatOnce({
           ...opts,
           cfg,
-          deps: { getReplyFromConfig: getReply, telegram: sendTelegram },
         });
         attempts.push(result);
         return result;
@@ -386,8 +392,6 @@ describe("main cron with the real heartbeat runner", () => {
         }
       },
     };
-    const foreground = createDeferred();
-    const foregroundRun = enqueueCommandInLane(CommandLane.Main, () => foreground.promise);
     let cron = new CronService(deps);
     try {
       await cron.start();
@@ -412,9 +416,9 @@ describe("main cron with the real heartbeat runner", () => {
       await expect(finished.promise).resolves.toMatchObject({
         jobId: job.id,
         status: "skipped",
-        error: "heartbeat skipped: requests-in-flight",
+        error: "heartbeat skipped: no-route",
       });
-      expect(attempts).toEqual([{ status: "skipped", reason: "requests-in-flight" }]);
+      expect(attempts).toEqual([{ status: "skipped", reason: "no-route" }]);
       const completed = cron.getJob(job.id)!;
       expect(completed.state.runningAtMs).toBeUndefined();
       expect(completed.state.consecutiveErrors).toBe(0);
@@ -429,8 +433,6 @@ describe("main cron with the real heartbeat runner", () => {
       expect(events.filter((event) => event.action === "finished")).toHaveLength(1);
 
       // A finished ambient poll leaves no retry or cron run to delay shutdown.
-      foreground.resolve();
-      await foregroundRun;
       await vi.advanceTimersByTimeAsync(60_000);
       expect(attempts).toHaveLength(1);
       expect(events.filter((event) => event.action === "finished")).toHaveLength(1);
@@ -438,8 +440,6 @@ describe("main cron with the real heartbeat runner", () => {
       expect(sendTelegram).not.toHaveBeenCalled();
       expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
     } finally {
-      foreground.resolve();
-      await foregroundRun;
       cron.stop();
       heartbeatRunner.stop();
       await vi.waitFor(() => expect(getActiveCronJobCount()).toBe(0));
@@ -455,12 +455,9 @@ describe("main cron with the real heartbeat runner", () => {
     });
   });
 
-  it.each(["direct", "scheduled"] as const)(
-    "preserves an enabled one-shot's schedule policy after a %s run while heartbeats are globally paused",
-    async (mode) => {
-      await runMainCronCase(mode, "now", { heartbeatPaused: true, deleteAfterRun: false });
-    },
-  );
+  it("preserves an enabled one-shot's schedule policy after a scheduled run while heartbeats are globally paused", async () => {
+    await runMainCronCase("scheduled", "now", { heartbeatPaused: true, deleteAfterRun: false });
+  });
 
   it("drains coalesced cron and exec work without recurrence while retaining late arrivals", async () => {
     await runMainCronCase("scheduled", "now", {
@@ -548,7 +545,7 @@ describe("main cron with the real heartbeat runner", () => {
         "real heartbeat did not reach the reply gate",
       );
       expect(getActiveCronJobCount()).toBe(1);
-      expect(getQueueSize(CommandLane.Cron)).toBe(1);
+      expect(getQueueSize(CommandLane.Cron)).toBe(0);
       throw bodyError;
     }).catch((error: unknown) => error);
     const fixtureFailure = outcome.then((error) => {

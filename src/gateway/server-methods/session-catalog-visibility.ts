@@ -10,13 +10,16 @@ import type {
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { readUserProfileAliases } from "../../state/user-profile-list.js";
-import { hasMultipleSessionSharingIdentities } from "../../state/user-profiles.js";
+import {
+  hasMultipleResidentSessionSharingIdentities,
+  readResidentUserProfileAliases,
+} from "../../state/user-profile-list.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
-import { operatorSessionCap } from "../operator-role-policy.js";
+import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { prepareSessionCreatorProfile } from "../session-creator.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
-import { resolveSessionSharingRole, resolveSessionSharingTarget } from "../session-sharing.js";
+import { sharingIdentity } from "../session-sharing-policy.js";
+import { resolveSessionSharingRole, resolveSessionSharingTargetAsync } from "../session-sharing.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -41,11 +44,11 @@ export function resolveSessionCatalogVisibility(
 ): SessionCatalogVisibility {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const admin = authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
-  const multipleIdentities = !admin && hasMultipleSessionSharingIdentities();
+  const multipleIdentities = !admin && hasMultipleResidentSessionSharingIdentities();
   const attachedProfileId = client?.authenticatedUserProfile?.profileId;
   const profileId = attachedProfileId === GATEWAY_OWNER_PROFILE_ID ? undefined : attachedProfileId;
   const others = admin ? undefined : operatorSessionCap(client, config);
-  const profileAliases = profileId ? readUserProfileAliases(profileId) : undefined;
+  const profileAliases = profileId ? readResidentUserProfileAliases(profileId) : undefined;
   const cacheKey = JSON.stringify({
     admin,
     multipleIdentities,
@@ -226,11 +229,23 @@ export async function resolveSessionCatalogThreadVisibility(params: {
       ) {
         return { visibility, source: { sessionKey: session.sessionKey, entry: visibleEntry } };
       }
-      const target = session.sessionKey
-        ? resolveSessionSharingTarget({ cfg: config, sessionKey: session.sessionKey })
-        : null;
+      const target = await resolveSessionSharingTargetAsync({
+        cfg: config,
+        sessionKey: session.sessionKey,
+      });
+      const identity = sharingIdentity(
+        params.client,
+        resolveGatewayOperatorRoleActor(params.client),
+      );
       return target !== null &&
-        resolveSessionSharingRole({ cfg: config, client: params.client, target }) === "member"
+        resolveSessionSharingRole({
+          cfg: params.context.getRuntimeConfig(),
+          client: params.client,
+          target,
+          isMember: Boolean(
+            identity && projection.hasMembership(target.storePath, target.storeKey, identity.id),
+          ),
+        }) === "member"
         ? { visibility, source: { sessionKey: target.canonicalKey, entry: visibleEntry } }
         : null;
     }

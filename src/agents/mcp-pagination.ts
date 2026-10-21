@@ -1,5 +1,6 @@
 /** Shared bounded pagination for MCP list operations. */
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
 type McpPaginationPage<T> = {
@@ -74,12 +75,6 @@ export async function collectMcpPaginatedItems<T>(
     }
   };
 
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(abortError(signal, params.label));
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-
   const items: T[] = [];
   const seenCursors = new Set<string>();
   let collectedBytes = 0;
@@ -88,10 +83,11 @@ export async function collectMcpPaginatedItems<T>(
   try {
     for (let pageNumber = 0; pageNumber < maxPages; pageNumber += 1) {
       assertActive();
-      const page = await Promise.race([
+      const page = await racePromiseWithAbortSignal(
         params.loadPage({ cursor, requestTimeoutMs: timeoutMs, signal }),
-        aborted,
-      ]);
+        signal,
+        () => abortError(signal, params.label),
+      );
       assertActive();
       const measured = boundedJsonUtf8Bytes(
         page.serializedValue ?? { items: page.items, nextCursor: page.nextCursor },
@@ -128,8 +124,5 @@ export async function collectMcpPaginatedItems<T>(
     throw new Error(`${params.label} exceeded ${maxPages} pages`);
   } finally {
     clearTimeout(deadlineTimer);
-    if (onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
   }
 }

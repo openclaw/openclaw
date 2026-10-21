@@ -36,6 +36,7 @@ import {
   hasQuickstartGatewayOverrides,
   formatQuickstartGatewaySummary,
   readSetupConfigFileSnapshot,
+  readSetupConfigAuthority,
   readValidSetupConfigFile,
   requireRiskAcknowledgement,
   requestTelemetryConsent,
@@ -47,7 +48,7 @@ import {
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
 import { resolveSetupWorkspaceSelection, validateSetupWorkspacePath } from "./setup.workspace.js";
 
-type SetupFlowChoice = WizardFlow | "import" | "keep-model" | `import:${string}`;
+type SetupFlowChoice = WizardFlow | "import" | "keep-model";
 
 export async function runSetupWizard(
   opts: OnboardOptions,
@@ -71,7 +72,9 @@ async function runSetupWizardOnce(
   await onboardHelpers.printWizardHeader(runtime);
   await prompter.intro(t("wizard.setup.intro"));
 
-  const snapshot = await readSetupConfigFileSnapshot();
+  const initialAuthority = await readSetupConfigAuthority();
+  const snapshot = initialAuthority.snapshot;
+  let assertConfigCurrent = initialAuthority.assertCurrent;
   let currentSetupSnapshot = snapshot;
   let baseConfig: OpenClawConfig = snapshot.valid
     ? (snapshot.runtimeConfig ?? snapshot.config)
@@ -219,15 +222,11 @@ async function runSetupWizardOnce(
   let usedImportFlow = false;
   let acknowledgeMigrationPromotion: (() => Promise<void>) | undefined;
   let importedInferenceVerified = false;
-  while (opts.importFrom || flow === "import" || flow.startsWith("import:")) {
-    const importFrom = opts.importFrom ?? (flow.startsWith("import:") ? flow.slice(7) : undefined);
+  while (opts.importFrom || flow === "import") {
     let migrationOutcome: Awaited<ReturnType<typeof runSetupMigrationImport>>;
     try {
       migrationOutcome = await runSetupMigrationImport({
-        opts: {
-          ...opts,
-          ...(importFrom ? { importFrom } : {}),
-        },
+        opts: { ...opts },
         baseConfig,
         ...migrationDiscovery,
         prompter,
@@ -272,13 +271,15 @@ async function runSetupWizardOnce(
     }
     usedImportFlow = true;
     acknowledgeMigrationPromotion = migrationOutcome.acknowledgePromotion;
-    const migratedSnapshot = await readSetupConfigFileSnapshot();
+    const migratedAuthority = await readSetupConfigAuthority();
+    const migratedSnapshot = migratedAuthority.snapshot;
     if (!migratedSnapshot.valid) {
       throw new Error(
         "Migration produced an invalid OpenClaw config. Run `openclaw doctor --fix` to apply supported repairs.",
       );
     }
     currentSetupSnapshot = migratedSnapshot;
+    assertConfigCurrent = migratedAuthority.assertCurrent;
     baseConfig = migratedSnapshot.runtimeConfig ?? migratedSnapshot.config;
     setupConfigMergeBase = structuredClone(baseConfig);
     const importedModelRef = resolveAgentModelPrimaryValue(baseConfig.agents?.defaults?.model);
@@ -403,7 +404,7 @@ async function runSetupWizardOnce(
     : null;
   if (remoteProbeAuth?.warning) {
     await prompter.note(
-      ["Could not resolve remote gateway SecretRef for setup probe.", remoteProbeAuth.warning].join(
+      ["Could not resolve remote gateway SecretRef for setup check.", remoteProbeAuth.warning].join(
         "\n",
       ),
       "Gateway auth",
@@ -523,6 +524,7 @@ async function runSetupWizardOnce(
       runtime,
       pendingAgent: firstAgent && { ...firstAgent, workspaceDir },
       preserveExistingModelSelection: keepExistingModelConfig,
+      assertCurrent: assertConfigCurrent,
     });
     nextConfig = stagedModelAuth.config;
   }
@@ -543,8 +545,21 @@ async function runSetupWizardOnce(
     preserveCandidateRoster: usedImportFlow && hasAuthoredRoster,
     // Pending setup choices must remain changes relative to the saved snapshot.
     baseConfig: setupConfigMergeBase,
+    ...(stagedModelAuth?.authProfiles.length
+      ? { expectedConfigHash: currentSetupSnapshot.hash ?? null }
+      : {}),
     ...(firstAgent ? { firstAgent } : {}),
   });
+  if (onboardingAgent.configHash) {
+    const createdAuthority = await readSetupConfigAuthority();
+    // Plugin validation can materialize different defaults from the same authored revision.
+    if (createdAuthority.snapshot.hash !== onboardingAgent.configHash) {
+      throw new ConfigMutationConflictError(
+        "config changed after first-agent creation; rerun setup",
+      );
+    }
+    assertConfigCurrent = createdAuthority.assertCurrent;
+  }
   nextConfig = onboardingAgent.config;
   setupConfigMergeBase = structuredClone(onboardingAgent.configBase);
   const migrationWarnings = onboardingAgent.sessionMigrationWarnings;
@@ -560,6 +575,7 @@ async function runSetupWizardOnce(
     usedImportFlow,
     keepExistingModelConfig,
     importedInferenceVerified,
+    assertCurrent: assertConfigCurrent,
     configTarget: createWizardInferenceConfigTarget(commitSetupConfigFile),
   });
   nextConfig = modelAuth.config;
@@ -595,7 +611,7 @@ async function runSetupWizardOnce(
       skipConfirm: flow === "quickstart",
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
-      onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
+      onPostWriteHook: channelSetup.onPostWriteHook,
     });
     const committed = await commitSetupConfigFile(nextConfig, { allowConfigSizeDrop: false });
     await channelSetup.runPostWriteHooks(committed.path);
@@ -620,6 +636,14 @@ async function runSetupWizardOnce(
   if (!usedImportFlow) {
     const { runSetupMemoryImportStep } = await import("./setup.memory-import.js");
     await runSetupMemoryImportStep({ config: nextConfig, prompter, runtime });
+  }
+
+  if (!opts.nonInteractive) {
+    const { runMemorySetupFlow } = await import("../flows/memory-setup.js");
+    nextConfig = await runMemorySetupFlow(nextConfig, prompter, {
+      agentDir: onboardingTarget.agentDir,
+      secretInputMode: opts.secretInputMode,
+    });
   }
 
   if (opts.skipSearch) {

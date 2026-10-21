@@ -2,12 +2,16 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installSessionToolResultGuard } from "../../agents/session-tool-result-guard.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import * as nestedActivity from "../../sessions/nested-tool-activity.js";
+import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
+import { readRunFailureNotice } from "../../shared/run-failure-notice.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as historySanitize from "../chat-display-projection.sanitize.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
@@ -45,17 +49,23 @@ async function withTranscript(
     append: (id: string, message: Record<string, unknown>) => Promise<unknown>;
     read: (options: PageOptions) => ReturnType<typeof readChatHistoryPageKernel>;
     raw: () => ReturnType<typeof readSessionMessagesAsync>;
+    fail: (runId: string) => Promise<void>;
   }) => Promise<void>,
-  entryOptions: { sessionStartedAt?: number } = {},
+  entryOptions: Pick<InternalSessionEntry, "sessionStartedAt" | "lifecycleRunId"> = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:page-recovery",
       sessionId: "page-recovery",
       storePath: path.join(state.sessionsDir(), "sessions.json"),
     };
-    const entry = { sessionId: scope.sessionId, updatedAt: 1, ...entryOptions };
+    const entry: InternalSessionEntry = {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      ...entryOptions,
+    };
     await replaceSessionEntry(scope, entry);
     await replaceTranscriptEvents(scope, [
       { type: "session", version: 3, id: scope.sessionId },
@@ -86,11 +96,60 @@ async function withTranscript(
           { readers: anchorReader, resolveCurrentUserProfileDisplay },
         ),
       raw: () => readSessionMessagesAsync(scope, { mode: "full", reason: "recovery immutability" }),
+      fail: async (runId) => {
+        entry.lifecycleRunId = undefined;
+        entry.lastRunId = runId;
+        entry.status = "failed";
+        await replaceSessionEntry(scope, entry);
+        await recordGatewaySessionRunFailure({
+          target: scope,
+          runId,
+          error: "All model attempts failed",
+        });
+      },
     });
   });
 }
 
 describe("historical page recovery context", () => {
+  it("hides active attempt diagnostics on reload and publishes one persisted final notice", async () => {
+    const partial = { ...failed, content: [{ type: "text", text: "Useful partial output" }] };
+    await withTranscript(
+      [
+        ["user", user],
+        ["partial", partial],
+        ["attempt", failed],
+      ],
+      async ({ read, raw, fail }) => {
+        const before = await raw();
+        const active = await read({ max: 20, offset: 0, messageId: undefined });
+        expect(active.messages.map(readChatHistoryMessageId)).toEqual(["user", "partial"]);
+        expect(active.messages.some(readRunFailureNotice)).toBe(false);
+        expect(active.messages[1]).toMatchObject({ content: partial.content });
+        expect(active.messages[1]).not.toHaveProperty("stopReason");
+        await fail("recovered-run");
+        await fail("recovered-run");
+        const settled = await read({ max: 20, offset: 0, messageId: undefined });
+        expect(settled.messages.map(readRunFailureNotice).filter(Boolean)).toEqual([
+          {
+            runId: "recovered-run",
+            summary: "Your request couldn't be completed: All model attempts failed",
+          },
+        ]);
+        expect(settled.messages[1]).toMatchObject({ content: partial.content });
+        const older = await read({ max: 2, offset: 1, messageId: undefined });
+        expect(older.messages.some(readRunFailureNotice)).toBe(false);
+        expect(older.messages).toContainEqual(
+          expect.objectContaining({ content: partial.content }),
+        );
+        const after = await raw();
+        expect(after.slice(0, before.length)).toEqual(before);
+        expect(after).toHaveLength(before.length + 1);
+      },
+      { lifecycleRunId: "recovered-run" },
+    );
+  });
+
   it("includes bounded off-page originals once for repeated reply references", async () => {
     const originalText = "q".repeat(600);
     await withTranscript(
@@ -428,6 +487,31 @@ describe("historical page recovery context", () => {
     },
   );
 
+  it("recovers a failed page across a hidden runtime continuation without rewriting history", async () => {
+    await withTranscript(
+      [
+        ["user", user],
+        ["failed", failed],
+        [
+          "continuation",
+          {
+            role: "user",
+            content: "Continue from the current transcript.",
+            display: false,
+            provenance: { kind: "internal_system" },
+          },
+        ],
+        ["answer", answer],
+      ],
+      async ({ read, raw }) => {
+        const original = await raw();
+        const page = await read({ offset: undefined, messageId: "failed" });
+        expect(page.messages.map(readChatHistoryMessageId)).toEqual([]);
+        expect(await raw()).toEqual(original);
+      },
+    );
+  });
+
   it.each([
     { reason: "later turn", offset: 2, messageId: undefined },
     { reason: "byte budget", offset: 1, messageId: undefined },
@@ -453,16 +537,9 @@ describe("historical page recovery context", () => {
         messageId,
         ...(reason === "byte budget" ? { maxHistoryBytes: 1 } : {}),
       });
-      expect(page.messages.map(readChatHistoryMessageId)).toEqual([ordinary ? "answer" : "failed"]);
+      expect(page.messages.map(readChatHistoryMessageId)).toEqual(ordinary ? ["answer"] : ["user"]);
       if (ordinary) {
         expect(reads).toHaveBeenCalledTimes(messageId ? 1 : 0);
-      } else {
-        expect(page.messages).toEqual([
-          expect.objectContaining({
-            stopReason: "error",
-            __openclaw: expect.objectContaining({ id: "failed" }),
-          }),
-        ]);
       }
     });
   });
@@ -538,7 +615,13 @@ describe("historical page recovery context", () => {
               rawPageMessages: 2,
             });
           } else {
-            expect(Object.keys(page)).toEqual(["messages"]);
+            expect(page.pagination).toBeUndefined();
+            expect(page.anchor).toMatchObject({
+              oldestMessageId: "failed",
+              newestMessageId: "failed",
+              hasOlder: true,
+              hasNewer: true,
+            });
           }
           expect(await raw()).toEqual(original);
           expect(renderedMessages).toBeLessThanOrEqual(original.length * 5);

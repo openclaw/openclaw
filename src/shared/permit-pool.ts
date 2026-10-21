@@ -1,3 +1,5 @@
+import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
+
 type PermitRelease = () => void;
 type PermitWaiter = {
   expired: () => boolean;
@@ -12,6 +14,17 @@ type PermitWaiter = {
 export function createPermitPool(limit: number) {
   let active = 0;
   const waiters: PermitWaiter[] = [];
+  let waiterHead = 0;
+
+  const compactWaiters = () => {
+    if (waiterHead >= waiters.length) {
+      waiters.length = 0;
+      waiterHead = 0;
+    } else if (waiterHead > 256 && waiterHead * 2 > waiters.length) {
+      waiters.splice(0, waiterHead);
+      waiterHead = 0;
+    }
+  };
 
   const createRelease = (): PermitRelease => {
     active += 1;
@@ -22,18 +35,15 @@ export function createPermitPool(limit: number) {
       }
       released = true;
       active -= 1;
-      while (waiters.length > 0) {
-        const waiter = waiters.shift();
-        if (!waiter) {
+      for (let waiter = waiters[waiterHead]; waiter; waiter = waiters[waiterHead]) {
+        waiterHead += 1;
+        const expired = waiter.expired();
+        waiter.settle(expired ? null : createRelease());
+        if (!expired) {
           break;
         }
-        if (waiter.expired()) {
-          waiter.settle(null);
-          continue;
-        }
-        waiter.settle(createRelease());
-        break;
       }
+      compactWaiters();
     };
   };
 
@@ -41,7 +51,7 @@ export function createPermitPool(limit: number) {
 
   return {
     get pendingCount(): number {
-      return waiters.length;
+      return waiters.length - waiterHead;
     },
     tryAcquire,
     async acquire({
@@ -58,31 +68,30 @@ export function createPermitPool(limit: number) {
         return releasePermit;
       }
       return await new Promise<PermitRelease | null>((resolve) => {
-        let settled = false;
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const cancel = () => waiter.settle(null);
+        let cancelDeadline: (() => void) | undefined;
+        const cancel = () => {
+          const index = waiters.indexOf(waiter, waiterHead);
+          if (index >= waiterHead) {
+            waiters.splice(index, 1);
+            compactWaiters();
+          }
+          waiter.settle(null);
+        };
         const waiter: PermitWaiter = {
           expired,
           settle: (release) => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            clearTimeout(timer);
+            cancelDeadline?.();
             signal?.removeEventListener("abort", cancel);
-            const index = waiters.indexOf(waiter);
-            if (index >= 0) {
-              waiters.splice(index, 1);
-            }
             resolve(release);
           },
         };
-        if (deadlineAtMs !== undefined) {
-          timer = setTimeout(cancel, Math.max(1, deadlineAtMs - Date.now()));
-          timer.unref();
-        }
         signal?.addEventListener("abort", cancel, { once: true });
         waiters.push(waiter);
+        if (deadlineAtMs !== undefined) {
+          cancelDeadline = scheduleAbsoluteDeadline(deadlineAtMs, cancel, undefined, {
+            unref: true,
+          });
+        }
       });
     },
   };

@@ -130,6 +130,14 @@ func runConnect(_ args: [String], configURL: URL) async {
     }
 
     let config = loadGatewayConfig(from: configURL)
+    var output = ConnectOutput(
+        status: "ok",
+        url: "unknown",
+        mode: (opts.mode ?? config.mode ?? "local").lowercased(),
+        role: opts.role,
+        clientId: opts.clientId,
+        clientMode: opts.clientMode,
+        scopes: opts.scopes)
     do {
         let endpoint = try resolveGatewayEndpoint(opts: opts, config: config)
         let displayName = opts.displayName ?? Host.current().localizedName ?? "OpenClaw macOS Debug CLI"
@@ -162,32 +170,17 @@ func runConnect(_ args: [String], configURL: URL) async {
         let snapshot = await snapshotStore.get()
         await channel.shutdown()
 
-        let output = ConnectOutput(
-            status: "ok",
-            url: endpoint.url.absoluteString,
-            mode: endpoint.mode,
-            role: opts.role,
-            clientId: opts.clientId,
-            clientMode: opts.clientMode,
-            scopes: opts.scopes,
-            snapshot: snapshot,
-            health: health,
-            error: nil)
+        output.url = endpoint.url.absoluteString
+        output.mode = endpoint.mode
+        output.snapshot = snapshot
+        output.health = health
         printConnectOutput(output, json: opts.json)
     } catch {
         let endpoint = try? resolveGatewayEndpoint(opts: opts, config: config)
-        let fallbackMode = (opts.mode ?? config.mode ?? "local").lowercased()
-        let output = ConnectOutput(
-            status: "error",
-            url: endpoint?.url.absoluteString ?? "unknown",
-            mode: endpoint?.mode ?? fallbackMode,
-            role: opts.role,
-            clientId: opts.clientId,
-            clientMode: opts.clientMode,
-            scopes: opts.scopes,
-            snapshot: nil,
-            health: nil,
-            error: error.localizedDescription)
+        output.status = "error"
+        output.url = endpoint?.url.absoluteString ?? "unknown"
+        output.mode = endpoint?.mode ?? output.mode
+        output.error = error.localizedDescription
         printConnectOutput(output, json: opts.json)
         exit(1)
     }

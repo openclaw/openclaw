@@ -9,9 +9,15 @@ import {
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  resolveExplicitIncognitoAgentSqliteTarget,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import { resolveStateDir } from "../state-dir.js";
 import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
+import { MULTI_STORE_PATH_SENTINEL } from "./session-sqlite-target-paths.js";
+
+export { resolveConcreteSessionStorePath } from "./session-sqlite-target-paths.js";
 
 export type SessionStorePathScope = {
   agentId?: string;
@@ -24,6 +30,15 @@ export type SessionStorePathScope = {
 export function resolveExplicitSessionStorePathForScope(
   scope: SessionStorePathScope,
 ): string | undefined {
+  const explicit = resolveExplicitIncognitoAgentSqliteTarget(scope.storePath, {
+    agentId: isIncognitoSessionKey(scope.sessionKey)
+      ? resolveAgentIdFromSessionKey(scope.sessionKey)
+      : scope.agentId,
+    env: scope.env,
+  });
+  if (explicit) {
+    return explicit.path;
+  }
   if (isIncognitoSessionKey(scope.sessionKey)) {
     return resolveIncognitoOpenClawAgentSqlitePath({
       agentId: resolveAgentIdFromSessionKey(scope.sessionKey),
@@ -31,14 +46,6 @@ export function resolveExplicitSessionStorePathForScope(
     });
   }
   return scope.storePath || undefined;
-}
-
-export function resolveConcreteSessionStorePath(storePath: string | undefined): string | undefined {
-  const trimmed = storePath?.trim();
-  if (!trimmed || trimmed === MULTI_STORE_PATH_SENTINEL || trimmed.includes("{agentId}")) {
-    return undefined;
-  }
-  return trimmed;
 }
 
 export function resolveSessionTranscriptsDirForAgent(
@@ -71,7 +78,6 @@ type SessionFilePathOptions = {
   sessionsDir?: string;
 };
 
-const MULTI_STORE_PATH_SENTINEL = "(multiple)";
 const SQLITE_TRANSCRIPT_TARGET_PREFIX = "sqlite:";
 
 export function resolveSessionFilePathOptions(params: {

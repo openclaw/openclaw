@@ -26,11 +26,7 @@ type SynologyGatewayStartupIssueCode =
   | "inherited-shared-webhook-path"
   | "duplicate-webhook-path"
   | "duplicate-webhook-url";
-type SynologyGatewayStartupIssue = {
-  code: SynologyGatewayStartupIssueCode;
-  logLevel: "info" | "warn";
-  message: string;
-};
+type SynologyGatewayStartupIssue = ReturnType<typeof buildStartupIssue>;
 
 const activeRouteCleanups = new Map<string, () => Promise<void>>();
 
@@ -38,7 +34,7 @@ function buildStartupIssue(
   code: SynologyGatewayStartupIssueCode,
   message: string,
   logLevel: "info" | "warn" = "warn",
-): SynologyGatewayStartupIssue {
+) {
   return { code, logLevel, message };
 }
 
@@ -113,13 +109,27 @@ function collectSynologyGatewayStartupIssues(params: {
     );
   }
 
-  const conflictingAccounts = accountIds.filter((candidateId) => {
+  const conflictingAccounts: string[] = [];
+  const conflictingPublicAccounts: string[] = [];
+  const publicRouteKey = resolveSynologyPublicWebhookRouteKey(account.webhookUrl);
+  for (const candidateId of accountIds) {
     if (candidateId === accountId) {
-      return false;
+      continue;
     }
     const candidate = resolveAccount(cfg, candidateId);
-    return candidate.enabled && candidate.webhookPath === account.webhookPath;
-  });
+    if (!candidate.enabled) {
+      continue;
+    }
+    if (candidate.webhookPath === account.webhookPath) {
+      conflictingAccounts.push(candidateId);
+    }
+    if (
+      publicRouteKey &&
+      resolveSynologyPublicWebhookRouteKey(candidate.webhookUrl) === publicRouteKey
+    ) {
+      conflictingPublicAccounts.push(candidateId);
+    }
+  }
   if (conflictingAccounts.length > 0) {
     issues.push(
       buildStartupIssue(
@@ -129,26 +139,13 @@ function collectSynologyGatewayStartupIssues(params: {
     );
   }
 
-  const publicRouteKey = resolveSynologyPublicWebhookRouteKey(account.webhookUrl);
-  if (publicRouteKey) {
-    const conflictingPublicAccounts = accountIds.filter((candidateId) => {
-      if (candidateId === accountId) {
-        return false;
-      }
-      const candidate = resolveAccount(cfg, candidateId);
-      return (
-        candidate.enabled &&
-        resolveSynologyPublicWebhookRouteKey(candidate.webhookUrl) === publicRouteKey
-      );
-    });
-    if (conflictingPublicAccounts.length > 0) {
-      issues.push(
-        buildStartupIssue(
-          "duplicate-webhook-url",
-          `account ${accountId} conflicts on webhookUrl with ${conflictingPublicAccounts.join(", ")}; refusing to start ambiguous public route. Set a unique externally reachable callback URL for each account.`,
-        ),
-      );
-    }
+  if (conflictingPublicAccounts.length > 0) {
+    issues.push(
+      buildStartupIssue(
+        "duplicate-webhook-url",
+        `account ${accountId} conflicts on webhookUrl with ${conflictingPublicAccounts.join(", ")}; refusing to start ambiguous public route. Set a unique externally reachable callback URL for each account.`,
+      ),
+    );
   }
 
   return issues;

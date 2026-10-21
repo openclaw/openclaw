@@ -1,6 +1,18 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
 const serializedArrays = new WeakMap<readonly unknown[], Uint8Array>();
+const frameSegments = new WeakMap<Uint8Array, readonly Uint8Array[]>();
+
+/** Retain shared byte identities across per-recipient frame envelopes. */
+export function concatGatewayFrame(chunks: readonly Uint8Array[]): Buffer {
+  const frame = Buffer.concat(chunks);
+  frameSegments.set(frame, chunks);
+  return frame;
+}
+
+export function gatewayFrameSegments(frame: Uint8Array): readonly Uint8Array[] | undefined {
+  return frameSegments.get(frame);
+}
 
 /** Own the optional payload field, including JSON omission, before socket fanout. */
 export class SerializedJsonPayload {
@@ -8,7 +20,8 @@ export class SerializedJsonPayload {
 
   constructor(payload: unknown) {
     const frame = serializeGatewayFrame({ type: "res", payload });
-    this.bytes = Buffer.from(frame).subarray('{"type":"res"'.length, -1);
+    const bytes = typeof frame === "string" ? Buffer.from(frame) : frame;
+    this.bytes = bytes.subarray('{"type":"res"'.length, -1);
   }
 
   toJSON(): unknown {
@@ -30,6 +43,10 @@ export function registerSerializedJsonArray<T>(
 ): readonly T[] {
   serializedArrays.set(values, Buffer.from(`[${encodedRows.join(",")}]`));
   return values;
+}
+
+export function serializedJsonArrayBytes(values: readonly unknown[]): number {
+  return serializedArrays.get(values)?.byteLength ?? 0;
 }
 
 function arrayBytes(value: unknown): Uint8Array | undefined {
@@ -74,7 +91,7 @@ export function serializeGatewayFrame(value: unknown): string | Buffer {
     typeof frame.toJSON !== "function"
   ) {
     const envelope = Object.fromEntries(Object.entries(frame).filter(([key]) => key !== "payload"));
-    return Buffer.concat([
+    return concatGatewayFrame([
       Buffer.from(JSON.stringify(envelope).slice(0, -1)),
       sharedPayload.bytes,
       Buffer.from("}"),
@@ -124,5 +141,5 @@ export function serializeGatewayFrame(value: unknown): string | Buffer {
     chunks.push(Buffer.from("}"));
   };
   appendObject(frame);
-  return Buffer.concat(chunks);
+  return concatGatewayFrame(chunks);
 }

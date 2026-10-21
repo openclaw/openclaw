@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-/** Normalizes provider auth input metadata collected from plugin setup flows. */
 import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
@@ -88,17 +87,6 @@ export function normalizeTokenProviderInput(
   tokenProvider: string | null | undefined,
 ): string | undefined {
   return normalizeOptionalLowercaseString(tokenProvider);
-}
-
-/** Normalizes secret input mode values accepted by provider setup. */
-export function normalizeSecretInputModeInput(
-  secretInputMode: string | null | undefined,
-): SecretInputMode | undefined {
-  const normalized = normalizeOptionalLowercaseString(secretInputMode);
-  if (normalized === "plaintext" || normalized === "ref") {
-    return normalized;
-  }
-  return undefined;
 }
 
 /** Resolves an API key from CLI options first, then environment or prompt fallback. */

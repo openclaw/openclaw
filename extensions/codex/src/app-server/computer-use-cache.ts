@@ -1,4 +1,3 @@
-/** Shared Computer Use plugin cache reconciliation for isolated Codex homes. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -12,7 +11,6 @@ import {
   resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath,
   resolveMacOSDesktopCodexBundledMarketplaceCandidates,
 } from "./desktop-app-paths.js";
-import { waitForCodexDesktopGeneration } from "./desktop-generation.js";
 
 const DEFAULT_CODEX_COMPUTER_USE_BUNDLED_MARKETPLACE_PATH =
   resolveMacOSDesktopCodexBundledMarketplaceCandidates("darwin")[0] ?? "";
@@ -95,58 +93,27 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
   const physicalCacheRoot = path.dirname(physicalCachePath);
   const stagingRoot = await fs.mkdtemp(path.join(physicalCacheRoot, `.${cacheName}.staging-`));
   const stagedPath = path.join(stagingRoot, cacheName);
-  const backupPath = path.join(
-    physicalCacheRoot,
-    `.${cacheName}.backup-${process.pid}-${Date.now()}`,
-  );
-  let backupCreated = false;
   try {
     // The managed marketplace links to desktop plugins; native discovery needs a
     // real version directory. Resolve only the root, preserving nested symlinks.
     const physicalSourceRoot = await fs.realpath(sourcePluginRoot);
     await fs.cp(physicalSourceRoot, stagedPath, { recursive: true });
-    // Source-copy notifications are only invalidations; reconcile them before
-    // the original generation's synchronous guard authorizes publication.
-    await waitForCodexDesktopGeneration();
     if (ownedParent) {
-      await assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
+      assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
     }
     if (stat) {
       params.assertCurrent?.();
-      await fs.rename(physicalCachePath, backupPath);
-      backupCreated = true;
-    }
-    try {
+      // This is a generated cache, not user data. A failed swap is repaired by
+      // the next startup instead of retaining a backup/rollback protocol.
+      await fs.rm(physicalCachePath, { recursive: true, force: true });
       if (ownedParent) {
-        await assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
+        assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
       }
-      params.assertCurrent?.();
-      await fs.rename(stagedPath, physicalCachePath);
-    } catch (error) {
-      if (backupCreated) {
-        try {
-          if (ownedParent) {
-            await assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
-          }
-          await fs.rename(backupPath, physicalCachePath);
-          backupCreated = false;
-        } catch (restoreError) {
-          throw new Error(
-            `Failed to install Computer Use cache ${cachePath} and restore its prior copy: ${String(error)}`,
-            { cause: restoreError },
-          );
-        }
-      }
-      throw error;
     }
-    if (backupCreated) {
-      if (ownedParent) {
-        await assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
-      }
-      await fs.rm(backupPath, { recursive: true, force: true });
-    }
+    params.assertCurrent?.();
+    await fs.rename(stagedPath, physicalCachePath);
   } finally {
-    if (!ownedParent || (await directoryIdentityIsStable(ownedParent))) {
+    if (!ownedParent || directoryIdentityIsStable(ownedParent)) {
       await fs.rm(stagingRoot, { recursive: true, force: true });
     }
   }

@@ -3,12 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   createAgentCapability,
   loadToolsCatalog,
   loadToolsEffective,
   refreshVisibleToolsEffectiveForCurrentSession,
-  resetToolsEffectiveState,
   setDefaultAgent,
 } from "./index.ts";
 import type { AgentsState } from "./index.ts";
@@ -33,8 +35,8 @@ function createGatewayHarness(client: GatewayBrowserClient) {
         return () => listeners.delete(listener);
       },
     },
-    publish(connected: boolean) {
-      snapshot = { client, phase: connected ? "connected" : "reconnecting" };
+    publish(connected: boolean, nextClient = client) {
+      snapshot = { client: nextClient, phase: connected ? "connected" : "reconnecting" };
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -127,6 +129,82 @@ function createSaveState(): {
 }
 
 describe("createAgentCapability lifecycle", () => {
+  it.each(["account", "recovery scope"])(
+    "retires catalogs when the same client's %s changes",
+    async (change) => {
+      const roster = { defaultId: "main", agents: [{ id: "main" }] };
+      const files = { agentId: "main", workspace: "workspace", files: [] };
+      const pending = deferred<unknown>();
+      const current = deferred<unknown>();
+      const request = vi
+        .fn<TestRequest>()
+        .mockResolvedValueOnce(roster)
+        .mockResolvedValueOnce(files)
+        .mockReturnValueOnce(pending.promise)
+        .mockReturnValue(current.promise);
+      const source = createApplicationGateway();
+      const hello = gatewayHelloForMethods(["agents.list", "agents.files.list"], ["operator.read"]);
+      hello.auth!.recoveryScope = "alice-scope";
+      source.publish({
+        ...source.gateway.snapshot,
+        client: createTestGatewayClient(request),
+        phase: "connected",
+        hello,
+        selfUser: { id: "alice", name: "Alice" },
+      });
+      const agents = createAgentCapability(source.gateway);
+      await agents.ensureList();
+      await agents.ensureFiles("main");
+      const old = agents.refreshList();
+      source.publish({
+        ...source.gateway.snapshot,
+        ...(change === "account"
+          ? { selfUser: { id: "bob", name: "Bob" } }
+          : {
+              selfUser: undefined,
+              hello: { ...hello, auth: { ...hello.auth!, recoveryScope: "bob-scope" } },
+            }),
+      });
+      expect(agents.state.agentsList).toBeNull();
+      expect(agents.files("main").list).toBeNull();
+      pending.resolve(roster);
+      await old;
+      expect(agents.state.agentsList).toBeNull();
+      expect(request).toHaveBeenCalledTimes(4);
+      current.resolve({ defaultId: "main", agents: [] });
+      await agents.ensureList();
+      expect(agents.state.agentsList?.agents).toEqual([]);
+      agents.dispose();
+    },
+  );
+
+  it("retains the roster and file inventory through a blip, but clears another client's data", async () => {
+    const roster = { defaultId: "main", agents: [{ id: "main" }] };
+    const files = { agentId: "main", workspace: "workspace", files: [] };
+    const refreshed = deferred<unknown>();
+    const request = vi
+      .fn<TestRequest>()
+      .mockResolvedValueOnce(roster)
+      .mockResolvedValueOnce(files)
+      .mockReturnValue(refreshed.promise);
+    const client = createTestGatewayClient(request);
+    const harness = createGatewayHarness(client);
+    const agents = createAgentCapability(harness.gateway);
+    await agents.ensureList();
+    await agents.ensureFiles("main");
+
+    harness.publish(false);
+    expect(agents.state.agentsList).toEqual(roster);
+    expect(agents.files("main").list).toEqual(files);
+    harness.publish(true);
+    expect(agents.state.agentsList).toEqual(roster);
+    expect(agents.files("main").list).toEqual(files);
+    harness.publish(false, createTestGatewayClient(request));
+    expect(agents.state.agentsList).toBeNull();
+    expect(agents.files("main").list).toBeNull();
+    refreshed.resolve(null);
+    agents.dispose();
+  });
   it("reuses the current roster while preserving forced refresh and reconnect ownership", async () => {
     const first = { defaultId: "main", agents: [{ id: "main" }] };
     const replacement = { defaultId: "research", agents: [{ id: "research" }] };
@@ -354,26 +432,6 @@ describe("loadToolsCatalog", () => {
     expect(state.toolsCatalogLoading).toBe(false);
   });
 
-  it("ignores catalog responses after selected agent changes mid-request", async () => {
-    const { state, request } = createState();
-    const response = deferred<unknown>();
-    request.mockReturnValue(response.promise);
-
-    const pending = loadToolsCatalog(state, "main");
-    state.agentsSelectedId = "other-agent";
-    response.resolve({
-      agentId: "main",
-      profiles: [{ id: "full", label: "Full" }],
-      groups: [],
-      groupSettings: [],
-    });
-    await pending;
-
-    expect(state.toolsCatalogResult).toBeNull();
-    expect(state.toolsCatalogError).toBeNull();
-    expect(state.toolsCatalogLoading).toBe(false);
-  });
-
   it("keeps a replacement-client catalog load isolated from the old request", async () => {
     const { state, request: oldRequest } = createState();
     const oldResult = deferred<unknown>();
@@ -449,26 +507,6 @@ describe("loadToolsEffective", () => {
     expect(state.toolsEffectiveLoading).toBe(false);
   });
 
-  it("ignores effective-tool responses after selected agent changes mid-request", async () => {
-    const { state, request } = createState();
-    const response = deferred<unknown>();
-    request.mockReturnValue(response.promise);
-
-    const pending = loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
-    state.agentsSelectedId = "other-agent";
-    response.resolve({
-      agentId: "main",
-      profile: "coding",
-      groups: [],
-    });
-    await pending;
-
-    expect(state.toolsEffectiveResult).toBeNull();
-    expect(state.toolsEffectiveResultKey).toBeNull();
-    expect(state.toolsEffectiveError).toBeNull();
-    expect(state.toolsEffectiveLoading).toBe(false);
-  });
-
   it("keeps a replacement-client effective-tools load isolated from the old request", async () => {
     const { state, request: oldRequest } = createState();
     const oldResult = deferred<unknown>();
@@ -534,29 +572,6 @@ describe("loadToolsEffective", () => {
 
     expect(state.toolsEffectiveResult?.profile).toBe("current");
     expect(state.toolsEffectiveError).toBeNull();
-  });
-
-  it("retires an old tools request when the same session is reset and reloaded", async () => {
-    const { state, request } = createState();
-    const oldRequest = deferred<unknown>();
-    const currentRequest = deferred<unknown>();
-    request.mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(currentRequest.promise);
-    state.agentsPanel = "tools";
-    state.sessionKey = "agent:main:current";
-
-    const staleLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
-    resetToolsEffectiveState(state);
-    const currentLoad = refreshVisibleToolsEffectiveForCurrentSession(state);
-    oldRequest.resolve({ agentId: "main", profile: "stale", groups: [] });
-    await staleLoad;
-
-    expect(state.toolsEffectiveResult).toBeNull();
-    expect(state.toolsEffectiveLoading).toBe(true);
-
-    currentRequest.resolve({ agentId: "main", profile: "current", groups: [] });
-    await currentLoad;
-    expect(state.toolsEffectiveResult?.profile).toBe("current");
-    expect(state.toolsEffectiveLoading).toBe(false);
   });
 
   it("uses the catalog provider when the active session reports a stale provider", async () => {

@@ -1,15 +1,11 @@
 import http from "node:http";
 import { URL } from "node:url";
+import { promisify } from "node:util";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import type { PluginLogger, PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
-import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
-import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
+import { resolveConfiguredCapabilityProviderAsync } from "openclaw/plugin-sdk/provider-selection-runtime";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
@@ -27,9 +23,7 @@ import {
   sendHttpRequestRejection,
 } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
-import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
 import {
-  normalizeVoiceCallConfig,
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKeyForCall,
   type VoiceCallConfig,
@@ -46,11 +40,10 @@ import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import type { WebhookResponsePayload } from "./webhook.types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+import { acceptRealtimeInboundRequest } from "./webhook/realtime-inbound-admission.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
-import {
-  StreamDisconnectGrace,
-  type StreamDisconnectLifecycle,
-} from "./webhook/stream-disconnect-grace.js";
+import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
+import { appendRecentTalkEventMetadata } from "./webhook/talk-event-metadata.js";
 
 const MAX_WEBHOOK_BODY_BYTES = WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes;
 const WEBHOOK_BODY_TIMEOUT_MS = WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
@@ -63,31 +56,6 @@ const loadRealtimeTranscriptionRuntime = createLazyRuntimeModule(
 const loadResponseGeneratorModule = createLazyRuntimeModule(
   () => import("./response-generator.js"),
 );
-
-function appendRecentTalkEventMetadata(
-  metadata: CallRecord["metadata"],
-  event: TalkEvent,
-): CallRecord["metadata"] {
-  const previous = metadata ?? {};
-  const recent = Array.isArray(previous.recentTalkEvents)
-    ? previous.recentTalkEvents.filter(
-        (entry): entry is { at: string; type: string; sessionId: string; turnId?: string } =>
-          Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
-      )
-    : [];
-  recent.push({
-    at: event.timestamp,
-    type: event.type,
-    sessionId: event.sessionId,
-    turnId: event.turnId,
-  });
-  return {
-    ...previous,
-    lastTalkEventAt: event.timestamp,
-    lastTalkEventType: event.type,
-    recentTalkEvents: recent.slice(-10),
-  };
-}
 
 function buildRequestUrl(requestUrl: string | undefined): URL {
   return new URL(requestUrl ?? "/", "http://localhost");
@@ -132,14 +100,6 @@ type CachedWebhookResponse = {
   response: Promise<WebhookResponsePayload>;
 };
 
-function cloneWebhookResponsePayload(payload: WebhookResponsePayload): WebhookResponsePayload {
-  return {
-    statusCode: payload.statusCode,
-    headers: payload.headers ? { ...payload.headers } : undefined,
-    body: payload.body,
-  };
-}
-
 export class VoiceCallWebhookServer {
   private server: http.Server | null = null;
   private listeningUrl: string | null = null;
@@ -168,7 +128,7 @@ export class VoiceCallWebhookServer {
     private readonly agentRuntime?: OpenClawPluginApi["runtime"]["agent"],
     logger?: PluginLogger,
   ) {
-    this.config = normalizeVoiceCallConfig(config);
+    this.config = config;
     const rawLogger = logger ?? {
       info: console.log,
       warn: console.warn,
@@ -224,7 +184,7 @@ export class VoiceCallWebhookServer {
     this.realtimeHandler = handler;
   }
 
-  getStreamDisconnectLifecycle(): StreamDisconnectLifecycle {
+  getStreamDisconnectLifecycle(): StreamDisconnectGrace {
     return this.streamDisconnectGrace;
   }
 
@@ -294,7 +254,7 @@ export class VoiceCallWebhookServer {
     const pluginConfig = this.fullConfig ?? this.coreConfig ?? undefined;
     const { getRealtimeTranscriptionProvider, listRealtimeTranscriptionProviders } =
       await loadRealtimeTranscriptionRuntime();
-    const resolution = resolveConfiguredCapabilityProvider({
+    const resolution = await resolveConfiguredCapabilityProviderAsync({
       configuredProviderId: streaming.provider,
       providerConfigs: streaming.providers,
       cfg: pluginConfig,
@@ -306,7 +266,9 @@ export class VoiceCallWebhookServer {
       resolveProviderConfig: ({ provider, cfg, rawConfig }) =>
         provider.resolveConfig?.({ cfg, rawConfig }) ?? rawConfig,
       isProviderConfigured: ({ provider, cfg, providerConfig }) =>
-        provider.isConfigured({ cfg, providerConfig }),
+        provider.isConfiguredAsync
+          ? provider.isConfiguredAsync({ cfg, providerConfig })
+          : (provider.isConfigured?.({ cfg, providerConfig }) ?? false),
     });
     if (!resolution.ok) {
       this.logger.warn(
@@ -398,7 +360,7 @@ export class VoiceCallWebhookServer {
           void this.manager
             .updateCallMetadata(current.call, (metadata) =>
               this.getCurrentStream(providerCallId, streamSid)
-                ? appendRecentTalkEventMetadata(metadata, event)
+                ? appendRecentTalkEventMetadata(metadata, event, "streaming")
                 : metadata,
             )
             .catch((error: unknown) => {
@@ -529,19 +491,7 @@ export class VoiceCallWebhookServer {
     }
 
     const server = this.server;
-    const serverClosePromise = new Promise<void>((resolve, reject) => {
-      if (!server) {
-        resolve();
-        return;
-      }
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
-    });
+    const serverClosePromise = server ? promisify(server.close.bind(server))() : Promise.resolve();
     this.startPromise = null;
     this.streamDisconnectGrace.close();
     const reaperStopped = this.stopStaleCallReaper?.();
@@ -733,7 +683,15 @@ export class VoiceCallWebhookServer {
           const isInboundRealtimeRequest = !direction || direction === "inbound";
           if (
             isInboundRealtimeRequest &&
-            !this.shouldAcceptRealtimeInboundRequest(realtimeParams)
+            !(await acceptRealtimeInboundRequest({
+              request: ctx,
+              form: realtimeParams,
+              verifiedRequestKey: verification.verifiedRequestKey,
+              config: this.config,
+              manager: this.manager,
+              provider: this.provider,
+              processEvents: (events) => this.processParsedEvents(events),
+            }))
           ) {
             this.logger.info("Realtime inbound call rejected before stream setup");
             return buildTwilioResponse('<Reject reason="rejected" />');
@@ -772,29 +730,26 @@ export class VoiceCallWebhookServer {
     }
   }
 
-  private pruneReplayResponses(rawNow: number): void {
-    const now = asDateTimestampMs(rawNow);
-    if (now !== undefined) {
-      for (const [key, entry] of this.replayResponses) {
-        if (entry.expiresAt <= now) {
-          this.replayResponses.delete(key);
-        }
+  private pruneReplayResponses(now: number): void {
+    for (const [key, entry] of this.replayResponses) {
+      if (entry.expiresAt <= now) {
+        this.replayResponses.delete(key);
       }
     }
     pruneMapToMaxSize(this.replayResponses, WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES);
   }
 
   private async getCachedReplayResponse(key: string): Promise<WebhookResponsePayload | null> {
-    const now = asDateTimestampMs(Date.now());
+    const now = Date.now();
     const entry = this.replayResponses.get(key);
-    if (!entry || now === undefined) {
+    if (!entry) {
       return null;
     }
     if (entry.expiresAt <= now) {
       this.replayResponses.delete(key);
       return null;
     }
-    return cloneWebhookResponsePayload(await entry.response);
+    return await entry.response;
   }
 
   private async cacheReplayResponse(
@@ -803,43 +758,30 @@ export class VoiceCallWebhookServer {
     releaseReplay?: () => void,
   ): Promise<WebhookResponsePayload> {
     const now = Date.now();
-    const expiresAt = resolveExpiresAtMsFromDurationMs(WEBHOOK_REPLAY_RESPONSE_TTL_MS, {
-      nowMs: now,
-    });
     this.replayResponseCacheCalls += 1;
     if (this.replayResponseCacheCalls % WEBHOOK_REPLAY_RESPONSE_PRUNE_INTERVAL === 0) {
       this.pruneReplayResponses(now);
     }
 
-    let cachedEntry: CachedWebhookResponse | undefined;
-    const ownerResponse = buildResponse()
-      .then(cloneWebhookResponsePayload)
-      .catch((err: unknown) => {
-        if (cachedEntry && this.replayResponses.get(key) === cachedEntry) {
-          this.replayResponses.delete(key);
-        }
-        releaseReplay?.();
-        throw err;
-      });
+    const ownerResponse = buildResponse().catch((err: unknown) => {
+      if (this.replayResponses.get(key) === cachedEntry) {
+        this.replayResponses.delete(key);
+      }
+      releaseReplay?.();
+      throw err;
+    });
     // Twilio owners receive the real one-time TwiML; waiters only see token-free XML.
     const response = ownerResponse.then((payload) =>
-      this.provider.name === "twilio"
-        ? buildTwilioResponse()
-        : cloneWebhookResponsePayload(payload),
+      this.provider.name === "twilio" ? buildTwilioResponse() : payload,
     );
     // Preserve rejection for concurrent waiters without creating an orphaned rejection.
     void response.catch(() => {});
-    if (expiresAt !== undefined) {
-      cachedEntry = {
-        expiresAt,
-        response,
-      };
-      this.replayResponses.set(key, cachedEntry);
-    }
+    const cachedEntry = { expiresAt: now + WEBHOOK_REPLAY_RESPONSE_TTL_MS, response };
+    this.replayResponses.set(key, cachedEntry);
     if (this.replayResponses.size > WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES) {
       this.pruneReplayResponses(now);
     }
-    return cloneWebhookResponsePayload(await ownerResponse);
+    return await ownerResponse;
   }
 
   private verifyPreAuthWebhookHeaders(headers: http.IncomingHttpHeaders): string | undefined {
@@ -910,7 +852,7 @@ export class VoiceCallWebhookServer {
       return null;
     }
 
-    if (ctx.query?.type === "status") {
+    if (ctx.query?.type === "status" || ctx.query?.type === "amd") {
       return null;
     }
 
@@ -924,30 +866,10 @@ export class VoiceCallWebhookServer {
     return !params.get("SpeechResult") && !params.get("Digits") ? params : null;
   }
 
-  private shouldAcceptRealtimeInboundRequest(params: URLSearchParams): boolean {
-    switch (this.config.inboundPolicy) {
-      case "open":
-        return true;
-      case "allowlist":
-      case "pairing":
-        return isAllowlistedCaller(
-          normalizePhoneNumber(params.get("From") ?? undefined),
-          this.config.allowFrom,
-        );
-      default:
-        return false;
-    }
-  }
-
   private async processParsedEvents(events: NormalizedEvent[]): Promise<boolean> {
     let replayable = false;
     for (const event of events) {
-      try {
-        replayable = (await this.processEventWithAutoResponse(event)) || replayable;
-      } catch (err) {
-        this.logger.error(`Error processing event ${event.type}: ${String(err)}`);
-        throw err;
-      }
+      replayable = (await this.processEventWithAutoResponse(event)) || replayable;
     }
     return replayable;
   }

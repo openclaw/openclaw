@@ -1,3 +1,4 @@
+import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
@@ -11,6 +12,8 @@ import {
   isSameSubagentRun,
   isSameSubagentRunOwner,
 } from "../agents/subagents/registry/subagent-run-generation.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
@@ -21,6 +24,11 @@ export async function reactivateCompletedSubagentSession(params: {
   task?: string;
   gatewayContextResolver?: GatewayContextResolver;
   assertCurrent?: () => void;
+  acpSession?: {
+    cfg: OpenClawConfig;
+    activeSessionAgentId: string;
+    sessionEntry?: SessionEntry;
+  };
 }): Promise<boolean> {
   const runId = params.runId?.trim();
   if (!runId) {
@@ -30,12 +38,28 @@ export async function reactivateCompletedSubagentSession(params: {
     params.sessionKey,
     (entry) => entry.pauseReason === "sessions_yield",
   );
-  const existing = paused ?? getLatestSubagentRunByChildSessionKey(params.sessionKey);
+  const existing = paused ?? (await getLatestSubagentRunByChildSessionKey(params.sessionKey));
   if (!existing || typeof existing.execution.endedAt !== "number") {
     return false;
   }
   if (params.gatewayContextResolver && !params.gatewayContextResolver()) {
     return false;
+  }
+  if (params.acpSession) {
+    const [acpMeta] = await readAcpSessionMetaForEntries({
+      cfg: params.acpSession.cfg,
+      entries: [
+        {
+          agentId: params.acpSession.activeSessionAgentId,
+          sessionKey: params.sessionKey,
+          entry: params.acpSession.sessionEntry,
+        },
+      ],
+    });
+    params.assertCurrent?.();
+    if (acpMeta) {
+      return false;
+    }
   }
   const stateContext = captureOpenClawStateWorkerContext();
   const liveSource = () =>

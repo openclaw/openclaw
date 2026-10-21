@@ -5,10 +5,7 @@ import type { ImageContent } from "../../llm/types.js";
 import { prepareFileContextFromMedia } from "../../media-understanding/file-context.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../../media/media-facts.js";
-import {
-  buildPromptImageFailureNotice,
-  detectAndLoadPromptImages,
-} from "../embedded-agent-runner/run/images.js";
+import { detectAndLoadPromptImages } from "../embedded-agent-runner/run/images.js";
 import {
   readPersistedImageBlockFactIndexes,
   readPersistedMediaImageLayout,
@@ -59,12 +56,13 @@ export async function prepareHarnessContextMedia(params: {
   });
   params.assertCurrent();
   const imageFacts = media.filter(isImageMediaFact);
+  const hasImageAttachments = imageFacts.length > 0 || inlineImages.length > 0;
   const text = [files.text];
-  if (imageFacts.length || inlineImages.length) {
+  if (hasImageAttachments) {
     text.push(buildInboundMediaNoteProjection({ media: imageFacts }).text ?? "[Image attachment]");
   }
   if (!params.modelInput.includes("image")) {
-    if (imageFacts.length || inlineImages.length || files.images.length) {
+    if (hasImageAttachments || files.images.length) {
       text.push("[Attachment images omitted: this model does not support image input]");
     }
     return { text: text.filter(Boolean).join("\n\n"), images: [] };
@@ -95,7 +93,6 @@ export async function prepareHarnessContextMedia(params: {
   const entries = rawImages.images.map((image, index) => ({
     image,
     sourceIndex: rawImages.imageFactIndexes[index] ?? media.length + index,
-    sequence: index,
   }));
   // The loader counts failed media facts; inline-only blocks have no fact to
   // charge, so include their sanitation drops in the visible disposition too.
@@ -111,25 +108,23 @@ export async function prepareHarnessContextMedia(params: {
     params.assertCurrent();
     failedImages += sanitized.dropped;
     for (const image of sanitized.images) {
-      entries.push({ image, sourceIndex: page.attachmentIndex, sequence: entries.length });
+      entries.push({ image, sourceIndex: page.attachmentIndex });
     }
   }
+  // A historical reload failure does not invalidate an earlier image answer.
   if (failedImages) {
-    text.push(buildPromptImageFailureNotice(failedImages));
+    text.push(
+      `[${failedImages} referenced image${failedImages === 1 ? "" : "s"} not included in this context]`,
+    );
   }
-  if (
-    (imageFacts.length || inlineImages.length) &&
-    !rawImages.images.length &&
-    !rawImages.failedMediaCount
-  ) {
+  if (hasImageAttachments && !rawImages.images.length && !rawImages.failedMediaCount) {
     text.push("[Referenced image contents are not included in this context]");
   }
   return {
     text: text.filter(Boolean).join("\n\n"),
     images: entries
-      .toSorted(
-        (left, right) => left.sourceIndex - right.sourceIndex || left.sequence - right.sequence,
-      )
+      // Stable sorting retains page order within each attachment.
+      .toSorted((left, right) => left.sourceIndex - right.sourceIndex)
       .map(({ image }) => image),
   };
 }

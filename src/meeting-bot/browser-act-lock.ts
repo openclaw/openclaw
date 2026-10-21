@@ -1,6 +1,7 @@
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { MeetingBrowserRequestCaller } from "./platform-adapter-contract.js";
 
 const browserActLock = new KeyedAsyncQueue();
 const BROWSER_ACT_TIMEOUT_MESSAGE =
@@ -34,4 +35,23 @@ export async function runMeetingBrowserAct<T>(params: {
     throw new Error(BROWSER_ACT_TIMEOUT_MESSAGE);
   });
   return await queued;
+}
+
+export function evaluateMeetingBrowser(params: {
+  callBrowser: MeetingBrowserRequestCaller;
+  deadline: number;
+  targetId: string;
+  script: () => string;
+}): Promise<unknown> {
+  return runMeetingBrowserAct({
+    deadline: params.deadline,
+    targetId: params.targetId,
+    operation: (timeoutMs) =>
+      params.callBrowser({
+        method: "POST",
+        path: "/act",
+        body: { kind: "evaluate", targetId: params.targetId, fn: params.script() },
+        timeoutMs,
+      }),
+  });
 }

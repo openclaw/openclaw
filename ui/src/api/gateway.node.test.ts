@@ -7,6 +7,8 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validatePreviousConnectParams } from "../../../packages/gateway-protocol/src/connect-compatibility.test-support.js";
+import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
+import { ConnectParamsSchema } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
@@ -35,6 +37,7 @@ import {
 import type { GatewayBrowserClientOptions, GatewayHelloOk } from "./gateway.ts";
 
 const realLoadOrCreateDeviceIdentity = nodes.loadOrCreateDeviceIdentity;
+const validateConnectParams = lazyCompile(ConnectParamsSchema);
 const recoveryMigrationRuntimeMock = vi.hoisted(() => ({
   loaded: vi.fn(),
   migrate: vi.fn(),
@@ -226,6 +229,7 @@ function emitHello(
   id: string | undefined,
   auth: Partial<NonNullable<GatewayHelloOk["auth"]>> = {},
   policy?: GatewayHelloOk["policy"],
+  features?: GatewayHelloOk["features"],
 ) {
   ws.emitMessage({
     type: "res",
@@ -236,6 +240,7 @@ function emitHello(
       protocol: 4,
       auth: { role: "operator", scopes: [], ...auth },
       policy,
+      features,
     },
   });
 }
@@ -310,7 +315,14 @@ describe("GatewayBrowserClient", () => {
     { advertised: false, modelCatalog: { agentId: "alpha" } },
     { advertised: true, modelCatalog: { agentId: "alpha", sessionKey: "agent:alpha:saved" } },
   ])("connects with only advertised catalog input: %j", async ({ advertised, modelCatalog }) => {
-    const client = createClient({ modelCatalog });
+    const readModelCatalog = vi.fn(() => modelCatalog);
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      get modelCatalog() {
+        return readModelCatalog();
+      },
+    });
+    clients.push(client);
     client.start();
     const { connectFrame } = await continueConnect(
       getLatestWebSocket(),
@@ -318,6 +330,7 @@ describe("GatewayBrowserClient", () => {
       1_800_000_000_000,
       advertised ? [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] : undefined,
     );
+    expect(readModelCatalog).toHaveBeenCalledTimes(advertised ? 1 : 0);
     if (advertised) {
       expect(connectFrame.params?.modelCatalog).toEqual(modelCatalog);
       expect(connectFrame.params?.caps).toContain(GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT);
@@ -326,6 +339,24 @@ describe("GatewayBrowserClient", () => {
       expect(connectFrame.params).not.toHaveProperty("modelCatalog");
       expect(connectFrame.params?.caps).not.toContain(GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT);
     }
+  });
+
+  it("clears advertised capabilities before connecting to another Gateway", async () => {
+    useNodeFakeTimers();
+    const client = createClient();
+    const first = await startConnect(client);
+    emitHello(first.ws, first.connectFrame.id, {}, undefined, {
+      capabilities: [GATEWAY_SERVER_CAPS.TALK_SESSION_CLOSE_DISPOSITION],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.hello?.features?.capabilities).toEqual(["talk-session-close-disposition"]);
+    client.stop();
+    expect(client.hello).toBeNull();
+    const second = await startConnect(client);
+    emitHello(second.ws, second.connectFrame.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.hello?.features?.capabilities).toBeUndefined();
+    client.stop();
   });
 
   it("does not publish hello when a response observer closes the browser socket", async () => {
@@ -354,16 +385,16 @@ describe("GatewayBrowserClient", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(ws.lastClose).toEqual({ code: 4000, reason: "response observer closed" });
     expect(onHello).not.toHaveBeenCalled();
-    expect(onClose).not.toHaveBeenCalled();
-    expect(loadDeviceAuthToken()?.token).toBe(STORED_CRED);
-    ws.emitClose(4000, "response observer closed");
-    expect(onClose).toHaveBeenCalledWith(
+    expect(onClose).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         code: 4000,
         reason: "response observer closed",
         willRetry: true,
       }),
     );
+    expect(loadDeviceAuthToken()?.token).toBe(STORED_CRED);
+    ws.emitClose(4000, "response observer closed");
+    expect(onClose).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(800);
     expect(getLatestWebSocket()).not.toBe(ws);
   });
@@ -600,16 +631,153 @@ describe("GatewayBrowserClient", () => {
     );
   });
 
-  it("signs a fallback connect with browser time when no challenge arrives", async () => {
+  it.each([
+    { timeoutMs: undefined, expectedTimeoutMs: 10_000 },
+    { timeoutMs: 30_000, expectedTimeoutMs: 10_000 },
+    { timeoutMs: 1_500, expectedTimeoutMs: 1_500 },
+  ])(
+    "bounds the first Talk catalog response wait: %j",
+    async ({ timeoutMs, expectedTimeoutMs }) => {
+      useNodeFakeTimers();
+      const client = createClient({ token: "shared-auth-token" });
+      const { ws, connectFrame } = await startConnect(client);
+      emitHello(ws, connectFrame.id);
+      const settled = vi.fn();
+      const result = client.request("talk.catalog", {}, { timeoutMs }).catch((error: unknown) => {
+        settled();
+        return error;
+      });
+      await vi.advanceTimersByTimeAsync(expectedTimeoutMs - 1);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await result).toMatchObject({ code: "CLIENT_TIMEOUT" });
+      expect(settled).toHaveBeenCalledOnce();
+      expect(ws.sent).toHaveLength(2);
+    },
+  );
+
+  it.each(["ready", "abort", "disconnect", "stop", "timeout"] as const)(
+    "bounds Talk catalog warming retries through %s",
+    async (outcome) => {
+      useNodeFakeTimers();
+      const client = createClient({ token: "shared-auth-token" });
+      const { ws, connectFrame } = await startConnect(client);
+      emitHello(ws, connectFrame.id);
+      const abort = new AbortController();
+      const params = { sessionKey: "agent:main:voice", model: "synthetic-voice" };
+      const result = client.request("talk.catalog", params, { signal: abort.signal }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      const first = JSON.parse(ws.sent.at(-1)!) as { id: string };
+      ws.emitMessage({
+        type: "res",
+        id: first.id,
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "Talk catalog is warming",
+          retryable: true,
+          retryAfterMs: 250,
+          details: { reason: "talk-catalog-warming" },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(249);
+      expect(ws.sent).toHaveLength(2);
+      if (outcome === "abort" || outcome === "disconnect" || outcome === "stop") {
+        if (outcome === "abort") {
+          abort.abort();
+        } else if (outcome === "disconnect") {
+          ws.emitClose(1006, "connection lost");
+        } else {
+          client.stop();
+        }
+        expect(await result).toEqual({ error: expect.any(Error) });
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(ws.sent).toHaveLength(2);
+        return;
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ws.sent).toHaveLength(3);
+      const retry = JSON.parse(ws.sent.at(-1)!) as { id: string };
+      expect(retry).toMatchObject({ method: "talk.catalog", params });
+      expect(retry.id).not.toBe(first.id);
+      if (outcome === "ready") {
+        ws.emitMessage({ type: "res", id: retry.id, ok: true, payload: { providers: [] } });
+        expect(await result).toEqual({ value: { providers: [] } });
+      } else {
+        await vi.advanceTimersByTimeAsync(9_750);
+        expect(await result).toEqual({
+          error: expect.objectContaining({ code: "CLIENT_TIMEOUT" }),
+        });
+      }
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(ws.sent.filter((raw) => JSON.parse(raw).method !== "health")).toHaveLength(3);
+    },
+  );
+
+  it.each([
+    { method: "config.get", reason: "talk-catalog-warming", retryable: true },
+    { method: "talk.catalog", reason: "provider-unavailable", retryable: true },
+    { method: "talk.catalog", reason: "talk-catalog-warming", retryable: false },
+  ])("does not retry unrelated catalog errors: %j", async ({ method, reason, retryable }) => {
+    useNodeFakeTimers();
+    const client = createClient({ token: "shared-auth-token" });
+    const { ws, connectFrame } = await startConnect(client);
+    emitHello(ws, connectFrame.id);
+    const result = client.request(method).catch((error: unknown) => error);
+    const frame = JSON.parse(ws.sent.at(-1)!) as { id: string };
+    ws.emitMessage({
+      type: "res",
+      id: frame.id,
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "unavailable", retryable, details: { reason } },
+    });
+    expect(await result).toBeInstanceOf(GatewayRequestError);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(ws.sent).toHaveLength(2);
+  });
+
+  it("waits for a delayed challenge before sending valid signed connect parameters", async () => {
     useNodeFakeTimers();
     const client = createClient({ token: "shared-auth-token" });
 
     client.start();
     const ws = getLatestWebSocket();
     ws.emitOpen();
-    await vi.advanceTimersByTimeAsync(750);
+    await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(parseLatestConnectFrame(ws).params?.device?.signedAt).toBe(Date.now());
+    expect(ws.sent).toEqual([]);
+    ws.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "delayed-challenge", ts: 1_800_000_000_000 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(ws.sent).toHaveLength(1);
+    const connectFrame = parseLatestConnectFrame(ws);
+    expect(validateConnectParams(connectFrame.params)).toBe(true);
+    expect(connectFrame.params.device).toMatchObject({
+      nonce: "delayed-challenge",
+      signedAt: 1_800_000_000_000,
+    });
+  });
+
+  it("closes without sending connect parameters when no challenge arrives", async () => {
+    useNodeFakeTimers();
+    const client = createClient({ token: "shared-auth-token" });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+    await vi.advanceTimersByTimeAsync(29_999);
+
+    expect(ws.lastClose).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(ws.sent).toEqual([]);
+    expect(ws.lastClose).toEqual({ code: 4008, reason: "connect challenge timeout" });
   });
 
   it.each([0, -1])("enforces the UTF-8 payload limit with %d bytes remaining", async (delta) => {

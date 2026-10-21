@@ -1,8 +1,53 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createXApiClient, type XPost } from "./api.js";
+import { createXTestSpend } from "./test-support/spend.js";
 import { assembleXThread } from "./thread.js";
 
 describe("X thread context", () => {
+  it("preserves the triggering mention when its thread cannot be afforded", async () => {
+    const fetch = vi.fn();
+    const api = createXApiClient({
+      spend: createXTestSpend({ dailyUsd: 0 }),
+      clientId: "synthetic",
+      clientSecret: "synthetic",
+      refreshToken: "synthetic",
+      saveRefreshToken: async () => {},
+      fetch,
+    });
+    const mention: XPost = { id: "11", author_id: "7", conversation_id: "1", text: "Please help" };
+    const context = await assembleXThread({ api, mention });
+    expect(context.posts).toEqual([mention]);
+    expect(context.bodyForAgent).toContain("[triggering mention]: Please help");
+    expect(context.bodyForAgent).toContain("thread context truncated by budget");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("stops searching once the configured number of posts is held", async () => {
+    const mention: XPost = { id: "11", author_id: "7", conversation_id: "1", text: "Please help" };
+    let searches = 0;
+    const api = createXApiClient({
+      spend: createXTestSpend(),
+      clientId: "synthetic",
+      clientSecret: "synthetic",
+      refreshToken: "synthetic",
+      saveRefreshToken: async () => {},
+      fetch: async (input) => {
+        if (input.endsWith("/oauth2/token")) {
+          return Response.json({ access_token: "synthetic" });
+        }
+        searches++;
+        return Response.json({
+          data: [mention, { ...mention, id: "1", text: "Root" }],
+          includes: { users: [{ id: "7", username: "author" }] },
+          meta: { next_token: "more" },
+        });
+      },
+    });
+    const context = await assembleXThread({ api, mention, maxPosts: 2 });
+    expect(searches).toBe(1);
+    expect(context.posts.map(({ id }) => id)).toEqual(["1", "11"]);
+  });
+
   it("loads ancestors and quotes, retains the root and trigger, and orders the bounded context", async () => {
     const post = (id: string, text: string, references?: XPost["referenced_tweets"]): XPost => ({
       id,
@@ -21,6 +66,7 @@ describe("X thread context", () => {
     ]);
     const fetched: string[] = [];
     const api = createXApiClient({
+      spend: createXTestSpend(),
       clientId: "client",
       clientSecret: "secret",
       refreshToken: "refresh",

@@ -4,6 +4,7 @@ import type { ExecFileException, ExecFileOptionsWithStringEncoding } from "node:
 export function createProcfsCommandFixture(
   original: typeof import("node:child_process"),
   readFile: (file: string) => string | undefined,
+  readPids?: () => string[] | undefined,
 ) {
   return (
     file: string,
@@ -14,6 +15,40 @@ export function createProcfsCommandFixture(
     const evalIndex = args.indexOf("-e");
     if (file !== process.execPath || evalIndex < 0) {
       return original.execFile(file, args, options, callback);
+    }
+    const runFixture = (injected: string, input: string | undefined) => {
+      const injectedArgs = args.slice();
+      injectedArgs[evalIndex + 1] = injected + injectedArgs[evalIndex + 1];
+      const child = original.execFile(file, injectedArgs, options, callback);
+      child.stdin?.end(input);
+      return child;
+    };
+    if (args.at(-2) === "snapshot") {
+      const pids = readPids?.();
+      if (!pids) {
+        return original.execFile(file, args, options, callback);
+      }
+      const files = Object.fromEntries(
+        ["/proc/sys/kernel/random/boot_id", ...pids.map((pid) => `/proc/${pid}/stat`)].map(
+          (path) => {
+            try {
+              return [path, { data: readFile(path) }];
+            } catch (error) {
+              return [path, { code: (error as NodeJS.ErrnoException).code }];
+            }
+          },
+        ),
+      );
+      const injected = `const fixtureFs = require("node:fs");
+const fixtureFiles = JSON.parse(fixtureFs.readFileSync(0, "utf8"));
+Object.assign(fixtureFs, (${createProcfsSyncFixture.toString()})(fixtureFs, file => {
+  const value = fixtureFiles[file];
+  if (value?.data !== undefined) return value.data;
+  throw Object.assign(new Error("fixture read failure"), { code: value?.code ?? "ENOENT" });
+}));
+fixtureFs.readdirSync = () => ${JSON.stringify(pids)};
+`;
+      return runFixture(injected, JSON.stringify(files));
     }
     const commandPath = `/proc/${args.at(-2)}/cmdline`;
     let data: string | undefined;
@@ -39,11 +74,7 @@ fixtureFs.openSync = (file, ...args) => {
   return 0;
 };
 `;
-    const injectedArgs = args.slice();
-    injectedArgs[evalIndex + 1] = injected + injectedArgs[evalIndex + 1];
-    const child = original.execFile(file, injectedArgs, options, callback);
-    child.stdin?.end(data);
-    return child;
+    return runFixture(injected, data);
   };
 }
 
