@@ -629,7 +629,9 @@ commit outcomes invalidate cached store facts through the anchor's write token.
 
 When an agent worker is refused before opening its native writer, the host releases
 its prepared lease after native exit. The original refusal reaches its caller,
-and other logical borrowers can retry. Native and cleanup failures retain their
+and other logical borrowers can retry. This explicit refusal also preserves
+SQLite's clean-restart seal because no native writer opened. Unknown outcomes
+still invalidate that proof, and native and cleanup failures retain their
 existing retirement rules.
 
 PostgreSQL catalog admission captures column types, nullability, exact defaults,

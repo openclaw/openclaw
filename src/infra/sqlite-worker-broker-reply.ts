@@ -121,6 +121,10 @@ export async function dispatchSqliteWorkerJob(
     assertDispatchable();
     job.custody.accept();
     job.detach();
+    if (actor && request.type !== "close") {
+      // A later request may open or write natively even if its reply is lost.
+      actor.openDispatch.openRefused = false;
+    }
     job.custody.post();
     if (request.timing) {
       request.timing.posted = performance.now();
@@ -415,7 +419,7 @@ export type SqliteWorkerReplyOwner = {
 
 export function receiveSqliteWorkerReply(
   slot: Pick<Slot, "current" | "failed"> & {
-    actors: ReadonlySet<Pick<Actor, "id" | "closeReceipt">>;
+    actors: ReadonlySet<Pick<Actor, "id" | "closeReceipt" | "openDispatch">>;
     worker: Pick<Slot["worker"], "postMessage">;
   },
   reply: SqliteWorkerReply,
@@ -433,8 +437,8 @@ export function receiveSqliteWorkerReply(
     Object.assign(job.observation.timing, reply.timing, { replyReceived: performance.now() });
   }
   if (!reply.ok) {
+    const admission = job.operationAdmission?.admission;
     if (reply.cleanupFailure && job.custody.dispatched && !reply.retire) {
-      const admission = job.operationAdmission?.admission;
       const failure =
         admission?.failureSource === "domain" && !reply.admissionRefused
           ? undefined
@@ -449,43 +453,42 @@ export function receiveSqliteWorkerReply(
       job.dispatchState.openNotEntered = true;
     }
     const error = decodeSqliteWorkerReplyError(reply.error);
-    if (
-      job.request.type === "open" &&
-      (reply.openNotEntered || reply.openOutcome === "refused-before-agent-open") &&
-      !reply.retire
-    ) {
+    const openRefused = reply.openOutcome === "refused-before-agent-open";
+    if (!reply.retire && (openRefused || (job.request.type === "open" && reply.openNotEntered))) {
       job.custody.retire();
       slot.current = undefined;
-      const refusal = job.operationAdmission?.admission.failure ?? error;
-      if (job.dispatchState && reply.openOutcome === "refused-before-agent-open") {
-        job.dispatchState.openRefused = true;
-      }
+      const refusal = admission?.failure ?? error;
       owner.finish(
         job,
         refusal,
         undefined,
         reply.openNotEntered ? { kind: "not-entered", error: refusal } : { kind: "completed" },
       );
+      if (openRefused) {
+        const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
+        if (actor) {
+          actor.openDispatch.openRefused = !admission?.cleanupFailures.length;
+        }
+      }
       owner.dispatch();
       return;
     }
     if (job.request.type !== "execute" || reply.retire) {
-      const refusedOpen =
-        job.request.type === "open" && reply.openOutcome === "refused-before-agent-open";
+      const refusedFactory = job.request.type === "open" && openRefused;
       const failure =
-        refusedOpen || reply.admissionRefused
-          ? toErrorObject(job.operationAdmission?.admission.failure ?? error, error.message)
+        refusedFactory || reply.admissionRefused
+          ? toErrorObject(admission?.failure ?? error, error.message)
           : error;
       owner.fail(
         failure,
         job.request.type !== "execute" || reply.admissionRefused ? failure : undefined,
-        refusedOpen ? "refused-before-agent-open" : undefined,
+        refusedFactory ? "refused-before-agent-open" : undefined,
       );
       return;
     }
     job.custody.retire();
     slot.current = undefined;
-    owner.finish(job, job.operationAdmission?.admission.failure ?? error);
+    owner.finish(job, admission?.failure ?? error);
     owner.dispatch();
     return;
   }

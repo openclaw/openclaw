@@ -564,14 +564,14 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       };
     }
   } catch (error) {
-    const refusedOpen = request.type === "open" && error instanceof SqliteWorkerOpenRefusedError;
-    if (openNotEntered || refusedOpen) {
+    const refusedBeforeAgentOpen = error instanceof SqliteWorkerOpenRefusedError;
+    if (openNotEntered || (request.type === "open" && refusedBeforeAgentOpen)) {
       stateContexts.delete(request.actor);
     }
     transfers.cancel();
     pendingResult = undefined;
     pendingInput = undefined;
-    const originalError = refusedOpen ? error.originalError : error;
+    const originalError = refusedBeforeAgentOpen ? error.originalError : error;
     const admissionRefused =
       commandAdmissionRefused ||
       (operationAdmission?.actor === request.actor &&
@@ -590,7 +590,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       id: request.id,
       ok: false,
       ...(retire || (nativeCleanupFailure && executed) ? { retire: true } : {}),
-      ...(refusedOpen ? { openOutcome: "refused-before-agent-open" } : {}),
+      ...(refusedBeforeAgentOpen ? { openOutcome: "refused-before-agent-open" } : {}),
       ...(openNotEntered ? { openNotEntered: true } : {}),
       ...(admissionRefused ? { admissionRefused: true } : {}),
       error: {
