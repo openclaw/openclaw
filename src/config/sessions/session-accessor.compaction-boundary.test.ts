@@ -13,6 +13,7 @@ import {
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
@@ -206,22 +207,17 @@ it("rolls back the boundary and accounting when live authority is revoked at com
   let current = true;
   let revoked = false;
   const ownerClosed = new Error("compaction authority revoked");
-  const create = admission.createSqliteWorkerOperationAdmission;
-  const observed = vi
-    .spyOn(admission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((callback, attachment) =>
-      create((request, grant) => {
-        if (
-          request.stage === "commit" &&
-          isRecord(request.facts) &&
-          request.facts.kind === "session-manager-authority"
-        ) {
-          current = false;
-          revoked = true;
-        }
-        callback(request, grant);
-      }, attachment),
-    );
+  const observed = sqliteWorkerOwnerProbe.admission(admission, (request, grant, callback) => {
+    if (
+      request.stage === "commit" &&
+      isRecord(request.facts) &&
+      request.facts.kind === "session-manager-authority"
+    ) {
+      current = false;
+      revoked = true;
+    }
+    callback(request, grant);
+  });
   try {
     await expect(
       compact((prepared) =>

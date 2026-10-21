@@ -106,6 +106,7 @@ export function createContext(
     channelsLoadingProbe: null,
     channelsRefreshSeq: 0,
     channelsSnapshot: options.channelsSnapshot ?? null,
+    channelsRead: null,
     channelsError: null,
     channelsLastSuccess: options.channelsSnapshot ? Date.now() : null,
     pairingLoading: false,

@@ -40,11 +40,8 @@ import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 import { Icon } from "./solid/icon.tsx";
 import { ShortcutHint } from "./solid/kbd.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
-import {
-  SessionGlyph,
-  renderSessionUnreadBadge,
-  renderSessionOwnerAvatar,
-} from "./solid/session-presentation.tsx";
+import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
+import { SessionGlyph, renderSessionUnreadBadge } from "./solid/session-presentation.tsx";
 
 type SidebarZone = ReturnType<AppSidebarRenderHost["reconciledSidebarZone"]>;
 type RailPinTouchPress = {
@@ -272,7 +269,7 @@ function renderRailPin(
             </Show>
           }
         >
-          {(user) => renderSessionOwnerAvatar(user())}
+          {(user) => <SessionOwnerAvatar owner={user()} />}
         </Show>
       </a>
     ) : entry.type === "route" ? (

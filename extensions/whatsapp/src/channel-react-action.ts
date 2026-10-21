@@ -113,11 +113,6 @@ async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParam
       throw new Error("WhatsApp upload-file buffer must be valid base64 or a base64 data URL.");
     }
     const buffer = Buffer.from(canonicalPayload, "base64");
-    if (buffer.byteLength > maxBytes) {
-      throw new Error(
-        `WhatsApp upload-file buffer exceeds configured media limit (${buffer.byteLength} bytes > ${maxBytes} bytes).`,
-      );
-    }
     mediaPayload = {
       buffer,
       ...(mediaContentType ? { contentType: mediaContentType } : {}),

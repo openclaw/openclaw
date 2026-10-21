@@ -6,6 +6,7 @@ import { createDiagnosticsPrometheusExporter } from "./service.js";
 import {
   baseEvent,
   createMetricsHarness,
+  scrapeMetrics,
   trusted,
   untrusted,
   withMetricsServer,
@@ -965,10 +966,10 @@ describe("diagnostics-prometheus service", () => {
         reason: "configured",
       },
     ]);
-    expect(exporter.render()).toContain(
+    expect(scrapeMetrics(exporter.handler)).toContain(
       'openclaw_model_tokens_total{agent="unknown",channel="unknown",model="gpt-5.4",provider="openai",token_type="input"} 12',
     );
-    expect(exporter.render()).not.toContain("Agent:qa:otel-trace-smoke");
+    expect(scrapeMetrics(exporter.handler)).not.toContain("Agent:qa:otel-trace-smoke");
 
     const prefix = "x".repeat(499);
     const usage = {} as Extract<DiagnosticEventPayload, { type: "model.usage" }>["usage"];
@@ -1006,7 +1007,7 @@ describe("diagnostics-prometheus service", () => {
       transport: "prometheus-scrape",
       status: "dropped",
     });
-    expect(exporter.render()).toBe("");
+    expect(scrapeMetrics(exporter.handler)).toBe("");
   });
 });
 

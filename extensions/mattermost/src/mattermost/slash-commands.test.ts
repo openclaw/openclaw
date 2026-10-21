@@ -106,7 +106,16 @@ it("parses application/json payloads", () => {
     text: "gpt-5",
     trigger_id: undefined,
     response_url: undefined,
+    root_id: undefined,
   });
+});
+
+it("keeps the thread root in a form callback", () => {
+  const payload = parseSlashCommandPayload(
+    "token=t1&team_id=team&channel_id=ch1&user_id=u1&command=%2Foc_status&text=&root_id=root-1",
+    "application/x-www-form-urlencoded",
+  );
+  expect(payload?.root_id).toBe("root-1");
 });
 
 it("returns null for malformed payloads missing required fields", () => {

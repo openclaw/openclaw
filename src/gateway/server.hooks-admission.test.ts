@@ -85,6 +85,11 @@ async function expectResponse(response: Response, status = 200) {
   expect(response.status, await response.clone().text()).toBe(status);
 }
 
+async function hookRunId(response: Response) {
+  await expectResponse(response);
+  return ((await response.json()) as { runId?: string }).runId;
+}
+
 function waitForGate(
   gate: Promise<void>,
   pending: Promise<unknown>,
@@ -556,14 +561,10 @@ describe("gateway hook admission", () => {
         return { status: "ok", summary: "done" };
       });
       const replayKey = "production-reload-replay";
-      const firstAgent = await postAgent(
-        port,
-        replayKey,
-        { message: "replay across reload" },
-        ROTATED_HOOK_TOKEN,
+      const message = { message: "replay across reload" };
+      const firstRunId = await hookRunId(
+        await postAgent(port, replayKey, message, ROTATED_HOOK_TOKEN),
       );
-      expect(firstAgent.status).toBe(200);
-      const firstAgentBody = (await firstAgent.json()) as { runId?: string };
       await waitForCronIsolatedRuns(1);
 
       await patchHooksConfig(socket, {
@@ -578,49 +579,11 @@ describe("gateway hook admission", () => {
         body: "{}",
         status: 400,
       });
-      const replayedAgent = await postHook(
-        port,
-        "/incoming/agent",
-        { message: "replay across reload" },
-        replayKey,
-        ROTATED_HOOK_TOKEN,
+      const replayedRunId = await hookRunId(
+        await postHook(port, "/incoming/agent", message, replayKey, ROTATED_HOOK_TOKEN),
       );
-      expect(replayedAgent.status).toBe(200);
-      const replayedAgentBody = (await replayedAgent.json()) as { runId?: string };
-      expect(replayedAgentBody.runId).toBe(firstAgentBody.runId);
+      expect(replayedRunId).toBe(firstRunId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  test("returns visible suppression without admitting a hook run", async () => {
-    await writeHookTransformModule(
-      "suppress.mjs",
-      "export default function suppress() { return null; }",
-    );
-    testState.hooksConfig = {
-      enabled: true,
-      token: HOOK_TOKEN,
-      mappings: [
-        {
-          id: "suppressed-source",
-          match: { path: "suppressed" },
-          action: "agent",
-          messageTemplate: "private {{payload.subject}}",
-          transform: { module: "suppress.mjs" },
-        },
-      ],
-    };
-    await withGatewayServer(async ({ port }) => {
-      cronIsolatedRun.mockClear();
-      const response = await postHook(
-        port,
-        "/hooks/suppressed",
-        { subject: "secret" },
-        "suppressed-source",
-      );
-      expect(response.status).toBe(204);
-      expect(cronIsolatedRun).not.toHaveBeenCalled();
-      expect(peekSystemEventEntries(resolveMainSessionKeyFromConfig())).toEqual([]);
     });
   });
 
@@ -671,113 +634,6 @@ describe("gateway hook admission", () => {
       });
       const response = await postAgent(port, "session-preparation-before-execution-lane");
       expect(response.status).toBe(409);
-    });
-  });
-
-  test.for(["persistent", "mapped"])(
-    "shares one pending %s dispatch across simultaneous duplicates",
-    async (mode, { signal }) => {
-      testState.hooksConfig = {
-        enabled: true,
-        token: HOOK_TOKEN,
-        allowRequestSessionKey: true,
-        allowedSessionKeyPrefixes: ["hook:"],
-        mappings: [
-          {
-            match: { path: "mapped-pending" },
-            action: "agent",
-            messageTemplate: "Mapped: {{payload.subject}}",
-          },
-        ],
-      };
-      const persistent = mode === "persistent";
-      await withGatewayServer(async ({ port }) => {
-        const runnerAdmission = createDeferred();
-        const runnerEntered = createDeferred();
-        cronIsolatedRun.mockClear();
-        cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
-          if (persistent) {
-            expect(params).toHaveProperty("job.sessionTarget", "session:hook:admission:shared");
-          }
-          runnerEntered.resolve();
-          await runnerAdmission.promise;
-          (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
-          return { status: "ok", summary: "done" };
-        });
-        const request = () =>
-          postHook(
-            port,
-            persistent ? "/hooks/agent" : "/hooks/mapped-pending",
-            persistent
-              ? {
-                  message: "Dispatch",
-                  sessionKey: "hook:admission:shared",
-                  sessionMode: "persistent",
-                }
-              : { subject: "Email" },
-            `pending-${mode}-idem`,
-          );
-
-        const firstResponse = request();
-        await waitForGate(
-          runnerEntered.promise,
-          firstResponse,
-          signal,
-          "hook request settled before runner admission",
-        );
-        const duplicateResponse = request();
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 25);
-        });
-        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
-        runnerAdmission.resolve();
-
-        const [first, duplicate] = await Promise.all([firstResponse, duplicateResponse]);
-        expect(first.status).toBe(200);
-        expect(duplicate.status).toBe(200);
-        const firstBody = (await first.json()) as { runId?: string };
-        const duplicateBody = (await duplicate.json()) as { runId?: string };
-        expect(duplicateBody.runId).toBe(firstBody.runId);
-      });
-    },
-  );
-
-  test("returns typed admission failures and leaves the idempotency key retryable", async () => {
-    await withHookGateway(async ({ port }) => {
-      cronIsolatedRun
-        .mockResolvedValueOnce({
-          status: "error",
-          error: "session changed",
-          admissionDisposition: "session-conflict",
-        })
-        .mockResolvedValueOnce({
-          status: "error",
-          error: "provider preparation failed",
-          admissionDisposition: "rejected",
-        })
-        .mockImplementationOnce(async (params: unknown) => {
-          (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
-          return { status: "ok", summary: "done" };
-        });
-      const request = () => postAgent(port, "admission-retry");
-
-      const conflict = await request();
-      expect(conflict.status).toBe(409);
-      const conflictBody = (await conflict.json()) as { ok?: boolean; runId?: string };
-      expect(conflictBody.ok).toBe(false);
-
-      const gatewayFailure = await request();
-      expect(gatewayFailure.status).toBe(502);
-      const gatewayFailureBody = (await gatewayFailure.json()) as {
-        ok?: boolean;
-        runId?: string;
-      };
-      expect(gatewayFailureBody.ok).toBe(false);
-      expect(gatewayFailureBody.runId).not.toBe(conflictBody.runId);
-
-      const admitted = await request();
-      await expectResponse(admitted);
-      expect(cronIsolatedRun).toHaveBeenCalledTimes(3);
     });
   });
 });

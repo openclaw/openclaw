@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { AsyncResource } from "node:async_hooks";
+import { request } from "node:http";
 import path from "node:path";
 import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
+import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { registerNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -182,6 +186,103 @@ async function fixture(initialReceipt?: Submission) {
 }
 
 describe("native subagent submission receipts in the binding store", () => {
+  it("persists an authenticated HTTP receipt after its startup binding lease closes", async () => {
+    const { root, store, owner, readSubmissions, reopen } = await fixture();
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    let applied: boolean | undefined;
+    const { relay, staleWrite } = await store.withLease(identity, async () => {
+      const registration = registerNativeHookRelayForBundledRuntime({
+        provider: "codex",
+        sessionId: identity.sessionId,
+        runId: "http-receipt",
+        allowedEvents: ["post_tool_use"],
+        postToolUse: {
+          toolNames: ["receipt_tool"],
+          observe: async (_invocation, assertCurrent) => {
+            applied = await store.mutate(
+              identity,
+              { kind: recordSubmission, owner, receipt },
+              assertCurrent,
+            );
+          },
+        },
+      });
+      return {
+        relay: registration,
+        staleWrite: AsyncResource.bind(() =>
+          store.mutate(identity, {
+            kind: "patch",
+            threadId: binding.threadId,
+            patch: { model: "stale-writer" },
+          }),
+        ),
+      };
+    });
+    try {
+      await relay.ready;
+      await expect(staleWrite()).rejects.toThrow("Lost Codex binding lease");
+      expect(store.read(identity)).toEqual(binding);
+      const bridge = await nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(
+        relay.relayId,
+      );
+      assert(bridge);
+      const { hostname, port, token } = bridge;
+      assert(typeof hostname === "string");
+      assert(typeof port === "number");
+      assert(typeof token === "string");
+      const response = await new Promise<{ code?: number; body: string }>((resolve, reject) => {
+        const outgoing = request(
+          {
+            hostname,
+            port,
+            method: "POST",
+            path: "/invoke",
+            agent: false,
+            signal: AbortSignal.timeout(5_000),
+            headers: {
+              authorization: `Bearer ${token}`,
+              "content-type": "application/json",
+            },
+          },
+          (incoming) => {
+            let body = "";
+            incoming.setEncoding("utf8");
+            incoming.on("data", (chunk: string) => {
+              body += chunk;
+            });
+            incoming.once("error", reject);
+            incoming.once("end", () => resolve({ code: incoming.statusCode, body }));
+          },
+        );
+        outgoing.once("error", reject);
+        outgoing.end(
+          JSON.stringify({
+            provider: "codex",
+            relayId: relay.relayId,
+            generation: relay.generation,
+            event: "post_tool_use",
+            rawPayload: {
+              hook_event_name: "PostToolUse",
+              tool_name: "receipt_tool",
+              tool_use_id: receipt.callId,
+              tool_input: {},
+              tool_response: {},
+            },
+          }),
+        );
+      });
+      expect(response).toMatchObject({ code: 200 });
+      expect(applied).toBe(true);
+      expect(await readSubmissions()).toEqual([receipt]);
+      await reopen();
+      expect(await readSubmissions()).toEqual([receipt]);
+    } finally {
+      relay.unregister();
+      await relay.drain();
+      await nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    }
+  });
+
   it("retains recorded completion across native resume without mutating incoming facts", async () => {
     const { owner, readAssignments, recordAssignment } = await fixture();
     const assignment = makeAssignment(owner, {

@@ -75,7 +75,7 @@ it("binds a first native chat.send before streaming and persists its stopped par
       requestRpcSourceCancellation(original);
     }
   });
-  // A zero interval still permits event-driven wakes to consume the scripted response.
+  // Keep event-driven wakes from consuming the scripted provider response.
   setHeartbeatsEnabled(false);
   const provider = buildMockOpenAiResponsesProvider(
     await listenProvider(providerServer),

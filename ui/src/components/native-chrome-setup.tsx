@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { NativeChromeExtensionSetupAction } from "../app/native-chrome-setup.ts";
 import type { LegacyChromeInstallResult } from "../app/native-device-settings.ts";
 import { projectNativeDeviceSettings } from "../lib/reactive/application-native.ts";
@@ -20,7 +20,7 @@ export function NativeChromeSetup() {
   });
   let disposed = false;
   let pending = false;
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
   });
   const actions = createMemo<readonly NativeChromeExtensionSetupAction[]>(() => {

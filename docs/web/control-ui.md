@@ -29,6 +29,9 @@ editors, Memory Import selections, Activity history, Dreaming results, approval
 queues, and open board and portal documents in memory. A transport interruption
 does not reset those page-local drafts. The connection indicator at the bottom
 left shows the connection state; retained data may be out of date until reconnect.
+While automatic reconnection is running, the indicator shows **Reconnecting…**
+with the sidebar's standard spinner and without a Retry button. **Retry** remains available when automatic recovery stops.
+A required page refresh keeps its separate refresh action.
 
 If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
 
@@ -321,6 +324,13 @@ Downloads use the session's existing file-read access, including managed reposit
 workspaces. Provider-backed node workspaces whose bridge only supports whole-file
 reads do not yet support downloads. Authorization errors appear in the UI; transfer
 progress and failures appear in your browser's download manager.
+
+To add an open file to your next message, choose **Attach to session** from the
+file toolbar's **⋯** menu. The file appears in the existing message draft; it is
+sent only when you send that message. Clean files use their original bytes.
+Text files with unsaved editor changes attach the current edited text without
+saving the file. Existing upload permissions and attachment size limits apply.
+Switching the file or session cancels a pending read.
 
 ## Take a photo in chat
 

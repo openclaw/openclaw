@@ -11,6 +11,7 @@ import {
   isInternalNonDeliveryChannel,
 } from "../utils/message-channel-constants.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 
@@ -30,6 +31,12 @@ export type ReplyDeliveryFactsObserver = (minimumAssistantMessageIndex?: number)
 type ReplyCompletionEvidence = "ready" | "delivered" | "pending" | "blocked" | "empty" | "silent";
 
 export const MISSING_REPLY_NOTICE_TEXT = "No answer was returned. Ask again if you still need one.";
+export const MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT = `${MISSING_REPLY_NOTICE_TEXT} Note: some tool actions may have already been executed — please verify before retrying.`;
+
+/** Only host-authored missing-reply copy may cross the terminal error egress boundary. */
+export function isHostMissingReplyNoticeText(text: string | undefined): boolean {
+  return text === MISSING_REPLY_NOTICE_TEXT || text === MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT;
+}
 
 export function createMissingReplyNotice(text = MISSING_REPLY_NOTICE_TEXT): ReplyPayload {
   return setReplyPayloadMetadata(
@@ -165,6 +172,16 @@ export function resolveReplyCompletion(
         ? "missing"
         : evidence,
   };
+}
+
+/** A host claim can waive a required result; an empty model response cannot. */
+export function resolveClaimedReplyExpectation(
+  expectation: ReplyExpectation,
+  meta: { providerStarted?: boolean; terminalReply?: AgentRunTerminalReplySnapshot } | undefined,
+): ReplyExpectation {
+  return meta?.providerStarted === false && meta.terminalReply?.disposition === "silent"
+    ? "optional"
+    : expectation;
 }
 
 /** Failure to observe a send is not proof that it is safe to generate or send another reply. */

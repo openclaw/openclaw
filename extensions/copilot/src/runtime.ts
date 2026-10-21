@@ -1,4 +1,4 @@
-import { resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import type { CopilotClient, CopilotClientOptions } from "@github/copilot-sdk";
 import { toStringifiedError as toCopilotRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { loadCopilotSdk } from "./sdk-loader.js";
@@ -222,9 +222,6 @@ function normalizeClientCreateOptions(
 
 function normalizeCopilotHome(copilotHome: string): string {
   let normalizedHome = resolve(copilotHome);
-  if (normalizedHome.endsWith(sep) && normalizedHome.length > 1) {
-    normalizedHome = normalizedHome.slice(0, -1);
-  }
   if (process.platform === "win32") {
     normalizedHome = normalizedHome.toLowerCase();
   }

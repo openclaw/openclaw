@@ -40,6 +40,7 @@ import {
 import { restoredInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { NewSessionPageOwner, type PageHost } from "./new-session-page-owner.ts";
+import { createSubmissionAction } from "./submission-action.ts";
 import { AgentSelect, NewSessionPlaceControls } from "./target-controls-view.tsx";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
@@ -103,6 +104,7 @@ function DraftBlock(props: {
   page: () => NewSessionPageOwner;
   revision: () => object;
   options: () => ReturnType<NewSessionPageOwner["composerOptions"]>;
+  submitting: boolean;
 }) {
   const submission = () => props.page().submission;
   const place = () => props.page().place;
@@ -166,7 +168,7 @@ function DraftBlock(props: {
       ref={(element) => {
         root = element;
       }}
-      aria-busy={submission().submitting ? "true" : "false"}
+      aria-busy={props.submitting ? "true" : "false"}
       onCompositionStart={() => props.page().titlePreparation?.setComposing(true)}
       onCompositionEnd={() => props.page().titlePreparation?.setComposing(false)}
       onFocusOut={() => props.page().titlePreparation?.setComposing(false)}
@@ -296,6 +298,14 @@ function renderPageContent(host: PageHost) {
   const pageState = projectOwner(owner, (value) => value);
   const page = pageState.read;
   const revision = createMemo(() => ({ value: pageState.revision() }));
+  const submissionError = createMemo(() => page().submission.error);
+  const saving = createSubmissionAction(
+    () => owner,
+    pageState.revision,
+    submissionError,
+    (failure) =>
+      owner.submission.setError(failure instanceof Error ? failure.message : String(failure)),
+  );
   owner.titlePreparation = createNewSessionTitle(() => ({
     context: owner.context,
     data: owner.data,
@@ -307,7 +317,12 @@ function renderPageContent(host: PageHost) {
   const options = createMemo(() => page().composerOptions());
   const Draft = () => (
     <NewSessionComposerTextareaContext value={owner.submission.composerTextarea}>
-      <DraftBlock page={page} revision={revision} options={options} />
+      <DraftBlock
+        page={page}
+        revision={revision}
+        options={options}
+        submitting={saving() || page().submission.submitting}
+      />
     </NewSessionComposerTextareaContext>
   );
   // Bind gateway facts before publishing the first reconciled draft snapshot.
@@ -407,10 +422,10 @@ function renderPageContent(host: PageHost) {
           />
         </Show>
         <NewSessionBody
-          error={page().submission.error}
+          error={submissionError()}
           pendingMessage={page().submission.pendingMessage}
           userId={userId()}
-          submitting={page().submission.submitting}
+          submitting={saving() || page().submission.submitting}
           statusLabel={
             page().context?.gateway.snapshot.phase === "connected"
               ? undefined
@@ -510,7 +525,12 @@ defineSolidBridge<
   }
 >("openclaw-new-session-page", PageContent, {
   properties: { data: { default: undefined, attribute: false } },
-  propertyChanged: (host) => pageOwners.get(host)?.changed(),
+  propertyChanged: (host) => {
+    const owner = pageOwners.get(host);
+    owner?.retireSubmissionPresentation();
+    owner?.changed();
+  },
+  disconnected: (host) => pageOwners.get(host)?.retireSubmissionPresentation(),
   methods: {
     focusComposer: (host) => pageOwners.get(host)?.focusComposer(),
   },

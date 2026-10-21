@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import * as http from "node:http";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { synologyChatPlugin } from "./channel.js";
 import { resolveLegacyWebhookNameToChatUserId, sendMessage } from "./client.js";
@@ -240,6 +241,37 @@ describe("Synology Chat client loopback", () => {
     expect(receivedPayloads).toHaveLength(1);
   });
 
+  it("rejects invalid recipients before HTTP and delivers normalized numeric IDs", async () => {
+    const payloads: unknown[] = [];
+    const port = await listenLoopback((req, res) => {
+      readForm(req, (body) => {
+        payloads.push(JSON.parse(body ?? "{}"));
+        respond(res, true);
+      });
+    });
+    const cfg = config(`http://127.0.0.1:${port}/webapi/entry.cgi`);
+    const plugin: ChannelPlugin = synologyChatPlugin;
+    const resolve = (to: string) => plugin.outbound?.resolveTarget?.({ cfg, to, mode: "explicit" });
+    const invalid = resolve("42oops");
+    if (invalid?.ok) {
+      await synologyChatPlugin.outbound.sendText({
+        cfg,
+        text: "invalid recipient",
+        to: invalid.to,
+      });
+    }
+    expect(invalid).toMatchObject({ ok: false });
+    expect(payloads).toEqual([]);
+
+    const valid = resolve("synology-chat:00042");
+    expect(valid).toEqual({ ok: true, to: "42" });
+    if (!valid?.ok) {
+      throw new Error("Expected a normalized recipient");
+    }
+    await synologyChatPlugin.outbound.sendText({ cfg, text: "normalized recipient", to: valid.to });
+    expect(payloads).toEqual([{ text: "normalized recipient", user_ids: [42] }]);
+  });
+
   it("delivers authenticated text and media without inventing platform message ids", async () => {
     const receivedPayloads: Array<Record<string, unknown>> = [];
     const port = await listenLoopback((req, res) => {
@@ -278,6 +310,7 @@ describe("Synology Chat client loopback", () => {
     });
     const outboundMedia = await synologyChatPlugin.outbound.sendMedia({
       ...sendContext,
+      text: "native outbound media",
       mediaUrl,
     });
     const durableText = await synologyChatPlugin.message.send?.text?.({
@@ -292,9 +325,9 @@ describe("Synology Chat client loopback", () => {
 
     expect(receivedPayloads).toEqual([
       { text: "native outbound text", user_ids: [42] },
-      { file_url: hostedCapabilityUrl, user_ids: [42] },
+      { file_url: hostedCapabilityUrl, text: "native outbound media", user_ids: [42] },
       { text: "durable adapter text", user_ids: [42] },
-      { file_url: hostedCapabilityUrl, user_ids: [42] },
+      { file_url: hostedCapabilityUrl, text: "durable adapter media", user_ids: [42] },
     ]);
     expect(durableText).toBeDefined();
     expect(durableMedia).toBeDefined();
@@ -312,6 +345,56 @@ describe("Synology Chat client loopback", () => {
       expect(result?.receipt.primaryPlatformMessageId).toBeUndefined();
     }
   });
+
+  it.each([true, false])(
+    "bounds attachment captions and preserves media custody when overflow acceptance is %s",
+    async (acceptOverflow) => {
+      const receivedPayloads: Array<Record<string, unknown>> = [];
+      const dispatchOrder: string[] = [];
+      const port = await listenLoopback((req, res) => {
+        dispatchOrder.push("post");
+        readForm(req, (body) => {
+          const payload = JSON.parse(body ?? "{}") as Record<string, unknown>;
+          receivedPayloads.push(payload);
+          const accepted =
+            typeof payload.text === "string" &&
+            payload.text.length <= 2_000 &&
+            (Boolean(payload.file_url) || acceptOverflow);
+          respond(res, accepted, accepted ? 200 : 413);
+        });
+      });
+      const cfg = config(`http://127.0.0.1:${port}/webapi/entry.cgi`);
+      hostedCapabilityCleanup.mockClear();
+      const delivery = synologyChatPlugin.message.send?.media?.({
+        cfg,
+        text: "x".repeat(2_001),
+        to: "42",
+        mediaUrl: "https://example.com/caption.png",
+        onPlatformSendDispatch: async () => {
+          dispatchOrder.push("dispatch");
+        },
+      });
+      if (acceptOverflow) {
+        await delivery;
+      } else {
+        await expect(delivery).rejects.toMatchObject({
+          code: "CHANNEL_PARTIAL_DELIVERY",
+          deliveryResult: {
+            visibleReplySent: true,
+            content: "x".repeat(2_000),
+            receipt: { threadId: "42", platformMessageIds: [] },
+          },
+        });
+      }
+
+      expect(receivedPayloads).toEqual([
+        { file_url: hostedCapabilityUrl, text: "x".repeat(2_000), user_ids: [42] },
+        { text: "x", user_ids: [42] },
+      ]);
+      expect(dispatchOrder).toEqual(["dispatch", "post", "dispatch", "post"]);
+      expect(hostedCapabilityCleanup).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {

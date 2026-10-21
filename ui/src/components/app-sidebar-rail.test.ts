@@ -538,6 +538,32 @@ describe("personal navigation rail", () => {
     expect(fetchAvatar).toHaveBeenCalledOnce();
   });
 
+  it("updates the avatar of a retained pinned person when owner metadata changes", async () => {
+    const { sidebar, sessions, result } = await fixture({ sidebarEntries: ["person:other"] });
+    const pin = rail(sidebar, "person:other");
+    const person = link(sidebar, "person:other");
+    const avatar = person.querySelector(".viewer-avatar")!;
+    expect(avatar.getAttribute("aria-label")).toBe("Other");
+    expect(avatar.querySelector(".viewer-avatar__initials")?.textContent).toBe("O");
+
+    sessions.publishList({
+      agentId: "main",
+      result: {
+        ...result,
+        owners: result.owners!.map((owner) =>
+          owner.id === "other" ? Object.assign({}, owner, { label: "Updated Person" }) : owner,
+        ),
+      },
+    });
+    await settleLitElement(sidebar);
+    expect(rail(sidebar, "person:other")).toBe(pin);
+    expect(link(sidebar, "person:other")).toBe(person);
+    expect(person.getAttribute("aria-label")).toBe("Updated Person");
+    expect(person.querySelector(".viewer-avatar")).toBe(avatar);
+    expect(avatar.getAttribute("aria-label")).toBe("Updated Person");
+    expect(avatar.querySelector(".viewer-avatar__initials")?.textContent).toBe("UP");
+  });
+
   it("pins a person with native drag and retains a safe destination after they go offline", async () => {
     const { sidebar, dom } = await fixture();
     dom.query<HTMLButtonElement>('[data-navigation-view="online"]')!.click();

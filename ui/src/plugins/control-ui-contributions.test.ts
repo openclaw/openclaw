@@ -268,6 +268,61 @@ async function mountActions(
 }
 
 describe("native plugin session actions", () => {
+  it("shows a concurrent action failure after a later invocation succeeds", async () => {
+    const { element, run } = await mountActions();
+    const failed = createDeferred();
+    const succeeded = createDeferred();
+    const button = element.querySelector<HTMLButtonElement>("button")!;
+    try {
+      run.mockReturnValueOnce(failed.promise).mockReturnValueOnce(succeeded.promise);
+      button.click();
+      button.click();
+      succeeded.resolve();
+      await succeeded.promise;
+      failed.reject(new Error("Synthetic concurrent action failure"));
+      await vi.waitFor(() =>
+        expect(element.querySelector('[role="alert"]')?.textContent).toBe(
+          "Synthetic concurrent action failure",
+        ),
+      );
+      expect(element.querySelector("button")).toBe(button);
+    } finally {
+      failed.resolve();
+      succeeded.resolve();
+    }
+  });
+
+  it("clears action failures on retry without replacing its controls", async () => {
+    const { element, run } = await mountActions();
+    const failed = createDeferred();
+    const retry = createDeferred();
+    const button = element.querySelector<HTMLButtonElement>("button")!;
+    try {
+      run.mockReturnValueOnce(failed.promise);
+      button.click();
+      failed.reject(new Error("Synthetic action failure"));
+      await vi.waitFor(() =>
+        expect(element.querySelector('[role="alert"]')?.textContent).toBe(
+          "Synthetic action failure",
+        ),
+      );
+      expect(element.querySelector("button")).toBe(button);
+
+      run.mockReturnValueOnce(retry.promise);
+      button.click();
+      await vi.waitFor(() => expect(element.querySelector('[role="alert"]')).toBeNull());
+      expect(element.querySelector("button")).toBe(button);
+      retry.resolve();
+      await retry.promise;
+      await element.updateComplete;
+      expect(element.querySelector('[role="alert"]')).toBeNull();
+      expect(element.querySelector("button")).toBe(button);
+    } finally {
+      failed.resolve();
+      retry.resolve();
+    }
+  });
+
   it("replaces placement subscriptions and resumes current session presentation", async () => {
     const { element, sessions } = await mountActions();
     expect(element.querySelector("button")?.textContent).toBe("Review Ready");

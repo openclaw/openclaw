@@ -80,8 +80,8 @@ export type MenuEntry =
       id: string;
       class?: string;
       items: readonly MenuEntry[];
-      /** Custom layout retains the native item bindings and this group's lifetime. */
-      render?: (children: JSX.Element) => JSX.Element;
+      /** Invoke inside an async boundary to render resolved rows with native item bindings. */
+      render?: (renderItems: (items: () => readonly MenuEntry[]) => JSX.Element) => JSX.Element;
     };
 
 export type MenuHandle = {
@@ -283,6 +283,13 @@ export function Menu(props: BranchProps): JSX.Element {
         ? "left-start"
         : "right-start"
       : "bottom-start");
+  // Anchor setup reads this from onSettled; JSX must not create a conditional memo there.
+  const childPlacement = (): OverlayPlacement | undefined =>
+    placement() === "left-end" || placement() === "right-end"
+      ? direction() === "rtl"
+        ? "left-end"
+        : "right-end"
+      : undefined;
   const activate = (value: string) => {
     const item = findItem(props.items, value);
     if (!item || item.disabled || item.children) {
@@ -436,7 +443,7 @@ export function Menu(props: BranchProps): JSX.Element {
           return current.kind === "group" ? current : undefined;
         };
         const groupMount = createMemo<
-          { id: string; render?: (children: JSX.Element) => JSX.Element } | undefined
+          { id: string; render?: Extract<MenuEntry, { kind: "group" }>["render"] } | undefined
         >((previous) => {
           const current = group();
           if (!current) {
@@ -450,11 +457,10 @@ export function Menu(props: BranchProps): JSX.Element {
         const fallback = (
           <Show when={groupMount()} keyed fallback={content()}>
             {(mount) => {
-              const children = renderEntries(() => group()?.items ?? []);
               return mount.render ? (
-                mount.render(children)
+                mount.render(renderEntries)
               ) : (
-                <div class={group()?.class}>{children}</div>
+                <div class={group()?.class}>{renderEntries(() => group()?.items ?? [])}</div>
               );
             }}
           </Show>
@@ -545,6 +551,7 @@ export function Menu(props: BranchProps): JSX.Element {
                         prewarm={props.prewarm && item().prewarm}
                         items={childEntries()}
                         controls={props.controls}
+                        placement={childPlacement()}
                         trigger={
                           item().trigger ?? (
                             <>

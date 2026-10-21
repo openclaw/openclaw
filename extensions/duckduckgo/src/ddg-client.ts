@@ -7,7 +7,6 @@ import {
   externalContentStamp,
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
-  normalizeCacheKey,
   readCachedSearchPayload,
   readResponseText,
   resolveCacheTtlMs,
@@ -133,15 +132,13 @@ export async function runDuckDuckGoSearch(params: {
     params.cacheTtlMinutes ?? params.config?.tools?.web?.search?.cacheTtlMinutes,
     DEFAULT_CACHE_TTL_MINUTES,
   );
-  const cacheKey = normalizeCacheKey(
-    JSON.stringify({
-      provider: "duckduckgo",
-      query: params.query,
-      count,
-      region: region ?? "",
-      safeSearch,
-    }),
-  );
+  const cacheKey = JSON.stringify({
+    provider: "duckduckgo",
+    query: params.query,
+    count,
+    region: region ?? "",
+    safeSearch,
+  });
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;

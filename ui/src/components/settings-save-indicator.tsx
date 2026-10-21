@@ -34,7 +34,10 @@ function Claw(props: { saved?: boolean }) {
     <span
       class={[
         "settings-save-indicator__claw",
-        `settings-save-indicator__claw--${props.saved ? "saved" : "saving"}`,
+        {
+          "settings-save-indicator__claw--saved": props.saved,
+          "settings-save-indicator__claw--saving": !props.saved,
+        },
       ]}
       aria-hidden="true"
     >

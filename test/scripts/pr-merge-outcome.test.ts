@@ -53,14 +53,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       observations: [
         ...(phase === "stability" ? [{}] : []),
         { main, pr: unknownProjection, advanceSeconds: 65 },
-        ...(settles
-          ? [
-              {
-                pr: clean,
-                advanceSeconds: 55,
-              },
-            ]
-          : []),
+        ...(settles ? [{ pr: clean, advanceSeconds: 55 }] : []),
       ],
     });
 
@@ -173,14 +166,14 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     }
   });
 
-  it.each([""])("preserves pre-journal output %j", (output) => {
+  it("preserves empty pre-journal output", () => {
     const f = fixture();
     const capture = join(f.worktree, ".local/merge-output.log");
-    writeFileSync(capture, output);
+    writeFileSync(capture, "");
     configureMerge(f, { mode: "unapplied" });
     const run = expectExit(f.run(), 1);
     expect(f.state().mutations).toBe(0);
-    expect(readFileSync(capture, "utf8")).toBe(output);
+    expect(readFileSync(capture, "utf8")).toBe("");
     expect(run.output).toContain("Legacy .local/merge-output.log: present");
     expect(run.output).toContain("investigate; see scripts/AGENTS.md merge-outcome doctrine");
     expect(run.output).not.toContain("rerun merge-run; if the operation lock was retained");
@@ -439,10 +432,6 @@ describePosix("repository identity across gh id representations", () => {
     nameWithOwner: "fixture/repo",
     url: "https://github.com/fixture/repo",
   };
-  const historicalIds = [
-    { name: "node", id: "R_kgDOQb6kRw", nextId: 1103012935 },
-    { name: "numeric", id: 1103012935, nextId: "R_kgDOQb6kRw" },
-  ];
   const retainRepository = (f: ReturnType<typeof fixture>, repo: unknown) => {
     const previous = f.git(["rev-parse", outcomeRef]);
     const parents = f.git(["show", "-s", "--format=%P", previous]).split(" ");
@@ -454,13 +443,11 @@ describePosix("repository identity across gh id representations", () => {
   };
 
   it.each(
-    historicalIds.flatMap((identity) =>
-      [false, true].map((completion) => ({
-        name: identity.name,
-        id: identity.id,
-        nextId: identity.nextId,
-        completion,
-      })),
+    [
+      { name: "node", id: "R_kgDOQb6kRw", nextId: 1103012935 },
+      { name: "numeric", id: 1103012935, nextId: "R_kgDOQb6kRw" },
+    ].flatMap(({ name, id, nextId }) =>
+      [false, true].map((completion) => ({ name, id, nextId, completion })),
     ),
   )(
     "retains $name identity across drift (completion=$completion)",

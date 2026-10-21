@@ -312,20 +312,21 @@ suite.define(() => {
       const agentMenu = sidebar.locator(".sidebar-agent-menu");
       await expect
         .poll(async () => {
-          const [card, menu] = await Promise.all([
+          const [card, rail, menu] = await Promise.all([
             sidebar.locator(".sidebar-agent-card__main").boundingBox(),
+            sidebar.locator(".sidebar-rail").boundingBox(),
             agentMenu.boundingBox(),
           ]);
-          if (!card || !menu) {
+          if (!card || !rail || !menu) {
             return null;
           }
           return {
-            besideCard: menu.x >= card.x + card.width,
-            anchoredToCard: menu.y <= card.y + card.height && menu.y + menu.height >= card.y,
+            railGap: menu.x - (rail.x + rail.width),
+            topOffset: menu.y - card.y,
             inViewport: menu.x >= 0 && menu.x + menu.width <= page.viewportSize()!.width,
           };
         })
-        .toEqual({ besideCard: true, anchoredToCard: true, inViewport: true });
+        .toEqual({ railGap: 8, topOffset: 0, inViewport: true });
       await agentMenu.locator('[data-value="agent:writer"]').click();
       await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
       await expectAgentName(sidebar, "Writer");

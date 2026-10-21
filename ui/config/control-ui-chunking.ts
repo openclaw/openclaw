@@ -115,6 +115,16 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "session-snapshot-database";
   }
 
+  if (
+    moduleIdIncludesPackage(id, "solid-js") ||
+    moduleIdIncludesPackage(id, "@solidjs/signals") ||
+    moduleIdIncludesPackage(id, "@solidjs/web")
+  ) {
+    // Preserve the specific runtime chunks above, including lazy deferred reads.
+    // Keep the remaining Solid initializers out of route-only boot groups.
+    return "solid-runtime";
+  }
+
   if (normalized.startsWith(resolvedLocaleConfigHintsModulePrefix)) {
     return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
   }
@@ -187,6 +197,14 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
         priority: 10,
         // Already-initial dependencies compress well; the UI source-size cap
         // fragmented them into tiny requests. The asset gzip budget bounds them.
+      },
+      {
+        name: "control-ui-lib",
+        test: (id: string) => normalizeModuleId(id).includes("/ui/src/lib/"),
+        tags: ["$initial"] as ["$initial"],
+        priority: 11,
+        // Keep initial state owners and utilities together across core entry points.
+        maxSize: 1024 * 1024,
       },
       ...(options.includeBootGroups === false
         ? []

@@ -2522,14 +2522,15 @@ select.input {
 }
 
 .code-block-json-mode {
-  min-height: 32px;
-  padding: 6px 10px;
+  min-height: 24px;
+  padding: 4px 8px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-family: var(--font-body);
+  font-size: var(--control-ui-text-xs);
 }
 
 .code-block-json-mode[aria-pressed="true"] {

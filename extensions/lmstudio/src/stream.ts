@@ -105,8 +105,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
         const requestedTimeoutMs =
           clampPositiveTimerTimeoutMs(options?.timeoutMs ?? asRecord(model).requestTimeoutMs) ??
           finiteSecondsToTimerSafeMilliseconds(providerConfig?.timeoutSeconds);
-        const preloadProviderConfig = ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
-        const providerHeaders = { ...preloadProviderConfig?.headers, ...model.headers };
+        const providerHeaders = { ...providerConfig?.headers, ...model.headers };
         const runtimeApiKey = options?.apiKey?.trim();
         const timeoutMs = requestedTimeoutMs ?? 120_000;
         const headers = await resolveLmstudioProviderHeaders({
