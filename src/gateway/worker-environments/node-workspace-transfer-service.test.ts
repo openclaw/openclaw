@@ -107,7 +107,7 @@ function retryOrUploadStatus(retryStarted: Promise<void>, upload: Promise<unknow
 }
 
 describe("node workspace transfer service", () => {
-  it("retains tracked build-cache inputs while excluding generated worktree includes", async () => {
+  it("retains tracked build-cache inputs while excluding generated ignored output", async () => {
     const root = tempDirs.make("node-workspace-transfer-build-cache-");
     const localPath = path.join(root, "workspace");
     const authored = ".artifacts/build-all-cache/authored.txt";
@@ -122,7 +122,7 @@ describe("node workspace transfer service", () => {
       fs.writeFile(path.join(localPath, authored), "original input\n"),
       fs.writeFile(path.join(localPath, "source.ts"), "source\n"),
       fs.writeFile(path.join(localPath, ".gitignore"), ".artifacts/build-all-cache/generated/\n"),
-      fs.writeFile(path.join(localPath, ".worktreeinclude"), "*.js\n"),
+      fs.writeFile(path.join(localPath, ".worktreeinclude"), "*.ts\n"),
     ]);
     const git = async (...args: string[]) => {
       const result = await runCommandWithTimeout(["git", "-C", localPath, ...args], {
@@ -206,6 +206,58 @@ describe("node workspace transfer service", () => {
       }
     } finally {
       await fs.chmod(path.join(localPath, generated), 0o644);
+      await service.closeAll();
+    }
+  });
+
+  it("retains explicitly included ignored cache inputs in node transfers", async () => {
+    const root = tempDirs.make("node-workspace-transfer-worktree-include-");
+    const localPath = path.join(root, "workspace");
+    const selected = ".artifacts/build-cache-inputs/compiler-input.json";
+    const generated = ".artifacts/build-cache-inputs/generated/output.js";
+    await fs.mkdir(path.dirname(path.join(localPath, selected)), { recursive: true });
+    await fs.mkdir(path.dirname(path.join(localPath, generated)), { recursive: true });
+    await Promise.all([
+      fs.writeFile(path.join(localPath, "source.ts"), "source\n"),
+      fs.writeFile(path.join(localPath, ".gitignore"), ".artifacts/build-cache-inputs/\n"),
+      fs.writeFile(
+        path.join(localPath, ".worktreeinclude"),
+        ".artifacts/build-cache-inputs/compiler-input.json\n",
+      ),
+      fs.writeFile(path.join(localPath, selected), "explicit compiler input\n"),
+      fs.writeFile(path.join(localPath, generated), "disposable cache\n"),
+    ]);
+    const git = async (...args: string[]) => {
+      const result = await runCommandWithTimeout(["git", "-C", localPath, ...args], {
+        timeoutMs: 10_000,
+      });
+      expect(result.code, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    await git("init", "--quiet");
+    await git("config", "user.name", "Workspace Transfer Test");
+    await git("config", "user.email", "workspace-transfer@example.invalid");
+    await git("add", ".");
+    await git("commit", "--quiet", "-m", "base");
+
+    const service = createNodeWorkspaceTransferService({
+      getOwner: () => transferOwner("session-worktree-include", 1, Date.now() + 60_000),
+      temporaryRoot: path.join(root, "transfer-tmp"),
+    });
+    try {
+      const prepared = await service.prepareSync({
+        environmentId: "environment-worktree-include",
+        ownerEpoch: 1,
+        sessionId: "session-worktree-include",
+        localPath,
+        isAuthorized: () => true,
+      });
+      expect(prepared.snapshot.manifest.entries.map((entry) => entry.path)).toContain(selected);
+      expect(prepared.snapshot.manifest.entries.some((entry) => entry.path === generated)).toBe(
+        false,
+      );
+      expect(prepared.snapshot.manifest.buildCacheInputs).toContain(selected);
+    } finally {
       await service.closeAll();
     }
   });

@@ -8,6 +8,7 @@ import {
 } from "./workspace-inventory-limits.js";
 import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
+import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
 import { probeWorkspaceGitMode } from "./workspace-sync-helpers.js";
 import {
   createWorkspaceGitTransferList,
@@ -94,7 +95,14 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
       }
     }
     includePaths = manifestPaths;
-    buildCacheInputs = new Set(await readTrackedWorkspacePaths(root, params.signal));
+    // `.worktreeinclude` can explicitly select an ignored cache-root input that
+    // the Git index does not track. Admit everything the transfer list carries
+    // so capture retains selected inputs while unselected generated output stays
+    // excluded.
+    buildCacheInputs = buildCacheInputPaths([
+      ...(await readTrackedWorkspacePaths(root, params.signal)),
+      ...transferable,
+    ]);
   }
   const actual = await captureWorkspaceSnapshot({
     root,
