@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { bindingMutation, interceptBindingStore } from "./binding-interleaving.test-support.js";
 import { createNativeSessionBindingLifecycle } from "./binding-lifecycle.js";
 import {
   bindingTestOptions,
@@ -103,53 +104,33 @@ describe("native session binding lifecycle", () => {
 
   it("drains an in-flight ownership mutation and rejects late attachment during archive", async () => {
     const { state, values } = createBindingTestState();
-    const withCurrent = state.withCurrent.bind(state);
     let startArchive: (() => void) | undefined;
-    state.withCurrent = (authority) => {
-      const store = withCurrent(authority);
-      return {
-        ...store,
-        async compareAndApply(...args) {
-          startArchive?.();
-          startArchive = undefined;
-          return await store.compareAndApply(...args);
-        },
-      };
-    };
+    interceptBindingStore(state, (store) => ({
+      async compareAndApply(...args) {
+        startArchive?.();
+        startArchive = undefined;
+        return await store.compareAndApply(...args);
+      },
+    }));
     const lifecycle = createNativeSessionBindingLifecycle(state, bindingTestOptions);
+    const update = (key: string, value: string) =>
+      lifecycle.withMutation(() => lifecycle.transact(key, () => bindingMutation(value)));
     const { promise: archiveReleased, resolve: releaseArchive } = createDeferred();
     let archive!: Promise<void>;
     startArchive = () => {
       archive = lifecycle.withExclusiveMutationFence(async () => {
         await expect(
           lifecycle.withMutation(() =>
-            lifecycle.transact("first", (current) => ({
-              next: { ...current, value: "updated" },
-              result: true,
-            })),
+            lifecycle.transact("first", (current) => bindingMutation("updated", current)),
           ),
         ).resolves.toBe(true);
         await archiveReleased;
       });
     };
 
-    await expect(
-      lifecycle.withMutation(() =>
-        lifecycle.transact("first", () => ({
-          next: { value: "before-archive" },
-          result: true,
-        })),
-      ),
-    ).resolves.toBe(true);
+    await expect(update("first", "before-archive")).resolves.toBe(true);
     await Promise.resolve();
-    await expect(
-      lifecycle.withMutation(() =>
-        lifecycle.transact("late", () => ({
-          next: { value: "late" },
-          result: true,
-        })),
-      ),
-    ).rejects.toThrow("native archive is in progress");
+    await expect(update("late", "late")).rejects.toThrow("native archive is in progress");
     releaseArchive();
     await expect(archive).resolves.toBeUndefined();
     expect(values.get("first")).toEqual({ value: "updated" });
@@ -160,40 +141,31 @@ describe("native session binding lifecycle", () => {
     vi.useFakeTimers();
     const { state, values } = createBindingTestState();
     values.set("binding", { value: "original" });
-    const withCurrent = state.withCurrent.bind(state);
     let holdRenewal = false;
     let renewalPrepared = false;
     const { promise: released, resolve: releaseRenewal } = createDeferred();
-    state.withCurrent = (authority) => {
-      const store = withCurrent(authority);
-      return {
-        ...store,
-        async compareAndApply(...args) {
-          if (holdRenewal) {
-            holdRenewal = false;
-            renewalPrepared = true;
-            await released;
-          }
-          return await store.compareAndApply(...args);
-        },
-      };
-    };
-    const lifecycle = createNativeSessionBindingLifecycle(state, bindingTestOptions);
-    try {
-      await lifecycle.withDeletion("binding", deletion, async (_record, mutation) => {
-        try {
-          holdRenewal = true;
-          await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.renewIntervalMs);
-          expect(renewalPrepared).toBe(true);
-          mutation.commit();
-          expect(values.has("binding")).toBe(false);
-        } finally {
-          releaseRenewal();
+    interceptBindingStore(state, (store) => ({
+      async compareAndApply(...args) {
+        if (holdRenewal) {
+          holdRenewal = false;
+          renewalPrepared = true;
+          await released;
         }
-      });
-      expect(values.has("binding")).toBe(false);
-    } finally {
-      releaseRenewal();
-    }
+        return await store.compareAndApply(...args);
+      },
+    }));
+    const lifecycle = createNativeSessionBindingLifecycle(state, bindingTestOptions);
+    await lifecycle.withDeletion("binding", deletion, async (_record, mutation) => {
+      try {
+        holdRenewal = true;
+        await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.renewIntervalMs);
+        expect(renewalPrepared).toBe(true);
+        mutation.commit();
+        expect(values.has("binding")).toBe(false);
+      } finally {
+        releaseRenewal();
+      }
+    });
+    expect(values.has("binding")).toBe(false);
   });
 });

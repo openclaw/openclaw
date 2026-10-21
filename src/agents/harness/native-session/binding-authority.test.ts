@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   replaceSessionEntry,
@@ -24,6 +23,7 @@ import {
   createNativeSessionBindingScope,
   readNativeSessionBindingEntries,
 } from "./binding-authority.js";
+import { bindingGate } from "./binding-interleaving.test-support.js";
 
 afterEach(() => {
   memorySessionActorOwners.reset();
@@ -71,15 +71,11 @@ it("admits incognito predecessor lineage without SQL and rejects changed lineage
       () => {},
     );
     const queries = observeHostDataSql();
-    let mutation: Awaited<ReturnType<typeof authority.prepareMutation>>;
-    try {
-      await expect(authority.withCurrent(() => "admitted")).resolves.toBe("admitted");
-      mutation = await authority.prepareMutation();
-      mutation.assertCurrent();
-      expect(queries.queries).toEqual([]);
-    } finally {
-      queries.restore();
-    }
+    await expect(authority.withCurrent(() => "admitted")).resolves.toBe("admitted");
+    const mutation = await authority.prepareMutation();
+    mutation.assertCurrent();
+    expect(queries.queries).toEqual([]);
+    queries.restore();
     await replaceSessionEntry(scope, {
       ...entry,
       previousSessionId: "changed-predecessor",
@@ -100,35 +96,29 @@ it("keeps the incognito source incarnation across a durable lineage wait", async
     const durableScope = { agentId: "main", sessionKey: "agent:main:durable-custody", env };
     replaceSessionEntrySync(durableScope, { sessionId: "durable", updatedAt: 1 });
     const durable = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(durableScope)));
-    const started = createDeferred();
-    const proceed = createDeferred();
+    await using gate = bindingGate();
     const read = sessionReads.withSessionEntriesFromStoresInWorker;
-    const delayed = vi
-      .spyOn(sessionReads, "withSessionEntriesFromStoresInWorker")
-      .mockImplementationOnce(async (inputs, consume, options) => {
-        started.resolve();
-        await proceed.promise;
+    vi.spyOn(sessionReads, "withSessionEntriesFromStoresInWorker").mockImplementationOnce(
+      async (inputs, consume, options) => {
+        await gate.pause();
         return read(inputs, consume, options);
-      });
+      },
+    );
     const consume = vi.fn();
-    const outcome = readNativeSessionBindingEntries(
-      [
-        { ...scope, storePath: memory.path },
-        { ...durableScope, storePath: durable.path },
-      ],
-      consume,
-    ).catch((error: unknown) => error);
-    try {
-      await started.promise;
-      memorySessionActorOwners.closeDatabase(memory);
-      await replaceSessionEntry(scope, entry);
-      proceed.resolve();
-      expect(await outcome).toMatchObject({ message: "Incognito session actor owner is closed" });
-      expect(consume).not.toHaveBeenCalled();
-    } finally {
-      proceed.resolve();
-      await outcome;
-      delayed.mockRestore();
-    }
+    const outcome = gate.observe(
+      readNativeSessionBindingEntries(
+        [
+          { ...scope, storePath: memory.path },
+          { ...durableScope, storePath: durable.path },
+        ],
+        consume,
+      ),
+    );
+    await gate.wait(outcome, "Durable lineage read was not reached");
+    memorySessionActorOwners.closeDatabase(memory);
+    await replaceSessionEntry(scope, entry);
+    gate.resume();
+    expect(await outcome).toMatchObject({ message: "Incognito session actor owner is closed" });
+    expect(consume).not.toHaveBeenCalled();
   });
 });
