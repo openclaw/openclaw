@@ -62,36 +62,22 @@ describe("isBotMentioned", () => {
   });
 });
 
-describe("resolveMentionTargets with @lid mapping", () => {
-  it("uses @lid reverse mapping for mentions and self identity", async () => {
-    await withTempDir("openclaw-lid-mapping-", async (authDir) => {
-      await fs.writeFile(
-        path.join(authDir, "lid-mapping-777_reverse.json"),
-        JSON.stringify("+1777"),
-      );
+it("uses @lid reverse mapping for mentions and self identity", async () => {
+  await withTempDir("openclaw-lid-mapping-", async (authDir) => {
+    await fs.writeFile(path.join(authDir, "lid-mapping-777_reverse.json"), JSON.stringify("+1777"));
 
-      const mentioned = isBotMentioned(
-        makeMsg({
-          body: "ping",
-          mentionedJids: ["777@lid"],
-          selfE164: "+1777",
-          selfJid: "1777@s.whatsapp.net",
-        }),
-        { mentionRegexes: [] },
-        authDir,
-      );
-      expect(mentioned).toBe(true);
+    const mentionsBot = (message: TestMessageOverrides) =>
+      isBotMentioned(makeMsg(message), { mentionRegexes: [] }, authDir);
+    expect(
+      mentionsBot({
+        body: "ping",
+        mentionedJids: ["777@lid"],
+        selfE164: "+1777",
+        selfJid: "1777@s.whatsapp.net",
+      }),
+    ).toBe(true);
 
-      const mentionedByNumber = isBotMentioned(
-        makeMsg({
-          body: "1777 ping",
-          selfJid: "777@lid",
-        }),
-        { mentionRegexes: [] },
-        authDir,
-      );
-      expect(mentionedByNumber).toBe(true);
-    });
+    expect(mentionsBot({ body: "1777 ping", selfJid: "777@lid" })).toBe(true);
   });
 });
 
