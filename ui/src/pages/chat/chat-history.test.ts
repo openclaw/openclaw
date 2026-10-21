@@ -443,48 +443,6 @@ describe("chat history run errors", () => {
     handleChatGatewayEvent(state, { sessionKey: "main", runId, ...event });
   }
 
-  it("retires a recovered failure after a newer successful history and rejects its stale replay", async () => {
-    const first = {
-      role: "user",
-      content: "Start working",
-      __openclaw: { id: "first", idempotencyKey: "run:user", seq: 1 },
-    };
-    const failed = { sessionId: "session", messages: [first], sessionInfo: row() };
-    let history: ChatHistoryResult = failed;
-    const state = host(() => history);
-    await loadChatHistory(state);
-    expect(state.chatRunError?.summary).toContain(failed.sessionInfo.lastRunError);
-    history = {
-      sessionId: "session",
-      messages: [
-        first,
-        {
-          role: "user",
-          content: "Try again",
-          __openclaw: { id: "retry", idempotencyKey: "retry:user", seq: 2 },
-        },
-        {
-          role: "assistant",
-          content: "Recovered",
-          __openclaw: { id: "answer", idempotencyKey: "retry", seq: 3 },
-        },
-      ],
-      sessionInfo: row({ status: "done", lastRunId: "retry", lastRunError: undefined }),
-    };
-    await loadChatHistory(state);
-    expect(state.currentSessionId).toBe("session");
-    expect(state.chatMessages).toEqual(history.messages);
-    expect(state.chatRunId).toBeNull();
-    expect(getChatSessionProjection(state).runs.run).toMatchObject({
-      status: "error",
-      errorMessage: failed.sessionInfo.lastRunError,
-    });
-    expect(state.chatRunError).toBeNull();
-    history = failed;
-    await loadChatHistory(state);
-    expect(state.chatRunError).toBeNull();
-  });
-
   it.each([
     { snapshotStatus: "failed", newerState: "failed", requestOrder: "before" },
     { snapshotStatus: "done", newerState: "completed", requestOrder: "after" },

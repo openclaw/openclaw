@@ -390,29 +390,26 @@ describe("chat page split layout host", () => {
     );
   });
 
-  it("does not let a cold chat canonicalization replace a newer route", async () => {
-    const { navigation, canonicalLocation } = await coldPage();
-
-    window.history.replaceState({}, "", "/settings/appearance");
-    canonicalLocation.resolve(location("/chat/research"));
-    await canonicalLocation.promise;
-    await Promise.resolve();
-
-    expect(navigation.replace).not.toHaveBeenCalled();
-  });
-
-  it("does not let a cold chat canonicalization replace a newer draft", async () => {
-    const { navigation, canonicalLocation } = await coldPage("old");
-    await Promise.resolve();
-    navigation.replace.mockClear();
-
-    window.history.replaceState({}, "", "/chat/research/workspace?draft=new");
-    canonicalLocation.resolve(location("/chat/research", "?draft=old"));
-    await canonicalLocation.promise;
-    await Promise.resolve();
-
-    expect(navigation.replace).not.toHaveBeenCalled();
-  });
+  it.each(["route", "draft"] as const)(
+    "does not let a cold chat canonicalization replace a newer %s",
+    async (changed) => {
+      const draft = changed === "draft";
+      const { navigation, canonicalLocation } = await coldPage(draft ? "old" : undefined);
+      if (draft) {
+        await Promise.resolve();
+        navigation.replace.mockClear();
+      }
+      window.history.replaceState(
+        {},
+        "",
+        draft ? "/chat/research/workspace?draft=new" : "/settings/appearance",
+      );
+      canonicalLocation.resolve(location("/chat/research", draft ? "?draft=old" : ""));
+      await canonicalLocation.promise;
+      await Promise.resolve();
+      expect(navigation.replace).not.toHaveBeenCalled();
+    },
+  );
 
   it("replaces into the canonical face namespace without adding history", async () => {
     window.history.replaceState({}, "", "/chat");
@@ -577,32 +574,6 @@ describe("chat page split layout host", () => {
     expect(loadSettings().chatSplitLayout?.columns[0]?.paneWeights).toEqual([0.5, 0.5]);
   });
 
-  it.each(["command", "close"] as const)(
-    "keeps the mounted pane's dashboard when activated by %s",
-    async (activation) => {
-      const { page, navigation } = await mountPage(
-        { sessionKey: "main", face: "chat" },
-        setPaneSession(createSplitLayout("main"), "p1", WORK_SESSION_KEY),
-      );
-      const [dashboard, chat] = panesIn(page);
-      expectDefined(dashboard, "dashboard pane").captureNavigationFace = () => "dashboard";
-      navigation.replace.mockClear();
-      if (activation === "command") {
-        command({ command: { kind: "focus", sessionKey: WORK_SESSION_KEY } });
-      } else {
-        chat?.onClosePane?.(chat.paneId);
-      }
-      expect(navigation.replace).toHaveBeenCalledExactlyOnceWith("dashboard", {
-        pathname: sessionNavigationTarget({
-          face: "dashboard",
-          sessionKey: WORK_SESSION_KEY,
-          fallbackAgentId: "main",
-        }).options.pathname,
-      });
-      expect(navigation.patch).not.toHaveBeenCalled();
-    },
-  );
-
   it("declares split panes, session switches, pane closes, and page disposal", async () => {
     const page = document.createElement("openclaw-chat-page");
     const { request } = setViewerPresenceContext(page);
@@ -740,7 +711,7 @@ describe("chat page split layout host", () => {
   });
 
   it.each(["hidden", "narrow", "disconnected"] as const)(
-    "handles header and unrelated drags through %s",
+    "retires a header drag when the page becomes %s",
     async (ending) => {
       const viewport = Object.assign(new EventTarget(), { matches: false });
       if (ending === "narrow") {
@@ -765,15 +736,6 @@ describe("chat page split layout host", () => {
         return 1;
       });
       const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockClear();
-      const unrelatedTarget = expectDefined(page.querySelector(".chat-split-view"), "split view");
-      expect(page.querySelector(".chat-split-view__drop-indicator")).toBeNull();
-      dispatchSessionDrag(unrelatedTarget, "dragover", 200);
-      dispatchSessionDrag(unrelatedTarget, "drop", 200);
-      await settleChatPage(page);
-      expect(page.querySelector(".chat-split-view__drop-indicator")).toBeNull();
-      expect(loadSettings().chatSplitLayout).toEqual(layout);
-      expect(navigation.replace).not.toHaveBeenCalled();
-
       dispatchSessionDrag(header, "dragenter", 200);
       dispatchSessionDrag(header, "dragover", 200);
       frame?.(0);

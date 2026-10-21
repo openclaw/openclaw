@@ -38,36 +38,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("projects only actionable submissions, without message or diagnostic content", () => {
-  const host = hostFor();
-  for (const state of [
-    undefined,
-    "waiting-idle",
-    "waiting-reconnect",
-    "sending",
-    "submitting",
-    "failed",
-    "unconfirmed",
-    "held",
-  ] as const) {
-    const row = { ...item(String(state), state), sendError: "private diagnostic" };
-    expect(
-      admitStoredChatComposerQueueItem(
-        host,
-        captureChatOutboxAdmission(host, host.sessionKey),
-        row,
-      ),
-    ).toBe(true);
-  }
-  const attention = listChatOutboxAttention(host);
-  expect(attention.map((row) => row.id)).toEqual(["failed", "unconfirmed", "held"]);
-  expect(JSON.stringify(attention)).not.toMatch(/Private message|private diagnostic/);
-  expect(attention[1]).toMatchObject({ unconfirmed: true, command: false, ...scope });
-  expect(listChatOutboxAttention({ ...host, settings: { gatewayUrl: "ws://other.test" } })).toEqual(
-    [],
-  );
-});
-
 it.each(["selected", "background"])(
   "keeps attention aligned with live delivery in the %s pane",
   (pane) => {

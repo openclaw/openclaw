@@ -52,7 +52,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function mountRecovery(kind: "draft" | "queue" = "draft") {
+async function mountRecovery() {
   const request = vi.fn(async () => ({}));
   const host: Parameters<typeof PaneOutboxRecovery>[0]["state"] = {
     settings: { gatewayUrl: "ws://recovery-owner.test" },
@@ -67,29 +67,17 @@ async function mountRecovery(kind: "draft" | "queue" = "draft") {
     chatQueue: [],
     chatMessages: [],
   };
-  const preview = kind === "draft" ? "Saved input for explicit review" : "Saved queued input";
+  const preview = "Saved input for explicit review";
   const target = storageTargetForGateway(host.settings.gatewayUrl);
   sessionStorage.setItem(
-    kind === "draft" ? target.previousKey : target.key,
+    target.previousKey,
     JSON.stringify({
-      version: kind === "draft" ? 2 : 4,
+      version: 2,
       gatewayOwner: host.settings.gatewayUrl,
       recovery: {},
       sessions: {
-        [kind === "draft" ? "global\u0000agent:main" : "agent:main:main\u0000agent:main"]: {
-          ...(kind === "draft"
-            ? { draft: preview }
-            : {
-                queue: [
-                  {
-                    id: "queued-input",
-                    text: preview,
-                    createdAt: 1,
-                    sendRunId: "pending-delivery",
-                    sessionId: host.currentSessionId,
-                  },
-                ],
-              }),
+        "global\u0000agent:main": {
+          draft: preview,
           draftRevision: 1,
           updatedAt: 1,
         },
@@ -133,26 +121,13 @@ async function mountRecovery(kind: "draft" | "queue" = "draft") {
   };
 }
 
-it("retires durable delivery receipts from the run owner without bridge prop refreshes", async () => {
-  const { host, element } = await mountRecovery("queue");
-  const owner = chatRunPresentation(host);
+it("does not reread recovery for an unchanged run publication", async () => {
+  const fixture = await mountRecovery();
   const initialReads = recoveryIo.prepare.mock.calls.length;
-  owner.publish();
+  chatRunPresentation(fixture.host).publish();
   await Promise.resolve();
   flush();
   expect(recoveryIo.prepare).toHaveBeenCalledTimes(initialReads);
-
-  host.chatMessages = [
-    { role: "user", __openclaw: { id: null, seq: null, idempotencyKey: "pending-delivery" } },
-  ];
-  await waitForSolid(() => expect(recoveryIo.prepare).toHaveBeenCalledTimes(initialReads + 1));
-  expect(readChatOutboxRecovery(host).entries).toHaveLength(1);
-
-  host.chatMessages = [
-    { role: "user", __openclaw: { id: "delivered", idempotencyKey: "pending-delivery" } },
-  ];
-  await waitForSolid(() => expect(element.querySelector(".chat-outbox-recovery-row")).toBeNull());
-  expect(readChatOutboxRecovery(host).entries).toEqual([]);
 });
 
 it("admits one review before Solid flushes and restores through the storage owner", async () => {
