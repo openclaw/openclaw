@@ -10,9 +10,10 @@ import {
   createSqliteWorkerOperationAdmission,
   observeSqliteWorkerCommittedFacts,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import { resolveLegacyInheritedAuthSourceAgentDir } from "../legacy-inherited-auth-dir.js";
+import { resolveLegacyInheritedAuthSourceAgentDirWithoutRegistration } from "../legacy-inherited-auth-dir.js";
 import { reportCommittedInlineAuthFailure } from "./constants.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
 import {
@@ -21,6 +22,7 @@ import {
   parseSharedAuthStoreOwnership,
   resolveSharedAuthStoreOwnershipAsync,
 } from "./path-resolve.js";
+import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import {
   hasInspectedLegacySharedAuthOwnership,
   isSharedAuthProfileWrite,
@@ -56,21 +58,50 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
     params.assertCurrent?.();
     return false;
   }
-  const sourceDir = resolveLegacyInheritedAuthSourceAgentDir(params.config, params.env);
+  const sourceDir = resolveLegacyInheritedAuthSourceAgentDirWithoutRegistration(
+    params.config,
+    params.env,
+  );
   const sourcePath = path.join(sourceDir, "openclaw-agent.sqlite");
+  const mainSourceDir = resolveSharedMainAuthAgentDir(params.env);
+  const mainSourcePath = path.join(mainSourceDir, "openclaw-agent.sqlite");
+  const fallbackSourcePath = isSameOpenClawAgentDatabasePath(sourcePath, mainSourcePath)
+    ? undefined
+    : mainSourcePath;
   let sourceIdentity: ReturnType<typeof inspectDatabasePathIdentitySync>;
   try {
     sourceIdentity = inspectDatabasePathIdentitySync(sourcePath);
   } catch {
     // Preserve Doctor ownership when the source cannot even be inspected.
   }
+  let fallbackSourceIdentity: ReturnType<typeof inspectDatabasePathIdentitySync>;
+  if (fallbackSourcePath) {
+    try {
+      fallbackSourceIdentity = inspectDatabasePathIdentitySync(fallbackSourcePath);
+    } catch {
+      // An unreadable fallback leaves the relocation to Doctor.
+    }
+  }
   const legacySourcePaths = resolveLegacyAuthProfileSourceCandidates({
     agentDir: sourceDir,
     env: params.env,
   }).map(({ path: source }) => source);
   const legacySourcesPresent = legacySourcePaths.map((source) => fs.existsSync(source));
+  const fallbackLegacySourcePaths = fallbackSourcePath
+    ? resolveLegacyAuthProfileSourceCandidates({
+        agentDir: mainSourceDir,
+        env: params.env,
+      }).map(({ path: source }) => source)
+    : [];
+  const fallbackLegacySourcesPresent = fallbackLegacySourcePaths.map((source) =>
+    fs.existsSync(source),
+  );
   const commits = watchAuthProfileNativeCommits(sourcePath);
+  const fallbackCommits = fallbackSourcePath
+    ? watchAuthProfileNativeCommits(fallbackSourcePath)
+    : undefined;
   const unchanged = commits.capture();
+  const fallbackUnchanged = fallbackCommits?.capture();
   const assertBinding = () => {
     const currentOwnership = getPreparedSharedAuthStoreOwnership(params.env);
     // A concurrent first read can install this root's initial binding while we wait.
@@ -80,11 +111,14 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
     }
   };
   const assertSource = () => {
-    if (!unchanged()) {
+    if (!unchanged() || (fallbackUnchanged && !fallbackUnchanged())) {
       throw new Error("Shared auth source changed during bootstrap");
     }
     if (sourceIdentity) {
       assertDatabasePathIdentity(sourcePath, sourceIdentity);
+    }
+    if (fallbackSourcePath && fallbackSourceIdentity) {
+      assertDatabasePathIdentity(fallbackSourcePath, fallbackSourceIdentity);
     }
     if (
       legacySourcePaths.some(
@@ -92,6 +126,13 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
       )
     ) {
       throw new Error("Legacy auth source changed during bootstrap");
+    }
+    if (
+      fallbackLegacySourcePaths.some(
+        (source, index) => fs.existsSync(source) !== fallbackLegacySourcesPresent[index],
+      )
+    ) {
+      throw new Error("Legacy fallback auth source changed during bootstrap");
     }
   };
   const assertCurrent = () => {
@@ -107,7 +148,18 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
       (scope) =>
         scope.execute({
           type: "authProfiles.bootstrap",
-          input: { sourcePath, sourceIdentity, legacySourcePaths },
+          input: {
+            sourcePath,
+            sourceIdentity,
+            legacySourcePaths,
+            ...(fallbackSourcePath
+              ? {
+                  fallbackSourcePath,
+                  fallbackSourceIdentity,
+                  fallbackLegacySourcePaths,
+                }
+              : {}),
+          },
         }),
       {
         assertCurrent,
@@ -132,6 +184,7 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
             acknowledged = {
               ownership: parseSharedAuthStoreOwnership(facts.ownership),
               relocated: facts.relocated,
+              ...(typeof facts.sourcePath === "string" ? { sourcePath: facts.sourcePath } : {}),
             };
           });
           return { nativeLocations: [context.admission.databasePath, sourcePath], admission };
@@ -157,7 +210,11 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
         sourceFailure = { error };
       }
       // The marker is durable even if the original caller or source has since retired.
-      publishFreshSharedAuthStoreHandoff(sourcePath, params.env, !sourceFailure);
+      publishFreshSharedAuthStoreHandoff(
+        acknowledged?.sourcePath ?? sourcePath,
+        params.env,
+        !sourceFailure,
+      );
       if (sourceFailure) {
         throw sourceFailure.error;
       }
@@ -177,5 +234,6 @@ export async function prepareFreshSharedAuthStoreWriteAsync(params: {
     return true;
   } finally {
     commits.dispose();
+    fallbackCommits?.dispose();
   }
 }

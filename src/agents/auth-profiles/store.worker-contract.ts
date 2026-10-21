@@ -78,9 +78,15 @@ export type AuthProfileBootstrapInput = {
   sourcePath: string;
   sourceIdentity?: DatabasePathIdentity;
   legacySourcePaths: string[];
+  /** Main-agent store when the configured inheritance owner points at another directory. */
+  fallbackSourcePath?: string;
+  fallbackSourceIdentity?: DatabasePathIdentity;
+  fallbackLegacySourcePaths?: string[];
 };
 
 export type AuthProfileBootstrapResult = {
   ownership: SharedAuthStoreOwnership;
   relocated: boolean;
+  /** Empty store whose inspection authorized the relocation. */
+  sourcePath?: string;
 };

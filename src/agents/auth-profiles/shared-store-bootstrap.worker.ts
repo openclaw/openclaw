@@ -18,6 +18,7 @@ import type { WorkerOperationContext } from "../../state/worker-operation-regist
 import { parseSharedAuthStoreOwnership } from "./path-resolve.js";
 import {
   hasPendingSharedAuthCleanupInDatabase,
+  inspectSharedAuthLegacyRowsReadOnly,
   readSharedAuthLegacyRowsFromDatabase,
   SHARED_AUTH_STORE_MIGRATION_KIND,
 } from "./shared-store-bootstrap.js";
@@ -56,16 +57,33 @@ export function bootstrapSharedAuthStoreInWorker(
               .where("removed_source", "=", 0),
           )
           .as("pendingCleanup"),
+        expression
+          .exists(
+            expression
+              .selectFrom("migration_sources")
+              .select("source_key")
+              .where("migration_kind", "=", SHARED_AUTH_STORE_MIGRATION_KIND)
+              .where("source_path", "=", input.fallbackSourcePath ?? input.sourcePath)
+              .where("removed_source", "=", 0),
+          )
+          .as("fallbackPendingCleanup"),
       ]),
     );
   }, options);
   const initialOwnership = parseSharedAuthStoreOwnership(
     initial?.ownership == null ? undefined : JSON.parse(initial.ownership),
   );
-  if (initialOwnership.location === "state-db" || initial?.pendingCleanup) {
+  if (
+    initialOwnership.location === "state-db" ||
+    initial?.pendingCleanup ||
+    (input.fallbackSourcePath !== undefined && initial?.fallbackPendingCleanup)
+  ) {
     return { ownership: initialOwnership, relocated: false };
   }
-  const commit = (emptySource: boolean): AuthProfileBootstrapResult => {
+  const commit = (
+    emptySource: boolean,
+    handoffSourcePath = input.sourcePath,
+  ): AuthProfileBootstrapResult => {
     if (!emptySource) {
       return { ownership: initialOwnership, relocated: false };
     }
@@ -79,10 +97,11 @@ export function bootstrapSharedAuthStoreInWorker(
         const relocated =
           ownership.location === "legacy-main" &&
           emptySource &&
-          !hasPendingSharedAuthCleanupInDatabase(db, input.sourcePath);
+          !hasPendingSharedAuthCleanupInDatabase(db, handoffSourcePath);
         const result: AuthProfileBootstrapResult = {
           ownership: relocated ? { location: "state-db" } : ownership,
           relocated,
+          sourcePath: handoffSourcePath,
         };
         if (relocated) {
           writeConfigMachineStateInDatabase(db, SHARED_AUTH_STORE_STATE_KEY, result.ownership);
@@ -95,12 +114,19 @@ export function bootstrapSharedAuthStoreInWorker(
       { operationLabel: "auth-profiles.bootstrap" },
     );
   };
-  if (!input.sourceIdentity || input.legacySourcePaths.some((source) => fs.existsSync(source))) {
+  const legacySourcePresent = (sources: string[] | undefined) =>
+    (sources ?? []).some((source) => fs.existsSync(source));
+  if (
+    !input.sourceIdentity ||
+    legacySourcePresent(input.legacySourcePaths) ||
+    legacySourcePresent(input.fallbackLegacySourcePaths)
+  ) {
     return commit(false);
   }
   assertDatabasePathIdentity(input.sourcePath, input.sourceIdentity);
   if (!input.sourceIdentity.key.startsWith("file:")) {
-    return commit(true);
+    // A non-file source cannot be compared with main here; leave cutover to Doctor.
+    return commit(input.fallbackSourcePath === undefined);
   }
   let inspected = false;
   let source: EngineConnection | undefined;
@@ -126,7 +152,26 @@ export function bootstrapSharedAuthStoreInWorker(
       assertDatabasePathIdentity(input.sourcePath, input.sourceIdentity!);
       const rows = readSharedAuthLegacyRowsFromDatabase(source!);
       inspected = true;
-      return commit(!rows.store && !rows.state);
+      if (rows.store || rows.state) {
+        return commit(false);
+      }
+      // Main still backs inherited reads until ownership flips. Never flip while it
+      // holds rows the owner's empty store would not carry across.
+      if (input.fallbackSourcePath !== undefined) {
+        if (
+          !input.fallbackSourceIdentity ||
+          !input.fallbackSourceIdentity.key.startsWith("file:")
+        ) {
+          return commit(false);
+        }
+        assertDatabasePathIdentity(input.fallbackSourcePath, input.fallbackSourceIdentity);
+        const fallbackRows = inspectSharedAuthLegacyRowsReadOnly(input.fallbackSourcePath);
+        if (fallbackRows.store || fallbackRows.state) {
+          return commit(false);
+        }
+        return commit(true, input.fallbackSourcePath);
+      }
+      return commit(true);
     };
     if (isPostgresSqlConnection(source)) {
       const postgres = source;

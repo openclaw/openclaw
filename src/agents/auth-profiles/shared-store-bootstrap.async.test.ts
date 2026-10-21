@@ -106,6 +106,36 @@ it("keeps legacy ownership when the configured inheritance owner has credentials
   expect(ownership()).toBeUndefined();
 });
 
+it("keeps legacy ownership when the configured owner is empty and main has credentials", async () => {
+  const mainStore = {
+    version: 1,
+    profiles: {
+      "openai:main": { type: "api_key" as const, provider: "openai", key: "main-key" },
+    },
+  };
+  const mainDatabase = openOpenClawAgentDatabase({ agentId: "main", path: sourcePath, env });
+  writeAuthProfileJsonCell(mainDatabase.db, "store", "agent", mainStore);
+  const ownerDir = path.join(stateDir, "agents", "ops", "agent");
+  const ownerPath = sqlite.resolveAuthProfileDatabasePath(ownerDir);
+  const ownerDatabase = openOpenClawAgentDatabase({ agentId: "ops", path: ownerPath, env });
+  writeAuthProfileJsonCell(ownerDatabase.db, "store", "agent", { version: 1, profiles: {} });
+  const config = {
+    agents: {
+      defaults: { authInheritance: { agentId: "ops" } },
+      entries: { main: {}, ops: {} },
+    },
+  };
+  setRuntimeConfigSnapshot(config, config);
+  await prepareActor();
+
+  const updated = await updateAuthProfileStoreWithLock({ updater: () => false });
+
+  expect(updated).not.toBeNull();
+  expect(paths.resolveSharedAuthStoreOwnership(env).location).toBe("legacy-main");
+  expect(ownership()).toBeUndefined();
+  expect(sqlite.readPersistedAuthProfileStoreRaw(sourceDir)).toEqual(mainStore);
+});
+
 it("does not combine an explicit environment with the ambient runtime auth owner", async () => {
   const ambientOwnerDir = path.join(stateDir, "agents", "ambient", "agent");
   const ambientPath = sqlite.resolveAuthProfileDatabasePath(ambientOwnerDir);

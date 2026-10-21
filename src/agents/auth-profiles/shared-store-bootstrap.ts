@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertEngineStoreExecutionAllowed } from "../../infra/database-engine/admission-scope.js";
 import { hasErrnoCode } from "../../infra/errno.js";
@@ -13,10 +15,12 @@ import {
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { registerListener } from "../../shared/listeners.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { agentEngineInput, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -24,7 +28,10 @@ import {
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveLegacyInheritedAuthSourceAgentDir } from "../legacy-inherited-auth-dir.js";
+import {
+  resolveLegacyInheritedAuthAgentId,
+  resolveLegacyInheritedAuthSourceAgentDirWithoutRegistration,
+} from "../legacy-inherited-auth-dir.js";
 import { listLegacyAuthProfileSources } from "./legacy-source-files.js";
 import {
   noteCommittedSharedAuthStoreOwnership,
@@ -78,6 +85,14 @@ export type SharedAuthLegacyStateRow = { state_json: string; updated_at: number 
 export type SharedAuthLegacyRows = {
   store: SharedAuthLegacyStoreRow | null;
   state: SharedAuthLegacyStateRow | null;
+};
+
+export type LegacySharedAuthSourceSelection = {
+  sourceDir: string;
+  sourcePath: string;
+  ownerId: string;
+  mainSourcePath: string;
+  conflictingSourcePath?: string;
 };
 
 export class SharedAuthStoreSourceInspectionError extends Error {
@@ -264,6 +279,84 @@ export function hasPendingSharedAuthCleanupInDatabase(
   );
 }
 
+/** Treat malformed profile payloads as populated so a repair never discards a secret. */
+export function hasStoredSharedAuthProfiles(rows: SharedAuthLegacyRows): boolean {
+  if (!rows.store) {
+    return false;
+  }
+  const profiles = safeParseJsonRecord(rows.store.store_json)?.profiles;
+  return !isRecord(profiles) || Object.keys(profiles).length > 0;
+}
+
+function hasLegacyAuthSources(agentDir: string, env: NodeJS.ProcessEnv): boolean {
+  return listLegacyAuthProfileSources({ agentDir, env }).length > 0;
+}
+
+/**
+ * Before cutover, main is still the read-through source for installations that never
+ * used the configured owner. Select the only populated store, and leave both stores in
+ * place when choosing either would silently change the credentials peers inherit.
+ */
+export function resolveLegacySharedAuthSourceSelection(params: {
+  config: OpenClawConfig | undefined;
+  env: NodeJS.ProcessEnv;
+  ownershipLocation: "legacy-main" | "state-db";
+  artifactPreservingReadOnly?: boolean;
+}): LegacySharedAuthSourceSelection {
+  const mainSourceDir = resolveSharedMainAuthAgentDir(params.env);
+  const mainSourcePath = path.join(mainSourceDir, "openclaw-agent.sqlite");
+  const configuredOwnerDir = resolveLegacyInheritedAuthSourceAgentDirWithoutRegistration(
+    params.config,
+    params.env,
+  );
+  const configuredOwnerId = normalizeAgentId(
+    params.config ? resolveLegacyInheritedAuthAgentId(params.config) : LEGACY_IMPLICIT_AGENT_ID,
+  );
+  const configuredOwnerPath = path.join(configuredOwnerDir, "openclaw-agent.sqlite");
+  const ownerIsMain =
+    configuredOwnerId === LEGACY_IMPLICIT_AGENT_ID ||
+    isSameOpenClawAgentDatabasePath(configuredOwnerPath, mainSourcePath);
+  const main = {
+    sourceDir: mainSourceDir,
+    sourcePath: mainSourcePath,
+    ownerId: LEGACY_IMPLICIT_AGENT_ID,
+    mainSourcePath,
+  };
+  if (ownerIsMain) {
+    return main;
+  }
+  if (hasPendingSharedAuthCleanup(params.env, configuredOwnerPath, params)) {
+    return {
+      sourceDir: configuredOwnerDir,
+      sourcePath: configuredOwnerPath,
+      ownerId: configuredOwnerId,
+      mainSourcePath,
+    };
+  }
+  if (hasPendingSharedAuthCleanup(params.env, mainSourcePath, params)) {
+    return main;
+  }
+  if (params.ownershipLocation !== "legacy-main") {
+    return main;
+  }
+  const ownerRows = inspectSharedAuthLegacyRowsReadOnly(configuredOwnerPath, params);
+  const mainRows = inspectSharedAuthLegacyRowsReadOnly(mainSourcePath, params);
+  const ownerPopulated =
+    hasStoredSharedAuthProfiles(ownerRows) || hasLegacyAuthSources(configuredOwnerDir, params.env);
+  const mainPopulated =
+    hasStoredSharedAuthProfiles(mainRows) || hasLegacyAuthSources(mainSourceDir, params.env);
+  const owner = {
+    sourceDir: configuredOwnerDir,
+    sourcePath: configuredOwnerPath,
+    ownerId: configuredOwnerId,
+    mainSourcePath,
+  };
+  if (ownerPopulated && mainPopulated) {
+    return { ...owner, conflictingSourcePath: mainSourcePath };
+  }
+  return ownerPopulated ? owner : main;
+}
+
 export function publishFreshSharedAuthStoreHandoff(
   sourcePath: string,
   env: NodeJS.ProcessEnv,
@@ -286,25 +379,33 @@ function initializeFreshSharedAuthStore(env: NodeJS.ProcessEnv, config?: OpenCla
   if (ownership.location === "state-db" || inspectedLegacySharedAuthOwnerships.has(ownership)) {
     return;
   }
-  const sourceDir = resolveLegacyInheritedAuthSourceAgentDir(config, env);
-  const sourcePath = path.join(sourceDir, "openclaw-agent.sqlite");
   try {
-    if (listLegacyAuthProfileSources({ agentDir: sourceDir, env }).length > 0) {
+    const selection = resolveLegacySharedAuthSourceSelection({
+      config,
+      env,
+      ownershipLocation: ownership.location,
+    });
+    // Both stores hold inherited credentials. Leave each in place: copying either one
+    // would change which credentials some peers read.
+    if (selection.conflictingSourcePath) {
       inspectedLegacySharedAuthOwnerships.add(ownership);
       return;
     }
-    const rows = inspectSharedAuthLegacyRowsReadOnly(sourcePath);
-    if (rows.store || rows.state || hasPendingSharedAuthCleanup(env, sourcePath)) {
+    if (listLegacyAuthProfileSources({ agentDir: selection.sourceDir, env }).length > 0) {
       inspectedLegacySharedAuthOwnerships.add(ownership);
       return;
     }
+    const rows = inspectSharedAuthLegacyRowsReadOnly(selection.sourcePath);
+    if (rows.store || rows.state || hasPendingSharedAuthCleanup(env, selection.sourcePath)) {
+      inspectedLegacySharedAuthOwnerships.add(ownership);
+      return;
+    }
+    writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" }, { env });
+    publishFreshSharedAuthStoreHandoff(selection.sourcePath, env);
   } catch {
     // Doctor owns unreadable or partially migrated legacy state; never infer past it.
     inspectedLegacySharedAuthOwnerships.add(ownership);
-    return;
   }
-  writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" }, { env });
-  publishFreshSharedAuthStoreHandoff(sourcePath, env);
 }
 
 export function isSharedAuthProfileWrite(params: {

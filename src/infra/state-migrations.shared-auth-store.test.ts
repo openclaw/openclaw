@@ -9,6 +9,7 @@ import { prepareSharedAuthStoreOwnershipForNative } from "../agents/auth-profile
 import * as persisted from "../agents/auth-profiles/persisted.js";
 import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
 import * as paths from "../agents/auth-profiles/shared-main-dir.js";
+import { prepareFreshSharedAuthStoreWrite } from "../agents/auth-profiles/shared-store-bootstrap.js";
 import * as sqlite from "../agents/auth-profiles/sqlite.js";
 import * as authState from "../agents/auth-profiles/state.js";
 import {
@@ -307,6 +308,7 @@ it("uses a configured non-main inheritance owner as the migration source", async
   expect(detected).toEqual({
     sourcePath: sqlite.resolveAuthProfileDatabasePath(ownerDir),
     hasLegacy: true,
+    ownerId: "ops",
   });
   expect(await fixture.migrate(detected)).toMatchObject({
     warnings: [],
@@ -314,6 +316,111 @@ it("uses a configured non-main inheritance owner as the migration source", async
   });
   expect(sharedAuth(fixture.env).store).toEqual(ownerStore);
   expect(localAuth(ownerDir).store).toBeNull();
+});
+
+it("uses main when the configured owner has no credentials", async () => {
+  const fixture = await createEmptyFixture(false);
+  const mainAgentDir = path.dirname(fixture.sourcePath);
+  const mainStore = makeStore("openai:main", "main-key");
+  sqlite.writePersistedAuthProfileStoreRaw(mainStore, mainAgentDir);
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: { authInheritance: { agentId: "ops" } },
+      entries: { main: {}, ops: {} },
+    },
+  };
+
+  const detected = fixture.detect({ config });
+  expect(detected).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: true });
+  expect(await fixture.migrate(detected)).toMatchObject({
+    warnings: [],
+    changes: [expect.stringContaining("Relocated shared auth")],
+  });
+  expect(sharedAuth(fixture.env).store).toEqual(mainStore);
+  expect(localAuth(mainAgentDir).store).toBeNull();
+});
+
+it("leaves both stores untouched when main and the configured owner both hold credentials", async () => {
+  const fixture = await createEmptyFixture(false);
+  const mainAgentDir = path.dirname(fixture.sourcePath);
+  const ownerDir = path.join(fixture.stateDir, "agents", "ops", "agent");
+  const ownerPath = sqlite.resolveAuthProfileDatabasePath(ownerDir);
+  sqlite.writePersistedAuthProfileStoreRaw(makeStore("openai:main", "main-key"), mainAgentDir);
+  sqlite.writePersistedAuthProfileStoreRaw(makeStore("openai:owner", "owner-key"), ownerDir);
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: { authInheritance: { agentId: "ops" } },
+      entries: { main: {}, ops: {} },
+    },
+  };
+  const mainBytes = fs.readFileSync(fixture.sourcePath);
+  const ownerBytes = fs.readFileSync(ownerPath);
+
+  const detected = fixture.detect({ config });
+  expect(detected).toEqual({
+    sourcePath: ownerPath,
+    hasLegacy: true,
+    ownerId: "ops",
+    conflictingSourcePath: fixture.sourcePath,
+  });
+  expect(await fixture.migrate(detected)).toMatchObject({
+    changes: [],
+    outcome: "skipped",
+    warningDisposition: "recoverable",
+    warnings: [expect.stringContaining("also stores credentials")],
+  });
+  expect(fs.readFileSync(fixture.sourcePath)).toEqual(mainBytes);
+  expect(fs.readFileSync(ownerPath)).toEqual(ownerBytes);
+  expect(ownership.resolveSharedAuthStoreOwnership(fixture.env)).toEqual({
+    location: "legacy-main",
+  });
+});
+
+it("keeps legacy ownership when the configured owner is empty and main holds credentials", async () => {
+  const fixture = await createEmptyFixture(false);
+  const mainAgentDir = path.dirname(fixture.sourcePath);
+  const mainStore = makeStore("openai:main", "main-key");
+  sqlite.writePersistedAuthProfileStoreRaw(mainStore, mainAgentDir);
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: { authInheritance: { agentId: "ops" } },
+      entries: { main: {}, ops: {} },
+    },
+  };
+
+  expect(
+    prepareFreshSharedAuthStoreWrite({
+      agentDir: undefined,
+      allowExplicitMain: true,
+      env: fixture.env,
+      config,
+    }),
+  ).toBe(true);
+  expect(ownership.resolveSharedAuthStoreOwnership(fixture.env)).toEqual({
+    location: "legacy-main",
+  });
+  expect(localAuth(mainAgentDir).store).toEqual(mainStore);
+});
+
+it("treats a configured owner agentDir that resolves to main as main", async () => {
+  const fixture = await createEmptyFixture(false);
+  const mainAgentDir = path.dirname(fixture.sourcePath);
+  const mainStore = makeStore("openai:main", "main-key");
+  sqlite.writePersistedAuthProfileStoreRaw(mainStore, mainAgentDir);
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: { authInheritance: { agentId: "ops" } },
+      entries: { main: {}, ops: { agentDir: mainAgentDir } },
+    },
+  };
+
+  const detected = fixture.detect({ config });
+  expect(detected).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: true });
+  expect(await fixture.migrate(detected)).toMatchObject({
+    warnings: [],
+    changes: [expect.stringContaining("Relocated shared auth")],
+  });
+  expect(sharedAuth(fixture.env).store).toEqual(mainStore);
 });
 
 it("binds Doctor detection to the selected config instead of the runtime snapshot", async () => {
@@ -347,6 +454,7 @@ it("binds Doctor detection to the selected config instead of the runtime snapsho
     expect(detected.sharedAuthStore).toEqual({
       sourcePath: sqlite.resolveAuthProfileDatabasePath(ownerDir),
       hasLegacy: true,
+      ownerId: "ops",
     });
   } finally {
     clearRuntimeConfigSnapshot();

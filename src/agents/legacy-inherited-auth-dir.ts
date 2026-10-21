@@ -3,7 +3,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveAgentDir, tryResolveLegacyDataOwnerAgentId } from "./agent-scope-config.js";
+import {
+  resolveAgentDir,
+  resolveEffectiveAgentDir,
+  tryResolveLegacyDataOwnerAgentId,
+} from "./agent-scope-config.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { resolveSharedMainAuthAgentDir } from "./auth-profiles/shared-main-dir.js";
 
@@ -30,6 +34,19 @@ export function resolveLegacyInheritedAuthSourceAgentDir(
   return env.OPENCLAW_AGENT_DIR?.trim() || !config
     ? resolveSharedMainAuthAgentDir(env)
     : resolveLegacyInheritedAuthAgentDir(config, env);
+}
+
+/**
+ * Selection-only variant: resolving an aliased owner directory must not register that
+ * directory under the owner, or database-owner inference would pick the alias later.
+ */
+export function resolveLegacyInheritedAuthSourceAgentDirWithoutRegistration(
+  config: OpenClawConfig | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return env.OPENCLAW_AGENT_DIR?.trim() || !config
+    ? resolveSharedMainAuthAgentDir(env)
+    : resolveEffectiveAgentDir(config, resolveLegacyInheritedAuthAgentId(config), { env });
 }
 
 export function resolveLegacyAuthSourceStorePath(
