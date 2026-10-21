@@ -57,7 +57,8 @@ vi.mock("../config/logging.js", async (importOriginal) => ({
   logConfigUpdated: vi.fn(),
 }));
 
-vi.mock("../commands/onboard-helpers.js", () => ({
+vi.mock("../commands/onboard-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-helpers.js")>()),
   applyWizardMetadata: mocks.applyWizardMetadata,
 }));
 

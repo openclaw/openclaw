@@ -5103,7 +5103,6 @@
 ["src/flows/doctor-gateway-token-repair.test.ts","../../packages/terminal-core/src/note.js","336fc791de8ce9b19eba2b7bc282f83250c9743ee50617878e94ae793b1f1113",1]
 ["src/flows/doctor-health-contribution-runners.config.auth-cleanup.test.ts","../agents/auth-profiles.js","46b7a524e58040174f4a048dae28da9085673e0ca0740af488cb4c502b65a381",1]
 ["src/flows/doctor-health-contribution-runners.config.auth-cleanup.test.ts","../commands/doctor/shared/config-flow-steps.js","5d38730b707120b6d695a4ffa44a4cac572c76f9003c3422d4cd3f5c445eef07",1]
-["src/flows/doctor-health-contribution-runners.config.auth-cleanup.test.ts","../commands/onboard-helpers.js","91b4cb75b7c35c2ae4ce098b802dc05db2c10b3a6e8d60da059c7cb0c53986e9",1]
 ["src/flows/doctor-health-contribution-runners.state.codex.test.ts","../commands/doctor/shared/codex-route-warnings.js","ceeb4d65c891e8d9c1b104d7995a955eb5ed5c6b37c052f8ba1acc57d727d1aa",1]
 ["src/flows/doctor-health-contribution-runners.state.paths.test.ts","../../packages/terminal-core/src/note.js","450be5235770b4d05474698a4509b9b875cb392aa2e4fe326f659b4e3d5980dd",1]
 ["src/flows/doctor-health-contribution-runners.state.paths.test.ts","../commands/backup-health.js","9fc0832c082d459110dbeff1be105bc79867175f153a68b8cb8000ac728c05f8",1]
