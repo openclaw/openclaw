@@ -1,11 +1,10 @@
-// Native command fixtures register Vitest hooks and must load during test collection.
+import assert from "node:assert/strict";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { registerTelegramNativeCommands } from "./src/bot-native-commands.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,
-  createPrivateCommandContext,
   deliverReplies,
   nativeCommandMocks,
   resetNativeCommandMenuMocks,
@@ -44,42 +43,29 @@ export async function createTelegramNativeCommandTestDriver(options: {
     ) {
       const command = input.command ?? "qaowner";
       const native = bot.commandHandlers.get(command);
-      if (!native) {
-        throw new Error(`Expected registered native /${command} command`);
-      }
+      assert(native, `Expected registered native /${command} command`);
       const senderId = input.senderId ?? 100;
       const chatId = input.chatId ?? senderId;
-      const context = createPrivateCommandContext({
-        userId: senderId,
-        chatId,
-        messageId: 17,
-        match: input.match,
-        ...(input.group ? { date: 1_700_000_000, username: "admin" } : {}),
+      return native({
+        match: input.match ?? "",
+        message: {
+          message_id: 17,
+          date: input.group ? 1_700_000_000 : Math.floor(Date.now() / 1000),
+          chat: input.group
+            ? { id: chatId, type: "supergroup", title: "Owners", is_forum: true }
+            : { id: chatId, type: "private" },
+          ...(input.group ? { message_thread_id: input.threadId } : {}),
+          from: { id: senderId, username: input.group ? "admin" : "bob" },
+        },
       });
-      return native(
-        input.group
-          ? {
-              ...context,
-              message: {
-                ...context.message,
-                chat: { id: chatId, type: "supergroup", title: "Owners", is_forum: true },
-                message_thread_id: input.threadId,
-              },
-            }
-          : context,
-      );
     },
     pairingStoreReadCount: () => nativeCommandMocks.readChannelAllowFromStore.mock.calls.length,
     deliveries: () =>
       deliverReplies.mock.calls.map(([delivery]) => ({ replies: delivery.replies })),
     sentMessages: () =>
       bot.sendMessage.mock.calls.map(([chatId, text]: unknown[]) => {
-        if (
-          (typeof chatId !== "number" && typeof chatId !== "string") ||
-          typeof text !== "string"
-        ) {
-          throw new Error("Expected Telegram sendMessage chat ID and text");
-        }
+        assert(typeof chatId === "number" || typeof chatId === "string");
+        assert(typeof text === "string");
         return { chatId, text };
       }),
     configureLogin(input: {
