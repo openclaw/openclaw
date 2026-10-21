@@ -11,7 +11,7 @@ const option = { value: "alpha", label: "Alpha", agent: { id: "alpha" } };
 const fixtures = [
   {
     name: "agent select",
-    create() {
+    create(this: void) {
       const element = document.createElement("openclaw-agent-select");
       element.options = [option];
       element.value = option.value;
@@ -25,7 +25,7 @@ const fixtures = [
   },
   {
     name: "agent avatar",
-    create() {
+    create(this: void) {
       const element = document.createElement("openclaw-agent-avatar");
       element.option = option;
       return {
