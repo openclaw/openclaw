@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
 import type { RunCliAgentParams } from "./types.js";
 
+const session = { sessionId: "coding", updatedAt: 1 };
+const emptyTools = { native: [], openClaw: [] };
 const params: RunCliAgentParams = {
   sessionId: "coding",
   sessionKey: "agent:coder:dashboard:coding",
@@ -21,8 +23,7 @@ const params: RunCliAgentParams = {
     },
   },
   sessionEntry: {
-    sessionId: "coding",
-    updatedAt: 1,
+    ...session,
     spawnedBy: "agent:intake:main",
     spawnDepth: 1,
     inheritedToolPolicyVersion: 1,
@@ -46,11 +47,21 @@ const input = {
   skipsTurnPreparation: false,
 };
 
+async function expectPolicy(
+  request: Parameters<typeof resolveCliRuntimeToolPolicy>[0],
+  availability?: RunCliAgentParams["cliToolAvailability"],
+  allowPolicy?: string[],
+) {
+  const result = await resolveCliRuntimeToolPolicy(request);
+  expect([result.params.cliToolAvailability, result.runtimeToolsAllowPolicy]).toEqual([
+    availability,
+    allowPolicy,
+  ]);
+}
+
 describe("delegated CLI tool policy", () => {
   it("removes ambient tools and retains the policy-filtered host projection", async () => {
-    const result = await resolveCliRuntimeToolPolicy(input);
-    expect(result.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
-    expect(result.runtimeToolsAllowPolicy).toEqual(["*"]);
+    await expectPolicy(input, emptyTools, ["*"]);
   });
   it("refuses a backend that cannot enforce live delegated authority", async () => {
     await expect(
@@ -75,7 +86,7 @@ describe("workspace-only CLI tool policy", () => {
     {
       params: {
         ...workspaceInput.params,
-        sessionEntry: { sessionId: "coding", updatedAt: 1, execHost: "node" as const },
+        sessionEntry: { ...session, execHost: "node" as const },
       },
     },
   ])("refuses an unmediated workspace-only run: %j", async (overrides) => {
@@ -85,30 +96,26 @@ describe("workspace-only CLI tool policy", () => {
   });
 
   it("preserves an exact tool cap when replacing native tools", async () => {
-    const result = await resolveCliRuntimeToolPolicy({
-      ...workspaceInput,
-      params: {
-        ...workspaceInput.params,
-        cliToolAvailability: { native: ["Read"], openClaw: ["message"] },
+    await expectPolicy(
+      {
+        ...workspaceInput,
+        params: {
+          ...workspaceInput.params,
+          cliToolAvailability: { native: ["Read"], openClaw: ["message"] },
+        },
+        projectNativeToolAuthority: () => ["read"],
       },
-      projectNativeToolAuthority: () => ["read"],
-    });
-    expect(result.params.cliToolAvailability).toEqual({
-      native: [],
-      openClaw: ["message", "read"],
-    });
-    expect(result.runtimeToolsAllowPolicy).toBeUndefined();
+      { native: [], openClaw: ["message", "read"] },
+    );
   });
 
   it("keeps backend-enforced tool-free questions independent of the file tool policy", async () => {
-    const result = await resolveCliRuntimeToolPolicy({
+    await expectPolicy({
       ...workspaceInput,
       isSideQuestion: true,
       skipsTurnPreparation: true,
       sideQuestionToolMode: "disabled",
     });
-    expect(result.params.cliToolAvailability).toBeUndefined();
-    expect(result.runtimeToolsAllowPolicy).toBeUndefined();
   });
 });
 
@@ -116,14 +123,16 @@ describe("ordinary Claude tool policy", () => {
   const ordinaryParams: RunCliAgentParams = {
     ...params,
     provider: "claude-cli",
-    sessionEntry: { sessionId: "coding", updatedAt: 1 },
+    sessionEntry: session,
   };
   const ordinary = { ...input, params: ordinaryParams, backendId: "claude-cli" };
+  const run = (overrides: Partial<RunCliAgentParams>) => ({
+    ...ordinary,
+    params: { ...ordinaryParams, ...overrides },
+  });
 
   it("selects the existing completion projection for ordinary agent turns", async () => {
-    const result = await resolveCliRuntimeToolPolicy(ordinary);
-    expect(result.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
-    expect(result.runtimeToolsAllowPolicy).toEqual(["*"]);
+    await expectPolicy(ordinary, emptyTools, ["*"]);
   });
 
   it.each([
@@ -133,41 +142,23 @@ describe("ordinary Claude tool policy", () => {
     { name: "side question", isSideQuestion: true },
     { name: "isolated utility completion", skipsTurnPreparation: true },
   ])("preserves the existing surface for $name", async ({ name: _name, ...overrides }) => {
-    const result = await resolveCliRuntimeToolPolicy({ ...ordinary, ...overrides });
-    expect(result.params.cliToolAvailability).toBeUndefined();
-    expect(result.runtimeToolsAllowPolicy).toBeUndefined();
+    await expectPolicy({ ...ordinary, ...overrides });
   });
 
   it("preserves explicit native tool selection and node placement", async () => {
     const selection = { native: ["Read"], openClaw: [] };
-    const explicit = await resolveCliRuntimeToolPolicy({
-      ...ordinary,
-      params: { ...ordinaryParams, cliToolAvailability: selection },
-    });
-    expect(explicit.params.cliToolAvailability).toEqual(selection);
-    const node = await resolveCliRuntimeToolPolicy({
-      ...ordinary,
-      params: {
-        ...ordinaryParams,
-        sessionEntry: { sessionId: "coding", updatedAt: 1, execHost: "node" },
-      },
-    });
+    await expectPolicy(run({ cliToolAvailability: selection }), selection);
+    const node = await resolveCliRuntimeToolPolicy(
+      run({ sessionEntry: { ...session, execHost: "node" } }),
+    );
     expect(node.params.cliToolAvailability).toBeUndefined();
   });
 
-  it.each(["config", "run"] as const)(
-    "preserves node-only execution selected by %s",
-    async (source) => {
-      const result = await resolveCliRuntimeToolPolicy({
-        ...ordinary,
-        params: {
-          ...ordinaryParams,
-          ...(source === "config"
-            ? { config: { tools: { exec: { host: "node" as const } } } }
-            : { execOverrides: { host: "node" as const } }),
-        },
-      });
-      expect(result.params.cliToolAvailability).toBeUndefined();
-    },
-  );
+  it.each([
+    { config: { tools: { exec: { host: "node" as const } } } },
+    { execOverrides: { host: "node" as const } },
+  ])("preserves node-only execution selected by %j", async (overrides) => {
+    const result = await resolveCliRuntimeToolPolicy(run(overrides));
+    expect(result.params.cliToolAvailability).toBeUndefined();
+  });
 });
