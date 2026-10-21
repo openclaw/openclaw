@@ -66,6 +66,7 @@ import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js"
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewaySchedulerClock } from "../../test-utils/gateway-scheduler-clock.js";
 import { onTimer } from "../service/timer.test-support.js";
+import { readSessionMessagesAsyncMock } from "./run-automation.test-support.js";
 import { prepareAuthorityConfig, resetAuthorityRunHarness } from "./run.authority.test-support.js";
 import {
   createOperatorContinuationService,
@@ -76,7 +77,6 @@ import {
   loadRunCronIsolatedAgentTurn,
   loadSessionEntryMock,
   patchSessionEntryMock,
-  readSessionMessagesAsyncMock,
   resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";

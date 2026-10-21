@@ -106,6 +106,22 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
   if (!form.deliveryMode) {
     errors.deliveryMode = "cron.errors.deliveryModeRequired";
   }
+  if (form.activeHoursEnabled) {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(form.activeHoursStart)) {
+      errors.activeHoursStart = "cron.errors.activeHoursTime";
+    }
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(form.activeHoursEnd) && form.activeHoursEnd !== "24:00") {
+      errors.activeHoursEnd = "cron.errors.activeHoursTime";
+    }
+    const timezone = form.activeHoursTimezone.trim();
+    if (timezone && timezone !== "local" && timezone !== "user") {
+      try {
+        new Intl.DateTimeFormat("en", { timeZone: timezone }).format();
+      } catch {
+        errors.activeHoursTimezone = "cron.errors.activeHoursTimezone";
+      }
+    }
+  }
   if (form.deliveryMode === "webhook") {
     const error = resolveCronWebhookDeliveryError(form.deliveryTo);
     if (error) {
@@ -308,9 +324,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
           : sourceJob.schedule
         : buildCronSchedule(form, editingJob?.schedule);
     const preserveLockedPayload = Boolean(
-      editingJob &&
-      form.payloadLocked &&
-      isReadOnlyCronPayload(sourcePayload, sourceJob?.declarationKey),
+      editingJob && form.payloadLocked && isReadOnlyCronPayload(sourcePayload),
     );
     const payload = preserveLockedPayload
       ? undefined
@@ -323,29 +337,55 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       selectedDeliveryMode === "announce"
         ? normalizedDeliveryAccountId || (editingJob?.delivery?.accountId ? null : undefined)
         : undefined;
+    const ownerTarget = selectedDeliveryMode === "announce" && form.deliveryTarget === "owner";
+    const previousDelivery =
+      editingJob?.delivery?.mode === "webhook" ? undefined : editingJob?.delivery;
+    // Owner lookup may be account-scoped, but must never inherit a conversation or thread target.
+    const ownerChannel =
+      form.deliveryChannel !== "last" ? form.deliveryChannel.trim() || undefined : undefined;
     const delivery = selectedDeliveryMode
       ? {
           mode: selectedDeliveryMode,
           ...(selectedDeliveryMode === "none"
-            ? form.deliveryBestEffort
-              ? { bestEffort: true }
-              : {}
+            ? {
+                ...(form.deliveryBestEffort ? { bestEffort: true } : {}),
+                ...(form.deliveryTarget === "owner"
+                  ? {
+                      target: "owner",
+                      channel: ownerChannel,
+                      accountId: normalizedDeliveryAccountId || undefined,
+                    }
+                  : {}),
+                ...(form.deliveryDirectPolicy ? { directPolicy: form.deliveryDirectPolicy } : {}),
+              }
             : {
-                channel:
-                  selectedDeliveryMode === "announce"
+                channel: ownerTarget
+                  ? (ownerChannel ??
+                    (editingJob?.delivery?.channel !== undefined ? null : undefined))
+                  : selectedDeliveryMode === "announce"
                     ? normalizePersistedDeliveryChannel(form.deliveryChannel, {
                         preserveLast: Boolean(editingJob?.delivery?.channel),
                       })
                     : undefined,
                 to:
-                  form.deliveryTo.trim() ||
+                  (ownerTarget ? "" : form.deliveryTo.trim()) ||
                   (selectedDeliveryMode === "announce" && editingJob?.delivery?.to
                     ? null
                     : undefined),
+                target: ownerTarget ? "owner" : previousDelivery?.target ? null : undefined,
+                directPolicy:
+                  selectedDeliveryMode === "announce"
+                    ? form.deliveryDirectPolicy ||
+                      (previousDelivery?.directPolicy ? null : undefined)
+                    : undefined,
                 accountId: deliveryAccountId,
                 bestEffort: form.deliveryBestEffort,
               }),
-          ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
+          threadId: ownerTarget
+            ? editingJob?.delivery?.threadId !== undefined
+              ? null
+              : undefined
+            : form.deliveryThreadId,
           ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
             ? { completionDestination: form.deliveryCompletionDestination }
             : {}),
@@ -379,6 +419,18 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       sessionTarget: form.sessionTarget,
       wakeMode: form.wakeMode,
       trigger,
+      activeHours: form.activeHoursEnabled
+        ? {
+            start: form.activeHoursStart,
+            end: form.activeHoursEnd,
+            ...(form.activeHoursTimezone.trim()
+              ? { timezone: form.activeHoursTimezone.trim() }
+              : {}),
+          }
+        : editingJob?.activeHours
+          ? null
+          : undefined,
+      idleOnly: form.idleOnly || editingJob?.idleOnly !== undefined ? form.idleOnly : undefined,
       delivery,
       failureAlert,
     };

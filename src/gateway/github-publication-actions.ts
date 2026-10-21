@@ -25,7 +25,10 @@ import { prepareGitHubPublicationRequesterV2 } from "./github-publication-reques
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
-  params: Exclude<SessionGitHubActionParams, { action: "refresh_base" | "inspect_pr" }>;
+  params: Exclude<
+    SessionGitHubActionParams,
+    { action: "refresh_base" | "inspect_pr" | "prepare_pr" }
+  >;
 };
 type SessionRead = Awaited<ReturnType<typeof prepareGitHubPublicationSession>>;
 
@@ -221,6 +224,11 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     }
   };
   assertRequester();
+  if (entry.worktree?.githubPullRequest) {
+    throw new Error(
+      "This workspace continues an existing PR. Its PR actions are not available yet; an earlier publication cannot select its target.",
+    );
+  }
   const receipt = ownPublicationAction
     ? await service.latestPublishedShared(session, () => target.selected.readCurrent())
     : await service.latestShared(session, undefined, undefined, () =>

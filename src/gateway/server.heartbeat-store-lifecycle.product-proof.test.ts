@@ -171,7 +171,6 @@ describe("session notification store ownership through the Gateway", () => {
                 workspace: home.workspaceDir,
                 skipBootstrap: true,
                 model: "proof/primary",
-                heartbeat: { every: "30m" },
                 subagents: { allowAgents: ["*"], maxConcurrent: 2 },
                 models: Object.fromEntries(
                   ["primary", "backup"].map((model) => [

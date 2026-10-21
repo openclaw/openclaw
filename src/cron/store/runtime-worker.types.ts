@@ -5,6 +5,7 @@ import type {
   OperatorApprovalRecord,
 } from "../../gateway/operator-approval-store.types.js";
 import type { ExecApprovalsFile } from "../../infra/exec-approvals-core.js";
+import type { AgentDeletionRecoveryHoldPredicate } from "../../state/agent-deletion-journal-recovery.kernel.js";
 import type { CronJobScratchWriteInput, CronJobScratchWriteOutcome } from "../scratch-contract.js";
 import type {
   CronNotificationIntent,
@@ -19,6 +20,7 @@ import type {
   CronJob,
   CronRunDiagnostics,
   CronStoreFile,
+  CronStoredJob,
 } from "../types.js";
 import type { CronJobMutation, CronJobMutationSnapshot } from "./job-mutations.types.js";
 import type { CronJobFamilyIdentity } from "./row-codec.js";
@@ -79,6 +81,12 @@ export type CronExternalStateChange =
     };
 
 export type CronRuntimeMutationInputs = {
+  "cron.provisionDefaultProactive": {
+    storePath: string | undefined;
+    agentId: string;
+    planned: CronStoredJob;
+    recoveryHoldPredicate?: AgentDeletionRecoveryHoldPredicate;
+  };
   "cron.recordSkippedRuns": { storeKey: string; change: CronSkippedRunChange };
   "cron.mutateExternalState": {
     storeKey: string;
@@ -163,6 +171,11 @@ type CronScheduleOwnershipFacts = {
 };
 
 export type CronRuntimeMutationContracts = {
+  "cron.provisionDefaultProactive": {
+    input: CronRuntimeMutationInputs["cron.provisionDefaultProactive"];
+    snapshot: Record<string, never>;
+    outcome: { storeKey: string; created: boolean; job: CronStoredJob | undefined };
+  };
   "cron.recordSkippedRuns": {
     input: CronRuntimeMutationInputs["cron.recordSkippedRuns"];
     snapshot: {

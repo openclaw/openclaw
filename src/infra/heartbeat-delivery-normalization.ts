@@ -16,7 +16,7 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import { escapeRegExp } from "../utils.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
 
-export type NormalizedHeartbeatDelivery = {
+type NormalizedHeartbeatDelivery = {
   shouldSkip: boolean;
   text: string;
   hasMedia: boolean;

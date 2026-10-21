@@ -220,11 +220,11 @@ export function buildStatusCommandOverviewRows(params: {
     ? theme.success("enabled")
     : theme.muted("skipped (use --deep)");
   const heartbeatParts = params.summary.heartbeat.agents.map((agent) => {
-    if (!agent.enabled || !agent.everyMs) {
+    if (!agent.enabled) {
       return `disabled (${agent.agentId})`;
     }
     if (agent.waitingForRoute) {
-      return `${agent.every} (${agent.agentId}; waiting for delivery route — set commands.ownerAllowFrom=["telegram:123456789"] or channel allowFrom; explicit delivery: heartbeat.target="telegram" with heartbeat.to="123456789")`;
+      return `${agent.every} (${agent.agentId}; waiting for delivery route — set commands.ownerAllowFrom=["telegram:123456789"] or channel allowFrom, or edit the automation delivery channel and recipient)`;
     }
     return `${agent.every} (${agent.agentId})`;
   });

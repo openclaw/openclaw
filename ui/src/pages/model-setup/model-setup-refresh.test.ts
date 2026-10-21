@@ -17,6 +17,7 @@ import {
   waitForElement,
   pageButton,
 } from "./model-setup-first-run.test-support.ts";
+import { createPage, mountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
 const inventory: SystemAgentSetupDetectResult = {
   ...detection,
@@ -39,7 +40,19 @@ describe("Model setup refresh continuity", () => {
     vi.unstubAllGlobals();
   });
 
+  it("waits for route data without reading props during effect application", async () => {
+    const warnings = vi.spyOn(console, "warn");
+    const { context, request } = createFirstRunContext();
+    const page = createPage(context);
+    document.body.appendChild(page);
+    mountModelSetupPage(page);
+    await page.updateComplete;
+    expect(callsFor(request, "openclaw.setup.detect")).toHaveLength(0);
+    expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
+  });
+
   it("keeps editable drafts and focus through a failed rescan", async () => {
+    const warnings = vi.spyOn(console, "warn");
     const { context, client, request } = createFirstRunContext();
     const { page } = await mountDetection(context, client, inventory, false);
     await selectManualProvider(page, "fixture-key");
@@ -69,6 +82,7 @@ describe("Model setup refresh continuity", () => {
     expect(input.value).toBe("synthetic-draft");
     expect(document.activeElement).toBe(input);
     expect(page.querySelector('[role="alert"]')?.textContent).toContain("Rescan failed");
+    expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
   });
 
   it("reopens the published native inventory without restarting discovery and retries explicitly", async () => {

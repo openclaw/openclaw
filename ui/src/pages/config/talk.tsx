@@ -46,7 +46,12 @@ export type TalkCatalogState =
 type TalkViewProps = {
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   nativeDeviceSnapshot?: NativeDeviceSettingsSnapshot | null;
-  voiceWake?: { state: VoiceWakeEditorState; onInput: (text: string) => void; onRetry: () => void };
+  voiceWake?: {
+    readState: () => VoiceWakeEditorState;
+    scope?: object | null;
+    onInput: (text: string) => void;
+    onRetry: () => void;
+  };
   selection: TalkRealtimeSelection;
   catalog: TalkCatalogState;
   catalogScope?: object | null;
@@ -351,7 +356,8 @@ export function Talk(props: TalkViewProps) {
         <DeviceTalk capability={props.nativeDeviceSettings} snapshot={props.nativeDeviceSnapshot} />
         {props.voiceWake && (
           <VoiceWakeEditor
-            state={props.voiceWake.state}
+            readState={props.voiceWake.readState}
+            scope={props.voiceWake.scope}
             onInput={props.voiceWake.onInput}
             onRetry={props.voiceWake.onRetry}
           />

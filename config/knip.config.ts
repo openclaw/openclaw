@@ -94,6 +94,10 @@ const repositoryScriptEntries = [
   "scripts/perf/workboard-read-measure.ts!",
   "scripts/perf/transcript-hydration-headroom.ts!",
   "scripts/perf/transcript-worker-memory-preload.ts!",
+  // transcript-broadcast-measure.ts preloads this stage probe with --import.
+  "scripts/perf/github-options-measure-preload.ts!",
+  // scripts/perf/README.md invokes this prompt-history fingerprint benchmark by path.
+  "scripts/perf/prompt-cache-history-measure.ts!",
   // scripts/perf/README.md invokes this synthetic authority allocation probe by path.
   "scripts/perf/operator-authority-measure.ts!",
   // #179149 invokes this synthetic event-dispatch allocation probe by path.

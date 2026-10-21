@@ -122,7 +122,15 @@ describe("Gateway Claw Add plan", () => {
     const plan = await buildPlan(source, config, "claw-gateway-add-fixture");
     const projected = projectGatewayClawAddPlan(plan, source, trust, config);
 
-    expect(plan.actions.filter((action) => action.kind === "workspaceFile")).toHaveLength(3);
+    expect(plan.actions.filter((action) => action.kind === "workspaceFile")).toHaveLength(2);
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "cronJob",
+        id: "$portable-heartbeat",
+        scratch:
+          "# Incident Heartbeat\n\nCheck active incidents, unresolved owners, and overdue status updates.\n",
+      }),
+    );
     expect(projected).toMatchObject({
       operation: "add",
       target: { agentId: "claw-gateway-add-fixture" },
@@ -360,12 +368,24 @@ describe("Gateway Claw Add plan", () => {
           excluded: expect.arrayContaining(["exec", "browser"]),
         },
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" },
-        heartbeat: { enabled: true, intervalMs: 1_800_000 },
+        heartbeat: { enabled: false, intervalMs: null },
       },
     });
     expect(projected.scheduledJobs).toEqual({
       coverage: "package-declarations",
       jobs: [
+        {
+          id: "$portable-heartbeat",
+          action: "schedule",
+          blocked: false,
+          proposed: {
+            schedule: { everyMs: 1_800_000 },
+            session: "isolated",
+            delivery: "owner",
+            message: expect.stringContaining("Review your automation scratch checklist"),
+            messageDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          },
+        },
         {
           id: "heartbeat-summary",
           action: "schedule",

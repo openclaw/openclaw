@@ -1783,14 +1783,20 @@ focused tests; PR CI owns broad gates.
 
 ## Operator authority allocations
 
-`operator-authority-measure.ts` isolates five real synchronous authority owners:
-`auth-policy`, `retained-grant`, `model-execution`, `admitted-run`, and
-`transcript-guard`. Its synthetic non-owner operator has an explicitly required
+`operator-authority-measure.ts` isolates six real synchronous authority owners:
+`auth-policy`, `retained-grant`, `recovery-source`, `model-execution`,
+`admitted-run`, and `transcript-guard`. Its synthetic non-owner operator has an explicitly required
 access-policy plugin, registered
 through `createApi(...).registerGatewayAccessPolicy(...)` with the normal plugin
 instance invocation wrappers. Setup authorizes and resumes the grant once;
 rechecks use the retained authority, as the recovery owner does. The fixture
 exposes no other plugin runtime capabilities and starts no Gateway or services.
+`recovery-source` creates one synthetic profile in a private temporary SQLite
+store, decodes the persisted source shape, and calls `restoreGatewayOperatorSource`.
+Its measured check is the restored authority's `assertCurrent`, including the real
+profile, source-auth policy, and retained plugin-grant owners. Setup creates and
+warms the profile; teardown releases it and removes only the generated state directory.
+Set `TMPDIR` to the approved sandbox before running this scenario or `all`.
 
 ```sh
 node --expose-gc --import ./scripts/tsx.mjs scripts/perf/operator-authority-measure.ts \
@@ -1804,8 +1810,13 @@ plugin-resume, and plugin-assert counts. Setup and warmup are excluded. Allocati
 uses V8 sampling at 32 KiB with both collected-object flags enabled; the report
 is allocation churn, not retained-heap delta. Raw profiles accompany `--output`,
 and the report includes the fifteen largest allocation sites with eight-frame
-stacks. A post-capture positive control requires grant revocation to fail the
-very next retained-authority check.
+stacks. `estimatedAuthPolicyStringifyBytesPerCheck` separately totals sampled
+allocations beneath `captureGatewayAuthPolicy` → the stable-stringify serializer,
+including recursive serializer frames when V8 inlines the public wrapper and
+collected objects; zero samples are an estimate, not an exact invocation count. A post-capture positive control requires grant revocation to fail the
+very next retained-authority check. The recovery scenario also removes its
+allowed browser origin on a fresh config and requires the next source check to
+reject, outside the measured window.
 
 Use at least five simultaneous baseline/candidate pairs on the approved
 benchmark host, with one `--scenario` and the same future `--start-at <epoch-ms>`
@@ -1821,8 +1832,9 @@ real admitted-run active assertion. `transcript-guard` captures the real owned
 transcript assertion with that admitted run as its commit guard, without writing
 storage. None is a model turn, tool step, transcript append, or measured production
 frequency. Derive those counts from an instrumented
-Gateway turn separately. This probe does not include profile-database access,
-other access policies, contextual-ingress callbacks, or transport allocation.
+Gateway turn separately. The recovery scenario prepares profile-database access
+outside capture and measures only the warm resident owner. This probe does not
+include other access policies, contextual-ingress callbacks, or transport allocation.
 
 For real turn counts, add `--operator-access-policy` to the existing streaming
 driver's `chat.send --stress-tools` scenario. A small isolated fixture is enough
@@ -1908,6 +1920,11 @@ main isolate. Each sample's `workloadCpuProfile` includes the full
 hottest functions, and sampled time under `broadcastInternal`. This differs from
 `--cpu-profile`, which captures stream admission/release and optional recap
 phases; the two flags cannot be combined.
+
+Add `--presence-deltas` when measuring presence delivery preparation; without this
+capability, clients receive legacy presence snapshots and bypass delta preparation.
+The option uses the synthetic trusted-proxy Control UI clients so their connections
+participate in presence; default backend probes are excluded from the roster.
 
 Run full CPU attribution in a separate matched pass, replacing `--allocations`
 with `--workload-cpu-profile`. The new mode rejects `--allocations`, `--trace-gc`,

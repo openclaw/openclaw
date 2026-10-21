@@ -46,6 +46,10 @@ export const GitHubPullRequestInspectSchema = closedObject({
 });
 // API-observed owners include Enterprise Managed Users; linked-profile schemas stay separate.
 export const GITHUB_PULL_REQUEST_LOGIN_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,37}[A-Za-z0-9])?$";
+export const GitHubPullRequestPrepareSchema = closedObject({
+  action: Type.Literal("prepare_pr"),
+  pullRequestUrl: GitHubPullRequestInspectSchema.properties.pullRequestUrl,
+});
 const GitHubPullRequestRefSchema = closedObject({
   repository: NonEmptyString,
   repositoryId: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
@@ -123,6 +127,11 @@ export const GitHubPublicationEvidenceUploadSchema = closedObject({
 });
 export const SessionGitHubActionParamsSchema = Type.Union([
   closedObject({
+    ...GitHubPullRequestPrepareSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
     ...GitHubPullRequestInspectSchema.properties,
     sessionKey: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
@@ -160,6 +169,14 @@ export const SessionGitHubBaseRefreshResultSchema = closedObject({
   baseCommit: NonEmptyString,
   changedPaths: Type.Array(Type.String()),
   conflictPaths: Type.Array(Type.String()),
+  review: Type.Optional(closedObject({ mode: Type.Literal("local"), base: NonEmptyString })),
+});
+export const SessionGitHubPullRequestPrepareResultSchema = closedObject({
+  status: Type.Literal("prepared"),
+  url: NonEmptyString,
+  headCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
+  headChanged: Type.Boolean(),
+  changedPaths: Type.Array(Type.String()),
   review: Type.Optional(closedObject({ mode: Type.Literal("local"), base: NonEmptyString })),
 });
 
@@ -324,6 +341,9 @@ export const SessionGitHubOptionsResultSchema = closedObject({
 export type SessionGitHubBaseRefreshResult = Static<typeof SessionGitHubBaseRefreshResultSchema>;
 export type SessionGitHubPullRequestInspectResult = Static<
   typeof SessionGitHubPullRequestInspectResultSchema
+>;
+export type SessionGitHubPullRequestPrepareResult = Static<
+  typeof SessionGitHubPullRequestPrepareResultSchema
 >;
 export type GitHubPublicationPublisher = Static<typeof GitHubPublicationPublisherSchema>;
 export type GitHubPublicationAction = Static<typeof GitHubPublicationActionSchema>;

@@ -162,6 +162,7 @@ export async function completeReplyAgentRun(input: {
     sessionKey &&
     storePath &&
     runResult.meta?.terminalReply?.disposition !== "silent" &&
+    prepared.replyCompletion.outcome !== "silent" &&
     (finalPayloads.length > 0 ||
       isStrandedReplyRetryRun ||
       runResult.meta?.terminalReply !== undefined)

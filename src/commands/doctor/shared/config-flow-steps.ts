@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { note } from "../../../../packages/terminal-core/src/note.js";
 import {
   getDeferredPluginMigrationConfigFacts,
   setDeferredPluginMigrationConfigFacts,
@@ -15,7 +16,10 @@ import { resolvePluginDoctorProviderRenames } from "../../../plugins/doctor-cont
 import { migratePluginConfigId } from "../../../plugins/update-config.js";
 import { protectActiveAuthProfileConfig } from "../../doctor-auth-profile-config.js";
 import { stripUnknownConfigKeys } from "../../doctor-config-analysis.js";
-import type { DoctorConfigMutationState } from "./config-mutation-state.js";
+import {
+  applyDoctorConfigMutation,
+  type DoctorConfigMutationState,
+} from "./config-mutation-state.js";
 import {
   classifyOtelGrpcMigrationOwnership,
   containsAuthoredInclude,
@@ -147,6 +151,61 @@ export function applyUnknownConfigKeyStep(params: {
     repairs: protectedAuth.repairs,
     warnings: protectedAuth.warnings,
   };
+}
+
+/** Retire heartbeat data before removing unknown configuration keys. */
+export async function applyRetiredConfigStep(params: {
+  state: DoctorConfigMutationState;
+  shouldRepair: boolean;
+  doctorFixCommand: string;
+  sourceConfig: OpenClawConfig;
+  emitChanges: (changeLines: readonly string[]) => void;
+}): Promise<DoctorConfigMutationState> {
+  let state = params.state;
+  if (params.shouldRepair) {
+    const { tryProjectRetiredHeartbeatConfig } = await import("../../doctor-heartbeat-legacy.js");
+    const { retireHeartbeatWithDoctor } = await import("../../doctor-heartbeat-retirement.js");
+    const retiredConfig = tryProjectRetiredHeartbeatConfig(state.candidate)
+      ? await retireHeartbeatWithDoctor(state.candidate)
+      : undefined;
+    if (retiredConfig && JSON.stringify(retiredConfig) !== JSON.stringify(state.candidate)) {
+      const mutation = {
+        config: retiredConfig,
+        changes: ["Retired heartbeat configuration after ordinary automation data was verified."],
+      };
+      params.emitChanges(mutation.changes);
+      state = applyDoctorConfigMutation({
+        state,
+        mutation,
+        shouldRepair: params.shouldRepair,
+        fixHint: `Run "${params.doctorFixCommand}" to finish the heartbeat migration.`,
+      });
+    }
+  }
+
+  const unknownStep = applyUnknownConfigKeyStep({
+    state,
+    shouldRepair: params.shouldRepair,
+    doctorFixCommand: params.doctorFixCommand,
+    preservedPaths: getDeferredPluginMigrationConfigFacts(params.sourceConfig)?.flatMap((pending) =>
+      (pending.configPaths ?? []).concat(pending.validationExcludedPaths ?? []),
+    ),
+  });
+  if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
+    const lines = [
+      ...unknownStep.removed.map((pathLocal) => `- ${pathLocal}`),
+      ...unknownStep.repairs.map((change) => `- ${change}`),
+    ];
+    if (params.shouldRepair) {
+      params.emitChanges(lines);
+    } else {
+      note(lines.join("\n"), "Unknown config keys");
+    }
+  }
+  if (unknownStep.warnings.length > 0) {
+    note(unknownStep.warnings.join("\n"), "Doctor warnings");
+  }
+  return unknownStep.state;
 }
 
 export type DoctorConfigReferenceSource = {

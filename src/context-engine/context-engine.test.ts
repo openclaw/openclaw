@@ -475,7 +475,8 @@ describe("Default engine selection", () => {
     async (failure) => {
       const engineId = uniqueEngineId(failure);
       if (failure !== "missing") {
-        await registerContextEngineForOwner(
+        registerContextEngineInRegistry(
+          requireActivePluginRegistry(),
           engineId,
           () => {
             if (failure === "factory") {
@@ -621,12 +622,13 @@ it("does not construct or quarantine read-only discovery context-engine factorie
       throw new Error("discovery factory must not run");
     });
     const runtime = vi.fn(() => createEngine("lossless-claw"));
+    const registry = requireActivePluginRegistry();
     const registerDiscovery = () =>
-      registerContextEngineForOwner(engineId, readOnly, owner, {
+      registerContextEngineInRegistry(registry, engineId, readOnly, owner, {
         allowSameOwnerRefresh: true,
         lifecycle: "readOnlyDiscovery",
       });
-    await registerDiscovery();
+    registerDiscovery();
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("legacy");
     expect(readOnly).not.toHaveBeenCalled();
     expect(await listContextEngineQuarantines()).toEqual([]);
@@ -634,13 +636,12 @@ it("does not construct or quarantine read-only discovery context-engine factorie
 
     await registerContextEngineForOwner(engineId, runtime, owner, {
       allowSameOwnerRefresh: true,
-      lifecycle: "runtime",
     });
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("lossless-claw");
     expect(runtime).toHaveBeenCalledOnce();
     expect(await listContextEngineQuarantines()).toEqual([]);
 
-    await registerDiscovery();
+    registerDiscovery();
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("lossless-claw");
     expect(readOnly).not.toHaveBeenCalled();
     expect(runtime).toHaveBeenCalledTimes(2);

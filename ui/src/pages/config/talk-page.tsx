@@ -77,6 +77,7 @@ class VoiceWakeSettingsOwner {
   private connection: CatalogConnection | null = null;
   private voiceWakeTimer: ReturnType<typeof setTimeout> | undefined;
   private voiceWakeWrite: VoiceWakeWrite | null = null;
+  private voiceWakeRead: { promise: Promise<void>; pending: boolean } | null = null;
   private render?: () => void;
 
   constructor(private readonly gateway: ApplicationContext["gateway"]) {
@@ -86,6 +87,14 @@ class VoiceWakeSettingsOwner {
 
   get state() {
     return this.value;
+  }
+
+  get readRequest() {
+    return this.voiceWakeRead?.promise;
+  }
+
+  get connectionScope() {
+    return this.connection;
   }
 
   private update(nextState: VoiceWakeEditorState) {
@@ -99,10 +108,10 @@ class VoiceWakeSettingsOwner {
     const connection = this.connection;
     if (
       connection?.connected &&
-      this.state.kind !== "loading" &&
+      !this.voiceWakeRead?.pending &&
       (this.state.kind !== "ready" || this.state.phase === "saved")
     ) {
-      void this.loadVoiceWake(connection);
+      this.loadVoiceWake(connection);
     }
     return () => {
       this.render = undefined;
@@ -121,7 +130,7 @@ class VoiceWakeSettingsOwner {
     if (this.state.kind === "ready") {
       void this.saveVoiceWake();
     } else if (this.connection) {
-      void this.loadVoiceWake(this.connection);
+      this.loadVoiceWake(this.connection);
     }
   }
 
@@ -150,24 +159,43 @@ class VoiceWakeSettingsOwner {
         ? this.state
         : null;
     this.connection = connection;
+    this.voiceWakeRead = null;
     this.update(
       draft
         ? { ...draft, phase: "pending", error: t("configPage.deviceTalk.triggerWordsDisconnected") }
         : { kind: "unavailable" },
     );
     if (client && connected && !draft && this.render) {
-      void this.loadVoiceWake(connection);
+      this.loadVoiceWake(connection);
     }
   }
 
-  private async loadVoiceWake(connection: CatalogConnection) {
-    if (!connection.client || !connection.connected) {
+  private loadVoiceWake(connection: CatalogConnection) {
+    const client = connection.client;
+    if (!client || !connection.connected) {
       return;
     }
-    this.update({ kind: "loading" });
+    this.value = { kind: "unavailable" };
+    const read = { promise: this.readVoiceWake(client, connection), pending: true };
+    this.voiceWakeRead = read;
+    this.render?.();
+    // The Gateway owner retains this receipt while no route is mounted; the mounted
+    // async memo observes the same rejection through its error boundary.
+    void read.promise.then(
+      () => {
+        read.pending = false;
+      },
+      () => {
+        read.pending = false;
+      },
+    );
+  }
+
+  private async readVoiceWake(client: GatewayClient, connection: CatalogConnection): Promise<void> {
     try {
-      const result = await connection.client.request<{ triggers: string[] }>("voicewake.get", {});
+      const result = await client.request<{ triggers: string[] }>("voicewake.get", {});
       if (this.connection === connection) {
+        this.voiceWakeRead = null;
         this.update({
           kind: "ready",
           text: result.triggers.join("\n"),
@@ -176,12 +204,12 @@ class VoiceWakeSettingsOwner {
         });
       }
     } catch (error) {
-      if (this.connection === connection) {
-        this.update({
-          kind: "error",
-          error: t("configPage.deviceTalk.triggerWordsLoadError", { error: String(error) }),
-        });
+      if (this.connection !== connection) {
+        return;
       }
+      throw new Error(t("configPage.deviceTalk.triggerWordsLoadError", { error: String(error) }), {
+        cause: error,
+      });
     }
   }
 
@@ -575,7 +603,10 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
   const settings = createTalkSettings(context, props);
   const runtime = projectRuntimeConfig(context.runtimeConfig);
   const voiceWake = voiceWakeOwner(context.gateway);
-  const voiceWakeState = projectOwner(voiceWake, (owner) => owner.state);
+  const voiceWakeState = projectOwner(voiceWake, (owner) => owner);
+  // Only a new read receipt starts async work; draft and write updates stay synchronous.
+  const voiceWakeRequest = createMemo(() => voiceWakeState.read().readRequest);
+  const voiceWakeRead = createMemo(async () => voiceWakeRequest());
   const device = context.nativeDeviceSettings
     ? projectNativeDeviceSettings(context.nativeDeviceSettings)
     : undefined;
@@ -586,8 +617,12 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
         nativeDeviceSettings={context.nativeDeviceSettings}
         nativeDeviceSnapshot={device?.read()}
         voiceWake={{
-          get state() {
-            return voiceWakeState.read();
+          readState: () => {
+            voiceWakeRead();
+            return voiceWakeState.read().state;
+          },
+          get scope() {
+            return voiceWakeState.read().connectionScope;
           },
           onInput: (text) => voiceWake.edit(text),
           onRetry: () => voiceWake.retry(),

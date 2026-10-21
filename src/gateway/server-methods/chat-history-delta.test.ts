@@ -111,7 +111,6 @@ const sessionKey = "agent:main:delta-budget";
 const sessionId = "delta-budget-session";
 const sessionSnapshot = buildGatewaySessionSnapshot({
   agentId: "main",
-  includeSession: true,
   sessionRow: { key: sessionKey, sessionId, kind: "direct", updatedAt: 42 },
 });
 

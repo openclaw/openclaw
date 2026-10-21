@@ -154,7 +154,6 @@ it("delivers nested event rows identical to the full list for each viewer and cl
         const source = {
           ...buildGatewaySessionSnapshot({
             sessionRow: projection.snapshot({ key, agentId: "main" }).row,
-            includeSession: true,
             lifecycle: true,
           }),
           sessionKey: key,

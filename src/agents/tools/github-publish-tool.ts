@@ -5,6 +5,7 @@ import {
   GitHubBaseRefreshSchema,
   GitHubPullRequestInspectSchema,
   type SessionGitHubPullRequestInspectResult,
+  type SessionGitHubPullRequestPrepareResult,
   type SessionGitHubBaseRefreshResult,
   GitHubPublicationActionSchema,
   GitHubPublicationEditSchema,
@@ -38,6 +39,7 @@ const publicationOperatorActions = GitHubPublicationActionSchema.properties.acti
 const publicationWorkspaceActions = [
   "publish",
   "inspect_pr",
+  "prepare_pr",
   "refresh_base",
   "edit",
   "ready",
@@ -80,6 +82,7 @@ function describeGitHubPublishTool(
 - edit: omit title/body to read current metadata. To change either field, send requestId, expectedHeadCommit, and its new value with the observed expectedTitle/expectedBody. Keep attribution, marker and footer unchanged in the full body. Omitted fields stay unchanged. Edit never synchronizes, stages, commits or pushes files or changes PR state. Read with edit after an uncertain response before retrying.
 - ready: mark the current session's own draft ready for review, using the requestId and expectedHeadCommit observed with edit. After an uncertain response, read with edit before retrying. This does not merge the PR.
 - request_review: after an explicit re-review request, read the current PR with edit, then send requestId and expectedHeadCommit to post only "@clawsweeper re-review". No comment text, focus or child target is accepted. Posting is not review acceptance or completion. If the response is uncertain, read existing PR comments before any new request; never retry blindly.
+- prepare_pr: when the user asks to continue their own existing PR, supply only pullRequestUrl to prepare its source in this conversation's managed sandbox. Intent may be established before the URL arrives. Verification runs again; inspect_pr is optional. Initial preparation requires a clean workspace without dirty, untracked, staged, or unpublished work; otherwise preparation refuses and preserves that work. A clean workspace receives exactly the PR head files. Keeps its directory, sandbox scope and guest Git history, and associates the original PR without publishing. Repeating a completed same-head preparation preserves edits without resetting files. A newer remote head is refused until source updates are supported. An interrupted first import recovers the same accepted head; headChanged reports whether GitHub has since advanced. Tests and Auto Review use the returned exact review base. Imported PR publication and other PR actions are not available yet; do not create a replacement PR.
 ${evidenceAvailable ? "- upload_evidence: upload one inspected image/video from this conversation's sandbox workspace to its existing GitHub.com PR repository. First read the PR with edit; send its requestId/expectedHeadCommit and evidence {path: workspace-relative path, sha256: inspected lowercase SHA-256, sizeBytes: inspected byte count, at most 10 MB}. Supports PNG, JPEG, GIF, WebP, MP4, MOV and WebM. Only the inspected bytes are sent. Use the returned uploaded URL with edit to associate it in the PR body, then verify reviewer access; uploaded does not prove public access. An unconfirmed result may have created an attachment: never repeat the upload blindly. No host credentials, other mounts, remote URLs, repository or PR selectors are accepted.\n" : ""}${refreshBaseAvailable ? "- refresh_base: integrate the selected base into this local managed sandbox before tests and Auto Review. Resolve returned conflicts, then acknowledge with conflictsResolved: true and the returned baseCommit, including unchanged binary choices. Tests and Auto Review use the returned exact review base (mode local). Refresh stages source but preserves guest HEAD/branches/commits and never publishes.\n" : ""}Edit${evidenceAvailable ? ", upload_evidence" : ""}, request_review${refreshBaseAvailable ? ", refresh_base" : ""} and own-draft readiness accept no other repository, PR, ref or publishing session.`
     : "This conversation cannot publish its own workspace. It can act on an explicitly selected publishing child's PR.";
   return actionsAvailable
@@ -152,6 +155,7 @@ export function createGitHubPublishTool(
         Omit<GitHubPublicationEdit, "action"> & {
           action?:
             | "inspect_pr"
+            | "prepare_pr"
             | "publish"
             | "refresh_base"
             | "edit"
@@ -170,6 +174,30 @@ export function createGitHubPublishTool(
       }
       if (input.draft !== undefined && input.action && input.action !== "publish") {
         throw new Error("draft only selects the state when publishing a new PR.");
+      }
+      if (input.action === "prepare_pr") {
+        if (
+          !publicationAvailable ||
+          !input.pullRequestUrl ||
+          Object.keys(input).some((key) => !["action", "pullRequestUrl"].includes(key))
+        ) {
+          throw new Error("prepare_pr accepts only this PR's URL for the current workspace.");
+        }
+        return jsonResult(
+          await withGatewayToolCallerIdentity(
+            { ...caller, workspaceBaseRefreshSandbox: options.sandbox ?? undefined },
+            () =>
+              callGateway<SessionGitHubPullRequestPrepareResult>(
+                "sessions.github.action",
+                {
+                  sessionKey: caller.sessionKey,
+                  action: "prepare_pr",
+                  pullRequestUrl: input.pullRequestUrl,
+                },
+                { timeoutMs: 600_000 },
+              ),
+          ),
+        );
       }
       if (input.action === "inspect_pr") {
         if (
@@ -190,7 +218,7 @@ export function createGitHubPublishTool(
       }
       if (input.pullRequestUrl !== undefined) {
         throw new Error(
-          "Only inspect_pr accepts a pullRequestUrl; other actions keep their session-bound target.",
+          "Use inspect_pr or prepare_pr for a pullRequestUrl; other actions keep their session-bound target.",
         );
       }
       if (input.action === "request_review") {

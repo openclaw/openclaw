@@ -77,7 +77,7 @@ function registerOwner(onDisposeRegistered?: () => void): LifecycleOwner {
     runtime: api.runtime,
     acquire(auth: Auth, abortSignal?: AbortSignal) {
       setMatrixRuntime(api.runtime);
-      const pending = acquireSharedMatrixClient({ auth, startClient: false, abortSignal });
+      const pending = acquireSharedMatrixClient({ auth, abortSignal });
       acquisitions.push(pending);
       void pending.catch(() => undefined);
       return pending;

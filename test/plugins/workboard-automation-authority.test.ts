@@ -20,6 +20,7 @@ import {
   createFinishedBarrier,
   createNoopLogger,
 } from "../../src/cron/service.test-harness.js";
+import type { CronServiceDeps } from "../../src/cron/service/state.js";
 import type { GatewayMethodDescriptorInput } from "../../src/gateway/methods/descriptor.js";
 import { createGatewayMethodRegistry } from "../../src/gateway/methods/registry.js";
 import type { GatewayRequestHandler } from "../../src/gateway/server-methods/types.js";
@@ -55,9 +56,10 @@ it.each(["agent_end", "subagent_ended"] as const)(
     const inGatewayScope = <T>(run: () => T) =>
       withPluginRuntimeGatewayRequestScope(gatewayScope, run);
     const finished = createFinishedBarrier();
-    const executeJob = vi.fn(() => {
+    const executeJob = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => {
       expect(getGatewayToolCallerIdentity()).toBeUndefined();
       expect(getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.()).toBe(gatewayContext);
+      return { status: "ok" };
     });
     const scheduler = createTestGatewayScheduler();
     const cron = new CronService({
@@ -67,7 +69,8 @@ it.each(["agent_end", "subagent_ended"] as const)(
       cronEnabled: false,
       defaultAgentId: "main",
       log: createNoopLogger(),
-      enqueueSystemEvent: executeJob,
+      enqueueSystemEvent: vi.fn(),
+      runSessionEvent: executeJob,
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       onEvent: finished.onEvent,
