@@ -1,11 +1,13 @@
 import { createComponent, flush } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../../api/types.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
@@ -29,6 +31,7 @@ import {
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 import type { SidebarContent, SidebarSelection } from "./chat-sidebar-content-types.ts";
+import { SessionDiffPanel } from "./session-diff-panel.tsx";
 
 function workspaceFile(
   path: string,
@@ -279,6 +282,119 @@ describe("session workspace state", () => {
     expect(state.sessionWorkspaceState).toBe(replacementWorkspace);
     expect(state.sessionWorkspaceState?.list).toBe(replacementContents);
     expect(resolveSessionDiffSidebarContent(state)).not.toBe(oldDiff);
+  });
+
+  it("refreshes the displayed diff while an older uncommitted poll is pending", async () => {
+    const snapshot = (line: string): SessionsDiffResult => ({
+      sessionKey: "agent:main:current",
+      files: [
+        {
+          path: "example.txt",
+          status: "modified",
+          additions: 1,
+          deletions: 1,
+          patch: `@@ -1 +1 @@\n-before\n+${line}`,
+        },
+      ],
+      additions: 1,
+      deletions: 1,
+    });
+    const original = snapshot("original snapshot");
+    const pending = createDeferred<SessionsDiffResult>();
+    let holdPoll = false;
+    const state = createLoadingHost(
+      {},
+      {
+        client: {
+          request: (_method: string, params: { poll?: boolean }) =>
+            params.poll
+              ? holdPoll
+                ? pending.promise
+                : Promise.resolve(original)
+              : Promise.resolve(snapshot("updated snapshot")),
+        },
+        hello: gatewayHelloForMethods(["sessions.diff"]),
+      },
+    );
+    const content = resolveSessionDiffSidebarContent(state);
+    if (content?.kind !== "session-diff") {
+      throw new Error("Expected a diff owner");
+    }
+    const { container } = mountSolid(() =>
+      createComponent(SessionDiffPanel, {
+        mobile: true,
+        owner: content.owner,
+        scopeRequest: { owner: content.owner, scope: { scope: "uncommitted" } },
+        loader: content.load,
+        onResult: content.onResult,
+        execNode: null,
+        loadFileText: null,
+        openFile: null,
+        revealFile: null,
+      }),
+    );
+    await waitForSolid(() => expect(container.textContent).toContain("original snapshot"));
+    holdPoll = true;
+    const polling = content.load({ scope: "uncommitted" });
+    try {
+      container.querySelector<HTMLButtonElement>(".session-diff__refresh")!.click();
+      await waitForSolid(() => expect(container.textContent).toContain("updated snapshot"));
+    } finally {
+      pending.resolve(original);
+      await polling;
+    }
+    expect(content.uncommitted?.files[0]?.patch).toContain("updated snapshot");
+  });
+
+  it("retains uncommitted changes while computing and retires retries with visible demand", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const result = {
+      sessionKey: "agent:main:current",
+      files: [{ path: "changed.ts", status: "modified", additions: 2, deletions: 1 }],
+      additions: 2,
+      deletions: 1,
+    };
+    const computing = { ...result, files: [], additions: 0, deletions: 0, computing: true };
+    const request = vi.fn().mockResolvedValueOnce(computing).mockResolvedValue(result);
+    const state = createLoadingHost(
+      {},
+      {
+        client: { request },
+        hello: gatewayHelloForMethods(["sessions.diff"]),
+      },
+    );
+    const content = resolveSessionDiffSidebarContent(state);
+    if (content?.kind !== "session-diff") {
+      throw new Error("Expected a diff owner");
+    }
+    const stop = content.requestUncommitted?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(content.uncommitted).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(content.uncommitted).toBe(result);
+    if (stop) {
+      stop();
+    }
+    request.mockResolvedValue(computing);
+    const stopRefresh = content.requestUncommitted?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(content.uncommitted).toBe(result);
+    if (stopRefresh) {
+      stopRefresh();
+    }
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(request).toHaveBeenCalledTimes(3);
+
+    content.requestUncommitted?.();
+    await vi.advanceTimersByTimeAsync(0);
+    state.connectionEpoch += 1;
+    resolveSessionDiffSidebarContent(state);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(content.uncommitted).toBe(result);
   });
 
   it("retries a pending visible reload without publishing a retired load failure", async () => {

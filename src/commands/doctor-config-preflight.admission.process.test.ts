@@ -13,12 +13,14 @@ import {
   insertStoredDeviceIdentityIfAbsent,
   readStoredDeviceIdentity,
 } from "../infra/device-identity-store.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js";
 import { repairAuditEventsSchema } from "../state/openclaw-state-db-audit-migration.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseAsync,
@@ -478,10 +480,54 @@ it.each<[string, string, boolean, string?]>([
     } else {
       expect(result.stdout, output).toContain("__READY__");
       expect(output).not.toContain("__REFUSED__");
-      expect(fs.readFileSync(approvalsPath, "utf8")).toBe(approvalsJson);
-      expect(fs.readdirSync(stateDir)).not.toContainEqual(
-        expect.stringMatching(/^exec-approvals\.json\.migrated\./),
-      );
+      expect(fs.existsSync(approvalsPath)).toBe(false);
+      expect(fs.existsSync(`${approvalsPath}.doctor-importing`)).toBe(false);
+      const archives = fs
+        .readdirSync(stateDir)
+        .filter((name) => name.startsWith("exec-approvals.json.migrated."));
+      expect(archives).toHaveLength(1);
+      const archivePath = path.join(stateDir, archives[0]!);
+      expect(fs.readFileSync(archivePath, "utf8")).toBe(approvalsJson);
+      if (process.platform !== "win32") {
+        expect(fs.statSync(archivePath).mode & 0o777).toBe(0o600);
+      }
+      // The startup child has exited; inspect its committed state without creating an owner.
+      using migrated = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+        readOnly: true,
+      });
+      const query =
+        getNodeSqliteKysely<Pick<StateDatabase, "migration_sources" | "exec_approvals_config">>(
+          migrated,
+        );
+      const receipts = executeSqliteQuerySync(
+        migrated,
+        query
+          .selectFrom("migration_sources")
+          .selectAll()
+          .where("migration_kind", "=", "legacy-exec-approvals-json"),
+      ).rows;
+      expect(receipts).toHaveLength(1);
+      const sourceHash = createHash("sha256").update(approvalsJson).digest("hex");
+      expect(receipts[0]).toMatchObject({
+        source_path: approvalsPath,
+        source_sha256: sourceHash,
+        source_size_bytes: Buffer.byteLength(approvalsJson),
+        removed_source: 1,
+        status: "completed",
+      });
+      expect(JSON.parse(receipts[0]?.report_json ?? "null")).toMatchObject({
+        decision: "empty-legacy-retired",
+        archivePath,
+        sourceSha256: sourceHash,
+        importedRecordCount: 0,
+        removesSource: true,
+      });
+      expect(
+        executeSqliteQuerySync(
+          migrated,
+          query.selectFrom("exec_approvals_config").select("config_key"),
+        ).rows,
+      ).toEqual([]);
     }
     expect(fs.readFileSync(legacyPath)).toEqual(before);
     expect(fs.readFileSync(configPath)).toEqual(configBefore);

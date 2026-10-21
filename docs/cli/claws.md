@@ -31,30 +31,33 @@ with each Claw attributed to its publisher.
 
 ## Create with an agent
 
-With Claws enabled in Labs, choose **Create Claw** from the main chat header or
-the agent's left-sidebar context menu. The action sends the bundled
-`$create-claw` skill invocation into that agent's existing main chat. The agent
-proposes portable behavior with an input, job, output, and authority boundary,
-then writes its private draft in that conversation. When the draft is ready,
-the Control UI opens a review modal; the agent does not return a review link or
-create or fork a session. This flow currently requires a workspace on the
-Gateway host.
+With Claws enabled in Labs, choose **Create Claw** from the agent's left-sidebar
+row menu. Pinned agents keep this action in a focused row menu. The action sends
+the bundled `$create-claw` skill invocation into that agent's existing main
+chat. The agent proposes portable behavior with an input, job, output, and
+authority boundary, then writes its private draft in that conversation. When
+the draft is ready, the Control UI opens a review modal; the agent does not
+return a review link or create or fork a session. This flow currently requires
+a workspace on the Gateway host.
 
 The review modal shows the exact archive files and
-declared skill, plugin, MCP, and automation requirements. Change the name or
-description and uncheck any optional workspace file or requirement before
-publishing. **Ask for changes** returns to the same chat; inspect the rebuilt
-review after the agent revises the draft. The package includes only newly
+declared skill, plugin, MCP, and automation requirements. The Name field is
+the new agent's display name, defaulted to readable title case; it does not
+change the package slug used as the Claw's registry identity. Change the name
+or description and uncheck any optional workspace file or requirement before
+publishing. **Ask for changes** returns to the same chat; review the rebuilt
+package after the agent revises the draft. The package includes only newly
 authored proposal contents; it does not copy the source workspace, memories,
 or raw conversations. Known private paths and credential-like text are
 rejected. Review the remaining text for personal facts and private context.
 
-Sign in with `clawhub login` on the Gateway host. Review shows the personal publisher
-and scoped package name. **Publish to ClawHub** uploads that exact reviewed
-artifact; changing the selection or publisher requires another review. An agent
-turn cannot authorize this step. After submission, a dismissing notification
-confirms that publication is pending security review and links to the Claw's
-ClawHub page.
+Sign in with `clawhub login` on the Gateway host. **Publish to ClawHub** uploads
+the exact reviewed artifact using that account; changing the selection
+requires another review. The editable Name is the agent display name; the
+ClawHub package slug and authenticated publisher are separate identities. An
+agent turn cannot authorize publication. After submission, a dismissing
+notification confirms that publication is pending security review and links
+to the Claw's ClawHub page.
 After ClawHub makes it public, others can discover it and Add it as an ordinary agent.
 
 ## Author locally

@@ -164,6 +164,7 @@ it("publishes legacy transcript previews without acquiring stored row facts agai
       const before = projection.snapshot(query, { includeLastMessage: true }).row;
       expect(before?.lastMessagePreview).toBeUndefined();
       const resident = projection.describe(query)!;
+      const retainedMaterialized = resident.materialized;
       const membership = [...resident.membership];
       const hasBoard = resident.hasBoard;
       await listProjectedSessions({ projection, opts: { includeLastMessage: true } });
@@ -192,6 +193,9 @@ it("publishes legacy transcript previews without acquiring stored row facts agai
       expect([...projection.describe(query)!.membership]).toEqual(membership);
       expect(reads).not.toHaveBeenCalled();
       const current = projection.describe(query)!;
+      expect(current.materialized).not.toBe(retainedMaterialized);
+      expect(retainedMaterialized.row.lastMessagePreview).toBeUndefined();
+      expect(retainedMaterialized.source.lastMessagePreview).toBeUndefined();
       expect(current.materialized.source.lastMessagePreview).toBe(after?.lastMessagePreview);
       expect(current.materialized.row.lastMessagePreview).toBe(after?.lastMessagePreview);
       const list = await listProjectedSessions({ projection, opts: { includeLastMessage: true } });

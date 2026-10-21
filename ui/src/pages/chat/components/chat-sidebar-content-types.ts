@@ -89,7 +89,10 @@ export type SessionDiffScope =
   | { scope: "all" | "uncommitted" }
   | { scope: "commit"; commit: string };
 
-type SessionDiffLoader = (params: SessionDiffScope) => Promise<SessionsDiffResult>;
+type SessionDiffLoader = (
+  params: SessionDiffScope,
+  options?: { refresh?: boolean },
+) => Promise<SessionsDiffResult>;
 
 type SessionDiffFileTextLoader = (path: string) => Promise<string | null>;
 
@@ -235,7 +238,7 @@ type SessionDiffSidebarContent = {
   /** Last accepted native Uncommitted result for this exact diff loader. */
   uncommitted?: SessionsDiffResult;
   /** Visible Environment demand shares this content's native diff loader. */
-  requestUncommitted?: () => void;
+  requestUncommitted?: () => void | (() => void);
   onResult?: SessionDiffProps["onResult"];
   loadFileText?: SessionDiffFileTextLoader;
   openFile?: (path: string) => void | Promise<SessionWorkspacePreview | undefined>;

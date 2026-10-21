@@ -168,7 +168,7 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
                       </Show>
                       {detail()?.owner?.displayName && detail()?.latestVersion ? " · " : undefined}
                       <Show when={detail()?.latestVersion}>
-                        {(version) => t("skillsPage.latest", { version: version().version })}
+                        {(version) => <>{t("skillsPage.latest", { version: version().version })}</>}
                       </Show>
                     </div>
                   </Show>{" "}

@@ -793,6 +793,11 @@ openclaw-pending-session-create {
   }
 }
 
+.chat {
+  --chat-scroll-to-bottom-size: 36px;
+  --chat-scroll-to-bottom-gap: 12px;
+}
+
 /* The zero-height anchor keeps the affordance out of the flex flow so showing
    it never shrinks the transcript or moves the composer. */
 .chat-scroll-to-bottom-wrap {
@@ -805,13 +810,13 @@ openclaw-pending-session-create {
 
 .chat-scroll-to-bottom {
   position: absolute;
-  bottom: 12px;
+  bottom: calc(var(--chat-scroll-to-bottom-gap) + var(--chat-scroll-to-bottom-clearance, 0px));
   left: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: var(--chat-scroll-to-bottom-size);
+  height: var(--chat-scroll-to-bottom-size);
   padding: 0;
   line-height: 1;
   color: var(--text);

@@ -907,7 +907,11 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
         )
         .toEqual(
           expect.arrayContaining([
-            expect.objectContaining({ pluginId: "workboard", status: "activated" }),
+            {
+              reports: expect.arrayContaining([
+                expect.objectContaining({ pluginId: "workboard", status: "activated" }),
+              ]),
+            },
           ]),
         );
       if (captureUiProof) {

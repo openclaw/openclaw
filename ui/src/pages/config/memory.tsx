@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For } from "solid-js";
+import { createMemo, Errored, For, Loading } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import {
@@ -31,9 +31,6 @@ registerEnglishCatalog(registerPluginManagementEnglish);
 
 registerEnglishCatalog(registerMemoryImportEnglish);
 
-/** One installed plugin that can claim the exclusive `plugins.slots.memory` slot. */
-type MemoryEngineOption = ReturnType<typeof buildMemoryEngineOptions>[number];
-
 /**
  * Enablement as the page actually knows it, shared by the engine row and the
  * add-on rows. `loading` and `unknown` exist so a catalog that was never read
@@ -46,10 +43,7 @@ export type MemoryCatalogState =
   | { kind: "unavailable" }
   | { kind: "ready"; plugins: readonly PluginCatalogItem[]; mutationAllowed: boolean };
 
-export function buildMemoryEngineOptions(
-  catalog: MemoryCatalogState,
-  selection: MemoryEngineSelection,
-) {
+function buildMemoryEngineOptions(catalog: MemoryCatalogState, selection: MemoryEngineSelection) {
   if (catalog.kind !== "ready") {
     return [];
   }
@@ -112,13 +106,13 @@ export function findMemoryCatalogPlugin(catalog: MemoryCatalogState, pluginId: s
 /** Additive memory plugin: no `kind`, so it layers on top of whichever engine wins the slot. */
 type MemoryAddonRow = ReturnType<typeof buildMemoryAddonRows>[number];
 
-export function buildMemoryAddonRows(
+function buildMemoryAddonRows(
   catalog: MemoryCatalogState,
   state: {
-    busy: ReadonlySet<string>;
-    errors: ReadonlyMap<string, string>;
-    notices: ReadonlyMap<string, { message: string }>;
-    refreshWarnings: ReadonlyMap<string, string>;
+    busy: Readonly<Partial<Record<string, true>>>;
+    errors: Readonly<Partial<Record<string, string>>>;
+    notices: Readonly<Partial<Record<string, { message: string }>>>;
+    refreshWarnings: Readonly<Partial<Record<string, string>>>;
   },
 ) {
   return memoryAddonPresentations.map((addon) => {
@@ -128,10 +122,10 @@ export function buildMemoryAddonRows(
       label: t(addon.labelKey),
       description: entry?.description ?? addon.id,
       state: resolveMemoryPluginState(catalog, entry),
-      busy: state.busy.has(addon.id),
-      error: state.errors.get(addon.id) ?? null,
+      busy: state.busy[addon.id] === true,
+      error: state.errors[addon.id] ?? null,
       notice:
-        [state.notices.get(addon.id)?.message, state.refreshWarnings.get(addon.id)]
+        [state.notices[addon.id]?.message, state.refreshWarnings[addon.id]]
           .filter(Boolean)
           .join(" ") || null,
     };
@@ -143,19 +137,14 @@ export type MemoryEngineOutcome = { kind: "error" | "warning"; message: string }
 type MemoryViewProps = {
   activeTab: MemoryTab;
   onTabChange: (tab: MemoryTab) => void;
-  engineOptions: readonly MemoryEngineOption[];
+  catalog: MemoryCatalogState;
+  catalogScope?: object | null;
+  addonOutcomes: Parameters<typeof buildMemoryAddonRows>[1];
   engineSelection: MemoryEngineSelection;
-  /**
-   * What the catalog says about the plugin the slot names. The slot and plugin
-   * enablement are independent config surfaces, so the named owner can be
-   * disabled and memory silently off; only `enabled` means it is running.
-   */
-  engineState: MemoryPluginState;
   engineBusy: boolean;
   /** Distinguishes a rejected write from a committed write with a failed refresh. */
   engineOutcome: MemoryEngineOutcome | null;
   onEngineChange: (engineId: string | null) => void;
-  addons: readonly MemoryAddonRow[];
   canToggleAddons: boolean;
   onAddonChange: (pluginId: string, enabled: boolean) => void;
   pluginsHref: string;
@@ -192,8 +181,13 @@ function EngineSection(props: MemoryViewProps) {
   // plugin loads. A segmented control states that up front instead of leaving it
   // to a post-save toast.
   const engineId = () => selectedEngineId(props.engineSelection);
+  const engineOptions = createMemo(() =>
+    buildMemoryEngineOptions(props.catalog, props.engineSelection),
+  );
+  const blocked = () =>
+    props.engineBusy || (props.catalog.kind === "ready" && !props.catalog.mutationAllowed);
   const defaultEngine = () =>
-    props.engineOptions.find((option) => option.id === DEFAULT_MEMORY_ENGINE_ID)?.label ??
+    engineOptions().find((option) => option.id === DEFAULT_MEMORY_ENGINE_ID)?.label ??
     t("memoryPage.engine.openClawMemory");
   const defaultDescription = (
     <SettingsDefaultDescription
@@ -201,9 +195,9 @@ function EngineSection(props: MemoryViewProps) {
       overridden={props.engineSelection.kind !== "default"}
     />
   );
-  const available = () => props.engineOptions.length > 0;
+  const available = () => engineOptions().length > 0;
   const options = () => [
-    ...props.engineOptions.map((option) => ({
+    ...engineOptions().map((option) => ({
       value: option.id,
       label: option.available
         ? option.label
@@ -232,7 +226,7 @@ function EngineSection(props: MemoryViewProps) {
               <SettingsSegmented
                 value={engineId() ?? MEMORY_ENGINE_OFF}
                 options={options()}
-                disabled={props.engineBusy}
+                disabled={blocked()}
                 ariaLabel={t("memoryPage.engine.rowTitle")}
                 onChange={(value) => props.onEngineChange(value || null)}
               />
@@ -241,7 +235,7 @@ function EngineSection(props: MemoryViewProps) {
             )
           }
         />
-        {available() ? <DisabledEngineRow {...props} /> : undefined}
+        {available() ? <DisabledEngineRow {...props} engineBusy={blocked()} /> : undefined}
         {!available() || props.engineOutcome === null ? undefined : (
           <SettingsRow
             title={t(
@@ -274,9 +268,11 @@ function EngineSection(props: MemoryViewProps) {
  */
 function DisabledEngineRow(props: MemoryViewProps) {
   const engineId = () => selectedEngineId(props.engineSelection);
+  const state = () =>
+    resolveMemoryPluginState(props.catalog, findMemoryCatalogPlugin(props.catalog, engineId()));
   return (
     <>
-      {engineId() !== null && props.engineState === "disabled" && (
+      {engineId() !== null && state() === "disabled" && (
         <SettingsRow
           title={t("memoryPage.engine.disabledTitle")}
           description={t("memoryPage.engine.disabledHint")}
@@ -314,6 +310,8 @@ function AddonRow(props: { addon: MemoryAddonRow; owner: MemoryViewProps }) {
   return (
     <>
       {props.owner.canToggleAddons &&
+      props.owner.catalog.kind === "ready" &&
+      props.owner.catalog.mutationAllowed &&
       (props.addon.state === "enabled" || props.addon.state === "disabled") ? (
         <SettingsToggleRow
           title={props.addon.label}
@@ -349,12 +347,13 @@ function AddonRow(props: { addon: MemoryAddonRow; owner: MemoryViewProps }) {
 }
 
 function AddonsSection(props: MemoryViewProps) {
+  const addons = createMemo(() => buildMemoryAddonRows(props.catalog, props.addonOutcomes));
   return (
     <SettingsSection
       title={t("memoryPage.addons.title")}
       description={t("memoryPage.addons.description")}
     >
-      <For each={props.addons} keyed={(addon) => addon.id}>
+      <For each={addons()} keyed={(addon) => addon.id}>
         {(addon) => <AddonRow addon={addon()} owner={props} />}
       </For>
       <SettingsRow
@@ -369,11 +368,32 @@ function AddonsSection(props: MemoryViewProps) {
   );
 }
 
+function MemoryCatalogSections(props: MemoryViewProps) {
+  return (
+    <>
+      <EngineSection {...props} />
+      <AddonsSection {...props} />
+    </>
+  );
+}
+
 function SettingsTab(props: MemoryViewProps) {
+  const catalogScope = createMemo(() => props.catalogScope);
   return (
     <ShellLayoutBoundary traits={{ settingsPage: true }}>
       <div class="settings-page">
-        <EngineSection {...props} /> <AddonsSection {...props} />
+        <Errored
+          fallback={(_error) => (
+            <MemoryCatalogSections {...props} catalog={{ kind: "unavailable" }} />
+          )}
+        >
+          <Loading
+            on={catalogScope()}
+            fallback={<MemoryCatalogSections {...props} catalog={{ kind: "loading" }} />}
+          >
+            <MemoryCatalogSections {...props} />
+          </Loading>
+        </Errored>
         <p class="settings-page__intro">{t("memoryPage.search.intro")}</p>
       </div>
       {props.editor}

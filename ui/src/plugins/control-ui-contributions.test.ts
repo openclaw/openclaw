@@ -26,7 +26,7 @@ type ContributionsElement = HTMLElementTagNameMap["openclaw-plugin-contributions
 const sessionKey = "agent:main:main";
 const cleanups: (() => void)[] = [];
 
-it("renders customization inline and retains pending reload state", async () => {
+it("renders customization inline and recovers reload controls after failure or success", async () => {
   const listeners = new Set<() => void>();
   const replacement = {
     key: "fixture/composer",
@@ -35,6 +35,7 @@ it("renders customization inline and retains pending reload state", async () => 
   };
   let selected: typeof replacement | undefined;
   const pendingReload = createDeferred();
+  const retryReload = createDeferred();
   const diagnostics: PluginControlUiDiagnostic[] = [
     {
       pluginId: "custom-review",
@@ -129,11 +130,21 @@ it("renders customization inline and retains pending reload state", async () => 
       ),
     );
     expect(button(t("pluginUi.reload")).disabled).toBe(false);
+
+    plugins.reload.mockReturnValueOnce(retryReload.promise);
+    button(t("pluginUi.reload")).click();
+    await vi.waitFor(() => expect(button(t("pluginUi.reload")).disabled).toBe(true));
+    expect(manager.querySelector('[role="alert"]')).toBeNull();
+    retryReload.resolve();
+    await vi.waitFor(() => expect(button(t("pluginUi.reload")).disabled).toBe(false));
+    expect(manager.querySelector('[role="alert"]')).toBeNull();
+
     button(t("common.retry")).click();
     expect(plugins.refresh).toHaveBeenCalledOnce();
     expect(manager.querySelector("openclaw-modal-dialog")).toBeNull();
   } finally {
     pendingReload.resolve();
+    retryReload.resolve();
   }
 });
 

@@ -205,6 +205,62 @@ describe("prompt cache history fingerprints", () => {
     });
   });
 
+  it("reuses owned content under mutable append envelopes across observers", async () => {
+    const args = { options: { path: "before-append" } };
+    const message = makeAgentAssistantMessage({
+      content: [
+        {
+          type: "toolCall",
+          id: "call-1",
+          name: "read",
+          arguments: args,
+        },
+      ],
+      timestamp: 1,
+    });
+    // A live message can be observed and edited before append seals its content.
+    beginOpenAIObservation({ sessionId: scopedKey("before-append"), messages: [message] });
+    args.options.path = "owned-arguments-fixture";
+    // The append owner normalizes the message itself, rather than its enclosing entry.
+    normalizeTranscriptJsonValue(message, "");
+    expect(isOwnedTranscriptPayload(message)).toBe(false);
+    expect(isOwnedTranscriptPayload(message.content)).toBe(true);
+    const observers = ["first", "second"].map((name) =>
+      createPromptCacheRequestObserver(
+        { sessionId: scopedKey(name), streamStrategy: "test" },
+        () => {},
+      ),
+    );
+    const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
+    const hashes = vi.mocked(crypto.hash);
+    hashes.mockClear();
+    for (let turn = 0; turn < 3; turn++) {
+      for (const observer of observers) {
+        expect(
+          await observer.onModelRequest(model, { messages: convertToLlm([message]) }),
+        ).toMatchObject({ changes: null });
+      }
+    }
+    expect(
+      hashes.mock.calls.filter(
+        ([, text]) => typeof text === "string" && text.includes("owned-arguments-fixture"),
+      ),
+    ).toHaveLength(1);
+
+    message.content = [
+      { type: "toolCall", id: "call-1", name: "read", arguments: { options: { path: "changed" } } },
+    ];
+    for (const observer of observers) {
+      expect(
+        await observer.onModelRequest(model, { messages: convertToLlm([message]) }),
+      ).toMatchObject({
+        changes: [
+          { code: "historyRewrite", detail: expect.stringContaining("content[0].arguments") },
+        ],
+      });
+    }
+  });
+
   it.each([false, true])(
     "ignores internal tool-result envelopes but detects content rewrites (sealed=%s)",
     async (sealed) => {

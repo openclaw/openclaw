@@ -14,7 +14,7 @@ export type WhatsAppQaRuntimeEnv = {
   groupJid?: string;
 };
 
-export type WhatsAppQaApprovalDecision = "allow-once" | "deny";
+type WhatsAppQaApprovalDecision = "allow-once" | "deny";
 type WhatsAppQaApprovalDecisionMode = "reaction" | "rpc";
 
 type WhatsAppQaMessageSendMode =
@@ -166,9 +166,4 @@ export type WhatsAppQaScenarioImplementation = {
   buildRun: () => WhatsAppQaScenarioRun;
   configOverrides?: WhatsAppQaConfigOverrides;
   requiresGroupJid?: boolean;
-};
-
-export type WhatsAppQaScenarioMetadata = {
-  id: string;
-  timeoutMs: number;
 };

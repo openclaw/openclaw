@@ -68,6 +68,7 @@ export async function reviewClawDraft(
     reviewToken: reviewToken(target, snapshot, publisher, connection.baseUrl),
     publisher,
     name: snapshot.name,
+    displayName: snapshot.displayName,
     version: snapshot.version,
     description: snapshot.description,
     items: snapshot.items,

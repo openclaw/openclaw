@@ -10,7 +10,7 @@ import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-f
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createCronToolSchema } from "./cron-tool-schema.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
-import { createGitHubPublishTool } from "./github-publish-tool.js";
+import { createGitHubPublishTool, githubPublishToolDefinition } from "./github-publish-tool.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
 
 vi.mock("./in-process-gateway.js", async (importOriginal) => ({
@@ -49,6 +49,28 @@ it("applies deployment action limits when publication and operator actions are a
   expect(tool?.parameters).toMatchObject({
     properties: { action: { enum: ["publish", "inspect"] } },
   });
+  const inspection = {
+    action: "inspect_pr",
+    pullRequestUrl: "https://github.com/example/repository/pull/1",
+  };
+  expect(Value.Check(expectDefined(tool, "restricted tool").parameters, inspection)).toBe(false);
+  for (const definition of [
+    githubPublishToolDefinition,
+    createGitHubPublishTool(),
+    createGitHubPublishTool({ publicationAvailable: false, actionsAvailable: true }),
+  ]) {
+    const [allowed] = applyGatewayToolPolicy([definition], {
+      tools: {
+        gatewayPolicy: {
+          allow: ["github_publish"],
+          actions: { github_publish: ["inspect_pr"] },
+        },
+      },
+    });
+    expect(Value.Check(expectDefined(allowed, "inspection tool").parameters, inspection)).toBe(
+      true,
+    );
+  }
 });
 
 function publicationSandbox(overrides: Partial<SandboxContext> = {}) {
@@ -132,6 +154,12 @@ it.each<{
       expect(tool.description).not.toMatch(/refresh/i);
     }
     expect(Value.Check(tool.parameters, {})).toBe(true);
+    expect(
+      Value.Check(tool.parameters, {
+        action: "inspect_pr",
+        pullRequestUrl: "https://github.com/example/repository/pull/1",
+      }),
+    ).toBe(true);
     for (const action of ["publish", "edit", "ready", "request_review"]) {
       expect(Value.Check(tool.parameters, { action }), action).toBe(true);
     }
@@ -147,7 +175,7 @@ it.each<{
   }
 });
 
-it.each(["edit", "refresh_base", "ready", "request_review", "upload_evidence"])(
+it.each(["inspect_pr", "edit", "refresh_base", "ready", "request_review", "upload_evidence"])(
   "rejects draft on %s without changing PR state",
   async (action) => {
     const { callGateway, execute } = setup(true);
@@ -162,6 +190,10 @@ it("offers current-PR preparation without privileged actions", () => {
   const tool = createGitHubPublishTool({ sandbox: publicationSandbox() });
   const check = (args: unknown, valid = true) =>
     expect(Value.Check(tool.parameters, args)).toBe(valid);
+  check({
+    action: "inspect_pr",
+    pullRequestUrl: "https://github.com/example/repository/pull/1",
+  });
   const request = {
     requestId: "a1111111-1111-4111-8111-111111111111",
     expectedHeadCommit: "a".repeat(40),

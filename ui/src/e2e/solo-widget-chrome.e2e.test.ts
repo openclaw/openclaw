@@ -172,10 +172,18 @@ suite.define(() => {
             },
           ],
         });
+        // Request capture precedes completion of the board's serialized mutation.
+        await expect
+          .poll(() => page.locator(".board-announcer").textContent())
+          .toBe("Resized Release status.");
         expect(await frame.evaluate((element, previous) => element === previous, original)).toBe(
           true,
         );
         expect(await note.inputValue()).toBe("Keep this local draft");
+        // Request capture precedes completion; wait before changing pages and mutating again.
+        await page
+          .getByText("Resized Release status.", { exact: true })
+          .waitFor({ state: "attached" });
         await selectChatLayoutAction(page, "Restore split");
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
         await widget.focus();
@@ -225,7 +233,9 @@ suite.define(() => {
         });
         await expect.poll(() => widget.locator(chrome).count()).toBe(0);
         await page.getByRole("tab", { name: "Research", exact: true }).click();
-        await page.locator('[data-widget-name="research-widget"]').waitFor();
+        await page
+          .locator('[data-widget-name="research-widget"].board-widget--page-chrome')
+          .waitFor();
         const researchMenu = await showDashboardMenu(page);
         expect(
           await page

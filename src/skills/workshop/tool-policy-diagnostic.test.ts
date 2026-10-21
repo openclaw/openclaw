@@ -1,31 +1,39 @@
 import { describe, expect, it } from "vitest";
+import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentToolsConfig } from "../../config/types.tools.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "./tool-policy-diagnostic.js";
 
+const agent = (
+  entry: AgentEntryConfig,
+  defaults?: NonNullable<OpenClawConfig["agents"]>["defaults"],
+): OpenClawConfig => ({ agents: { entries: { main: entry }, ...(defaults ? { defaults } : {}) } });
+const agentTools = (tools: AgentToolsConfig) => agent({ tools });
+const byProvider = (tools: NonNullable<AgentToolsConfig["byProvider"]>[string]) => ({
+  byProvider: { openai: tools },
+});
+function withModel(config: OpenClawConfig): OpenClawConfig {
+  return {
+    ...config,
+    agents: { ...config.agents, defaults: { model: { primary: "openai/gpt-5.5" } } },
+  };
+}
+
 function detect(config: OpenClawConfig, workshopEnabled = true) {
-  const agents = config.agents;
-  const hasRoster = Boolean(agents && "entries" in agents);
   return detectSkillWorkshopToolPolicyDiagnostic({
-    config: {
-      ...config,
-      agents: hasRoster ? agents : { ...agents, entries: { main: {} } },
-    },
+    config: { ...config, agents: { entries: { main: {} }, ...config.agents } },
     workshopEnabled,
   });
 }
 
 describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
   it("reports the sandbox construction gate despite an additive grant", () => {
-    const diagnostic = detect({
-      agents: {
-        entries: {
-          main: {
-            sandbox: { mode: "all" },
-            tools: { profile: "minimal", alsoAllow: ["skill_workshop"] },
-          },
-        },
-      },
-    });
+    const diagnostic = detect(
+      agent({
+        sandbox: { mode: "all" },
+        tools: { profile: "minimal", alsoAllow: ["skill_workshop"] },
+      }),
+    );
 
     expect(diagnostic).toMatchObject({ source: "agents.entries.main.sandbox.mode" });
     expect(diagnostic?.detail).toContain("sandboxed run without library-authoring authority");
@@ -35,12 +43,12 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
   });
 
   it("identifies inherited sandbox mode and limits non-main advice to those sessions", () => {
-    const diagnostic = detect({
-      agents: {
-        defaults: { sandbox: { mode: "non-main" } },
-        entries: { main: { tools: { profile: "minimal", alsoAllow: ["skill_workshop"] } } },
-      },
-    });
+    const diagnostic = detect(
+      agent(
+        { tools: { profile: "minimal", alsoAllow: ["skill_workshop"] } },
+        { sandbox: { mode: "non-main" } },
+      ),
+    );
 
     expect(diagnostic).toMatchObject({ source: "agents.defaults.sandbox.mode" });
     expect(diagnostic?.detail).toContain("In non-main sessions");
@@ -50,17 +58,15 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
   it("returns no diagnostic for an included tool or an unsandboxed additive grant", () => {
     expect(detect({ tools: { profile: "coding" } })).toBeNull();
     expect(
-      detect({
-        agents: {
-          defaults: { sandbox: { mode: "all" } },
-          entries: {
-            main: {
-              sandbox: { mode: "off" },
-              tools: { profile: "messaging", alsoAllow: ["skill_workshop"] },
-            },
+      detect(
+        agent(
+          {
+            sandbox: { mode: "off" },
+            tools: { profile: "messaging", alsoAllow: ["skill_workshop"] },
           },
-        },
-      }),
+          { sandbox: { mode: "all" } },
+        ),
+      ),
     ).toBeNull();
   });
 
@@ -68,103 +74,53 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
     expect(detect({ tools: { profile: "messaging" } }, false)).toBeNull();
   });
 
-  it("names agent-scoped profile and allowlist sources", () => {
-    expect(
-      detect({
-        agents: { entries: { main: { tools: { profile: "messaging" } } } },
-      }),
-    ).toMatchObject({
-      source: "agents.entries.main.tools.profile",
-      fix: 'Add agents.entries.main.tools.alsoAllow: ["skill_workshop"].',
-    });
-
-    expect(
-      detect({
-        agents: { entries: { main: { tools: { allow: ["read"] } } } },
-      }),
-    ).toMatchObject({
-      source: "agents.entries.main.tools.allow",
-      fix: 'Add "skill_workshop" to agents.entries.main.tools.allow.',
-    });
-  });
-
-  it("targets the effective agent-scoped profile grant owner", () => {
-    expect(
-      detect({
+  it.each([
+    [
+      agentTools({ profile: "messaging" }),
+      "agents.entries.main.tools.profile",
+      'Add agents.entries.main.tools.alsoAllow: ["skill_workshop"].',
+    ],
+    [
+      agentTools({ allow: ["read"] }),
+      "agents.entries.main.tools.allow",
+      'Add "skill_workshop" to agents.entries.main.tools.allow.',
+    ],
+    [
+      {
         tools: { profile: "messaging" },
-        agents: { entries: { main: { tools: { alsoAllow: ["read"] } } } },
+        ...agentTools({ alsoAllow: ["read"] }),
+      },
+      "tools.profile",
+      'Add agents.entries.main.tools.alsoAllow: ["skill_workshop"].',
+    ],
+    [
+      withModel({
+        ...agentTools(byProvider({ alsoAllow: ["read"] })),
+        tools: byProvider({ profile: "messaging" }),
       }),
-    ).toMatchObject({
-      source: "tools.profile",
-      fix: 'Add agents.entries.main.tools.alsoAllow: ["skill_workshop"].',
-    });
-  });
-
-  it("targets the effective agent-scoped provider profile grant owner", () => {
-    expect(
-      detect({
-        agents: {
-          defaults: { model: { primary: "openai/gpt-5.5" } },
-          entries: {
-            main: {
-              tools: { byProvider: { openai: { alsoAllow: ["read"] } } },
-            },
-          },
-        },
-        tools: { byProvider: { openai: { profile: "messaging" } } },
-      }),
-    ).toMatchObject({
-      source: 'tools.byProvider["openai"].profile',
-      fix: 'Add agents.entries.main.tools.byProvider["openai"].alsoAllow: ["skill_workshop"].',
-    });
-  });
-
-  it("names the matching agent provider allowlist source", () => {
-    expect(
-      detect({
-        agents: {
-          defaults: { model: { primary: "openai/gpt-5.5" } },
-          entries: {
-            main: {
-              tools: { byProvider: { openai: { allow: ["read"] } } },
-            },
-          },
-        },
-      }),
-    ).toMatchObject({
-      source: 'agents.entries.main.tools.byProvider["openai"].allow',
-      fix: 'Add "skill_workshop" to agents.entries.main.tools.byProvider["openai"].allow.',
-    });
-  });
+      'tools.byProvider["openai"].profile',
+      'Add agents.entries.main.tools.byProvider["openai"].alsoAllow: ["skill_workshop"].',
+    ],
+    [
+      withModel(agentTools(byProvider({ allow: ["read"] }))),
+      'agents.entries.main.tools.byProvider["openai"].allow',
+      'Add "skill_workshop" to agents.entries.main.tools.byProvider["openai"].allow.',
+    ],
+  ] satisfies [OpenClawConfig, string, string][])(
+    "targets %s with source %s",
+    (config, source, fix) => {
+      expect(detect(config)).toMatchObject({ source, fix });
+    },
+  );
 
   it.each([
     { tools: { deny: ["skill_workshop"] } },
     { tools: { profile: "minimal", deny: ["skill_*"] } },
-    { tools: { byProvider: { openai: { deny: ["group:agents"] } } } },
-    { agents: { entries: { main: { tools: { profile: "minimal", deny: ["group:agents"] } } } } },
-    {
-      agents: {
-        entries: {
-          main: { tools: { byProvider: { openai: { deny: ["skill_workshop"] } } } },
-        },
-      },
-    },
-    {
-      agents: {
-        entries: {
-          main: { sandbox: { mode: "all" }, tools: { deny: ["skill_workshop"] } },
-        },
-      },
-    },
+    { tools: byProvider({ deny: ["group:agents"] }) },
+    agentTools({ profile: "minimal", deny: ["group:agents"] }),
+    agentTools(byProvider({ deny: ["skill_workshop"] })),
+    agent({ sandbox: { mode: "all" }, tools: { deny: ["skill_workshop"] } }),
   ] satisfies OpenClawConfig[])("treats a matching deny as an intentional opt-out: %j", (cfg) => {
-    expect(
-      detect({
-        ...cfg,
-        agents: {
-          ...cfg.agents,
-          defaults: { model: { primary: "openai/gpt-5.5" } },
-        },
-      }),
-    ).toBeNull();
+    expect(detect(withModel(cfg))).toBeNull();
   });
 });

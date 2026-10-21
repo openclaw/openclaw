@@ -75,7 +75,6 @@ it.each([
         expect(socket.sent.some((frame) => frame.method === "connect")).toBe(true),
       );
       const connect = socket.sent.find((frame) => frame.method === "connect")!;
-      expect(connect).toBeDefined();
       socket.receive({
         type: "res",
         id: connect.id,
@@ -95,9 +94,7 @@ it.each([
       const verification = runVerification([client, "main", modelTarget]);
       void verification.then(settled, settled);
       const request = socket.sent.at(-1)!;
-      expect(request).toMatchObject({
-        method: "openclaw.setup.verify",
-      });
+      expect(request.method).toBe("openclaw.setup.verify");
       expect(request.params).toEqual(
         modelTarget ? { agentId: "main", modelTarget: "utility" } : { agentId: "main" },
       );

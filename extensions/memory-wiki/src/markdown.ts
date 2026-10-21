@@ -25,7 +25,6 @@ export type ParsedWikiMarkdown = {
   body: string;
 };
 
-export type WikiClaimEvidence = NonNullable<ReturnType<typeof normalizeWikiClaimEvidence>>;
 export type WikiClaim = ReturnType<typeof normalizeWikiClaims>[number];
 type WikiPersonCard = ReturnType<typeof normalizeWikiPersonCard>;
 export type WikiRelationship = ReturnType<typeof normalizeWikiRelationships>[number];

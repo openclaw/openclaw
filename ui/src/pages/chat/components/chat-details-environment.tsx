@@ -1,8 +1,10 @@
+import type { JSX } from "@solidjs/web";
 import { Show, onSettled, createMemo, createSignal, merge } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
 import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
 import { ChatDetailsContextContent, ChatDetailsContextSummary } from "./chat-details-context.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
@@ -11,6 +13,29 @@ import type { ChatDetailsEnvironmentDesktopProps, ChatDetailsProps } from "./cha
 import { ChatPanePlacement, createChatMachinePresentation } from "./chat-pane-placement.tsx";
 
 type Props = { details: ChatDetailsProps; presented: boolean };
+
+export function EnvironmentAction(props: {
+  presented: boolean;
+  onOpen?: () => void;
+  children: () => JSX.Element;
+}) {
+  return (
+    <Show when={props.onOpen} fallback={props.children()}>
+      <button
+        class="chat-environment__action"
+        type="button"
+        onClick={() => {
+          if (props.presented) {
+            props.onOpen?.();
+          }
+        }}
+      >
+        {props.children()}
+        <Icon name="chevronRight" />
+      </button>
+    </Show>
+  );
+}
 
 export function EnvironmentChangeCounts(props: { result: SessionsDiffResult; mobile?: boolean }) {
   const binaryFiles = createMemo(() => props.result.files.filter((file) => file.binary).length);
@@ -46,9 +71,10 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
   const workspace = () => props.details.detailsWorkspace;
   const [localExpanded, setLocalExpanded] = createSignal(true);
   const expanded = () => props.expanded ?? localExpanded();
+  const visible = createDocumentVisibility();
   // The checkout owner loads and publishes; this leaf only supplies visible demand.
   const requestUncommitted = createMemo(() =>
-    props.presented && expanded() ? props.onRequestUncommitted : undefined,
+    props.presented && expanded() && visible() ? props.onRequestUncommitted : undefined,
   );
   const session = () => props.details.selectedSession;
   const placement = merge(
@@ -133,29 +159,14 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
         fallback={
           <Show when={host()}>
             <div class="chat-details__row chat-environment__row">
-              <Show
-                when={props.onOpenMachine}
-                fallback={
+              <EnvironmentAction presented={props.presented} onOpen={props.onOpenMachine}>
+                {() => (
                   <>
                     <MachineIcon />
                     <span>{host()}</span>
                   </>
-                }
-              >
-                <button
-                  class="chat-environment__action"
-                  type="button"
-                  onClick={() => {
-                    if (props.presented) {
-                      props.onOpenMachine?.();
-                    }
-                  }}
-                >
-                  <MachineIcon />
-                  <span>{host()}</span>
-                  <Icon name="chevronRight" />
-                </button>
-              </Show>
+                )}
+              </EnvironmentAction>
             </div>
           </Show>
         }
@@ -196,9 +207,8 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
       </Show>
       <Show when={changes()}>
         <div class="chat-details__row chat-environment__row">
-          <Show
-            when={props.onOpenUncommitted}
-            fallback={
+          <EnvironmentAction presented={props.presented} onOpen={props.onOpenUncommitted}>
+            {() => (
               <>
                 <Icon name="diff" />
                 <span>{t("chat.sessionDetails.changes")}</span>
@@ -206,25 +216,8 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                   {(result) => <EnvironmentChangeCounts result={result()} />}
                 </Show>
               </>
-            }
-          >
-            <button
-              class="chat-environment__action"
-              type="button"
-              onClick={() => {
-                if (props.presented) {
-                  props.onOpenUncommitted?.();
-                }
-              }}
-            >
-              <Icon name="diff" />
-              <span>{t("chat.sessionDetails.changes")}</span>
-              <Show when={changes()}>
-                {(result) => <EnvironmentChangeCounts result={result()} />}
-              </Show>
-              <Icon name="chevronRight" />
-            </button>
-          </Show>
+            )}
+          </EnvironmentAction>
         </div>
       </Show>
     </ChatDetailsDesktopSection>,

@@ -162,16 +162,17 @@ function BoardWidgetCellContent(
       : null,
   );
 
-  async function runAction(action: () => Promise<void>, failureMessage?: string) {
+  async function runAction(run: () => Promise<void>, failureMessage?: string) {
     if (actionInFlight || props.busy) {
       return;
     }
     actionInFlight = true;
+    // A cell-local action would hold the shared owner's busy updates across bridge roots.
     setActionPending(true);
     setActionError("");
     menu?.close();
     try {
-      await action();
+      await run();
     } catch (error) {
       if (connected) {
         setActionError(formatUiError(error));

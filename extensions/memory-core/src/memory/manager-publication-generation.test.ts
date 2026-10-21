@@ -422,6 +422,7 @@ it("refreshes invalidated source and vector facts after an in-process write", as
       db.prepare(
         "INSERT INTO memory_index_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       ).run("memory_vector_rebuild_v1", "1");
+      db.prepare("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1").run();
     });
     const sql = observeHostDataSql();
     try {
@@ -441,6 +442,7 @@ it("refreshes invalidated source and vector facts after an in-process write", as
         "clean",
         "memory_vector_rebuild_v1",
       );
+      db.prepare("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1").run();
     });
     await database.refreshFacts();
     expect(database.facts.invalidatedSources).toEqual([]);

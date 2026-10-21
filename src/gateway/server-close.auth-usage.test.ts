@@ -1,7 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { markAuthProfileSuccess } from "../agents/auth-profiles/profiles.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -12,22 +9,17 @@ import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gate
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
-import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
+import { readClosedDatabase } from "./server-close.lifecycle.test-support.js";
+import { createGatewayCloseRace } from "./server-close.race.test-support.js";
 
 it("settles accepted auth bookkeeping across the close prelude and refuses new usage", async ({
   signal,
 }) => {
-  const fixture = await createGatewayMetadataCloseFixture("gateway-auth-usage-close");
-  const recordingEntered = createDeferred();
-  const releaseRecording = createDeferred();
-  const preludeEntered = createDeferred();
-  let closing: Promise<void> | undefined;
+  const race = await createGatewayCloseRace("gateway-auth-usage-close", signal);
+  const { fixture, kernel } = race;
   let queuedFailure: Promise<void> | undefined;
-  let restoreRecording: (() => void) | undefined;
+  race.onCleanup(() => queuedFailure?.catch(() => {}));
   try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = expectDefined(fixture.kernels.get(port), "Gateway kernel");
     const profileId = "fixture:accepted-close";
     const store: AuthProfileStore = {
       version: 1,
@@ -38,12 +30,11 @@ it("settles accepted auth bookkeeping across the close prelude and refuses new u
     const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
     const recording = probe.command(stateWorker, async (command, executeOptions, scope) => {
       if (command.type === "authProfiles.usage") {
-        recordingEntered.resolve();
-        await releaseRecording.promise;
+        await race.block();
       }
       return scope.execute(command, executeOptions);
     });
-    restoreRecording = () => recording.mockRestore();
+    race.onCleanup(() => recording.mockRestore());
     const inGateway = <T>(operation: () => T) =>
       withPluginRuntimeGatewayContextResolver(kernel.resolvePluginGatewayContext, operation);
     inGateway(() =>
@@ -55,56 +46,36 @@ it("settles accepted auth bookkeeping across the close prelude and refuses new u
         sessionId: "accepted-close-session",
       }),
     );
-    await withinTest(recordingEntered.promise, signal);
+    await race.waitForEntry();
     queuedFailure = inGateway(() =>
       markAuthProfileFailure({ store, profileId, reason: "timeout" }),
     );
     void queuedFailure.catch(() => undefined);
-    kernel.scheduler.signal.addEventListener("abort", () => preludeEntered.resolve(), {
-      once: true,
-    });
-    let closed = false;
-    closing = server.close({ reason: "auth bookkeeping close regression" }).then(() => {
-      closed = true;
-    });
-    await withinTest(preludeEntered.promise, signal);
+    await race.close(kernel.scheduler.signal, undefined, { reason: "auth usage close" });
     await expect(
       inGateway(() => markAuthProfileSuccess({ store, profileId, provider: "fixture" })),
     ).rejects.toThrow("Auth profile usage owner is closed");
-    expect(closed).toBe(false);
+    expect(race.closed).toBe(false);
     expect(shared.isOpen).toBe(true);
 
-    releaseRecording.resolve();
-    await withinTest(closing, signal);
+    await race.finish();
     await queuedFailure;
     expect(shared.isOpen).toBe(false);
-    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
-      readOnly: true,
-    });
-    try {
-      const row = database
-        .prepare(
-          "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.state'",
-        )
-        .get();
-      expect(JSON.parse(String(row?.value_json))).toMatchObject({
-        lastGood: { fixture: profileId },
-        usageStats: {
-          [profileId]: {
-            lastUsed: expect.any(Number),
-            errorCount: 1,
-            failureCounts: { timeout: 1 },
-          },
+    const [row] = readClosedDatabase(
+      resolveOpenClawStateSqlitePath(fixture.state.env),
+      "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.state'",
+    );
+    expect(JSON.parse(String(row?.value_json))).toMatchObject({
+      lastGood: { fixture: profileId },
+      usageStats: {
+        [profileId]: {
+          lastUsed: expect.any(Number),
+          errorCount: 1,
+          failureCounts: { timeout: 1 },
         },
-      });
-    } finally {
-      database.close();
-    }
+      },
+    });
   } finally {
-    releaseRecording.resolve();
-    await closing?.catch(() => {});
-    await queuedFailure?.catch(() => {});
-    restoreRecording?.();
-    await fixture.cleanup();
+    await race.dispose();
   }
 });
