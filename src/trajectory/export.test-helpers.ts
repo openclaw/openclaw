@@ -2,20 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Message, Usage } from "openclaw/plugin-sdk/llm";
 
-const emptyUsage: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
-};
+const zeroCounts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+const emptyUsage: Usage = { ...zeroCounts, totalTokens: 0, cost: { ...zeroCounts, total: 0 } };
+const textContent = (text: string): [{ type: "text"; text: string }] => [{ type: "text", text }];
 
 export function userMessage(content: string): Message {
   return { role: "user", content, timestamp: 1 };
@@ -36,12 +25,12 @@ export function assistantMessage(
   };
 }
 
-function toolResultMessage(content: Extract<Message, { role: "toolResult" }>["content"]): Message {
+function toolResultMessage(text: string): Message {
   return {
     role: "toolResult",
     toolCallId: "call_1",
     toolName: "read",
-    content,
+    content: textContent(text),
     isError: false,
     timestamp: 3,
   };
@@ -85,11 +74,7 @@ export function simpleSessionEntries(
       ...messageEntry("entry-user", null, params.userMessage ?? userMessage("hello"), 40),
       timestamp: params.userEntryTimestamp ?? "2026-04-01T05:46:40.000Z",
     },
-    messageEntry(
-      "entry-assistant",
-      "entry-user",
-      assistantMessage([{ type: "text", text: "done" }]),
-    ),
+    messageEntry("entry-assistant", "entry-user", assistantMessage(textContent("done"))),
   ];
 }
 
@@ -116,18 +101,8 @@ export function toolCallSessionEntries(workspaceDir: string, toolResultText = "R
       "entry-user",
       readCall(path.join(workspaceDir, "skills", "weather", "SKILL.md")),
     ),
-    messageEntry(
-      "entry-tool-result",
-      "entry-tool-call",
-      toolResultMessage([{ type: "text", text: toolResultText }]),
-      42,
-    ),
-    messageEntry(
-      "entry-assistant",
-      "entry-tool-result",
-      assistantMessage([{ type: "text", text: "done" }]),
-      43,
-    ),
+    messageEntry("entry-tool-result", "entry-tool-call", toolResultMessage(toolResultText), 42),
+    messageEntry("entry-assistant", "entry-tool-result", assistantMessage(textContent("done")), 43),
   ];
 }
 
