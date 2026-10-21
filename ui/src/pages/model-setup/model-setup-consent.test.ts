@@ -1,31 +1,22 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../../i18n/index.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
+import { describe, expect, it } from "vitest";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
+  activated,
+  callsFor,
   candidate,
   clickCandidate,
   createFirstRunContext,
-  detection,
-  mountPage,
+  modalButton,
+  mountDetection,
+  pendingReceipt,
+  runningStep,
+  useFirstRunFixtures,
 } from "./model-setup-first-run.test-support.ts";
 import { MODEL_SETUP_AUTH_START_TIMEOUT_MS } from "./state.ts";
 
 describe("ModelSetupPage activation consent", () => {
-  beforeEach(async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    localStorage.setItem(
-      "openclaw-device-identity-v1",
-      JSON.stringify({ version: 1, privateKey: "test-device-key" }),
-    );
-    await i18n.setLocale("en");
-  });
-  afterEach(() => {
-    document.body.replaceChildren();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  useFirstRunFixtures("test-device-key");
 
   it.each(["accept", "decline", "cancel"] as const)(
     "requires an explicit answer before activation (%s)",
@@ -45,33 +36,25 @@ describe("ModelSetupPage activation consent", () => {
           };
           expect(next.sessionId).toBe(activeSession);
           if (!next.answer) {
-            return {
-              done: false,
-              status: "running",
-              step: {
-                id: "review",
-                type: "note",
-                title: "Review model setup",
-                message: "This changes the selected model route.",
-              },
-            };
+            return runningStep({
+              id: "review",
+              type: "note",
+              title: "Review model setup",
+              message: "This changes the selected model route.",
+            });
           }
           answers.push(next.answer);
           if (next.answer.stepId === "review") {
-            return {
-              done: false,
-              status: "running",
-              step: {
-                id: "consent",
-                type: "confirm",
-                title: "Confirm model setup",
-                message: "Apply the reviewed changes?",
-                initialValue: false,
-              },
-            };
+            return runningStep({
+              id: "consent",
+              type: "confirm",
+              title: "Confirm model setup",
+              message: "Apply the reviewed changes?",
+              initialValue: false,
+            });
           }
           return next.answer.value === true
-            ? { done: true, status: "done", modelActivation: { modelRef: "provider/selected" } }
+            ? activated("provider/selected")
             : { done: true, status: "cancelled", error: "Model setup was declined." };
         }
         if (method === "wizard.cancel") {
@@ -79,42 +62,28 @@ describe("ModelSetupPage activation consent", () => {
         }
         throw new Error(`Unexpected method ${method}`);
       });
-      const { page } = await mountPage(context, {
-        state: {
-          phase: "ready",
-          result: {
-            ...detection,
-            candidates: [
-              candidate("codex-cli", "provider/selected", true),
-              candidate("openai-api-key", "provider/other", true),
-            ],
-          },
-        },
-        client,
-        firstRun: true,
+      const { page } = await mountDetection(context, client, {
+        candidates: [
+          candidate("codex-cli", "provider/selected", true),
+          candidate("openai-api-key", "provider/other", true),
+        ],
       });
       expect(request).not.toHaveBeenCalled();
       await clickCandidate(page, "openai-api-key");
       await waitForFast(() => expect(page.textContent).toContain("Review model setup"));
       expect(context.navigate).not.toHaveBeenCalled();
-      const button = (label: string) =>
-        [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
-          (element) => element.textContent?.trim() === label,
-        )!;
-      button("Continue").click();
+      modalButton(page, "Continue")!.click();
       await waitForFast(() => expect(page.textContent).toContain("Apply the reviewed changes?"));
       expect(answers).toEqual([{ stepId: "review", value: undefined }]);
       expect(context.navigate).not.toHaveBeenCalled();
-      button(decision === "accept" ? "Yes" : decision === "decline" ? "No" : "Cancel").click();
+      modalButton(page, { accept: "Yes", decline: "No", cancel: "Cancel" }[decision])!.click();
       if (decision === "accept") {
         await waitForFast(() =>
           expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
         );
         expect(answers.at(-1)).toEqual({ stepId: "consent", value: true });
       } else {
-        await waitForFast(() =>
-          expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull(),
-        );
+        await waitForFast(() => expect(pendingReceipt()).toBeNull());
         expect(context.navigate).not.toHaveBeenCalled();
         if (decision === "decline") {
           expect(answers.at(-1)).toEqual({ stepId: "consent", value: false });
@@ -126,12 +95,8 @@ describe("ModelSetupPage activation consent", () => {
           );
         }
       }
-      expect(
-        request.mock.calls.filter(([method]) => method === "openclaw.setup.activate.start"),
-      ).toHaveLength(1);
-      expect(request.mock.calls.some(([method]) => method === "openclaw.setup.activate")).toBe(
-        false,
-      );
+      expect(callsFor(request, "openclaw.setup.activate.start")).toHaveLength(1);
+      expect(callsFor(request, "openclaw.setup.activate")).toHaveLength(0);
     },
   );
 });

@@ -12,13 +12,22 @@ function detection(
 ): SystemAgentSetupDetectResult {
   return {
     candidates,
-    unavailableCandidates: [],
     manualProviders: [],
-    authOptions: [],
     prepareOptions,
-    recommendedInstalls: [],
     workspace: "/tmp/workspace",
     setupComplete: false,
+  };
+}
+
+type Candidate = SystemAgentSetupDetectResult["candidates"][number];
+function candidate(kind: Candidate["kind"], modelRef: string, credentials = true): Candidate {
+  return {
+    kind,
+    modelRef,
+    credentials,
+    label: "Local Provider",
+    detail: "available locally",
+    recommended: false,
   };
 }
 
@@ -42,52 +51,22 @@ describe("model setup prepare options", () => {
           ? { kind, modelRef: "vendor/model", modelTarget: "utility" }
           : { kind, modelRef: "vendor/model" },
       );
-      const candidate: SystemAgentSetupDetectResult["candidates"][number] = {
-        kind,
-        brandId: "vendor",
-        label: "Vendor Local",
-        detail: "available locally",
-        modelRef: "vendor/model",
-        recommended: false,
-        credentials: true,
-      };
-      const result = detection([candidate], [option]);
+      const prepared = candidate(kind, "vendor/model");
+      const result = detection([prepared], [option]);
 
       expect(listModelSetupPrepareOptions(result)).toEqual([]);
-      expect(findPreparedModelCandidate(result, choiceId)).toEqual(candidate);
+      expect(findPreparedModelCandidate(result, choiceId)).toEqual(prepared);
     },
   );
 
   it("does not treat raw reserved choice ids as canonical kinds", () => {
-    const result = detection(
-      [
-        {
-          kind: "provider-auto:local/provider%beta",
-          label: "Local Provider",
-          detail: "available locally",
-          modelRef: "local/model",
-          recommended: false,
-          credentials: true,
-        },
-      ],
-      [],
-    );
+    const result = detection([candidate("provider-auto:local/provider%beta", "local/model")], []);
     expect(findPreparedModelCandidate(result, "local/provider%beta")).toBeUndefined();
   });
 
   it("uses provider identity to hide a usable aliased provider", () => {
     const result = detection(
-      [
-        {
-          kind: "provider-auto:other-choice",
-          brandId: "lmstudio",
-          label: "LM Studio",
-          detail: "available locally",
-          modelRef: "lmstudio/qwen3-8b-instruct",
-          recommended: false,
-          credentials: true,
-        },
-      ],
+      [candidate("provider-auto:other-choice", "lmstudio/qwen3-8b-instruct")],
       [{ id: "lmstudio-local", brandId: "lmstudio", label: "LM Studio" }],
     );
 
@@ -96,17 +75,7 @@ describe("model setup prepare options", () => {
 
   it("keeps setup available for credential-less candidates", () => {
     const result = detection(
-      [
-        {
-          kind: "provider-auto:lmstudio",
-          brandId: "lmstudio",
-          label: "LM Studio",
-          detail: "API key required",
-          modelRef: "lmstudio/qwen3-8b-instruct",
-          recommended: false,
-          credentials: false,
-        },
-      ],
+      [candidate("provider-auto:lmstudio", "lmstudio/qwen3-8b-instruct", false)],
       [{ id: "lmstudio", brandId: "lmstudio", label: "LM Studio" }],
     );
 

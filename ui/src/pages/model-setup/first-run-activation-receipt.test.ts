@@ -10,6 +10,7 @@ import {
 const receiptKey = "openclaw.modelSetup.pendingActivation.v1";
 const deviceKey = "openclaw-device-identity-v1";
 const privateKey = "high-entropy-device-private-key-never-in-receipts";
+const candidate = { kind: "openai-api-key", modelRef: "openai/expected" };
 
 function createContext(options: { token?: string; deviceToken?: string } = {}): ApplicationContext {
   return {
@@ -39,7 +40,6 @@ describe("first-run activation receipt", () => {
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -70,10 +70,7 @@ describe("first-run activation receipt", () => {
     },
   ])("refuses a receipt after its $name changes", ({ replace }) => {
     const context = createContext();
-    persistFirstRunActivationReceipt(context, {
-      kind: "openai-api-key",
-      modelRef: "openai/expected",
-    });
+    persistFirstRunActivationReceipt(context, candidate);
 
     replace(context);
 
@@ -83,10 +80,7 @@ describe("first-run activation receipt", () => {
 
   it("binds paired-device authentication when no explicit Gateway credential exists", () => {
     const context = createContext({ token: "", deviceToken: "paired-device-token" });
-    persistFirstRunActivationReceipt(context, {
-      kind: "openai-api-key",
-      modelRef: "openai/expected",
-    });
+    persistFirstRunActivationReceipt(context, candidate);
 
     const persisted = localStorage.getItem(receiptKey) ?? "";
     expect(persisted).not.toContain("paired-device-token");
@@ -116,7 +110,6 @@ describe("first-run activation receipt", () => {
 
   it("fails closed without durable storage, a persisted device key, or authenticated credentials", () => {
     const context = createContext({ token: "" });
-    const candidate = { kind: "openai-api-key", modelRef: "openai/expected" };
 
     expect(persistFirstRunActivationReceipt(context, candidate)).toBeNull();
 
@@ -124,16 +117,13 @@ describe("first-run activation receipt", () => {
     localStorage.removeItem(deviceKey);
     expect(persistFirstRunActivationReceipt(context, candidate)).toBeNull();
 
+    const unavailable = () => {
+      throw new Error("Browser storage disabled");
+    };
     vi.stubGlobal("localStorage", {
-      getItem: () => {
-        throw new Error("Browser storage disabled");
-      },
-      setItem: () => {
-        throw new Error("Browser storage disabled");
-      },
-      removeItem: () => {
-        throw new Error("Browser storage disabled");
-      },
+      getItem: unavailable,
+      setItem: unavailable,
+      removeItem: unavailable,
     });
     expect(persistFirstRunActivationReceipt(context, candidate)).toBeNull();
     expect(readFirstRunActivationReceipt(context)).toBeNull();

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { createSignal, flush, untrack } from "solid-js";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
@@ -11,37 +11,34 @@ import { ModelSetupWizard } from "./wizard-view-solid.tsx";
 
 registerEnglishCatalog(registerModelSetupEnglish);
 
+beforeEach(() => onTestFinished(installDialogPolyfill()));
+
+const wizardDefaults = {
+  mode: "auth" as const,
+  refreshWarning: null,
+  onValueChange: () => undefined,
+  onAnswer: () => undefined,
+  onCancel: () => undefined,
+  onClose: () => undefined,
+};
+
+type StepState = Extract<ModelSetupWizardState, { phase: "step" }>;
+function stepState(step: StepState["step"], busy = false): StepState {
+  return { phase: "step", authChoice: "synthetic-provider", step, busy, validationError: null };
+}
+
 it("keeps the wizard and focused input mounted while typing a draft", async () => {
-  const restoreDialog = installDialogPolyfill();
-  onTestFinished(restoreDialog);
   const [draft, setDraft] = createSignal("initial");
   const answer = vi.fn();
-  const container = document.body.appendChild(document.createElement("div"));
-  const view = mountSolid(
-    () => (
-      <ModelSetupWizard
-        mode="auth"
-        state={{
-          phase: "step",
-          authChoice: "synthetic-provider",
-          step: { id: "access-code", type: "text", message: "Access code" },
-          busy: false,
-          validationError: null,
-        }}
-        refreshWarning={null}
-        value={draft()}
-        onValueChange={(value) => setDraft(String(value))}
-        onAnswer={answer}
-        onCancel={() => undefined}
-        onClose={() => undefined}
-      />
-    ),
-    { container },
-  );
-  onTestFinished(() => {
-    view.unmount();
-    container.remove();
-  });
+  const { container } = mountSolid(() => (
+    <ModelSetupWizard
+      {...wizardDefaults}
+      state={stepState({ id: "access-code", type: "text", message: "Access code" })}
+      value={draft()}
+      onValueChange={(value) => setDraft(String(value))}
+      onAnswer={answer}
+    />
+  ));
   flush();
   const modal = container.querySelector("openclaw-modal-dialog")!;
   await modal.updateComplete;
@@ -62,59 +59,36 @@ it("keeps the wizard and focused input mounted while typing a draft", async () =
 });
 
 it("shows live sign-in activity and focuses the primary action as each step changes", async () => {
-  onTestFinished(installDialogPolyfill());
-  const [state, setState] = createSignal<ModelSetupWizardState>({
-    phase: "step",
-    authChoice: "synthetic-provider",
-    step: {
+  const [state, setState] = createSignal<ModelSetupWizardState>(
+    stepState({
       id: "consent",
       type: "select",
       message: "Runs on this host.\n\nHost permissions apply.",
       options: [{ value: "continue", label: "Continue" }],
-    },
-    busy: false,
-    validationError: null,
-  });
+    }),
+  );
   const [startingChat, setStartingChat] = createSignal(false);
   const startChat = vi.fn();
-  const container = document.body.appendChild(document.createElement("div"));
-  const view = mountSolid(
-    () => (
-      <ModelSetupWizard
-        mode="auth"
-        state={state()}
-        refreshWarning={null}
-        doneMessage="Provider is connected"
-        doneAction={{ label: "Start a new chat", disabled: startingChat(), onClick: startChat }}
-        value="continue"
-        onValueChange={() => undefined}
-        onAnswer={() => undefined}
-        onCancel={() => undefined}
-        onClose={() => undefined}
-      />
-    ),
-    { container },
-  );
-  onTestFinished(() => {
-    view.unmount();
-    container.remove();
-  });
+  const { container } = mountSolid(() => (
+    <ModelSetupWizard
+      {...wizardDefaults}
+      state={state()}
+      doneMessage="Provider is connected"
+      doneAction={{ label: "Start a new chat", disabled: startingChat(), onClick: startChat }}
+      value="continue"
+    />
+  ));
   flush();
   await container.querySelector("openclaw-modal-dialog")!.updateComplete;
   expect(document.activeElement?.textContent).toContain("Continue");
-  setState({
-    phase: "step",
-    authChoice: "synthetic-provider",
-    step: {
-      id: "device-code",
-      type: "progress",
-      executor: "gateway",
-      externalUrl: "https://example.com/sign-in",
-      deviceCode: { code: "ABCD-1234" },
-    },
-    busy: true,
-    validationError: null,
-  });
+  const deviceStep = {
+    id: "device-code",
+    type: "progress" as const,
+    executor: "gateway" as const,
+    externalUrl: "https://example.com/sign-in",
+    deviceCode: { code: "ABCD-1234" },
+  };
+  setState(stepState(deviceStep, true));
   flush();
   expect(document.activeElement?.textContent).toContain("Open sign-in");
   const status = container.querySelector('[role="status"][aria-busy="true"]');
@@ -122,21 +96,14 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   expect(status?.querySelector(".wizard-step__spinner")).not.toBeNull();
   const code = container.querySelector("code");
   expect(container.querySelector("code")?.textContent).toBe("ABCD-1234");
-  setState({
-    phase: "step",
-    authChoice: "synthetic-provider",
-    step: {
-      id: "verify",
-      type: "progress",
-      executor: "gateway",
-      message: "Verifying access…",
-      progressMessage: "Verifying access…",
-      externalUrl: "https://example.com/sign-in",
-      deviceCode: { code: "ABCD-1234" },
-    },
-    busy: true,
-    validationError: null,
-  });
+  const verifyStep = {
+    ...deviceStep,
+    id: "verify",
+    deviceCode: { code: "ABCD-1234" },
+    message: "Verifying access…",
+    progressMessage: "Verifying access…",
+  };
+  setState(stepState(verifyStep, true));
   flush();
   expect(container.querySelectorAll(".wizard-step__spinner")).toHaveLength(1);
   expect(container.textContent).toContain("Verifying access…");
