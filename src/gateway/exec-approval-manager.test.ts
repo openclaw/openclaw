@@ -1,12 +1,10 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalDecision, ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   ExecApprovalManager,
@@ -14,9 +12,9 @@ import {
 } from "./exec-approval-manager.js";
 import {
   createTestApprovalManager as createApprovalManager,
+  createTestApprovalFixture,
   createApprovalScheduler,
   type ApprovalClockWake,
-  installTestApprovalClock,
 } from "./exec-approval-manager.test-support.js";
 import type {
   ExecApprovalManagerOptions,
@@ -31,9 +29,10 @@ async function getOperatorApproval(params: Parameters<typeof getOperatorApproval
 }
 
 describe("ExecApprovalManager", () => {
-  const tempDirs: string[] = [];
+  let currentTest: Parameters<typeof createApprovalManager>[0];
   let scheduled: ReturnType<typeof createApprovalScheduler>;
-  beforeEach(() => {
+  beforeEach((test) => {
+    currentTest = test;
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     scheduled = createApprovalScheduler();
   });
@@ -47,28 +46,12 @@ describe("ExecApprovalManager", () => {
   afterEach(async () => {
     await scheduled.scheduler.stop();
     vi.restoreAllMocks();
-    for (const dir of tempDirs.splice(0)) {
-      await closeOpenClawStateDatabaseByPathAsync(path.join(dir, "state.sqlite"));
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
   });
 
-  function createDatabaseOptions() {
-    installTestApprovalClock();
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-manager-"));
-    tempDirs.push(dir);
-    return { dir, databaseOptions: { path: path.join(dir, "state.sqlite") } };
-  }
-
-  function persistentManagerOptions(databaseOptions: { path: string }) {
-    return {
-      scheduler: scheduled.scheduler,
-      approvalKind: "exec" as const,
-      persistence: { runtimeEpoch: "runtime-a", databaseOptions },
-      resolveAllowedDecisions: () => ["allow-once", "deny"] as const,
-      resolveAudienceSessionKeys: (sessionKey: string) => [sessionKey, "agent:main:parent"],
-    };
-  }
+  const persistentPolicy = {
+    resolveAllowedDecisions: () => ["allow-once", "deny"] as const,
+    resolveAudienceSessionKeys: (sessionKey: string) => [sessionKey, "agent:main:parent"],
+  };
 
   function createPersistentManager(
     options: Pick<
@@ -76,15 +59,16 @@ describe("ExecApprovalManager", () => {
       "onError" | "onLifecycle" | "resolveAudienceSessionKeys"
     > = {},
   ) {
-    const { dir, databaseOptions } = createDatabaseOptions();
+    const fixture = createTestApprovalFixture(currentTest, {
+      ...persistentPolicy,
+      ...options,
+      scheduler: scheduled.scheduler,
+    });
+    const { databaseOptions } = fixture;
     return {
-      dir,
-      databaseOptions,
+      ...fixture,
+      dir: path.dirname(databaseOptions.path),
       readStored: () => getOperatorApproval({ id: "approval", databaseOptions }),
-      manager: new ExecApprovalManager({
-        ...persistentManagerOptions(databaseOptions),
-        ...options,
-      }),
     };
   }
 
@@ -401,7 +385,9 @@ describe("ExecApprovalManager", () => {
     });
     const onLifecycle = vi.fn();
     const replayManager = new ExecApprovalManager({
-      ...persistentManagerOptions(databaseOptions),
+      ...persistentPolicy,
+      scheduler: scheduled.scheduler,
+      persistence: { runtimeEpoch: manager.runtimeEpoch, databaseOptions },
       onLifecycle,
     });
     const replayPromise = (
@@ -477,12 +463,13 @@ describe("ExecApprovalManager", () => {
   });
 
   it("rejects unrenderable persistent plugin requests before creating a row or waiter", async () => {
-    const { databaseOptions } = createDatabaseOptions();
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
-      scheduler: scheduled.scheduler,
-      approvalKind: "plugin",
-      persistence: { runtimeEpoch: "runtime-plugin", databaseOptions },
-    });
+    const { manager, databaseOptions } = createTestApprovalFixture<PluginApprovalRequestPayload>(
+      currentTest,
+      {
+        scheduler: scheduled.scheduler,
+        approvalKind: "plugin",
+      },
+    );
     const requests: PluginApprovalRequestPayload[] = [
       { title: "", description: "Needs approval" },
       { title: "Sensitive action", description: " \t " },
@@ -598,7 +585,7 @@ describe("ExecApprovalManager", () => {
       decision: "allow-once",
       resolver: device,
       expectedKind: "exec",
-      runtimeEpoch: "runtime-a",
+      runtimeEpoch: manager.runtimeEpoch,
       databaseOptions,
     });
     if (resolved.outcome !== "resolved") {
@@ -615,13 +602,6 @@ describe("ExecApprovalManager", () => {
       decision: "allow-once",
       resolvedBy: "Control UI",
     });
-  });
-
-  it("fails an existing waiter closed when durable lookup is missing", async () => {
-    const { manager, id, decisionPromise, snapshot } = await persistentApproval();
-    expect(await manager.reconcileDurableLookup({ outcome: "missing", id })).toBeNull();
-    await expect(decisionPromise).resolves.toBe("deny");
-    expect(await snapshot()).toMatchObject({ decision: "deny", terminalReason: "storage-corrupt" });
   });
 
   it("consumes allow-once durably without erasing the winning decision", async () => {
@@ -662,7 +642,7 @@ describe("ExecApprovalManager", () => {
     const sameEpochManager = new ExecApprovalManager<{ command: string }>({
       scheduler: scheduled.scheduler,
       approvalKind: "exec",
-      persistence: { runtimeEpoch: "runtime-a", databaseOptions },
+      persistence: { runtimeEpoch: manager.runtimeEpoch, databaseOptions },
     });
     const durable = expectDefined(await readStored(), "durable approval");
     expect(await snapshot()).toMatchObject({

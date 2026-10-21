@@ -420,20 +420,14 @@ it("allows no-op binding delivery and fences a retained grant after reassignment
     expect(await bindings.resolveByConversationAsync(missingRef)).toBeNull();
     expect(changes).toHaveLength(2);
     const [pending, settled] = changes;
-    if (
-      !pending ||
-      !("kind" in pending) ||
-      pending.kind !== "pending" ||
-      !settled ||
-      !("kind" in settled) ||
-      settled.kind !== "settled"
-    ) {
+    if (!pending || !settled || !("operation" in pending) || !("operation" in settled)) {
       throw new Error("Missing native pending/settled binding operation");
     }
-    expect(pending.identity).toBe(identity);
-    expect(settled.identity).toBe(identity);
+    expect(changes).toMatchObject([
+      { kind: "pending", identity },
+      { kind: "settled", identity, outcome: "unchanged" },
+    ]);
     expect(settled.operation).toBe(pending.operation);
-    expect(settled.outcome).toBe("unchanged");
     await expect(handler.sendText("allowed after no-op settlement")).resolves.toMatchObject({
       messageId: "allowed",
     });

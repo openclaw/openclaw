@@ -225,10 +225,7 @@ it.each([
 ])("selects TLS ownership for $name", async ({ url, source, config, pin, scope, inspect }) => {
   mocks.details.mockReturnValue(connection(url, source));
   inspectLocalCertificate();
-  const result = await bootstrap({
-    config,
-    gatewayUrl: source === "cli --url" ? url : undefined,
-  });
+  const result = await bootstrap({ config, gatewayUrl: source === "cli --url" ? url : undefined });
   expect(result.tlsFingerprint).toBe(pin);
   expect(mocks.certificate.mock.calls).toEqual(inspect ? [[TLS_CONFIG]] : []);
   if (scope) {

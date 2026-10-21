@@ -69,12 +69,9 @@ async function createDeps() {
       .mockResolvedValue(conversation),
     resolveOutboundChannelPlugin: vi
       .spyOn(channelResolution, "resolveOutboundChannelPlugin")
-      .mockImplementation(
-        () =>
-          ({
-            outbound: { prepareConversationTurnMessageId: () => "reef-outbound-1" },
-          }) as never,
-      ),
+      .mockReturnValue({
+        outbound: { prepareConversationTurnMessageId: () => "reef-outbound-1" },
+      } as never),
     resolveOutboundSessionRoute: vi
       .spyOn(outboundSession, "resolveOutboundSessionRoute")
       .mockImplementation(async () => ({
@@ -269,8 +266,9 @@ describe("runGatewayConversationTurn", () => {
   });
 
   it("creates a context binding only when a discovered address starts a turn", async () => {
-    const unbound = unboundConversation();
-    deps.readConversation.mockResolvedValueOnce(unbound).mockResolvedValue(conversation);
+    deps.readConversation
+      .mockResolvedValueOnce(unboundConversation())
+      .mockResolvedValue(conversation);
     deps.bindOutboundSessionEntry.mockImplementationOnce(async (params) => {
       params.workerGuard?.assertCurrent?.();
     });
@@ -300,8 +298,7 @@ describe("runGatewayConversationTurn", () => {
   });
 
   it("rejects a route-owner change at the outbound session binding commit", async () => {
-    const unbound = unboundConversation();
-    deps.readConversation.mockResolvedValue(unbound);
+    deps.readConversation.mockResolvedValue(unboundConversation());
     deps.bindOutboundSessionEntry.mockImplementationOnce(async (params) => {
       params.workerGuard?.assertCurrent?.();
     });
@@ -487,8 +484,7 @@ describe("runGatewayConversationTurn", () => {
   });
 
   it("rejects unsupported channels before registering or sending", async () => {
-    const unbound = unboundConversation();
-    deps.readConversation.mockResolvedValue(unbound);
+    deps.readConversation.mockResolvedValue(unboundConversation());
     deps.resolveOutboundChannelPlugin.mockReturnValueOnce({ outbound: {} } as never);
 
     await expect(runTurn("turn-unsupported")).rejects.toBeInstanceOf(ConversationInputError);

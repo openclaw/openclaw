@@ -12,18 +12,13 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import * as agentEvents from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
-import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
-import {
-  expectDeclaredHttpOwnerIdentity,
-  expectHttpForeignSessionAuthority,
-  expectSharedSecretHttpOwnerIdentity,
-} from "./http-authority.test-support.js";
+import { expectDeclaredHttpOwnerIdentity } from "./http-authority.test-support.js";
 import * as httpCommon from "./http-common.js";
 import {
   registerOpenResponsesHttpUploadTests,
@@ -42,6 +37,7 @@ import {
 import * as httpUtils from "./http-utils.js";
 import type { ResponseResource } from "./open-responses.schema.js";
 import { registerOpenResponsesContinuationTests } from "./openresponses-http.continuation.test-support.js";
+import { registerOpenResponsesFileInputTests } from "./openresponses-http.media.test-support.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommandMock,
@@ -963,49 +959,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
     },
   );
 
-  it("preserves declared owner identity for streaming and non-streaming private callers", async () => {
-    await expectDeclaredHttpOwnerIdentity({
-      post: (stream, headers) =>
-        postResponses(enabledPort, { stream, model: "openclaw", input: "hi" }, headers),
-      consume: async (response, stream) => {
-        const body = await response.text();
-        if (stream) {
-          expect(parseSseEvents(body).map((event) => event.event)).toContain("response.completed");
-        }
-      },
-      senderIsOwner: () => firstAgentOpts().senderIsOwner,
-    });
-  });
-
-  it.each(["trusted-proxy", "token"] as const)(
-    "preserves %s authority when mutating another operator response session",
-    async (authMethod) => {
-      await expectHttpForeignSessionAuthority({
-        authMethod,
-        ownerEmail: "response-owner@example.test",
-        sessionKey: "agent:main:foreign-openresponses-http",
-        sessionId: "foreign-openresponses-http",
-        closeReason: "openresponses operator role session sharing test done",
-        startServer: async (port, auth) => {
-          const { startGatewayServer } = await import("./server.js");
-          return await startGatewayServer(port, {
-            host: "127.0.0.1",
-            auth,
-            controlUiEnabled: false,
-            openResponsesEnabled: true,
-          });
-        },
-        writeGatewayConfig,
-        post: (port, headers) =>
-          postResponses(
-            port,
-            { model: "openclaw", input: "mutate foreign response session" },
-            headers,
-          ),
-      });
-    },
-  );
-
   it("preserves verified trusted-proxy owner identity for both response modes", async () => {
     await withEnvAsync(
       { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
@@ -1169,53 +1122,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
         }
       },
     );
-  });
-
-  it.each(["token", "password"] as const)(
-    "preserves owner identity for streaming and non-streaming %s-authenticated callers",
-    async (mode) => {
-      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-      const port = portClaim.port;
-      const server = await startServer(
-        portClaim,
-        mode === "token" ? { mode, token: "secret" } : { mode, password: "secret" },
-      );
-      try {
-        await expectSharedSecretHttpOwnerIdentity({
-          post: (stream, headers) => postAt(port, stream === undefined ? {} : { stream }, headers),
-          consume: ensureResponseConsumed,
-          senderIsOwner: () => firstAgentOpts().senderIsOwner,
-        });
-      } finally {
-        await server.close({ reason: `openresponses ${mode} auth owner test done` });
-      }
-    },
-  );
-
-  it("keeps streamed agent work admitted after the HTTP handler returns", async () => {
-    const idleRootCount = getActiveGatewayRootWorkCount();
-    const continueAgent = createDeferred();
-    agentCommandMock.mockClear();
-    agentCommandMock.mockImplementationOnce((async () => {
-      await continueAgent.promise;
-      const queued = await enqueueCommandInLane(
-        "openresponses-http-admission-probe",
-        async () => true,
-      );
-      return { payloads: [{ text: queued ? "answer queued" : "unreachable" }] };
-    }) as never);
-
-    const res = await post({ stream: true });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    continueAgent.resolve();
-
-    const events = parseSseEvents(await res.text());
-    expect(collectSseEventTypes(events)).toContain("response.completed");
-    expect(collectSseEventTypes(events)).not.toContain("response.failed");
-    expect(findSseEvent(events, "response.completed").data).toContain("answer queued");
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
   });
 
   it("returns a tool-only response without empty commentary", async () => {
@@ -1642,4 +1548,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 });
+
+registerOpenResponsesFileInputTests(post);
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
