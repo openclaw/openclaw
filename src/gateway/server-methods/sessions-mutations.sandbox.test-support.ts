@@ -66,6 +66,8 @@ export function registerSessionSandboxMutationTests({
   };
   const errorContaining = (message: string) =>
     expect.objectContaining({ message: expect.stringContaining(message) });
+  const expectAccepted = (respond: ReturnType<typeof vi.fn>, result: unknown) =>
+    expect(respond).toHaveBeenCalledWith(true, result, undefined);
   const expectRefused = (respond: ReturnType<typeof vi.fn>, message: string, batchKey?: string) =>
     expect(respond).toHaveBeenCalledWith(
       ...(batchKey
@@ -114,17 +116,16 @@ export function registerSessionSandboxMutationTests({
           requestClient,
           cfg,
         );
-      expect(await patch("off", null)).toHaveBeenCalledWith(
-        true,
+      expectAccepted(
+        await patch("off", null),
         expect.objectContaining({ entry: expect.objectContaining({ sandboxMode: "off" }) }),
-        undefined,
       );
       expect(loadSessionEntry(scope)?.sandboxMode).toBe("off");
       expect(await sandboxed(key)).toBe(false);
       expect(await sandboxed(sibling)).toBe(true);
       expectRefused(await patch(null, null), "changed before patch");
       expect(loadSessionEntry(scope)?.sandboxMode).toBe("off");
-      expect(await patch(null, "off")).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      expectAccepted(await patch(null, "off"), expect.any(Object));
       expect(loadSessionEntry(scope)).not.toHaveProperty("sandboxMode");
       expect(await sandboxed(key)).toBe(true);
       expect(cfg.agents?.defaults?.sandbox?.mode).toBe("all");
@@ -180,20 +181,12 @@ export function registerSessionSandboxMutationTests({
         },
         requestClient,
       );
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          outcomes: [
-            { key: keys[0], ok: true },
-            {
-              key: keys[1],
-              ok: false,
-              error: errorContaining("changed before patch"),
-            },
-          ],
-        },
-        undefined,
-      );
+      expectAccepted(respond, {
+        outcomes: [
+          { key: keys[0], ok: true },
+          { key: keys[1], ok: false, error: errorContaining("changed before patch") },
+        ],
+      });
       expect(loadSessionEntry(scope(keys[0]!))?.sandboxMode).toBe("off");
       expect(loadSessionEntry(scope(keys[1]!))).not.toHaveProperty("sandboxMode");
       respond = await invoke(
@@ -204,11 +197,7 @@ export function registerSessionSandboxMutationTests({
         },
         requestClient,
       );
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        { outcomes: [{ key: keys[0], ok: true }] },
-        undefined,
-      );
+      expectAccepted(respond, { outcomes: [{ key: keys[0], ok: true }] });
       expect(loadSessionEntry(scope(keys[0]!))).not.toHaveProperty("sandboxMode");
     }));
 
