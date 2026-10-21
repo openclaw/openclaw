@@ -1,7 +1,8 @@
 import { ChannelType } from "discord-api-types/v10";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveDiscordChannelAllowlist } from "./resolve-channels.js";
+import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import { jsonResponse, urlToString } from "./test-http-helpers.js";
 
 type Channel = { id: string; name: string; guild_id: string; type: number };
@@ -12,19 +13,17 @@ const channel = (id: string, name = "general", guild_id = "111", type = 0): Chan
   type,
 });
 
-function resolve(
-  entries: string[],
+function makeFetcher(
   options: {
     guilds?: { id: string; name: string }[];
     channels?: Channel[];
     lookup?: (id: string) => Response;
+    members?: (query: string) => unknown;
   } = {},
 ) {
   const guilds = options.guilds ?? [{ id: "111", name: "Test Server" }];
-  return resolveDiscordChannelAllowlist({
-    token: "test",
-    entries,
-    fetcher: withFetchPreconnect(async (input) => {
+  return withFetchPreconnect(
+    vi.fn(async (input: RequestInfo | URL) => {
       const url = urlToString(input);
       if (url.endsWith("/users/@me/guilds")) {
         return jsonResponse(guilds);
@@ -32,14 +31,58 @@ function resolve(
       if (options.channels && guilds.some(({ id }) => url.endsWith(`/guilds/${id}/channels`))) {
         return jsonResponse(options.channels);
       }
+      if (
+        options.members &&
+        guilds.some(({ id }) => url.includes(`/guilds/${id}/members/search`))
+      ) {
+        return jsonResponse(options.members(new URL(url).searchParams.get("query") ?? ""));
+      }
       return (
         (/\/channels\/[^/]+$/.test(url)
           ? options.lookup?.(url.split("/").at(-1) ?? "")
           : undefined) ?? new Response("not found", { status: 404 })
       );
     }),
-  });
+  );
 }
+const resolve = (entries: string[], options?: Parameters<typeof makeFetcher>[0]) =>
+  resolveDiscordChannelAllowlist({ token: "test", entries, fetcher: makeFetcher(options) });
+
+describe("resolveDiscordUserAllowlist", () => {
+  it("resolves mentions without fetching guilds", async () => {
+    const fetcher = makeFetcher();
+    expect(
+      await resolveDiscordUserAllowlist({
+        token: "test",
+        entries: ["<@123456789012345678>"],
+        fetcher,
+      }),
+    ).toEqual([{ input: "<@123456789012345678>", resolved: true, id: "123456789012345678" }]);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("loads guilds once for multiple username entries", async () => {
+    const fetcher = makeFetcher({
+      members: (query) => [{ user: { id: `u-${query}`, username: query, bot: false }, nick: null }],
+    });
+    expect(
+      await resolveDiscordUserAllowlist({ token: "test", entries: ["alice", "bob"], fetcher }),
+    ).toMatchObject([
+      { resolved: true, input: "alice", id: "u-alice", name: "alice" },
+      { resolved: true, input: "bob", id: "u-bob", name: "bob" },
+    ]);
+    expect(
+      fetcher.mock.calls.filter(([input]) => urlToString(input).endsWith("/users/@me/guilds")),
+    ).toHaveLength(1);
+  });
+  it.each([
+    ["blank entries", "test", ["", "  "]],
+    ["blank token", "  ", ["123456789012345678", "alice"]],
+  ] as const)("returns ordered unresolved results for %s", async (_name, token, entries) => {
+    expect(
+      await resolveDiscordUserAllowlist({ token, entries: [...entries], fetcher: makeFetcher() }),
+    ).toEqual(entries.map((input) => ({ input, resolved: false })));
+  });
+});
 
 describe("resolveDiscordChannelAllowlist", () => {
   it("prefers a matching guild channel over a public thread", async () => {

@@ -1,6 +1,10 @@
 import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  inspectDiscordSetupAccount,
+  resolveDiscordSetupAccountConfig,
+} from "./setup-account-state.js";
 import { createDiscordSetupWizardBase } from "./setup-core.js";
 
 const discordSetupWizard = createDiscordSetupWizardBase({
@@ -30,7 +34,42 @@ describe("discordSetupWizard.dmPolicy", () => {
   });
 });
 
-describe("discordSetupWizard.status", () => {
+describe("discord setup accounts", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it.each([
+    ["work", undefined, "Work"],
+    [undefined, "work", "work"],
+  ] as const)(
+    "resolves explicit account %s or default %s with case-insensitive overrides",
+    (accountId, defaultAccount, key) => {
+      const cfg = config({
+        defaultAccount,
+        allowFrom: ["top"],
+        accounts: {
+          alerts: { allowFrom: ["alerts-only"] },
+          [key]: { name: "Work", allowFrom: ["acct"] },
+        },
+      });
+      expect(resolveDiscordSetupAccountConfig({ cfg, accountId })).toMatchObject({
+        accountId: "work",
+        config: { name: "Work", allowFrom: ["acct"] },
+      });
+    },
+  );
+
+  it.each([
+    ["default", "setup-token", "env", true],
+    ["work", "", "none", false],
+  ] as const)(
+    "keeps runtime environment fallback scoped to %s",
+    (accountId, token, tokenSource, configured) => {
+      vi.stubEnv("DISCORD_BOT_TOKEN", "Bot setup-token");
+      expect(
+        inspectDiscordSetupAccount({ cfg: config({ accounts: { work: {} } }), accountId }),
+      ).toMatchObject({ token, tokenSource, configured });
+    },
+  );
+
   it("uses configured defaultAccount for omitted setup configured state", async () => {
     const configured = await discordSetupWizard.status.resolveConfigured({
       cfg: config({
@@ -45,9 +84,6 @@ describe("discordSetupWizard.status", () => {
 
     expect(configured).toBe(false);
   });
-});
-
-describe("discordSetupWizard.groupAccess", () => {
   it("writes resolved Discord channel rows to their selected guild and channel", () => {
     const next = discordSetupWizard.groupAccess?.applyAllowlist?.({
       cfg: config({ guilds: { existing: { channels: { keep: { enabled: true } } } } }),

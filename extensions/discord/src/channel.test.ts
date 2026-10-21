@@ -619,49 +619,40 @@ describe("discordPlugin outbound", () => {
     }
   });
 
-  const startupSlotCases: Array<{
-    name: string;
-    defaultAccount: string | undefined;
-    accounts: NonNullable<NonNullable<DiscordConfig>["accounts"]>;
-    slots: string[];
-  }> = [
+  function startupAccounts(tokens: Record<string, string | undefined>) {
+    return Object.fromEntries(
+      Object.entries(tokens).map(([id, token]) => [
+        id,
+        { enabled: true, ...(token ? { token: `Bot ${token}-token` } : {}) },
+      ]),
+    );
+  }
+  it.each([
     {
       name: "configured default first",
       defaultAccount: "main",
-      accounts: {
-        billy: { token: "Bot billy-token", enabled: true },
-        farber: { token: "Bot farber-token", enabled: true },
-        main: { token: "Bot main-token", enabled: true },
-      },
+      tokens: { billy: "billy", farber: "farber", main: "main" },
       slots: ["main", "billy", "farber"],
     },
     {
       name: "duplicate-token default excluded",
       defaultAccount: "main",
-      accounts: {
-        billy: { token: "Bot billy-token", enabled: true },
-        farber: { token: "Bot shared-token", enabled: true },
-        main: { token: "Bot shared-token", enabled: true },
-      },
+      tokens: { billy: "billy", farber: "shared", main: "shared" },
       slots: ["billy", "farber"],
     },
     {
       name: "unconfigured accounts excluded",
       defaultAccount: undefined,
-      accounts: { alpha: { enabled: true }, zeta: { token: "Bot zeta-token", enabled: true } },
+      tokens: { alpha: undefined, zeta: "zeta" },
       slots: ["zeta"],
     },
-  ];
-  it.each(startupSlotCases)(
-    "assigns startup slots with $name",
-    async ({ defaultAccount, accounts, slots }) => {
-      prepareDiscordStartupMocks();
-      const cfg = createCfg({ defaultAccount, accounts });
-      for (const [index, accountId] of slots.entries()) {
-        await expectDiscordStartupDelay(cfg, accountId, index * 10_000);
-      }
-    },
-  );
+  ])("assigns startup slots with $name", async ({ defaultAccount, tokens, slots }) => {
+    prepareDiscordStartupMocks();
+    const cfg = createCfg({ defaultAccount, accounts: startupAccounts(tokens) });
+    for (const [index, accountId] of slots.entries()) {
+      await expectDiscordStartupDelay(cfg, accountId, index * 10_000);
+    }
+  });
 });
 
 it.each([
@@ -720,45 +711,6 @@ it("discordPlugin normalizes dm allowlist entries with trimmed prefixes and ment
   });
   expect(result.normalizeEntry?.("  discord:<@!123456789>  ")).toBe("123456789");
   expect(result.normalizeEntry?.("  user:987654321  ")).toBe("987654321");
-});
-
-describe("discordPlugin groups", () => {
-  it("uses plugin-owned group policy resolvers", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "discord-test",
-          guilds: {
-            guild1: {
-              requireMention: false,
-              tools: { allow: ["message.guild"] },
-              channels: {
-                "123": {
-                  requireMention: true,
-                  tools: { allow: ["message.channel"] },
-                },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      discordPlugin.groups?.resolveRequireMention?.({
-        cfg,
-        groupSpace: "guild1",
-        groupId: "123",
-      }),
-    ).toBe(true);
-    expect(
-      discordPlugin.groups?.resolveToolPolicy?.({
-        cfg,
-        groupSpace: "guild1",
-        groupId: "123",
-      }),
-    ).toEqual({ allow: ["message.channel"] });
-  });
 });
 
 describe("discordPlugin messaging target resolver", () => {

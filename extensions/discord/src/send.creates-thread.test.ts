@@ -1,8 +1,8 @@
-import { ChannelType, Routes } from "discord-api-types/v10";
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { ChannelType, MessageFlags, Routes } from "discord-api-types/v10";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RateLimitError } from "./internal/discord.js";
 import { hasDiscordMessageCreateAmbiguity } from "./retry.js";
-import { registerSendAssetsAndRetriesTests } from "./send.assets-and-retries.test-support.js";
-import { makeDiscordRest, requestBody, requestPath } from "./send.test-harness.js";
+import { makeDiscordRest, requestBody, requestPath, timerDelayAt } from "./send.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/web-media", async () => {
   const { discordWebMediaMockFactory } = await import("./send.test-harness.js");
@@ -78,7 +78,100 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 afterAll(() => vi.doUnmock("openclaw/plugin-sdk/web-media"));
-registerSendAssetsAndRetriesTests(() => send);
+const rateLimitError = (retryAfter = 0) =>
+  new RateLimitError(
+    new Response(null, {
+      status: 429,
+      headers: { "X-RateLimit-Scope": "user", "X-RateLimit-Bucket": "test-bucket" },
+    }),
+    { message: "You are being rate limited.", retry_after: retryAfter, global: false },
+  );
+
+describe("structured sends and retries", () => {
+  it("lists emojis for a guild", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    getMock.mockResolvedValue([{ id: "e1", name: "party" }]);
+    await send.listGuildEmojisDiscord("g1", clientOpts(rest));
+    expect(getMock).toHaveBeenCalledWith(Routes.guildEmojis("g1"));
+  });
+
+  it("allows sticker link embeds when suppression is disabled", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+    await send.sendStickerDiscord("channel:789", ["123"], {
+      ...clientOpts(rest),
+      content: "https://example.com",
+      suppressEmbeds: false,
+    });
+    expect(requestBody(postMock)).toMatchObject({
+      content: "https://example.com",
+      sticker_ids: ["123"],
+      enforce_nonce: true,
+    });
+    expect(requestBody(postMock).flags).toBeUndefined();
+  });
+
+  it("preserves poll answers, receipt, and silent flags across a retried 502", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
+    const result = await send.sendPollDiscord(
+      "channel:789",
+      { question: "Lunch?", options: ["Pizza", "Sushi"] },
+      {
+        ...clientOpts(rest),
+        threadId: "789",
+        silent: true,
+        retry,
+      },
+    );
+    expect(result).toMatchObject({
+      messageId: "msg1",
+      channelId: "789",
+      receipt: {
+        threadId: "789",
+        parts: [{ platformMessageId: "msg1", kind: "poll" }],
+      },
+    });
+    expect(requestPath(postMock)).toBe(Routes.channelMessages("789"));
+    expect(requestBody(postMock)).toMatchObject({
+      flags: MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications,
+      enforce_nonce: true,
+      poll: {
+        question: { text: "Lunch?" },
+        answers: [{ poll_media: { text: "Pizza" } }, { poll_media: { text: "Sushi" } }],
+        duration: 24,
+        allow_multiselect: false,
+        layout_type: 1,
+      },
+    });
+    expect(postMock).toHaveBeenCalledTimes(2);
+    expect(requestBody(postMock).nonce).toMatch(/^[0-9a-f]{24}$/);
+    expect(requestBody(postMock, 1).nonce).toBe(requestBody(postMock).nonce);
+  });
+
+  it("honors retry_after and retries media without duplicating its overflow text", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+    const { rest, postMock } = makeDiscordRest();
+    postMock
+      .mockRejectedValueOnce(rateLimitError(0.001))
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "msg2", channel_id: "789" });
+    const sending = send.sendMessageDiscord("channel:789", "a".repeat(2005), {
+      ...clientOpts(rest),
+      mediaUrl: "https://example.com/photo.jpg",
+      retry: { ...retry, maxDelayMs: 1000 },
+    });
+    await vi.runAllTimersAsync();
+    const result = await sending;
+    expect(result.messageId).toBe("msg1");
+    expect(result.receipt.platformMessageIds).toEqual(["msg1", "msg2"]);
+    expect(postMock).toHaveBeenCalledTimes(3);
+    expect(timerDelayAt(setTimeoutSpy)).toBe(1);
+  });
+});
 
 it.each([false, true])("keeps chunked replies in one thread (explicit=%s)", async (explicit) => {
   const { postMock, run } = forumPayloadHarness();
@@ -268,4 +361,123 @@ it("bans a member", async () => {
   const { rest, putMock } = makeDiscordRest();
   await send.banMemberDiscord({ ...member, deleteMessageDays: 2 }, clientOpts(rest));
   expect(requests(putMock)).toEqual([[Routes.guildBan("g1", "u1"), { delete_message_days: 2 }]]);
+});
+
+function messageClient() {
+  const mocks = makeDiscordRest();
+  return { ...mocks, opts: clientOpts(mocks.rest) };
+}
+
+describe("Discord message reads", () => {
+  it("returns messages and forwards pagination", async () => {
+    const { getMock, opts } = messageClient();
+    const messages = [{ id: "1", content: "hello" }];
+    getMock.mockResolvedValueOnce(messages);
+    await expect(send.readMessagesDiscord("C1", { limit: 5, before: "10" }, opts)).resolves.toEqual(
+      messages,
+    );
+    expect(getMock).toHaveBeenCalledWith(Routes.channelMessages("C1"), { limit: 5, before: "10" });
+  });
+
+  it("rejects non-array message responses", async () => {
+    const { getMock, opts } = messageClient();
+    getMock.mockResolvedValueOnce("\u001f\ufffd\u0008raw gzip bytes");
+    await expect(send.readMessagesDiscord("C1", {}, opts)).rejects.toThrow(
+      "Unexpected Discord response for message read: expected array.",
+    );
+  });
+
+  it("preserves empty search results while encoding filters and clamping the limit", async () => {
+    const { getMock, opts } = messageClient();
+    const results = { messages: [], total_results: 0 };
+    getMock.mockResolvedValueOnce(results);
+    const query = {
+      guildId: "G1",
+      content: "release & review",
+      channelIds: ["c1", "c2"],
+      authorIds: ["u1", "u2"],
+      limit: 99,
+    };
+    await expect(send.searchMessagesDiscord(query, opts)).resolves.toEqual(results);
+    expect(getMock).toHaveBeenCalledWith(
+      "/guilds/G1/messages/search?content=release+%26+review&channel_id=c1&channel_id=c2&author_id=u1&author_id=u2&limit=25",
+    );
+  });
+
+  it.each([
+    [
+      {
+        message: "Index not yet available. Try again later",
+        code: 110000,
+        documents_indexed: 0,
+        retry_after: 2,
+      },
+      "Discord message search unavailable: Index not yet available. Try again later (retry after 2s)",
+    ],
+    [
+      { total_results: 1 },
+      "Unexpected Discord response for message search: expected messages array.",
+    ],
+    [
+      "\u001f\ufffd\u0008raw gzip bytes",
+      "Unexpected Discord response for message search: expected object.",
+    ],
+  ] as const)("rejects invalid search response %#", async (response, error) => {
+    const { getMock, opts } = messageClient();
+    getMock.mockResolvedValueOnce(response);
+    await expect(
+      send.searchMessagesDiscord({ guildId: "G1", content: "test" }, opts),
+    ).rejects.toThrow(error);
+  });
+});
+
+describe("Discord voice status", () => {
+  it("recognizes an absent voice state", async () => {
+    const { getMock, opts } = messageClient();
+    getMock.mockRejectedValueOnce(new Error("DiscordError: Unknown Voice State"));
+    await expect(send.fetchVoiceStatusDiscord("g1", "u1", opts)).resolves.toEqual({
+      guild_id: "g1",
+      user_id: "u1",
+      channel_id: null,
+      connected: false,
+      absent: true,
+      reason: "unknown_voice_state",
+    });
+  });
+
+  it("propagates other Discord failures", async () => {
+    const { getMock, opts } = messageClient();
+    const error = Object.assign(new Error("Unknown Guild"), { status: 404, discordCode: 10004 });
+    getMock.mockRejectedValueOnce(error);
+    await expect(send.fetchVoiceStatusDiscord("g1", "u1", opts)).rejects.toBe(error);
+  });
+});
+
+it("sends typing to the resolved channel", async () => {
+  const { postMock, opts } = messageClient();
+  await expect(send.sendTypingDiscord("12345", { ...opts, accountId: "ops" })).resolves.toEqual({
+    ok: true,
+    channelId: "12345",
+  });
+  expect(postMock).toHaveBeenCalledWith(Routes.channelTyping("12345"));
+});
+
+it("posts scheduled event fields unchanged to the selected guild", async () => {
+  const { postMock, opts } = messageClient();
+  const payload = {
+    name: "Release review",
+    scheduled_start_time: "2026-04-29T10:00:00.000Z",
+    scheduled_end_time: "2026-04-29T11:00:00.000Z",
+    privacy_level: 2,
+    entity_type: 3,
+    entity_metadata: { location: "Review room" },
+  } as const;
+  postMock.mockResolvedValueOnce({ id: "event1" });
+
+  await expect(send.createScheduledEventDiscord("g1", payload, opts)).resolves.toEqual({
+    id: "event1",
+  });
+  expect(postMock).toHaveBeenCalledExactlyOnceWith("/guilds/g1/scheduled-events", {
+    body: payload,
+  });
 });

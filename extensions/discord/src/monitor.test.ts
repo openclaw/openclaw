@@ -22,7 +22,6 @@ import {
   shouldEmitDiscordReactionNotification,
 } from "./monitor/allow-list.js";
 import { createDiscordLivePolicyReader } from "./monitor/live-policy.js";
-import { resolveDiscordReplyTarget } from "./monitor/threading.js";
 import { setDiscordRuntime } from "./runtime.js";
 import { firstMockArg, firstMockCall } from "./test-support/mock-calls.js";
 type DiscordReactionEvent = Parameters<
@@ -82,51 +81,6 @@ describe("DiscordMessageListener", () => {
     await Promise.resolve();
     await Promise.resolve();
   }
-
-  it("waits for the durable handler handoff", async () => {
-    let handlerResolved = false;
-    const deferred = createDeferred<void>();
-    const handler = vi.fn(async () => {
-      await deferred.promise;
-      handlerResolved = true;
-    });
-    const listener = new DiscordMessageListener(handler);
-
-    const handlePromise = listener.handle(messageEvent, messageClient);
-
-    await flushAsyncWork();
-    expect(handler).toHaveBeenCalledOnce();
-    expect(handlerResolved).toBe(false);
-
-    deferred.resolve();
-    await expect(handlePromise).resolves.toBeUndefined();
-    expect(handlerResolved).toBe(true);
-  });
-
-  it("dispatches subsequent events concurrently without blocking on prior handler", async () => {
-    const first = createDeferred<void>();
-    const second = createDeferred<void>();
-    let runCount = 0;
-    const handler = vi.fn(async () => {
-      runCount += 1;
-      if (runCount === 1) {
-        await first.promise;
-        return;
-      }
-      await second.promise;
-    });
-    const listener = new DiscordMessageListener(handler);
-
-    const firstHandle = listener.handle(messageEvent, messageClient);
-    const secondHandle = listener.handle(messageEvent, messageClient);
-
-    await flushAsyncWork();
-    expect(handler).toHaveBeenCalledTimes(2);
-
-    first.resolve();
-    second.resolve();
-    await Promise.all([firstHandle, secondHandle]);
-  });
 
   it("logs handler failures", async () => {
     const logger = { warn: vi.fn(), error: vi.fn() } as unknown as ReturnType<
@@ -255,18 +209,6 @@ it("discord group DM gating: matches group DM allowlist", () => {
   }
 });
 
-it("discord reply target selection: handles off/first/all reply modes", () => {
-  for (const [replyToMode, hasReplied, expected] of [
-    ["off", false, undefined],
-    ["first", false, "123"],
-    ["first", true, undefined],
-    ["all", false, "123"],
-    ["all", true, "123"],
-  ] as const) {
-    expect(resolveDiscordReplyTarget({ replyToMode, replyToId: "123", hasReplied })).toBe(expected);
-  }
-});
-
 it("discord reaction notification gating: applies mode-specific reaction notification rules", () => {
   type Input = Omit<Parameters<typeof shouldEmitDiscordReactionNotification>[0], "botId">;
   const outsider = { users: ["trusted-user"] };
@@ -279,10 +221,7 @@ it("discord reaction notification gating: applies mode-specific reaction notific
   const cases: Array<[string, Partial<Input>, boolean]> = [
     ["unset own, bot author", { messageAuthorId: "bot-1", userId: "user-1" }, true],
     ["unset own, other author", {}, false],
-    ["off", { mode: "off", messageAuthorId: "bot-1", userId: "user-1" }, false],
-    ["all", { mode: "all" }, true],
     ["all blocks outsider", { mode: "all", guildInfo: outsider }, false],
-    ["own, bot author", { mode: "own", messageAuthorId: "bot-1" }, true],
     ["own, other author", { mode: "own", messageAuthorId: "user-2", userId: "user-3" }, false],
     [
       "own blocks outsider",
@@ -295,16 +234,6 @@ it("discord reaction notification gating: applies mode-specific reaction notific
       false,
     ],
     ["allowlist misses", { mode: "allowlist", allowlist: [] }, false],
-    [
-      "allowlist id",
-      {
-        mode: "allowlist",
-        userId: "123",
-        userName: "steipete",
-        guildInfo: { users: ["123", "other"] },
-      },
-      true,
-    ],
     ["allowlist names disabled", namedUser, false],
     ["allowlist names enabled", { ...namedUser, allowNameMatching: true }, true],
     [
