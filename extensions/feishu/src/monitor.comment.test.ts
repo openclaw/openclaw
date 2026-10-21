@@ -348,57 +348,47 @@ describe("resolveDriveCommentEventTurn", () => {
     expect(turn?.prompt).not.toContain("This is a whole-document comment.");
   });
 
-  it("retries comment reply lookup when the requested reply is not immediately visible", async () => {
+  it.each([false, true])("settles missing reply lookup (aborted=%s)", async (aborted) => {
     vi.useFakeTimers();
+    const abortController = new AbortController();
+    const replyId = "7623359125999999999";
+    const text = "Insert a sentence below this paragraph";
     const missing = [rootReply, reply("7623358762999999999", "Earlier assistant summary")];
     const client = makeOpenApiClient({
-      repliesSequence: [
-        missing,
-        missing,
-        [rootReply, reply("7623359125999999999", "Insert a sentence below this paragraph")],
-      ],
+      repliesSequence: aborted
+        ? [[reply(ROOT_REPLY_ID, "Earlier assistant summary")]]
+        : [missing, missing, [rootReply, reply(replyId, text)]],
     });
     const turnPromise = resolveCommentTurn({
       client,
       event: makeDriveCommentEvent({
-        notice_meta: { notice_type: "add_reply" },
-        reply_id: "7623359125999999999",
+        reply_id: replyId,
+        ...(aborted ? {} : { notice_meta: { notice_type: "add_reply" } }),
       }),
+      abortSignal: aborted ? abortController.signal : undefined,
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(vi.getTimerCount()).toBe(1);
-    await vi.advanceTimersByTimeAsync(2_000);
+    if (aborted) {
+      abortController.abort();
+    } else {
+      await vi.advanceTimersByTimeAsync(2_000);
+    }
     const turn = await turnPromise;
-    expect(turn?.targetReplyText).toBe("Insert a sentence below this paragraph");
-    expectPrompt(
-      turn,
-      'The user added a reply in "Comment event handling request".',
-      'Original comment text: "Also send it to the agent after receiving the comment event"',
-      "Insert a sentence below this paragraph",
-    );
+    if (aborted) {
+      expect(turn).not.toBeNull();
+      expect(turn?.targetReplyText).toBeUndefined();
+    } else {
+      expect(turn?.targetReplyText).toBe(text);
+      expectPrompt(
+        turn,
+        'The user added a reply in "Comment event handling request".',
+        'Original comment text: "Also send it to the agent after receiving the comment event"',
+        text,
+      );
+    }
     expect(vi.getTimerCount()).toBe(0);
-    expect(replyRequests(client)).toHaveLength(3);
-  });
-
-  it("stops the comment reply retry loop when the owning abortSignal fires", async () => {
-    vi.useFakeTimers();
-    const abortController = new AbortController();
-    const client = makeOpenApiClient({
-      repliesSequence: [[reply(ROOT_REPLY_ID, "Earlier assistant summary")]],
-    });
-    const turnPromise = resolveCommentTurn({
-      client,
-      event: makeDriveCommentEvent({ reply_id: "7623358762999999999" }),
-      abortSignal: abortController.signal,
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(vi.getTimerCount()).toBe(1);
-    abortController.abort();
-    const turn = await turnPromise;
-    expect(turn).not.toBeNull();
-    expect(vi.getTimerCount()).toBe(0);
-    expect(replyRequests(client)).toHaveLength(1);
-    expect(turn?.targetReplyText).toBeUndefined();
+    expect(replyRequests(client)).toHaveLength(aborted ? 1 : 3);
   });
 
   it.each([
@@ -447,21 +437,15 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
     first.release();
     await second.promise;
     expect(handleComment).toHaveBeenCalledTimes(2);
-    expect(handleComment).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
+    expect(handleComment.mock.calls.map(([params]) => params)).toMatchObject([
+      {
         accountId: "default",
         botOpenId: "ou_bot",
         abortSignal: controller.signal,
-        event: expect.objectContaining({ event_id: "evt_1", comment_id: COMMENT_ID }),
-      }),
-    );
-    expect(handleComment).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        event: expect.objectContaining({ event_id: "evt_2" }),
-      }),
-    );
+        event: { event_id: "evt_1", comment_id: COMMENT_ID },
+      },
+      { event: { event_id: "evt_2" } },
+    ]);
   });
 
   it("does not execute a queued durable comment after its claim aborts", async () => {

@@ -448,29 +448,41 @@ export function registerServiceInstallationConvergenceTests(
     { drift: true, restart: false, outcome: "ok", status: "skipped" },
     { drift: true, restart: true, outcome: "reconciliation-pending", status: "skipped" },
     { drift: true, restart: true, outcome: "readiness-pending", status: "skipped" },
+    { drift: false, restart: true, outcome: "absent", status: "skipped" },
   ] as const)(
     "reconciles an already-current service installation (drift=$drift, restart=$restart, outcome=$outcome)",
     async ({ drift, restart, outcome, status }) => {
       const identity = createManagedServiceIdentityFixture(makeHome());
       try {
+        const absent = outcome === "absent";
+        const absentMessage = "Gateway restart skipped: no Gateway service or listener is running.";
         const packageRoot = path.join(identity.home, "prefix-b");
-        const serviceUpdateVerdict = {
-          kind: "owned" as const,
-          root: path.join(identity.home, drift ? "prefix-a" : "prefix-b"),
-          fingerprint: "installed-command",
-          refreshDefinition: true,
-          requiresInstallRootRefresh: drift,
-        };
+        const serviceUpdateVerdict = absent
+          ? { kind: "absent" as const }
+          : {
+              kind: "owned" as const,
+              root: path.join(identity.home, drift ? "prefix-a" : "prefix-b"),
+              fingerprint: "installed-command",
+              refreshDefinition: true,
+              requiresInstallRootRefresh: drift,
+            };
         mocks.revalidateService.mockResolvedValue(serviceUpdateVerdict);
         mocks.readServiceState.mockResolvedValue(managedServiceState(process.env));
         const serviceObservation = {
           inspected: true,
           runtimeInspected: true,
-          running: true,
+          running: !absent,
           serviceEnv: process.env,
           serviceUpdateVerdict,
+          ...(absent && {
+            serviceMutationAllowed: false,
+            serviceMutationSkipMessage: absentMessage,
+          }),
         };
         mocks.restartService.mockImplementationOnce(async ({ result }) => {
+          if (outcome === "absent") {
+            throw new Error("An absent service must not restart");
+          }
           expect(mocks.stopService).not.toHaveBeenCalled();
           expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
           expect(mocks.printResult).not.toHaveBeenCalled();
@@ -521,6 +533,10 @@ export function registerServiceInstallationConvergenceTests(
               }),
             }),
           );
+        }
+        if (absent) {
+          expect(mocks.printResult.mock.lastCall?.[0].steps).toEqual([]);
+          expect(defaultRuntime.error).toHaveBeenCalledWith(absentMessage);
         }
       } finally {
         identity.restore();

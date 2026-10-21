@@ -12,7 +12,6 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveConfiguredMcpTransport } from "../config/mcp-config-normalize.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { logWarn } from "../logger.js";
-import type { McpEnterpriseConfig } from "./mcp-enterprise.js";
 import { resolveHttpMcpServerLaunchConfig, type HttpMcpTransportType } from "./mcp-http.js";
 import type { McpOAuthConfig } from "./mcp-oauth-provider.js";
 import {
@@ -44,9 +43,8 @@ export type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
   transportType: HttpMcpTransportType;
   url: string;
   headers?: Record<string, string>;
-  auth?: "oauth" | "enterprise";
+  auth?: "oauth";
   oauth?: ResolvedMcpOAuthConfig;
-  enterprise?: McpEnterpriseConfig;
   sslVerify?: boolean;
   clientCert?: string;
   clientKey?: string;
@@ -165,7 +163,6 @@ export function resolveMcpTransportConfig(
     return null;
   }
   const oauth = record?.oauth;
-  const enterprise = record?.enterprise;
   const clientCert = normalizeOptionalString(record?.clientCert);
   const clientKey = normalizeOptionalString(record?.clientKey);
   return {
@@ -173,10 +170,8 @@ export function resolveMcpTransportConfig(
     transportType: launch.config.transportType,
     url: launch.config.url,
     headers: launch.config.headers,
-    ...(record?.auth === "oauth" || record?.auth === "enterprise" ? { auth: record.auth } : {}),
+    ...(record?.auth === "oauth" ? { auth: "oauth" as const } : {}),
     ...(isRecord(oauth) ? { oauth: oauth as ResolvedMcpOAuthConfig } : {}),
-    // SAFETY: MCP server config is validated by McpServerSchema before runtime resolution.
-    ...(isRecord(enterprise) ? { enterprise: enterprise as McpEnterpriseConfig } : {}),
     ...(typeof record?.sslVerify === "boolean" ? { sslVerify: record.sslVerify } : {}),
     ...(clientCert ? { clientCert } : {}),
     ...(clientKey ? { clientKey } : {}),

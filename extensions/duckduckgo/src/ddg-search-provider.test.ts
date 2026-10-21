@@ -37,7 +37,7 @@ async function search(query: string, html?: string) {
   if (html !== undefined) {
     fetch.mockResolvedValue(htmlResponse(html));
   }
-  return await runDuckDuckGoSearch({ query, cacheTtlMinutes: 0 });
+  return await runDuckDuckGoSearch({ query });
 }
 
 it.each([4.5, 11])("rejects invalid count %s before searching", async (count) => {

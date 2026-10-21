@@ -3978,9 +3978,17 @@ openclaw-tooltip.sidebar-hover-tooltip {
   margin-block: 4px;
 }
 
-.sidebar-identity-menu .nav-item__icon {
+.sidebar-identity-menu .nav-item__icon,
+.sidebar-identity-menu .sidebar-gateway-health-slot {
   width: 20px;
   height: 20px;
+}
+
+.sidebar-gateway-health-slot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
 }
 
 .sidebar-identity-menu__help .oc-menu-item__submenu-icon {

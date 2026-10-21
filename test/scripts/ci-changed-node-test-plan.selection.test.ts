@@ -69,7 +69,7 @@ it("bounds protected regressions to nearby consumers and restores area coverage 
   const direct = "src/agents/example/subject.test.ts";
   const nearby = "src/infra/device-pairing.test.ts";
   const distant = "src/infra/state-migrations.audit-logs.test.ts";
-  const unrelated = "src/agents/bash-tools.exec.path.test.ts";
+  const unrelated = "src/agents/bash-tools.exec.script-preflight.test.ts";
   const cwd = fixture({
     [source]: "export const value = 1;",
     [direct]: 'import "./subject.js";',

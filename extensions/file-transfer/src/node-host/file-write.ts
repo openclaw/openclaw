@@ -8,7 +8,7 @@ import {
   resolveAbsolutePathForWrite,
   root,
 } from "openclaw/plugin-sdk/security-runtime";
-import { inspectStrictBase64 } from "../shared/base64.js";
+import { inspectStrictBase64, normalizeBase64ForCompare } from "../shared/base64.js";
 import {
   fileIdentity,
   matchesFileIdentity,
@@ -81,9 +81,7 @@ export async function handleFileWrite(params: Partial<FileWriteParams> & Record<
   // Buffer decoding is permissive; verify the round trip, including padding bits.
   const buf = Buffer.from(contentBase64, "base64");
   const reEncoded = buf.toString("base64");
-  const normalize = (s: string): string =>
-    s.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
-  if (normalize(reEncoded) !== normalize(contentBase64)) {
+  if (normalizeBase64ForCompare(reEncoded) !== normalizeBase64ForCompare(contentBase64)) {
     return err("INVALID_BASE64", "contentBase64 is not valid base64");
   }
 

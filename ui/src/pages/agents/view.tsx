@@ -174,7 +174,7 @@ export function Agents(props: AgentsProps) {
           </div>
         </div>
         <Show when={props.error}>
-          <div class="callout danger" style={{ "margin-top": "8px" }}>
+          <div class="callout danger" role="alert" style={{ "margin-top": "8px" }}>
             {props.error}
           </div>
         </Show>
