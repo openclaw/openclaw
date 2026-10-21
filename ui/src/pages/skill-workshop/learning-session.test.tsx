@@ -21,13 +21,13 @@ afterEach(() => vi.useRealTimers());
 
 const key = "agent:research:dashboard:7e93881c-0186-4d25-9e99-cdce85cac675";
 const retainedRun = expect.objectContaining({ sessionKey: key, pendingRunId: "learning-run" });
+const unresolved = () => new Promise<never>(() => {});
 
-async function mountLearningPage(
-  context = createContext(
-    vi.fn(() => new Promise<never>(() => {})),
-    { methods: ["sessions.create"] },
-  ),
-) {
+function learningContext(request: ReturnType<typeof vi.fn> = vi.fn(unresolved)) {
+  return createContext(request, { methods: ["sessions.create"] });
+}
+
+async function mountLearningPage(context = learningContext()) {
   const mounted = mountSolid(() => <SkillWorkshopPage />, {
     wrapper: createSolidApplicationContextProvider(context).wrapper,
   });
@@ -75,28 +75,18 @@ it("shows a failed creation without automatically retrying", async () => {
 it("retains an accepted run without redirecting a replaced Workshop page", async () => {
   vi.useFakeTimers();
   const sent = createDeferredCore<RequestFrame>();
-  let nextRequestId = 0;
-  const pending = new GatewayPendingRequests({
-    createRequestId: () => String(++nextRequestId),
-    nowMs: () => Date.now(),
-  });
+  const pending = new GatewayPendingRequests({ createRequestId: () => "1", nowMs: Date.now });
   const sender = { send: vi.fn((data: string) => sent.resolve(JSON.parse(data) as RequestFrame)) };
   onTestFinished(() => pending.flush(new Error("Workshop test complete")));
   let signal: AbortSignal | undefined;
-  const request = vi.fn(
-    (method: string, params?: unknown, options?: Parameters<typeof pending.request>[3]) => {
-      if (method === "sessions.create") {
-        signal = options?.signal;
-        return pending.request(sender, method, params, options);
-      }
-      if (method === "sessions.list") {
-        return Promise.resolve(sessionsResult([]));
-      }
-      return new Promise<never>(() => {});
-    },
-  );
-  const context = createContext(request, { methods: ["sessions.create"] });
-  const client = createTestGatewayClient(request);
+  const client = createTestGatewayClient((method, params, options) => {
+    if (method === "sessions.create") {
+      signal = options?.signal;
+      return pending.request(sender, method, params, options);
+    }
+    return method === "sessions.list" ? Promise.resolve(sessionsResult([])) : unresolved();
+  });
+  const context = learningContext(vi.fn(client.request));
   const { gateway } = createGatewayHarness(client, ["sessions.create"], {
     initial: { ...context.gateway.snapshot, client },
   });
@@ -116,11 +106,9 @@ it("retains an accepted run without redirecting a replaced Workshop page", async
     payload: { key, runStarted: true, runId: "learning-run" },
   });
   await create.mock.results[0]?.value;
-  expect(context.navigate).not.toHaveBeenCalled();
   expect(context.chatSubmissions.retain).toHaveBeenCalledExactlyOnceWith(retainedRun);
   mounted = await mountLearningPage(context);
   expect(mounted.button.disabled).toBe(false);
-  expect(create).toHaveBeenCalledOnce();
-  expect(sender.send).toHaveBeenCalledOnce();
+  expect([create.mock.calls.length, sender.send.mock.calls.length]).toEqual([1, 1]);
   expect(context.navigate).not.toHaveBeenCalled();
 });
