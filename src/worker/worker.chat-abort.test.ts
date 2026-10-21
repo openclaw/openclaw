@@ -229,7 +229,10 @@ it.each([
         previewGate?.entered.promise ?? providerStarted.promise,
         "cancellation boundary",
       );
-      expect(getAgentRunContext(RUN_ID)?.sessionId).toBe(SESSION_ID);
+      expect(getAgentRunContext(RUN_ID)).toMatchObject({
+        sessionId: SESSION_ID,
+        isControlUiVisible: true,
+      });
       const respond = await invokeChatAbortHandler({
         handler: coreGatewayHandlers["chat.abort"]!,
         context,

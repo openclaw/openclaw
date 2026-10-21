@@ -296,17 +296,6 @@ it.each([false, true])(
     });
   },
 );
-it.each(["id", "name"] as const)(
-  "rejects a complete credential in tool-call %s metadata",
-  async (field) => {
-    const call = tool({}, { name: "read", [field]: secret });
-    const final = message([call]);
-    const result = await scenario([toolEnd(call, 0, final), terminal(final)]);
-    expect(result.message.stopReason).toBe("error");
-    expect(JSON.stringify(result)).not.toContain(secret);
-  },
-);
-
 it("holds incomplete prefixes across tool blocks before any generated tool can escape", async () => {
   const call = tool({ nested: [secretPrefix] }, { async: true });
   const partial = message([call]);

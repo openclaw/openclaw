@@ -21,7 +21,6 @@ import {
   type WorkerLiveEventRequestFrame,
   WorkerLiveEventRequestFrameSchema,
   WORKER_PROTOCOL_FEATURES,
-  WORKER_RPC_SET_VERSION,
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitRequestFrame,
   WorkerTranscriptCommitRequestFrameSchema,
@@ -81,6 +80,7 @@ import {
   parseWorkerProcessMessage,
   type WorkerProcessResult,
 } from "./worker-process-protocol.js";
+import { createWorkerLaunchDescriptorForTest } from "./worker-process.test-support.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
 import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
@@ -88,16 +88,16 @@ import {
   registerWorkerBackgroundExecLifecycleTests,
   registerWorkerExecEnvironmentFinalizationTests,
 } from "./worker-runtime-background-exec.suite.js";
-import {
-  registerWorkerGatewayToolAvailabilityTests,
-  registerWorkerGatewayToolRpcTests,
-} from "./worker-runtime-gateway-tools.test-support.js";
 import { registerWorkerGitHubFailureTests } from "./worker-runtime-github-failures.suite.js";
 import { registerWorkerNativeInferenceTests } from "./worker-runtime-native-inference.suite.js";
 import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
 import { registerWorkerPromptTests } from "./worker-runtime-prompt.suite.js";
 import { registerWorkerReplayWindowTests } from "./worker-runtime-replay.suite.js";
-import { createWorkerToolSurfaceForTest } from "./worker-tool-surface.test-support.js";
+import {
+  registerWorkerGatewayToolAvailabilityTests,
+  registerWorkerGatewayToolRpcTests,
+  createWorkerToolSurfaceForTest,
+} from "./worker-tool-surface.test-support.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
 const browserRuntimeMocks = vi.hoisted(() => ({
@@ -814,15 +814,13 @@ class FakeWorkerGateway {
 }
 
 function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescriptor {
-  return {
-    version: 4,
+  return createWorkerLaunchDescriptorForTest({
     connectionEndpoint: { kind: "unix", socketPath },
     admission: {
       environmentId: "worker-environment",
       credential: CREDENTIAL,
       sessionId: SESSION_ID,
       ownerEpoch: OWNER_EPOCH,
-      rpcSetVersion: WORKER_RPC_SET_VERSION,
       handshake: {
         bundleHash: BUNDLE_HASH,
         openclawVersion: "worker-test",
@@ -836,11 +834,9 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
       agentRuntimeIdentityToken: "test-agent-runtime-token",
       turnId: "worker-turn",
       prompt: "Complete the worker turn.",
-      suppressPromptTranscript: false,
       workspaceDir,
       modelRef: MODEL_REF,
       inferenceOptions: { reasoning: "off" },
-      initialMessages: [],
       transcript: { baseLeafId: "leaf-base", nextSeq: 3 },
       liveEvents: { ackedSeq: 0, nextSeq: 1 },
       toolAuthority: {
@@ -848,7 +844,7 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
         exec: { host: "gateway", security: "full", ask: "off" },
       },
     },
-  };
+  });
 }
 
 const gateways: FakeWorkerGateway[] = [];

@@ -3,10 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  WORKER_PROTOCOL_FEATURES,
-  WORKER_RPC_SET_VERSION,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -24,6 +20,7 @@ import {
   type WorkerProcessResult,
 } from "./worker-process-protocol.js";
 import { runWorkerProcess } from "./worker-process.js";
+import { createWorkerLaunchDescriptorForTest } from "./worker-process.test-support.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -52,31 +49,8 @@ vi.mock("./worker.runtime.js", () => ({
   createWorkerRuntimeEnvironment: vi.fn(),
 }));
 
-const descriptor = {
-  version: 4,
-  connectionEndpoint: { kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" },
-  admission: {
-    environmentId: "environment-1",
-    credential: ["worker", "fixture", "value"].join("-"),
-    sessionId: "session-1",
-    ownerEpoch: 1,
-    rpcSetVersion: WORKER_RPC_SET_VERSION,
-    handshake: {
-      bundleHash: "a".repeat(64),
-      openclawVersion: "2026.7.12",
-      protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-    },
-  },
+const descriptor = createWorkerLaunchDescriptorForTest({
   assignment: {
-    agentId: "agent-1",
-    operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
-    agentRuntimeIdentityToken: "signed-runtime-token",
-    runId: "run-1",
-    turnId: "turn-1",
-    prompt: "Inspect the workspace.",
-    suppressPromptTranscript: false,
-    workspaceDir: "/tmp/openclaw-worker/workspace",
-    modelRef: { provider: "provider-1", model: "model-1" },
     inferenceOptions: { reasoning: "medium", maxTokens: 512 },
     initialMessages: [
       { role: "user", content: [{ type: "text", text: "Earlier context." }], timestamp: 1 },
@@ -85,7 +59,7 @@ const descriptor = {
     liveEvents: { ackedSeq: 12, nextSeq: 13 },
     toolAuthority: { allowedToolNames: ["read", "exec"] },
   },
-} satisfies WorkerLaunchDescriptor;
+});
 
 function commandInput() {
   const input = new PassThrough();
@@ -236,7 +210,7 @@ function gatedCommandHarness(mode: "standalone" | "managed") {
 
 function waitForRuntimeAbort(
   result: Awaited<ReturnType<typeof runWorkerDescriptor>> = completed,
-  onAbort = () => {},
+  onAbort: (signal: AbortSignal) => void = () => {},
 ) {
   const started = createDeferred<AbortSignal>();
   vi.mocked(runWorkerDescriptor).mockImplementationOnce(async (_launch, options) => {
@@ -246,7 +220,7 @@ function waitForRuntimeAbort(
     }
     started.resolve(signal);
     await aborted(signal);
-    onAbort();
+    onAbort(signal);
     return result;
   });
   return started.promise;
@@ -362,23 +336,17 @@ describe("worker command lifetime gate", () => {
     "aborts the worker path and terminates its owned tree on IPC disconnect (%s)",
     async (mode) => {
       const harness = gatedCommandHarness(mode);
-      let runtimeSignal: AbortSignal | undefined;
-      vi.mocked(runWorkerDescriptor).mockImplementation(async (_descriptor, options) => {
-        const signal = options?.signal;
-        if (!signal) {
-          throw new Error("expected worker lifetime abort signal");
-        }
-        runtimeSignal = signal;
-        await aborted(signal);
+      const started = waitForRuntimeAbort(completed, (signal) => {
         throw signal.reason instanceof Error ? signal.reason : new Error("worker interrupted");
       });
       const lifetime = lifetimeHarness();
       lifetime.terminateOwnedTree.mockImplementation(() => {
-        expect(runtimeSignal?.aborted).toBe(true);
+        expect(runtimeSignal.aborted).toBe(true);
       });
       const running = runWorkerCommand({ ...harness, lifetime: lifetime.contract });
       lifetime.open();
-      await vi.waitFor(() => expect(runWorkerDescriptor).toHaveBeenCalledOnce());
+      const runtimeSignal = await started;
+      expect(runWorkerDescriptor).toHaveBeenCalledOnce();
 
       lifetime.disconnectAfterStart();
 

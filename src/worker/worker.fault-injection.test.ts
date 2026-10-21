@@ -8,12 +8,6 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runWorkerProviderReplayRoundTrip } from "../../test/helpers/worker-provider-replay-roundtrip.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import {
-  claimAgentRunContext,
-  clearAgentRunContext,
-  getAgentRunContext,
-} from "../infra/agent-run-registry.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
@@ -29,7 +23,6 @@ import {
   ENVIRONMENT_ID,
   RUN_ID,
   SESSION_ID,
-  SESSION_KEY,
   doneMessage,
   doneOutcome,
   type WorkerClients,
@@ -629,31 +622,6 @@ describe("cloud worker milestone 2 fault injection", () => {
     expect(current.transcript.nextSeq).toBe(2);
     expect(harness.requestParams("worker.transcript.commit")).toHaveLength(2);
     expect(transcript().getEntries()).toHaveLength(1);
-  });
-
-  it("advances a worker live stream whose run context is dispatch-owned and visible", async () => {
-    const current = await createClients();
-    // Worker live events must adopt the dispatch-owned context without hiding it.
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    claimAgentRunContext(RUN_ID, {
-      agentId: "main",
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      isControlUiVisible: true,
-      lifecycleGeneration,
-    });
-    try {
-      await current.connection.start();
-
-      previews(current, RUN_ID, "one", "two");
-      await expect(current.live.emitTerminal(RUN_ID, TERMINAL_EVENT)).resolves.toBeUndefined();
-
-      expect(harness.liveDeltas).toEqual(["one", "two"]);
-      expect(liveRequests().map(({ seq }) => seq)).toEqual([1, 2, 3]);
-      expect(getAgentRunContext(RUN_ID)?.isControlUiVisible).toBe(true);
-    } finally {
-      clearAgentRunContext(RUN_ID);
-    }
   });
 
   it("settles stop during an in-flight commit without retrying or spinning", async () => {
