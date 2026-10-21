@@ -215,6 +215,8 @@ esac`,
       const disableFails = mode === "failure";
       const definition = "[Unit]\nDescription=Gateway cleanup fixture\n";
       const unitPath = await writeUnit(unitName, definition);
+      const backup = "[Unit]\nDescription=Previous Gateway\n";
+      await fs.writeFile(`${unitPath}.bak`, backup);
       if (mode !== "missing") {
         await cleanupCommand(
           `test -f "$HOME/.config/systemd/user/${unitName}" || exit 98\n${disableFails ? "kill -TERM $$" : "exit 0"}`,
@@ -225,10 +227,15 @@ esac`,
       if (disableFails) {
         await expect(uninstall({ env, stdout })).rejects.toThrow("systemctl disable failed:");
         await expect(fs.readFile(unitPath, "utf8")).resolves.toBe(definition);
+        await expect(fs.readFile(`${unitPath}.bak`, "utf8")).resolves.toBe(backup);
         expect(output()).not.toContain("Removed");
       } else {
-        await uninstall({ env, stdout });
+        const result = await uninstall({ env, stdout });
+        if (unitName === "openclaw-gateway.service" && mode === "missing") {
+          expect(result).toMatchObject({ unitName, unitPath, removed: true, disabled: false });
+        }
         await absent(unitPath);
+        await absent(`${unitPath}.bak`);
         expect(output()).toContain("Removed");
       }
       if (mode === "missing") {
@@ -248,6 +255,7 @@ esac`,
     const unitName = "openclaw-lisa.service";
     const definition = "[Unit]\nDescription=OpenClaw Gateway (profile: lisa)\n";
     const unitPath = await writeUnit(unitName, definition);
+    await fs.writeFile(`${unitPath}.bak`, "[Unit]\nDescription=Previous gateway\n");
     if (matches) {
       await cleanupCommand("exit 0");
     }
@@ -265,6 +273,7 @@ esac`,
     }
     expect(await removal).toMatchObject({ unitName, unitPath, removed: true, disabled: true });
     await absent(unitPath);
+    await absent(`${unitPath}.bak`);
     expect(await calls()).toContain("--user disable --now openclaw-lisa.service");
     expect(output()).toContain("Removed");
   });

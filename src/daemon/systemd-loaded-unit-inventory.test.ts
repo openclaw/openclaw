@@ -202,16 +202,9 @@ it("keeps multiline command data separate from every loaded unit's identity", as
     payload,
   ]);
   addUnit("openclaw-gateway.service");
-  systemctl.mockImplementation(async (args) =>
+  systemctl.mockResolvedValue(
     success(
-      args.includes("list-units")
-        ? "custom-rescue.service loaded active running Worker\nopenclaw-gateway.service loaded active running Gateway\n"
-        : [...units.values()]
-            .map(
-              (unit) =>
-                `Id=${unit.name}\nActiveState=active\nFragmentPath=${unit.fragmentPath}\nExecStart={ path=${unit.argv[0]} ; argv[]=${unit.argv.join(" ")} ; ignore_errors=no ; start_time=[] ; stop_time=[] ; pid=0 ; code=(null) ; status=0 }\n`,
-            )
-            .join("\n"),
+      "custom-rescue.service loaded active running Worker\nopenclaw-gateway.service loaded active running Gateway\n",
     ),
   );
   expect(await listLoadedSystemdUnits("system", buses)).toEqual([

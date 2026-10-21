@@ -2119,36 +2119,6 @@ describe("uninstallLegacySystemdUnits", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
-  it("preserves legacy files after interrupted discovery and refused disable", async () => {
-    const tempHomeRoot = tempDirs.make("openclaw-legacy-unit-");
-    const env = { HOME: path.join(tempHomeRoot, "home") };
-    const unitPath = path.join(env.HOME, ".config", "systemd", "user", "clawdbot-gateway.service");
-    const previous = "[Unit]\nDescription=Clawdbot Gateway\n";
-    const backup = "[Unit]\nDescription=Previous Clawdbot Gateway\n";
-    await writeUnitFixture(unitPath, previous);
-    await writeUnitFixture(`${unitPath}.bak`, backup);
-    execFileMock.mockImplementation((_command, args, _options, callback) => {
-      if (args[0] === "--version") {
-        expect(args).toEqual(["--version"]);
-        callback(
-          createExecFileError("executable probe interrupted", { termination: "signal" }),
-          "",
-          "",
-        );
-      } else if (args[1] === "is-enabled") {
-        callback(null, "enabled\n", "");
-      } else {
-        assertUserSystemctlArgs(args, "disable", "--now", "clawdbot-gateway.service");
-        callback(createExecFileError("permission denied"), "", "Permission denied");
-      }
-    });
-    const { stdout } = createWritableStreamMock();
-    await expect(uninstallLegacySystemdUnits({ env, stdout })).rejects.toThrow(
-      "systemctl disable failed: Permission denied",
-    );
-    await expectFiles({ [unitPath]: previous, [`${unitPath}.bak`]: backup });
-  });
-
   it("discovers and removes an orphaned legacy backup", async () => {
     const tempHomeRoot = tempDirs.make("openclaw-legacy-backup-");
     const env = { HOME: path.join(tempHomeRoot, "home") };
@@ -2178,50 +2148,31 @@ describe("uninstallLegacySystemdUnits", () => {
   });
 });
 
-it.each(["absent", "unavailable", "legacy", "reload-failed"] as const)(
+it.each(["absent", "reload-failed"] as const)(
   "removes only safely disabled user units: %s",
   async (scenario) => {
-    const { env, unitPath: canonicalPath } = await createSystemdFixture("user");
-    if (scenario === "legacy") {
-      env.OPENCLAW_PROFILE = "lisa";
-    }
-    const unitName = scenario === "legacy" ? "openclaw-lisa.service" : GATEWAY_SERVICE;
-    const unitPath = path.join(path.dirname(canonicalPath), unitName);
+    const { env, unitPath } = await createSystemdFixture("user");
+    const unitName = GATEWAY_SERVICE;
     if (scenario !== "absent") {
-      await writeUnitFixture(
-        unitPath,
-        scenario === "legacy"
-          ? "[Unit]\nDescription=OpenClaw Gateway (profile: lisa)\n"
-          : "[Unit]\nDescription=OpenClaw Gateway\n",
-      );
+      await writeUnitFixture(unitPath, "[Unit]\nDescription=OpenClaw Gateway\n");
     }
-    if (scenario === "absent" || scenario === "legacy") {
+    if (scenario === "absent") {
       await writeUnitFixture(
         `${unitPath}.bak`,
-        scenario === "legacy"
-          ? "[Unit]\nDescription=Previous gateway\n"
-          : "Environment=OPENCLAW_GATEWAY_TOKEN=orphaned-token\n",
-        scenario === "legacy" ? 0o644 : 0o600,
+        "Environment=OPENCLAW_GATEWAY_TOKEN=orphaned-token\n",
+        0o600,
       );
     }
-    if (scenario === "unavailable") {
-      execFileMock.mockImplementation(
-        execFileResult(createExecFileError("spawn systemctl ENOENT", { code: "ENOENT" }), "", ""),
+    execFileMock
+      .mockImplementationOnce(systemctlVersionResult())
+      .mockImplementationOnce(systemctlUserSuccess("disable", "--now", unitName));
+    if (scenario === "reload-failed") {
+      execFileMock.mockImplementationOnce(
+        systemctlUserResult(
+          [createExecFileError("bus unavailable", { code: 1 }), "", "Bus unavailable"],
+          "daemon-reload",
+        ),
       );
-    } else {
-      execFileMock
-        .mockImplementationOnce(systemctlVersionResult())
-        .mockImplementationOnce(systemctlUserResult([null, "", ""], "disable", "--now", unitName));
-      if (scenario === "legacy" || scenario === "reload-failed") {
-        execFileMock.mockImplementationOnce(
-          systemctlUserResult(
-            scenario === "reload-failed"
-              ? [createExecFileError("bus unavailable", { code: 1 }), "", "Bus unavailable"]
-              : [null, "", ""],
-            "daemon-reload",
-          ),
-        );
-      }
     }
     const { write, stdout } = createWritableStreamMock();
     const operation = uninstallUserSystemdGatewayUnit({ env, stdout });
@@ -2232,20 +2183,15 @@ it.each(["absent", "unavailable", "legacy", "reload-failed"] as const)(
         unitName,
         unitPath,
         removed: scenario !== "absent",
-        disabled: scenario !== "unavailable",
+        disabled: true,
       });
     }
     await expectFiles({ [unitPath]: null });
-    if (scenario === "absent" || scenario === "legacy") {
+    if (scenario === "absent") {
       await expectFiles({ [`${unitPath}.bak`]: null });
     }
     if (scenario === "absent") {
       expect(requireFirstWrite(write)).toContain("User-scope systemd unit not found");
-    }
-    if (scenario === "unavailable") {
-      expect(write.mock.calls.map((call) => String(call[0])).join("")).toContain(
-        "systemctl unavailable; removing unit file only",
-      );
     }
   },
 );

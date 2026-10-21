@@ -306,36 +306,35 @@ it.each([
   },
 );
 
-it.each([false, true])("requires authority to load definitions (owned=%s)", async (owned) => {
-  const assertCurrent = vi.fn();
-  mockCollected({ missing: true });
-  const runtime = await readLoaded(
-    owned ? { loadForInspection: { managerUid: 2001, assertCurrent } } : {},
-  );
-  expect(runtime.status).toBe(owned ? "stopped" : "unknown");
-  expect(runtime.missingUnit).not.toBe(true);
-  if (owned) {
-    expect(assertCurrent).toHaveBeenCalled();
-    expect(busctl.mock.calls.some(([, args]) => args.includes("GetProcesses"))).toBe(true);
-  }
-  expect(busctl.mock.calls.some(([, args]) => args.includes("LoadUnit"))).toBe(owned);
-  expect(systemctl).not.toHaveBeenCalled();
-});
-
-it.each(["uid", "busy"] as const)(
-  "preserves %s refusal without lifecycle effects",
-  async (fault) => {
-    const manager = mockCollected({ processes: fault === "busy" ? [["/owned", 91, "child"]] : [] });
-    const assertCurrent = () => {};
-    const observation = readLoaded({
-      loadForInspection: { managerUid: fault === "uid" ? 2002 : 2001, assertCurrent },
+it.each(["unowned", "owned", "uid", "busy"])(
+  "checks definition-loading authority: %s",
+  async (mode) => {
+    const assertCurrent = vi.fn();
+    const manager = mockCollected({
+      missing: mode === "unowned" || mode === "owned",
+      processes: mode === "busy" ? [["/owned", 91, "child"]] : [],
     });
-    if (fault === "uid") {
+    const observation = readLoaded(
+      mode === "unowned"
+        ? {}
+        : { loadForInspection: { managerUid: mode === "uid" ? 2002 : 2001, assertCurrent } },
+    );
+    if (mode === "uid") {
       await expect(observation).rejects.toMatchObject({ reason: "systemd-manager-changed" });
     } else {
-      expect((await observation).status).toBe("unknown");
+      const runtime = await observation;
+      expect(runtime.status).toBe(mode === "owned" ? "stopped" : "unknown");
+      if (mode !== "busy") {
+        expect(runtime.missingUnit).not.toBe(true);
+      }
     }
-    expect(manager.loaded).toBe(fault !== "uid");
+    const loaded = mode === "owned" || mode === "busy";
+    expect(manager.loaded).toBe(loaded);
+    expect(busctl.mock.calls.some(([, args]) => args.includes("LoadUnit"))).toBe(loaded);
+    if (mode === "owned") {
+      expect(assertCurrent).toHaveBeenCalled();
+      expect(busctl.mock.calls.some(([, args]) => args.includes("GetProcesses"))).toBe(true);
+    }
     expect(systemctl).not.toHaveBeenCalled();
     expect(
       busctl.mock.calls.every(
