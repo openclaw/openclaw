@@ -4,7 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { flush } from "solid-js";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { settingsViews } from "./index.tsx";
 
 const emptyLogin = { message: null, qrDataUrl: null, connected: null, busy: false };
@@ -22,9 +22,7 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
     ...patch,
   };
   const abort = new AbortController();
-  const unavailable = () => {
-    throw new Error("WhatsApp uses native Settings markup");
-  };
+  const unavailable = () => assert.fail("WhatsApp uses native Settings markup");
   const logout = vi.fn<() => Promise<void>>().mockResolvedValue();
   const configDispose = vi.fn();
   const context = {
@@ -61,19 +59,14 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
   flush();
   const buttons = () => [...container.querySelectorAll("button")];
   const rows = () => [...container.querySelectorAll("dt")];
-  const button = (label: string) => {
-    const node = buttons().find((candidate) => candidate.textContent?.trim() === label);
-    if (!node) {
-      throw new Error(`Missing ${label}`);
-    }
-    return node;
-  };
   return {
     ...context,
     ...context.login,
     container,
     buttons,
-    button,
+    button: (label: string) =>
+      buttons().find((node) => node.textContent?.trim() === label) ??
+      assert.fail(`Missing ${label}`),
     expectFacts(expected: Record<string, string>) {
       const facts = rows().map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]);
       expect(Object.fromEntries(facts)).toMatchObject(expected);
@@ -91,33 +84,28 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
 
 it("keeps QR/relink actions and busy state tied to the shared login snapshot", () => {
   const f = fixture();
-  const qrLogin = { ...emptyLogin, qrDataUrl: "data:image/png;base64,fixture" };
+  const qrLogin = { ...emptyLogin, message: "Scan now", qrDataUrl: "data:image/png,qr" };
   expect(f.buttons().map((node) => node.textContent)).toEqual(["Show QR", "Logout", "Refresh"]);
   expect(f.button("Show QR").classList.contains("primary")).toBe(true);
   f.button("Show QR").click();
   expect(f.start).toHaveBeenCalledWith(false);
-  f.update({
-    status: { linked: true },
-    login: { ...qrLogin, message: "Scan now", connected: false },
-  });
+  f.update({ status: { linked: true }, login: qrLogin });
   expect(f.container.querySelector("img")?.getAttribute("alt")).toBe("WhatsApp QR");
   expect(f.container.querySelector('[role="status"]')?.textContent).toBe("Scan now");
   f.button("Relink").click();
   expect(f.start).toHaveBeenLastCalledWith(true);
   f.button("Wait for scan").click();
   expect(f.wait).toHaveBeenCalledOnce();
-  f.update({ login: { ...qrLogin, busy: true } });
+  f.update({ login: { ...qrLogin, message: null, busy: true } });
   for (const label of ["Relink", "Wait for scan", "Logout"]) {
     expect(f.button(label).disabled).toBe(true);
   }
 });
 
 it("uses the declared default account for configured fallback and keeps absent status booleans false", () => {
+  const configuredAccount = { accountId: "selected", configured: true };
   const f = fixture({
-    accounts: [
-      { accountId: "first", configured: false },
-      { accountId: "selected", configured: true },
-    ],
+    accounts: [{ accountId: "first", configured: false }, configuredAccount],
     defaultAccountId: "selected",
   });
   f.expectFacts({ Configured: "Yes", Linked: "No", Running: "No", Connected: "No" });
@@ -127,7 +115,7 @@ it("uses the declared default account for configured fallback and keeps absent s
   f.update({
     status: {},
     defaultAccountId: "missing",
-    accounts: [{ accountId: "first", configured: true }],
+    accounts: [configuredAccount],
   });
   f.expectFacts({ Configured: "Yes" });
   expect(f.container.querySelector(".settings-count")).toBeNull();
