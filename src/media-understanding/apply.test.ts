@@ -339,20 +339,6 @@ describe("applyMediaUnderstanding", () => {
     );
   });
 
-  it("keeps caption for command parsing when audio has user text", async () => {
-    const ctx = await createAudioCtx({ body: "/capture status" });
-    ctx.CommandAuthorized = false;
-    await applyAudio(ctx);
-
-    expectTranscriptApplied(
-      ctx,
-      "transcribed text",
-      "[Audio]\nUser text:\n/capture status\nTranscript:\ntranscribed text",
-      "/capture status",
-    );
-    expect(ctx.CommandAuthorized).toBe(false);
-  });
-
   it("handles URL-only attachments for audio transcription", async () => {
     const ctx: MsgContext = {
       Body: "",

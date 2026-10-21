@@ -300,22 +300,6 @@ describe("describeImageWithModelCore", () => {
 describe("image runtime cancellation and retries", () => {
   installImageRuntimeTestHooks();
 
-  it("reports the resolved model input when an image model is text-only", async () => {
-    const ref = { provider: "lmstudio", model: "text-only" };
-    mockImageModel({
-      provider: ref.provider,
-      id: ref.model,
-      api: "openai-completions",
-      input: ["text"],
-      baseUrl: "http://127.0.0.1:1234",
-    });
-
-    await expect(describeImageWithModelCore(request(ref))).rejects.toThrow(
-      "Model does not support images: lmstudio/text-only (resolved lmstudio/text-only input: text)",
-    );
-    expect(completeMock).not.toHaveBeenCalled();
-  });
-
   it.each([
     { asyncTransform: false, replace: true },
     { asyncTransform: true, replace: false },

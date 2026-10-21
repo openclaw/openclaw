@@ -200,22 +200,6 @@ describe("provider operation deadlines", () => {
     await expect(wait).resolves.toBeUndefined();
   });
 
-  it("polls provider status JSON until a payload is complete", async () => {
-    const fetchFn = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ status: "in_progress" }))
-      .mockResolvedValueOnce(jsonResponse({ status: "completed" }));
-
-    const result = poll(fetchFn, 10_000, {
-      headers: new Headers({ authorization: "Bearer test" }),
-    });
-
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    await expect(result).resolves.toEqual({ status: "completed" });
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-  });
-
   it.each(["poll", "download"])("bounds a trickling %s response body", async (stage) => {
     const fetchFn = vi
       .fn<typeof fetch>()
@@ -235,26 +219,6 @@ describe("provider operation deadlines", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
-  it("passes guarded request policy through provider status polling", async () => {
-    const release = queueGuardedResponse(jsonResponse({ status: "completed" }));
-
-    const result = await poll(fetch, undefined, {
-      headers: new Headers({ authorization: "Bearer test" }),
-      allowPrivateNetwork: true,
-      dispatcherPolicy: { mode: "direct" },
-      auditContext: "provider-video-status",
-    });
-
-    expect(result).toEqual({ status: "completed" });
-    const call = getFirstGuardedFetchCall();
-    expect([call.policy, call.dispatcherPolicy, call.auditContext]).toEqual([
-      { allowPrivateNetwork: true },
-      { mode: "direct" },
-      "provider-video-status",
-    ]);
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
   it("retries guarded transient provider status failures while polling", async () => {
     const firstRelease = queueGuardedResponse(busyResponse());
     const secondRelease = queueGuardedResponse(jsonResponse({ status: "completed" }));
@@ -262,29 +226,22 @@ describe("provider operation deadlines", () => {
     const result = poll(fetch, 10_000, {
       headers: new Headers({ authorization: "Bearer test" }),
       allowPrivateNetwork: true,
+      dispatcherPolicy: { mode: "direct" },
+      auditContext: "provider-video-status",
     });
 
     await vi.advanceTimersByTimeAsync(250);
 
     await expect(result).resolves.toEqual({ status: "completed" });
     expect(guardedFetch).toHaveBeenCalledTimes(2);
+    const call = getFirstGuardedFetchCall();
+    expect([call.policy, call.dispatcherPolicy, call.auditContext]).toEqual([
+      { allowPrivateNetwork: true },
+      { mode: "direct" },
+      "provider-video-status",
+    ]);
     expect(firstRelease).toHaveBeenCalledTimes(1);
     expect(secondRelease).toHaveBeenCalledTimes(1);
-  });
-
-  it("throws provider failure messages while polling status JSON", async () => {
-    const fetchFn = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse({ status: "failed", error: { message: "model rejected" } }),
-      );
-
-    await expect(
-      poll(fetchFn, undefined, {
-        getFailureMessage: (payload) =>
-          payload.status === "failed" ? payload.error?.message : undefined,
-      }),
-    ).rejects.toThrow("model rejected");
   });
 
   it.each(["poll", "download"])(

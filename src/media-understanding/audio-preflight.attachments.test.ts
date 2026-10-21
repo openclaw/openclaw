@@ -136,6 +136,7 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
         );
         const ctx: MsgContext = {
           Body: "",
+          CommandAuthorized: false,
           media: [{}, { ...media[0], transcribed: true }, ...media.slice(1)],
         };
         const transcript = await transcribeFirstAudio({ ctx, cfg });
@@ -173,6 +174,7 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
         expect(ctx.BodyForAgent).toBe(ctx.agentText);
         expect(ctx.agentText).not.toContain("stale alias");
         expect(ctx).toMatchObject({ ...captionFields, rawText: caption, commandText: caption });
+        expect(ctx.CommandAuthorized).toBe(false);
         if (textField !== "Body") {
           expect(ctx.Body).toContain("transport envelope");
           expect(ctx.agentText).not.toContain("transport envelope");
