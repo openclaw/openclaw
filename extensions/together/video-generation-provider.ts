@@ -85,19 +85,18 @@ function resolveTogetherVideoBaseUrl(req: VideoGenerationRequest): string {
 }
 
 function extractTogetherVideoUrl(payload: TogetherVideoResponse): string | undefined {
-  if (Array.isArray(payload.outputs)) {
-    for (const entry of payload.outputs) {
-      const url = normalizeOptionalString(entry.video_url) ?? normalizeOptionalString(entry.url);
-      if (url) {
-        return url;
-      }
+  const outputs = Array.isArray(payload.outputs)
+    ? payload.outputs
+    : payload.outputs
+      ? [payload.outputs]
+      : [];
+  for (const entry of outputs) {
+    const url = normalizeOptionalString(entry.video_url) ?? normalizeOptionalString(entry.url);
+    if (url) {
+      return url;
     }
-    return undefined;
   }
-  return (
-    normalizeOptionalString(payload.outputs?.video_url) ??
-    normalizeOptionalString(payload.outputs?.url)
-  );
+  return undefined;
 }
 
 function readTogetherVideoFailureMessage(payload: TogetherVideoResponse): string | undefined {

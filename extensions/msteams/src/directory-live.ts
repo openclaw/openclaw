@@ -5,8 +5,9 @@ import {
 import type { ChannelDirectoryEntry } from "../runtime-api.js";
 import { searchGraphUsers } from "./graph-users.js";
 import {
-  listChannelsForTeamWithPageInfo,
-  listTeamsByNameWithPageInfo,
+  listChannelsForTeam,
+  listTeamsByName,
+  normalizeQuery,
   resolveGraphToken,
 } from "./graph.js";
 
@@ -16,7 +17,7 @@ export async function listMSTeamsDirectoryPeersLive(params: {
   query?: string | null;
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
-  const query = params.query?.trim() ?? "";
+  const query = normalizeQuery(params.query);
   if (!query) {
     return [];
   }
@@ -52,7 +53,7 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
   query?: string | null;
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
-  const rawQuery = params.query?.trim() ?? "";
+  const rawQuery = normalizeQuery(params.query);
   if (!rawQuery) {
     return [];
   }
@@ -65,7 +66,7 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
     : [rawQuery, null];
 
   const normalizedChannelQuery = normalizeLowercaseStringOrEmpty(channelQuery);
-  const { items: teams } = await listTeamsByNameWithPageInfo(token, teamQuery);
+  const teams = await listTeamsByName(token, teamQuery);
   const results: ChannelDirectoryEntry[] = [];
 
   for (const team of teams) {
@@ -87,7 +88,7 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
       }
       continue;
     }
-    const { items: channels } = await listChannelsForTeamWithPageInfo(token, teamId);
+    const channels = await listChannelsForTeam(token, teamId);
     for (const channel of channels) {
       const name = channel.displayName?.trim();
       if (!name) {

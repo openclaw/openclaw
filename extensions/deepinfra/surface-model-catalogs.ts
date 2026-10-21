@@ -53,10 +53,8 @@ async function listDeepInfraGenerationCatalog(
       provider: PROVIDER_ID,
       model: model.id,
       source: "live",
+      label: model.name,
     };
-    if (model.name) {
-      entry.label = model.name;
-    }
     if (kind === "video_generation") {
       entry.capabilities = buildDeepInfraVideoModelCapabilities();
     }
