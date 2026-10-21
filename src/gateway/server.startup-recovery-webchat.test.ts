@@ -1,13 +1,7 @@
-import { createServer } from "node:http";
-import { text as readStreamText } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import {
-  closeHttpServer,
-  listenLoopback,
-} from "../../test/helpers/gateway-integration-fixtures.js";
-import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import { closeHttpServer } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
@@ -22,32 +16,16 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import { createStartupRecoveryFixture } from "./server.startup-recovery.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
-import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 it(
   "admits startup resends as mailbox inputs ahead of same-session WebChat and keeps child context out of a reset parent",
   { timeout: 90_000 },
   async () => {
-    const token = "startup-recovery-webchat-token";
-    const state = await createOpenClawTestState({
-      label: "startup-recovery-webchat",
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: token,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-    });
     const sessionKey = "agent:main:main";
     const sessionId = "startup-recovery-session";
     const recoveryMessage = "Resume this interrupted task after restart.";
@@ -84,42 +62,36 @@ it(
     const targetRequests: string[] = [];
     const secondRequests: string[] = [];
     let holdRecovery = false;
-    let providerRequestCount = 0;
-    const providerServer = createServer((request, response) => {
-      void (async () => {
-        const body = await readStreamText(request);
-        if (request.method !== "POST" || request.url !== "/v1/responses") {
-          response.writeHead(404).end();
-          return;
+    const {
+      state,
+      provider: providerServer,
+      cfg,
+      token,
+      responseCount,
+    } = await createStartupRecoveryFixture(
+      "startup-recovery-webchat",
+      async (body) => {
+        if (
+          [recoveryMessage, canceledMessage, survivorMessage, afterResetMessage].some((text) =>
+            body.includes(text),
+          )
+        ) {
+          targetRequests.push(body);
         }
-        if (!body.includes("Generate a concise session title")) {
-          if (
-            [recoveryMessage, canceledMessage, survivorMessage, afterResetMessage].some((text) =>
-              body.includes(text),
-            )
-          ) {
-            targetRequests.push(body);
-          }
-          if (body.includes(secondRecoveryMessage)) {
-            secondRequests.push(body);
-            await secondRecoveryGate.promise;
-          }
-          if (body.includes(afterResetMessage)) {
-            afterResetRequest.resolve(body);
-          }
-          if (holdRecovery && body.includes(recoveryMessage)) {
-            holdRecovery = false;
-            await recoveryGate.promise;
-          }
+        if (body.includes(secondRecoveryMessage)) {
+          secondRequests.push(body);
+          await secondRecoveryGate.promise;
         }
-        providerRequestCount += 1;
-        writeOpenAiResponsesText(response, {
-          text: "WEBCHAT_OK",
-          messageId: `startup-recovery-${providerRequestCount}`,
-          responseId: `startup-recovery-response-${providerRequestCount}`,
-        });
-      })().catch((error: unknown) => response.writeHead(500).end(String(error)));
-    });
+        if (body.includes(afterResetMessage)) {
+          afterResetRequest.resolve(body);
+        }
+        if (holdRecovery && body.includes(recoveryMessage)) {
+          holdRecovery = false;
+          await recoveryGate.promise;
+        }
+      },
+      { maxConcurrent: 2, responseText: "WEBCHAT_OK" },
+    );
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     let recovery: ReturnType<typeof recoverRestartAbortedMainSessions> | undefined;
     const startupRecoveryStop = new AbortController();
@@ -174,28 +146,6 @@ it(
           message: { role: "user", content: message, idempotencyKey: source },
         });
       }
-      const provider = buildMockOpenAiResponsesProvider(
-        `${await listenLoopback(providerServer)}/v1`,
-        "gpt-startup-recovery-webchat",
-      );
-      const cfg = {
-        agents: {
-          defaults: {
-            workspace: state.workspaceDir,
-            skipBootstrap: true,
-            maxConcurrent: 2,
-            model: { primary: provider.modelRef },
-            models: {
-              [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
-            },
-          },
-          entries: { main: {} },
-        },
-        messages: { queue: { mode: "followup", debounceMsByChannel: { webchat: 0 } } },
-        models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
-        gateway: { auth: { mode: "token", token } },
-        plugins: { slots: { memory: "none" } },
-      } satisfies OpenClawConfig;
       gateway = await startGatewayWithClient({
         cfg,
         configPath: state.configPath,
@@ -221,7 +171,7 @@ it(
         idempotencyKey: warmupRunId,
       });
       await waitOk(warmupRunId);
-      expect(providerRequestCount).toBeGreaterThan(0);
+      expect(responseCount()).toBeGreaterThan(0);
       targetRequests.length = 0;
 
       for (const { key, id, cycleId } of recoverySessions) {

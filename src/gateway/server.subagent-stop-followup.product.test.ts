@@ -1,6 +1,7 @@
 // Prove Stop, deletion, and yield of kept children through real Gateway tools.
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
+import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-responses-model-fixture.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -19,11 +20,7 @@ import {
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import * as sessionReconciliation from "../agents/subagents/registry/subagent-session-reconciliation.js";
 import { sessionControllerMailboxes } from "../sessions/session-controller.mailbox.js";
-import {
-  closeProvider,
-  listenProvider,
-  readProviderBody,
-} from "./gateway-provider-fixture.test-support.js";
+import { readProviderBody } from "./gateway-provider-fixture.test-support.js";
 import {
   createSubagentStopFixture,
   findSubagentRecords,
@@ -63,39 +60,29 @@ type ModelHandler = (
 /** Serves one scripted parent plus its children; unscripted turns answer NO_REPLY. */
 async function startScriptedModel(handle: ModelHandler) {
   let responseSequence = 0;
-  const server = createServer((request, response) => {
-    void serve(request, response).catch((error: unknown) => {
-      if (!response.headersSent) {
-        response.writeHead(500, { "content-type": "application/json" });
+  const server = await startOpenAiResponsesModelServer({
+    modelId: "stop-proof",
+    bindError: "Expected subagent model server address",
+    onRequest: async (request, response) => {
+      try {
+        const body = await readProviderBody(request);
+        responseSequence += 1;
+        if (!(await handle(body, request, response, responseSequence))) {
+          writeOpenAiResponsesText(response, {
+            text: "NO_REPLY",
+            messageId: `fallback_${responseSequence}`,
+            responseId: `fallback_response_${responseSequence}`,
+          });
+        }
+      } catch (error) {
+        if (!response.headersSent) {
+          response.writeHead(500, { "content-type": "application/json" });
+        }
+        response.end(JSON.stringify({ error: { message: String(error) } }));
       }
-      response.end(JSON.stringify({ error: { message: String(error) } }));
-    });
+    },
   });
-  async function serve(request: IncomingMessage, response: ServerResponse) {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (request.method === "GET" && url.pathname === "/v1/models") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: [{ id: "stop-proof", object: "model" }] }));
-      return;
-    }
-    if (request.method !== "POST" || url.pathname !== "/v1/responses") {
-      response.writeHead(404).end();
-      return;
-    }
-    const body = await readProviderBody(request);
-    responseSequence += 1;
-    if (!(await handle(body, request, response, responseSequence))) {
-      writeOpenAiResponsesText(response, {
-        text: "NO_REPLY",
-        messageId: `fallback_${responseSequence}`,
-        responseId: `fallback_response_${responseSequence}`,
-      });
-    }
-  }
-  return {
-    url: await listenProvider(server),
-    close: () => closeProvider(server),
-  };
+  return { url: `${server.baseUrl}/v1`, close: server.close };
 }
 
 /** A child that holds its model call until cancellation, then attempts a late result. */
@@ -454,17 +441,20 @@ const deleteChild = (client: ProofClient, key: string) =>
     deleted: true,
   });
 
-async function startProof(script: { handle: ModelHandler; release?: () => void }, label: string) {
+async function withProof(
+  script: { handle: ModelHandler; release?: () => void },
+  label: string,
+  run: (client: ProofClient) => Promise<void>,
+) {
   const model = await startScriptedModel(script.handle);
   const gateway = await startProofGateway(model.url, label);
-  return {
-    client: gateway.client,
-    close: async () => {
-      script.release?.();
-      await gateway.close();
-      await model.close();
-    },
-  };
+  try {
+    await run(gateway.client);
+  } finally {
+    script.release?.();
+    await gateway.close();
+    await model.close();
+  }
 }
 
 /** Controller inputs that a run still owes its requester, by stable reservation identity. */
@@ -484,10 +474,9 @@ it.each(["active", "paused"] as const)(
   "delivers exactly one kept-child successor after exact-run Stop of an %s source",
   async (sourceState) => {
     const script = startStopFollowupModel(sourceState);
-    const gateway = await startProof(script, `subagent-stop-followup-${sourceState}`);
     const parentRunId = `subagent-stop-followup-parent-${sourceState}`;
-    try {
-      await startParentTurn(gateway.client, parentRunId);
+    await withProof(script, `subagent-stop-followup-${sourceState}`, async (client) => {
+      await startParentTurn(client, parentRunId);
       const source = await script.sourceIdentified;
       if (sourceState === "active") {
         await script.firstChildStarted;
@@ -496,17 +485,15 @@ it.each(["active", "paused"] as const)(
       }
       script.allowParentStop();
       const successorRunId = await script.successorAccepted;
-      await waitForAgent(gateway.client, successorRunId);
+      await waitForAgent(client, successorRunId);
       script.allowParentYield();
-      await waitForAgent(gateway.client, parentRunId);
+      await waitForAgent(client, parentRunId);
       await waitForRun(successorRunId, (row) => row.delivery?.status === "delivered");
       await script.completionDelivered;
       expect(script.deliveryCounts()).toEqual({ successorDeliveries: 1, stoppedDeliveries: 0 });
       expect(owedControllerInputs(source.runId), "the stopped source owes nothing").toEqual([]);
       expect(owedControllerInputs(successorRunId), "the successor delivered once").toEqual([]);
-    } finally {
-      await gateway.close();
-    }
+    });
   },
 );
 
@@ -514,31 +501,28 @@ it.each(["delete", "stop"] as const)(
   "retires a %s child without blocking its completed sibling or the parent yield",
   async (retirement) => {
     const script = startRetiredSiblingModel(retirement);
-    const gateway = await startProof(script, `subagent-retired-${retirement}`);
     const parentRunId = `subagent-retired-${retirement}-parent`;
-    try {
-      await startParentTurn(gateway.client, parentRunId);
+    await withProof(script, `subagent-retired-${retirement}`, async (client) => {
+      await startParentTurn(client, parentRunId);
       const retired = await script.retiredChild;
       await script.retiredChildStarted;
       if (retirement === "delete") {
         await waitForRun(retired.runId, (row) => row.pauseReason === "sessions_yield");
       }
       const sibling = await script.siblingChild;
-      await waitForAgent(gateway.client, sibling.runId);
+      await waitForAgent(client, sibling.runId);
       if (retirement === "delete") {
-        await deleteChild(gateway.client, retired.sessionKey);
+        await deleteChild(client, retired.sessionKey);
         expect(owedControllerInputs(retired.runId), "deletion retires its inputs").toEqual([]);
       }
       script.allowParentRetirement();
-      await waitForAgent(gateway.client, parentRunId);
+      await waitForAgent(client, parentRunId);
       await waitForRun(sibling.runId, (row) => row.delivery?.status === "delivered");
       await script.siblingDelivered;
       expect(script.deliveryCounts()).toEqual({ siblingDeliveries: 1, retiredDeliveries: 0 });
       expect(owedControllerInputs(retired.runId), "the retired child owes nothing").toEqual([]);
       expect(owedControllerInputs(sibling.runId), "the sibling delivered once").toEqual([]);
-    } finally {
-      await gateway.close();
-    }
+    });
   },
 );
 
@@ -558,14 +542,13 @@ it.each([
       ending === "child stop" ? "pause" : "hold",
     );
     const label = `subagent-only-child-${ending.replaceAll(" ", "-")}`;
-    const gateway = await startProof(script, label);
     const parentRunId = `${label}-parent`;
     const parentSessionKey = `agent:main:${parentRunId}`;
-    try {
-      await startParentTurn(gateway.client, parentRunId);
+    await withProof(script, label, async (client) => {
+      await startParentTurn(client, parentRunId);
       const child = (await script.children)[0]!;
       await script.childrenStarted;
-      await waitForAgent(gateway.client, parentRunId);
+      await waitForAgent(client, parentRunId);
       await waitForRun(
         child.runId,
         (row) =>
@@ -573,11 +556,11 @@ it.each([
           (ending !== "child stop" || row.pauseReason === "sessions_yield"),
       );
       if (ending === "child stop" || ending === "active child stop") {
-        await abortChild(gateway.client, child);
+        await abortChild(client, child);
       } else if (ending === "child delete") {
-        await deleteChild(gateway.client, child.sessionKey);
+        await deleteChild(client, child.sessionKey);
       } else {
-        await gateway.client.request("sessions.abort", { key: parentSessionKey });
+        await client.request("sessions.abort", { key: parentSessionKey });
       }
       // The cohort resolves when its last member's wake is settled or retired.
       await waitForRunOrRemoval(
@@ -594,9 +577,7 @@ it.each([
         expect(body).toContain(onlyChildTask);
       }
       expect(owedControllerInputs(child.runId), "the resolved cohort owes nothing").toEqual([]);
-    } finally {
-      await gateway.close();
-    }
+    });
   },
 );
 
@@ -607,27 +588,26 @@ it.each([
   "tells a parent $notices time(s) when the user stops the $stopped of an awaited child",
   async ({ stopped, notices: expectedNotices }) => {
     const script = startChildModel([awaitedChildTask], false);
-    const gateway = await startProof(script, `subagent-awaited-${stopped}-stop`);
     const parentRunId = `subagent-awaited-${stopped}-stop-parent`;
     const parentSessionKey = `agent:main:${parentRunId}`;
-    try {
-      await startParentTurn(gateway.client, parentRunId);
+    await withProof(script, `subagent-awaited-${stopped}-stop`, async (client) => {
+      await startParentTurn(client, parentRunId);
       const child = (await script.children)[0]!;
       await script.childrenStarted;
-      await waitForAgent(gateway.client, parentRunId);
+      await waitForAgent(client, parentRunId);
       expect(getSubagentRunByRunId(child.runId)?.requesterSettleWake?.requesterYieldBatch).not.toBe(
         true,
       );
       const outputPolls = vi.mocked(announceOutput.readLatestSubagentOutputWithRetry);
       outputPolls.mockClear();
       if (stopped === "child") {
-        await abortChild(gateway.client, child);
+        await abortChild(client, child);
         await script.continued;
         // A killed child has no further output: its notice is sent without polling for any.
         expect(outputPolls).not.toHaveBeenCalled();
       } else {
         // A requester-wide Stop: the parent already knows, so its children report nothing.
-        await gateway.client.request("sessions.abort", { key: parentSessionKey });
+        await client.request("sessions.abort", { key: parentSessionKey });
         // The Stop's own kill owner publishes the termination; the sweeper confirms it after
         // the reconciliation window. Age the kill past that window and drive one sweep, so the
         // confirmation decides delivery inside this test.
@@ -658,9 +638,7 @@ it.each([
         );
         expect(notice).toContain("(no output)");
       }
-    } finally {
-      await gateway.close();
-    }
+    });
   },
 );
 
@@ -669,7 +647,6 @@ it("confirms a stopped child's kill without losing either of two overlapping con
     "Hold the first child of a yielded pair until it is stopped.",
     "Hold the second child of a yielded pair until it is stopped.",
   ]);
-  const gateway = await startProof(script, "subagent-yielded-pair-parent-stop");
   const parentRunId = "subagent-yielded-pair-parent-stop-parent";
   const parentSessionKey = `agent:main:${parentRunId}`;
   const confirmations = vi.mocked(sweepKill.reconcileProvisionalSubagentKill);
@@ -680,73 +657,77 @@ it("confirms a stopped child's kill without losing either of two overlapping con
   const { resolveSubagentSessionCompletion: actualRead } = await vi.importActual<
     typeof sessionReconciliation
   >("../agents/subagents/registry/subagent-session-reconciliation.js");
-  try {
-    await startParentTurn(gateway.client, parentRunId);
-    const children = await script.children;
-    await script.childrenStarted;
-    await waitForAgent(gateway.client, parentRunId);
-    for (const child of children) {
-      await waitForRun(child.runId, (row) => row.requesterSettleWake?.requesterYieldBatch === true);
-    }
-    // Hold the first confirmation of one stopped child inside its completion read, as a slow
-    // session read does, so a second confirmation of the same kill overlaps it.
-    const [held] = children;
-    const readHeld = createDeferred();
-    const releaseRead = createDeferred();
-    let confirming = 0;
-    let holding = true;
-    confirmations.mockClear();
-    confirmations.mockImplementation(async (params) => {
-      confirming += params.runId === held!.runId ? 1 : 0;
-      try {
-        return await actualConfirm(params);
-      } finally {
-        confirming -= params.runId === held!.runId ? 1 : 0;
-      }
-    });
-    reads.mockImplementation(async (params) => {
-      if (holding && confirming > 0 && params.childSessionKey === held!.sessionKey) {
-        holding = false;
-        readHeld.resolve();
-        await releaseRead.promise;
-      }
-      return await actualRead(params);
-    });
-    // A requester-wide Stop kills both children; each kill confirms once its owner settles.
-    await gateway.client.request("sessions.abort", { key: parentSessionKey, clearQueued: true });
-    await readHeld.promise;
-    // The sweeper confirms the same kill once it ages past the reconciliation window. Sweep
-    // at that later time rather than rewriting the kill record the held confirmation owns.
-    const sweepAt = Date.now() + PROVISIONAL_KILL_RECONCILIATION_MS;
-    const clock = vi.spyOn(Date, "now").mockReturnValue(sweepAt);
+  await withProof(script, "subagent-yielded-pair-parent-stop", async (client) => {
     try {
-      await subagentRegistryTesting.sweepOnceForTests();
+      await startParentTurn(client, parentRunId);
+      const children = await script.children;
+      await script.childrenStarted;
+      await waitForAgent(client, parentRunId);
+      for (const child of children) {
+        await waitForRun(
+          child.runId,
+          (row) => row.requesterSettleWake?.requesterYieldBatch === true,
+        );
+      }
+      // Hold the first confirmation of one stopped child inside its completion read, as a slow
+      // session read does, so a second confirmation of the same kill overlaps it.
+      const [held] = children;
+      const readHeld = createDeferred();
+      const releaseRead = createDeferred();
+      let confirming = 0;
+      let holding = true;
+      confirmations.mockClear();
+      confirmations.mockImplementation(async (params) => {
+        confirming += params.runId === held!.runId ? 1 : 0;
+        try {
+          return await actualConfirm(params);
+        } finally {
+          confirming -= params.runId === held!.runId ? 1 : 0;
+        }
+      });
+      reads.mockImplementation(async (params) => {
+        if (holding && confirming > 0 && params.childSessionKey === held!.sessionKey) {
+          holding = false;
+          readHeld.resolve();
+          await releaseRead.promise;
+        }
+        return await actualRead(params);
+      });
+      // A requester-wide Stop kills both children; each kill confirms once its owner settles.
+      await client.request("sessions.abort", { key: parentSessionKey, clearQueued: true });
+      await readHeld.promise;
+      // The sweeper confirms the same kill once it ages past the reconciliation window. Sweep
+      // at that later time rather than rewriting the kill record the held confirmation owns.
+      const sweepAt = Date.now() + PROVISIONAL_KILL_RECONCILIATION_MS;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(sweepAt);
+      try {
+        await subagentRegistryTesting.sweepOnceForTests();
+      } finally {
+        clock.mockRestore();
+      }
+      releaseRead.resolve();
+      for (const child of children) {
+        await waitForRunOrRemoval(
+          child.runId,
+          (row) =>
+            row.execution.status === "terminal" &&
+            row.killReconciliation === undefined &&
+            row.requesterSettleWake === undefined,
+        );
+      }
+      await Promise.allSettled(confirmations.mock.results.map((result) => result.value));
+      expect(
+        confirmations.mock.settledResults.filter((result) => result.type === "rejected"),
+        "an overlapping confirmation never loses the kill it confirms",
+      ).toEqual([]);
+      for (const child of children) {
+        expect(owedControllerInputs(child.runId), "the stopped child owes nothing").toEqual([]);
+      }
+      // The requester stopped its own children, so it already knows.
+      expect(script.continuations()).toEqual([]);
     } finally {
-      clock.mockRestore();
+      confirmations.mockImplementation(actualConfirm);
+      reads.mockImplementation(actualRead);
     }
-    releaseRead.resolve();
-    for (const child of children) {
-      await waitForRunOrRemoval(
-        child.runId,
-        (row) =>
-          row.execution.status === "terminal" &&
-          row.killReconciliation === undefined &&
-          row.requesterSettleWake === undefined,
-      );
-    }
-    await Promise.allSettled(confirmations.mock.results.map((result) => result.value));
-    expect(
-      confirmations.mock.settledResults.filter((result) => result.type === "rejected"),
-      "an overlapping confirmation never loses the kill it confirms",
-    ).toEqual([]);
-    for (const child of children) {
-      expect(owedControllerInputs(child.runId), "the stopped child owes nothing").toEqual([]);
-    }
-    // The requester stopped its own children, so it already knows.
-    expect(script.continuations()).toEqual([]);
-  } finally {
-    confirmations.mockImplementation(actualConfirm);
-    reads.mockImplementation(actualRead);
-    await gateway.close();
-  }
+  });
 });

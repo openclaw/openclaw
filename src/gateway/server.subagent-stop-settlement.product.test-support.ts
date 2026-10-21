@@ -115,33 +115,28 @@ export function subagentToolCallEvents(
   ];
 }
 
-function buildSubagentStopConfig(
+export function createSubagentModelConfig(
   workspace: string,
-  tls: { certPath: string; keyPath: string },
+  options: { modelId?: string; name?: string; baseUrl?: string; runtime?: boolean } = {},
 ): OpenClawConfig {
+  const modelId = options.modelId ?? "stop-proof";
+  const runtime = options.runtime ? { agentRuntime: { id: "openclaw" as const } } : {};
   const { api, baseUrl, provider, ...model } = makeProviderModelFixture<"openai-responses">({
-    id: "stop-proof",
-    name: "Stop proof",
+    id: modelId,
+    name: options.name ?? "Stop proof",
     provider: "synthetic",
     api: "openai-responses",
-    baseUrl: "https://example.invalid/v1",
+    baseUrl: options.baseUrl ?? "https://example.invalid/v1",
     contextWindow: 4096,
     maxTokens: 1024,
   });
-  const trustedProxy = {
-    userHeader: "x-forwarded-user",
-    requiredHeaders: ["x-forwarded-proto"],
-    allowUsers: [proxyUser],
-    allowLoopback: true,
-    deviceAutoApprove: { enabled: true, scopes: [...operatorScopes] },
-  };
   return {
     cron: { enabled: false },
     agents: {
       defaults: {
         workspace,
         skipBootstrap: true,
-        model: { primary: "synthetic/stop-proof" },
+        model: { primary: `synthetic/${modelId}` },
         subagents: { allowAgents: ["*"] },
       },
     },
@@ -152,12 +147,38 @@ function buildSubagentStopConfig(
           api,
           baseUrl,
           apiKey: "synthetic-test-key",
-          models: [model],
+          ...runtime,
+          ...(options.baseUrl ? { request: { allowPrivateNetwork: true } } : {}),
+          models: [
+            {
+              ...model,
+              ...runtime,
+              ...(options.runtime
+                ? { api, params: { transport: "sse", openaiWsWarmup: false } }
+                : {}),
+            },
+          ],
         },
       },
     },
     plugins: { enabled: false, slots: { memory: "none" } },
     tools: { profile: "coding", toolSearch: false },
+  };
+}
+
+function buildSubagentStopConfig(
+  workspace: string,
+  tls: { certPath: string; keyPath: string },
+): OpenClawConfig {
+  const trustedProxy = {
+    userHeader: "x-forwarded-user",
+    requiredHeaders: ["x-forwarded-proto"],
+    allowUsers: [proxyUser],
+    allowLoopback: true,
+    deviceAutoApprove: { enabled: true, scopes: [...operatorScopes] },
+  };
+  return {
+    ...createSubagentModelConfig(workspace),
     gateway: {
       auth: {
         mode: "trusted-proxy",
