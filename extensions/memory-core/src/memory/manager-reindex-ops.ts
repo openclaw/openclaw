@@ -61,11 +61,11 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
       return;
     }
     await state.shadow.closeShadow();
+    this.reindexState = undefined;
     if (!state.shadow.postgresStageId) {
       state.shadow.assertShadowPath();
       await removeMemoryDatabaseFiles(state.tempDbPath);
     }
-    this.reindexState = undefined;
   }
 
   protected async resumeReindex(params?: MemorySyncParams): Promise<boolean> {
