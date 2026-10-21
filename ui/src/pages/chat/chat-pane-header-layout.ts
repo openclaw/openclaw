@@ -261,6 +261,8 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           }
         : undefined;
     const detailsProgress = this.detailsProgressCardPresentation;
+    const conversationMain =
+      (sidebarMainPanel(sidebarLayout)?.slot ?? "conversation") === "conversation";
     const headerDetails: ChatDetailsViewProps | undefined = ownsSubagentsPanel
       ? {
           elements,
@@ -278,6 +280,9 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                     });
                   },
                   onViewAll: () => {
+                    if (this.sessionPresentation === "desktop") {
+                      this.headerDetailsRef.value?.close();
+                    }
                     detailsOutputs.outputs?.onViewAll();
                     this.navigateMobileHost({
                       area: "panels",
@@ -370,8 +375,8 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           presentation:
             this.sessionPresentation === "desktop" ? headerPresentation : panePresentation,
           conversationVisible,
-          externalTrigger:
-            (sidebarMainPanel(sidebarLayout)?.slot ?? "conversation") !== "conversation",
+          conversationMain,
+          externalTrigger: !conversationMain,
           setRef: (details) => {
             this.headerDetailsRef.value = details;
           },
