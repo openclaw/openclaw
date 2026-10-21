@@ -13,7 +13,7 @@ import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
-import { clawCreatorFlow } from "../pages/claws/creator-flow.ts";
+import { clawCreatorAction } from "../pages/claws/creator-flow.ts";
 import { canCreateClawDraft } from "../pages/claws/draft-navigation.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderSessionListFrame } from "./app-sidebar-session-list-render.tsx";
@@ -170,7 +170,7 @@ export function SidebarAgentRoster(props: RosterProps) {
             host().onNavigate?.("sessions");
             break;
           case "create-claw":
-            void clawCreatorFlow(context).start(card().id);
+            clawCreatorAction(context, card().id)?.();
             break;
           case "settings":
             context.navigate("agents", {

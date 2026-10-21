@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -28,8 +30,9 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
     it("opens a compact package modal, removes an optional file, and submits the reviewed selection", async () => {
       const context = await browser.newContext({
         locale: "en-US",
+        colorScheme: "dark",
         serviceWorkers: "block",
-        viewport: { width: 1200, height: 850 },
+        viewport: { width: 1440, height: 900 },
       });
       const page = await context.newPage();
       const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
@@ -44,6 +47,7 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
         reviewToken: "b".repeat(64),
         publisher: "maker",
         name: "@maker/release-brief",
+        displayName: "Release Brief",
         version: "0.1.0",
         description: "Summarizes releases for a new user.",
         items: [
@@ -94,18 +98,43 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
         await page.goto(`${server.baseUrl}agents/claws?draft=${draftId}&agent=main`);
         const dialog = page.getByRole("dialog", { name: "Review your Claw" });
         await dialog.waitFor();
-        expect(await dialog.getByLabel("Name").inputValue()).toBe("release-brief");
+        expect(await dialog.getByLabel("Name").inputValue()).toBe("Release Brief");
+        expect(await dialog.getByText(/Publishing as/u).count()).toBe(0);
+        expect(await dialog.getByText("Inspect", { exact: true }).count()).toBe(0);
+        expect(await dialog.getByText("View", { exact: true }).count()).toBe(2);
         expect(await dialog.getByLabel("Description").inputValue()).toBe(
           "Summarizes releases for a new user.",
         );
         expect(await dialog.getByRole("textbox", { name: /JSON/i }).count()).toBe(0);
-        if (process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1") {
-          const dir = createControlUiE2eArtifactDir("claw-creator-review");
-          await page.screenshot({ path: `${dir}/review.png`, animations: "disabled" });
-        }
         await gateway.setMethodResponse("claws.drafts.review", {
           ...reviewed,
           reviewToken: "c".repeat(64),
+          displayName: "Engineering Partner",
+        });
+        await dialog.getByLabel("Name").fill("Engineering Partner");
+        await expect
+          .poll(async () => (await gateway.getRequests("claws.drafts.review")).length)
+          .toBe(2);
+        const nameReview = await gateway.getRequests("claws.drafts.review");
+        expect(nameReview[1]?.params).toMatchObject({
+          choices: { displayName: "Engineering Partner" },
+        });
+        expect(await dialog.getByLabel("Name").inputValue()).toBe("Engineering Partner");
+        if (process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1") {
+          const dir = createControlUiE2eArtifactDir("claw-creator-review");
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            dialog,
+            [dialog.getByLabel("Name"), dialog.getByLabel("Description")],
+            { animations: "disabled", elements: [dialog] },
+          );
+          await writeFile(`${dir}/review.png`, frame.png);
+        }
+
+        await gateway.setMethodResponse("claws.drafts.review", {
+          ...reviewed,
+          reviewToken: "d".repeat(64),
+          displayName: "Engineering Partner",
           items: reviewed.items.map((item) =>
             item.kind === "file" ? { ...item, included: false } : item,
           ),
@@ -114,10 +143,13 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
         await dialog.getByRole("checkbox", { name: "workspace/checklist.md" }).uncheck();
         await expect
           .poll(async () => (await gateway.getRequests("claws.drafts.review")).length)
-          .toBe(2);
+          .toBe(3);
         const requests = await gateway.getRequests("claws.drafts.review");
-        expect(requests[1]?.params).toMatchObject({
-          choices: { excluded: ["file:workspace/checklist.md"] },
+        expect(requests[2]?.params).toMatchObject({
+          choices: {
+            displayName: "Engineering Partner",
+            excluded: ["file:workspace/checklist.md"],
+          },
         });
         await gateway.deferNext("claws.drafts.publish");
         await dialog.getByRole("button", { name: "Publish to ClawHub" }).click();
@@ -143,7 +175,8 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
         );
         await gateway.setMethodResponse("claws.drafts.review", {
           ...reviewed,
-          reviewToken: "d".repeat(64),
+          reviewToken: "e".repeat(64),
+          displayName: "Engineering Partner",
           items: reviewed.items.map((item) =>
             item.kind === "file" ? { ...item, included: false } : item,
           ),
@@ -152,7 +185,7 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
         await dialog.getByRole("button", { name: "Refresh review" }).click();
         await expect
           .poll(async () => (await gateway.getRequests("claws.drafts.review")).length)
-          .toBe(3);
+          .toBe(4);
         await expect
           .poll(() => dialog.getByRole("button", { name: "Publish to ClawHub" }).isEnabled())
           .toBe(true);
@@ -162,8 +195,11 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
           .toBe(2);
         const published = await gateway.getRequests("claws.drafts.publish");
         expect(published[1]?.params).toMatchObject({
-          reviewToken: "d".repeat(64),
-          choices: { excluded: ["file:workspace/checklist.md"] },
+          reviewToken: "e".repeat(64),
+          choices: {
+            displayName: "Engineering Partner",
+            excluded: ["file:workspace/checklist.md"],
+          },
         });
         await page
           .getByText("Submitted to ClawHub. Publication pending security review.")
@@ -180,61 +216,11 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
       }
     });
 
-    it("shows a failed settings action and lets the creator retry there", async () => {
+    it("keeps Create Claw out of the main chat header and session menu", async () => {
       const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
       const page = await context.newPage();
       const config = { gateway: { controlUi: { experimental: { claws: true } } } };
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["claws.drafts.create", "chat.send"],
-        methodResponses: {
-          "config.get": {
-            config,
-            sourceConfig: config,
-            resolved: config,
-            raw: JSON.stringify(config),
-            hash: "claws-create-error-config",
-            path: "/tmp/openclaw-claws-create-error.json",
-            valid: true,
-            issues: [],
-          },
-          "agents.list": {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [{ id: "main", name: "Main" }],
-          },
-        },
-      });
-      try {
-        await page.goto(`${server.baseUrl}settings/agents/main`);
-        await gateway.deferNext("claws.drafts.create");
-        await page.getByRole("button", { name: "Create Claw" }).click();
-        await gateway.waitForRequest("claws.drafts.create");
-        await gateway.rejectDeferred("claws.drafts.create", {
-          code: "UNAVAILABLE",
-          message: "The agent workspace is unavailable.",
-        });
-        await page.getByText("The agent workspace is unavailable.").waitFor();
-        expect(new URL(page.url()).pathname).toContain("/settings/agents/main");
-
-        await gateway.setMethodResponse("claws.drafts.create", {
-          draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
-          prompt: "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
-        });
-        await gateway.setMethodResponse("chat.send", { status: "started" });
-        await page.getByRole("button", { name: "Retry" }).click();
-        await gateway.waitForRequest("chat.send");
-        await page.waitForURL(/\/chat\/main/u);
-      } finally {
-        await context.close();
-      }
-    });
-
-    it("starts from the main chat header and sends the bundled skill prompt in the main session", async () => {
-      const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-      const page = await context.newPage();
-      const config = { gateway: { controlUi: { experimental: { claws: true } } } };
-      const gateway = await installMockGateway(page, {
+      await installMockGateway(page, {
         featureMethods: ["claws.drafts.create", "chat.send"],
         methodResponses: {
           "config.get": {
@@ -253,30 +239,33 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
             scope: "per-sender",
             agents: [{ id: "main", name: "Main" }],
           },
-          "claws.drafts.create": {
-            draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
-            prompt: "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
-          },
-          "chat.send": { status: "started" },
         },
       });
       try {
         await page.goto(`${server.baseUrl}chat/main`);
-        await page.getByRole("button", { name: "Create Claw" }).click();
-        await gateway.waitForRequest("claws.drafts.create");
-        await gateway.waitForRequest("chat.send");
-        const sent = (await gateway.getRequests("chat.send"))[0]?.params;
-        expect(sent).toMatchObject({
-          sessionKey: "agent:main:main",
-          message: "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
-          workContext: {
-            page: "claw-create",
-            detail: { draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087" },
-          },
-        });
-        expect((sent as { message: string } | undefined)?.message).not.toContain(
-          "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
-        );
+        const screenshotDir =
+          process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1"
+            ? createControlUiE2eArtifactDir("claw-creator-chat-header")
+            : undefined;
+        const header = page.locator(".chat-pane__header");
+        if (screenshotDir) {
+          const closedFrame = await takeControlUiScreenshotFrame(page, header, [header], {
+            animations: "disabled",
+            elements: [header],
+          });
+          await writeFile(`${screenshotDir}/chat-header-closed.png`, closedFrame.png);
+        }
+        expect(await page.getByRole("button", { name: "Create Claw" }).count()).toBe(0);
+        await page.getByRole("button", { name: "Actions for Main" }).click();
+        const createClawItem = page.getByRole("menuitem", { name: /Create Claw/u });
+        expect(await createClawItem.count()).toBe(0);
+        if (screenshotDir) {
+          const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [header], {
+            animations: "disabled",
+            elements: [header],
+          });
+          await writeFile(`${screenshotDir}/chat-header-menu.png`, frame.png);
+        }
       } finally {
         await context.close();
       }

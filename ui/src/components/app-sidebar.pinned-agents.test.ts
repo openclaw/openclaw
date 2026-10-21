@@ -184,3 +184,35 @@ it("offers agent sessions and settings without a create action, and confirms age
     expect(context.agents.refreshList).toHaveBeenCalledOnce();
   });
 });
+
+it("offers Create Claw from the agent-row menu when the Gateway supports creation", async () => {
+  const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
+  context.runtimeConfig.state.configForm = {
+    gateway: { controlUi: { experimental: { claws: true } } },
+  };
+  gatewayHarness.publish({
+    hello: gatewayHelloForMethods([
+      ...SESSION_MUTATION_TEST_METHODS,
+      "claws.drafts.create",
+      "chat.send",
+    ]),
+  });
+  sidebar.sidebarAgentsMode = "roster";
+  await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
+  await settleRoster(sidebar);
+
+  const previousRequest = request.getMockImplementation()!;
+  request.mockImplementation((...args) =>
+    args[0] === "claws.drafts.create"
+      ? Promise.reject(new Error("The agent workspace is unavailable."))
+      : previousRequest(...args),
+  );
+  sidebar.querySelector<HTMLButtonElement>('button[aria-label="Options for Harbor"]')!.click();
+  await vi.waitFor(() =>
+    expect(sidebar.querySelector('[data-value="create-claw"]')).not.toBeNull(),
+  );
+  sidebar.querySelector<HTMLElement>('[data-value="create-claw"]')!.click();
+  await vi.waitFor(() =>
+    expect(request).toHaveBeenCalledWith("claws.drafts.create", { agentId: "main" }),
+  );
+});
