@@ -62,8 +62,8 @@ test.skipIf(process.platform !== "linux").for([false, true])(
       createExtensionRuntime(),
     );
     const outcome = loading.then(
-      () => ({ ok: true as const, result: apiResult }),
-      (error: unknown) => ({ ok: false as const, error }),
+      () => apiResult,
+      (error: unknown) => error,
     );
     let observed: Awaited<typeof outcome> | undefined;
     try {
@@ -114,32 +114,15 @@ test.skipIf(process.platform !== "linux").for([false, true])(
       }
       await withinTest(outcome, signal);
     }
-    if (denyStop) {
-      expect(observed).toMatchObject({
-        ok: false,
-        error: {
-          code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN",
-          cause: {
-            stdout: expect.stringContaining("NATIVE_EXEC_READY:"),
-            stderr: "",
-            code: 0,
-            killed: true,
-          },
-        },
-      });
-      if (observed && !observed.ok) {
-        expect(hasCommandProcessCleanupError(observed.error)).toBe(true);
-      }
-    } else {
-      expect(observed).toMatchObject({
-        ok: true,
-        result: {
-          stdout: expect.stringContaining("NATIVE_EXEC_READY:"),
-          stderr: "",
-          code: 0,
-          killed: true,
-        },
-      });
-    }
+    const result = {
+      stdout: expect.stringContaining("NATIVE_EXEC_READY:"),
+      stderr: "",
+      code: 0,
+      killed: true,
+    };
+    expect(observed).toMatchObject(
+      denyStop ? { code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN", cause: result } : result,
+    );
+    expect(hasCommandProcessCleanupError(observed)).toBe(denyStop);
   },
 );
