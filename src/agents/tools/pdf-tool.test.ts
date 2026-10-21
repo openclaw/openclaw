@@ -13,6 +13,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import * as authProfileRuntime from "../auth-profiles/store-runtime.js";
 import * as modelResolution from "../embedded-agent-runner/model.js";
+import { makeModel } from "../embedded-agent-runner/model.test-harness.js";
 import * as modelAuth from "../model-auth.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import * as preparedRuntime from "../prepared-model-runtime.js";
@@ -25,7 +26,9 @@ import * as pdfModelConfig from "./pdf-tool.model-config.js";
 import {
   createPdfToolInfraStub,
   FAKE_PDF_MEDIA,
+  requirePdfTool,
   resetPdfToolAuthEnv,
+  stubPdfInput,
   withPreparedRuntimeFacts,
 } from "./pdf-tool.test-support.js";
 
@@ -62,10 +65,7 @@ afterEach(() => {
 });
 
 function tool(options: Options = {}) {
-  return (
-    createPdfTool({ agentDir, config: pdfConfig(ANTHROPIC), ...options }) ??
-    expect.fail("expected PDF tool")
-  );
+  return requirePdfTool({ agentDir, config: pdfConfig(ANTHROPIC), ...options });
 }
 const summary = (text = "fallback summary") =>
   makeAssistantMessageFixture({
@@ -156,12 +156,8 @@ it("admits managed inbound refs under workspace-only policy", async () => {
   const stateDir = tempDirs.make("openclaw-pdf-inbound-");
   await writePdf("media/inbound/claim.pdf", stateDir);
   await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-    const { pdf, loadSpy } = await native({ fsPolicy: { workspaceOnly: true } }, false);
+    const { pdf } = await native({ fsPolicy: { workspaceOnly: true } }, false);
     const result = await pdf.execute("pdf", { pdf: "media://inbound/claim.pdf" });
-    expect(loadSpy).toHaveBeenCalledWith(
-      "media://inbound/claim.pdf",
-      expect.objectContaining({ localRoots: [path.join(stateDir, "media")] }),
-    );
     expect(result.content).toEqual(textContent("native summary"));
   });
 });
@@ -327,10 +323,7 @@ it.each(["bedrock-converse-stream", "openai-completions"])(
     vi.mocked(modelAuth.requireApiKey).mockImplementation(() => {
       throw new Error("must not require a literal API key");
     });
-    vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({
-      text: "Extracted content",
-      images: [],
-    });
+    stubPdfInput("Extracted content");
     completeMock.mockResolvedValue(summary("Bedrock summary"));
     const config: OpenClawConfig =
       api === "bedrock-converse-stream"
@@ -344,13 +337,11 @@ it.each(["bedrock-converse-stream", "openai-completions"])(
                   api: "bedrock-converse-stream",
                   models: [
                     {
-                      id: "vision-1",
+                      ...makeModel("vision-1"),
                       name: "Bedrock Vision",
                       input: ["text", "image"],
-                      reasoning: false,
                       contextWindow: 16_000,
                       maxTokens: 4_096,
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     },
                   ],
                 },

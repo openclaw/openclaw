@@ -7,19 +7,25 @@ import { persistRegistryFixture } from "../subagents/registry/subagent-registry-
 import { clearSubagentRunsReadCacheForTest } from "../subagents/registry/subagent-registry-state.js";
 import { createSubagentsTool } from "./subagents-tool.js";
 
+const ownerKey = "agent:main:main";
+const createRun = (overrides: Parameters<typeof createSubagentRunRecord>[0]) =>
+  createSubagentRunRecord({
+    childSessionKey: `agent:main:subagent:${overrides.runId}`,
+    requesterSessionKey: ownerKey,
+    requesterAgentId: "main",
+    ...overrides,
+  });
+const createTool = () => createSubagentsTool({ agentSessionKey: ownerKey, config: {} });
+
 it("keeps persisted subagent wait selection off the calling thread", async () => {
   await withOpenClawTestState(
     { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
     async () => {
-      const ownerKey = "agent:main:main";
-      const childKey = "agent:main:subagent:persisted-wait";
-      const run = createSubagentRunRecord({
+      const run = createRun({
         runId: "physical-run",
         taskRunId: "logical-run",
         generation: 1,
-        childSessionKey: childKey,
-        requesterSessionKey: ownerKey,
-        requesterAgentId: "main",
+        childSessionKey: "agent:main:subagent:persisted-wait",
         completion: { required: false },
         delivery: { status: "not_required" },
       });
@@ -39,10 +45,11 @@ it("keeps persisted subagent wait selection off the calling thread", async () =>
         });
       });
       try {
-        const result = await createSubagentsTool({ agentSessionKey: ownerKey, config: {} }).execute(
-          "wait",
-          { action: "wait", runIds: [run.runId], timeoutSeconds: 0 },
-        );
+        const result = await createTool().execute("wait", {
+          action: "wait",
+          runIds: [run.runId],
+          timeoutSeconds: 0,
+        });
         expect(result.details).toMatchObject({
           reason: "timeout",
           runs: [{ runId: run.runId }],
@@ -60,26 +67,20 @@ it("keeps persisted subagent wait selection off the calling thread", async () =>
 
 it("bounds current control scope work to the caller tree in a 5,000-run registry", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const ownerKey = "agent:main:main";
-    const selected = createSubagentRunRecord({
-      runId: "selected",
-      childSessionKey: "agent:main:subagent:selected",
-      requesterSessionKey: ownerKey,
-      requesterAgentId: "main",
-    });
+    const selected = createRun({ runId: "selected" });
     for (let index = 0; index < 5_000; index++) {
       const runId = `unrelated-${index}`;
       subagentRuns.set(
         runId,
-        createSubagentRunRecord({
+        createRun({
           runId,
-          childSessionKey: `agent:main:subagent:${runId}`,
           requesterSessionKey: "agent:main:unrelated",
+          requesterAgentId: undefined,
         }),
       );
     }
     subagentRuns.set(selected.runId, selected);
-    const tool = createSubagentsTool({ agentSessionKey: ownerKey, config: {} });
+    const tool = createTool();
     const read = () =>
       tool.execute("scope", {
         action: "wait",
@@ -145,33 +146,27 @@ it("reports the persisted pause age of a yielded leaf, never of a parent with a 
       const now = Date.UTC(2026, 9, 5, 12, 0, 0);
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(now);
-      const ownerKey = "agent:main:main";
       const pausedAt = now - (43 * 3_600_000 + 12 * 60_000);
       const base = {
         generation: 1,
-        requesterSessionKey: ownerKey,
-        requesterAgentId: "main",
         completion: { required: false },
         delivery: { status: "not_required" },
       } as const;
-      const leaf = createSubagentRunRecord({
+      const leaf = createRun({
         ...base,
         runId: "parked-leaf",
-        childSessionKey: "agent:main:subagent:parked-leaf",
         pauseReason: "sessions_yield",
         execution: { status: "terminal", startedAt: pausedAt - 60_000, endedAt: pausedAt },
       });
-      const orchestrator = createSubagentRunRecord({
+      const orchestrator = createRun({
         ...base,
         runId: "waiting-orchestrator",
-        childSessionKey: "agent:main:subagent:waiting-orchestrator",
         pauseReason: "sessions_yield",
         execution: { status: "terminal", startedAt: pausedAt - 60_000, endedAt: pausedAt },
       });
-      const announcedChild = createSubagentRunRecord({
+      const announcedChild = createRun({
         ...base,
         runId: "announced-child",
-        childSessionKey: "agent:main:subagent:announced-child",
         requesterSessionKey: orchestrator.childSessionKey,
         expectsCompletionMessage: true,
         execution: { status: "running", startedAt: now - 60_000 },
@@ -186,7 +181,7 @@ it("reports the persisted pause age of a yielded leaf, never of a parent with a 
       // The announced child exists only in persisted rows, never in the in-memory registry.
       clearSubagentRunsReadCacheForTest();
       try {
-        const tool = createSubagentsTool({ agentSessionKey: ownerKey, config: {} });
+        const tool = createTool();
         const wait = await tool.execute("wait", {
           action: "wait",
           runIds: [leaf.runId, orchestrator.runId],
@@ -194,15 +189,13 @@ it("reports the persisted pause age of a yielded leaf, never of a parent with a 
         });
         const runs = (wait.details as { runs: Array<{ runId: string; pausedForMs?: number }> })
           .runs;
-        const waitedLeaf = runs.find((run) => run.runId === leaf.runId);
-        expect(waitedLeaf).toMatchObject({ status: "waiting" });
-        expect(waitedLeaf?.pausedForMs).toBe(43 * 3_600_000 + 12 * 60_000);
-        expect(runs.find((run) => run.runId === orchestrator.runId)).toMatchObject({
+        const parent = runs.find((run) => run.runId === orchestrator.runId);
+        expect(runs.find((run) => run.runId === leaf.runId)).toMatchObject({
           status: "waiting",
+          pausedForMs: 43 * 3_600_000 + 12 * 60_000,
         });
-        expect(runs.find((run) => run.runId === orchestrator.runId)).not.toHaveProperty(
-          "pausedForMs",
-        );
+        expect(parent).toMatchObject({ status: "waiting" });
+        expect(parent).not.toHaveProperty("pausedForMs");
 
         const list = await tool.execute("list", { action: "list", recentMinutes: 60 });
         const details = list.details as {

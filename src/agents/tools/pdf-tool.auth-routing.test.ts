@@ -2,8 +2,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as llmStream from "../../llm/stream.js";
-import * as pdfExtract from "../../media/pdf-extract.js";
-import * as webMedia from "../../media/web-media.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
@@ -14,10 +12,10 @@ import { createEmptyPreparedModelRuntimeFixture } from "../embedded-agent-runner
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
-import { createPdfTool } from "./pdf-tool.js";
 import {
-  FAKE_PDF_MEDIA,
+  requirePdfTool,
   resetPdfToolAuthEnv,
+  stubPdfInput,
   withTempPdfAgentDir,
 } from "./pdf-tool.test-support.js";
 
@@ -77,16 +75,13 @@ it.each(["API key", "OAuth"])("routes %s PDF auth with Codex chat", async (mode)
       authModes: { openai: "api_key" as const },
       pluginRegistry,
     };
-    vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
-    vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({ text: "PDF", images: [] });
+    stubPdfInput();
     const complete = vi.spyOn(llmStream, "completeSimple").mockResolvedValue(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "PDF answer" }],
       }),
     );
-    const tool =
-      createPdfTool({ config, agentDir, preparedModelRuntime }) ??
-      expect.fail("PDF tool was not registered");
+    const tool = requirePdfTool({ config, agentDir, preparedModelRuntime });
     const result = await tool.execute("pdf-auth", { pdf: "/tmp/doc.pdf", pages: "21" });
     expect(result.content).toEqual([{ type: "text", text: "PDF answer" }]);
     expect(complete).toHaveBeenCalledWith(

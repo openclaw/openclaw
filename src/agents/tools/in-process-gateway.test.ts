@@ -106,6 +106,9 @@ function expectNoTransport() {
   expect(mocks.callGateway).not.toHaveBeenCalled();
   expect(mocks.callGatewayTool).not.toHaveBeenCalled();
 }
+function expectDispatch(method: string, params: unknown, options: unknown = expect.anything()) {
+  expect(mocks.dispatch).toHaveBeenCalledWith(method, params, options);
+}
 beforeEach(() => {
   mocks.hasContext = true;
   mocks.dispatch.mockReset().mockResolvedValue({ ok: true });
@@ -204,11 +207,7 @@ describe("trusted in-process Gateway session creation", () => {
     "keeps $name private and refuses transport fallback",
     async ({ request, read, binding, carrierIndex, error }) => {
       await callAgentToolGatewayRequest(request);
-      expect(mocks.dispatch).toHaveBeenCalledWith(
-        request.method,
-        request.params,
-        expect.anything(),
-      );
+      expectDispatch(request.method, request.params);
       const carrier = mocks.dispatch.mock.calls[0]?.[carrierIndex];
       if (carrierIndex === 1) {
         expect(read(carrier)).toEqual(binding);
@@ -244,7 +243,7 @@ describe("trusted in-process Gateway session creation", () => {
       sessionMutationCommitGuard,
     });
 
-    expect(mocks.dispatch).toHaveBeenCalledWith(
+    expectDispatch(
       "sessions.create",
       { agentId: "main" },
       expect.objectContaining({
@@ -306,17 +305,8 @@ describe("trusted in-process Gateway session creation", () => {
     const gateway = gatewayBinding();
     const params = { agentId: "main", label: "worker" };
     const controller = new AbortController();
-    const selectedGateways: GatewayRequestContext[] = [];
-    const dispatchThroughSelectedGateway = (
-      options?: Parameters<typeof callInProcessGatewayToolWithCreation>[3],
-    ) => {
-      const selected = options?.resolveGatewayContext?.() ?? gateway.replacement;
-      selectedGateways.push(selected);
-      return selected;
-    };
-
     mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
-      expect(dispatchThroughSelectedGateway(options)).toBe(gateway.admitted);
+      expect(options.resolveGatewayContext()).toBe(gateway.admitted);
       expect(options).toEqual({
         ...syntheticOptions,
         sessionCreation: creation,
@@ -335,7 +325,6 @@ describe("trusted in-process Gateway session creation", () => {
       ),
     ).resolves.toEqual({ key: "agent:main:worker" });
     expect(mocks.dispatch).toHaveBeenLastCalledWith("sessions.create", params, expect.any(Object));
-    expect(selectedGateways).toEqual([gateway.admitted]);
 
     const dispatchesBeforeReplacement = mocks.dispatch.mock.calls.length;
     await expect(
@@ -346,13 +335,12 @@ describe("trusted in-process Gateway session creation", () => {
     ).rejects.toThrow("Gateway instance unavailable for sessions.create");
     expect(mocks.dispatch).toHaveBeenCalledTimes(dispatchesBeforeReplacement);
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
-    expect(selectedGateways).not.toContain(gateway.replacement);
 
     for (const settlement of ["resolve", "reject"] as const) {
       gateway.restore();
       const pendingDispatch = createDeferred<{ key: string }>();
       mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
-        expect(dispatchThroughSelectedGateway(options)).toBe(gateway.admitted);
+        expect(options.resolveGatewayContext()).toBe(gateway.admitted);
         return await pendingDispatch.promise;
       });
 
@@ -368,7 +356,6 @@ describe("trusted in-process Gateway session creation", () => {
       await expect(creationCall).rejects.toThrow(
         "Gateway instance unavailable for sessions.create",
       );
-      expect(selectedGateways).not.toContain(gateway.replacement);
     }
   });
 
@@ -481,7 +468,7 @@ describe("request-shaped in-process Gateway dispatch", () => {
       };
       await callRequest("agent", { ...params }, { ...options, timeoutMs });
 
-      expect(mocks.dispatch).toHaveBeenCalledWith("agent", params, {
+      expectDispatch("agent", params, {
         ...syntheticOptions,
         ...options,
         ...(expected === undefined ? {} : { timeoutMs: expected }),
@@ -631,11 +618,8 @@ describe("request-shaped in-process Gateway dispatch", () => {
 
     await callAgentToolGatewayRequest(request);
 
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "sessions.list",
-      params: { limit: 5 },
-      timeoutMs: 2_000,
-    });
+    const { agentRunTracking: _tracking, agentToolCaller: _caller, ...wireRequest } = request;
+    expect(mocks.callGateway).toHaveBeenCalledWith(wireRequest);
     expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 });
