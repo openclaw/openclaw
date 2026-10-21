@@ -77,29 +77,14 @@ function liveReport(...params: Parameters<typeof makeRuntimeParity>) {
 }
 
 describe("token efficiency report", () => {
-  it("fails live reports on positive Codex token increases over the threshold", () => {
-    const report = liveReport(
-      "runtime-tool-fs-read",
-      makeCell(usage(72_000, 381), [makeToolCall("fs.read"), makeToolCall("fs.read")]),
-      makeCell(
-        usage(118_000, 1_489),
-        Array.from({ length: 40 }, () => makeToolCall("fs.read")),
-      ),
-    );
-
-    expect(report).toMatchObject({
-      pass: false,
-      aggregate: { flaggedScenarios: ["runtime-tool-fs-read"] },
-      rows: [{ classification: "regression", flagged: true, toolsUsed: ["fs.read"] }],
-    });
-    expect(report.failures).toEqual([
-      "runtime-tool-fs-read token delta=+65.1% exceeds 15.0% Codex increase threshold",
-    ]);
-  });
-
   it("detects a real cache regression even when cached-inclusive totals hide it", () => {
-    const openclaw = makeCell(usage(7_403, 220, 435_810, 415_492, 12_695));
-    const codex = makeCell(usage(25_894, 220, 495_710, 445_189, 24_407));
+    const openclaw = makeCell(usage(7_403, 220, 435_810, 415_492, 12_695), [
+      makeToolCall("fs.read"),
+    ]);
+    const codex = makeCell(usage(25_894, 220, 495_710, 445_189, 24_407), [
+      makeToolCall("fs.read"),
+      makeToolCall("fs.read"),
+    ]);
     codex.cacheDiagnostics = buildRuntimeParityCacheDiagnostics([
       usage(3, 11, 24_421, 0, 24_407),
       usage(24_448, 11, 24_459, 0, 0),
@@ -111,6 +96,7 @@ describe("token efficiency report", () => {
     expect(report.rows[0]).toMatchObject({
       classification: "regression",
       flagged: true,
+      toolsUsed: ["fs.read"],
       openclaw: { processedTokens: 20_318, cacheReadTokens: 415_492 },
       codex: {
         processedTokens: 50_521,
@@ -120,6 +106,9 @@ describe("token efficiency report", () => {
       },
     });
     expect(report.rows[0]?.deltaPercent).toBeGreaterThan(145);
+    expect(report.failures).toEqual([
+      "first-hour-cache-miss token delta=+148.7% exceeds 15.0% Codex increase threshold",
+    ]);
     expect(report.aggregate.codex).toMatchObject({
       processedTokens: 50_521,
       cacheMissCount: 1,

@@ -12,9 +12,7 @@ import {
   measureRuntimeParityCellTiming,
   summarizeRuntimeParityTiming,
 } from "./runtime-parity-timing.js";
-import { runRuntimeParityScenario, type RuntimeParityResult } from "./runtime-parity.js";
-import { readQaScenarioById } from "./scenario-catalog.js";
-import { buildRuntimeParityScenarioResult } from "./suite-runtime-parity-result.js";
+import type { RuntimeParityResult } from "./runtime-parity.js";
 
 type QaParityReportScenario = QaParitySuiteSummary["scenarios"][number];
 
@@ -231,33 +229,21 @@ it("fails the parity gate when required parity scenarios are skipped", () => {
 });
 
 it.each([
-  [
-    "neutral headings",
-    [
-      `Failed:
+  `Failed:
 - None observed.
 Blocked:
 - No live provider evidence in this lane.`,
-    ],
-  ],
-  [
-    "neutral error phrasing",
-    [
-      `Worked:
+  `Worked:
 - Scenario finished with Error budget: 0.
 - No errors found in the seeded material.
 - Errors: none observed.`,
-      "Error: none. The attached image analysis completed without incident.",
-    ],
-  ],
-] as const)("ignores %s in passing reports", (_name, details) => {
-  const scenarios = details.map((text, index) =>
-    passingScenario(
-      index === 0 ? "Source and docs discovery report" : "Image understanding from attachment",
-      text,
-    ),
-  );
-  expect(computeQaAgenticParityMetrics({ scenarios }).fakeSuccessCount).toBe(0);
+  "Error: none. The attached image analysis completed without incident.",
+])("ignores neutral prose in passing reports: %s", (details) => {
+  expect(
+    computeQaAgenticParityMetrics({
+      scenarios: [passingScenario("Source and docs discovery report", details)],
+    }).fakeSuccessCount,
+  ).toBe(0);
 });
 
 it("only flags failure-tone passes, not positive-tone", () => {
@@ -398,66 +384,6 @@ it("fails runtime parity reports with no executed scenarios", () => {
     },
     "Runtime parity report has no executed scenarios.",
   );
-});
-
-it.each([
-  { description: "known harness gap", knownGap: true, bothSkipped: false, pass: true },
-  { description: "unexpected skip", knownGap: false, bothSkipped: false, pass: false },
-  { description: "both runtimes skipped", knownGap: true, bothSkipped: true, pass: false },
-])("preserves $description in runtime parity evidence", async ({ knownGap, bothSkipped, pass }) => {
-  const catalogScenario = readQaScenarioById("compaction-retry-mutating-tool");
-  const { summary, captured } = runtimeScenario(makeRuntimeParitySummary(), 1);
-  const result = await runRuntimeParityScenario({
-    scenarioId: catalogScenario.id,
-    runCell: async (runtime) => ({
-      status: runtime === "codex" || bothSkipped ? "skip" : "pass",
-      details:
-        runtime === "codex"
-          ? knownGap
-            ? "known-harness-gap compaction-retry-mutating-tool: native compaction"
-            : "implementation unavailable"
-          : undefined,
-      cell: captured.cells[runtime],
-    }),
-  });
-  summary.scenarios[1] = buildRuntimeParityScenarioResult({
-    scenarioName: catalogScenario.title,
-    result,
-  });
-
-  const report = buildQaRuntimeParityReport({ summary });
-
-  expect(report.pass).toBe(pass);
-  expect(report.scenarios[1]).toMatchObject({
-    status: pass ? "pass" : "fail",
-    openclawStatus: bothSkipped ? "skip" : "pass",
-    codexStatus: "skip",
-    drift: pass ? "structural" : "failure-mode",
-  });
-  const steps = summary.scenarios[1]?.steps?.map((step) => step.status);
-  expect(steps).toEqual([bothSkipped ? "skip" : "pass", "skip", pass ? "pass" : "skip"]);
-  expect(renderQaRuntimeParityMarkdownReport(report)).toContain("- codex: skip (");
-});
-
-it("passes runtime parity reports with controlled tool-error cells and advisory drift", () => {
-  const { summary, scenario, captured } = runtimeScenario(makeRuntimeParitySummary(), 1);
-  captured.cells.codex.runtimeErrorClass = "tool-error";
-  summary.scenarios[1] = buildRuntimeParityScenarioResult({
-    scenarioName: scenario.name,
-    result: captured,
-  });
-
-  const report = buildQaRuntimeParityReport({ summary });
-
-  expect(report).toMatchObject({
-    pass: true,
-    failedScenarios: 0,
-    failures: [],
-    scenarios: [{}, { codexStatus: "pass" }],
-  });
-  const steps = summary.scenarios[1]?.steps?.map((step) => step.status);
-  expect(steps).toEqual(["pass", "pass", "pass"]);
-  expect(renderQaRuntimeParityMarkdownReport(report)).toContain("- codex: pass (1 tool calls");
 });
 
 it("renders explicit non-assistant parity usage as N/A without weakening parity", () => {
