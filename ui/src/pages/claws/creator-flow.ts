@@ -19,6 +19,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { canCreateClawDraft } from "./draft-navigation.ts";
 
 type Target = {
   agentId: string;
@@ -158,7 +159,7 @@ export class ClawCreatorFlow {
         message: created.prompt,
         workContext: {
           page: "claw-create",
-          title: "Create Claw",
+          title: t("clawsDraft.title"),
           agentId,
           sessionKey: target.sessionKey,
           detail: { draftId: target.draftId },
@@ -367,4 +368,11 @@ export function clawCreatorFlow(context: ApplicationContext) {
     flows.set(context, flow);
   }
   return flow;
+}
+
+export function clawCreatorAction(context: ApplicationContext, agentId: string | undefined) {
+  if (!agentId || !canCreateClawDraft(context)) {
+    return undefined;
+  }
+  return () => void clawCreatorFlow(context).start(agentId);
 }

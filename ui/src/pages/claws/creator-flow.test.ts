@@ -119,8 +119,8 @@ describe("Create Claw from the agent's main chat", () => {
     expect(flow.publication?.publicationStatus).toBe("pending");
     expect(showToast).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "clawsDraft.pending",
-        actionLabel: "clawsDraft.viewPublication",
+        message: "Submitted to ClawHub. Publication pending security review.",
+        actionLabel: "View on ClawHub",
         onAction: expect.any(Function),
       }),
     );
