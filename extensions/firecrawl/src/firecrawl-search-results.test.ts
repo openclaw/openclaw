@@ -7,9 +7,7 @@ const second = { url: "https://example.com/second", title: "Second" };
 
 installPinnedHostnameTestHooks();
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 async function search(payload: Record<string, unknown>, count = 10) {
   vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(payload));
@@ -22,35 +20,37 @@ async function search(payload: Record<string, unknown>, count = 10) {
   return await tool.execute({ query: "Firecrawl result selection", count });
 }
 
+function expectUrls(result: unknown, urls: string[]) {
+  expect(result).toMatchObject({ count: urls.length, results: urls.map((url) => ({ url })) });
+}
+
 describe("Firecrawl search result selection", () => {
   it.each([
     { data: { news: [first] } },
     { data: { images: [first] } },
     { data: { web: [], news: [first] } },
   ])("preserves source-specific results: %j", async (payload) => {
-    expect(await search(payload)).toMatchObject({ count: 1, results: [{ url: first.url }] });
+    expectUrls(await search(payload), [first.url]);
   });
 
   it("combines populated Firecrawl source arrays", async () => {
-    expect(await search({ data: { web: [first], news: [second] } })).toMatchObject({
-      count: 2,
-      results: [{ url: first.url }, { url: second.url }],
-    });
+    expectUrls(await search({ data: { web: [first], news: [second] } }), [first.url, second.url]);
   });
 
   it("finds the last supported envelope after malformed candidates", async () => {
-    expect(
-      await search({ data: false, results: "invalid", web: { results: [first] } }),
-    ).toMatchObject({ count: 1, results: [{ url: first.url }] });
+    expectUrls(await search({ data: false, results: "invalid", web: { results: [first] } }), [
+      first.url,
+    ]);
   });
 
   it("keeps an empty winning array instead of selecting a later envelope", async () => {
-    expect(
+    expectUrls(
       await search({
         data: { results: [], data: [first], web: [first] },
         web: { results: [first] },
       }),
-    ).toMatchObject({ count: 0, results: [] });
+      [],
+    );
   });
 
   it("counts objects with invalid URLs toward the scan cap after skipping primitive rows", async () => {
@@ -63,7 +63,7 @@ describe("Firecrawl search result selection", () => {
       ],
     });
 
-    expect(result).toMatchObject({ count: 1, results: [{ url: first.url }] });
+    expectUrls(result, [first.url]);
   });
 
   it("bounds canonical result URLs after percent-encoding Unicode", async () => {
@@ -77,10 +77,7 @@ describe("Firecrawl search result selection", () => {
       ],
     });
 
-    expect(result).toMatchObject({
-      count: 1,
-      results: [{ url: "https://example.com/%F0%9F%A6%80" }],
-    });
+    expectUrls(result, ["https://example.com/%F0%9F%A6%80"]);
   });
 
   it("fills the requested count after invalid rows and preserves schema field fallbacks", async () => {
@@ -106,16 +103,12 @@ describe("Firecrawl search result selection", () => {
       1,
     );
 
-    expect(result).toMatchObject({
-      count: 1,
-      results: [
-        {
-          url: first.url,
-          title: expect.stringContaining("Fallback title"),
-          description: expect.stringContaining("Fallback snippet"),
-        },
-      ],
-    });
+    expectUrls(result, [first.url]);
+    expect(result).toHaveProperty("results.0.title", expect.stringContaining("Fallback title"));
+    expect(result).toHaveProperty(
+      "results.0.description",
+      expect.stringContaining("Fallback snippet"),
+    );
     expect(JSON.stringify(result)).not.toContain("2026-08-03");
   });
 });

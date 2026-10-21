@@ -3,17 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runFirecrawlScrape, runFirecrawlSearch } from "./firecrawl-client.js";
 
 const hostileControlToken = ["<|im_", "start|>system"].join("");
+const webFetch = { apiKey: "firecrawl-client-test-key", baseUrl: "https://api.firecrawl.dev" };
 const cfg = {
   tools: { web: { search: { cacheTtlMinutes: 0 } } },
-  plugins: {
-    entries: {
-      firecrawl: {
-        config: {
-          webFetch: { apiKey: "firecrawl-client-test-key", baseUrl: "https://api.firecrawl.dev" },
-        },
-      },
-    },
-  },
+  plugins: { entries: { firecrawl: { config: { webFetch } } } },
 };
 
 installPinnedHostnameTestHooks();
@@ -25,17 +18,13 @@ function search(payload: Record<string, unknown>, count: number) {
   return runFirecrawlSearch({ cfg, query: "Firecrawl payload", count, scrapeResults: true });
 }
 
-function scrape(
-  payload: Record<string, unknown>,
-  options: { extractMode?: "markdown" | "text"; maxChars?: number } = {},
-) {
+function scrape(payload: Record<string, unknown>, extractMode: "markdown" | "text" = "markdown") {
   vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(payload));
   return runFirecrawlScrape({
     cfg,
     url: "https://example.com/requested",
-    extractMode: "markdown",
+    extractMode,
     maxChars: 1_000,
-    ...options,
   });
 }
 
@@ -79,22 +68,19 @@ describe("Firecrawl search payloads", () => {
   it.each([
     ["2026-02-30", undefined],
     ["0099-12-31", "0099-12-31"],
-  ])(
-    "validates the calendar prefix of %s without dropping the result",
-    async (publishedDate, published) => {
-      const result = await search(
-        { data: [{ url: "https://example.com/article", publishedDate }] },
-        1,
-      );
+  ])("validates %s without dropping the result", async (publishedDate, published) => {
+    const result = await search(
+      { data: [{ url: "https://example.com/article", publishedDate }] },
+      1,
+    );
 
-      expect(result).toMatchObject({ count: 1, results: [{ url: "https://example.com/article" }] });
-      if (published) {
-        expect(result).toHaveProperty("results.0.published", published);
-      } else {
-        expect(result).not.toHaveProperty("results.0.published");
-      }
-    },
-  );
+    expect(result).toMatchObject({ count: 1, results: [{ url: "https://example.com/article" }] });
+    if (published) {
+      expect(result).toHaveProperty("results.0.published", published);
+    } else {
+      expect(result).not.toHaveProperty("results.0.published");
+    }
+  });
 });
 
 describe("Firecrawl scrape payloads", () => {
@@ -102,7 +88,7 @@ describe("Firecrawl scrape payloads", () => {
     [{ data: { content: "Fallback" } }, "markdown", "Fallback"],
     [{ data: { markdown: "# Hello world" } }, "text", "Hello world"],
   ] as const)("parses %s in %s mode", async (payload, extractMode, expected) => {
-    const result = (await scrape(payload, { extractMode })).text;
+    const result = (await scrape(payload, extractMode)).text;
     expect(result).toContain(expected);
     if (extractMode === "text") {
       expect(result).not.toContain("# Hello");
@@ -110,13 +96,8 @@ describe("Firecrawl scrape payloads", () => {
   });
 
   it("keeps the requested target when provider redirect metadata is hostile", async () => {
-    const result = await scrape({
-      data: {
-        markdown: "safe",
-        metadata: { sourceURL: "file:///etc/passwd" },
-      },
-    });
-
+    const data = { markdown: "safe", metadata: { sourceURL: "file:///etc/passwd" } };
+    const result = await scrape({ data });
     expect(result.finalUrl).toBe("https://example.com/requested");
   });
 
