@@ -9,7 +9,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { createDiffPresentation } from "./chat-diff-render.solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
-import { ReviewDisclosure } from "./session-diff-disclosure.tsx";
+import { FileDisclosure } from "./file-disclosure.tsx";
 import { SessionDiffOpenIcon } from "./session-diff-icons.tsx";
 import type { SessionDiffViewBindings } from "./session-diff-presentation.ts";
 import { FILE_STATUS_LABELS, diffStat, splitPath } from "./session-diff-presentation.ts";
@@ -344,13 +344,14 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
           </button>
         </div>
         <Show when={desktop()} fallback={<Show when={!collapsed()}>{body()}</Show>}>
-          <ReviewDisclosure
+          <FileDisclosure
+            variant="review"
             open={!collapsed()}
             active={props.active !== false}
             instant={motionInstant()}
           >
             {body()}
-          </ReviewDisclosure>
+          </FileDisclosure>
         </Show>
       </section>
     );

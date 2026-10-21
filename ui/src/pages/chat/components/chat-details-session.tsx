@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { For, Show, createMemo, createSignal, createStore, onSettled } from "solid-js";
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
@@ -70,11 +70,13 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
         runActive:
           host.props?.runActive === true || host.props?.selectedSession?.hasActiveRun === true,
       });
-    diffSummaryInputs.set(host, syncDiffSummary);
-    onSettled(syncDiffSummary);
-    onCleanup(() => {
-      diffSummaryInputs.delete(host);
-      changes.dispose();
+    onSettled(() => {
+      diffSummaryInputs.set(host, syncDiffSummary);
+      syncDiffSummary();
+      return () => {
+        diffSummaryInputs.delete(host);
+        changes.dispose();
+      };
     });
     const changesView = projectOwner(changes, (owner) => owner.snapshot);
     const summary = () => changesView.read().summary;
@@ -123,14 +125,14 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
       <Show when={identity()} keyed>
         {(_identity) => {
           const [pullRequestsOpen, setPullRequestsOpen] = createSignal(true);
-          const [sectionChoices, setSectionChoices] = createSignal<
+          const [sectionChoices, setSectionChoices] = createStore<
             Partial<Record<ChatDetailsDesktopSectionId, boolean>>
           >({});
           const desktopPresentation = () =>
             props.desktop ? props.props?.desktopPresentation : undefined;
           const sectionExpanded = (section: ChatDetailsDesktopSectionId) =>
             props.props?.desktopDisclosures?.expanded[section] ??
-            sectionChoices()[section] ??
+            sectionChoices[section] ??
             (section === "environment" ||
               section === "subagents" ||
               section === "automations" ||
@@ -139,7 +141,9 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             if (!host.isConnected || !props.presented || sectionExpanded(section) === expanded) {
               return;
             }
-            setSectionChoices((previous) => ({ ...previous, [section]: expanded }));
+            setSectionChoices((choices) => {
+              choices[section] = expanded;
+            });
             props.props?.desktopDisclosures?.onExpandedChange(section, expanded);
           };
           const changeSubagentsExpanded = (expanded: boolean) =>

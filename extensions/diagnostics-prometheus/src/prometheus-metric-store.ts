@@ -231,8 +231,7 @@ export function createPrometheusMetricStore() {
       ["counter", counters.samples],
       ["gauge", gauges.samples],
     ] as const) {
-      // oxlint-disable-next-line unicorn/no-array-sort -- The store owns and reuses this scrape array.
-      for (const sample of samples.sort((left, right) => left.key.localeCompare(right.key))) {
+      for (const sample of samples.toSorted((left, right) => left.key.localeCompare(right.key))) {
         header(sample.name, type, sample.help);
         write(sample.prefix, sample.value);
       }
@@ -245,8 +244,7 @@ export function createPrometheusMetricStore() {
         write(`${DROPPED_SERIES_COUNTER_NAME} `, droppedSeries);
       }
     }
-    // oxlint-disable-next-line unicorn/no-array-sort -- The store owns and reuses this scrape array.
-    for (const sample of histograms.samples.sort((left, right) =>
+    for (const sample of histograms.samples.toSorted((left, right) =>
       left.key.localeCompare(right.key),
     )) {
       header(sample.name, "histogram", sample.help);

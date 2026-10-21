@@ -161,12 +161,11 @@ export async function createRepositoryPublicationFixture(
     .mockReset()
     .mockImplementation(
       async (
-        request: { workspaceId: string; checkpointRef: string; includePublication?: boolean },
+        request: { workspaceId: string; checkpointRef: string },
         use: (payload: Partial<SessionRepositoryCheckpointPayload>) => Promise<unknown>,
       ) => {
         expect(request).toMatchObject({
           workspaceId: workspace.workspaceId,
-          includePublication: true,
         });
         const payload = payloads.get(request.checkpointRef);
         if (!payload) {

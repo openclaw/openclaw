@@ -3,7 +3,7 @@
 // config form draft so the embedded schema editor below stays in sync.
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { createSignal, onSettled } from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
@@ -11,7 +11,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
+import { projectMutableSource, projectOwner } from "../../lib/reactive/projection.ts";
 import type { VoiceWakeEditorState } from "./talk-device.tsx";
 import {
   resolveTalkModelFamilySettings,
@@ -281,19 +281,27 @@ export type TalkSettingsPageProps = {
 };
 
 function createTalkSettings(context: ApplicationContext, props: TalkSettingsPageProps) {
-  const [catalog, setCatalog] = createSignal<TalkCatalogState>({ kind: "unavailable" });
+  const initial: TalkCatalogState = { kind: "unavailable" };
+  // Accepted facts drive synchronous mutation policy; the issued read drives rendering.
+  const catalogState: {
+    value: TalkCatalogState;
+    read: TalkCatalogState | Promise<TalkCatalogState>;
+    connection: CatalogConnection | null;
+  } = { value: initial, read: initial, connection: null };
+  const catalogSource = projectMutableSource(catalogState, (state) => state);
+  const catalog = createMemo(async () => catalogSource.read().read);
+  const catalogScope = createMemo(() => catalogSource.read().connection);
   const [modelDefaultResetIntent, setModelDefaultResetIntent] =
     createSignal<ModelDefaultResetIntent | null>(null);
-  let connectionValue: CatalogConnection | null = null;
   /** `undefined` = baseline not yet observed; `null` = no public revision token. */
   let lastCatalogConfigRevision: string | null | undefined;
 
   // Provider credential readiness can change outside the config editor without
   // advancing the config hash, so window focus refreshes the catalog.
   const refreshOnFocus = () => {
-    const connection = connectionValue;
+    const connection = catalogState.connection;
     if (connection?.client && connection.connected) {
-      void loadCatalog(connection.client, connection);
+      loadCatalog(connection.client, connection);
     }
   };
 
@@ -306,42 +314,55 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
     // connecting -> connected keeps the same client object; keying only on the
     // client would leave a page mounted mid-handshake without a catalog.
     if (
-      connectionValue?.gatewayUrl === gatewayUrl &&
-      connectionValue.client === client &&
-      connectionValue.connected === connected
+      catalogState.connection?.gatewayUrl === gatewayUrl &&
+      catalogState.connection.client === client &&
+      catalogState.connection.connected === connected
     ) {
       return;
     }
-    connectionValue = connection;
+    catalogState.connection = connection;
+    catalogState.value = { kind: client && connected ? "loading" : "unavailable" };
     if (!client || !connected) {
-      setCatalog({ kind: "unavailable" });
+      catalogState.read = catalogState.value;
+      catalogSource.publish();
       return;
     }
-    setCatalog({ kind: "loading" });
-    void loadCatalog(client, connection);
+    loadCatalog(client, connection);
   }
 
-  async function loadCatalog(client: GatewayClient, connection: CatalogConnection) {
-    try {
+  function loadCatalog(client: GatewayClient, connection: CatalogConnection) {
+    const read = (async (): Promise<TalkCatalogState> => {
       const result = await client.request<TalkCatalogResult>("talk.catalog", {});
-      if (connectionValue !== connection) {
-        return;
-      }
-      // Same-connection catalog refreshes are best effort; focus/config changes refresh again.
-      setCatalog({
+      return {
         kind: "ready",
         ready: result.realtime.ready === true,
         activeProvider: result.realtime.activeProvider ?? null,
         providers: result.realtime.providers,
-      });
-      acknowledgeModelDefaultReset(connection);
-    } catch {
-      // The catalog only powers the pickers; the page still renders the raw
-      // configured values when it cannot be read.
-      if (connectionValue === connection) {
-        setCatalog({ kind: "unavailable" });
-      }
-    }
+      };
+    })();
+    catalogState.read = read;
+    catalogSource.publish();
+    void read.then(
+      (value) => {
+        if (catalogState.connection !== connection) {
+          return;
+        }
+        // Same-connection completions remain best effort, including overlapping focus reads.
+        catalogState.value = value;
+        catalogState.read = value;
+        catalogSource.publish();
+        acknowledgeModelDefaultReset(connection);
+      },
+      () => {
+        if (catalogState.connection !== connection) {
+          return;
+        }
+        catalogState.value = { kind: "unavailable" };
+        catalogState.read = read;
+        // Errored renders raw configured values; mutation policy has no provider facts.
+        catalogSource.publish();
+      },
+    );
   }
 
   function acknowledgeModelDefaultReset(connection: CatalogConnection) {
@@ -375,9 +396,9 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       return;
     }
     lastCatalogConfigRevision = configRevision;
-    const connection = connectionValue;
+    const connection = catalogState.connection;
     if (connection?.client && connection.connected) {
-      void loadCatalog(connection.client, connection);
+      loadCatalog(connection.client, connection);
     }
   }
 
@@ -398,7 +419,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       runtimeConfig.patchForm(["talk", "realtime", "model"], model);
       const selection = liveSelection();
       const transport = selection.transport;
-      const provider = selectedTalkProviderOption(catalog(), selection);
+      const provider = selectedTalkProviderOption(catalogState.value, selection);
       const family = resolveTalkModelFamilySettings(provider, model);
       const rejectsTransport =
         transport !== null &&
@@ -446,7 +467,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
 
   function selectedProviderConfigKeys(): string[] {
     const selection = liveSelection();
-    const option = selectedTalkProviderOption(catalog(), selection);
+    const option = selectedTalkProviderOption(catalogState.value, selection);
     return talkProviderConfigKeys(selection, option);
   }
 
@@ -484,7 +505,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       return;
     }
     const configuredTransport = selection.transport;
-    const currentCatalog = catalog();
+    const currentCatalog = catalogState.value;
     const option =
       currentCatalog.kind === "ready"
         ? currentCatalog.providers.find((provider) => provider.id === providerId)
@@ -535,11 +556,18 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
     syncCatalog(catalogConnection(context.gateway));
     refreshCatalogOnConfigChange(context.runtimeConfig.state);
     return () => {
-      connectionValue = null;
+      catalogState.connection = null;
       stops.forEach((stop) => stop());
     };
   });
-  return { catalog, modelDefaultResetIntent, changeModel, changeVoice, changeProvider };
+  return {
+    catalog,
+    catalogScope,
+    modelDefaultResetIntent,
+    changeModel,
+    changeVoice,
+    changeProvider,
+  };
 }
 
 export function TalkSettingsPage(props: TalkSettingsPageProps) {
@@ -566,6 +594,7 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
         }}
         selection={resolveTalkRealtimeSelection(props.configObject ?? {})}
         catalog={settings.catalog()}
+        catalogScope={settings.catalogScope()}
         modelDefaultPending={settings.modelDefaultResetIntent() !== null}
         configBusy={
           props.mutationDisabled ||

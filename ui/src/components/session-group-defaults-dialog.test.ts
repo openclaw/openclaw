@@ -94,6 +94,34 @@ it("keeps folder input focus while filtering and saves the keyboard-completed fo
   expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
 });
 
+it("selects and saves the Git worktree mode without creating unowned menu content", async () => {
+  const warnings = vi.spyOn(console, "warn");
+  try {
+    const { modal, completed, submit } = await openDialog({
+      inspectRepository: async () => "git",
+    });
+    await waitForSave(modal);
+    const trigger = modal.querySelector<HTMLButtonElement>("#session-group-defaults-mode-trigger")!;
+    trigger.click();
+    await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+    modal.querySelector<HTMLButtonElement>('[data-environment-mode="worktree"]')!.click();
+    await waitForSolid(() => {
+      expect(trigger.getAttribute("data-value")).toBe("worktree");
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    });
+    submitForm(modal);
+    await completed;
+    expect(submit).toHaveBeenCalledExactlyOnceWith({ ...defaults, worktree: true });
+    expect(
+      warnings.mock.calls.filter(
+        ([message]) => typeof message === "string" && message.includes("[NO_OWNER_EFFECT]"),
+      ),
+    ).toEqual([]);
+  } finally {
+    warnings.mockRestore();
+  }
+});
+
 it("clears a saved directory when the agent workspace choice closes the popover", async () => {
   const { modal, completed, submit } = await openDialog();
   const trigger = await openFolderPicker(modal);

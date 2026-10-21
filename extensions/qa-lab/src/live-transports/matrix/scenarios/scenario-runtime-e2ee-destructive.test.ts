@@ -224,16 +224,19 @@ it.each(["deviceId", "userId"] as const)(
         "matrix",
         storageMetadataRuntime.openMatrixStorageMetaStoreOptions(otherRoot),
       ).register("current", otherMetadata);
+      createPluginStateSyncKeyedStoreForTests("matrix", {
+        ...storageMetadataRuntime.openMatrixStorageMetaStoreOptions(accountRoot),
+        namespace: "recovery-key",
+      }).register("current", { retained: true });
       resetPluginStateStoreForTests();
 
       await expect(
         mutateMatrixQaCliStateLoss({
           deviceId: "DEVICE",
-          preserveRecoveryKey: false,
           runtime: { stateDir },
           userId: "@owner:matrix-qa.test",
         }),
-      ).resolves.toMatchObject({ accountRoot });
+      ).resolves.toBe(accountRoot);
       expect(
         createPluginStateSyncKeyedStoreForTests(
           "matrix",

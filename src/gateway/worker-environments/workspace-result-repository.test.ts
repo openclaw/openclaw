@@ -376,7 +376,7 @@ describe("repository workspace result ownership", () => {
         sql.restore();
       }
       await withSessionRepositoryCheckpoint(
-        { workspaceId: f.repository.workspaceId, includePublication: true },
+        { workspaceId: f.repository.workspaceId },
         async (snapshot) => {
           expect(snapshot.changedEntries).toHaveLength(8);
           await expect(

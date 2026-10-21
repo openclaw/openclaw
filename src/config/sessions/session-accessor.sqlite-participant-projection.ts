@@ -7,7 +7,6 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
-import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
 import {
   getSqliteReadScopeRevision,
   runSqliteReadOperationSync,
@@ -44,22 +43,6 @@ function selectParticipantRows(database: EngineConnection) {
     .orderBy("identity_namespace");
 }
 
-let participantWriteSnapshot: EngineConnection | undefined;
-
-/** The entry CAS owns an immediate transaction before borrowing its unchanged preparation. */
-export function withSessionParticipantWriteSnapshot<T>(
-  database: EngineConnection,
-  read: () => T,
-): T {
-  const previous = participantWriteSnapshot;
-  participantWriteSnapshot = database;
-  try {
-    return read();
-  } finally {
-    participantWriteSnapshot = previous;
-  }
-}
-
 // Deferred readers must execute their first SELECT to establish the native snapshot.
 const singleSessionParticipantQuery = createSqliteQueryCache((database: EngineConnection) => {
   const query = prepareSqliteQuerySync<string, SessionParticipantRow>(database, (parameter) =>
@@ -75,17 +58,7 @@ const singleSessionParticipantQuery = createSqliteQueryCache((database: EngineCo
   return (key: string) =>
     runSqliteReadOperationSync(database, () => {
       const revision = getSqliteReadScopeRevision(database);
-      if (
-        revision &&
-        last?.key === key &&
-        (last.revision === revision ||
-          (participantWriteSnapshot === database &&
-            last.revision.snapshot === undefined &&
-            last.revision.schema === revision.schema &&
-            last.revision.mutationRevision === revision.mutationRevision &&
-            last.revision.writeRevision === readSqliteDatabaseWriteRevision(database)))
-      ) {
-        last.revision = revision;
+      if (revision && last?.key === key && last.revision === revision) {
         return last.rows;
       }
       const rows = query(key).rows;
@@ -149,7 +122,7 @@ export function participantRecordsBySessionKey(
 }
 
 function participantProjection(
-  records: readonly SessionParticipantRecord[],
+  records: readonly Pick<SessionParticipantRecord, "identity">[],
 ): Pick<SessionEntry, "participants" | "participantCount"> {
   if (records.length === 0) {
     return {};
@@ -162,7 +135,7 @@ function participantProjection(
 
 export function withProjectedParticipants(
   entry: SessionEntry,
-  records: readonly SessionParticipantRecord[],
+  records: readonly Pick<SessionParticipantRecord, "identity">[],
 ): SessionEntry {
   return records.length ? { ...entry, ...participantProjection(records) } : entry;
 }
@@ -188,10 +161,18 @@ export function projectSqliteSessionParticipants(
   database: EngineConnection,
   sessionKey: string,
   entry: SessionEntry,
+  identitiesJson?: string,
 ): SessionEntry {
   const actor = readSessionActorParticipants({ db: database }, sessionKey);
   if (actor !== undefined) {
     return withProjectedParticipants(entry, actor);
+  }
+  if (identitiesJson !== undefined) {
+    const identities: [string, string][] = JSON.parse(identitiesJson);
+    return withProjectedParticipants(
+      entry,
+      identities.map(([namespace, id]) => ({ identity: readParticipantIdentity(namespace, id) })),
+    );
   }
   const prepared =
     readPreparedSessionParticipants(database, sessionKey) ??
@@ -209,10 +190,13 @@ export function projectSqliteSessionParticipants(
 export function prepareSqliteSessionParticipantProjection(
   database: EngineConnection,
   sessionKeys: readonly string[],
-): (sessionKey: string, entry: SessionEntry) => SessionEntry {
+): (sessionKey: string, entry: SessionEntry, identitiesJson?: string) => SessionEntry {
   let recordsByKey: Map<string, SessionParticipantRecord[]> | undefined;
   let acquisitionFailed = false;
-  return (sessionKey, entry) => {
+  return (sessionKey, entry, identitiesJson) => {
+    if (identitiesJson !== undefined) {
+      return projectSqliteSessionParticipants(database, sessionKey, entry, identitiesJson);
+    }
     const actor = readSessionActorParticipants({ db: database }, sessionKey);
     if (actor !== undefined) {
       return withProjectedParticipants(entry, actor);

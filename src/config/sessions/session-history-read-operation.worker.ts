@@ -306,7 +306,6 @@ async function prepareHistoryRead(
           fields: readSessionTitleFieldsFromTranscript(request.scope, {
             includeInterSession: request.includeInterSession,
             skillCommands: request.skillCommands,
-            readOnly: true,
           }),
         }));
     }
