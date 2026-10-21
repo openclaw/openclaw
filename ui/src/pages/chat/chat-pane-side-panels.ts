@@ -540,7 +540,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
     if (!text.trim()) {
       return;
     }
-    if (!connected || !client) {
+    if (this.routeResolutionPending || !connected || !client) {
       this.sessionCompanionThreads.setDraft(sessionKey, text, agentId);
       return;
     }

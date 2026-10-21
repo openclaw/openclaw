@@ -85,6 +85,18 @@ function createReadMarkerPane(result: Record<string, never> | null = null) {
 }
 
 describe("chat pane read markers", () => {
+  it("does not acknowledge an observed row until route confirmation", () => {
+    const { pane, patch } = createReadMarkerPane({});
+    authorize(pane, ["operator.write"]);
+    const row = unreadRow({ sessionId: "cached-session" });
+    pane.routeResolutionPending = true;
+    pane.markSessionRead(row);
+    expect(patch).not.toHaveBeenCalled();
+    pane.routeResolutionPending = false;
+    pane.markSessionRead(row);
+    expectRead(patch);
+  });
+
   it("does not turn optimistic read rollback into another patch during restart", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(0);
     const random = vi.spyOn(Math, "random").mockReturnValue(0.5);

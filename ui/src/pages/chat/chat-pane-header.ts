@@ -221,7 +221,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             : null;
     const sharingSnapshot = this.context.gateway.snapshot;
     const renameAccess = row
-      ? readSessionMethodAccess(this.context.gateway.snapshot, {
+      ? this.readHeaderSessionMethodAccess({
           method: "sessions.patch",
           params: { key: row.key, label: null },
           sessionScope: true,
@@ -240,7 +240,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       agentsList: this.context.agents.state.agentsList,
       hello: this.context.gateway.snapshot.hello,
     });
-    const archiveAllowed = Boolean(row && this.canArchiveHeaderSession(row));
     const deleteAllowed = Boolean(
       row &&
       !isNativeCatalogAdoptionSessionKey(row.key) &&
@@ -250,6 +249,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const sessionActionDisabledReasons = row
       ? sessionMenuReasons({
           snapshot: this.context.gateway.snapshot,
+          routePending: this.routeResolutionPending,
           placementRow: row,
           requiredProfile:
             this.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
@@ -257,7 +257,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         })
       : {};
     const assignmentAccess = row
-      ? readSessionMethodAccess(this.context.gateway.snapshot, {
+      ? this.readHeaderSessionMethodAccess({
           method: "sessions.assignOwner",
           params: {
             key: row.key,
@@ -660,7 +660,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               actionDisabledReasons,
               forkDisabled: this.state.sessionsLoading || row.modelSelectionLocked === true,
               forkFromLastCompleted: row.hasActiveRun === true,
-              archiveAllowed,
+              archiveAllowed: this.canArchiveHeaderSession(row),
               archiveShortcut: this.active && this.presented && !this.onboarding,
               deleteAllowed,
               onOpen: this.onHeaderMenuOpen,

@@ -336,7 +336,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   protected markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
-    if (!state || !row || !this.secondarySessionReadsReady()) {
+    if (this.routeResolutionPending || !state || !row || !this.secondarySessionReadsReady()) {
       return;
     }
     const failureAt = row.endedAt ?? row.updatedAt ?? 0;
@@ -443,7 +443,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   protected async restoreArchivedSession(sessionKey: string, expectedSessionId: string) {
     const scope = this.captureConnectionScope();
-    if (!scope || scope.state.sessionKey !== sessionKey) {
+    if (this.routeResolutionPending || !scope || scope.state.sessionKey !== sessionKey) {
       return;
     }
     const access = readSessionMethodAccess(scope.context.gateway.snapshot, {

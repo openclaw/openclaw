@@ -37,7 +37,7 @@ export function cancelPendingQueuedChatInput(state: ChatHistoryHost, id: string)
   if (!view || !input?.runId) {
     return false;
   }
-  if (!client || !state.connected) {
+  if (state.isRouteSessionPending?.() || !client || !state.connected) {
     return true;
   }
   const connectionIsCurrent = captureChatConnectionOwner(state);

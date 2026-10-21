@@ -386,7 +386,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
 
   protected readonly clearSavedProgressCard = (card: ProgressCard): void => {
     const target = this.initialProgressCardTarget();
-    if (!target) {
+    if (this.routeResolutionPending || !target) {
       return;
     }
     void this.progressCards

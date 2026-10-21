@@ -73,11 +73,13 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
     ) {
       return null;
     }
-    const canOpen = canCallGatewayMethod(
-      this.context.gateway.snapshot,
-      "session.discussion.open",
-      "operator.write",
-    );
+    const canOpen =
+      !this.routeResolutionPending &&
+      canCallGatewayMethod(
+        this.context.gateway.snapshot,
+        "session.discussion.open",
+        "operator.write",
+      );
     const contentGeneration = this.connectionGeneration;
     const cached = this.sessionDiscussionPanels.get(sessionKey);
     if (cached?.generation === contentGeneration && cached.canOpen === canOpen) {
@@ -89,6 +91,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
       key: string,
     ) => {
       if (
+        (method === "session.discussion.open" && this.routeResolutionPending) ||
         contentGeneration !== this.connectionGeneration ||
         !state.connected ||
         !state.client ||

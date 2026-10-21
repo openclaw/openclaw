@@ -315,6 +315,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
   ): Promise<void> {
     const scope = this.captureConnectionScope();
     if (
+      this.routeResolutionPending ||
       !scope ||
       this.collaboration.busyIds.has(suggestion.id) ||
       (resolution === "edit" && this.collaboration.editOperation !== undefined) ||
@@ -614,7 +615,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
   protected sendTypingState(typing: boolean, preview?: string, cursor?: number): void {
     const scope = this.captureConnectionScope();
     const row = scope ? selectedChatSessionRow(scope.state) : undefined;
-    if (!scope || !row?.sessionId || !this.hasMultipleIdentities()) {
+    if (this.routeResolutionPending || !scope || !row?.sessionId || !this.hasMultipleIdentities()) {
       this.clearTypingRequest();
       return;
     }
@@ -623,6 +624,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     const send = () => {
       const current = selectedChatSessionRow(scope.state);
       if (
+        this.routeResolutionPending ||
         !this.isConnectionScopeCurrent(scope) ||
         scope.state.sessionKey !== sessionKey ||
         current?.sessionId !== sessionId ||

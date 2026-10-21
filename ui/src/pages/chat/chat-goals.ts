@@ -303,6 +303,9 @@ async function runGoalOperation(
   expectedOperation?: GoalOperation,
 ): Promise<boolean> {
   const client = host.client;
+  if (host.isRouteSessionPending?.()) {
+    return rejectGoalOperation(host, t("chat.thread.loading"));
+  }
   if (!client || !host.connected || !client.recoveryScopeReady) {
     return rejectGoalOperation(host, t("chat.goals.offline"));
   }
@@ -504,12 +507,16 @@ async function runGoalOperation(
   operations.setPending(operation, true);
   setChatError(host, null);
   try {
-    const request = () =>
-      client.request<SessionsGoalMutationResult>(
+    const request = () => {
+      if (host.isRouteSessionPending?.()) {
+        throw new Error(t("chat.thread.loading"));
+      }
+      return client.request<SessionsGoalMutationResult>(
         "action" in params ? "sessions.goal.update" : "sessions.goal.clear",
         params,
         { timeoutMs: GOAL_REQUEST_TIMEOUT_MS },
       );
+    };
     let result: SessionsGoalMutationResult;
     try {
       result = await request();

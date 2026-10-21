@@ -39,6 +39,9 @@ export async function requestChatSend(
     expectedLeafEntryId?: string | null;
   },
 ): Promise<ChatSendAck> {
+  if (state.isRouteSessionPending?.()) {
+    throw new Error(t("chat.thread.loading"));
+  }
   if (params.attachments?.length) {
     assertUploadsEnabled(state.uploadConfig);
   }

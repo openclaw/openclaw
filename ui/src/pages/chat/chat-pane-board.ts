@@ -72,6 +72,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
 
   private canSaveDashboardDefault(row: GatewaySessionRow): boolean {
     return Boolean(
+      !this.routeResolutionPending &&
       this.state?.connected &&
       row.sessionId &&
       !this.sessionParticipationTracker.resolve({
@@ -271,8 +272,12 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       !gateway ||
       (hasOperatorReadAccess(gateway.hello?.auth ?? null) &&
         isGatewayMethodAdvertised(gateway, "board.get") !== false);
-    const canMutate = !gateway || hasOperatorWriteAccess(gateway.hello?.auth ?? null);
-    const canGrant = !gateway || hasOperatorApprovalsAccess(gateway.hello?.auth ?? null);
+    const canMutate =
+      !this.routeResolutionPending &&
+      (!gateway || hasOperatorWriteAccess(gateway.hello?.auth ?? null));
+    const canGrant =
+      !this.routeResolutionPending &&
+      (!gateway || hasOperatorApprovalsAccess(gateway.hello?.auth ?? null));
     const canPinWidgets =
       canMutate &&
       (!gateway ||

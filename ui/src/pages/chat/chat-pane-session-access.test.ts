@@ -59,6 +59,60 @@ async function createHeaderDraftPane(row: GatewaySessionRow) {
 }
 
 describe("chat pane session access", () => {
+  it("does not create a session inheriting an unconfirmed current route", async () => {
+    const create = vi.fn(async () => "agent:main:new");
+    const sessions = createSessionCapabilityFixture({ create });
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions,
+    });
+    state.isRouteSessionPending = () => true;
+    await expect(pane.createSession()).resolves.toBe(false);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("holds header metadata and lifecycle writes until the route is confirmed", async () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:current",
+      sessionId: "current-session",
+      kind: "direct",
+      sharingRole: "owner",
+    };
+    const { pane, patch, groupsPut } = await createHeaderDraftPane(row);
+    pane.routeResolutionPending = true;
+    pane.beginHeaderRename(row);
+    expect(pane.headerPresentation.renameSession).toBeNull();
+    for (const action of [
+      { kind: "set-icon", icon: "star" },
+      { kind: "assign-owner", owner: { type: "human", id: "synthetic-owner" } },
+      { kind: "toggle-archived" },
+      { kind: "delete" },
+      { kind: "move-to-group", category: "Unconfirmed" },
+    ] as const) {
+      await pane.handleHeaderSessionAction(action, row);
+    }
+    await pane.restoreArchivedSession(row.key, row.sessionId!);
+    expect(patch).not.toHaveBeenCalled();
+    expect(groupsPut).not.toHaveBeenCalled();
+
+    pane.routeResolutionPending = false;
+    pane.beginHeaderRename(row);
+    pane.headerPresentation.renameValue = "Confirmed rename";
+    pane.routeResolutionPending = true;
+    pane.commitHeaderRename();
+    expect(patch).not.toHaveBeenCalled();
+    pane.routeResolutionPending = false;
+    pane.commitHeaderRename();
+    expect(patch).toHaveBeenCalledWith(
+      row.key,
+      { label: "Confirmed rename" },
+      {
+        agentId: "main",
+        expectedSessionId: row.sessionId,
+      },
+    );
+  });
+
   it("refuses ordinary session creation for read-only operators", async () => {
     const sessions = {
       create: vi.fn(async () => "agent:main:new"),

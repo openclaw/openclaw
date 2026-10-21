@@ -39,6 +39,34 @@ async function openCachedRoute(page: Page) {
 }
 
 suite.define(() => {
+  it("keeps metadata actions disabled when startup publishes before route confirmation", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
+      async ({ page }) => {
+        const gateway = await openCachedRoute(page);
+        await page.goto(new URL(`/chat/main/${id}`, suite.server.baseUrl).href);
+        await page.getByText(transcript, { exact: true }).waitFor();
+        await gateway.waitForRequest("sessions.resolve");
+        await gateway.waitForRequest("chat.startup");
+        await gateway.resolveDeferred("chat.startup", {
+          messages: [{ role: "assistant", content: transcript }],
+          sessionInfo: { ...row, unread: true, sharingRole: "owner" },
+        });
+        const pane = page.locator(".chat-pane-cache__pane--active");
+        await pane.getByText("Snapshot conversation", { exact: true }).first().waitFor();
+        await pane.locator(".chat-header-session-menu__trigger").click();
+        const rename = page.getByRole("menuitem", { name: "Rename…", exact: true });
+        expect(await rename.isDisabled()).toBe(true);
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        await page.keyboard.press("Escape");
+        await gateway.resolveDeferred("sessions.resolve", { ok: true, ...row });
+        await page.waitForFunction(() => window.openclawControlUi?.snapshot().routeReady === true);
+        await pane.locator(".chat-header-session-menu__trigger").click();
+        expect(await rename.isEnabled()).toBe(true);
+      },
+    );
+  });
+
   it("rejects stale route confirmation across reconnect while cached rows are admitted", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },

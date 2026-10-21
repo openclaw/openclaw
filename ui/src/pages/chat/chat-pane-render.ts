@@ -163,7 +163,11 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       selectedSession,
       placementStartup !== null,
     );
-    const canWriteProgressCard = state.connected && !sessionParticipationBlocked && hasWriteScope;
+    const canWriteProgressCard =
+      !this.routeResolutionPending &&
+      state.connected &&
+      !sessionParticipationBlocked &&
+      hasWriteScope;
     const restartRecoveryTombstoned = selectedSession?.restartRecoveryStatus === "tombstoned";
     const multiIdentity = this.hasMultipleIdentities();
     const suggestionViewer =
@@ -281,6 +285,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     };
     const publicationRow = readPublicationRow();
     if (
+      this.routeResolutionPending ||
       !publicationScope ||
       !publicationRow ||
       isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish") !== true ||
@@ -308,6 +313,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         isCurrent: () => {
           const row = readPublicationRow();
           return (
+            !this.routeResolutionPending &&
             this.isConnectionScopeCurrent(publicationScope) &&
             row !== undefined &&
             publication?.matches(row)

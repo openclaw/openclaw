@@ -8,6 +8,7 @@ import {
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import { requestChatSend } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
@@ -37,6 +38,14 @@ it("holds history mutations without changing the cached transcript or draft", as
   expect(host.request).not.toHaveBeenCalled();
   expect(host.chatMessage).toBe("Retain draft");
   expect(host.chatMessages).toBe(messages);
+});
+
+it("holds a direct transport send used by realtime chat during route admission", async () => {
+  const host = makeChatHost({ isRouteSessionPending: () => true, requestHandlers: {} });
+  await expect(
+    requestChatSend(host, { message: "Unconfirmed talk turn", runId: "talk-turn" }),
+  ).rejects.toThrow();
+  expect(host.request).not.toHaveBeenCalled();
 });
 
 it("holds direct and restored queued sends after startup until route revalidation", async () => {
