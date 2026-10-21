@@ -75,22 +75,6 @@ describe("scripts/bench-sqlite-state", () => {
       stateSchema: OPENCLAW_STATE_SCHEMA_VERSION,
     });
 
-    const expectedIds = [
-      "cron.store.load",
-      "task-runs.cron.list",
-      "task-runs.cron-source.list",
-      "delivery.pending.load",
-      "ingress.pending.first-page",
-      "ingress.pending.seek-page",
-      "ingress.pending.id-page",
-      "ingress.pending.id-seek-page",
-      "plugin-state.namespace.live",
-      "agent-cache.plugin-model-catalog.list",
-      "transcript.tail.metadata",
-      "transcript.tail.payload",
-    ];
-    expect(report.queries.map((query) => query.id)).toEqual(expectedIds);
-    expect(new Set(report.queries.map((query) => query.id)).size).toBe(expectedIds.length);
     const expectedRows = new Map([
       ["cron.store.load", 13],
       ["task-runs.cron.list", 1_000],
@@ -105,6 +89,8 @@ describe("scripts/bench-sqlite-state", () => {
       ["transcript.tail.metadata", 256],
       ["transcript.tail.payload", 256],
     ]);
+    expect(report.queries.map((query) => query.id)).toEqual([...expectedRows.keys()]);
+    expect(new Set(report.queries.map((query) => query.id)).size).toBe(expectedRows.size);
     for (const query of report.queries) {
       expect(["agent", "state"]).toContain(query.database);
       expect(query.rows).toBe(expectedRows.get(query.id));

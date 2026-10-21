@@ -53,22 +53,6 @@ function toPowerShellSingleQuotedLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-function createFailingNodeFixture(scriptSource: string): string {
-  const scriptWithoutEntryPoint = scriptSource.replace(ENTRYPOINT_RE, "");
-  const entrypointLines = extractEntrypointLines(scriptSource);
-  expect(scriptWithoutEntryPoint).not.toBe(scriptSource);
-
-  return [
-    scriptWithoutEntryPoint,
-    "",
-    "function Check-Node { return $false }",
-    "function Install-Node { return $false }",
-    "",
-    ...entrypointLines,
-    "",
-  ].join("\n");
-}
-
 function createNativeUpgradeEnvironment(root: string, usableCommand: boolean): NodeJS.ProcessEnv {
   const bin = join(root, "bin");
   mkdirSync(bin, { recursive: true });
@@ -462,10 +446,12 @@ try {
       "  if ($Arguments[0] -eq 'uninstall') { $script:OldOwnerRemoved = $true; $global:LASTEXITCODE = 0; return }",
       "  throw 'unexpected npm command'",
       "}",
-      "function Install-OpenClawFromGit { return $false }",
+      "function Install-OpenClawFromGit { Write-Output 'pnpm stdout before failure'; return $false }",
+      "function Ensure-OpenClawOnPath { throw 'should not continue after failed git install' }",
       "$InstallMethod = 'git'",
       "$NoOnboard = $true",
       "$null = Main",
+      'if ($script:InstallExitCode -ne 1) { throw "InstallExitCode=$script:InstallExitCode" }',
       "if ($script:OldOwnerRemoved) { throw 'failed candidate retired the working npm owner' }",
     ),
     "node-versions": installerFixture(
@@ -823,21 +809,6 @@ foreach ($script:portableFailure in @('throw', 'unsupported')) {
     if ($ErrorActionPreference -ne 'Stop') { throw 'caller error policy changed' }
 }
 `,
-    ),
-    "noisy-git-failure": installerFixture(
-      "function Check-Node { return $true }",
-      "function Check-ExistingOpenClaw { return $false }",
-      "function Get-NpmCommandPath { return $null }",
-      "function Install-OpenClawFromGit {",
-      "  Write-Output 'pnpm stdout before failure'",
-      "  return $false",
-      "}",
-      "function Ensure-OpenClawOnPath { throw 'should not continue after failed git install' }",
-      "$InstallMethod = 'git'",
-      "$GitDir = 'C:\\\\openclaw-test'",
-      "$NoOnboard = $true",
-      "$null = Main",
-      'if ($script:InstallExitCode -ne 1) { throw "InstallExitCode=$script:InstallExitCode" }',
     ),
     "quiet-main-success": installerFixture(
       "function Check-Node { return $true }",
@@ -1430,9 +1401,7 @@ try {
     "fails install when interactive onboarding exits non-zero",
     async () => {
       const result = await runFixtureFile(
-        [
-          source.replace(ENTRYPOINT_RE, ""),
-          "",
+        installerFixture(
           "function Check-Node { return $true }",
           "function Check-ExistingOpenClaw { return $false }",
           "function Get-NpmCommandPath { return 'npm.cmd' }",
@@ -1451,10 +1420,8 @@ try {
           "}",
           "$InstallMethod = 'npm'",
           "$NoOnboard = $false",
-          "",
-          ...extractEntrypointLines(source),
-          "",
-        ].join("\n"),
+          ...entrypointLines,
+        ),
       );
       expect(result.status).toBe(1);
       expect(`${result.stdout}\n${result.stderr}`).toContain(
@@ -1464,7 +1431,13 @@ try {
   );
 
   runConcurrentIfPowerShell("exits non-zero when run as a script file", async () => {
-    const result = await runFixtureFile(createFailingNodeFixture(source));
+    const result = await runFixtureFile(
+      installerFixture(
+        "function Check-Node { return $false }",
+        "function Install-Node { return $false }",
+        ...entrypointLines,
+      ),
+    );
     expect(result.status).toBe(1);
   });
 

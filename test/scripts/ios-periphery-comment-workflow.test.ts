@@ -147,6 +147,14 @@ async function runCommenter(
     ...options.run,
   };
   const apiCalls: string[] = [];
+  const job = (name: string, run_attempt: number, conclusion = "success") => ({
+    name,
+    run_attempt,
+    conclusion,
+    status: "completed",
+  });
+  const producerJobs = (attempt: number, conclusion = "success") =>
+    platform === "macOS" ? [job("Build macOS Periphery reports", attempt, conclusion)] : [];
   const core = {
     infos: [] as string[],
     warnings: [] as string[],
@@ -178,53 +186,17 @@ async function runCommenter(
           return [
             ...(options.previousAttempts ?? []).flatMap((run_attempt) =>
               [
-                {
-                  name: `Detect ${platform} scan scope`,
-                  conclusion: "success",
-                  status: "completed",
-                  run_attempt,
-                },
-                {
-                  name: `Scan ${platform} dead code`,
-                  conclusion: "skipped",
-                  status: "completed",
-                  run_attempt,
-                },
-              ].concat(
-                platform === "macOS"
-                  ? [
-                      {
-                        name: "Build macOS Periphery reports",
-                        conclusion: "success",
-                        status: "completed",
-                        run_attempt,
-                      },
-                    ]
-                  : [],
-              ),
+                job(`Detect ${platform} scan scope`, run_attempt),
+                job(`Scan ${platform} dead code`, run_attempt, "skipped"),
+              ].concat(producerJobs(run_attempt)),
             ),
-            {
-              conclusion: options.scopeJobConclusion ?? "success",
-              name: `Detect ${platform} scan scope`,
-              run_attempt: run.run_attempt,
-              status: "completed",
-            },
-            {
-              conclusion: options.scanJobConclusion ?? "success",
-              name: `Scan ${platform} dead code`,
-              run_attempt: options.scanAttempt ?? options.producerAttempt ?? run.run_attempt,
-              status: "completed",
-            },
-            ...(platform === "macOS"
-              ? [
-                  {
-                    conclusion: options.producerConclusion ?? "success",
-                    name: "Build macOS Periphery reports",
-                    run_attempt: options.producerAttempt ?? run.run_attempt,
-                    status: "completed",
-                  },
-                ]
-              : []),
+            job(`Detect ${platform} scan scope`, run.run_attempt, options.scopeJobConclusion),
+            job(
+              `Scan ${platform} dead code`,
+              options.scanAttempt ?? options.producerAttempt ?? run.run_attempt,
+              options.scanJobConclusion,
+            ),
+            ...producerJobs(options.producerAttempt ?? run.run_attempt, options.producerConclusion),
           ];
         },
         listWorkflowRunArtifacts(this: void, params: Record<string, unknown>) {
@@ -351,8 +323,7 @@ function expectUnavailableComment(bodies: string[]): void {
 }
 
 function expectNoWrite(result: Awaited<ReturnType<typeof runCommenter>>) {
-  expect(result.createdBodies).toEqual([]);
-  expect(result.updatedBodies).toEqual([]);
+  expect(result).toMatchObject({ createdBodies: [], updatedBodies: [] });
 }
 
 function makeZip(
