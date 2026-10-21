@@ -122,18 +122,13 @@ if (!isMainThread) {
         await setImmediate();
         // Against the old owner, keep the gate closed through the native destructor.
         await terminate.mock.calls[0]?.result;
-        assert.equal(activeSettled, false, "cancellation must retain native custody");
-        assert.equal(closeSettled, false, "pool close must retain native custody");
-        assert.equal(
-          terminate.mock.callCount(),
-          0,
-          "native initialization must not be interrupted",
+        assert.deepEqual(
+          [activeSettled, closeSettled, successorStarted],
+          [false, false, false],
+          "cancellation must retain native custody and the active worker slot",
         );
-        assert.equal(successorStarted, false, "the active section must retain its worker slot");
+        assert.equal(terminate.mock.callCount(), 0, "native init must not be interrupted");
         assert.equal(pool.getSnapshot().pendingTasks, ending === "close" ? 1 : 2);
-      }
-
-      if (!outsideNative) {
         Atomics.store(gate, 1, 1);
         Atomics.notify(gate, 1);
       }
