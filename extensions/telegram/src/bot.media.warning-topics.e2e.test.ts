@@ -140,66 +140,54 @@ function configureForum(requireMention: boolean) {
 describe("telegram inbound media", () => {
   it("captures pin and venue location payload fields", async () => {
     const { handler, replySpy } = await createBotHandler();
-
+    const location = { latitude: 48.858844, longitude: 2.294351 };
     const cases = [
       {
         updateId: 7005,
         message: {
-          chat: { id: 42, type: "private" as const },
-          message_id: 5,
           caption: "Meet here",
-          date: 1736380800,
-          location: { latitude: 48.858844, longitude: 2.294351, horizontal_accuracy: 12 },
+          location: { ...location, horizontal_accuracy: 12 },
         },
-        assert: (payload: Record<string, unknown>) => {
-          expect(payload.Body).toContain("Meet here");
-          expect(payload.Body).toContain("48.858844");
-          expect(payload).toMatchObject({
-            LocationLat: 48.858844,
-            LocationLon: 2.294351,
-            LocationSource: "pin",
-            LocationIsLive: false,
-            ProviderUpdateId: "7005",
-            ProviderUpdateKind: "message",
-            ProviderMessageTimestamp: 1736380800000,
-          });
+        expected: {
+          Body: expect.stringContaining("Meet here"),
+          LocationLat: 48.858844,
+          LocationLon: 2.294351,
+          LocationSource: "pin",
+          LocationIsLive: false,
+          ProviderUpdateId: "7005",
+          ProviderUpdateKind: "message",
+          ProviderMessageTimestamp: 1736380800000,
         },
       },
       {
         updateId: 7006,
         message: {
-          chat: { id: 42, type: "private" as const },
-          message_id: 6,
-          date: 1736380800,
-          venue: {
-            title: "Eiffel Tower",
-            address: "Champ de Mars, Paris",
-            location: { latitude: 48.858844, longitude: 2.294351 },
-          },
+          venue: { title: "Eiffel Tower", address: "Champ de Mars, Paris", location },
         },
-        assert: (payload: Record<string, unknown>) => {
-          expect(payload.Body).toContain("48.858844");
-          expect(payload).toMatchObject({
-            LocationName: "Eiffel Tower",
-            LocationAddress: "Champ de Mars, Paris",
-            LocationSource: "place",
-          });
+        expected: {
+          LocationName: "Eiffel Tower",
+          LocationAddress: "Champ de Mars, Paris",
+          LocationSource: "place",
         },
       },
     ] as const;
-
     for (const testCase of cases) {
       replySpy.mockClear();
+      const message = {
+        chat: { id: 42, type: "private" },
+        date: 1736380800,
+        message_id: testCase.updateId - 7000,
+        ...testCase.message,
+      };
       await handler({
-        update: { update_id: testCase.updateId, message: testCase.message },
-        message: testCase.message,
+        update: { update_id: testCase.updateId, message },
+        message,
         me: { username: "openclaw_bot" },
         getFile: async () => ({ file_path: "unused" }),
       });
-
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replyPayload();
-      testCase.assert(payload);
+      expect(replyPayload()).toMatchObject(testCase.expected);
+      expect(replyPayload().Body).toContain("48.858844");
     }
   });
 });
@@ -343,44 +331,10 @@ describe("telegram media groups", () => {
     MEDIA_GROUP_TEST_TIMEOUT_MS,
   );
 
-  it(
-    "buffers separate media groups independently",
-    async () => {
-      const { handler, replySpy, runtimeError } = await createBotHandler();
-      const fetchSpy = mockTelegramPngDownload();
-      const timers = holdMediaGroup();
-
-      try {
-        await Promise.all(
-          ["A", "B"].map((name, index) => {
-            const fileId = `photo${name}1`;
-            return handler(
-              mediaContext(111 + index, fileId, `photos/${fileId}.jpg`, {
-                caption: `Album ${name}`,
-                date: 1736380800 + index,
-                media_group_id: `album${name}`,
-                filePath: `photos/${fileId}.jpg`,
-              }),
-            );
-          }),
-        );
-
-        expect(replySpy).not.toHaveBeenCalled();
-        await timers.flush(2);
-        expect(replySpy).toHaveBeenCalledTimes(2);
-        expect(runtimeError).not.toHaveBeenCalled();
-      } finally {
-        timers.restore();
-        fetchSpy.mockRestore();
-      }
-    },
-    MEDIA_GROUP_TEST_TIMEOUT_MS,
-  );
-  it(
-    "buffers same-id forum topic media groups independently",
-    async () => {
-      const restoreConfig = configureForum(false);
-
+  it.each([false, true])(
+    "buffers media groups independently (same-id forum topics=%s)",
+    async (forum) => {
+      const restoreConfig = forum ? configureForum(false) : () => {};
       const { handler, replySpy, runtimeError } = await createBotHandler();
       const fetchSpy = mockTelegramPngDownload();
       const timers = holdMediaGroup();
@@ -390,17 +344,21 @@ describe("telegram media groups", () => {
           [101, 202].map((threadId, index) =>
             handler(
               mediaContext(131 + index, `topic${index + 1}photo`, `photos/topic${index + 1}.jpg`, {
-                chat: { id: -10042, type: "supergroup", is_forum: true },
-                message_thread_id: threadId,
-                is_topic_message: true,
+                ...(forum
+                  ? {
+                      chat: { id: -10042, type: "supergroup", is_forum: true },
+                      message_thread_id: threadId,
+                      is_topic_message: true,
+                    }
+                  : {}),
                 caption: `@openclaw_bot Topic ${index === 0 ? "one" : "two"} album`,
                 date: 1736380800 + index,
-                media_group_id: "album-shared-by-telegram",
+                media_group_id: forum ? "album-shared-by-telegram" : `album${index}`,
               }),
             ),
           ),
         );
-
+        expect(replySpy).not.toHaveBeenCalled();
         await timers.flush(2);
         expect(replySpy).toHaveBeenCalledTimes(2);
         const firstPayload = replyPayload(0);

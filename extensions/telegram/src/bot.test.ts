@@ -1208,105 +1208,64 @@ describe("createTelegramBot", () => {
   });
 
   it.each([
-    {
-      name: "renders canonical truth on a losing typed surface",
-      approvalId: "plugin:id-owned-by-exec",
-      callbackId: "cbq-typed-approval-loser",
-      messageId: 24,
-      applied: false,
-      outcome: { status: "allowed", decision: "allow-once" },
-      commandText: "echo canonical",
-      telegram: { capabilities: ["vision"] },
-      terminalTitle: "ℹ️ Approval already resolved",
-      terminalResult: "Recorded result: Allowed once",
-      editFails: false,
-    },
-    {
-      name: "sends a canonical receipt when the clicked message cannot be edited",
-      approvalId: "fallback-receipt-id",
-      callbackId: "cbq-terminal-edit-fallback",
-      messageId: 25,
-      applied: true,
-      outcome: { status: "denied", decision: "deny" },
-      commandText: "echo denied",
-      telegram: {},
-      terminalTitle: "✅ Approval resolved here",
-      terminalResult: "Recorded result: Denied",
-      editFails: true,
-    },
-  ] satisfies Array<{
-    name: string;
-    approvalId: string;
-    callbackId: string;
-    messageId: number;
-    applied: boolean;
-    outcome: { status: "allowed"; decision: "allow-once" } | { status: "denied"; decision: "deny" };
-    commandText: string;
-    telegram: TelegramChannelConfig;
-    terminalTitle: string;
-    terminalResult: string;
-    editFails: boolean;
-  }>)(
-    "$name",
-    async ({
+    ["renders canonical truth on a losing typed surface", false],
+    ["sends a canonical receipt when the clicked message cannot be edited", true],
+  ] as const)("%s", async (_name, editFails) => {
+    const approvalId = editFails ? "fallback-receipt-id" : "plugin:id-owned-by-exec";
+    const callbackId = editFails ? "cbq-terminal-edit-fallback" : "cbq-typed-approval-loser";
+    const messageId = editFails ? 25 : 24;
+    const commandText = editFails ? "echo denied" : "echo canonical";
+    const outcome = editFails
+      ? ({ status: "denied", decision: "deny" } as const)
+      : ({ status: "allowed", decision: "allow-once" } as const);
+    if (editFails) {
+      editMessageTextSpy.mockRejectedValueOnce(new Error("Bad Request: message can't be edited"));
+    }
+    resolveExecApprovalSpy.mockResolvedValueOnce(
+      approvalResolution(approvalId, editFails, outcome, commandText),
+    );
+    mockTelegramConfig(
+      makeExecApprovalTelegramConfig(editFails ? {} : { capabilities: ["vision"] }),
+    );
+    const callbackHandler = await createCallbackHandler();
+    const callbackData = buildTelegramApprovalCallbackData({
+      type: "approval",
       approvalId,
-      callbackId,
-      messageId,
-      applied,
-      outcome,
+      approvalKind: "exec",
+      decision: "deny",
+    });
+    if (!callbackData) {
+      throw new Error("Expected typed approval callback data");
+    }
+    await callbackHandler(
+      makeCallbackContext(callbackId, callbackData, {
+        message_id: messageId,
+        text: "Approval required.",
+      }),
+    );
+    expect(execApprovalCall()).toMatchObject({
+      approvalId,
+      approvalKind: "exec",
+      decision: "deny",
+      senderId: "9",
+    });
+    const terminalText = [
+      editFails ? "✅ Approval resolved here" : "ℹ️ Approval already resolved",
+      `Recorded result: ${editFails ? "Denied" : "Allowed once"}`,
+      `ID: ${approvalId}`,
+      "",
+      "Command:",
       commandText,
-      telegram,
-      terminalTitle,
-      terminalResult,
-      editFails,
-    }) => {
-      if (editFails) {
-        editMessageTextSpy.mockRejectedValueOnce(new Error("Bad Request: message can't be edited"));
-      }
-      resolveExecApprovalSpy.mockResolvedValueOnce(
-        approvalResolution(approvalId, applied, outcome, commandText),
-      );
-      mockTelegramConfig(makeExecApprovalTelegramConfig(telegram));
-      const callbackHandler = await createCallbackHandler();
-      const callbackData = buildTelegramApprovalCallbackData({
-        type: "approval",
-        approvalId,
-        approvalKind: "exec",
-        decision: "deny",
-      });
-      if (!callbackData) {
-        throw new Error("Expected typed approval callback data");
-      }
-      await callbackHandler(
-        makeCallbackContext(callbackId, callbackData, {
-          message_id: messageId,
-          text: "Approval required.",
-        }),
-      );
-      expect(execApprovalCall()).toMatchObject({
-        approvalId,
-        approvalKind: "exec",
-        decision: "deny",
-        senderId: "9",
-      });
-      const terminalText = [
-        terminalTitle,
-        terminalResult,
-        `ID: ${approvalId}`,
-        "",
-        "Command:",
-        commandText,
-      ].join("\n");
-      expect(editMessageTextSpy).toHaveBeenCalledWith(1234, messageId, terminalText, emptyKeyboard);
-      if (editFails) {
-        expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, messageId, emptyKeyboard);
-        expect(sendMessageSpy).toHaveBeenCalledWith(1234, terminalText, undefined);
-      } else {
-        expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
-      }
-      expect(answerCallbackQuerySpy).toHaveBeenCalledWith(callbackId);
-    },
-  );
+    ].join("\n");
+    expect(editMessageTextSpy).toHaveBeenCalledWith(1234, messageId, terminalText, emptyKeyboard);
+    if (editFails) {
+      expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, messageId, emptyKeyboard);
+      expect(sendMessageSpy).toHaveBeenCalledWith(1234, terminalText, undefined);
+    } else {
+      expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    }
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith(callbackId);
+  });
 
   it("consumes malformed callbacks in the reserved approval namespace", async () => {
     const pluginHandler = vi.fn(async () => ({ handled: true }));
@@ -1527,27 +1486,19 @@ describe("createTelegramBot", () => {
   );
 
   it.each([
-    {
-      name: "stale canonical convergence",
-      approvalId: "stale-retry-id",
-      decision: "deny",
-      callbackId: "cbq-stale-legacy-retry",
-      messageId: 27,
-      errorMessage: "gateway unavailable",
-      stale: true,
-    },
-    {
-      name: "legacy resolution without exposing error details",
-      approvalId: "138e9b8c",
-      decision: "allow-once",
-      callbackId: "cbq-approve-error",
-      messageId: 25,
-      errorMessage: "gateway secret detail",
-      stale: false,
-    },
-  ])(
-    "retries failed $name",
-    async ({ approvalId, decision, callbackId, messageId, errorMessage, stale }) => {
+    ["stale canonical convergence", "stale-retry-id", "deny", 27, "gateway unavailable", true],
+    [
+      "legacy resolution without exposing error details",
+      "138e9b8c",
+      "allow-once",
+      25,
+      "gateway secret detail",
+      false,
+    ],
+  ] as const)(
+    "retries failed %s",
+    async (_name, approvalId, decision, messageId, errorMessage, stale) => {
+      const callbackId = stale ? "cbq-stale-legacy-retry" : "cbq-approve-error";
       if (stale) {
         resolveExecApprovalSpy.mockRejectedValueOnce(resolvedApprovalError());
       }
