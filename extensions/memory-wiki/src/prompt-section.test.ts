@@ -1,5 +1,4 @@
 // Memory Wiki tests cover synchronous guidance and async compiled prompt preparation.
-import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -10,8 +9,6 @@ import type { OpenClawConfig } from "../api.js";
 import {
   activateMemoryWikiCompiledCacheOwner,
   configureMemoryWikiCompiledCacheStore,
-  writeMemoryWikiCompiledCache,
-  type MemoryWikiCompiledCacheSnapshot,
   type MemoryWikiCompiledDigestClaim,
   type MemoryWikiCompiledDigestPage,
 } from "./compiled-cache.js";
@@ -20,18 +17,16 @@ import {
   resolveMemoryWikiConfig,
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
-import {
-  appendMemoryWikiLog,
-  ensureMemoryWikiVaultGeneration,
-  hashMemoryWikiVaultSources,
-  loadMemoryWikiValidatedVaultIdentity,
-  loadMemoryWikiVaultIdentity,
-} from "./log.js";
+import { ensureMemoryWikiVaultGeneration } from "./log.js";
 import {
   createWikiPromptSectionBuilder,
   createWikiPromptSectionPreparer,
 } from "./prompt-section.js";
-import { createMemoryWikiTestHarness } from "./test-helpers.js";
+import {
+  createCompiledSnapshot,
+  createMemoryWikiTestHarness,
+  publishCompiledSnapshot,
+} from "./test-helpers.js";
 
 const { configureCompiledCacheStore } = createMemoryWikiTestHarness();
 let suiteRoot = "";
@@ -72,8 +67,9 @@ async function seedCompiledDigest(params: {
     params.config,
     await ensureMemoryWikiVaultGeneration(params.config.vault.path),
   );
-  const snapshot: MemoryWikiCompiledCacheSnapshot = {
-    digest: {
+  await publishCompiledSnapshot(
+    params.config,
+    createCompiledSnapshot({
       claimCount: params.claimCount,
       contradictionCount: params.contradictionCount ?? 0,
       pages: params.pages.map((page, index) => ({
@@ -91,55 +87,7 @@ async function seedCompiledDigest(params: {
           Object.assign({ status: "supported", freshnessLevel: "unknown" }, claim),
         ),
       })),
-    },
-    claims: [],
-    dashboards: {
-      importInsights: {
-        sourceType: "chatgpt",
-        totalItems: 0,
-        totalClusters: 0,
-        clusters: [],
-        truncated: false,
-      },
-      overview: {
-        totalItems: 0,
-        totalPages: 0,
-        pageCounts: { synthesis: 0, entity: 0, concept: 0, source: 0, report: 0 },
-        totalClaims: 0,
-        totalQuestions: 0,
-        totalContradictions: 0,
-        clusters: [],
-        truncated: false,
-      },
-    },
-  };
-  const publicationId = randomUUID();
-  const reservationId = randomUUID();
-  const parentPublicationId = (await loadMemoryWikiVaultIdentity(params.config.vault.path))
-    .compiledCachePublicationId;
-  await appendMemoryWikiLog(params.config.vault.path, {
-    type: "compile",
-    timestamp: "2026-07-17T00:00:00.000Z",
-    details: { compiledCacheReservationId: reservationId },
-  });
-  const sourceGeneration = hashMemoryWikiVaultSources([]);
-  await appendMemoryWikiLog(params.config.vault.path, {
-    type: "compile",
-    timestamp: "2026-07-17T00:00:00.000Z",
-    details: {
-      compiledCachePublicationId: publicationId,
-      compiledCacheParentPublicationId: parentPublicationId,
-      compiledCacheReservationId: reservationId,
-      compiledCacheSourceGeneration: sourceGeneration,
-    },
-  });
-  await writeMemoryWikiCompiledCache(
-    params.config,
-    snapshot,
-    publicationId,
-    parentPublicationId,
-    async () => {},
-    () => loadMemoryWikiValidatedVaultIdentity(params.config.vault.path),
+    }),
   );
 }
 

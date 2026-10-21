@@ -171,6 +171,11 @@ describe("memory-wiki cli", () => {
     await fs.writeFile(filePath, json.replace(assistantReply, reply), "utf8");
   }
 
+  async function createChatGptVault() {
+    const vault = await createCliVault({ initialize: true });
+    return { ...vault, exportDir: await createChatGptExport(vault.rootDir) };
+  }
+
   async function findImportedSourceFile(rootDir: string): Promise<string> {
     return expectDefined(
       (await fs.readdir(path.join(rootDir, "sources"))).find((entry) => entry !== "index.md"),
@@ -272,12 +277,9 @@ describe("memory-wiki cli", () => {
       "utf8",
     );
 
-    const program = createProgram(config);
-
-    await program.parseAsync(["wiki", "okf", "import", bundlePath, "--json"], { from: "user" });
-
-    const importOutput = String(stdoutWriteMock.mock.calls.at(-1)?.[0] ?? "");
-    const importResult = JSON.parse(importOutput) as {
+    const importResult = JSON.parse(
+      await runWiki(config, ["okf", "import", bundlePath, "--json"]),
+    ) as {
       importedCount: number;
       pagePaths: string[];
     };
@@ -288,11 +290,9 @@ describe("memory-wiki cli", () => {
       ]),
     );
 
-    stdoutWriteMock.mockClear();
-    await program.parseAsync(["wiki", "search", "completed order", "--json"], { from: "user" });
-
-    const searchOutput = String(stdoutWriteMock.mock.calls.at(-1)?.[0] ?? "");
-    const searchResults = JSON.parse(searchOutput) as Array<{ path: string; title: string }>;
+    const searchResults = JSON.parse(
+      await runWiki(config, ["search", "completed order", "--json"]),
+    ) as Array<{ path: string; title: string }>;
     expect(searchResults).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -517,8 +517,7 @@ describe("memory-wiki cli", () => {
   it.each([false, true])(
     "rejects malformed UTF-8 ChatGPT exports (envelope: %s)",
     async (envelope) => {
-      const { rootDir, config } = await createCliVault({ initialize: true });
-      const exportDir = await createChatGptExport(rootDir);
+      const { rootDir, config, exportDir } = await createChatGptVault();
       const exportPath = path.join(exportDir, "conversations.json");
       const conversations = JSON.parse(await fs.readFile(exportPath, "utf8")) as Array<{
         title: string;
@@ -548,8 +547,7 @@ describe("memory-wiki cli", () => {
   );
 
   it("imports ChatGPT exports with dry-run, apply, and rollback", async () => {
-    const { rootDir, config } = await createCliVault({ initialize: true });
-    const exportDir = await createChatGptExport(rootDir);
+    const { rootDir, config, exportDir } = await createChatGptVault();
 
     const dryRun = await runChatGptImport(config, exportDir, "--dry-run");
     expect(dryRun).toMatchObject({ dryRun: true, createdCount: 1 });
@@ -601,8 +599,7 @@ describe("memory-wiki cli", () => {
   );
 
   it("preserves a user save after compile before the import run record is written", async () => {
-    const { rootDir, config } = await createCliVault({ initialize: true });
-    const exportDir = await createChatGptExport(rootDir);
+    const { rootDir, config, exportDir } = await createChatGptVault();
     let pagePath = "";
     let edited = "";
     afterCompileHook.run = async () => {
@@ -631,8 +628,7 @@ describe("memory-wiki cli", () => {
   });
 
   it("reports the rollback command when compilation fails after a ChatGPT import", async () => {
-    const { rootDir, config } = await createCliVault({ initialize: true });
-    const exportDir = await createChatGptExport(rootDir);
+    const { rootDir, config, exportDir } = await createChatGptVault();
     const firstApplied = await runChatGptImport(config, exportDir);
     const firstRunId = expectDefined(firstApplied.runId, "first ChatGPT import runId");
     const sourceFile = await findImportedSourceFile(rootDir);
@@ -666,8 +662,7 @@ describe("memory-wiki cli", () => {
   });
 
   it("preserves a page recreated between the rollback move-aside and the snapshot restore", async () => {
-    const { rootDir, config } = await createCliVault({ initialize: true });
-    const exportDir = await createChatGptExport(rootDir);
+    const { rootDir, config, exportDir } = await createChatGptVault();
     await runChatGptImport(config, exportDir);
     const sourceFile = await findImportedSourceFile(rootDir);
     const pagePath = path.join(rootDir, "sources", sourceFile);
@@ -722,8 +717,7 @@ describe("memory-wiki cli", () => {
   });
 
   it("imports ChatGPT exports with out-of-range Unix timestamps", async () => {
-    const { rootDir, config } = await createCliVault({ initialize: true });
-    const exportDir = await createChatGptExport(rootDir);
+    const { rootDir, config, exportDir } = await createChatGptVault();
     const conversationsPath = path.join(exportDir, "conversations.json");
     const conversations = JSON.parse(await fs.readFile(conversationsPath, "utf8")) as Array<
       Record<string, unknown>

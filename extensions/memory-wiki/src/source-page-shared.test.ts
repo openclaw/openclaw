@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { buildSourcePage } from "./source-page.test-helpers.js";
+import { createMemoryWikiTestHarness } from "./test-helpers.js";
+
+const { createTempDir } = createMemoryWikiTestHarness();
 
 const { fsRootMock } = vi.hoisted(() => ({ fsRootMock: vi.fn() }));
 
@@ -45,13 +47,12 @@ describe("writeImportedSourcePage", () => {
   }
 
   beforeEach(async () => {
-    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-source-page-"));
+    suiteRoot = await createTempDir("memory-wiki-source-page-");
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.useRealTimers();
     fsRootMock.mockClear();
-    await fs.rm(suiteRoot, { recursive: true, force: true });
   });
 
   it("falls back when the source mtime is outside the Date range", async () => {
@@ -109,22 +110,12 @@ describe("writeImportedSourcePage", () => {
   });
 
   it("recreates an unchanged source entry when its page is missing", async () => {
-    const params = importParams({
+    const params = await createPage("restored body", {
       sourceUpdatedAtMs: 123,
-      sourceSize: 13,
       buildRendered: (raw) => raw,
     });
-    const { group, pagePath, sourcePath, sourceUpdatedAtMs, sourceSize, renderFingerprint } =
-      params;
-    await fs.writeFile(sourcePath, "restored body", "utf8");
-    params.state.entries[params.syncKey] = {
-      group,
-      pagePath,
-      sourcePath,
-      sourceUpdatedAtMs,
-      sourceSize,
-      renderFingerprint,
-    };
+    const { pagePath } = params;
+    await fs.rm(path.join(suiteRoot, pagePath));
     fsRootMock.mockClear();
     const result = await writeImportedSourcePage(params);
 

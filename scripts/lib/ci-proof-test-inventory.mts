@@ -659,7 +659,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/memory-wiki/src/chatgpt-import.test.ts",
   "extensions/memory-wiki/src/cli.test.ts",
   "extensions/memory-wiki/src/ingest.test.ts",
-  "extensions/memory-wiki/src/source-sync-malformed-notes.test.ts",
   "extensions/memory-wiki/src/source-sync-state.test.ts",
   "extensions/memory-wiki/src/wiki-notes-read-retry.test.ts",
   "extensions/migrate-hermes/config.test.ts",

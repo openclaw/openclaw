@@ -99,18 +99,22 @@ describe("toWikiPageSummary", () => {
         privacyTier: "local-private",
       },
     ];
+    const metadata = {
+      entityType: "person",
+      canonicalId: "maintainer.brad-groux",
+      aliases: ["brad", "bgroux"],
+      privacyTier: "local-private",
+      bestUsedFor: ["Microsoft ecosystem routing"],
+      notEnoughFor: ["legal approval"],
+      lastRefreshedAt: "2026-04-29T00:00:00.000Z",
+      relationships,
+    };
     const raw = renderWikiMarkdown({
       frontmatter: {
+        ...metadata,
         pageType: "entity",
-        entityType: "person",
         id: "entity.brad",
         title: "Brad Groux",
-        canonicalId: "maintainer.brad-groux",
-        aliases: ["brad", "bgroux"],
-        privacyTier: "local-private",
-        bestUsedFor: ["Microsoft ecosystem routing"],
-        notEnoughFor: ["legal approval"],
-        lastRefreshedAt: "2026-04-29T00:00:00.000Z",
         personCard: {
           handles: ["@bgroux"],
           email: "brad@example.com",
@@ -118,7 +122,6 @@ describe("toWikiPageSummary", () => {
           confidence: 0.8,
           privacyTier: "confirm-before-use",
         },
-        relationships,
         claims: [
           {
             id: "claim.brad.teams",
@@ -137,13 +140,7 @@ describe("toWikiPageSummary", () => {
       raw,
     });
     expect(summary).toMatchObject({
-      entityType: "person",
-      canonicalId: "maintainer.brad-groux",
-      aliases: ["brad", "bgroux"],
-      privacyTier: "local-private",
-      bestUsedFor: ["Microsoft ecosystem routing"],
-      notEnoughFor: ["legal approval"],
-      lastRefreshedAt: "2026-04-29T00:00:00.000Z",
+      ...metadata,
       personCard: expect.objectContaining({
         handles: ["@bgroux"],
         emails: ["brad@example.com"],

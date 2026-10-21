@@ -424,7 +424,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/memory-wiki/doctor-contract-api.test.ts",
   "extensions/memory-wiki/src/chatgpt-import.test.ts",
   "extensions/memory-wiki/src/compiled-cache.integration.test.ts",
-  "extensions/memory-wiki/src/source-sync-malformed-notes.test.ts",
   "extensions/memory-wiki/src/source-sync-state.test.ts",
   "extensions/msteams/doctor-contract-api.test.ts",
   "extensions/msteams/src/conversation-store-state.test.ts",

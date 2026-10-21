@@ -1,15 +1,10 @@
-// Memory Wiki tests cover the related-pages block index used by compile.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
 import * as markdown from "./markdown.js";
-import {
-  renderWikiMarkdown,
-  WIKI_RELATED_END_MARKER,
-  WIKI_RELATED_START_MARKER,
-} from "./markdown.js";
+import { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
@@ -27,21 +22,27 @@ type PageSpec = {
   links?: string[];
 };
 
-async function writePages(rootDir: string, pages: PageSpec[]) {
+function pageSpec(
+  file: string,
+  id: string,
+  title: string,
+  sourceIds?: string[],
+  links: string[] = [],
+): PageSpec {
+  return { path: file, id, title, pageType: id.slice(0, id.indexOf(".")), sourceIds, links };
+}
+
+async function writePages(vault: Awaited<ReturnType<typeof createVault>>, pages: PageSpec[]) {
   for (const page of pages) {
-    const target = path.join(rootDir, page.path);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(
-      target,
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: page.pageType,
-          ...(page.id ? { id: page.id } : {}),
-          title: page.title,
-          ...(page.sourceIds ? { sourceIds: page.sourceIds } : {}),
-        },
-        body: `# ${page.title}\n\n${(page.links ?? []).map((link) => `See [[${link}]].`).join("\n")}\n`,
-      }),
+    await vault.page(
+      page.path,
+      {
+        pageType: page.pageType,
+        ...(page.id ? { id: page.id } : {}),
+        title: page.title,
+        ...(page.sourceIds ? { sourceIds: page.sourceIds } : {}),
+      },
+      `# ${page.title}\n\n${(page.links ?? []).map((link) => `See [[${link}]].`).join("\n")}\n`,
     );
   }
 }
@@ -55,10 +56,11 @@ async function readRelatedBlock(rootDir: string, relativePath: string): Promise<
 
 describe("compile related blocks", () => {
   it("resolves sources, references and related pages from the vault-wide index", async () => {
-    const { rootDir, config } = await createVault({
+    const vault = await createVault({
       initialize: true,
       config: { vault: { renderMode: "obsidian" } },
     });
+    const { rootDir, config } = vault;
     const hubPages: PageSpec[] = Array.from({ length: 26 }, (_, index) => ({
       path: `concepts/hub-user-${String(index).padStart(2, "0")}.md`,
       id: `concept.hub-user-${index}`,
@@ -74,55 +76,27 @@ describe("compile related blocks", () => {
       pageType: "concept",
       sourceIds: ["source.edge"],
     }));
-    await writePages(rootDir, [
-      { path: "sources/alpha.md", id: "source.alpha", title: "Alpha", pageType: "source" },
-      { path: "sources/beta.md", id: "source.beta", title: "Beta", pageType: "source" },
-      { path: "sources/hub.md", id: "source.hub", title: "Hub", pageType: "source" },
-      {
-        path: "concepts/one.md",
-        id: "concept.one",
-        title: "Concept One",
-        pageType: "concept",
-        sourceIds: ["source.alpha"],
-        links: ["concepts/two"],
-      },
-      {
-        path: "concepts/two.md",
-        id: "concept.two",
-        title: "Concept Two",
-        pageType: "concept",
-        sourceIds: ["source.alpha", "source.alpha", "source.beta"],
-      },
-      {
-        path: "entities/ent.md",
-        id: "entity.ent",
-        title: "Entity",
-        pageType: "entity",
-        sourceIds: ["source.beta"],
-        links: ["Concept One"],
-      },
-      {
-        path: "syntheses/synth.md",
-        id: "synthesis.synth",
-        title: "Synth",
-        pageType: "synthesis",
-        sourceIds: ["source.alpha", "concept.one"],
-      },
-      {
-        path: "concepts/dup-a.md",
-        id: "concept.dup",
-        title: "Dup A",
-        pageType: "concept",
-        links: ["concepts/lonely"],
-      },
-      {
-        path: "concepts/dup-b.md",
-        id: "concept.dup",
-        title: "Dup B",
-        pageType: "concept",
-        links: ["concepts/dup-a", "concepts/lonely"],
-      },
-      { path: "concepts/lonely.md", id: "concept.lonely", title: "Lonely", pageType: "concept" },
+    await writePages(vault, [
+      pageSpec("sources/alpha.md", "source.alpha", "Alpha"),
+      pageSpec("sources/beta.md", "source.beta", "Beta"),
+      pageSpec("sources/hub.md", "source.hub", "Hub"),
+      pageSpec("concepts/one.md", "concept.one", "Concept One", ["source.alpha"], ["concepts/two"]),
+      pageSpec("concepts/two.md", "concept.two", "Concept Two", [
+        "source.alpha",
+        "source.alpha",
+        "source.beta",
+      ]),
+      pageSpec("entities/ent.md", "entity.ent", "Entity", ["source.beta"], ["Concept One"]),
+      pageSpec("syntheses/synth.md", "synthesis.synth", "Synth", ["source.alpha", "concept.one"]),
+      pageSpec("concepts/dup-a.md", "concept.dup", "Dup A", [], ["concepts/lonely"]),
+      pageSpec(
+        "concepts/dup-b.md",
+        "concept.dup",
+        "Dup B",
+        [],
+        ["concepts/dup-a", "concepts/lonely"],
+      ),
+      pageSpec("concepts/lonely.md", "concept.lonely", "Lonely"),
       ...hubPages,
       ...edgePages,
     ]);
@@ -150,10 +124,11 @@ describe("compile related blocks", () => {
   });
 
   it("builds related blocks from indexes instead of rescanning every page per page", async () => {
-    const { rootDir, config } = await createVault({
+    const vault = await createVault({
       initialize: true,
       config: { vault: { renderMode: "obsidian" } },
     });
+    const { rootDir, config } = vault;
     const pageCount = 120;
     const sourceCount = 36;
     const specs: PageSpec[] = [];
@@ -165,11 +140,11 @@ describe("compile related blocks", () => {
         pageType: "source",
       });
     }
-    // Path, filename-only, heading and block links all resolve to the same backlink.
+    // Path, filename-only, aliased heading and block links resolve to the same backlink.
     const linkForms = [
       ["concepts/", ""],
       ["", ""],
-      ["concepts/", "#Heading"],
+      ["concepts/", "#Heading|Display"],
       ["", "#^block"],
     ] as const;
     for (let index = 0; index < pageCount - sourceCount; index++) {
@@ -186,7 +161,7 @@ describe("compile related blocks", () => {
         links: [`${prefix}p${(index * 7 + 3) % (pageCount - sourceCount)}${suffix}`],
       });
     }
-    await writePages(rootDir, specs);
+    await writePages(vault, specs);
 
     // Count how often compile touches each page's relation lists; a per-page rescan of
     // the whole vault shows up as quadratic growth here, independent of timing.
