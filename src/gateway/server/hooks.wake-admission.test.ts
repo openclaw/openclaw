@@ -230,9 +230,14 @@ describe("authenticated immediate hook wake admission", () => {
     },
   );
 
-  it.each(["capture", "acceptance"] as const)(
-    "rejects a config replacement during %s without recapturing the destination",
-    async (phase) => {
+  it.each([
+    ["now", "capture"],
+    ["now", "acceptance"],
+    ["next-heartbeat", "capture"],
+    ["next-heartbeat", "acceptance"],
+  ] as const)(
+    "rejects a config replacement during %s %s without recapturing the destination",
+    async (mode, phase) => {
       const reached = createDeferred();
       const release = createDeferred();
       if (phase === "capture") {
@@ -241,15 +246,22 @@ describe("authenticated immediate hook wake admission", () => {
           await release.promise;
           return target;
         });
-      } else {
+      } else if (mode === "now") {
         mocks.enqueue.mockImplementationOnce(() => {
           reached.resolve();
           return receipt({ accepted: release.promise.then(() => ({ ok: true })) });
         });
+      } else {
+        mocks.defer.mockImplementationOnce(async ({ commitGuard }) => {
+          reached.resolve();
+          await release.promise;
+          commitGuard();
+          return { ok: true, eventOutcome: "queued" };
+        });
       }
       const { handler, revoke } = fixture();
-      const responsePromise = post(handler);
-      await reached.promise;
+      const responsePromise = post(handler, mode);
+      await awaitGateBeforeSettlement(reached.promise, responsePromise, "Admission did not start");
       revoke();
       release.resolve();
       const response = await responsePromise;
@@ -259,7 +271,10 @@ describe("authenticated immediate hook wake admission", () => {
       });
       expect(response.end).toHaveBeenCalledOnce();
       expect(mocks.capture).toHaveBeenCalledOnce();
-      expect(mocks.enqueue).toHaveBeenCalledTimes(phase === "capture" ? 0 : 1);
+      expect(mocks.enqueue).toHaveBeenCalledTimes(mode === "now" && phase === "acceptance" ? 1 : 0);
+      if (mode === "next-heartbeat") {
+        expect(mocks.defer).toHaveBeenCalledTimes(phase === "capture" ? 0 : 1);
+      }
       expect(peekSystemEvents(sessionKey)).toEqual([]);
     },
   );
@@ -523,41 +538,4 @@ describe("authenticated immediate hook wake admission", () => {
     expect(peekSystemEvents(sessionKey)).toEqual([]);
     expect(mocks.enqueue).not.toHaveBeenCalled();
   });
-
-  it.each(["capture", "deferred commit"] as const)(
-    "rejects configuration replacement during deferred %s before accepting a notice",
-    async (phase) => {
-      const reached = createDeferred();
-      const release = createDeferred();
-      if (phase === "capture") {
-        mocks.capture.mockImplementationOnce(async () => {
-          reached.resolve();
-          await release.promise;
-          return target;
-        });
-      } else {
-        mocks.defer.mockImplementationOnce(async ({ commitGuard }) => {
-          reached.resolve();
-          await release.promise;
-          commitGuard();
-          return { ok: true, eventOutcome: "queued" };
-        });
-      }
-      const { handler, revoke } = fixture();
-      const pending = post(handler, "next-heartbeat");
-      await awaitGateBeforeSettlement(reached.promise, pending, "Deferred admission did not start");
-      revoke();
-      release.resolve();
-      const response = await pending;
-      expect(response.status).toBe(409);
-      expect(JSON.parse(response.body)).toMatchObject({
-        error: "hook configuration changed; retry request",
-      });
-      expect(response.end).toHaveBeenCalledOnce();
-      expect(mocks.capture).toHaveBeenCalledOnce();
-      expect(mocks.defer).toHaveBeenCalledTimes(phase === "capture" ? 0 : 1);
-      expect(mocks.enqueue).not.toHaveBeenCalled();
-      expect(peekSystemEvents(sessionKey)).toEqual([]);
-    },
-  );
 });

@@ -29,16 +29,6 @@ function snapshotWith(
   return { channels, channelAccounts };
 }
 
-function createManager(snapshot: ChannelRuntimeSnapshot) {
-  return {
-    getRuntimeSnapshot: vi.fn(() => snapshot),
-    getAutostartSuppression: vi.fn<ChannelManager["getAutostartSuppression"]>(() => null),
-    isAmbientAutostartSuppressed: vi.fn<ChannelManager["isAmbientAutostartSuppressed"]>(
-      () => false,
-    ),
-  };
-}
-
 type ReadinessOptions = Omit<
   Parameters<typeof createReadinessChecker>[0],
   "channelManager" | "startedAt"
@@ -51,7 +41,14 @@ function createReadinessHarness({
   startedAgoMs?: number;
   accounts?: Record<string, Partial<ChannelAccountSnapshot>>;
 }) {
-  const manager = createManager(snapshotWith(accounts));
+  const snapshot = snapshotWith(accounts);
+  const manager = {
+    getRuntimeSnapshot: vi.fn(() => snapshot),
+    getAutostartSuppression: vi.fn<ChannelManager["getAutostartSuppression"]>(() => null),
+    isAmbientAutostartSuppressed: vi.fn<ChannelManager["isAmbientAutostartSuppressed"]>(
+      () => false,
+    ),
+  };
   return {
     manager,
     readiness: createReadinessChecker({
@@ -183,17 +180,6 @@ describe("createReadinessChecker", () => {
   ])(
     "reports warming, failed, and recovered core agents (skip channels: $skipChannels, channel failed: $channelFailed)",
     ({ skipChannels, channelFailed }) => {
-      const pending = createAgentDatabaseInspectionRefusal({
-        agentId: "main",
-        paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
-        reason: "Startup inspection and preparation are still running.",
-        pending: true,
-      });
-      const refusal = createAgentDatabaseInspectionRefusal({
-        agentId: "main",
-        paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
-        reason: "Session identities require migration before this agent can run.",
-      });
       let refusals: AgentDatabaseAdmissionRefusal[] = [];
       const { readiness } = createReadinessHarness({
         accounts: channelFailed ? { discord: stoppedAccount({ connected: false }) } : {},
@@ -205,17 +191,22 @@ describe("createReadinessChecker", () => {
         : readySnapshot();
       expect(readiness()).toEqual(channelReadiness);
 
-      refusals = [pending];
-      expect(readiness()).toEqual({
-        ...failingSnapshot(["agent-database:main"]),
-        agentDatabases: [pending],
-      });
-
-      refusals = [refusal];
-      expect(readiness()).toEqual({
-        ...failingSnapshot(["agent-database:main"]),
-        agentDatabases: [refusal],
-      });
+      for (const pending of [true, false]) {
+        refusals = [
+          createAgentDatabaseInspectionRefusal({
+            agentId: "main",
+            paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
+            reason: pending
+              ? "Startup inspection and preparation are still running."
+              : "Session identities require migration before this agent can run.",
+            ...(pending ? { pending } : {}),
+          }),
+        ];
+        expect(readiness()).toEqual({
+          ...failingSnapshot(["agent-database:main"]),
+          agentDatabases: refusals,
+        });
+      }
 
       refusals = [];
       expect(readiness()).toEqual(channelReadiness);
@@ -261,28 +252,21 @@ describe("createReadinessChecker", () => {
     },
   );
 
-  it("keeps a dead-ingress channel ready while its restart backoff is still pending", () => {
-    const startedAt = Date.now() - FIVE_MIN_MS;
+  it.each([
+    { name: "dead ingress in restart backoff", running: false, ready: true },
+    { name: "dead ingress while running", running: true, ready: false },
+  ])("checks $name independently of transport connectivity", ({ running, ready }) => {
     const { readiness } = discordHarness({
-      running: false,
+      running,
       restartPending: true,
       ingressUnavailable: true,
       reconnectAttempts: 3,
-      lastStartAt: startedAt - 30_000,
+      lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
       lastStopAt: Date.now() - 5_000,
     });
-    expect(readiness()).toEqual(readySnapshot());
-  });
-
-  it("fails readiness for a running channel whose transport is up but ingress is dead", () => {
-    const { readiness } = discordHarness({
-      running: true,
-      connected: true,
-      restartPending: true,
-      ingressUnavailable: true,
-      lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
-    });
-    expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS, true));
+    expect(readiness()).toEqual(
+      ready ? readySnapshot() : failingSnapshot(["discord"], FIVE_MIN_MS, true),
+    );
   });
 
   it("treats stale-socket channels as ready to avoid pulling healthy idle pods", () => {
