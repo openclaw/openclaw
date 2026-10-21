@@ -738,6 +738,7 @@ it.for(["transport", "agent", "context-overflow"] as const)(
             return {
               payloads: [],
               meta: {
+                durationMs: 1,
                 error: {
                   kind: "context_overflow",
                   message:
