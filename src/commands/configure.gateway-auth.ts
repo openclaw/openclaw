@@ -1,5 +1,6 @@
 import { resolveMutableAgentEntry } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   normalizeAgentModelRefForConfig,
@@ -224,6 +225,9 @@ export async function promptAuthConfig(
   const modelWriteTarget = options?.modelWriteTarget ?? "agent";
   // Pickers project an agent's model state over defaults; shared setup must start from defaults.
   const pickerAgentId = modelWriteTarget === "agent" ? target.agentId : undefined;
+  // Shared defaults need credentials in the store every agent inherits, not the setup agent's.
+  const credentialAgentDir =
+    modelWriteTarget === "agent" ? target.agentDir : resolveSharedMainAuthAgentDir();
   let next = cfg;
   let authChoice = "skip";
   let preferredProvider: string | undefined;
@@ -286,7 +290,7 @@ export async function promptAuthConfig(
       prompter,
       runtime,
       agentId: target.agentId,
-      agentDir: target.agentDir,
+      agentDir: credentialAgentDir,
       setDefaultModel: false,
       preserveExistingDefaultModel: true,
     });

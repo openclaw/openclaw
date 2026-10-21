@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -423,6 +424,22 @@ describe("promptAuthConfig", () => {
     const pickerScope = { agentId: undefined, agentDir: target.agentDir };
     expect(mocks.defaultModel.mock.calls[0]?.[0]).toMatchObject(pickerScope);
     expect(promptModelAllowlistOptions()).toMatchObject(pickerScope);
+  });
+
+  it("stores shared-default credentials in the store every agent inherits", async () => {
+    const config = agentConfig({}, { primary: "openai/gpt-5.4" });
+    mocks.authChoice.mockResolvedValue("provider-plugin:configure-provider:api-key");
+    mocks.applyAuth.mockResolvedValue({ config });
+    mocks.allowlist.mockResolvedValue({ models: undefined });
+
+    await promptAuthConfig(config, makeRuntime(), noopPrompter, target, {
+      modelWriteTarget: "defaults",
+    });
+
+    expect(mocks.applyAuth.mock.calls[0]?.[0]).toMatchObject({
+      agentId: target.agentId,
+      agentDir: resolveSharedMainAuthAgentDir(),
+    });
   });
 
   it("rewrites a shared legacy Codex primary without touching an agent policy", async () => {
