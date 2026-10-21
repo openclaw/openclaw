@@ -127,25 +127,9 @@ const makeDeps = (): CliDeps => ({
   imessage: vi.fn(),
 });
 
-function createTelegramSecretRawConfig() {
-  return {
-    channels: {
-      telegram: {
-        token: { $secret: "vault://telegram/token" }, // pragma: allowlist secret
-      },
-    },
-  };
-}
-
-function createTelegramResolvedTokenConfig(token: string) {
-  return {
-    channels: {
-      telegram: {
-        token,
-      },
-    },
-  };
-}
+const telegramConfig = (token: string | { $secret: string }) => ({
+  channels: { telegram: { token } },
+});
 
 function mockResolvedCommandConfig(params: {
   rawConfig: Record<string, unknown>;
@@ -276,26 +260,22 @@ describe("messageCommand", () => {
   });
 
   it("threads resolved SecretRef config into message actions", async () => {
-    const rawConfig = createTelegramSecretRawConfig();
-    const resolvedConfig = createTelegramResolvedTokenConfig("12345:resolved-token");
-    mockResolvedCommandConfig({
-      rawConfig: rawConfig as unknown as Record<string, unknown>,
-      resolvedConfig: resolvedConfig as unknown as Record<string, unknown>,
-    });
+    const rawConfig = telegramConfig({ $secret: "vault://telegram/token" }); // pragma: allowlist secret
+    const resolvedConfig = telegramConfig("12345:resolved-token");
+    mockResolvedCommandConfig({ rawConfig, resolvedConfig });
 
     await runMessageCommand();
 
     const actionCall = readOnlyMessageActionCall();
     expect(actionCall.cfg).toBe(resolvedConfig);
-    expect(actionCall.action).toBe("send");
-    expect(actionCall.params.channel).toBe("telegram");
-    expect(actionCall.params.target).toBe("123456");
-    expect(actionCall.params.message).toBe("hi");
-    expect(actionCall.agentId).toBe("main");
-    expect(actionCall.senderIsOwner).toBe(true);
-    expect(actionCall.conversationReadOrigin).toBe("direct-operator");
-    expect(actionCall.gateway?.clientName).toBe("cli");
-    expect(actionCall.gateway?.mode).toBe("cli");
+    expect(actionCall).toMatchObject({
+      action: "send",
+      params: { channel: "telegram", target: "123456", message: "hi" },
+      agentId: "main",
+      senderIsOwner: true,
+      conversationReadOrigin: "direct-operator",
+      gateway: { clientName: "cli", mode: "cli" },
+    });
     expect(actionCall.cfg).not.toBe(rawConfig);
     const configResolutionCall = resolveCommandConfigWithSecrets.mock.calls[0]?.[0] as {
       commandName?: string;
@@ -388,11 +368,11 @@ describe("messageCommand", () => {
     });
 
     const actionCall = readOnlyMessageActionCall();
-    expect(actionCall.action).toBe("poll");
-    expect(actionCall.senderIsOwner).toBe(false);
-    expect(actionCall.params.channel).toBe("telegram");
-    expect(actionCall.params.target).toBe("123456789");
-    expect(actionCall.params.pollQuestion).toBe("Ship it?");
+    expect(actionCall).toMatchObject({
+      action: "poll",
+      senderIsOwner: false,
+      params: { channel: "telegram", target: "123456789", pollQuestion: "Ship it?" },
+    });
   });
 
   it("reports partial delivery failure truthfully in JSON output", async () => {

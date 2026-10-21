@@ -40,12 +40,15 @@ type DiscordHealthAccount = {
   configured: boolean;
 };
 
-type IMessageHealthAccount = {
-  accountId: string;
-  enabled: boolean;
-  configured: boolean;
-};
 type AccountParams = { cfg: Record<string, unknown>; accountId?: string | null };
+function healthPlugin(
+  id: string,
+  label: string,
+  config: HealthTestPlugin["config"],
+  status: HealthTestPlugin["status"],
+): HealthTestPlugin {
+  return { ...createChannelTestPluginBase({ id, label }), config, status };
+}
 
 function telegramAccount(params: AccountParams): TelegramHealthAccount {
   const channels = params.cfg.channels as Record<string, { botToken?: string }> | undefined;
@@ -73,40 +76,26 @@ function buildTelegramHealthSummary(snapshot: {
 }
 
 function createTelegramHealthPlugin(): HealthTestPlugin {
-  return {
-    ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
-    config: {
+  const resolveAccount: HealthTestPlugin["config"]["resolveAccount"] = (cfg, accountId) =>
+    telegramAccount({ cfg: cfg as Record<string, unknown>, accountId });
+  return healthPlugin(
+    "telegram",
+    "Telegram",
+    {
       listAccountIds: () => ["default"],
-      resolveAccount: (cfg, accountId) =>
-        telegramAccount({ cfg: cfg as Record<string, unknown>, accountId }),
-      inspectAccount: (cfg, accountId) =>
-        telegramAccount({ cfg: cfg as Record<string, unknown>, accountId }),
+      resolveAccount,
+      inspectAccount: resolveAccount,
       isConfigured: (account) => Boolean((account as TelegramHealthAccount).token.trim()),
     },
-    status: {
+    {
       buildChannelSummary: ({ snapshot }) => buildTelegramHealthSummaryForTest(snapshot),
       probeAccount: async ({ account, timeoutMs }) =>
         await probeTelegramAccountForTestOverride?.(account as TelegramHealthAccount, timeoutMs),
     },
-  };
+  );
 }
 
-function discordAccount(params: AccountParams): DiscordHealthAccount {
-  const channels = params.cfg.channels as Record<string, unknown> | undefined;
-  const discord = (channels?.discord as Record<string, unknown> | undefined) ?? {};
-  const accountId = params.accountId?.trim() || "default";
-  const token = typeof discord.token === "string" ? discord.token.trim() : "";
-  return {
-    accountId,
-    token,
-    tokenSource: token ? "config" : "none",
-    ...(token ? { tokenStatus: "available" as const } : {}),
-    enabled: discord.enabled !== false,
-    configured: Boolean(token),
-  };
-}
-
-function inspectDiscordAccount(params: AccountParams): DiscordHealthAccount {
+function discordAccount(params: AccountParams, inspect = false): DiscordHealthAccount {
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const discord = (channels?.discord as Record<string, unknown> | undefined) ?? {};
   const accountId = params.accountId?.trim() || "default";
@@ -114,32 +103,33 @@ function inspectDiscordAccount(params: AccountParams): DiscordHealthAccount {
   const tokenStatus =
     token.length > 0
       ? "available"
-      : discord.token && typeof discord.token === "object"
+      : inspect && discord.token && typeof discord.token === "object"
         ? "configured_unavailable"
         : "missing";
   return {
     accountId,
     token,
     tokenSource: tokenStatus === "missing" ? "none" : "config",
-    tokenStatus,
+    ...(inspect || token ? { tokenStatus } : {}),
     enabled: discord.enabled !== false,
     configured: tokenStatus !== "missing",
   };
 }
 
 function createDiscordHealthPlugin(): HealthTestPlugin {
-  return {
-    ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
-    config: {
+  return healthPlugin(
+    "discord",
+    "Discord",
+    {
       listAccountIds: () => ["default"],
       resolveAccount: (cfg, accountId) =>
         discordAccount({ cfg: cfg as Record<string, unknown>, accountId }),
       inspectAccount: (cfg, accountId) =>
-        inspectDiscordAccount({ cfg: cfg as Record<string, unknown>, accountId }),
+        discordAccount({ cfg: cfg as Record<string, unknown>, accountId }, true),
       isEnabled: (account) => (account as DiscordHealthAccount).enabled,
       isConfigured: (account) => (account as DiscordHealthAccount).configured,
     },
-    status: {
+    {
       buildAccountSnapshot: ({ account, runtime }) => {
         const resolved = account as DiscordHealthAccount;
         return {
@@ -161,7 +151,7 @@ function createDiscordHealthPlugin(): HealthTestPlugin {
         connected: snapshot.connected ?? false,
       }),
     },
-  };
+  );
 }
 
 function createIMessageHealthPlugin(): HealthTestPlugin {
@@ -170,16 +160,17 @@ function createIMessageHealthPlugin(): HealthTestPlugin {
     enabled: true,
     configured: true,
   });
-  return {
-    ...createChannelTestPluginBase({ id: "imessage", label: "iMessage" }),
-    config: {
+  return healthPlugin(
+    "imessage",
+    "iMessage",
+    {
       listAccountIds: () => ["default"],
       resolveAccount,
       inspectAccount: resolveAccount,
-      isEnabled: (account) => (account as IMessageHealthAccount).enabled,
-      isConfigured: (account) => (account as IMessageHealthAccount).configured,
+      isEnabled: (account) => (account as ReturnType<typeof resolveAccount>).enabled,
+      isConfigured: (account) => (account as ReturnType<typeof resolveAccount>).configured,
     },
-    status: {
+    {
       buildChannelSummary: ({ snapshot }) => ({
         accountId: snapshot.accountId,
         configured: Boolean(snapshot.configured),
@@ -195,7 +186,7 @@ function createIMessageHealthPlugin(): HealthTestPlugin {
         },
       }),
     },
-  };
+  );
 }
 
 describe("collectGatewayHealthSnapshot", () => {
@@ -235,8 +226,74 @@ describe("collectGatewayHealthSnapshot", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    setActivePluginRegistry(createTestRegistry([]));
     tempDirs.cleanup();
   });
+
+  it.each([false, true])(
+    "keeps unavailable accounts visible (resolved sibling=%s)",
+    async (withSibling) => {
+      testConfig = {};
+      setActivePluginRegistry(createTestRegistry([]));
+      const probeAccount = vi.fn(async () => ({ ok: true }));
+      const runtimeOnly = vi.fn(() =>
+        expect.unreachable("runtime hook received an inspection summary"),
+      );
+      const buildAccountSnapshot = vi.fn(({ account }: { account: unknown }) => {
+        expect(account).toMatchObject({ token: "healthy-token" });
+        return { accountId: "healthy", configured: true, name: "Resolved healthy account" };
+      });
+      const id = "health-inspection-fixture";
+      healthPluginsForTest = [
+        healthPlugin(
+          id,
+          "Inspection",
+          {
+            listAccountIds: () => (withSibling ? ["default", "healthy"] : ["default"]),
+            resolveAccount: (_cfg, accountId) => {
+              if (!withSibling || accountId !== "healthy") {
+                throw new Error("credential unavailable");
+              }
+              return { accountId, enabled: true, configured: true, token: "healthy-token" };
+            },
+            inspectAccount: (_cfg, accountId) =>
+              withSibling
+                ? {
+                    accountId,
+                    enabled: true,
+                    configured: true,
+                    tokenStatus: accountId === "healthy" ? "available" : "configured_unavailable",
+                  }
+                : undefined,
+          },
+          withSibling
+            ? { probeAccount, buildAccountSnapshot }
+            : {
+                probeAccount: runtimeOnly,
+                buildAccountSnapshot: runtimeOnly,
+                buildChannelSummary: runtimeOnly,
+              },
+        ),
+      ];
+      const accounts = (await getHealthSnapshot({ probe: true })).channels[id]?.accounts;
+      if (withSibling) {
+        expect(accounts).toMatchObject({
+          default: { configured: true, tokenStatus: "configured_unavailable" },
+          healthy: { configured: true, name: "Resolved healthy account" },
+        });
+        expect(probeAccount).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            account: expect.objectContaining({ accountId: "healthy", token: "healthy-token" }),
+          }),
+        );
+        expect(buildAccountSnapshot).toHaveBeenCalledTimes(1);
+      } else {
+        expect(accounts?.default?.configured).toBeUndefined();
+        expect(accounts?.default?.stateReason).toBe("configuration status unavailable");
+        expect(runtimeOnly).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("bounds probes by the fixed gateway collection deadline", async () => {
     testConfig = {

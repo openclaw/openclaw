@@ -13,7 +13,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import * as gatewayLocks from "../infra/gateway-lock.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -106,7 +105,7 @@ async function cleanupFixture(configOutside = false, configRaw = "{}") {
   const configPath = path.join(configOutside ? tmpRoot : stateDir, "openclaw.json");
   await fs.mkdir(stateDir);
   await fs.writeFile(configPath, configRaw);
-  const runtime = createRuntimeMock();
+  const runtime = createTestRuntime();
   const paths = {
     stateDir,
     configPath,
@@ -140,16 +139,6 @@ function pauseRemovalAt(pathname: string) {
   return { started: started.promise, resume: resumed.resolve, restore: () => spy.mockRestore() };
 }
 
-function createRuntimeMock() {
-  return {
-    log: vi.fn<(message: string) => void>(),
-    error: vi.fn<(message: string) => void>(),
-  } as unknown as RuntimeEnv & {
-    log: ReturnType<typeof vi.fn<(message: string) => void>>;
-    error: ReturnType<typeof vi.fn<(message: string) => void>>;
-  };
-}
-
 describe("moveToTrash", () => {
   it("retains the target when ownership expires during asynchronous preparation", async () => {
     const targetPath = path.join(tempDirs.make("openclaw-trash-expired-"), "target");
@@ -178,7 +167,7 @@ describe("moveToTrash", () => {
     vi.spyOn(fs, "realpath").mockImplementation(async (candidate) =>
       String(candidate) === path.dirname(targetPath) ? path.dirname(targetPath) : outsideTarget,
     );
-    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+    const runtime = createTestRuntime();
 
     await moveToTrash(targetPath, runtime);
 
@@ -191,7 +180,7 @@ describe("moveToTrash", () => {
     const testRoot = tempDirs.make("openclaw-trash-dangling-link-");
     const targetPath = path.join(testRoot, "workspace-link");
     fsSync.symlinkSync(path.join(testRoot, "missing-target"), targetPath, "dir");
-    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+    const runtime = createTestRuntime();
     const sourcePath = path.join(fsSync.realpathSync(testRoot), "workspace-link");
 
     await expect(moveToTrash(targetPath, runtime)).resolves.toBe(true);
@@ -231,7 +220,7 @@ describe("cleanup path removals", () => {
   });
 
   it("returns failure when any linked dry-run target is unsafe", async () => {
-    const runtime = createRuntimeMock();
+    const runtime = createTestRuntime();
     await expect(
       removeStateAndLinkedPaths(
         {
@@ -522,7 +511,7 @@ describe("cleanup path removals", () => {
   it.each(["remove", "preview", "failure"] as const)(
     "settles workspace rows after filesystem %s",
     async (operation) => {
-      const runtime = createRuntimeMock();
+      const runtime = createTestRuntime();
       const workspaceDir = path.join(tempDirs.make("openclaw-cleanup-workspace-"), "workspace");
       await fs.mkdir(workspaceDir);
       const siblingMarker = `${workspaceDir}.attested`;
@@ -552,7 +541,7 @@ describe("cleanup path removals", () => {
   );
 
   it("continues after an injected workspace remover rejects", async () => {
-    const runtime = createRuntimeMock();
+    const runtime = createTestRuntime();
     const removeWorkspace = vi
       .fn<(workspace: string) => Promise<boolean>>()
       .mockRejectedValueOnce(new Error("trash unavailable"))
@@ -568,7 +557,7 @@ describe("cleanup path removals", () => {
   });
 
   it("refuses to remove the current working directory", async () => {
-    const runtime = createRuntimeMock();
+    const runtime = createTestRuntime();
     const result = await removePath(process.cwd(), runtime, { dryRun: true });
 
     expect(result.ok).toBe(false);
