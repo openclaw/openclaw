@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
+import { text } from "node:stream/consumers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runCommandBuffered, runExec } from "../exec.js";
 import { prepareOomScoreAdjustedSpawn } from "../linux-oom-score.js";
@@ -8,9 +9,7 @@ import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost } from "./host.js";
 import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
-const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
-
-describe.skipIf(skipBrokerTests)("Gateway spawn transports", () => {
+describe.skipIf(!supportsSpawnBrokerCommandTransport())("Gateway spawn transports", () => {
   let broker: ReturnType<typeof createSpawnBrokerHost>;
 
   beforeAll(async () => {
@@ -40,12 +39,9 @@ describe.skipIf(skipBrokerTests)("Gateway spawn transports", () => {
       await expect(child.ready()).rejects.toMatchObject({ code: "ENOENT" });
     } else {
       await child.ready();
-      let output = "";
-      child.stdout!.on("data", (chunk) => {
-        output += chunk;
-      });
+      const output = text(child.stdout!);
       expect(await once(child, "close")).toEqual([0, null]);
-      expect(output.trim()).toBe(enabled ? "1000" : original.trim());
+      expect((await output).trim()).toBe(enabled ? "1000" : original.trim());
       expect(child.spawnfile).toBe("/bin/cat");
     }
     expect(await readFile(scorePath, "utf8")).toBe(original);
@@ -79,11 +75,9 @@ describe.skipIf(skipBrokerTests)("Gateway spawn transports", () => {
 
   it("preserves runExec launch error metadata across asynchronous readiness", async () => {
     const command = "/openclaw-nonexistent-spawn-broker-command";
-    const options = { logOutput: false };
-    const local = await runExec(command, [], options).catch((error: unknown) => error);
-    const remote = await runWithSpawnBroker(broker, () =>
-      runExec(command, [], options).catch((error: unknown) => error),
-    );
+    const run = () => runExec(command, [], { logOutput: false }).catch((error: unknown) => error);
+    const local = await run();
+    const remote = await runWithSpawnBroker(broker, run);
     expect(local).toBeInstanceOf(Error);
     const message = (local as Error).message;
     expect(remote).toMatchObject({ code: "ENOENT", failed: true, stdout: "", stderr: "", message });
