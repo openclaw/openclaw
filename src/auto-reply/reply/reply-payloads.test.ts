@@ -60,11 +60,7 @@ const suppression = { targetsMatchForReplySuppression: targetsMatchTelegramReply
 vi.mock("../../channels/plugins/bundled.js", () => ({
   getBundledChannelPlugin: (channel: string) =>
     channel === "telegram"
-      ? {
-          outbound: {
-            targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
-          },
-        }
+      ? { outbound: { targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression } }
       : undefined,
 }));
 

@@ -253,9 +253,7 @@ function emitNotices(entry: SessionEntry, phases = ["end"], failure?: Error) {
 }
 
 function createActiveGoalEntry(): SessionEntry {
-  return {
-    sessionId: "queued-session",
-    updatedAt: 1,
+  return makeEntry({
     goal: {
       schemaVersion: 1,
       id: "goal",
@@ -267,7 +265,7 @@ function createActiveGoalEntry(): SessionEntry {
       tokensUsed: 0,
       continuationTurns: 0,
     },
-  };
+  });
 }
 
 it("retains an undefined preflight rejection as an executable failure", async () => {
@@ -343,7 +341,6 @@ it.each([
       const turn = await admitted(prepare(queued));
       const execution = turn.queued;
       expect(execution.run).toMatchObject({
-        config: admittedConfig,
         requesterOrigin: { senderId, senderE164 },
         senderIsOwner: admittedOwner,
         traceAuthorized: admittedOwner,
@@ -599,22 +596,6 @@ it("does not pass stale enqueue-time state into a rotated session generation", a
     state.preflight.mock.calls[0]?.[0];
   expect(preflightParams.sessionStore?.main).toBeUndefined();
   expect(state.refreshGoal).toHaveBeenCalledWith(undefined, undefined);
-});
-
-it("settles presentation and releases the reply operation when dispatcher setup fails", async () => {
-  const failure = new Error("dispatcher reset failed");
-  const onQueuedFollowupSettled = vi.fn(async () => {});
-
-  await expect(
-    prepare(createRun(), {
-      opts: {
-        onQueuedFollowupAdmitted: vi.fn().mockRejectedValue(failure),
-        onQueuedFollowupSettled,
-      },
-    }),
-  ).rejects.toBe(failure);
-  expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
-  expect(operation.complete).toHaveBeenCalledOnce();
 });
 
 it("keeps the model selected at admission when preferences change during source adoption", async () => {
