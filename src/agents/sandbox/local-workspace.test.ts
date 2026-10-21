@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandBuffered } from "../../process/exec.js";
+import { writePrivateTempFile } from "../sessions/tools/private-temp-file.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import {
@@ -155,6 +156,19 @@ it.runIf(process.platform !== "win32")(
     const before = await fs.readdir(path.dirname(path.dirname(staged)));
     await rejectAfterAdmission(() => [stageInput("late-input", "blocked")]);
     expect(await fs.readdir(path.dirname(path.dirname(staged)))).toEqual(before);
+    authority = new AbortController();
+    waitForAdmission = undefined;
+    const checkpointError = new Error("input projection checkpoint failed");
+    checkpoint.mockRejectedValueOnce(checkpointError);
+    await expect(
+      writePrivateTempFile("checkpoint-output", "unpublished input", {
+        sandbox: { root, bridge },
+        assertCurrent,
+      }),
+    ).rejects.toBe(checkpointError);
+    // The delegate returned internally, but the caller never received its path.
+    expect(await fs.readdir(path.dirname(path.dirname(staged)))).toEqual(before);
+    expect(await fs.readFile(staged, "utf8")).toBe("trusted input");
   },
 );
 
