@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, For, Repeat, onCleanup, onSettled } from "solid-js";
+import { createMemo, createUniqueId, For, Repeat, onSettled } from "solid-js";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
@@ -216,6 +216,9 @@ function PanelView(
     return () => {
       disposed = true;
       owner.dispose();
+      if (owners.get(host) === owner) {
+        owners.delete(host);
+      }
     };
   });
   // One window listener follows this mounted owner; embedded panels never claim it.
@@ -226,11 +229,6 @@ function PanelView(
       }
     }),
   );
-  onCleanup(() => {
-    if (owners.get(host) === owner) {
-      owners.delete(host);
-    }
-  });
   const tab = () => view().activeTab();
   const target = () => view().target();
   const railMenuId = createUniqueId();
@@ -522,17 +520,14 @@ function PanelView(
             )}
             <For each={[...view().state.tabs]} keyed={(item) => item.id}>
               {(item) => {
-                let id = "";
-                onCleanup(() => content.delete(id));
+                const registerContent = elementRef<HTMLElement>((element) => {
+                  const initialTabId = item().id;
+                  content.set(initialTabId, element);
+                  return () => content.delete(initialTabId);
+                });
                 return (
                   <div
-                    ref={[
-                      (element) => {
-                        id = item().id;
-                        content.set(id, element);
-                      },
-                      elementRef(props.onScrollPortRef),
-                    ]}
+                    ref={[registerContent, elementRef(props.onScrollPortRef)]}
                     class="lr-content"
                     tabindex={-1}
                     hidden={item().id !== view().state.activeId || initial()}

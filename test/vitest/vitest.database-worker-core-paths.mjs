@@ -74,6 +74,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/physical-facts.test.ts",
   "src/infra/database-engine/port.test.ts",
   "src/infra/database-engine/offline-auth.postgres.test.ts",
+  "src/infra/database-engine/auth-native-load.postgres.test.ts",
   "src/infra/database-engine/maintenance-custody.conformance.test.ts",
   "src/infra/database-engine/postgres-search-admission.postgres.test.ts",
   "src/infra/database-engine/postgres-search.conformance.test.ts",

@@ -28,7 +28,6 @@ import { buildWhatsAppQaConfig, parseWhatsAppQaCredentialPayload } from "./whats
 import {
   resolveWhatsAppQaMessageTargets,
   type WhatsAppQaScenarioImplementation,
-  type WhatsAppQaScenarioMetadata,
   type WhatsAppQaScenarioRun,
 } from "./whatsapp-live.contracts.js";
 import { isTransientWhatsAppQaDriverError } from "./whatsapp-live.driver.js";
@@ -41,7 +40,7 @@ import { runWhatsAppStructuredInboundChecks } from "./whatsapp-live.media.js";
 import { waitForScenarioObservedMessage } from "./whatsapp-live.observations.js";
 import { unpackWhatsAppAuthArchive } from "./whatsapp-live.setup.js";
 
-type Scenario = WhatsAppQaScenarioMetadata & WhatsAppQaScenarioImplementation;
+type Scenario = WhatsAppQaScenarioImplementation & { id: string; timeoutMs: number };
 type MessageRun = Exclude<WhatsAppQaScenarioRun, { kind: "approval" }>;
 type Context = Parameters<NonNullable<MessageRun["afterSend"]>>[0];
 type WhatsAppQaConfigBase = Parameters<typeof buildWhatsAppQaConfig>[0];

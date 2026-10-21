@@ -258,7 +258,11 @@ async function prepareSpawnParentWorktreeSource(
     };
   }
   const context = captureWorktreeRunEndContext(process.env);
-  const accept = captureWorktreeRegistryReadGuard(context, "source-owner");
+  const accept = captureWorktreeRegistryReadGuard(context, "source-owner", {
+    id: parent.entry.worktree.id,
+    ownerKind: "session",
+    ownerId: parent.canonicalKey,
+  });
   const worktree = await readLiveRegistryWorktreeByOwner(context, "session", parent.canonicalKey);
   const assertWorktreeCurrent = accept(worktree);
   options.signal?.throwIfAborted();

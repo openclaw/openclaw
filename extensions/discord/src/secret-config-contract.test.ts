@@ -18,76 +18,54 @@ function createContext(): ResolverContext {
   };
 }
 
-describe("Discord secret target registry", () => {
-  it.each([
-    [
-      "channels.discord.voice.realtime.providers.*.apiKey",
-      "channels.discord.voice.realtime.providers.openai.apiKey",
-    ],
-    [
-      "channels.discord.voice.tts.providers.*.apiKey",
-      "channels.discord.voice.tts.providers.openai.apiKey",
-    ],
-    [
-      "channels.discord.voice.tts.personas.*.providers.*.apiKey",
-      "channels.discord.voice.tts.personas.narrator.providers.openai.apiKey",
-    ],
-    [
-      "channels.discord.accounts.*.voice.tts.personas.*.providers.*.apiKey",
-      "channels.discord.accounts.work.voice.tts.personas.narrator.providers.openai.apiKey",
-    ],
-    [
-      "channels.discord.accounts.*.voice.realtime.providers.*.apiKey",
-      "channels.discord.accounts.work.voice.realtime.providers.openai.apiKey",
-    ],
-    [
-      "channels.discord.accounts.*.voice.tts.providers.*.apiKey",
-      "channels.discord.accounts.work.voice.tts.providers.openai.apiKey",
-    ],
-  ])("identifies the provider segment for %s", (targetId, concretePath) => {
-    const entry = secretTargetRegistryEntries.find((candidate) => candidate.id === targetId);
+function voice(keys: Record<string, string>, mode?: "stt-tts") {
+  const providers = Object.fromEntries(
+    Object.entries(keys).map(([provider, id]) => [provider, { apiKey: secretRef(id) }]),
+  );
+  return { enabled: true, mode, realtime: { providers } };
+}
 
-    expect(entry).toBeDefined();
-    if (!entry || typeof entry.providerIdPathSegmentIndex !== "number") {
-      throw new Error(`Missing provider segment metadata for ${targetId}`);
-    }
-    expect(concretePath.split(".")[entry.providerIdPathSegmentIndex]).toBe("openai");
-  });
-
-  it("partitions realtime owners by account and provider", () => {
-    const context = createContext();
-    collectRuntimeConfigAssignments({
-      config: {
-        channels: {
-          discord: {
-            voice: {
-              enabled: true,
-              realtime: {
-                providers: {
-                  openai: { apiKey: secretRef("ROOT_OPENAI") },
-                  mistral: { apiKey: secretRef("ROOT_MISTRAL") },
-                },
-              },
-            },
-            accounts: {
-              inherited: { enabled: true },
-              Work: {
-                enabled: true,
-                voice: {
-                  enabled: true,
-                  realtime: {
-                    providers: {
-                      openai: { apiKey: secretRef("WORK_OPENAI") },
-                    },
-                  },
-                },
-              },
-            },
+function collectVoiceAssignments(
+  root: ReturnType<typeof voice>,
+  work: ReturnType<typeof voice>,
+  accountId = "Work",
+) {
+  const context = createContext();
+  collectRuntimeConfigAssignments({
+    config: {
+      channels: {
+        discord: {
+          voice: root,
+          accounts: {
+            inherited: { enabled: true },
+            [accountId]: { enabled: true, voice: work },
           },
         },
       },
-      context,
-    });
+    },
+    context,
+  });
+  return context;
+}
+
+describe("Discord secret target registry", () => {
+  it.each([
+    ["channels.discord.voice.realtime.providers.*.apiKey", 5],
+    ["channels.discord.voice.tts.providers.*.apiKey", 5],
+    ["channels.discord.voice.tts.personas.*.providers.*.apiKey", 7],
+    ["channels.discord.accounts.*.voice.tts.personas.*.providers.*.apiKey", 9],
+    ["channels.discord.accounts.*.voice.realtime.providers.*.apiKey", 7],
+    ["channels.discord.accounts.*.voice.tts.providers.*.apiKey", 7],
+  ] as const)("identifies the provider segment for %s", (targetId, providerIndex) => {
+    const entry = secretTargetRegistryEntries.find((candidate) => candidate.id === targetId);
+    expect(entry?.providerIdPathSegmentIndex).toBe(providerIndex);
+  });
+
+  it("partitions realtime owners by account and provider", () => {
+    const context = collectVoiceAssignments(
+      voice({ openai: "ROOT_OPENAI", mistral: "ROOT_MISTRAL" }),
+      voice({ openai: "WORK_OPENAI" }),
+    );
 
     expect(
       context.assignments
@@ -110,40 +88,11 @@ describe("Discord secret target registry", () => {
   });
 
   it("skips realtime provider refs when Discord voice uses stt-tts mode", () => {
-    const context = createContext();
-    collectRuntimeConfigAssignments({
-      config: {
-        channels: {
-          discord: {
-            voice: {
-              enabled: true,
-              mode: "stt-tts",
-              realtime: {
-                providers: {
-                  openai: { apiKey: secretRef("UNUSED_REALTIME_KEY") },
-                },
-              },
-            },
-            accounts: {
-              inherited: { enabled: true },
-              work: {
-                enabled: true,
-                voice: {
-                  enabled: true,
-                  mode: "stt-tts",
-                  realtime: {
-                    providers: {
-                      openai: { apiKey: secretRef("UNUSED_WORK_REALTIME_KEY") },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      context,
-    });
+    const context = collectVoiceAssignments(
+      voice({ openai: "UNUSED_REALTIME_KEY" }, "stt-tts"),
+      voice({ openai: "UNUSED_WORK_REALTIME_KEY" }, "stt-tts"),
+      "work",
+    );
 
     expect(context.assignments).toStrictEqual([]);
     expect(context.warnings).toMatchObject([

@@ -19,11 +19,8 @@ export async function withHostDataSql<T>(
   observe?: Parameters<typeof observeHostDataSql>[0],
 ): Promise<T> {
   const sql = observeHostDataSql(observe);
-  try {
-    return await run(sql);
-  } finally {
-    sql.restore();
-  }
+  using _ = { [Symbol.dispose]: sql.restore };
+  return await run(sql);
 }
 
 export function publication(request: admission.SqliteWorkerAdmissionRequest) {
@@ -60,13 +57,8 @@ export function observeNativeCommit(module: typeof admission, observe = () => {}
 export function captureCommandWorker(type: string) {
   let terminate: (() => Promise<number>) | undefined;
   // Preserve the original receiver and target only the worker carrying this command.
-  const workerPrototype: {
-    postMessage: (
-      this: Worker,
-      ...args: Parameters<Worker["postMessage"]>
-    ) => ReturnType<Worker["postMessage"]>;
-  } = Worker.prototype;
-  const posted = workerPrototype.postMessage;
+  // oxlint-disable-next-line typescript/unbound-method -- Forwarded below with the original worker receiver.
+  const posted = Worker.prototype.postMessage;
   vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (this: Worker, ...args) {
     const message: unknown = args[0];
     if (isRecord(message) && message.type === "execute" && message.input instanceof Uint8Array) {
@@ -92,28 +84,23 @@ export function expectNoSql(queries: readonly string[], pattern: RegExp) {
   expect(queries.filter((query) => pattern.test(query))).toEqual([]);
 }
 
-function wrapAgentExecution(
-  owner: OpenClawAgentDatabaseExecution,
-  decorate: Decorate,
-): OpenClawAgentDatabaseExecution {
-  return {
-    ...owner,
-    get fileIdentity() {
-      return owner.fileIdentity;
-    },
-    runExisting: (source, operation, options) =>
-      owner.runExisting(source, (worker) => operation(decorate(worker)), options),
-  };
-}
-
 // Capture the originals before spying; keep both paths and their lazy identity getters intact.
 export function spyAgentExecutions(module: ExecutionModule, decorate: Decorate) {
-  const capture = module.captureOpenClawAgentDatabaseExecution;
-  const prepare = module.captureOpenClawAgentDatabasePreparationExecution;
-  vi.spyOn(module, "captureOpenClawAgentDatabaseExecution").mockImplementation((...args) =>
-    wrapAgentExecution(capture(...args), decorate),
-  );
-  vi.spyOn(module, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(
-    (...args) => wrapAgentExecution(prepare(...args), decorate),
-  );
+  const wrap =
+    <Args extends unknown[]>(capture: (...args: Args) => OpenClawAgentDatabaseExecution) =>
+    (...args: Args): OpenClawAgentDatabaseExecution => {
+      const owner = capture(...args);
+      return {
+        ...owner,
+        get fileIdentity() {
+          return owner.fileIdentity;
+        },
+        runExisting: (source, operation, options) =>
+          owner.runExisting(source, (worker) => operation(decorate(worker)), options),
+      };
+    };
+  const capture = wrap(module.captureOpenClawAgentDatabaseExecution);
+  const prepare = wrap(module.captureOpenClawAgentDatabasePreparationExecution);
+  vi.spyOn(module, "captureOpenClawAgentDatabaseExecution").mockImplementation(capture);
+  vi.spyOn(module, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(prepare);
 }

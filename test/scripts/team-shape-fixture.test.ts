@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { zstdDecompressSync } from "node:zlib";
 import { afterEach, expect, it } from "vitest";
 import {
   generateTeamShapeFixture,
@@ -25,6 +26,14 @@ it("rejects unsafe ports and refuses to overwrite existing state", async () => {
   for (const port of ["18789", "39999", "65536", "NaN"]) {
     expect(() => parseTeamShapeOptions(["--state-dir", "/unused", "--port", port])).toThrow();
   }
+  for (const args of [
+    ["--long-transcript-entries", "1000000"],
+    ["--worktree-files", "500001"],
+    ["--projects", "0", "--worktree-files", "1"],
+    ["--projects", "0", "--nested-repository"],
+  ]) {
+    expect(() => parseTeamShapeOptions(["--state-dir", "/unused", ...args])).toThrow();
+  }
   const root = temporary.make("team-shape-existing-");
   const sentinel = path.join(root, "operator-state");
   fs.writeFileSync(sentinel, "keep");
@@ -33,6 +42,71 @@ it("rejects unsafe ports and refuses to overwrite existing state", async () => {
   ).rejects.toThrow();
   expect(fs.readdirSync(root)).toEqual(["operator-state"]);
   expect(read(sentinel)).toBe("keep");
+});
+
+it("adds bounded long histories and an unchanged tracked inventory with a nested checkout", async () => {
+  const stateDir = path.join(temporary.make("team-shape-stress-"), "state");
+  const { summary, env } = await generateTeamShapeFixture(
+    parseTeamShapeOptions([
+      "--state-dir",
+      stateDir,
+      ..."--sessions 2 --runs 0 --approvals 0 --cron 0 --projects 1 --transcript-mib 0 --long-transcript-entries 4 --long-transcript-sessions 1 --worktree-files 5 --nested-repository".split(
+        " ",
+      ),
+    ]),
+  );
+  expect(summary).toMatchObject({
+    logicalTranscriptBytes: 4 * 1024,
+    transcriptMessages: 4,
+    longTranscriptSessions: 1,
+    thinkingSignatureBytes: 2 * 16 * 1024,
+    worktreeFiles: 5,
+    nestedRepository: true,
+  });
+  using agent = new DatabaseSync(path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite"), {
+    readOnly: true,
+  });
+  const rows = agent
+    .prepare(
+      "SELECT session_id, event_json, event_zstd FROM transcript_events ORDER BY session_id, seq",
+    )
+    .all();
+  const events = rows.map((row) =>
+    JSON.parse(
+      row.event_zstd instanceof Uint8Array
+        ? zstdDecompressSync(row.event_zstd).toString("utf8")
+        : String(row.event_json),
+    ),
+  );
+  expect(rows.filter((row) => row.session_id === "team-shape-session-1")).toHaveLength(1);
+  const messages = events.filter((event) => event.type === "message");
+  expect(messages.map((event) => event.message.role)).toEqual([
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+  ]);
+  expect(messages.map((event) => event.parentId)).toEqual([
+    null,
+    ...messages.slice(0, -1).map((event) => event.id),
+  ]);
+  const signatures: string[] = messages.flatMap((event) =>
+    event.message.content
+      .filter((block: { type: string }) => block.type === "thinking")
+      .map((block: { thinkingSignature: string }) => block.thinkingSignature),
+  );
+  expect(signatures.map((signature) => signature.length)).toEqual([16 * 1024, 16 * 1024]);
+  expect(new Set(signatures).size).toBe(2);
+  const worktree = summary.projectWorktrees[0]!.path;
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", worktree, ...args], { env, encoding: "utf8" }).trim();
+  expect(git("ls-files", "inventory").split("\n")).toHaveLength(5);
+  expect(git("diff", "--name-only", "main")).toBe("");
+  expect(git("status", "--porcelain")).toBe("?? nested-repository/");
+  expect(git("-C", path.join(worktree, "nested-repository"), "status", "--porcelain")).toBe("");
+  expect(git("-C", path.join(worktree, "nested-repository"), "log", "-1", "--format=%s")).toBe(
+    "test: seed nested synthetic repository",
+  );
 });
 
 it("creates canonical sessions, retained lifecycle states and isolated supporting stores", async () => {
