@@ -14,12 +14,17 @@ vi.mock("../config/paths.js", () => ({
   resolveIsNixMode: () => false,
   resolveStateDir: () => "/synthetic/openclaw-state",
 }));
+// mock-isolation: startup admission uses synthetic config, not operator files.
 vi.mock("../config/io.runtime.js", () => ({ readSourceConfigBestEffort: mocks.config }));
+// mock-isolation: startup health checks must not execute real host commands.
 vi.mock("../process/exec.js", () => ({ runUtf8CommandWithTimeout: mocks.command }));
+// mock-isolation: capture startup warnings without terminal side effects.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
+// mock-isolation: startup resolves a synthetic installation root, not the live checkout.
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRoot: vi.fn(async () => "/synthetic/openclaw"),
 }));
+// mock-isolation: startup selection must not migrate real operator databases.
 vi.mock("../infra/state-migrations.doctor.js", () => ({
   prepareLegacyStateDatabaseSchema: mocks.migrateState,
 }));

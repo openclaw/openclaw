@@ -14,6 +14,7 @@ vi.mock("../commands/doctor/shared/codex-route-warnings.js", () => ({
   maybeRepairCodexSessionRoutes: mocks.maybeRepairCodexSessionRoutes,
 }));
 
+// mock-isolation: capture migration notes without rendering to the operator terminal.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 beforeEach(() => {

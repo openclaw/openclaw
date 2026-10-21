@@ -18,6 +18,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: obs.note }));
 vi.mock("../commands/backup-health.js", () => ({ noteBackupDoctorHint: () => {} }));
 vi.mock("../state/config-machine-state-write.js", () => ({ writeConfigMachineState: () => {} }));
+// mock-isolation: use a synthetic cloned project without querying operator project state.
 vi.mock("../projects/project-registry.js", () => ({
   listProjectRegistry: async () => [{ repoRoot: "/synthetic/clone", source: "cloned" }],
 }));
@@ -33,18 +34,22 @@ vi.mock("../infra/git-exec.js", () => ({
     };
   },
 }));
+// mock-isolation: record advisory selection without opening operator databases.
 vi.mock("../commands/doctor-db-bloat.js", () => ({
   noteSqliteDatabaseBloat: () => obs.record("db-size-advice", undefined),
 }));
 vi.mock("../commands/doctor-sandbox.js", () => ({
   noteCodexBwrapNamespaceWarnings: obs.codexBwrap,
 }));
+// mock-isolation: record advisory selection without reading real workspace bootstrap files.
 vi.mock("../commands/doctor-bootstrap-size.js", () => ({
   noteBootstrapFileSize: () => obs.record("bootstrap-size-advice", undefined),
 }));
+// mock-isolation: record credential-advice selection without accessing real credentials.
 vi.mock("../gateway/github-public-api.js", () => ({
   hasConfiguredGitHubApiCredential: () => obs.record("github-credential-advice", false),
 }));
+// mock-isolation: record advisory selection without reading or modifying real workspaces.
 vi.mock("../commands/doctor-workspace.js", () => ({
   collectWorkspaceBackupTip: () => undefined,
   MEMORY_SYSTEM_PROMPT: "synthetic",

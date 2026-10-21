@@ -8,16 +8,20 @@ function registerNames(program: Command, ...names: string[]) {
     program.command(name);
   }
 }
+// mock-isolation: registry routing uses synthetic commands without agent runtime initialization.
 vi.mock("./register.agent.js", () => ({
   registerAgentsCommands: (program: Command) => registerNames(program, "agents"),
 }));
+// mock-isolation: registry routing must not initialize a real model turn.
 vi.mock("./register.agent-turn.js", () => ({
   registerAgentTurnCommand: (program: Command) => registerNames(program, "agent"),
 }));
+// mock-isolation: registry wiring must not initialize maintenance or mutate operator state.
 vi.mock("./register.maintenance.js", () => ({
   registerMaintenanceCommands: (program: Command) =>
     registerNames(program, "doctor", "triage", "dashboard", "reset", "uninstall"),
 }));
+// mock-isolation: registry wiring must not query live Gateway or session state.
 vi.mock("./register.status-health-sessions.js", () => ({
   registerStatusHealthSessionsCommands: (program: Command) =>
     registerNames(program, "status", "health", "sessions"),

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../commands/configure.wizard.js", () => ({ runConfigureWizard: mocks.runWizard }));
+// mock-isolation: test both wizard routes independently of the runner's TTY.
 vi.mock("../terminal-interactivity.js", () => ({ isTerminalInteractive: () => true }));
 vi.mock("../../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../runtime.js")>()),

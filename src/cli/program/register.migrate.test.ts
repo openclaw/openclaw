@@ -9,8 +9,10 @@ const commands = vi.hoisted(() => ({
   migratePlanCommand: vi.fn(),
 }));
 const runtime = vi.hoisted(() => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }));
+// mock-isolation: route parsing must not import credentials or mutate real migration state.
 vi.mock("../../commands/migrate.js", () => commands);
 
+// mock-isolation: capture command exits without terminating the test worker.
 vi.mock("../../runtime.js", () => ({
   ExitError: class ExitError extends Error {},
   defaultRuntime: runtime,

@@ -16,21 +16,27 @@ const handlers = vi.hoisted(() => ({
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
 }));
 
+// mock-isolation: argument parsing must not create real backup archives.
 vi.mock("../../commands/backup.js", () => ({ backupCreateCommand: handlers.create }));
 // Argument parsing must not open database owners or launch backup workers.
+// mock-isolation: argument parsing must not open repositories or launch backup workers.
 vi.mock("../../commands/backup-git.js", () => ({
   backupGitLogCommand: handlers.gitLog,
   backupGitRestoreCommand: handlers.gitRestore,
   backupGitVerifyCommand: handlers.gitVerify,
 }));
+// mock-isolation: argument parsing must not restore or overwrite operator data.
 vi.mock("../../commands/backup-restore.js", () => ({ backupRestoreCommand: handlers.restore }));
+// mock-isolation: argument parsing must not read real backup archives.
 vi.mock("../../commands/backup-verify.js", () => ({ backupVerifyCommand: handlers.verify }));
+// mock-isolation: argument parsing must not open database owners or backup workers.
 vi.mock("../../commands/backup-sqlite.js", () => ({
   backupSqliteCreateCommand: handlers.sqliteCreate,
   backupSqliteListCommand: handlers.sqliteList,
   backupSqliteRestoreCommand: handlers.sqliteRestore,
   backupSqliteVerifyCommand: handlers.sqliteVerify,
 }));
+// mock-isolation: capture JSON and exit requests without writing to the real terminal or exiting.
 vi.mock("../../runtime.js", () => ({ defaultRuntime: handlers.runtime }));
 
 const { runtime } = handlers;

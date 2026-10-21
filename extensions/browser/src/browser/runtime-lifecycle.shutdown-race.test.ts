@@ -13,8 +13,10 @@ const mocks = vi.hoisted(() => ({
   stopOpenClawChrome: vi.fn(async (_running: RunningChrome) => {}),
 }));
 
+// mock-isolation: shutdown races use synthetic Chrome handles, not native browser processes.
 vi.mock("./chrome.js", () => ({ stopOpenClawChrome: mocks.stopOpenClawChrome }));
 
+// mock-isolation: simulate a removed installed chunk without importing the real MCP client.
 vi.mock("./chrome-mcp.js", () => {
   if (mocks.chunksRemoved) {
     throw new Error("installed Chrome MCP chunk was removed");

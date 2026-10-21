@@ -5,11 +5,17 @@ import { buildProgram } from "./build-program.js";
 import type { ProgramContext } from "./context.js";
 
 const createProgramContextMock = vi.hoisted(() => vi.fn());
+// mock-isolation: root argument handling must not load or execute real command handlers.
 vi.mock("./command-registry-core.js", () => ({ registerCoreCliCommands: vi.fn() }));
+// mock-isolation: root argument handling must not load optional subcommand runtimes.
 vi.mock("./register.subclis.js", () => ({ registerSubCliCommands: vi.fn() }));
+// mock-isolation: use fixed version and channel context, not installed runtime metadata.
 vi.mock("./context.js", () => ({ createProgramContext: createProgramContextMock }));
+// mock-isolation: exercise Commander error routing without global help customization.
 vi.mock("./help.js", () => ({ configureProgramHelp: vi.fn() }));
+// mock-isolation: argument-error tests must not admit real command side effects.
 vi.mock("./preaction.js", () => ({ registerPreActionHooks: vi.fn() }));
+// mock-isolation: keep the program context local to this synthetic CLI fixture.
 vi.mock("./program-context.js", () => ({ setProgramContext: vi.fn() }));
 
 describe("buildProgram", () => {

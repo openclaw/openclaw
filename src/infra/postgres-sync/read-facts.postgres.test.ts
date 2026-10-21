@@ -30,7 +30,12 @@ import { usePostgresTestHarness } from "./postgres.test-support.js";
 
 const harness = usePostgresTestHarness("read_facts");
 const { connection, prefix, directories } = harness;
-type StoreFixture = ReturnType<typeof openStore>;
+type StoreFixture = {
+  pathname: string;
+  writer: PostgresSqlConnection;
+  open: () => PostgresSqlConnection;
+  close: () => void;
+};
 const stores: StoreFixture[] = [];
 harness.onClose(() =>
   withEngineStoreAdmission(() => {
@@ -40,7 +45,7 @@ harness.onClose(() =>
   }),
 );
 
-function openStore(schema: StoreSchema) {
+function openStore(schema: StoreSchema): StoreFixture {
   const pathname = path.join(directories.make("pg-read-facts-"), "anchor.sqlite");
   const handles: {
     db: PostgresSqlConnection;

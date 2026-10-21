@@ -44,6 +44,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   loadPluginMetadataSnapshot: load,
 }));
 
+// mock-isolation: auth planning must not initialize real provider setup runtimes.
 vi.mock("../plugins/setup-registry.js", () => ({ resolvePluginSetupProviderCore: setup }));
 
 describe("resolveEnvApiKey provider auth aliases", () => {

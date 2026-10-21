@@ -11,6 +11,7 @@ function mockRuntimeFallback() {
   const loadBundledCapabilityRuntimeRegistry = vi.fn(() => {
     throw new Error("public artifact should not hit bundled runtime registry");
   });
+  // mock-isolation: public-artifact lookup must never initialize bundled provider runtimes.
   vi.doMock("../bundled-capability-runtime.js", () => ({ loadBundledCapabilityRuntimeRegistry }));
   return loadBundledCapabilityRuntimeRegistry;
 }

@@ -7,8 +7,10 @@ const pathExistsMock = vi.hoisted(() => vi.fn());
 const resolveSafeInstallDirMock = vi.hoisted(() => vi.fn());
 const assertCanonicalPathWithinBaseMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: target admission tests control path existence without accessing installed plugins.
 vi.mock("./fs-safe.js", () => ({ pathExists: pathExistsMock }));
 
+// mock-isolation: exercise admission sequencing independently of the path-security implementation.
 vi.mock("./install-safe-path.js", () => ({
   resolveSafeInstallDir: resolveSafeInstallDirMock,
   assertCanonicalPathWithinBase: assertCanonicalPathWithinBaseMock,

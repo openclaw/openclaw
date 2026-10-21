@@ -74,7 +74,7 @@ function observeChild(child: ChildProcess, signal: AbortSignal) {
     get output() {
       return output;
     },
-    async waitForOutput(text: string) {
+    waitForOutput: async (text: string) => {
       const waiting = new AbortController();
       try {
         while (!output.includes(text)) {

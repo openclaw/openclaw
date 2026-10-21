@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi, type Mock } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -26,8 +26,8 @@ let config: OpenClawConfig;
 let registry: ReturnType<typeof createEmptyPluginRegistry>;
 let harness: AgentHarness;
 let params: Parameters<typeof setupNativeRuntime>[0] & {
-  assertCurrent: ReturnType<typeof vi.fn>;
-  onCommitStarted: ReturnType<typeof vi.fn>;
+  assertCurrent: Mock<() => void>;
+  onCommitStarted: Mock<() => void>;
 };
 beforeEach(() => {
   vi.resetAllMocks();
