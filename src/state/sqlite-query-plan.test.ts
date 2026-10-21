@@ -25,9 +25,12 @@ import {
 
 const planTempDirs = useAutoCleanupTempDirTracker(afterAll);
 
-function createTempStateDir(): string {
-  return planTempDirs.make("openclaw-sqlite-plan-");
+function databaseOptions() {
+  return { env: { OPENCLAW_STATE_DIR: planTempDirs.make("openclaw-sqlite-plan-") } };
 }
+const stateDatabase = () => openOpenClawStateDatabase(databaseOptions());
+const agentDatabase = () =>
+  openOpenClawAgentDatabase({ ...databaseOptions(), agentId: "worker-1" });
 
 function observeQueries(pattern: RegExp, observe: (sql: string, params: SQLInputValue[]) => void) {
   const prototype = requireNodeSqlite().StatementSync.prototype;
@@ -84,9 +87,7 @@ afterEach(() => {
 
 describe("sqlite hot query plans", () => {
   it("bounds absent legacy watch detection and migration by the cursor index", () => {
-    const { db } = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
-    });
+    const { db } = stateDatabase();
     const plans: string[] = [];
     {
       using _ = observeQueries(/^select .* from "session_watch_cursors" /i, (sql, params) => {
@@ -113,10 +114,7 @@ describe("sqlite hot query plans", () => {
   it.each(["missing", "production", "stale"])(
     "checks orphan-query plans and preserves live rows with %s statistics",
     (statistics) => {
-      const { db } = openOpenClawAgentDatabase({
-        agentId: "worker-1",
-        env: { OPENCLAW_STATE_DIR: createTempStateDir() },
-      });
+      const { db } = agentDatabase();
       // Multiple events per owner exercise the cost that a one-row fixture hides.
       db.exec(`PRAGMA foreign_keys = OFF;
         WITH RECURSIVE events(n) AS (VALUES(0) UNION ALL SELECT n + 1 FROM events WHERE n < 191)
@@ -202,9 +200,7 @@ describe("sqlite hot query plans", () => {
   );
 
   it("searches failed delivery ranges with and without planner statistics", () => {
-    const database = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
-    });
+    const database = stateDatabase();
     const { db } = database;
     const sqlite = requireNativeSqliteDatabase(db);
     const unboundedColumns = deriveDeliveryQueueRetentionColumns("", "{}");
@@ -274,9 +270,7 @@ describe("sqlite hot query plans", () => {
   });
 
   it("uses shared state indexes for list and queue queries", () => {
-    const { db } = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
-    });
+    const { db } = stateDatabase();
     const check = planAssertions(db);
     check(
       `SELECT job_id, name, updated_at FROM cron_jobs WHERE store_key = ?
@@ -316,10 +310,7 @@ describe("sqlite hot query plans", () => {
 
   it("keeps the reply-target delivery lookup on the partial reply index", () => {
     // A fresh store has no planner statistics, so the plan depends only on whether the partial index is usable.
-    const database = openOpenClawAgentDatabase({
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
-    });
+    const database = agentDatabase();
     const captured: Array<{ params: SQLInputValue[]; sql: string }> = [];
     {
       using _ = observeQueries(/from "conversation_deliveries" /i, (sql, params) => {
@@ -342,10 +333,7 @@ describe("sqlite hot query plans", () => {
   });
 
   it("uses per-agent cache indexes for session metadata and expiry scans", () => {
-    const { db } = openOpenClawAgentDatabase({
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
-    });
+    const { db } = agentDatabase();
     const check = planAssertions(db);
     const noSort = ["USE TEMP B-TREE FOR ORDER BY"];
     check(
