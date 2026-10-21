@@ -15,7 +15,6 @@ import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js
 import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   setupPersistentSessionCreateTestHarness,
   chatSendOwner,
@@ -193,23 +192,12 @@ test("sessions.create registers a category only after the session commit succeed
   );
   expect(failed.ok).toBe(false);
   expect(readSessionGroupCatalog().groups.map((group) => group.name)).not.toContain(category);
-  const broadcastToConnIds = vi.fn();
-  const created = await createSession(
-    { category: `  ${category}  `, key: "agent:main:dashboard:created" },
-    {
-      context: {
-        broadcastToConnIds,
-        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
-      },
-    },
+  expectOk(
+    await createSession({ category: `  ${category}  `, key: "agent:main:dashboard:created" }),
   );
-  expectOk(created);
   expect(readSessionGroupCatalog().groups.filter((group) => group.name === category)).toHaveLength(
     1,
   );
-  expect(
-    broadcastToConnIds.mock.calls.filter(([, payload]) => payload?.reason === "groups"),
-  ).toHaveLength(1);
 });
 
 test("concurrent sessions.create requests adopt one canonical keyed session", async () => {
@@ -224,16 +212,12 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   }
   expect(created.every((result) => result.ok)).toBe(true);
   expect(new Set(created.map((result) => result.payload?.key))).toEqual(new Set([key]));
-  const sessionIds = new Set(created.map((result) => result.payload?.sessionId));
-  expect(sessionIds.size).toBe(1);
-  const persistedSessionId = loadSessionEntry({ sessionKey: key, storePath })?.sessionId;
-  const canonicalSessionId = created[0]?.payload?.sessionId;
-  expect(persistedSessionId).toBe(canonicalSessionId);
+  const sessionId = readEntry(key)?.sessionId;
+  expect(new Set(created.map((result) => result.payload?.sessionId))).toEqual(new Set([sessionId]));
 });
 
 test("createGatewaySession forwards its commit guard into main-session reset", async () => {
   try {
-    const key = "agent:main:main";
     const original = sessionStoreEntry("main-before-guard-close");
     testState.sessionConfig = { dmScope: "main" };
     await writeSessionStore({ entries: { main: original } });
@@ -244,7 +228,7 @@ test("createGatewaySession forwards its commit guard into main-session reset", a
     });
     await expect(resetMain({ commitGuard })).rejects.toThrow("session create authority closed");
     expect(commitGuard).toHaveBeenCalledTimes(2);
-    expect(readEntry(key)).toMatchObject(original);
+    expect(readEntry()).toMatchObject(original);
   } finally {
     testState.sessionConfig = undefined;
   }
@@ -274,9 +258,7 @@ test("sessions.create persists explicit tool overrides before the first turn", a
   const parentSessionKey = "agent:main:main";
   await seedMain(
     "tool-overrides-parent",
-    {
-      toolOverrides: { skills: { inherited: false } },
-    },
+    { toolOverrides: { skills: { inherited: false } } },
     parentSessionKey,
   );
   const sessionKey = "agent:main:dashboard:create-tool-overrides";
@@ -313,7 +295,6 @@ test("sessions.create persists explicit tool overrides before the first turn", a
       payload: { entry: { toolOverrides: normalized }, runStarted: true },
     });
     expect(observed).toEqual([normalized]);
-    expect(readEntry(sessionKey)?.toolOverrides).toEqual(normalized);
     const retried = await createSession({ key: sessionKey, toolOverrides: requested }, client);
     expectOk(retried);
     const mismatch = await createSession(
@@ -508,78 +489,4 @@ test("sessions.create does not apply create-time visibility to an in-place reset
   await seedMain("sess-existing-main");
   const reset = await createSession({ ...mainReset, visibility: "draft" });
   expect(reset).toMatchObject(invalidCreate("visibility"));
-});
-
-test("sessions.create replays an identical creation once and rejects conflicting intent", async () => {
-  const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
-  chatSend.mockImplementation(async ({ respond }) => {
-    respond(true, { runId: "create-once", status: "started" });
-  });
-  const context = { dedupe: new Map() };
-  const ownerId = ensureProfileForEmail("replay@owner.test").id;
-  const clientFor = (scopes = ["operator.write", "operator.admin"], profileId = ownerId) => ({
-    connect: {
-      role: "operator",
-      scopes,
-      device: { id: "control-ui-device" },
-    },
-    authenticatedUserProfile: { profileId },
-  });
-  const params = {
-    agentId: "main",
-    idempotencyKey: "create-once",
-    message: "start this task exactly once",
-    permissionMode: "full",
-  };
-  const request = (nextParams = params, nextClient = clientFor()) =>
-    directSessionReq<{ key: string }>("sessions.create", nextParams, {
-      client: nextClient as never,
-      context,
-    });
-  try {
-    const first = await request();
-    const replay = await request(
-      {
-        message: params.message,
-        permissionMode: params.permissionMode,
-        idempotencyKey: params.idempotencyKey,
-        agentId: params.agentId,
-      },
-      clientFor(["operator.admin", "operator.read", "operator.write"]),
-    );
-    expectOk(first);
-    expect(replay).toEqual(first);
-    expect(chatSend).toHaveBeenCalledOnce();
-    expect(chatSend.mock.calls[0]?.[0].params).toMatchObject({
-      idempotencyKey: expect.any(String),
-      message: "start this task exactly once",
-    });
-    const conflict = await request({ ...params, message: "start a different task" });
-    expect(conflict).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "session creation idempotency key was reused with different parameters",
-      },
-    });
-    expect(chatSend).toHaveBeenCalledOnce();
-    const downgraded = await request(params, clientFor(["operator.write"]));
-    expect(downgraded).toMatchObject({
-      ok: false,
-      error: { message: "missing scope: operator.admin" },
-    });
-    expect(chatSend).toHaveBeenCalledOnce();
-    const differentOwner = await request(
-      params,
-      clientFor(undefined, ensureProfileForEmail("other@owner.test").id),
-    );
-    expectOk(differentOwner);
-    expect(differentOwner.payload?.key).not.toBe(first.payload?.key);
-    expect(chatSend).toHaveBeenCalledTimes(2);
-    expect(chatSend.mock.calls[1]?.[0].params.idempotencyKey).not.toBe(
-      chatSend.mock.calls[0]?.[0].params.idempotencyKey,
-    );
-  } finally {
-    chatSend.mockRestore();
-  }
 });

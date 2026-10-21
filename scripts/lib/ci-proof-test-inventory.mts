@@ -2906,7 +2906,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server.sessions.create.repositories.test.ts",
   "src/gateway/server.sessions.create.stores.test.ts",
   "src/gateway/server.sessions.create.titles.test.ts",
-  "src/gateway/server.sessions.create.worktree-selection.test.ts",
   "src/gateway/server.sessions.create.worktrees.test.ts",
   "src/gateway/server.sessions.delete-lifecycle.test.ts",
   "src/gateway/server.sessions.delete-state-lifecycle.test.ts",

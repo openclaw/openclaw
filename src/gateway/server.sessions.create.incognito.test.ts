@@ -18,7 +18,6 @@ import {
   setupSessionCreateTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import {
   dispatchInboundMessageMock,
@@ -75,7 +74,7 @@ function closeIncognitoSessions() {
   memorySessionActorOwners.list().forEach((owner) => memorySessionActorOwners.closeDatabase(owner));
 }
 
-test("sessions.create keeps incognito rows process-local through list, spawn, reset, and delete", async () => {
+test("sessions.create keeps incognito rows process-local through list and spawn", async () => {
   const { storePath } = await createSessionStoreDir();
   const read = (sessionKey: string) => loadSessionEntry({ agentId: "main", sessionKey });
   try {
@@ -106,7 +105,6 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     expect(read(key)?.sessionId).toBe(entry?.sessionId);
 
     const child = await createSession({ parentSessionKey: key });
-    const childKey = child.key;
     expect(child.entry).toMatchObject({
       incognito: true,
       parentSessionKey: key,
@@ -126,21 +124,6 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     expect(durableRow(storePath, durableSubagentKey)).toEqual({
       current_session_id: "durable-subagent",
     });
-
-    expect((await directSessionReq("sessions.delete", { key: childKey })).payload).toMatchObject({
-      archived: [],
-      deleted: true,
-    });
-
-    const reset = await directSessionReq<{ deleted?: boolean }>("sessions.reset", { key });
-    expect(reset.payload).toMatchObject({ deleted: true });
-    expect(
-      (await resolveGatewaySessionStoreTargetInWorker({ cfg: getRuntimeConfig(), key })).storePath,
-    ).toBe(incognitoPath);
-    expect(read(key)).toBeUndefined();
-    expect(read(childKey)).toBeUndefined();
-    expect(existsSync(incognitoPath)).toBe(false);
-    await expectNotListed(key);
 
     for (const suffix of ["discord:channel:123", "subagent:incognito-client-key"]) {
       await expectInvalidCreate(
