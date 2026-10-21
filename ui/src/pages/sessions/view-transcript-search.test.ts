@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOverlay, type Overlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   disposeSessionViews,
   renderSessionsView,
@@ -89,8 +90,7 @@ describe("sessions transcript search view", () => {
     render({
       ...buildProps(buildMultiResult([{ ...session, updatedAt: timestamp }])),
       transcriptSearchQuery: "launch code",
-      transcriptSearch: {
-        status: "results",
+      transcriptSearch: Promise.resolve({
         sessions: [session],
         results: [
           {
@@ -106,11 +106,14 @@ describe("sessions transcript search view", () => {
         indexing: true,
         truncated: true,
         archivedTranscriptsExcluded: 0,
-      },
+      }),
       onNavigateToChat,
     });
     await Promise.resolve();
 
+    await waitForSolid(() =>
+      expect(container.querySelector(".sessions-transcript-search__result")).not.toBeNull(),
+    );
     const result = container.querySelector<HTMLButtonElement>(
       ".sessions-transcript-search__result",
     );

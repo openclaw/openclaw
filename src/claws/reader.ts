@@ -75,179 +75,6 @@ function workspaceSourceDiagnostic(error: unknown, sourcePath: string): ClawDiag
   return fileDiagnostic(code, message, "$.workspace");
 }
 
-async function buildDevelopmentSnapshot(params: {
-  source: ResolvedClawSource;
-  manifest: ClawManifest;
-  manifestRaw: Buffer;
-  openClawProfile?: { path: string; raw: Buffer };
-}): Promise<
-  | {
-      ok: true;
-      integrity: string;
-      byteLength: number;
-      manifest: { byteLength: number; digest: string };
-      openClawProfile?: { sourcePath: string; byteLength: number; digest: string };
-      workspaceSources: ClawWorkspaceSourceSnapshot[];
-      packageBootstrap?: ClawWorkspaceSourceSnapshot;
-    }
-  | { ok: false; diagnostics: ClawDiagnostic[] }
-> {
-  const hash = createHash("sha256");
-  let byteLength = 0;
-  const add = (label: string, bytes: Buffer) => {
-    updateSnapshotHash(hash, label, bytes);
-    byteLength += bytes.byteLength;
-  };
-  const snapshotFile = (bytes: Buffer) => ({
-    byteLength: bytes.byteLength,
-    digest: digestClawBytes(bytes),
-  });
-  const manifest = snapshotFile(params.manifestRaw);
-  const openClawProfile = params.openClawProfile
-    ? {
-        sourcePath: params.openClawProfile.path.replaceAll("\\", "/"),
-        ...snapshotFile(params.openClawProfile.raw),
-      }
-    : undefined;
-  add("canonical-source", Buffer.from(params.source.manifestPath, "utf8"));
-  add("manifest", params.manifestRaw);
-  if (params.openClawProfile) {
-    add(`profile:${params.openClawProfile.path.replaceAll("\\", "/")}`, params.openClawProfile.raw);
-  }
-
-  if (params.source.kind === "package") {
-    const packageJson = params.source.packageJsonRaw;
-    if (!packageJson) {
-      return fileFailure("package_read_failed", "Could not snapshot package.json.");
-    }
-    add("package.json", packageJson);
-  }
-
-  const sourceRoot = await fsSafeRoot(params.source.packageRoot);
-  let packageBootstrap: ClawWorkspaceSourceSnapshot | undefined;
-  if (await sourceRoot.exists("BOOTSTRAP.md")) {
-    try {
-      const read = await sourceRoot.read("BOOTSTRAP.md", {
-        hardlinks: "reject",
-        maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-        symlinks: "reject",
-      });
-      const text = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);
-      if (text.trim().length === 0) {
-        return fileFailure(
-          "package_bootstrap_empty",
-          "Package-root BOOTSTRAP.md must contain first-run instructions.",
-          "$.bootstrap",
-        );
-      }
-      const digest = digestClawBytes(read.buffer);
-      add("bootstrap:BOOTSTRAP.md", read.buffer);
-      packageBootstrap = {
-        sourcePath: "BOOTSTRAP.md",
-        realPath: read.realPath,
-        byteLength: read.buffer.byteLength,
-        digest,
-      };
-    } catch (error) {
-      const tooLarge = error instanceof FsSafeError && error.code === "too-large";
-      return fileFailure(
-        tooLarge ? "package_bootstrap_too_large" : "package_bootstrap_invalid",
-        tooLarge
-          ? `Package-root BOOTSTRAP.md exceeds ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes.`
-          : `Package-root BOOTSTRAP.md must be a safe UTF-8 regular file: ${(error as Error).message}`,
-        "$.bootstrap",
-      );
-    }
-  }
-
-  const declaredSources = [
-    ...Object.values(params.manifest.workspace.bootstrapFiles)
-      .filter((entry): entry is { source: string } => entry !== undefined)
-      .map((entry) => entry.source),
-    ...params.manifest.workspace.files.map((entry) => entry.source),
-  ].toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
-
-  const openedSources: Array<{ sourcePath: string; opened: OpenResult }> = [];
-  const workspaceSources: ClawWorkspaceSourceSnapshot[] = [];
-  try {
-    let workspaceByteLength = 0;
-    for (const sourcePath of declaredSources) {
-      try {
-        await assertNoSymlinkParents({
-          rootDir: params.source.packageRoot,
-          targetPath: resolve(params.source.packageRoot, sourcePath),
-          allowMissing: false,
-          messagePrefix: "Workspace source",
-        });
-        const opened = await sourceRoot.open(sourcePath, {
-          hardlinks: "reject",
-          symlinks: "reject",
-        });
-        if (opened.stat.size > MAX_MANAGED_FILE_BYTES) {
-          await opened[Symbol.asyncDispose]();
-          throw new FsSafeError(
-            "too-large",
-            `file exceeds limit of ${MAX_MANAGED_FILE_BYTES} bytes (got ${opened.stat.size})`,
-          );
-        }
-        workspaceByteLength += opened.stat.size;
-        openedSources.push({ sourcePath, opened });
-      } catch (error) {
-        return { ok: false, diagnostics: [workspaceSourceDiagnostic(error, sourcePath)] };
-      }
-    }
-
-    if (workspaceByteLength > MAX_MANAGED_WORKSPACE_BYTES) {
-      return fileFailure(
-        "workspace_sources_too_large",
-        `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
-        "$.workspace",
-      );
-    }
-
-    let readWorkspaceByteLength = 0;
-    for (const { sourcePath, opened } of openedSources) {
-      let bytes: Buffer;
-      try {
-        bytes = await readFileHandleBounded(opened.handle, MAX_MANAGED_FILE_BYTES);
-      } catch (error) {
-        if (error instanceof FsSafeError && error.code === "too-large") {
-          return { ok: false, diagnostics: [workspaceSourceDiagnostic(error, sourcePath)] };
-        }
-        throw error;
-      }
-      readWorkspaceByteLength += bytes.byteLength;
-      if (readWorkspaceByteLength > MAX_MANAGED_WORKSPACE_BYTES) {
-        return fileFailure(
-          "workspace_sources_too_large",
-          `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
-          "$.workspace",
-        );
-      }
-      const digest = digestClawBytes(bytes);
-      add(`workspace:${sourcePath}`, bytes);
-      workspaceSources.push({
-        sourcePath,
-        realPath: opened.realPath,
-        byteLength: bytes.byteLength,
-        digest,
-      });
-    }
-  } finally {
-    await Promise.all(openedSources.map(({ opened }) => opened[Symbol.asyncDispose]()));
-  }
-
-  return {
-    ok: true,
-    integrity: `sha256:${hash.digest("hex")}`,
-    byteLength,
-    manifest,
-    ...(openClawProfile ? { openClawProfile } : {}),
-    workspaceSources,
-    ...(packageBootstrap ? { packageBootstrap } : {}),
-  };
-}
-
 function parsePackageJson(value: unknown): PackageJson | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -502,18 +329,152 @@ export async function readClawManifestFile(
   if (!profile.ok) {
     return profile;
   }
-  const snapshot = await buildDevelopmentSnapshot({
-    source: sourceResult.source,
-    manifest: parsed.manifest,
-    manifestRaw: manifestResult.raw,
-    ...(profile.raw && profile.path
-      ? { openClawProfile: { path: profile.path, raw: profile.raw } }
-      : {}),
-  });
-  if (!snapshot.ok) {
-    return snapshot;
-  }
   const resolvedSource = sourceResult.source;
+  const hash = createHash("sha256");
+  let byteLength = 0;
+  const add = (label: string, bytes: Buffer) => {
+    updateSnapshotHash(hash, label, bytes);
+    byteLength += bytes.byteLength;
+  };
+  const snapshotFile = (bytes: Buffer) => ({
+    byteLength: bytes.byteLength,
+    digest: digestClawBytes(bytes),
+  });
+  const manifestSnapshot = snapshotFile(manifestResult.raw);
+  const profileSnapshot =
+    profile.raw && profile.path
+      ? {
+          sourcePath: profile.path.replaceAll("\\", "/"),
+          ...snapshotFile(profile.raw),
+        }
+      : undefined;
+  add("canonical-source", Buffer.from(resolvedSource.manifestPath, "utf8"));
+  add("manifest", manifestResult.raw);
+  if (profile.raw && profile.path) {
+    add(`profile:${profile.path.replaceAll("\\", "/")}`, profile.raw);
+  }
+
+  if (resolvedSource.kind === "package") {
+    const packageJson = resolvedSource.packageJsonRaw;
+    if (!packageJson) {
+      return fileFailure("package_read_failed", "Could not snapshot package.json.");
+    }
+    add("package.json", packageJson);
+  }
+
+  const sourceRoot = await fsSafeRoot(resolvedSource.packageRoot);
+  let packageBootstrap: ClawWorkspaceSourceSnapshot | undefined;
+  if (await sourceRoot.exists("BOOTSTRAP.md")) {
+    try {
+      const read = await sourceRoot.read("BOOTSTRAP.md", {
+        hardlinks: "reject",
+        maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+        symlinks: "reject",
+      });
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);
+      if (text.trim().length === 0) {
+        return fileFailure(
+          "package_bootstrap_empty",
+          "Package-root BOOTSTRAP.md must contain first-run instructions.",
+          "$.bootstrap",
+        );
+      }
+      const digest = digestClawBytes(read.buffer);
+      add("bootstrap:BOOTSTRAP.md", read.buffer);
+      packageBootstrap = {
+        sourcePath: "BOOTSTRAP.md",
+        realPath: read.realPath,
+        byteLength: read.buffer.byteLength,
+        digest,
+      };
+    } catch (error) {
+      const tooLarge = error instanceof FsSafeError && error.code === "too-large";
+      return fileFailure(
+        tooLarge ? "package_bootstrap_too_large" : "package_bootstrap_invalid",
+        tooLarge
+          ? `Package-root BOOTSTRAP.md exceeds ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes.`
+          : `Package-root BOOTSTRAP.md must be a safe UTF-8 regular file: ${(error as Error).message}`,
+        "$.bootstrap",
+      );
+    }
+  }
+
+  const declaredSources = [
+    ...Object.values(parsed.manifest.workspace.bootstrapFiles)
+      .filter((entry): entry is { source: string } => entry !== undefined)
+      .map((entry) => entry.source),
+    ...parsed.manifest.workspace.files.map((entry) => entry.source),
+  ].toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
+
+  const openedSources: Array<{ sourcePath: string; opened: OpenResult }> = [];
+  const workspaceSources: ClawWorkspaceSourceSnapshot[] = [];
+  try {
+    let workspaceByteLength = 0;
+    for (const sourcePath of declaredSources) {
+      try {
+        await assertNoSymlinkParents({
+          rootDir: resolvedSource.packageRoot,
+          targetPath: resolve(resolvedSource.packageRoot, sourcePath),
+          allowMissing: false,
+          messagePrefix: "Workspace source",
+        });
+        const opened = await sourceRoot.open(sourcePath, {
+          hardlinks: "reject",
+          symlinks: "reject",
+        });
+        if (opened.stat.size > MAX_MANAGED_FILE_BYTES) {
+          await opened[Symbol.asyncDispose]();
+          throw new FsSafeError(
+            "too-large",
+            `file exceeds limit of ${MAX_MANAGED_FILE_BYTES} bytes (got ${opened.stat.size})`,
+          );
+        }
+        workspaceByteLength += opened.stat.size;
+        openedSources.push({ sourcePath, opened });
+      } catch (error) {
+        return { ok: false, diagnostics: [workspaceSourceDiagnostic(error, sourcePath)] };
+      }
+    }
+
+    if (workspaceByteLength > MAX_MANAGED_WORKSPACE_BYTES) {
+      return fileFailure(
+        "workspace_sources_too_large",
+        `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
+        "$.workspace",
+      );
+    }
+
+    let readWorkspaceByteLength = 0;
+    for (const { sourcePath, opened } of openedSources) {
+      let bytes: Buffer;
+      try {
+        bytes = await readFileHandleBounded(opened.handle, MAX_MANAGED_FILE_BYTES);
+      } catch (error) {
+        if (error instanceof FsSafeError && error.code === "too-large") {
+          return { ok: false, diagnostics: [workspaceSourceDiagnostic(error, sourcePath)] };
+        }
+        throw error;
+      }
+      readWorkspaceByteLength += bytes.byteLength;
+      if (readWorkspaceByteLength > MAX_MANAGED_WORKSPACE_BYTES) {
+        return fileFailure(
+          "workspace_sources_too_large",
+          `Workspace sources exceed ${MAX_MANAGED_WORKSPACE_BYTES} aggregate bytes.`,
+          "$.workspace",
+        );
+      }
+      const digest = digestClawBytes(bytes);
+      add(`workspace:${sourcePath}`, bytes);
+      workspaceSources.push({
+        sourcePath,
+        realPath: opened.realPath,
+        byteLength: bytes.byteLength,
+        digest,
+      });
+    }
+  } finally {
+    await Promise.all(openedSources.map(({ opened }) => opened[Symbol.asyncDispose]()));
+  }
   const source: ClawSourceIdentity = {
     kind: resolvedSource.kind,
     name: resolvedSource.name,
@@ -521,21 +482,21 @@ export async function readClawManifestFile(
     packageRoot: resolvedSource.packageRoot,
     manifestPath: resolvedSource.manifestPath,
     integrityKind: "development-snapshot",
-    integrity: snapshot.integrity,
-    byteLength: snapshot.byteLength,
+    integrity: `sha256:${hash.digest("hex")}`,
+    byteLength,
   };
   return {
     ok: true,
     manifest: parsed.manifest,
     ...(hasMarkdownBody ? { clawMarkdownBody: manifestResult.body } : {}),
-    ...(snapshot.packageBootstrap ? { packageBootstrap: snapshot.packageBootstrap } : {}),
+    ...(packageBootstrap ? { packageBootstrap } : {}),
     ...(profile.profile ? { openClawProfile: profile.profile } : {}),
     source,
     snapshot: {
-      manifest: snapshot.manifest,
-      ...(snapshot.openClawProfile ? { openClawProfile: snapshot.openClawProfile } : {}),
-      workspaceSources: snapshot.workspaceSources,
-      ...(snapshot.packageBootstrap ? { packageBootstrap: snapshot.packageBootstrap } : {}),
+      manifest: manifestSnapshot,
+      ...(profileSnapshot ? { openClawProfile: profileSnapshot } : {}),
+      workspaceSources,
+      ...(packageBootstrap ? { packageBootstrap } : {}),
     },
     diagnostics: [...parsed.diagnostics, ...(profile.diagnostics ?? [])],
   };

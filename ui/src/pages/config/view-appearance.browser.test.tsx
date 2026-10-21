@@ -61,7 +61,7 @@ describe("config appearance preferences", () => {
       devices: [{ deviceId, label }],
       permissionRequired: false,
       selectedDeviceId: deviceId,
-      loading: false,
+      discovery: null,
       error: null,
     };
   }
@@ -496,7 +496,7 @@ describe("config appearance preferences", () => {
       const onRefresh = vi.fn();
       const state = {
         devices: [...devices],
-        loading,
+        discovery: loading ? new Promise<string | null>(() => {}) : null,
         permissionRequired: true,
         selectedDeviceId: "",
         error: null,

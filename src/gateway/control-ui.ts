@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { isWithinDir } from "@openclaw/fs-safe/path";
 import { kindFromMime } from "@openclaw/media-core/mime";
 import { isControlUiFocusPath } from "@openclaw/session-url-contract";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { sendJson as sendJsonResponse } from "../infra/http-json.js";
 import { createHttpRequestAbortSignal } from "../infra/http-request-lifecycle.js";
@@ -18,19 +18,13 @@ import { extractOriginalFilename } from "../media/store.js";
 import { resolveAvatarMime } from "../shared/avatar-policy.js";
 import { normalizeChatImageRenditionWidth } from "../shared/chat-image-renditions.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 import {
   controlUiAvatarResolutionMeta,
   type ControlUiAvatarMeta,
   gatewayAssistantAvatarUrl,
   prepareGatewayAssistantAvatar,
-  resolveGatewayAssistantAvatar,
 } from "./assistant-avatar.js";
-import {
-  DEFAULT_ASSISTANT_IDENTITY,
-  resolveAssistantIdentity,
-  resolveAssistantIdentityAvatar,
-} from "./assistant-identity.js";
+import { resolveAssistantIdentityAvatar } from "./assistant-identity.js";
 import {
   buildAssistantMediaContentDisposition,
   resolveAssistantMediaFilename,
@@ -49,15 +43,14 @@ import {
 } from "./control-ui-assistant-media-read.js";
 import { prepareAssistantMessageMedia } from "./control-ui-assistant-message-media.js";
 import { matchesControlUiBootstrapConfigPath } from "./control-ui-bootstrap-contract.js";
-import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
+import { prepareControlUiBootstrapConfig } from "./control-ui-bootstrap.js";
 import {
   isControlUiRootPublicAsset,
   isControlUiVersionedPublicAsset,
   parseControlUiResourcePath,
-  type ControlUiBootstrapConfig,
-  type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
 import { applyControlUiSecurityHeaders } from "./control-ui-csp.js";
+import { startControlUiDocumentDiagnostics } from "./control-ui-document-diagnostics.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
@@ -95,7 +88,6 @@ import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { readControlUiRootAsset, type ControlUiRootState } from "./server-control-ui-root.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
@@ -573,102 +565,12 @@ function isSafeRelativePath(relPath: string) {
   );
 }
 
-async function prepareControlUiBootstrapConfig(
-  req: IncomingMessage,
-  res: ServerResponse,
-  opts: ControlUiRequestOptions | undefined,
-  basePath: string,
-  terminalEnabled: boolean,
-  replyOnFailure = true,
-) {
-  let pluginFrameGrants: readonly ControlUiPluginFrameGrantAck[] = [];
-  const requestAuth = await authorizeControlUiReadRequestOrReply({
-    ...opts,
-    req,
-    res,
-    cfg: opts?.cfg ?? opts?.config,
-    replyOnFailure,
-    requiredOperatorMethod: "sessions.list",
-    onPluginFrameGrants: (grants) => {
-      pluginFrameGrants = grants;
-    },
-  });
-  if (!requestAuth) {
-    return null;
-  }
-  requestAuth.assertCurrent();
-  if (req.method === "HEAD") {
-    return { config: undefined, requestAuth };
-  }
-  const config = opts?.config;
-  const [assistant, pluginControlUiModules, devGitBranch, preferences] = await Promise.all([
-    (async () => {
-      const resolvedIdentity = config
-        ? await resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
-        : undefined;
-      const identity = resolvedIdentity ?? DEFAULT_ASSISTANT_IDENTITY;
-      const avatarProjection =
-        config && resolvedIdentity
-          ? await resolveGatewayAssistantAvatar({
-              cfg: config,
-              identity: resolvedIdentity,
-              httpBasePath: basePath,
-            })
-          : { avatar: identity.avatar, resolution: null };
-      return { identity, agentId: resolvedIdentity?.agentId, avatarProjection };
-    })(),
-    authorizeOperatorScopesForMethod("plugins.controlUi.list", requestAuth.operatorScopes).allowed
-      ? import("./control-ui-plugin-assets.js").then(({ listControlUiPluginCatalog }) =>
-          listControlUiPluginCatalog().then(
-            ({ plugins }) => plugins,
-            // The post-connect plugins.controlUi.list RPC owns user-visible catalog errors.
-            () => [],
-          ),
-        )
-      : [],
-    resolveDevInstallGitBranch(),
-    import("./control-ui-bootstrap-preferences.js").then(
-      ({ prepareControlUiBootstrapPreferences }) =>
-        prepareControlUiBootstrapPreferences(config, requestAuth),
-    ),
-  ]);
-  const { identity, agentId: assistantAgentId, avatarProjection } = assistant;
-  const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
-  requestAuth.assertCurrent();
-  const bootstrapConfig = {
-    preferences,
-    basePath,
-    assistantName: identity.name,
-    assistantAvatar: avatarProjection.avatar,
-    assistantAvatarSource: avatarMeta.avatarSource,
-    assistantAvatarStatus: avatarMeta.avatarStatus,
-    assistantAvatarReason: avatarMeta.avatarReason,
-    ...(assistantAgentId ? { assistantAgentId } : {}),
-    serverVersion: resolveRuntimeServiceVersion(process.env),
-    serverBuildId:
-      config?.gateway?.controlUi?.root === undefined
-        ? (resolveRuntimeServiceBuildId() ?? undefined)
-        : undefined,
-    devGitBranch: devGitBranch ?? undefined,
-    ...resolveControlUiBootstrapPresentation(config),
-    terminalEnabled,
-    cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
-    pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",
-    pluginControlUiModules,
-    pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
-      pluginId,
-      path: grantPath,
-      match,
-    })),
-  } satisfies ControlUiBootstrapConfig;
-  return { config: bootstrapConfig, requestAuth };
-}
-
 export async function handleControlUiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   opts?: ControlUiRequestOptions,
 ): Promise<boolean> {
+  const startedAt = performance.now();
   const urlRaw = req.url;
   if (!urlRaw) {
     return false;
@@ -842,6 +744,8 @@ export async function handleControlUiHttpRequest(
       path.basename(asset.file.path) === "index.html"
     ) {
       if (req.method === "HEAD") {
+        using diagnostics = startControlUiDocumentDiagnostics(startedAt);
+        using _ = diagnostics?.scope("render");
         const encoding = resolveControlUiHtmlEncoding(req);
         if (encoding === "not-acceptable") {
           respondControlUiNotAcceptable(res);
@@ -857,9 +761,19 @@ export async function handleControlUiHttpRequest(
         asset = await readControlUiRootAsset(rootState, fileRel, true);
         continue;
       }
+      using diagnostics = startControlUiDocumentDiagnostics(startedAt);
       const bootstrap = opts?.auth
-        ? await prepareControlUiBootstrapConfig(req, res, opts, basePath, terminalEnabled, false)
+        ? await prepareControlUiBootstrapConfig(
+            req,
+            res,
+            opts,
+            basePath,
+            terminalEnabled,
+            false,
+            diagnostics,
+          )
         : undefined;
+      using _ = diagnostics?.scope("render");
       await serveControlUiIndexHtml(
         req,
         res,

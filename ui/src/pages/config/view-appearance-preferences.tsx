@@ -19,6 +19,7 @@ import {
 import { SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatCompletionRoute } from "../../lib/model-runtime-label.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LocalToggleRow } from "./local-toggle-row.tsx";
@@ -169,25 +170,51 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
       ? props.config.onMicrophoneRefresh
       : props.config.onCameraRefresh)?.();
   };
-  const note = createMemo(() =>
-    state()?.error ? (
-      <span role="alert">{state()?.error}</span>
-    ) : !state()?.loading && state()?.devices.length === 0 ? (
-      t(props.kind === "microphone" ? "chat.composer.noMicrophones" : "chat.composer.noCameras")
-    ) : undefined,
-  );
+  const discovery = createMemo(() => ({ promise: state()?.discovery }), {
+    equals: (previous, next) => previous.promise === next.promise,
+  });
+  const discoveryReady = createMemo(async () => {
+    const issue = await discovery().promise;
+    if (issue) {
+      throw new Error(issue);
+    }
+    return true;
+  });
+
   return (
     <Show when={state() && onSelect()}>
       <SettingsRow
         title={title()}
         description={
           <>
-            {note() ? (
+            {state()?.error ? (
               <>
-                {note()}
+                <span role="alert">{state()?.error}</span>
                 <br />
               </>
-            ) : undefined}
+            ) : (
+              <Errored
+                fallback={(error) => (
+                  <>
+                    <span role="alert">{formatUiError(error())}</span>
+                    <br />
+                  </>
+                )}
+              >
+                <Loading on={discovery().promise} fallback={null}>
+                  {discoveryReady() && state()?.devices.length === 0 && (
+                    <>
+                      {t(
+                        props.kind === "microphone"
+                          ? "chat.composer.noMicrophones"
+                          : "chat.composer.noCameras",
+                      )}
+                      <br />
+                    </>
+                  )}
+                </Loading>
+              </Errored>
+            )}
             {t("quickSettings.personal.browserOnly")}
           </>
         }

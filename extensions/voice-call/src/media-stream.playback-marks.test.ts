@@ -1,9 +1,9 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
+import * as realtimeVoiceSdk from "openclaw/plugin-sdk/realtime-voice";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { MediaStreamHandler } from "./media-stream.js";
 import {
   createHandler,
@@ -28,14 +28,24 @@ const nextWsMessage = (ws: WebSocket): Promise<Record<string, unknown>> =>
 async function withPlaybackStream(
   streamSid: string,
   callSid: string,
-  run: (handler: MediaStreamHandler, ws: WebSocket, events: TalkEvent[]) => Promise<void>,
+  run: (
+    handler: MediaStreamHandler,
+    ws: WebSocket,
+    events: () => realtimeVoiceSdk.TalkEvent[],
+  ) => Promise<void>,
 ) {
   const onConnect = vi.fn();
-  const events: TalkEvent[] = [];
+  const talkEventSpy = vi.spyOn(realtimeVoiceSdk, "recordTalkObservabilityEvent");
+  onTestFinished(() => {
+    talkEventSpy.mockRestore();
+  });
+  const events = () =>
+    talkEventSpy.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.sessionId === `voice-call:${callSid}:${streamSid}`);
   const handler = createHandler({
     shouldAcceptStream: () => true,
     onConnect,
-    onTalkEvent: (_callId, _streamSid, event) => events.push(event),
   });
   const server = await startWsServer(handler);
   let ws: WebSocket | undefined;
@@ -94,7 +104,7 @@ describe("MediaStreamHandler playback marks", () => {
       await withTimeout(outboundMark);
       handler.clearTtsQueue("MZ-clear-mark", "barge-in");
       await withTimeout(playback);
-      expect(talkEvents.some((event) => event.type === "output.audio.done")).toBe(false);
+      expect(talkEvents().some((event) => event.type === "output.audio.done")).toBe(false);
 
       ws.send(
         JSON.stringify({
@@ -105,7 +115,7 @@ describe("MediaStreamHandler playback marks", () => {
       );
       ws.close();
       await waitForClose(ws);
-      expect(talkEvents.some((event) => event.type === "output.audio.done")).toBe(false);
+      expect(talkEvents().some((event) => event.type === "output.audio.done")).toBe(false);
     });
   });
 });

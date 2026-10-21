@@ -1,19 +1,10 @@
 import { flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";
 import { workboardTestHost } from "./test/host.setup.ts";
 import { createViewContext } from "./test/host.ts";
 import { createWorkboardWidget } from "./widgets.tsx";
 import { WorkboardWidgetModel } from "./widgets/runtime.ts";
-
-const disposers: (() => void)[] = [];
-afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
-  document.body.replaceChildren();
-  vi.restoreAllMocks();
-});
 
 function mountWidget(canMutate = true, presented = true) {
   const fixture = workboardTestHost();
@@ -22,109 +13,87 @@ function mountWidget(canMutate = true, presented = true) {
   const card = createWorkboardCard();
   const request = vi.fn(async () => ({ cards: [card] }));
   fixture.host.request = request as typeof fixture.host.request;
-  const container = document.createElement("div");
-  document.body.append(container);
-  const context = createViewContext(
-    fixture.host,
-    {
-      sessionKey: "main",
-      widget: { name: "Card", props: { cardId: card.id } },
-      canMutate,
-      canGrant: true,
-    },
-    presented,
-  );
+  const container = document.body.appendChild(document.createElement("div"));
+  const widget = { name: "Card", props: { cardId: card.id } };
+  const props = { sessionKey: "main", widget, canMutate, canGrant: true };
+  const context = createViewContext(fixture.host, props, presented);
   const mounted = createWorkboardWidget(fixture.host, "card")(container, context);
-  disposers.push(() => mounted?.dispose?.());
-  return { fixture, request, card, container, context, mounted, initialListeners };
+  onTestFinished(() => container.remove());
+  onTestFinished(() => mounted?.dispose?.());
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
+  const notify = () => {
+    fixture.notify();
+    flush();
+  };
+  const present = (visible: boolean) => {
+    mounted?.update?.({ ...context, presented: visible });
+    flush();
+  };
+  const title = (text = card.title) =>
+    vi.waitFor(() => expect(container.textContent).toContain(text));
+  return { ...fixture, request, card, container, present, notify, title, initialListeners };
 }
 
-it("renders the public card widget with read-only status controls", async () => {
-  const widget = mountWidget(false);
-  await vi.waitFor(() => expect(widget.container.textContent).toContain(widget.card.title));
-  const select = widget.container.querySelector("select");
-  expect(select?.disabled).toBe(true);
-  select!.value = "done";
-  select!.dispatchEvent(new Event("change", { bubbles: true }));
-  expect(widget.request.mock.calls).toHaveLength(1);
-});
-
 it("does not derive cards for unrelated host notifications but updates permission and card changes", async () => {
-  const widget = mountWidget();
-  await vi.waitFor(() => expect(widget.container.textContent).toContain(widget.card.title));
-  const select = widget.container.querySelector("select")!;
+  const w = mountWidget();
+  await w.title();
+  const select = w.container.querySelector("select")!;
   const deriveCards = vi.spyOn(WorkboardWidgetModel.prototype, "cards", "get");
-  for (let index = 0; index < 10; index += 1) {
-    widget.fixture.notify();
-    flush();
+  w.notify();
+  expect(deriveCards).not.toHaveBeenCalled();
+  expect(w.container.querySelector("select")).toBe(select);
+  expect(w.request).toHaveBeenCalledTimes(1);
+
+  Object.assign(w.host, { locale: "es" });
+  w.notify();
+  expect(select.getAttribute("aria-label")).toBe(`Estado: ${w.card.title}`);
+  expect(deriveCards).not.toHaveBeenCalled();
+  for (const canWrite of [false, true]) {
+    w.connection.canWrite = canWrite;
+    w.notify();
+    expect(select.disabled).toBe(!canWrite);
   }
-  expect(deriveCards).not.toHaveBeenCalled();
-  expect(widget.container.querySelector("select")).toBe(select);
-  expect(widget.request).toHaveBeenCalledTimes(1);
 
-  Object.assign(widget.fixture.host, { locale: "es" });
-  widget.fixture.notify();
-  flush();
-  expect(select.getAttribute("aria-label")).toBe(`Estado: ${widget.card.title}`);
-  expect(deriveCards).not.toHaveBeenCalled();
-  Object.assign(widget.fixture.host, { locale: "en" });
-  widget.fixture.notify();
-  flush();
-
-  widget.fixture.connection.canWrite = false;
-  widget.fixture.notify();
-  flush();
-  expect(select.disabled).toBe(true);
-  widget.fixture.connection.canWrite = true;
-  widget.fixture.notify();
-  flush();
-  expect(select.disabled).toBe(false);
-
-  widget.request.mockResolvedValueOnce({ cards: [{ ...widget.card, title: "Changed card" }] });
-  widget.fixture.emit("plugin.workboard.changed", {});
-  await vi.waitFor(() => expect(widget.container.textContent).toContain("Changed card"));
+  w.request.mockResolvedValueOnce({ cards: [{ ...w.card, title: "Changed card" }] });
+  w.emit("plugin.workboard.changed", {});
+  await w.title("Changed card");
   expect(deriveCards).toHaveBeenCalled();
-  expect(widget.container.querySelector("select")).toBe(select);
-
-  widget.mounted?.update?.({ ...widget.context, presented: false });
-  flush();
-  deriveCards.mockClear();
-  widget.fixture.notify();
-  flush();
-  expect(deriveCards).not.toHaveBeenCalled();
-  expect(widget.fixture.listeners).toEqual(widget.initialListeners);
+  expect(w.container.querySelector("select")).toBe(select);
 });
 
-it("starts visible widgets and releases hidden widget subscriptions", async () => {
-  const widget = mountWidget(true, false);
-  expect(widget.request).not.toHaveBeenCalled();
-  widget.mounted?.update?.({ ...widget.context, presented: true });
-  await vi.waitFor(() => expect(widget.container.textContent).toContain(widget.card.title));
-  const select = widget.container.querySelector("select")!;
-  const count = widget.request.mock.calls.length;
-  widget.mounted?.update?.({ ...widget.context, presented: false });
-  flush();
-  expect(widget.container.querySelector("select")).toBe(select);
+it.each([false, true])("blocks read-only/hidden mutations (canMutate=%s)", async (canMutate) => {
+  const w = mountWidget(canMutate, false);
+  expect(w.request).not.toHaveBeenCalled();
+  w.present(true);
+  await w.title();
+  const select = w.container.querySelector("select")!;
+  w.present(!canMutate);
+  expect(w.container.querySelector("select")).toBe(select);
   expect(select.disabled).toBe(true);
   select.value = "done";
   select.dispatchEvent(new Event("change", { bubbles: true }));
-  expect(widget.request).toHaveBeenCalledTimes(count);
-  expect(widget.fixture.listeners).toEqual(widget.initialListeners);
-  expect(widget.fixture.events.get("plugin.workboard.changed")?.size).toBe(0);
-  widget.fixture.emit("plugin.workboard.changed", {});
-  expect(widget.request).toHaveBeenCalledTimes(count);
-  widget.mounted?.update?.({ ...widget.context, presented: true });
-  await vi.waitFor(() => expect(widget.request).toHaveBeenCalledTimes(count + 1));
+  expect(w.request).toHaveBeenCalledTimes(1);
+  if (canMutate) {
+    expect(w.listeners).toEqual(w.initialListeners);
+    expect(w.events.get("plugin.workboard.changed")?.size).toBe(0);
+    const deriveCards = vi.spyOn(WorkboardWidgetModel.prototype, "cards", "get");
+    w.notify();
+    expect(deriveCards).not.toHaveBeenCalled();
+    w.emit("plugin.workboard.changed", {});
+    expect(w.request).toHaveBeenCalledTimes(1);
+    w.present(true);
+    await vi.waitFor(() => expect(w.request).toHaveBeenCalledTimes(2));
+  }
 });
 
 it("offers retry after an owner request fails, then replaces the error with cards", async () => {
-  const widget = mountWidget(true, false);
-  widget.request.mockRejectedValueOnce(new Error("Catalog temporarily unavailable"));
-  widget.mounted?.update?.({ ...widget.context, presented: true });
-  await vi.waitFor(() =>
-    expect(widget.container.textContent).toContain("Catalog temporarily unavailable"),
-  );
-  widget.container.querySelector<HTMLButtonElement>("button")!.click();
-  await vi.waitFor(() => expect(widget.container.textContent).toContain(widget.card.title));
-  expect(widget.container.querySelector('[role="alert"]')).toBeNull();
+  const { request, present, title, container } = mountWidget(true, false);
+  request.mockRejectedValueOnce(new Error("Catalog temporarily unavailable"));
+  present(true);
+  await title("Catalog temporarily unavailable");
+  container.querySelector<HTMLButtonElement>("button")!.click();
+  await title();
+  expect(container.querySelector('[role="alert"]')).toBeNull();
 });

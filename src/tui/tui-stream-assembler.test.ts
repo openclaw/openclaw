@@ -1,5 +1,4 @@
-// Verifies streamed TUI message assembly and display state updates.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 
 const text = (value: string) => ({ type: "text", text: value }) as const;
@@ -7,70 +6,53 @@ const thinking = (value: string) => ({ type: "thinking", thinking: value }) as c
 const pairingQr = (terminalText: string) =>
   ({ type: "openclaw_pairing_qr", terminalText }) as const;
 
-const messageWithContent = (content: readonly Record<string, unknown>[]) =>
-  ({
-    role: "assistant",
-    content,
-  }) as const;
+const message = (...content: readonly Record<string, unknown>[]) =>
+  ({ role: "assistant", content }) as const;
 
 describe("TuiStreamAssembler", () => {
-  it("keeps thinking before content even when thinking arrives later", () => {
-    const assembler = new TuiStreamAssembler();
-    const first = assembler.ingestDelta("run-1", messageWithContent([text("Hello")]), true);
-    expect(first).toBe("Hello");
+  let assembler: TuiStreamAssembler;
+  beforeEach(() => {
+    assembler = new TuiStreamAssembler();
+  });
 
-    const second = assembler.ingestDelta("run-1", messageWithContent([thinking("Brain")]), true);
-    expect(second).toBe("[thinking]\nBrain\n\nHello");
+  it("keeps thinking before content even when thinking arrives later", () => {
+    expect(assembler.ingestDelta("run-1", message(text("Hello")), true)).toBe("Hello");
+    expect(assembler.ingestDelta("run-1", message(thinking("Brain")), true)).toBe(
+      "[thinking]\nBrain\n\nHello",
+    );
   });
 
   it("tracks literal placeholder text as real displayable content until finalization", () => {
-    const assembler = new TuiStreamAssembler();
-
-    expect(assembler.hasDisplayText("run-literal-output")).toBe(false);
-
-    assembler.ingestDelta("run-literal-output", messageWithContent([text("(no output)")]), false);
-
-    expect(assembler.hasDisplayText("run-literal-output")).toBe(true);
-    expect(
-      assembler.finalize("run-literal-output", { role: "assistant", content: [] }, false),
-    ).toBe("(no output)");
-    expect(assembler.hasDisplayText("run-literal-output")).toBe(false);
+    expect(assembler.hasDisplayText("run-1")).toBe(false);
+    assembler.ingestDelta("run-1", message(text("(no output)")), false);
+    expect(assembler.hasDisplayText("run-1")).toBe(true);
+    expect(assembler.finalize("run-1", message(), false)).toBe("(no output)");
+    expect(assembler.hasDisplayText("run-1")).toBe(false);
   });
 
   it("renders pairing QR terminal text from final assistant content", () => {
-    const assembler = new TuiStreamAssembler();
-    const finalText = assembler.finalize(
-      "run-pair-qr",
-      messageWithContent([
-        text("Scan this QR code with the OpenClaw iOS app:"),
-        pairingQr("\u001b[47m\u001b[30m█ ▄\u001b[0m"),
-      ]),
-      false,
-    );
-    expect(finalText).toContain("Scan this QR code with the OpenClaw iOS app:");
+    const prompt = "Scan this QR code with the OpenClaw iOS app:";
+    const content = message(text(prompt), pairingQr("\u001b[47m\u001b[30m█ ▄\u001b[0m"));
+    const finalText = assembler.finalize("run-pair-qr", content, false);
+    expect(finalText).toContain(prompt);
     expect(finalText).toContain("█ ▄");
     expect(finalText).not.toContain("\u001b[47m");
     expect(finalText).not.toBe("(no output)");
   });
 
   it("keeps visible thinking ahead of an attachment-only final", () => {
-    const assembler = new TuiStreamAssembler();
     const finalText = assembler.finalize(
       "run-media-thinking",
-      messageWithContent([
-        thinking("Preparing the attachment"),
-        { type: "image", data: "secret-image" },
-      ]),
+      message(thinking("Preparing the attachment"), { type: "image", data: "secret-image" }),
       true,
     );
     expect(finalText).toBe("[thinking]\nPreparing the attachment\n\nAttached image");
   });
 
   it("keeps an error ahead of an attachment summary", () => {
-    const assembler = new TuiStreamAssembler();
     const finalText = assembler.finalize(
       "run-media-error",
-      messageWithContent([{ type: "video", url: "file:///private/clip.mp4" }]),
+      message({ type: "video", url: "file:///private/clip.mp4" }),
       false,
       "media generation failed",
     );
@@ -79,40 +61,28 @@ describe("TuiStreamAssembler", () => {
   });
 
   it("returns null when delta text is unchanged", () => {
-    const assembler = new TuiStreamAssembler();
-    const first = assembler.ingestDelta("run-4", messageWithContent([text("Repeat")]), false);
-    expect(first).toBe("Repeat");
-    const second = assembler.ingestDelta("run-4", messageWithContent([text("Repeat")]), false);
-    expect(second).toBeNull();
+    expect(assembler.ingestDelta("run-4", message(text("Repeat")), false)).toBe("Repeat");
+    expect(assembler.ingestDelta("run-4", message(text("Repeat")), false)).toBeNull();
   });
 
   it("bounds orphaned stream state while preserving recently active runs", () => {
-    const assembler = new TuiStreamAssembler();
     for (let index = 0; index < 200; index += 1) {
-      assembler.ingestDelta(`run-${index}`, messageWithContent([text(`Draft ${index}`)]), false);
+      assembler.ingestDelta(`run-${index}`, message(text(`Draft ${index}`)), false);
     }
 
-    assembler.ingestDelta("run-0", messageWithContent([text("Recently active")]), false);
-    assembler.ingestDelta("run-200", messageWithContent([text("Newest")]), false);
-
-    expect(assembler.finalize("run-0", { role: "assistant", content: [] }, false)).toBe(
-      "Recently active",
-    );
-    expect(assembler.finalize("run-1", { role: "assistant", content: [] }, false)).toBe(
-      "(no output)",
-    );
-    expect(assembler.finalize("run-200", { role: "assistant", content: [] }, false)).toBe("Newest");
+    assembler.ingestDelta("run-0", message(text("Recently active")), false);
+    assembler.ingestDelta("run-200", message(text("Newest")), false);
+    expect(assembler.finalize("run-0", message(), false)).toBe("Recently active");
+    expect(assembler.finalize("run-1", message(), false)).toBe("(no output)");
+    expect(assembler.finalize("run-200", message(), false)).toBe("Newest");
   });
 
   it("does not evict an active run when an evicted run finalizes late", () => {
-    const assembler = new TuiStreamAssembler();
     for (let index = 0; index < 201; index += 1) {
-      assembler.ingestDelta(`run-${index}`, messageWithContent([text(`Draft ${index}`)]), false);
+      assembler.ingestDelta(`run-${index}`, message(text(`Draft ${index}`)), false);
     }
 
-    expect(assembler.finalize("run-0", messageWithContent([text("Late final")]), false)).toBe(
-      "Late final",
-    );
-    expect(assembler.finalize("run-1", { role: "assistant", content: [] }, false)).toBe("Draft 1");
+    expect(assembler.finalize("run-0", message(text("Late final")), false)).toBe("Late final");
+    expect(assembler.finalize("run-1", message(), false)).toBe("Draft 1");
   });
 });

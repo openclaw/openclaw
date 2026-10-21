@@ -674,6 +674,36 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     expect(await fs.readdir(path.dirname(unitPath))).toEqual([path.basename(unitPath)]);
   });
 
+  it.each([0o775, 0o777])(
+    "repairs an owned writable state directory (%o) before publication",
+    async (mode) => {
+      await writeFixtureFile(path.join(stateDir, "operator-data"), "preserved\n");
+      await fs.chmod(stateDir, mode);
+
+      expect(await readCapability()).toEqual({ kind: "writable" });
+      expect((await fs.stat(stateDir)).mode & 0o777).toBe(mode);
+      await stage();
+
+      expect((await fs.stat(stateDir)).mode & 0o777).toBe(0o700);
+      expect(await read(path.join(stateDir, "operator-data"))).toBe("preserved\n");
+      expect(await read(unitPath)).toContain("ExecStart=");
+      expect(await read(environmentPath)).toContain("replacement-secret-canary");
+    },
+  );
+
+  it("does not publish service credentials if state directory repair fails", async () => {
+    await fs.chmod(stateDir, 0o775);
+    onOpen((file, handle) => {
+      if (file === stateDir) {
+        vi.spyOn(handle, "chmod").mockRejectedValue(new Error("state directory chmod denied"));
+      }
+    });
+
+    await expect(stage()).rejects.toThrow("state directory chmod denied");
+    await expectEmpty(stateDir, path.dirname(unitPath));
+    expect((await fs.stat(stateDir)).mode & 0o777).toBe(0o775);
+  });
+
   it("publishes only the effective state-dir environment", async () => {
     const effectiveStateDir = path.join(root, "effective-state");
     const effectiveEnvironmentPath = path.join(effectiveStateDir, "gateway.systemd.env");

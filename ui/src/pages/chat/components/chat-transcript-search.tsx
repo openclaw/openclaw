@@ -1,9 +1,12 @@
 import { Show, createMemo } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "../../../components/tooltip.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import type { TranscriptSearchState } from "./chat-transcript-search-state.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export function TranscriptSearch(props: { search: TranscriptSearchState }) {
   const source = createMemo(() => projectOwner(props.search, (owner) => owner.snapshot, Object.is));

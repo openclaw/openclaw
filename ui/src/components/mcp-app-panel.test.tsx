@@ -65,6 +65,7 @@ it("retains the old app and its launch target until teardown finishes", async ()
     wrapper: createSolidApplicationContextProvider(context).wrapper,
   });
   await waitForSolid(() => expect(viewLoad.started).toHaveBeenCalledOnce());
+  expect(request).not.toHaveBeenCalled();
   setLaunch({ ...firstLaunch, deepLink: "/initial" });
   flush();
   viewLoad.resolve();

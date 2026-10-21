@@ -46,7 +46,7 @@ const IDENTITY_MENU_LINKS: ReadonlyArray<{
 export const COMMAND_VALUE_PREFIX = "command:";
 const LINK_VALUE_PREFIX = "link:";
 type SidebarAgentMenuParams = Omit<SidebarAgentMenuSwitcherParams, "allAgentsScope"> & {
-  position: { x: number; top: number };
+  position: { x: number; top: number; placement?: "right-start" };
   anchor?: HTMLElement;
   tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   basePath: string;

@@ -157,9 +157,24 @@ deleted.
 An interrupted initial preparation retains the same accepted source for retry.
 If recovery returns `headChanged: true`, it completed that original accepted
 head while GitHub has since advanced. Preparation makes no GitHub writes
-and is not a publication receipt. Publication and other PR actions for an
-imported association remain unavailable; they refuse instead of creating a
-replacement PR or acting on an earlier publication from this conversation.
+and is not a publication receipt. Source publication for an imported association
+remains unavailable; it refuses instead of creating a replacement PR.
+
+After preparation, existing metadata, readiness, fixed re-review and evidence
+actions select the original bound PR, including before any new push and when an
+older publication exists in the conversation. Read it with `edit` first. Its
+result includes `pullRequest` (URL, repository and branch), rather than claiming
+that preparation produced a `publication` receipt. For these imported actions,
+send the observed `expectedHeadCommit` without `requestId`; receipt-backed actions
+still require their publication's `requestId`. Every guest action rechecks the
+current linked author and private repository access. Writes also recheck current
+head and publisher eligibility; a changed target or authority refuses the action.
+
+Full-write operators can inspect, close or merge the bound original PR through
+the same existing actions and head preconditions, without linking the guest's
+GitHub identity to their own account. Existing child-session selection and guest
+restrictions remain in force. Preparation does not grant merge or close access,
+and an administrator joining does not elevate later guest turns.
 Keep the updated Gateway when continuing an imported workspace; older versions
 do not understand this association.
 
@@ -222,7 +237,7 @@ reconcile the original attachment before requesting another transfer.
 If upload authority changes after the request begins, the denial also warns that
 an attachment may already exist.
 
-A person with full operator write access can request landing in the same conversation, including a guest-created sandboxed session. The agent uses `github_publish` with `action: "inspect"` to read the session's completed shared publication and its current GitHub state. After review and required checks, `action: "ready"` marks its draft ready and `action: "merge"` merges it. To close the PR without merging, use `action: "close"` after inspection. All three writes require the inspected `requestId` and `expectedHeadCommit`; merge also requires an explicit `mergeMethod` (`merge`, `squash`, or `rebase`). GitHub still enforces repository permissions and merge requirements. These operations do not enable auto-merge or delete the branch, workspace, or conversation.
+A person with full operator write access can request landing in the same conversation, including a guest-created sandboxed session. The agent uses `github_publish` with `action: "inspect"` to read the session's completed shared publication and its current GitHub state. After review and required checks, `action: "ready"` marks its draft ready and `action: "merge"` merges it. To close the PR without merging, use `action: "close"` after inspection. All three writes require the inspected `expectedHeadCommit` and, for a publication receipt, its `requestId`; merge also requires an explicit `mergeMethod` (`merge`, `squash`, or `rebase`). GitHub still enforces repository permissions and merge requirements. These operations do not enable auto-merge or delete the branch, workspace, or conversation.
 
 Squash landing uses the current PR title read by the merge action as the commit subject, including for a one-commit PR whose original subject differs. Contributor trailers remain in the commit body. Merge and rebase methods retain GitHub's existing commit-message behavior.
 

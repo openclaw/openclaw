@@ -76,7 +76,9 @@ export function SidebarUpdateCard(
   let host!: HTMLElement;
   const [holdingCampaignId, setHoldingCampaignId] = createOptimistic<string | null>(null);
   const [nativeUpdateAvailable, setNativeUpdateAvailable] = createSignal(hasNativeUpdateBridge());
-  const refreshScope = createMemo(() => ({ required: props.refreshRequired }));
+  const refreshScope = createMemo(() => ({ required: props.refreshRequired }), {
+    equals: (before, after) => before.required === after.required,
+  });
   const [refreshState, setRefreshState] = createSignal(() => {
     // Re-entering recovery starts with a fresh retry surface.
     refreshScope();
