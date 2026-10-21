@@ -322,7 +322,28 @@ function readPriorManifestEntries(manifestRoot, digest) {
   }
   return prior.entries;
 }
-async function eligiblePaths() {
+async function readIgnoredWorkspacePaths() {
+  const includePath = path.join(root, ".worktreeinclude");
+  const hasIncludes = fs.existsSync(includePath) && fs.lstatSync(includePath).isFile();
+  const ignored = new Set(await nulPaths(["--full-name", "--others", "--ignored", "--exclude-standard",
+    ...(hasIncludes ? [] : ["--", ${JSON.stringify(STAGED_INPUT_GIT_PATHSPEC)}]),
+  ]));
+  const included = [];
+  if (hasIncludes) {
+    // Keep standard excludes out of this query. Their union would select every
+    // ignored path instead of only explicit .worktreeinclude matches.
+    for (const candidate of await nulPaths([
+      "--full-name",
+      "--others",
+      "--ignored",
+      "--exclude-from=" + includePath,
+    ])) {
+      if (ignored.has(candidate)) included.push(candidate);
+    }
+  }
+  return { ignored, included };
+}
+async function eligiblePaths(ignoredPaths) {
   const selected = new Set();
   let selectedPathBytes = 0;
   function addSelected(relative) {
@@ -339,31 +360,16 @@ async function eligiblePaths() {
   for (const relative of await nulPaths(["--full-name", "--cached", "--others", "--exclude-standard"])) {
     addSelected(relative);
   }
-  const includePath = path.join(root, ".worktreeinclude");
-  const hasIncludes = fs.existsSync(includePath) && fs.lstatSync(includePath).isFile();
-  const ignored = new Set(await nulPaths(["--full-name", "--others", "--ignored", "--exclude-standard",
-    ...(hasIncludes ? [] : ["--", ${JSON.stringify(STAGED_INPUT_GIT_PATHSPEC)}]),
-  ]));
+  const { ignored, included } = ignoredPaths ?? (await readIgnoredWorkspacePaths());
   for (const candidate of ignored) {
     if (isStagedInput(candidate)) addSelected(candidate);
   }
-  if (hasIncludes) {
-    // Keep standard excludes out of this query. Their union would select every
-    // ignored path instead of only explicit .worktreeinclude matches.
-    for (const candidate of await nulPaths([
-      "--full-name",
-      "--others",
-      "--ignored",
-      "--exclude-from=" + includePath,
-    ])) {
-      if (ignored.has(candidate)) {
-        // .worktreeinclude is an explicit admission decision. Retain new
-        // cache-root selections before the build-cache filter runs so worker
-        // edits under these roots remain visible to reconciliation.
-        rememberBuildCacheInputs([candidate]);
-        addSelected(candidate);
-      }
-    }
+  for (const candidate of included) {
+    // .worktreeinclude is an explicit admission decision. Retain new
+    // cache-root selections before the build-cache filter runs so worker
+    // edits under these roots remain visible to reconciliation.
+    rememberBuildCacheInputs([candidate]);
+    addSelected(candidate);
   }
   for (const priorManifestDigest of priorManifestDigests) {
     const manifestRoot = path.join(process.env.HOME, ".openclaw-worker", "manifests");
@@ -383,7 +389,7 @@ async function eligiblePaths() {
   return [...selected].filter((relative) => !isExcludedWorkspacePath(relative)).sort();
 }
 async function initializeRetainedBuildCacheInputs() {
-  if (!fs.existsSync(path.join(root, ".git"))) return;
+  if (!fs.existsSync(path.join(root, ".git"))) return null;
   excludeBuildCaches = true;
   let paths = [];
   if (requestedBaseCommit && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(requestedBaseCommit)) {
@@ -405,12 +411,15 @@ async function initializeRetainedBuildCacheInputs() {
     }
   }
   // The index also admits inputs staged after the requested base commit.
+  const ignoredPaths = await readIgnoredWorkspacePaths();
   rememberBuildCacheInputs([
     ...paths,
     ...priorPaths,
     ...(await nulPaths(["--full-name", "--cached"])),
     ...readRetainedInputs(),
+    ...ignoredPaths.included,
   ]);
+  return ignoredPaths;
 }
 function assertSerializedManifestBudget(baseCommit, entries) {
   let bytes = Buffer.byteLength(JSON.stringify({ version: 1, baseCommit, entries: [] }));
@@ -568,10 +577,10 @@ async function main() {
     process.stdout.write("sha256:" + resolveManifest(manifestRoot, requestedManifestDigest) + "\n");
     return;
   }
-  await initializeRetainedBuildCacheInputs();
+  const ignoredPaths = await initializeRetainedBuildCacheInputs();
   assertManifestCurrent();
   if (eligibleOnly) {
-    for (const relative of await eligiblePaths()) addWithParents(relative);
+    for (const relative of await eligiblePaths(ignoredPaths)) addWithParents(relative);
   } else {
     walk("");
   }

@@ -355,8 +355,11 @@ it("retains admitted plain-workspace cache inputs when Git metadata appears", as
     tempDirs.make("workspace-plain-admission-"),
   );
   const authored = ".artifacts/build-all-cache/authored.txt";
+  const selected = ".artifacts/build-all-cache/compiler-input.json";
   const generated = ".artifacts/build-all-cache/generated/output.js";
   await writeWorkspaceFiles(workspace, {
+    ".gitignore": ".artifacts/build-all-cache/\n",
+    ".worktreeinclude": `${selected}\n`,
     "source.txt": "source\n",
     [authored]: "authored before Git\n",
   });
@@ -372,12 +375,16 @@ it("retains admitted plain-workspace cache inputs when Git metadata appears", as
     timeoutMs: 10_000,
   });
   expect(initialized.code, initialized.stderr).toBe(0);
-  await writeWorkspaceFiles(workspace, { [generated]: "disposable cache\n" });
+  await writeWorkspaceFiles(workspace, {
+    [selected]: "selected after Git\n",
+    [generated]: "disposable cache\n",
+  });
 
   const captured = await runManifest(["", "all", plainRef.slice(7)]);
   expect(captured.code, captured.stderr).toBe(0);
   const manifest = await readManifest(captured.stdout.trim());
   expect(manifest.entries.some((entry) => entry.path === authored)).toBe(true);
+  expect(manifest.entries.some((entry) => entry.path === selected)).toBe(true);
   expect(manifest.entries.some((entry) => entry.path === generated)).toBe(false);
   expect(manifest.entries.some((entry) => entry.path === "source.txt")).toBe(true);
 });
