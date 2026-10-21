@@ -76,6 +76,7 @@ export function createInitialCronState<Row = CronJob>(
     connected: snapshot.connected ?? false,
     cronLoading: false,
     cronJobsError: null,
+    cronJobsReadDenied: false,
     cronJobsLoadingMore: false,
     cronJobsReloadPending: false,
     cronJobsReloadPendingTableFilters: false,

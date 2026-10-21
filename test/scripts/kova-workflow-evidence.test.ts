@@ -104,38 +104,21 @@ describe("Kova workflow evidence", () => {
     });
   });
 
-  it.each<{
-    name: string;
-    evidence: Partial<ReturnType<typeof record>["providerEvidence"]>;
-    reason: string;
-  }>([
-    {
-      name: "mock-provider evidence",
-      evidence: { source: "mock-provider-log" },
-      reason: "provider source was mock-provider-log",
-    },
-    {
-      name: "different model",
-      evidence: { models: [{ value: "gpt-5.5", count: 1 }] },
-      reason: "provider model did not match gpt-5.6",
-    },
-    {
-      name: "mixed models",
-      evidence: {
+  it.each<[Partial<ReturnType<typeof record>["providerEvidence"]>, string]>([
+    [{ source: "mock-provider-log" }, "provider source was mock-provider-log"],
+    [{ models: [{ value: "gpt-5.5", count: 1 }] }, "provider model did not match gpt-5.6"],
+    [
+      {
         requestCount: 2,
         models: [
           { value: MODEL, count: 1 },
           { value: "gpt-5.5", count: 1 },
         ],
       },
-      reason: "provider model evidence was not exact",
-    },
-    {
-      name: "model count drift",
-      evidence: { models: [{ value: MODEL, count: 2 }] },
-      reason: "provider model count did not match request count",
-    },
-  ])("rejects live $name", ({ evidence, reason }) => {
+      "provider model evidence was not exact",
+    ],
+    [{ models: [{ value: MODEL, count: 2 }] }, "provider model count did not match request count"],
+  ])("rejects live evidence %j: %s", (evidence, reason) => {
     const { laneReport, validate } = fixture("live");
     Object.assign(laneReport.records[0]!.providerEvidence, evidence);
     expect(validate).toThrow(`live record scenario-a/state-a ${reason}`);

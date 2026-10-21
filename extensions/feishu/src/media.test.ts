@@ -489,9 +489,9 @@ describe("saveMessageResourceFeishu", () => {
       });
     }
     expect(result).toMatchObject({
-      saved: { size: "fake-ios-video-data".length },
+      size: "fake-ios-video-data".length,
       contentType: "video/mp4",
-      fileName: "ios-video.mp4",
+      id: expect.stringMatching(/^ios-video---[a-f0-9-]{36}\.mp4$/),
     });
   });
 
@@ -523,11 +523,7 @@ describe("saveMessageResourceFeishu", () => {
       const result = await downloadResource(
         source === "payload" ? { originalFilename: latin1 } : {},
       );
-      if (source === "header") {
-        expect(result.fileName).toBe(fileName);
-      } else {
-        expect(result.saved.id).toMatch(/^武汉15座山登山信息汇总---[a-f0-9-]{36}\.csv$/);
-      }
+      expect(result.id).toMatch(/^武汉15座山登山信息汇总---[a-f0-9-]{36}\.csv$/);
     },
   );
 

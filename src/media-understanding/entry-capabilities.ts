@@ -37,7 +37,12 @@ export function resolveEffectiveMediaEntryCapabilities(params: {
   if (!providerId) {
     return undefined;
   }
-  return params.providerRegistry.get(providerId)?.capabilities;
+  const provider = params.providerRegistry.get(providerId);
+  return provider?.sharedEntryCapabilities === undefined
+    ? provider?.capabilities
+    : provider.sharedEntryCapabilities.filter((capability) =>
+        provider.capabilities?.includes(capability),
+      );
 }
 
 export function matchesMediaEntryCapability(params: {

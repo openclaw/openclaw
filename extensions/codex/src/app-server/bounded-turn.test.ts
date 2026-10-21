@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
 import {
   codexModel,
@@ -11,7 +11,10 @@ import {
   threadStartResult,
 } from "./bounded-turn.test-harness.js";
 import type { JsonValue } from "./protocol.js";
+import * as shared from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 function requestParams(fake: ReturnType<typeof createClientFactory>, method: string) {
   return fake.request.mock.calls.find(([name]) => name === method)?.[1];
@@ -44,9 +47,10 @@ const clientOptions = (fake: ReturnType<typeof createClientFactory>) =>
   vi.mocked(fake.factory).mock.calls[0]?.[0];
 
 function runTurn(
-  clientFactory: TurnParams["options"]["clientFactory"],
+  clientFactory: typeof shared.createIsolatedCodexAppServerClient,
   params: Partial<TurnParams> = {},
 ) {
+  vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockImplementation(clientFactory);
   return runBoundedCodexAppServerTurn({
     model: { mode: "required", id: "gpt-5.4" },
     timeoutMs: 5_000,
@@ -56,7 +60,7 @@ function runTurn(
     requiredModalities: ["text"],
     isolation: "private-stdio",
     ...params,
-    options: { ...params.options, clientFactory },
+    options: params.options ?? {},
   });
 }
 

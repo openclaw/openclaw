@@ -255,6 +255,7 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
                             <button
                               type="button"
                               class="btn btn--sm"
+                              aria-label={`${t("mcpApp.settings")}: ${row().entry.title}`}
                               disabled={!catalog.available()}
                               onClick={() => open(row().server, row().entry, true)}
                             >
