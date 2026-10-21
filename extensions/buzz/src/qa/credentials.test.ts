@@ -52,20 +52,14 @@ describe("Buzz QA credentials", () => {
   });
 
   it("never includes credential values in validation errors", () => {
-    const privateKey = "not-a-private-key-value";
-    const authTag = "not-an-auth-tag-value";
-    const malformed = {
-      ...credentialPayload,
-      driverPrivateKey: privateKey,
-      driverAuthTag: authTag,
-    };
+    const invalid = { driverPrivateKey: "bad-key", driverAuthTag: "bad-tag" };
     try {
-      parseBuzzQaCredentialPayload(malformed);
+      parseBuzzQaCredentialPayload({ ...credentialPayload, ...invalid });
       expect.fail("Expected malformed credentials to be rejected");
     } catch (error) {
       expect(error).toMatchObject({ message: "Buzz QA credentials are missing or malformed." });
-      expect(String(error)).not.toContain(privateKey);
-      expect(String(error)).not.toContain(authTag);
+      expect(String(error)).not.toContain(invalid.driverPrivateKey);
+      expect(String(error)).not.toContain(invalid.driverAuthTag);
     }
   });
 
