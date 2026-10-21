@@ -154,6 +154,14 @@ async function fixture(fork = false, linked = true) {
       if (value) {
         return commandResult(JSON.stringify(value));
       }
+      const comparePrefix = `repos/${headRepo.full_name}/compare/`;
+      if (endpoint.startsWith(comparePrefix)) {
+        const [from, to] = endpoint.slice(comparePrefix.length).split("?")[0]!.split("...");
+        if (!remoteCommits.has(from!) || !remoteCommits.has(to!)) {
+          return commandResult("", 1);
+        }
+        return commandResult(JSON.stringify({ sha: await local.git("merge-base", from!, to!) }));
+      }
       const commitPrefix = `repos/${headRepo.full_name}/git/commits/`;
       if (endpoint.startsWith(commitPrefix)) {
         const sha = endpoint.slice(commitPrefix.length);
@@ -197,6 +205,12 @@ async function fixture(fork = false, linked = true) {
     },
     rewindRemoteBranch() {
       branchHead = originalHead;
+    },
+    async pushAsAuthor(parent: string) {
+      const tree = await local.git("rev-parse", `${parent}^{tree}`);
+      branchHead = await local.git("commit-tree", tree, "-p", parent, "-m", "Author follow-up");
+      pr.head.sha = branchHead;
+      remoteCommits.add(branchHead);
     },
     async acceptNewerSource() {
       await fs.writeFile(
@@ -440,6 +454,26 @@ describe("shared publication to a prepared original PR", () => {
     expect(f.pushes).toHaveLength(1);
     expect(f.mutations).toEqual([]);
   });
+
+  it.each([true, false])(
+    "settles an accepted update after a later author push only when it contains that update (descendant=%s)",
+    async (descendant) => {
+      const f = await fixture(true);
+      f.loseResponse();
+      expect(await f.publish("author-push-after-acceptance")).toMatchObject({
+        status: "publishing",
+      });
+      const accepted = f.pr.head.sha;
+      await f.pushAsAuthor(descendant ? accepted : f.originalHead);
+      expect(await f.publish("author-push-after-acceptance")).toMatchObject(
+        descendant
+          ? { status: "published", url: f.pr.html_url, headCommit: accepted }
+          : { status: "failed", code: "push_rejected" },
+      );
+      expect(f.pushes).toHaveLength(1);
+      expect(f.mutations).toEqual([]);
+    },
+  );
 
   it.each(["closed", "revoked"])(
     "preserves an accepted request without returning a receipt to a %s requester",

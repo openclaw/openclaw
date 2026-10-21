@@ -215,14 +215,35 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       if (!params.requester || row.identity_source === "personal") {
         throw new GitHubPublicationRequesterUnavailableError();
       }
-      bound = await prepareBoundGitHubPublication({
-        pullRequest,
-        row,
-        cwd: worktree.path,
-        requester: params.requester(),
-        refreshIdentity,
-        assertCurrent: assertAuthority,
-      });
+      try {
+        bound = await prepareBoundGitHubPublication({
+          pullRequest,
+          row,
+          cwd: worktree.path,
+          requester: params.requester(),
+          refreshIdentity,
+          assertCurrent: assertAuthority,
+        });
+      } catch (error) {
+        // A journaled commit may already be on the PR beneath a later author push. Only a
+        // confirmed observation of that commit settles the request; otherwise the refusal stands.
+        if (
+          error instanceof GitHubPublicationBranchChangedError &&
+          row.head_commit &&
+          row.head_commit !== row.source_head_commit
+        ) {
+          const reconciled = await reconcileObservedPublication().catch((cause: unknown) => {
+            if (cause instanceof GitHubPublicationRecoveryPendingError) {
+              return undefined;
+            }
+            throw cause;
+          });
+          if (reconciled) {
+            return reconciled;
+          }
+        }
+        throw error;
+      }
       if (bound.observedPublication) {
         return await reconcileObservedPublication();
       }
