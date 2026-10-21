@@ -457,6 +457,26 @@ describe("chrome.ts internal", () => {
       running.proc.kill?.("SIGTERM");
     }
 
+    async function abortPendingLaunch(proc: FakeProc, reason: Error) {
+      stubBrowserExecutableAndPrefs("present");
+      spawnMock.mockReturnValue(proc);
+      const probeEntered = createDeferred<void>();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          probeEntered.resolve();
+          throw new Error("ECONNREFUSED");
+        }),
+      );
+      const controller = new AbortController();
+      const launch = launchOpenClawChrome(makeResolved(), makeProfile(proc.pid!), {
+        signal: controller.signal,
+      });
+      await probeEntered.promise;
+      controller.abort(reason);
+      return await launch;
+    }
+
     const captureFailedLaunchStderr = async (params: {
       port: number;
       chunks: readonly (Buffer | string)[];
@@ -593,27 +613,9 @@ describe("chrome.ts internal", () => {
     });
 
     it("aborts a deferred managed launch and proves its exact child exited", async () => {
-      stubBrowserExecutableAndPrefs("present");
       const proc = makeFakeProc({ pid: 51114 });
-      spawnMock.mockReturnValue(proc);
-      const probeEntered = createDeferred<void>();
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => {
-          probeEntered.resolve();
-          throw new Error("ECONNREFUSED");
-        }),
-      );
-      const controller = new AbortController();
       const reason = new Error("lifecycle invalidated");
-
-      const launch = launchOpenClawChrome(makeResolved(), makeProfile(51114), {
-        signal: controller.signal,
-      });
-      await probeEntered.promise;
-      controller.abort(reason);
-
-      await expect(launch).rejects.toBe(reason);
+      await expect(abortPendingLaunch(proc, reason)).rejects.toBe(reason);
       expect(proc.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
       expect(proc.signalCode).toBe("SIGKILL");
     });
@@ -641,29 +643,10 @@ describe("chrome.ts internal", () => {
     });
 
     it("returns the exact child when abort cleanup cannot prove process exit", async () => {
-      stubBrowserExecutableAndPrefs("present");
-      const proc = makeFakeProc({
-        pid: 51116,
-        kill: vi.fn(() => true),
-      });
-      spawnMock.mockReturnValue(proc);
-      const probeEntered = createDeferred<void>();
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => {
-          probeEntered.resolve();
-          throw new Error("ECONNREFUSED");
-        }),
+      const proc = makeFakeProc({ pid: 51116, kill: vi.fn(() => true) });
+      const error = await abortPendingLaunch(proc, new Error("stop invalidated launch")).catch(
+        (err: unknown) => err,
       );
-      const controller = new AbortController();
-
-      const launch = launchOpenClawChrome(makeResolved(), makeProfile(51116), {
-        signal: controller.signal,
-      });
-      await probeEntered.promise;
-      controller.abort(new Error("stop invalidated launch"));
-      const error = await launch.catch((err: unknown) => err);
-
       expect(error).toBeInstanceOf(ManagedChromeCleanupError);
       expect(error).toMatchObject({ running: { pid: 51116, proc } });
       expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
