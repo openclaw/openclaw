@@ -1,9 +1,9 @@
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveSandboxSkillsRoot } from "../../config/paths.js";
 import { resolveUserPath } from "../../infra/home-dir.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace-default.js";
-import { SANDBOX_STATE_DIR } from "./constants.js";
 import { hashTextSha256 } from "./hash.js";
 import type { SandboxConfig, SandboxIsolationSubject } from "./types.js";
 import { resolveMaterializedSandboxSkillsWorkspaceDir } from "./workspace-mounts.js";
@@ -125,10 +125,7 @@ export function resolveSandboxWorkspaceLayoutPaths(params: {
       : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
   const workspaceDir =
     params.cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
-  const materializedSkillsRoot = resolveSandboxWorkspaceDir(
-    path.join(SANDBOX_STATE_DIR, "skills-workspaces"),
-    scopeKey,
-  );
+  const materializedSkillsRoot = resolveSandboxWorkspaceDir(resolveSandboxSkillsRoot(), scopeKey);
   const skillsWorkspaceDir =
     params.cfg.workspaceAccess === "rw"
       ? resolveMaterializedSandboxSkillsWorkspaceDir(materializedSkillsRoot)

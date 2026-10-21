@@ -185,6 +185,7 @@ export async function agentExecCommand(
   const runtimeCleanup = createAgentCleanupScope();
   let temporaryStateDir: string | undefined;
   let restoreEnvironment: (() => void) | undefined;
+  let restoreReusableSandboxSkillsRoot: (() => void) | undefined;
   let restoreConfigEnvironment: (() => void) | undefined;
   let restoreOverrideEnvironment: (() => void) | undefined;
   let restoreRuntimeConfigSnapshot: (() => void) | undefined;
@@ -288,6 +289,15 @@ export async function agentExecCommand(
     restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
     runtimePaths.pinRuntimePaths();
     if (temporaryStateDir) {
+      // Retained sandbox containers keep skill copies as read-only bind sources, so
+      // that path follows the installation lifetime while session state stays temporary.
+      const paths = runtimePaths;
+      const previousSkillsRoot = paths.pinSandboxSkillsRoot(
+        paths.resolveSandboxSkillsRootForState(storedAuthStateDir),
+      );
+      restoreReusableSandboxSkillsRoot = () => {
+        paths.pinSandboxSkillsRoot(previousSkillsRoot);
+      };
       const { createOpenClawDatabaseMaintenanceScope } =
         await import("../state/openclaw-state-db-async-lifecycle.js");
       // Temporary runs own their resources without borrowing maintenance schema authority.
@@ -437,6 +447,7 @@ export async function agentExecCommand(
       cleanupError ??= error;
     }
   };
+  runCleanupStep(() => restoreReusableSandboxSkillsRoot?.());
   runCleanupStep(() => restoreEnvironment?.());
   runCleanupStep(() => restoreOverrideEnvironment?.());
   runCleanupStep(() => restoreConfigEnvironment?.());
