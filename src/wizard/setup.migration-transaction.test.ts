@@ -100,11 +100,6 @@ async function mutateConfig(
   });
 }
 
-async function expectUnpromoted(root: string, currentConfig: { value: Record<string, unknown> }) {
-  await expect(fs.access(memoryPath(root))).rejects.toThrow();
-  expect(currentConfig.value).toEqual({});
-}
-
 function provider(params: {
   source: string;
   mutateDuringApply?: (ctx: MigrationProviderContext) => Promise<void>;
@@ -211,8 +206,16 @@ async function createImportFixture() {
         commitConfigFile: async (config) => (currentConfig.value = structuredClone(config)),
         continueOnboarding: true,
       }),
-    unpromoted: () => expectUnpromoted(root, currentConfig),
+    unpromoted: async () => {
+      await expect(fs.access(memoryPath(root))).rejects.toThrow();
+      expect(currentConfig.value).toEqual({});
+    },
     memory: () => fs.readFile(memoryPath(root), "utf8"),
+    cleaned: async () => {
+      expect(
+        (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-migration-")),
+      ).toEqual([]);
+    },
   };
 }
 
@@ -367,9 +370,7 @@ it.each([true, false])(
     }
     expect(mocks.runEmbedded).toHaveBeenCalledOnce();
     expect(await fs.readFile(source, "utf8")).toBe("remember this\n");
-    expect(
-      (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-migration-")),
-    ).toEqual([]);
+    await fixture.cleaned();
   },
 );
 
@@ -428,17 +429,13 @@ it("promotes while the live runtime state database changes during staged apply",
       liveClientBytes = await fs.readFile(resolveClientCredentialStorePath(liveEnv));
     },
   });
-  await expect(fixture.run()).resolves.toEqual({
-    kind: "no-imported-inference",
-  });
+  await expect(fixture.run()).resolves.toEqual({ kind: "no-imported-inference" });
   expect(await fixture.memory()).toBe("remember this\n");
   expect(JSON.stringify(currentConfig.value)).not.toContain(".openclaw-migration-");
   expect(mocks.verify).not.toHaveBeenCalled();
   expect(liveClientBytes).toBeDefined();
   expect(await fs.readFile(resolveClientCredentialStorePath(liveEnv))).toEqual(liveClientBytes);
-  expect(
-    (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-migration-")),
-  ).toEqual([]);
+  await fixture.cleaned();
   expect(listOpenClawRegisteredAgentDatabases({ env: liveEnv })).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ agentId: "main" }),
@@ -458,7 +455,7 @@ it.each([
 ] as const)(
   "rejects unsupported staged client %s without publishing or retaining the stage",
   async (material) => {
-    const { root, currentConfig } = fixture;
+    const { root } = fixture;
     fixture.install({
       mutateDuringApply: async (ctx) => {
         using credentials = openClientCredentialCustody(
@@ -522,14 +519,11 @@ it.each([
     });
 
     await expect(fixture.run()).rejects.toThrow("unsupported staged client credentials");
-    expect(currentConfig.value).toEqual({});
-    await expect(fs.access(path.join(root, "workspace", "MEMORY.md"))).rejects.toThrow();
+    await fixture.unpromoted();
     await expect(
       fs.access(path.join(root, "openclaw-state", "client", "credentials.sqlite")),
     ).rejects.toThrow();
-    expect(
-      (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-migration-")),
-    ).toEqual([]);
+    await fixture.cleaned();
   },
 );
 
@@ -554,9 +548,7 @@ it("routes deferred writes through the canonical runtime and retries only failed
   const initialProvider = installDeferred(false);
   const plan = vi.fn(initialProvider.plan);
   mocks.provider = { ...initialProvider, plan };
-  await expect(fixture.run()).resolves.toEqual({
-    kind: "no-imported-inference",
-  });
+  await expect(fixture.run()).resolves.toEqual({ kind: "no-imported-inference" });
   expect(activationCalls).toEqual(["plugin:calendar", "plugin:drive"]);
   expect(mocks.canonicalMutateConfigFile).toHaveBeenCalledOnce();
   expect(fixture.currentConfig.value).toMatchObject({ gateway: { port: 23456 } });
@@ -569,9 +561,7 @@ it("routes deferred writes through the canonical runtime and retries only failed
   );
   expect(JSON.stringify(initialReport)).not.toContain(".openclaw-migration-");
   installDeferred(true).plan = plan;
-  await expect(fixture.run()).resolves.toEqual({
-    kind: "no-imported-inference",
-  });
+  await expect(fixture.run()).resolves.toEqual({ kind: "no-imported-inference" });
   expect(plan).toHaveBeenCalledOnce();
   expect(mocks.canonicalMutateConfigFile).toHaveBeenCalledOnce();
   expect(activationCalls).toEqual(["plugin:calendar", "plugin:drive", "plugin:drive"]);
