@@ -48,14 +48,17 @@ afterEach(async () => {
 
 describe("discord model picker preferences", () => {
   it("records recent models in recency order without duplicates", async () => {
-    const env = await createStateEnv();
-    const scope = { userId: "123" };
+    const userScope = { userId: "123" };
 
-    await recordDiscordModelPickerRecentModel({ env, scope, modelRef: "openai/gpt-4o" });
-    await recordDiscordModelPickerRecentModel({ env, scope, modelRef: "openai/gpt-4.1" });
-    await recordDiscordModelPickerRecentModel({ env, scope, modelRef: "openai/gpt-4o" });
+    await recordDiscordModelPickerRecentModel({ env, scope: userScope, modelRef: "openai/gpt-4o" });
+    await recordDiscordModelPickerRecentModel({
+      env,
+      scope: userScope,
+      modelRef: "openai/gpt-4.1",
+    });
+    await recordDiscordModelPickerRecentModel({ env, scope: userScope, modelRef: "openai/gpt-4o" });
 
-    const recent = await readDiscordModelPickerRecentModels({ env, scope });
+    const recent = await readDiscordModelPickerRecentModels({ env, scope: userScope });
     expect(recent).toEqual(["openai/gpt-4o", "openai/gpt-4.1"]);
   });
 
@@ -67,21 +70,19 @@ describe("discord model picker preferences", () => {
   });
 
   it("prunes older stored models beyond the recent limit", async () => {
-    const env = await createStateEnv();
-    const scope = { userId: "limited-user" };
+    const userScope = { userId: "limited-user" };
     for (const modelRef of [
       "openai/model-a",
       "openai/model-b",
       "openai/model-c",
       "openai/model-d",
     ]) {
-      await recordDiscordModelPickerRecentModel({ env, scope, modelRef, limit: 2 });
+      await recordDiscordModelPickerRecentModel({ env, scope: userScope, modelRef, limit: 2 });
     }
 
-    await expect(readDiscordModelPickerRecentModels({ env, scope, limit: 10 })).resolves.toEqual([
-      "openai/model-d",
-      "openai/model-c",
-    ]);
+    await expect(
+      readDiscordModelPickerRecentModels({ env, scope: userScope, limit: 10 }),
+    ).resolves.toEqual(["openai/model-d", "openai/model-c"]);
     const store = createPluginStateKeyedStoreForTests<unknown>("discord", {
       namespace: "model-picker-preferences",
       maxEntries: 2_000,
