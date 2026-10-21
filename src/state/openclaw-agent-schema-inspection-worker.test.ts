@@ -4,10 +4,12 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
+import * as sqliteInspection from "../infra/sqlite-readonly-worker.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
+import { preflightAgentDatabasesBounded } from "./openclaw-database-preflight-agent-scheduler.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -26,6 +28,73 @@ function createSource(sql: string) {
   database.exec(sql);
   return pathname;
 }
+
+it.each(["abort", "dispose"] as const)("joins an unused prestarted child on %s", async (stop) => {
+  const controller = new AbortController();
+  await using reader = createAgentSchemaInspectionWorker();
+  vi.mocked(fork).mockClear();
+  reader.prestart(controller.signal);
+  const child = vi.mocked(fork).mock.results[0]?.value;
+  expect(child?.pid).toBeGreaterThan(0);
+  const closed = vi.fn();
+  child.once("close", closed);
+  const closure = new Promise<void>((resolve) => {
+    child.once("close", resolve);
+  });
+  if (stop === "abort") {
+    controller.abort(new Error("startup stopped before target discovery"));
+    await closure;
+  }
+  await reader[Symbol.asyncDispose]();
+  expect(closed).toHaveBeenCalledOnce();
+  expect([reader.processCount, reader.inspectionCount, reader.snapshotCount]).toEqual([1, 0, 0]);
+});
+
+it("hands its prestarted child to the first scheduler slot without spending inspection time", async () => {
+  const pathname = createSource("CREATE TABLE probe(value TEXT); PRAGMA user_version = 1;");
+  await using reader = createAgentSchemaInspectionWorker();
+  vi.mocked(fork).mockClear();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const budget = vi.spyOn(sqliteInspection, "readSqliteInspectionBudget").mockReturnValue({
+    timeoutMs: 1_000,
+    size: "fixture",
+  });
+  try {
+    reader.prestart();
+    const child = vi.mocked(fork).mock.results[0]?.value;
+    const closed = vi.fn();
+    child.once("close", closed);
+    // Discovery can outlast an inspection's entire budget; only the eventual read spends it.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(child.killed).toBe(false);
+    let available: typeof reader | undefined = reader;
+    const stats = await preflightAgentDatabasesBounded(
+      [pathname],
+      async (target, _inspection, _claim, inspect) => {
+        const result = await inspect({ pathname: target, supportedVersion: 1 });
+        expect(result).toMatchObject({ version: 1, failure: undefined });
+      },
+      { incompatible: [], indeterminate: [] },
+      undefined,
+      undefined,
+      () => {
+        const transferred = available;
+        available = undefined;
+        return transferred;
+      },
+    );
+    expect(stats).toEqual({
+      schemaProcessCount: 1,
+      schemaInspectionCount: 1,
+      schemaSnapshotCount: 0,
+    });
+    expect(fork).toHaveBeenCalledOnce();
+    expect(closed).toHaveBeenCalledOnce();
+  } finally {
+    budget.mockRestore();
+    vi.useRealTimers();
+  }
+});
 
 it("inspects state in cold children without executing comparison DDL", async () => {
   const directory = tempDirs.make("state-schema-contract-transfer-");

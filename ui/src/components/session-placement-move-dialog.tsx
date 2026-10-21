@@ -1,14 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import {
-  createMemo,
-  createSignal,
-  Errored,
-  For,
-  Loading,
-  onCleanup,
-  onSettled,
-  Show,
-} from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, onSettled, Show } from "solid-js";
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
@@ -495,7 +486,7 @@ function DestinationGroup(props: {
       }
     });
   };
-  onCleanup(() => animation?.cancel());
+  onSettled(() => () => animation?.cancel());
   return (
     <Show when={props.rows.length > 0}>
       <section class="session-move__group" aria-label={props.label}>

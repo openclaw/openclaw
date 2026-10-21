@@ -1,6 +1,6 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import "../../styles/approval.css";
 import "../../styles/chat/question-card.css";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSignal, onCleanup, For, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -16,15 +16,18 @@ import {
   submitQuestionPrompt,
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
+import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ChatQuestionCard } from "../chat/components/chat-question-card-view.tsx";
 import { createGatewayQuestionPanelProps } from "../chat/components/chat-question-card.ts";
 import { terminalAnswer } from "../chat/components/chat-question-summary.tsx";
+
+registerEnglishCatalog(registerApprovalsEnglish);
 
 type QuestionPageRequestError = "connection" | "load" | "unavailable" | null;
 
