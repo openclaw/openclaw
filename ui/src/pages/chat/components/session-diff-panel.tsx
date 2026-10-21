@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, createStore, onSettled, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { nativeGatewaysCapability } from "../../../app/native-gateways.runtime.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -54,32 +54,27 @@ export function SessionDiffPanel(props: SessionDiffProps) {
   const collapseEntry = createMemo(
     () => ({
       desktop: desktop(),
-      active: props.active !== false,
+      active: desktop() && props.active !== false,
       paths: value()?.views.map((view) => view.file.path) ?? [],
     }),
     {
       equals: (before, after) => before.desktop === after.desktop && before.active === after.active,
     },
   );
-  type CollapseState = { presentation: ReturnType<typeof collapseEntry>; paths: Set<string> };
-  // Entry resets the view; data refreshes and local disclosure choices retain their state.
-  const [collapseState, setCollapseState] = createSignal<CollapseState>((previous) => {
-    const next = collapseEntry();
-    const entering = next !== previous?.presentation;
-    const paths =
-      entering && next.desktop && next.active
-        ? new Set(next.paths)
-        : entering && !next.desktop && previous?.presentation.desktop
-          ? new Set<string>()
-          : (previous?.paths ?? new Set<string>());
-    return { presentation: next, paths };
-  });
-  const collapsedPaths = () => collapseState().paths;
-  const setCollapsedPaths = (next: Set<string> | ((paths: Set<string>) => Set<string>)) =>
-    setCollapseState((previous) => ({
-      ...previous,
-      paths: typeof next === "function" ? next(previous.paths) : next,
-    }));
+  // Desktop entry resets disclosure; native activity and data refreshes retain local choices.
+  const [collapsedFiles, setCollapsedFiles] = createStore<Record<string, true>>(
+    (draft: Record<string, true>) => {
+      const entry = collapseEntry();
+      return entry.desktop && !entry.active
+        ? draft
+        : Object.fromEntries<true>(
+            (entry.desktop ? entry.paths : []).map((path) => [`file:${path}`, true]),
+          );
+    },
+    Object.create(null),
+  );
+  // Prefix Git paths because Solid reserves prototype-related object keys.
+  const isCollapsed = (path: string) => collapsedFiles[`file:${path}`] === true;
   const [menu, setMenu] = createSignal<SessionDiffMenuData | null>(null);
   // Local scope choices survive until a new request from this owner arrives.
   const [scope, setScope] = createSignal<SessionDiffScope>((previous) => {
@@ -153,7 +148,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     const budget = createDiffPairingBudget();
     return new Map(
       (value()?.views ?? [])
-        .filter((view) => !collapsedPaths().has(view.file.path))
+        .filter((view) => !isCollapsed(view.file.path))
         .map((view) => [view, pairSessionDiffLines(view.source.parsed?.lines ?? [], budget)]),
     );
   });
@@ -234,17 +229,18 @@ export function SessionDiffPanel(props: SessionDiffProps) {
           setValue({ owner, scope: requestedScope, result, views });
           props.onResult?.({ owner, scope: requestedScope, result });
           const currentPaths = new Set(views.map((view) => view.file.path));
-          setCollapsedPaths(
-            (paths) =>
-              new Set([
-                ...[...paths].filter((path) => currentPaths.has(path)),
-                ...(desktop()
-                  ? views
-                      .filter((view) => !reusable.some((old) => old.file.path === view.file.path))
-                      .map((view) => view.file.path)
-                  : []),
-              ]),
-          );
+          setCollapsedFiles((paths) => {
+            for (const key of Object.keys(paths)) {
+              if (!currentPaths.has(key.slice("file:".length))) {
+                delete paths[key];
+              }
+            }
+            for (const view of desktop() ? views : []) {
+              if (!reusable.some((old) => old.file.path === view.file.path)) {
+                paths[`file:${view.file.path}`] = true;
+              }
+            }
+          });
           if (!currentPaths.has(selectedPath() ?? "")) {
             setSelectedPath(null);
           }
@@ -292,7 +288,9 @@ export function SessionDiffPanel(props: SessionDiffProps) {
   function jumpToFile(path: string) {
     setMotionInstant(true);
     setSelectedPath(path);
-    setCollapsedPaths((paths) => new Set([...paths].filter((entry) => entry !== path)));
+    setCollapsedFiles((paths) => {
+      delete paths[`file:${path}`];
+    });
     // Scrolling needs the expanded file's committed height, and menu return-focus
     // must settle before focus moves to the selected file.
     onSettled(() => {
@@ -301,27 +299,33 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     });
   }
   function toggleFile(path: string) {
-    const collapsing = !collapsedPaths().has(path);
+    const collapsing = !isCollapsed(path);
     const element = fileElements.get(path);
     const readingAbove =
       collapsing &&
       element &&
       element.getBoundingClientRect().top <
         (element.parentElement?.getBoundingClientRect().top ?? 0);
-    setCollapsedPaths((paths) => {
-      const next = new Set(paths);
-      if (next.has(path)) {
-        next.delete(path);
+    setCollapsedFiles((paths) => {
+      const key = `file:${path}`;
+      if (paths[key]) {
+        delete paths[key];
       } else {
-        next.add(path);
+        paths[key] = true;
       }
-      return next;
     });
     if (readingAbove) {
       onSettled(() => {
         element.scrollIntoView({ block: "start" });
       });
     }
+  }
+  function collapseAll() {
+    setCollapsedFiles(() =>
+      Object.fromEntries<true>(
+        (value()?.views ?? []).map(({ file }) => [`file:${file.path}`, true]),
+      ),
+    );
   }
   function toggleTree() {
     const next = !treeOpen();
@@ -367,10 +371,10 @@ export function SessionDiffPanel(props: SessionDiffProps) {
         codePresentations.get(action.path)?.expand();
         return;
       case "collapse-all":
-        setCollapsedPaths(new Set(value()?.views.map((view) => view.file.path) ?? []));
+        collapseAll();
         return;
       case "expand-all":
-        setCollapsedPaths(new Set<string>());
+        setCollapsedFiles(() => Object.create(null));
         return;
       case "toggle-wrap": {
         if (mobile()) {
@@ -558,7 +562,8 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     props,
     desktop,
     mobile,
-    collapsedPaths,
+    collapsedFiles,
+    isCollapsed,
     scope,
     split,
     wrap,
@@ -608,7 +613,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
       });
     },
     refreshCollapsed: () => {
-      setCollapsedPaths(new Set(value()?.views.map((view) => view.file.path) ?? []));
+      collapseAll();
       loadDiff();
     },
     renderMobileSync,

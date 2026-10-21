@@ -22,7 +22,7 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
     props,
     desktop,
     mobile,
-    collapsedPaths,
+    isCollapsed,
     wordDiffs,
     selectedPath,
     motionInstant,
@@ -147,7 +147,7 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
     // The keyed list retains this owner by source, not refreshed metadata.
     const source = () => fileProps.view.source;
     const file = () => fileProps.view.file;
-    const collapsed = () => collapsedPaths().has(file().path);
+    const collapsed = () => isCollapsed(file().path);
     // The pairing budget skips collapsed files. Keep its last real result while
     // the desktop reader is still painting its exit, rather than emptying Split.
     const rows = createMemo<ReturnType<typeof pairSessionDiffLines>>(
