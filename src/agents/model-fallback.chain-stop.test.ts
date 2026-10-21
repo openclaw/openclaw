@@ -91,45 +91,50 @@ async function terminalAbortWrapper(): Promise<Error> {
   assert(error instanceof Error);
   return error;
 }
-type StopInput = { error: Error | { message: string }; abortSignal?: AbortSignal };
-const stopCases: Array<{
-  reason: string;
-  make: () => StopInput | Promise<StopInput>;
-  image?: boolean;
-}> = [
-  { reason: "agent_run_terminal_timeout", make: () => ({ error: terminalTimeout() }) },
-  {
-    reason: "command_lane_task_timeout",
-    make: () => ({
-      error: new CommandLaneTaskTimeoutError("chain-stop-lane", {
+type StopError = Error | { message: string };
+const stopCases: Array<
+  [
+    reason: string,
+    make: () => StopError | Promise<StopError>,
+    image?: boolean,
+    opaqueName?: boolean,
+  ]
+> = [
+  ["agent_run_terminal_timeout", terminalTimeout],
+  [
+    "command_lane_task_timeout",
+    () =>
+      new CommandLaneTaskTimeoutError("chain-stop-lane", {
         cause: "release-signal",
         elapsedMs: 0,
         taskBudgetMs: 60_000,
       }),
-    }),
-  },
-  {
-    reason: "agent_harness_preflight",
-    make: () => ({ error: new AgentHarnessPreflightError("private preflight detail") }),
-    image: true,
-  },
-  {
-    reason: "sandbox_provisioning",
-    make: () => ({
-      error: toSandboxProvisioningError(new Error("private sandbox detail"), "fixture"),
-    }),
-  },
-  {
-    reason: "caller_signal_aborted",
-    make: () => ({ error: { message: "private caller detail" }, abortSignal: AbortSignal.abort() }),
-  },
-  { reason: "agent_run_direct_abort", make: () => ({ error: createAgentRunDirectAbortError() }) },
-  { reason: "agent_run_restart_abort", make: () => ({ error: createAgentRunRestartAbortError() }) },
-  {
-    reason: "session_placement_settlement_closed",
-    make: () => ({ error: createSessionPlacementSettlementClosedAbortError() }),
-  },
-  { reason: "terminal_abort_wrapper", make: async () => ({ error: await terminalAbortWrapper() }) },
+  ],
+  [
+    "agent_harness_preflight",
+    () => new AgentHarnessPreflightError("private preflight detail"),
+    true,
+  ],
+  [
+    "sandbox_provisioning",
+    () => toSandboxProvisioningError(new Error("private sandbox detail"), "fixture"),
+  ],
+  ["caller_signal_aborted", () => ({ message: "private caller detail" })],
+  ["agent_run_direct_abort", createAgentRunDirectAbortError],
+  ["agent_run_restart_abort", createAgentRunRestartAbortError],
+  ["session_placement_settlement_closed", createSessionPlacementSettlementClosedAbortError],
+  ["terminal_abort_wrapper", terminalAbortWrapper],
+  ...[
+    () => {
+      throw new Error("error name is unavailable");
+    },
+    () => Symbol("unusable error name"),
+  ].map((get): [string, () => Error, boolean, boolean] => [
+    "agent_run_terminal_timeout",
+    () => Object.defineProperty(terminalTimeout(), "name", { get }),
+    false,
+    true,
+  ]),
 ];
 
 it("preserves an idle-breaker result without reporting fallback success or trying another model", async () => {
@@ -211,14 +216,15 @@ it("does not attribute a returned timeout to a deduplicated single-candidate cha
 });
 
 it.each(stopCases)(
-  "records $reason once without replacing or retrying the failure",
-  async (row) => {
-    const { error, abortSignal } = await row.make();
+  "records %s once without replacing or retrying the failure (case %#)",
+  async (reason, make, image, opaqueName) => {
+    const error = await make();
+    const abortSignal = reason === "caller_signal_aborted" ? AbortSignal.abort() : undefined;
     Object.freeze(error);
     const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("must not run");
     const onError = vi.fn();
     const onFallbackStep = vi.fn<ModelFallbackStepHandler>();
-    const result = row.image
+    const result = image
       ? runWithImageModelFallback({
           cfg: { agents: { defaults: { imageModel } } },
           run,
@@ -234,46 +240,20 @@ it.each(stopCases)(
     expect(records).toHaveLength(1);
     expect(records[0]?.attributes).toMatchObject({
       event: "model_fallback_chain_stopped",
-      reason: row.reason,
+      reason,
       candidateProvider: "fixture-primary",
       candidateModel: "fixture-model",
-      ...(error instanceof Error ? { errorName: error.name } : {}),
-      ...(row.image ? {} : { sessionId: "chain-stop-session", lane: "chain-stop-lane" }),
+      ...(error instanceof Error && !opaqueName ? { errorName: error.name } : {}),
+      ...(image ? {} : { sessionId: "chain-stop-session", lane: "chain-stop-lane" }),
     });
     expect(records[0]?.attributes).not.toHaveProperty("decision");
     expect(records[0]?.attributes).not.toHaveProperty("fallbackStepType");
-    if (!(error instanceof Error)) {
+    if (!(error instanceof Error) || opaqueName) {
       expect(records[0]?.attributes).not.toHaveProperty("errorName");
     }
     expect(JSON.stringify(records)).not.toContain(error.message);
   },
 );
-
-it.each([
-  {
-    name: "cannot be read",
-    read() {
-      throw new Error("error name is unavailable");
-    },
-  },
-  { name: "is not a string", read: () => Symbol("unusable error name") },
-])("preserves a terminal timeout when its error name $name", async ({ read }) => {
-  const error = terminalTimeout();
-  Object.defineProperty(error, "name", { get: read });
-  const run = vi.fn().mockRejectedValue(error);
-  const failure = await runWithModelFallback({ ...fallbackOptions, run }).catch(
-    (caught: unknown) => caught,
-  );
-  expect(failure === error).toBe(true);
-  expect(run).toHaveBeenCalledOnce();
-  await capture.flush();
-  expect(fallbackRecords()).toHaveLength(1);
-  expect(fallbackRecords()[0]?.attributes).toMatchObject({
-    event: "model_fallback_chain_stopped",
-    reason: "agent_run_terminal_timeout",
-  });
-  expect(fallbackRecords()[0]?.attributes).not.toHaveProperty("errorName");
-});
 
 it("sanitizes compact stop diagnostics without exposing error details", async () => {
   const provider = "fixture\nprovider\u001b[31m";

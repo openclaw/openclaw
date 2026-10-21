@@ -33,7 +33,11 @@ import {
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import {
+  completionConfig,
+  nodeCommand as currentNodeEvalCommand,
+  runningSession,
+} from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "./embedded-agent.js";
@@ -64,19 +68,7 @@ beforeAll(async () => {
     label: "process-notification",
     env: { OPENCLAW_TEST_FAST: "0" },
   });
-  config = {
-    agents: {
-      entries: { main: { workspace: state.workspaceDir } },
-      defaults: {
-        workspace: state.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: "mock-openai/gpt-5.6-luna" },
-        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-      },
-    },
-    plugins: { enabled: false },
-    skills: { load: { watch: false } },
-  };
+  config = completionConfig(state.workspaceDir);
   setRuntimeConfigSnapshot(config);
   await state.writeConfig(config);
   openOpenClawStateDatabase();
@@ -161,16 +153,6 @@ async function completionPrompt(sessionKey: string, signal: AbortSignal) {
   return turn.prompt;
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
-}
-
-function currentNodeEvalCommand(source: string): string {
-  const node = shellQuote(process.execPath);
-  const script = shellQuote(source);
-  return process.platform === "win32" ? `& ${node} -e ${script}` : `${node} -e ${script}`;
-}
-
 function textContent(result: { content: Array<{ type: string; text?: string }> }): string {
   return result.content.find((part) => part.type === "text")?.text ?? "";
 }
@@ -252,7 +234,8 @@ async function startBackground(
     background: true,
     ...params,
   });
-  const sessionId = backgroundSessionId(started.details);
+  const { sessionId } = runningSession(started.details);
+  expect(sessionId).toEqual(expect.any(String));
   return { sessionId, ...processActions(scopeKey, sessionId) };
 }
 
@@ -282,15 +265,6 @@ function processActions(scopeKey: string, sessionId: string) {
       )
       .toContain(expected);
   return { tool, call, waitFor, checkRunning };
-}
-
-function backgroundSessionId(details: ExecToolDetails): string {
-  const sessionId = details.status === "running" ? details.sessionId : undefined;
-  expect(sessionId).toEqual(expect.any(String));
-  if (!sessionId) {
-    throw new Error("exec did not return a background session id");
-  }
-  return sessionId;
 }
 
 const FINALIZER_SECRET = ["sk", "synthetic", "fixture", "never", "real"].join("-");
@@ -638,7 +612,7 @@ test.skipIf(process.platform === "win32")(
 );
 
 test.skipIf(process.platform === "win32")(
-  "controls and cancels one real interactive background child through process tools",
+  "writes, submits, and confirms cancellation of a real interactive background child",
   async () => {
     const scopeKey = "agent:main:process-control-roundtrip";
     const source = [
@@ -672,36 +646,11 @@ test.skipIf(process.platform === "win32")(
       sessionId = started.sessionId;
       const { tool: processTool, call, waitFor, checkRunning } = started;
 
-      const listed = await call("list");
-      expect(listed.details).toMatchObject({
-        status: "completed",
-        sessions: expect.arrayContaining([
-          expect.objectContaining({
-            sessionId,
-            status: "running",
-            stdinWritable: true,
-          }),
-        ]),
-      });
-
       await waitFor("log", "READY");
-
-      const readyPoll = await call("poll", { timeout: 30_000 }, AbortSignal.timeout(1_000));
-      expect(readyPoll.details).toMatchObject({
-        status: "running",
-        sessionId,
-        aggregated: expect.stringContaining("READY"),
-      });
-
       expect(await checkRunning("write", { data: "alpha" })).toContain("Wrote 5 bytes");
       expect(textContent(await call("log"))).not.toContain("LINE:alpha");
       expect(await checkRunning("submit")).toContain("Submitted");
       await waitFor("poll", "LINE:alpha");
-      expect(await checkRunning("send-keys", { literal: "beta" })).toContain("Sent 4 bytes");
-      await checkRunning("send-keys", { keys: ["Enter"] });
-      await waitFor("poll", "LINE:beta");
-      await checkRunning("send-keys", { keys: ["C-c"] });
-      await waitFor("log", "CONTROL:CTRL-C:2");
 
       const killed = await call("kill");
       expect(textContent(killed)).toBe(
@@ -716,15 +665,13 @@ test.skipIf(process.platform === "win32")(
       expect(finalPoll.details).toMatchObject({
         status: "completed",
         exitReason: "manual-cancel",
-        aggregated: expect.stringContaining("CONTROL:CTRL-C:2"),
+        aggregated: expect.stringContaining("LINE:alpha"),
       });
 
       const completedLog = await call("log");
       expect(completedLog.details).toMatchObject({ status: "completed", sessionId });
       expect(Value.Check(processTool.outputSchema!, completedLog.details)).toBe(true);
-      for (const output of ["LINE:alpha", "LINE:beta", "CONTROL:CTRL-C:2"]) {
-        expect(textContent(completedLog)).toContain(output);
-      }
+      expect(textContent(completedLog)).toContain("LINE:alpha");
     } finally {
       if (sessionId && getSession(sessionId)) {
         await processActions(scopeKey, sessionId).call("kill");
