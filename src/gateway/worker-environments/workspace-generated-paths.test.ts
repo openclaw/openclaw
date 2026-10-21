@@ -21,99 +21,90 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const digest = (raw: string) => createHash("sha256").update(raw).digest("hex");
-const fileEntry = (entryPath: string, content: string, size = content.length) => ({
-  path: entryPath,
-  type: "file" as const,
-  mode: 0o644,
-  size,
-  sha256: digest(content),
-});
-async function readCapture(manifestRoot: string, ref: string) {
-  const { entries }: { entries: Array<{ path: string; type: string }> } = JSON.parse(
-    await fs.readFile(path.join(manifestRoot, `${ref.trim().slice(7)}.json`), "utf8"),
-  );
-  return {
-    files: entries.filter((entry) => entry.type !== "directory"),
-    directories: entries.filter((entry) => entry.type === "directory").map((entry) => entry.path),
+const cacheEntry = { type: "file" as const, mode: 0o644, size: 5, sha256: digest("cache") };
+const emptyManifest = { version: 1 as const, baseCommit: null, entries: [] };
+async function makeWorkspace(files: Record<string, string>) {
+  const fixture = await createScriptWorkspace(tempDirs.make("workspace-generated-"));
+  await writeWorkspaceFiles(fixture.workspace, files);
+  const manifestPath = (ref: string) =>
+    path.join(fixture.manifestRoot, `${ref.trim().slice(7)}.json`);
+  const readLocal = (baseCommit: string | null = null) =>
+    readActualWorkspaceManifestImpl({ root: fixture.workspace, baseCommit });
+  const capture = async () => {
+    const local = await readLocal();
+    const remote = await fixture.runManifest(["", "all"]);
+    expect(remote.code, remote.stderr).toBe(0);
+    const { entries }: { entries: Array<{ path: string; type: string }> } = JSON.parse(
+      await fs.readFile(manifestPath(remote.stdout), "utf8"),
+    );
+    expect(
+      entries.filter((entry) => entry.type === "directory").map((entry) => entry.path),
+    ).toEqual(local.manifest.directories);
+    return { local, files: entries.filter((entry) => entry.type !== "directory") };
   };
+  return { ...fixture, manifestPath, readLocal, capture };
 }
-const cache = ".cache/vitest/results.json";
-const packageCaches = [
-  ".local/share/pnpm/store/v11/files/10/package-content",
-  ".cache/openclaw/bun/pinned/linux-x64/bin/bun",
-  ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome",
-  ".cache/bun-transpiler/compiled.pile",
-  ".artifacts/vitest-worker-cache/run-cache-0/outputs/dist/worker.js",
+const cacheRoots = [
+  ".local/share/pnpm/store",
+  ".cache/openclaw/bun",
+  ".cache/ms-playwright",
+  ".cache/bun-transpiler",
+  ".artifacts/vitest-worker-cache",
+  ".artifacts/vitest-workers",
+  ".cache/vitest",
+  ".artifacts/dist-artifacts.lock",
+];
+const generatedPaths = [
+  ...cacheRoots.map((root) => `${root}/cache.bin`),
   ".artifacts/vitest-shard-timings.json",
 ];
 const workerPackage = ".artifacts/vitest-workers/run-cache-0/package.json";
-const lock = ".artifacts/dist-artifacts.lock/owner.json";
 const stagedRoot = stagedInputDirectory("a".repeat(64));
 const userFiles = {
   ".gitignore": ".artifacts/\n.cache/\n.local/\n",
-  ".local/share/pnpm/store-notes.md": "user notes\n",
   ".local/share/pnpm/tools/tool.js": "user tool\n",
-  "fixtures/.local/share/pnpm/store/input.txt": "nested user fixture\n",
   [`${stagedRoot}/.gitignore`]: STAGED_INPUT_GITIGNORE,
-  [`${stagedRoot}/.local/share/pnpm/store/input.txt`]: "staged input\n",
   ".artifacts/report.md": "user report\n",
   ".artifacts/build-all-cache/authored.txt": "original input\n",
   ".artifacts/build-cache-inputs/authored.json": "original input\n",
-  ".artifacts/vitest-worker-cache-notes.md": "user notes\n",
   ".artifacts/vitest-shard-timings.json-notes": "user notes\n",
-  "fixtures/.artifacts/vitest-worker-cache/input.js": "nested user fixture\n",
-  ".cache/bun-transpiler-notes.md": "user notes\n",
-  "fixtures/.cache/bun-transpiler/input.pile": "nested user fixture\n",
-  [`${stagedRoot}/.cache/bun-transpiler/input.pile`]: "staged input\n",
-  [`${stagedRoot}/.artifacts/vitest-worker-cache/input.js`]: "staged input\n",
   ".openclaw/tmp/unit.log": "guest log\n",
-  ".artifacts/vitest-workers-notes.md": "user notes\n",
-  "fixtures/.artifacts/vitest-workers/input.json": "nested user fixture\n",
   ".cache/openclaw/notes.md": "user notes\n",
-  ".cache/ms-playwright-notes.md": "user notes\n",
-  "fixtures/.cache/ms-playwright/input.txt": "nested user fixture\n",
   ".cache/user-data.json": "user data\n",
-  ".cache/vitest-input.txt": "user fixture\n",
-  ".artifacts/dist-artifacts.lock-notes": "user notes\n",
-  "fixtures/.cache/vitest/input.json": "nested user fixture\n",
+  ...Object.fromEntries(
+    cacheRoots.flatMap((root) => [
+      [`${root}-notes`, "user notes\n"],
+      [`fixtures/${root}/input`, "nested user fixture\n"],
+      [`${stagedRoot}/${root}/input`, "staged input\n"],
+    ]),
+  ),
 };
 
 it("excludes only generated runtime roots from capture and transfer", async () => {
-  const { workspace, runManifest, manifestRoot } = await createScriptWorkspace(
-    tempDirs.make("workspace-generated-capture-"),
-  );
-  await writeWorkspaceFiles(workspace, {
+  const { workspace, capture } = await makeWorkspace({
     ...userFiles,
     "source.ts": "source edit\n",
-    [cache]: "test cache\n",
-    ...Object.fromEntries(packageCaches.map((name) => [name, ""])),
-    [lock]: "transient owner\n",
+    ...Object.fromEntries(generatedPaths.map((name) => [name, ""])),
     [workerPackage]: '{"type":"module"}\n',
   });
-  for (const name of packageCaches) {
+  for (const name of generatedPaths) {
     await fs.truncate(path.join(workspace, name), MAX_RECONCILIATION_FILE_BYTES + 1);
   }
-  const local = await readActualWorkspaceManifestImpl({ root: workspace, baseCommit: null });
-  const result = parseChangedWorkspaceResult(
-    { version: 1, baseCommit: null, entries: [] },
-    local.manifest,
-  );
+  const { local, files } = await capture();
+  const result = parseChangedWorkspaceResult(emptyManifest, local.manifest);
   expect(result.entries.some((entry) => entry.path === "source.ts")).toBe(true);
-  const remote = await runManifest(["", "all"]);
-  expect(remote.code, remote.stderr).toBe(0);
   const expected = [...Object.keys(userFiles), "source.ts"].toSorted();
-  expect(local.manifest.entries.map((entry) => entry.path).toSorted()).toEqual(expected);
-  const captured = await readCapture(manifestRoot, remote.stdout);
-  expect(captured.files.map((entry) => entry.path).toSorted()).toEqual(expected);
-  expect(captured.directories).toEqual(local.manifest.directories);
+  for (const entries of [local.manifest.entries, files]) {
+    expect(entries.map((entry) => entry.path).toSorted()).toEqual(expected);
+  }
   const oversizedArtifact = ".local/share/user-data.bin";
   const oversized = {
     ...local.manifest,
-    entries: [fileEntry(oversizedArtifact, "", MAX_RECONCILIATION_FILE_BYTES + 1)],
+    entries: [{ ...cacheEntry, path: oversizedArtifact, size: MAX_RECONCILIATION_FILE_BYTES + 1 }],
   };
-  expect(() =>
-    parseChangedWorkspaceResult({ version: 1, baseCommit: null, entries: [] }, oversized),
-  ).toThrow(`Cloud workspace result is too large: ${oversizedArtifact}`);
+  expect(() => parseChangedWorkspaceResult(emptyManifest, oversized)).toThrow(
+    `Cloud workspace result is too large: ${oversizedArtifact}`,
+  );
   if (process.platform !== "win32") {
     const target = tempDirs.make("workspace-generated-transfer-");
     const transfer = await runCommandWithTimeout(
@@ -127,7 +118,7 @@ it("excludes only generated runtime roots from capture and transfer", async () =
       { timeoutMs: 10_000 },
     );
     expect(transfer.code, transfer.stderr).toBe(0);
-    for (const name of [cache, lock, workerPackage, ...packageCaches]) {
+    for (const name of [...generatedPaths, workerPackage]) {
       await expect(fs.stat(path.join(target, name))).rejects.toMatchObject({ code: "ENOENT" });
     }
     for (const [name, content] of Object.entries(userFiles)) {
@@ -137,12 +128,8 @@ it("excludes only generated runtime roots from capture and transfer", async () =
 });
 
 it("omits cache-only ancestry from remote capture while retaining empty directories", async () => {
-  const { workspace, runManifest, manifestRoot } = await createScriptWorkspace(
-    tempDirs.make("workspace-cache-only-capture-"),
-  );
-  await writeWorkspaceFiles(
-    workspace,
-    Object.fromEntries([cache, workerPackage, ...packageCaches].map((name) => [name, "cache"])),
+  const { workspace, capture } = await makeWorkspace(
+    Object.fromEntries([...generatedPaths, workerPackage].map((name) => [name, "cache"])),
   );
   for (const stage of ["caches", "empty directory", "guest report"]) {
     if (stage === "empty directory") {
@@ -151,12 +138,8 @@ it("omits cache-only ancestry from remote capture while retaining empty director
     if (stage === "guest report") {
       await writeWorkspaceFiles(workspace, { ".artifacts/report.md": "guest evidence" });
     }
-    const remote = await runManifest(["", "all"]);
-    expect(remote.code, remote.stderr).toBe(0);
-    const raw = await readCapture(manifestRoot, remote.stdout);
-    const local = await readActualWorkspaceManifestImpl({ root: workspace, baseCommit: null });
-    expect(raw.directories).toEqual(local.manifest.directories);
-    expect(raw.files).toEqual(local.manifest.entries);
+    const { local, files } = await capture();
+    expect(files).toEqual(local.manifest.entries);
     expect(local.manifest.directories).toEqual(
       stage === "caches" ? [] : stage === "empty directory" ? ["empty"] : [".artifacts", "empty"],
     );
@@ -166,11 +149,8 @@ it("omits cache-only ancestry from remote capture while retaining empty director
 it.each([false, true])(
   "projects historical caches for Git capture and lookup (guest report: %s)",
   async (report) => {
-    const { workspace, runManifest, manifestRoot } = await createScriptWorkspace(
-      tempDirs.make("workspace-legacy-cache-capture-"),
-    );
     const cachePath = ".artifacts/vitest-worker-cache/out.js";
-    await writeWorkspaceFiles(workspace, {
+    const { workspace, runManifest, manifestRoot, manifestPath, readLocal } = await makeWorkspace({
       ".gitignore": ".artifacts/\nmedia/inbound/\n",
       "source.txt": "source",
       [cachePath]: "cache",
@@ -180,7 +160,7 @@ it.each([false, true])(
     });
     await fs.mkdir(path.join(workspace, "kept-empty"));
     const baseCommit = await initializeScriptGitWorkspace(workspace, ".");
-    const current = await readActualWorkspaceManifestImpl({ root: workspace, baseCommit });
+    const current = await readLocal(baseCommit);
     const directories = new Set([
       ...(current.manifest.directories ?? []),
       ".artifacts",
@@ -192,25 +172,27 @@ it.each([false, true])(
       entries: [
         ...[...directories].map((name) => ({ path: name, type: "directory", mode: 0o700 })),
         ...current.manifest.entries,
-        fileEntry(cachePath, "cache"),
+        { ...cacheEntry, path: cachePath },
       ].toSorted((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)),
     });
     const legacyDigest = digest(legacy);
     await fs.mkdir(manifestRoot, { recursive: true });
-    const legacyPath = path.join(manifestRoot, `${legacyDigest}.json`);
+    const legacyPath = manifestPath(`sha256:${legacyDigest}`);
     await fs.writeFile(legacyPath, legacy);
     const expected = serializeWorkerWorkspaceManifest(
       parseWorkerWorkspaceManifest(legacy, `sha256:${legacyDigest}`),
     );
     const expectedDigest = digest(expected);
-    const resolved = await runManifest([baseCommit, "resolve", expectedDigest]);
-    expect(resolved.code, resolved.stderr).toBe(0);
-    expect(resolved.stdout.trim()).toBe(`sha256:${expectedDigest}`);
-    const captured = await runManifest([baseCommit, "eligible", legacyDigest]);
-    expect(captured.code, captured.stderr).toBe(0);
-    expect(captured.stdout.trim()).toBe(`sha256:${expectedDigest}`);
+    for (const [mode, ref] of [
+      ["resolve", expectedDigest],
+      ["eligible", legacyDigest],
+    ] as const) {
+      const result = await runManifest([baseCommit, mode, ref]);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(`sha256:${expectedDigest}`);
+    }
     expect(await fs.readFile(legacyPath, "utf8")).toBe(legacy);
-    expect(await fs.readFile(path.join(manifestRoot, `${expectedDigest}.json`), "utf8")).toBe(
+    expect(await fs.readFile(manifestPath(`sha256:${expectedDigest}`), "utf8")).toBe(
       current.rawManifest,
     );
   },
