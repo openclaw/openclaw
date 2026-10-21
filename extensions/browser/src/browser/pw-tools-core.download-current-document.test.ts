@@ -6,11 +6,12 @@ import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as outputFiles from "./output-files.js";
 import { observeOutputWriteSettlement } from "./output-files.test-support.js";
-import { downloadCurrentDocumentViaPlaywright } from "./pw-tools-core.downloads.js";
 import * as harness from "./pw-tools-core.test-harness.js";
 
-harness.installPwToolsCoreTestHooks();
 const expectedUrl = "http://127.0.0.1/inline.png";
+import { downloadCurrentDocumentViaPlaywright } from "./pw-tools-core.downloads.js";
+
+harness.installPwToolsCoreTestHooks();
 const privateNetwork = { dangerouslyAllowPrivateNetwork: true };
 const redirectError = "download redirects cannot be inspected";
 const mainFrame = {};

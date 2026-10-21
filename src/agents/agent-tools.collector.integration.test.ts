@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { Type } from "typebox";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
@@ -17,7 +16,12 @@ import { consumeSwarmStructuredOutput } from "./tools/structured-output-tool.js"
 const runId = "collector-tool-contract";
 const sessionKey = "agent:main:subagent:collector-contract";
 const config = { agents: { entries: { main: {} } }, tools: { swarm: true } };
-const schema = Type.Object({ answer: Type.String() }, { additionalProperties: false });
+const schema = {
+  type: "object",
+  properties: { answer: { type: "string" } },
+  required: ["answer"],
+  additionalProperties: false,
+};
 let workspaceDir: string;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

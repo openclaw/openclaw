@@ -46,6 +46,7 @@ vi.mock("../agents/model-auth.js", async () => {
 vi.mock("../agents/model-catalog.js", () => ({ loadManifestModelCatalog: () => [] }));
 vi.mock("../system-agent/setup-inference.js", () => ({ verifySetupInference: vi.fn() }));
 vi.mock("../system-agent/setup-inference-turn.js", () => ({ runSetupInferenceTurn: mocks.probe }));
+// mock-isolation: Select the fixture's configured route without loading real system-agent state.
 vi.mock("../system-agent/inference-route.js", () => ({
   resolveSystemAgentConfiguredRouteFromConfig: async (config: OpenClawConfig, agentId: string) => {
     const agent = config.agents?.entries?.[agentId];

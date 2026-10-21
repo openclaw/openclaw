@@ -11,6 +11,7 @@ const { connectOverCdpMock } = vi.hoisted(() => ({
   connectOverCdpMock: vi.fn<(transport: ConnectOverCDPTransport) => Promise<Browser>>(),
 }));
 
+// mock-isolation: Exercise the CDP transport without launching a real Playwright browser.
 vi.mock("./playwright-core.runtime.js", () => ({
   getPlaywrightUserAgent: () => "Playwright/test",
   getPlaywrightCore: () => ({ chromium: { connectOverCDP: connectOverCdpMock }, devices: {} }),

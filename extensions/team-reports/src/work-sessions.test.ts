@@ -93,9 +93,9 @@ it("resolves aliases case-insensitively through merges and deduplicates owner pa
 
 it.each([
   [[profile("name-only", null)], "unlinked", "name-only"],
-  [[profile("enterprise", "Alice", null, "ghe.example.test")], "unlinked"],
-  [[profile("a", "Alice", "missing")], "ambiguous"],
-  [[profile("a", "Alice", "b"), profile("b", null, "a")], "ambiguous"],
+  [[profile("enterprise", "Alice", null, "ghe.example.test")], "unlinked", "alice"],
+  [[profile("a", "Alice", "missing")], "ambiguous", "alice"],
+  [[profile("a", "Alice", "b"), profile("b", null, "a")], "ambiguous", "alice"],
 ] as const)("never queries unfiltered sessions for %j (%s)", async (profiles, reason, alias) => {
   identities([...profiles]);
   await expectNoSessions(alias, reason);

@@ -21,6 +21,7 @@ const { detect, execFile, readRelease, launch, success } = vi.hoisted(() => {
   };
 });
 
+// mock-isolation: Model platform opener availability independently of installed host binaries.
 vi.mock("./detect-binary.js", () => ({ detectBinary: detect }));
 
 vi.mock("node:child_process", async () => {
@@ -28,6 +29,7 @@ vi.mock("node:child_process", async () => {
   return { ...actual, execFileSync: execFile };
 });
 
+// mock-isolation: Observe opener commands without launching host applications.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: launch }));
 
 vi.mock("node:fs/promises", async () => {

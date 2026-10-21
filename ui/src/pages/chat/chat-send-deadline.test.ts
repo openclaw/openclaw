@@ -114,6 +114,8 @@ async function startPreparingSend(
   testOptions: { holdResponse?: boolean } = {},
 ) {
   const { pending, wire, issued, host } = requestFixture("startup", true);
+  host.sessionKey = "agent:main:startup";
+  host.chatError = null;
   let ready = false;
   const attempts: string[] = [];
   const writes: RequestFrame[] = [];

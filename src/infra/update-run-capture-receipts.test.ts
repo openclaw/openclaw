@@ -63,20 +63,23 @@ const record = (overrides: Partial<UpdateRunRecord> = {}): UpdateRunRecord => ({
   ...overrides,
 });
 
-const receipt = (): NonNullable<UpdateRunRecord["origin"]["updateRecoveryCapture"]> => ({
-  manifestSha256: "a".repeat(64),
-  configWrites: [
-    {
-      path: path.join(root, "state", "private-config.json"),
-      beforeHash: "b".repeat(64),
-      afterHash: "c".repeat(64),
-      contiguous: false,
-    },
-  ],
-  warnings: [{ kind: "undeclared-migration-resources", pluginId: "legacy", message: "undeclared" }],
-  status: "restore-failed",
-  error: `Retained capture at ${root}`,
-});
+const receipt = () =>
+  ({
+    manifestSha256: "a".repeat(64),
+    configWrites: [
+      {
+        path: path.join(root, "state", "private-config.json"),
+        beforeHash: "b".repeat(64),
+        afterHash: "c".repeat(64),
+        contiguous: false,
+      },
+    ],
+    warnings: [
+      { kind: "undeclared-migration-resources", pluginId: "legacy", message: "undeclared" },
+    ],
+    status: "restore-failed",
+    error: `Retained capture at ${root}`,
+  }) satisfies NonNullable<UpdateRunRecord["origin"]["updateRecoveryCapture"]>;
 
 const storedRow = () => db().prepare("SELECT * FROM update_runs WHERE run_id=?").get(runId);
 
@@ -302,6 +305,20 @@ it("bounds disposable diagnostics without shrinking operational receipts", () =>
   expect(Buffer.byteLength(String(row?.origin_json))).toBeLessThanOrEqual(16 * 1024);
   const recovered = read();
   expect(recovered.origin.updateRecoveryCapture).toEqual(capture);
+});
+
+it("preserves full-capacity receipts while evicting diagnostics", () => {
+  const capture = receipt();
+  const driver = record().origin.driver;
+  const size = Buffer.byteLength(JSON.stringify({ driver, updateRecoveryCapture: capture }));
+  capture.warnings[0]!.message += "w".repeat(16 * 1024 - size);
+  persist(record({ origin: { driver, updateRecoveryCapture: capture, nextAction: "diagnostic" } }));
+  const row = storedRow();
+  expect(Buffer.byteLength(String(row?.origin_json))).toBe(16 * 1024);
+  const recovered = read();
+  expect(recovered.origin.updateRecoveryCapture).toEqual(capture);
+  expect(recovered.origin.driver).toEqual(driver);
+  expect(recovered.origin).not.toHaveProperty("nextAction");
 });
 
 it.each(["hash", "path", "oversized"] as const)(

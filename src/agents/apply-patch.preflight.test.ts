@@ -44,6 +44,13 @@ async function expectFiles(root: string, files: Record<string, string>) {
   expect(Object.fromEntries(names.map((name, i) => [name, contents[i]]))).toEqual(files);
 }
 
+type FilePatchCase = {
+  name: string;
+  hunks: string;
+  files: Record<string, string>;
+  move?: string;
+};
+
 describe("applyPatch preflight", () => {
   it.each([
     {
@@ -181,7 +188,7 @@ describe("applyPatch preflight", () => {
     await expect(fs.readFile(target, "utf8")).resolves.toBe("keep\n");
   });
 
-  it.runIf(process.platform !== "win32").each([
+  it.runIf(process.platform !== "win32").each<FilePatchCase>([
     {
       name: "a replaced link apart from its old target",
       hunks: [
@@ -204,7 +211,7 @@ describe("applyPatch preflight", () => {
     await expectFiles(dir, files);
   });
 
-  it.each([
+  it.each<FilePatchCase>([
     {
       name: "re-creates a hardlinked path",
       hunks: "*** Add File: alias.txt\n+new",
@@ -221,7 +228,7 @@ describe("applyPatch preflight", () => {
     await expectFiles(dir, files);
   });
 
-  it.each([
+  it.each<FilePatchCase>([
     {
       name: "updates the other name with contents written through the first",
       hunks: update("alias.txt", "two", "three"),

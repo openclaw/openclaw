@@ -50,7 +50,9 @@ it("uses supplied alias metadata exactly once despite conflicting ambient hooks"
     });
     const stores = createEmptyAgentDiscoveryStores();
     const rows = ["final", "middle", "plain", "hooked", "wrong"].map((id) =>
-      makeProviderModelFixture({ ...modelRoute, id, input: ["text", "image"] }),
+      Object.assign(makeProviderModelFixture({ ...modelRoute, id, input: ["text", "image"] }), {
+        contextWindow: 16_000,
+      }),
     );
     stores.modelRegistry.registerProvider(provider, { api: modelRoute.api, baseUrl, models: rows });
     const configuredRuntimeModels = rows.map((model) => ({ provider, modelId: model.id, model }));

@@ -29,6 +29,7 @@ vi.mock("../plugins/capability-provider-runtime.js", () => ({
   },
 }));
 
+// mock-isolation: Supply the selected-model catalog without invoking provider discovery.
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   readPreparedModelCatalog: vi.fn(async (_params: unknown) => catalog),

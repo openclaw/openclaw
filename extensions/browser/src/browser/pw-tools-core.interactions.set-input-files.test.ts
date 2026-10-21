@@ -7,6 +7,7 @@ const readFile = vi.fn(),
   stat = vi.fn(),
   detectMime = vi.fn();
 const resolvePaths = vi.fn<typeof import("./paths.js").resolveStrictExistingUploadPaths>();
+// mock-isolation: Upload cases supply canonical paths without reading host upload directories.
 vi.mock("./paths.js", () => ({ resolveStrictExistingUploadPaths: resolvePaths }));
 vi.mock("node:fs/promises", () => ({ default: { readFile, stat } }));
 vi.mock("openclaw/plugin-sdk/media-mime", () => ({ detectMime }));

@@ -52,7 +52,7 @@ it("retains replacement recipients during history loading", async () => {
   host.chatMessage = "@Alex please review";
   host.chatMentions = [recipient("profile-second")];
   const info: ChatHistoryResult["sessionInfo"] = {
-    key: "agent:main",
+    key: host.sessionKey,
     kind: "direct",
     updatedAt: 1,
   };

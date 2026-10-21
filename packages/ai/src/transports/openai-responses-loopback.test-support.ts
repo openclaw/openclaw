@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { text } from "node:stream/consumers";
 import { promisify } from "node:util";
 import OpenAI from "openai";
 import { expect, vi } from "vitest";
@@ -27,11 +26,18 @@ export async function createResponsesLoopbackServer(events: (turn: number) => un
     requests.push(JSON.parse(body) as Record<string, unknown>);
     return events(requests.length);
   };
-  const server = createServer(async (request, response) => {
+  const server = createServer((request, response) => {
     authorization.push(request.headers.authorization);
-    const reply = eventsForRequest(await text(request));
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    response.end(reply.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+    request.setEncoding("utf8");
+    let body = "";
+    request.on("data", (chunk: string) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      const reply = eventsForRequest(body);
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(reply.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+    });
   });
   const sockets = new WebSocketServer({ server });
   sockets.on("connection", (socket, request) => {
