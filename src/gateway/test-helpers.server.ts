@@ -69,6 +69,7 @@ import { getGatewayTestPort, canRetryPort, startClaimedGateway } from "./test-he
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommandMock,
+  createGatewayTestState,
   cronIsolatedRun,
   embeddedRunMock,
   gatewayReplyMock,
@@ -333,24 +334,11 @@ function resetGatewayMutableTestFixtures(sessionStorePath?: string): void {
   agentDiscoveryMock.enabled = false;
   agentDiscoveryMock.discoverCalls = 0;
   agentDiscoveryMock.models = [];
-  testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
-  testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
-  testState.gatewayControlUi = undefined;
-  testState.hooksConfig = undefined;
-  testState.legacyIssues = [];
-  testState.legacyParsed = {};
-  testState.migrationConfig = null;
-  testState.migrationChanges = [];
-  testState.cronEnabled = false;
-  testState.cronTriggersEnabled = undefined;
-  testState.cronStorePath = undefined;
-  testState.sessionConfig = undefined;
-  testState.sessionStorePath = sessionStorePath;
-  testState.agentConfig = undefined;
-  testState.agentsConfig = undefined;
-  testState.bindingsConfig = undefined;
-  testState.channelsConfig = undefined;
-  testState.allowFrom = undefined;
+  Object.assign(testState, createGatewayTestState(), {
+    gatewayBind: DEFAULT_GATEWAY_TEST_BIND,
+    gatewayAuth: { mode: "token", token: "test-gateway-token-1234567890" },
+    sessionStorePath,
+  });
   lastSyncedSessionStorePath = undefined;
   lastSyncedSessionConfigJson = undefined;
   testIsNixMode.value = false;

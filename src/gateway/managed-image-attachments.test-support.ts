@@ -3,11 +3,14 @@ import fs from "node:fs/promises";
 import http, { type IncomingHttpHeaders } from "node:http";
 import path from "node:path";
 import { buffer as readResponseBuffer } from "node:stream/consumers";
-import { afterAll, afterEach, beforeAll, beforeEach, expect } from "vitest";
+import { deserialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
+import * as brokerReply from "../infra/sqlite-worker-broker-reply.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -25,6 +28,38 @@ type RequestResult = {
   headers: IncomingHttpHeaders;
   body: Buffer;
 };
+
+export function interceptManagedImageMutationReplies(onReply: (commandType: string) => boolean) {
+  const commands = new WeakMap<object, string>();
+  const dispatch = brokerReply.dispatchSqliteWorkerJob;
+  const receive = brokerReply.receiveSqliteWorkerReply;
+  const dispatchSpy = vi
+    .spyOn(brokerReply, "dispatchSqliteWorkerJob")
+    .mockImplementation((slot, job, rejected) => {
+      if (job.request.type === "execute") {
+        const command: unknown = deserialize(job.request.input);
+        if (isRecord(command) && typeof command.type === "string") {
+          commands.set(job.request, command.type);
+        }
+      }
+      return dispatch(slot, job, rejected);
+    });
+  const replySpy = vi
+    .spyOn(brokerReply, "receiveSqliteWorkerReply")
+    .mockImplementation((slot, reply, owner) => {
+      if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
+        const command = commands.get(slot.current.request);
+        if (command && onReply(command)) {
+          return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
+        }
+      }
+      return receive(slot, reply, owner);
+    });
+  return () => {
+    replySpy.mockRestore();
+    dispatchSpy.mockRestore();
+  };
+}
 
 export async function requestManagedImageHttp(
   origin: string,
