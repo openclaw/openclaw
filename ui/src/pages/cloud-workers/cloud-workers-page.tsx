@@ -1,5 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, createStore, onCleanup, onSettled, Show, For } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  createStore,
+  Errored,
+  Loading,
+  onSettled,
+  Show,
+  For,
+} from "solid-js";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
@@ -52,11 +61,9 @@ export function CloudWorkersPage() {
     return configSave.state;
   };
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
-  const [catalog, setCatalog] = createSignal<{
-    pending: boolean;
-    value?: Map<string, ProfileSummary>;
-    error?: string;
-  }>({ pending: false });
+  const [catalog, setCatalog] = createSignal<Map<string, ProfileSummary>>();
+  const [catalogLoad, setCatalogLoad] = createSignal<{ promise: Promise<void> } | null>(null);
+  const catalogCompletion = createMemo(() => catalogLoad()?.promise.then(() => null) ?? null);
   let previousCatalogReceipt: ReturnType<typeof catalogReceipt> | undefined;
   let catalogRequest: AbortController | undefined;
   function clearPresentation() {
@@ -64,7 +71,8 @@ export function CloudWorkersPage() {
       state.editor = null;
       state.draft = createCloudWorkerDraft();
     });
-    setCatalog({ pending: false });
+    setCatalog(undefined);
+    setCatalogLoad(null);
   }
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
@@ -80,7 +88,10 @@ export function CloudWorkersPage() {
       }
       refreshCatalog();
     },
-    invalidateRequests: () => configSave.update({ busy: false }),
+    invalidateRequests: () => {
+      catalogRequest?.abort();
+      configSave.update({ busy: false });
+    },
   });
   void context.runtimeConfig.ensureLoaded();
   function catalogReceipt() {
@@ -112,14 +123,12 @@ export function CloudWorkersPage() {
         !canCallGatewayMethod(gateway.snapshot, "environments.list", "operator.admin")
       ) {
         if (gateway.connected) {
-          setCatalog({ pending: false });
-        } else {
-          setCatalog((previous) => ({ ...previous, pending: false }));
+          setCatalog(undefined);
         }
+        setCatalogLoad(null);
         return;
       }
-      setCatalog((previous) => ({ ...previous, pending: true }));
-      void scope.client
+      const promise = scope.client
         .request<EnvironmentsListResult>(
           "environments.list",
           { projection: "profiles" },
@@ -132,22 +141,18 @@ export function CloudWorkersPage() {
               gateway.isCurrent(scope) &&
               context.runtimeConfig.state.configSnapshot?.appliedConfigHash === appliedHash
             ) {
-              setCatalog({
-                pending: false,
-                value: new Map((result.profiles ?? []).map((profile) => [profile.id, profile])),
-              });
+              setCatalog(new Map((result.profiles ?? []).map((profile) => [profile.id, profile])));
             }
           },
           (error: unknown) => {
             if (!controller.signal.aborted && gateway.isCurrent(scope)) {
-              setCatalog((previous) => ({
-                ...previous,
-                pending: false,
-                error: formatUiError(error),
-              }));
+              throw error;
             }
           },
         );
+      setCatalogLoad({ promise });
+      // The async memo owns feedback; retired and unobserved tasks still settle safely.
+      void promise.catch(() => undefined);
     });
   }
   onSettled(() => {
@@ -156,7 +161,6 @@ export function CloudWorkersPage() {
     refreshCatalog();
     return stop;
   });
-  onCleanup(() => catalogRequest?.abort());
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(configProjection.read().state.configSnapshot);
   }
@@ -301,7 +305,7 @@ export function CloudWorkersPage() {
             t("cloudWorkersPage.operatingSystemFact", {
               value:
                 catalog()
-                  .value?.get(profile.id)
+                  ?.get(profile.id)
                   ?.operatingSystems?.find((system) => system.id === profile.target)?.label ??
                 profile.target,
             }),
@@ -316,14 +320,33 @@ export function CloudWorkersPage() {
   }
 
   function renderProfile(profile: ConfiguredCloudWorkerProfile) {
-    const statusControl = () =>
-      catalog().pending && !catalog().value ? (
-        <SettingsStatus kind={"muted"} label={t("common.loading")} />
-      ) : catalog().value?.has(profile.id) ? (
-        <SettingsStatus kind={"ok"} label={t("cloudWorkersPage.advertised")} />
-      ) : (
-        <SettingsStatus kind={"warn"} label={t("cloudWorkersPage.unavailable")} />
-      );
+    const unavailable = () => (
+      <SettingsStatus kind={"warn"} label={t("cloudWorkersPage.unavailable")} />
+    );
+    const statusControl = () => (
+      <Show
+        when={catalog()}
+        fallback={
+          <Show when={catalogLoad()} keyed fallback={unavailable()}>
+            {(request) => (
+              <Errored fallback={unavailable()}>
+                <Loading
+                  on={request}
+                  fallback={<SettingsStatus kind={"muted"} label={t("common.loading")} />}
+                >
+                  {catalogCompletion()}
+                  {unavailable()}
+                </Loading>
+              </Errored>
+            )}
+          </Show>
+        }
+      >
+        <Show when={catalog()?.has(profile.id)} fallback={unavailable()}>
+          <SettingsStatus kind={"ok"} label={t("cloudWorkersPage.advertised")} />
+        </Show>
+      </Show>
+    );
 
     return (
       <SettingsRow
@@ -400,7 +423,7 @@ export function CloudWorkersPage() {
   function Editor() {
     const editing = () => view.editor?.kind === "edit";
     const systems = () =>
-      editing() ? (catalog().value?.get(view.draft.id)?.operatingSystems ?? []) : [];
+      editing() ? (catalog()?.get(view.draft.id)?.operatingSystems ?? []) : [];
     const unadvertised = () =>
       Boolean(view.draft.target && !systems().some((system) => system.id === view.draft.target));
     return (
@@ -559,11 +582,15 @@ export function CloudWorkersPage() {
                   {t("cloudWorkersPage.adminRequired")}
                 </div>
               </Show>
-              <Show when={catalog().error}>
-                <div class="callout warning" role="status">
-                  {t("cloudWorkersPage.catalogFailed", { error: catalog().error ?? "" })}
-                </div>
-              </Show>
+              <Errored
+                fallback={(error) => (
+                  <div class="callout warning" role="status">
+                    {t("cloudWorkersPage.catalogFailed", { error: formatUiError(error()) })}
+                  </div>
+                )}
+              >
+                <Loading on={catalogLoad()}>{catalogCompletion()}</Loading>
+              </Errored>
               <Show when={saveState().error && !view.editor}>
                 <div class="callout warning" role="alert">
                   {saveState().error}

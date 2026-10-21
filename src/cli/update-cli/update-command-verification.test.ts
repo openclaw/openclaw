@@ -247,7 +247,7 @@ it.each(["transient-timeout", "mixed"])(
         versionMatch: true,
         readyz: true,
         settled: true,
-        channelsReady: true,
+        channelsReady: false,
       }),
       expect.anything(),
     );

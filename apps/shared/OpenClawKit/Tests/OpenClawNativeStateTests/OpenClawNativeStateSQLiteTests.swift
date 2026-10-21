@@ -31,7 +31,7 @@ struct OpenClawNativeStateSQLiteTests {
                 INSERT INTO macos_port_guardian_records VALUES (4242,18789,'synthetic-command','remote',10);
                 """)
                 try self.createConfigMachineState(writer)
-                try writer.execute("PRAGMA user_version = 29; UPDATE schema_meta SET schema_version = 29")
+                try writer.execute("PRAGMA user_version = 30; UPDATE schema_meta SET schema_version = 30")
             }
             let original = try Data(contentsOf: url)
             let database = try OpenClawNativeStateSQLite(
@@ -62,8 +62,8 @@ struct OpenClawNativeStateSQLiteTests {
                 }
                 #expect(try database.scalarText("SELECT command FROM macos_port_guardian_records") == "changed-command")
             }
-            #expect(try database.scalarInt64("PRAGMA user_version") == 29)
-            #expect(try database.scalarInt64("SELECT schema_version FROM schema_meta") == 29)
+            #expect(try database.scalarInt64("PRAGMA user_version") == 30)
+            #expect(try database.scalarInt64("SELECT schema_version FROM schema_meta") == 30)
         }
     }
 
@@ -72,7 +72,7 @@ struct OpenClawNativeStateSQLiteTests {
         try self.withDatabaseURL { writer, url in
             try writer.ensureCanonicalTable(.macosPortGuardianRecords)
             try self.createConfigMachineState(writer)
-            try writer.execute("PRAGMA user_version = 30; UPDATE schema_meta SET schema_version = 30")
+            try writer.execute("PRAGMA user_version = 31; UPDATE schema_meta SET schema_version = 31")
             let original = try Data(contentsOf: url)
 
             #expect {

@@ -156,7 +156,7 @@ describe("setupCommand", () => {
         const defaults = {
           workspace: oldWorkspace,
           skipBootstrap: skip,
-          heartbeat: { every: "30m" },
+          thinkingDefault: "low",
         };
         const agents = { defaults, entries: { ops: {} } };
         const gateway = missingGateway ? {} : { mode: "local" };
@@ -187,7 +187,7 @@ describe("setupCommand", () => {
         expect(root.agents?.defaults?.skipBootstrap).toBe(true);
         expect(root.agents.defaults.workspace).toBe(changeWorkspace ? nextWorkspace : undefined);
         expect(root.agents.entries).toEqual(scope === "defaults" ? agents.entries : undefined);
-        expect(root.agents.defaults.heartbeat).toBeUndefined();
+        expect(root.agents.defaults.thinkingDefault).toBeUndefined();
         expect(root.gateway?.mode).toBe(
           missingGateway ? "local" : scope === "root" ? undefined : "local",
         );

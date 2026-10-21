@@ -136,6 +136,7 @@ export async function createFixture(
       const client = connections.clients.getByConnectionId(connId);
       return client
         ? createControlUiSessionPrRead({
+            allowOwnImportedPullRequest: true,
             client,
             ...session,
             getRuntimeConfig,
@@ -160,6 +161,7 @@ export async function createFixture(
     clock,
     addReader,
     profile,
+    readerEmail,
     other,
     sessionId,
     cfg,

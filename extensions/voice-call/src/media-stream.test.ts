@@ -6,9 +6,9 @@ import type {
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
 } from "openclaw/plugin-sdk/realtime-transcription";
-import { createTalkSessionController, type TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
+import * as realtimeVoiceSdk from "openclaw/plugin-sdk/realtime-voice";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { MediaStreamHandler } from "./media-stream.js";
 import {
   createHandler,
@@ -32,7 +32,7 @@ function seedStreamSession(
     streamSid,
     ws,
     sttSession: createStubSession(),
-    talk: createTalkSessionController({
+    talk: realtimeVoiceSdk.createTalkSessionController({
       sessionId: `voice-call:${callId}:${streamSid}`,
       mode: "stt-tts",
       transport: "gateway-relay",
@@ -99,21 +99,25 @@ describe("MediaStreamHandler security hardening", () => {
         sentAudio.push(Buffer.from(audio));
       },
     };
-    const talkEvents: TalkEvent[] = [];
+    const talkEventSpy = vi.spyOn(realtimeVoiceSdk, "recordTalkObservabilityEvent");
+    onTestFinished(() => {
+      talkEventSpy.mockRestore();
+    });
+    const talkEvents = () =>
+      talkEventSpy.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.sessionId === "voice-call:CA-talk:MZ-talk");
     const handler = createHandler({
       transcriptionProvider: createStubSttProvider((request) => {
         callbacks = request;
         return session;
       }),
       shouldAcceptStream: () => true,
-      onTalkEvent: (_callId, _streamSid, event) => {
-        talkEvents.push(event);
-      },
     });
     await withConnection(handler, async (ws) => {
       sendStart(ws, "MZ-talk", "CA-talk");
       await vi.waitFor(() =>
-        expect(talkEvents.map((event) => event.type)).toContain("session.ready"),
+        expect(talkEvents().map((event) => event.type)).toContain("session.ready"),
       );
 
       ws.send(
@@ -142,10 +146,10 @@ describe("MediaStreamHandler security hardening", () => {
       ws.close();
       await waitForClose(ws);
       await vi.waitFor(() =>
-        expect(talkEvents.map((event) => event.type)).toContain("session.closed"),
+        expect(talkEvents().map((event) => event.type)).toContain("session.closed"),
       );
 
-      expect(talkEvents.map((event) => event.type)).toEqual([
+      expect(talkEvents().map((event) => event.type)).toEqual([
         "session.started",
         "session.ready",
         "turn.started",
@@ -162,7 +166,7 @@ describe("MediaStreamHandler security hardening", () => {
         "turn.cancelled",
         "session.closed",
       ]);
-      expect(talkEvents[0]).toMatchObject({
+      expect(talkEvents()[0]).toMatchObject({
         sessionId: "voice-call:CA-talk:MZ-talk",
         mode: "stt-tts",
         transport: "gateway-relay",
@@ -170,12 +174,12 @@ describe("MediaStreamHandler security hardening", () => {
         provider: "openai",
         seq: 1,
       });
-      expect(talkEvents.find((event) => event.type === "transcript.done")).toMatchObject({
+      expect(talkEvents().find((event) => event.type === "transcript.done")).toMatchObject({
         final: true,
         turnId: "MZ-talk:turn-1",
         payload: { text: "hello there", role: "user" },
       });
-      expect(talkEvents.find((event) => event.type === "turn.cancelled")).toMatchObject({
+      expect(talkEvents().find((event) => event.type === "turn.cancelled")).toMatchObject({
         final: true,
         turnId: "MZ-talk:turn-2",
         payload: { reason: "barge-in" },

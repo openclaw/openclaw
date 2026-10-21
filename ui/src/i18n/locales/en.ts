@@ -3496,6 +3496,8 @@ export const en: TranslationMap & {
     runEntry: {},
     errors: {
       nameRequired: "Name is required.",
+      activeHoursTime: "Enter HH:MM (24:00 is allowed only for the end).",
+      activeHoursTimezone: "Enter a valid IANA timezone, local, or user.",
       scheduleAtInvalid: "Enter a valid date/time.",
       everyAmountInvalid: "Interval must be greater than 0.",
       triggerIntervalTooShort:

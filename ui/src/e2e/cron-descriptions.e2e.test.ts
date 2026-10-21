@@ -87,7 +87,6 @@ suite.define(() => {
       describedJob("agent", { kind: "agentTurn", message: "List overnight deployment activity" }),
       describedJob("command", { kind: "command", argv: ["echo", "healthy"] }),
       describedJob("script", { kind: "script", script: "return 'healthy'" }),
-      describedJob("heartbeat", { kind: "heartbeat" }),
     ] as const;
     const undescribedJob = cronJob("without-description", "Plain task");
     await suite.withPage(pageOptions, async ({ page }) => {

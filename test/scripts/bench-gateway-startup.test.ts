@@ -908,7 +908,6 @@ server.listen(port, "127.0.0.1", () => {
         mode: "token",
         token: "synthetic-startup-benchmark-token",
       });
-      expect(config.agents?.defaults?.heartbeat?.every).toBe("0m");
       expect(config.models).toEqual(bundledPluginFixture.models);
       expect(config.channels).toEqual(bundledPluginFixture.channels);
       expect(config.tools).toEqual(bundledPluginFixture.tools);

@@ -365,9 +365,6 @@ async function readPiSessionSummary(
     // last good index instead of poisoning future append scans.
     return cached?.summary;
   }
-  if (cached?.summary?.threadId && cached.summary.threadId !== summary?.threadId) {
-    threadFileCache.delete(threadCacheKey(cached.storeRoot, cached.summary.threadId));
-  }
   cacheSummary(candidate.file, { ...candidate, summary, scanState });
   if (summary) {
     threadFileCache.set(threadCacheKey(candidate.storeRoot, summary.threadId), candidate.file);

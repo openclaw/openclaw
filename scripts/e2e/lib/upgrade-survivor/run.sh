@@ -2471,7 +2471,7 @@ if [ "$SCENARIO" = "dreaming-cron-doctor" ]; then
   phase dreaming-cron-repeat-doctor openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
     openclaw doctor --repair --non-interactive >"$DOCTOR_LOG" 2>&1
   phase assert-dreaming-idempotence node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs assert-idempotent
-  phase prepare-dreaming-runtime node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs prepare-runtime
+  phase prepare-dreaming-runtime node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs prepare-runtime "$(package_root)"
   OPENCLAW_SKIP_CRON=0 phase dreaming-runtime-gateway-start start_gateway
   phase dreaming-runtime-gateway-probes check_gateway_probes
   phase wait-dreaming-runtime node scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs wait-runtime

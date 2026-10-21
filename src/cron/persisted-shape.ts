@@ -5,10 +5,11 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { compileSafeRegex } from "../security/safe-regex.js";
+import { assertCronActiveHours } from "./active-hours.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { isCronEventSchedule } from "./source-schedule.js";
 import { parseCronStreamSandboxTarget } from "./stream-sandbox-target.js";
-import { isSystemOwnedCronPayloadKind, type CronJobState } from "./types.js";
+import type { CronJobState } from "./types.js";
 
 const CRON_STATE_TIMESTAMP_FIELDS = [
   "nextRunAtMs",
@@ -58,6 +59,7 @@ type InvalidPersistedCronJobReason =
   | "missing-schedule"
   | "invalid-schedule"
   | "invalid-state"
+  | "invalid-execution-policy"
   | "unsatisfiable-schedule"
   | "invalid-trigger"
   | "missing-payload"
@@ -73,6 +75,24 @@ export function getInvalidPersistedCronJobReason(
   }
   if (getInvalidCronJobStateTimestampField(candidate.state)) {
     return "invalid-state";
+  }
+  if (candidate.idleOnly !== undefined && typeof candidate.idleOnly !== "boolean") {
+    return "invalid-execution-policy";
+  }
+  if (candidate.activeHours !== undefined) {
+    const { start, end, timezone } = asRecord(candidate.activeHours);
+    if (
+      typeof start !== "string" ||
+      typeof end !== "string" ||
+      (timezone !== undefined && typeof timezone !== "string")
+    ) {
+      return "invalid-execution-policy";
+    }
+    try {
+      assertCronActiveHours({ start, end, timezone });
+    } catch {
+      return "invalid-execution-policy";
+    }
   }
   const schedule = candidate.schedule;
   if (!schedule || Array.isArray(schedule)) {
@@ -196,8 +216,7 @@ export function getInvalidPersistedCronJobReason(
     payloadKind !== "systemEvent" &&
     payloadKind !== "agentTurn" &&
     payloadKind !== "command" &&
-    payloadKind !== "script" &&
-    !isSystemOwnedCronPayloadKind(payloadKind)
+    payloadKind !== "script"
   ) {
     return "invalid-payload";
   }
@@ -216,6 +235,14 @@ export function getInvalidPersistedCronJobReason(
     return "invalid-payload";
   }
   if (scheduleKind === "event" && payloadKind !== "agentTurn") {
+    return "invalid-payload";
+  }
+  if (
+    payloadKind === "agentTurn" &&
+    ["skipIfScratchEmpty", "includeReasoning"].some(
+      (field) => payloadRecord[field] !== undefined && typeof payloadRecord[field] !== "boolean",
+    )
+  ) {
     return "invalid-payload";
   }
   if (payloadKind === "command") {

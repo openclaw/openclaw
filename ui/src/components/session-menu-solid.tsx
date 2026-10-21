@@ -27,7 +27,6 @@ import {
 
 /** Only resolved local worktree destinations are offered by the menu host. */
 export type SessionMenuWork = {
-  loading: boolean;
   pullRequestUrl: string | null;
   worktreePath: string | null;
 };

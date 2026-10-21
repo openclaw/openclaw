@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -8,14 +9,9 @@ import {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import type {
-  PluginHookBeforeToolCallEvent,
-  PluginHookBeforeToolCallResult,
-  PluginHookToolContext,
-} from "openclaw/plugin-sdk/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import type { AuditRow, PendingAuthorization } from "./src/broker.js";
+import type { AuditRow, OnePasswordBroker, PendingAuthorization } from "./src/broker.js";
 
 const { getItem } = vi.hoisted(() => ({
   getItem: vi.fn(async () => ({
@@ -88,22 +84,13 @@ describe("OnePassword pending authorizations on the SQLite worker", () => {
     ];
     plugin.register(api);
     const factory = registerTool.mock.calls[0]?.[0];
-    if (typeof factory !== "function") {
-      throw new Error("missing tool factory");
-    }
+    assert(typeof factory === "function", "missing tool factory");
     const tool = factory(invocation);
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("expected one tool");
-    }
+    assert(tool && !Array.isArray(tool), "expected one tool");
     const beforeToolCall = on.mock.calls.find(([name]) => name === "before_tool_call")?.[1] as
-      | ((
-          event: PluginHookBeforeToolCallEvent,
-          context: PluginHookToolContext,
-        ) => Promise<PluginHookBeforeToolCallResult | void>)
+      | OnePasswordBroker["beforeToolCall"]
       | undefined;
-    if (!beforeToolCall) {
-      throw new Error("missing policy hook");
-    }
+    assert(beforeToolCall, "missing policy hook");
     for (const [toolCallId, slug, decision, dropNonce] of [
       ["automatic", "automatic", undefined, false],
       ["approved", "approval", "allow-always", false],
@@ -133,26 +120,15 @@ describe("OnePassword pending authorizations on the SQLite worker", () => {
       );
     }
     expect(getItem).toHaveBeenCalledTimes(3);
-    expect(
-      await api.runtime.state
-        .openKeyedStore<PendingAuthorization>({
-          namespace: "pending",
-          maxEntries: 512,
-          overflowPolicy: "evict-oldest",
-        })
-        .entries(),
-    ).toEqual([]);
-    expect(
-      (
-        await api.runtime.state
-          .openKeyedStore<AuditRow>({
-            namespace: "audit",
-            maxEntries: 40_000,
-            overflowPolicy: "evict-oldest",
-          })
-          .entries()
-      ).map(({ value }) => value.outcome),
-    ).toEqual(expect.arrayContaining(["auto", "approved", "grant"]));
+    const entries = <T>(namespace: string, maxEntries: number) =>
+      api.runtime.state
+        .openKeyedStore<T>({ namespace, maxEntries, overflowPolicy: "evict-oldest" })
+        .entries();
+    expect(await entries<PendingAuthorization>("pending", 512)).toEqual([]);
+    const audit = await entries<AuditRow>("audit", 40_000);
+    expect(audit.map(({ value }) => value.outcome)).toEqual(
+      expect.arrayContaining(["auto", "approved", "grant"]),
+    );
     for (const call of sql) {
       expect(call).not.toHaveBeenCalled();
     }

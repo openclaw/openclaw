@@ -1,7 +1,5 @@
-// Message channel tests cover channel id normalization and routing helpers.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -15,24 +13,12 @@ import {
   resolveGatewayMessageChannel,
 } from "./message-channel.js";
 
-const INTERNAL_NON_DELIVERY_CHANNELS = [
-  "heartbeat",
-  "cron",
-  "webhook",
-  "voice",
-  "sessions_send",
-] as const;
-
 const emptyRegistry = createTestRegistry([]);
 
-const demoMarkdownPlugin: ChannelPlugin = {
-  ...createChannelTestPluginBase({
-    id: "demo-markdown-channel",
-    label: "Demo Markdown Channel",
-    docsPath: "/channels/demo-markdown-channel",
-    markdownCapable: true,
-  }),
-};
+function registerChannel(id: string, markdownCapable?: boolean) {
+  const plugin = createChannelTestPluginBase({ id, markdownCapable });
+  setActivePluginRegistry(createTestRegistry([{ pluginId: id, plugin, source: "test" }]));
+}
 
 describe("message-channel", () => {
   beforeEach(() => {
@@ -75,25 +61,18 @@ describe("message-channel", () => {
   });
 
   it("recognises internal non-delivery channel sources", () => {
-    for (const channel of INTERNAL_NON_DELIVERY_CHANNELS) {
+    for (const channel of ["heartbeat", "cron", "webhook", "voice", "sessions_send"]) {
       expect(isInternalNonDeliveryChannel(channel)).toBe(true);
     }
-    expect(isInternalNonDeliveryChannel("telegram")).toBe(false);
-    expect(isInternalNonDeliveryChannel("webchat")).toBe(false);
-    expect(isInternalNonDeliveryChannel("")).toBe(false);
-    expect(isInternalNonDeliveryChannel("HEARTBEAT")).toBe(false);
-    expect(isInternalNonDeliveryChannel("cron-event")).toBe(false);
-    expect(isInternalNonDeliveryChannel("exec-event")).toBe(false);
+    for (const channel of ["telegram", "webchat", "", "HEARTBEAT", "cron-event", "exec-event"]) {
+      expect(isInternalNonDeliveryChannel(channel)).toBe(false);
+    }
   });
 
   it("reads markdown capability from channel metadata", () => {
     expect(isMarkdownCapableMessageChannel("telegram")).toBe(true);
     expect(isMarkdownCapableMessageChannel("whatsapp")).toBe(false);
-    setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "demo-markdown-channel", plugin: demoMarkdownPlugin, source: "test" },
-      ]),
-    );
+    registerChannel("demo-markdown-channel", true);
     expect(isMarkdownCapableMessageChannel("demo-markdown-channel")).toBe(true);
   });
 
@@ -115,20 +94,7 @@ describe("message-channel", () => {
   });
 
   it("treats registered plugin channels without markdown metadata as plain text", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "qa-channel",
-          plugin: createChannelTestPluginBase({
-            id: "qa-channel",
-            label: "QA Channel",
-            docsPath: "/channels/qa-channel",
-          }),
-          source: "test",
-        },
-      ]),
-    );
-
+    registerChannel("qa-channel");
     expect(isMarkdownCapableMessageChannel("qa-channel")).toBe(false);
   });
 });

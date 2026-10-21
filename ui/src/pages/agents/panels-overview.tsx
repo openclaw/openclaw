@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, For, onSettled, Show } from "solid-js";
+import { createMemo, createUniqueId, Errored, For, Loading, onSettled, Show } from "solid-js";
 import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type {
   AgentIdentityResult,
@@ -9,6 +9,7 @@ import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
 import { MultiSelect } from "../../components/multi-select.tsx";
 import { createOverlayAnchor } from "../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../components/overlay-lifecycle.ts";
+import { failPanelRefresh } from "../../components/panel-refresh-status.ts";
 import "../../components/tooltip.ts";
 import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
@@ -375,7 +376,38 @@ export function AgentOverview(
       ) : undefined}
       <SettingsSection
         title={t("agents.overview.modelSelection")}
-        notice={<PanelRefreshNotice status={params.readData().chatModelCatalogStatus} />}
+        notice={
+          <For
+            each={
+              params.readData().chatModelCatalogRead
+                ? [params.readData().chatModelCatalogRead!]
+                : []
+            }
+          >
+            {(read) => (
+              <Errored
+                fallback={(error) => (
+                  <PanelRefreshNotice
+                    status={failPanelRefresh(
+                      {
+                        error: null,
+                        hasLoaded: params.modelCatalogHasSnapshot,
+                        stale: false,
+                        awaitingGateway: false,
+                      },
+                      error(),
+                      params.modelCatalogGateway,
+                    )}
+                  />
+                )}
+              >
+                <Loading>
+                  <ModelCatalogCompletion read={read} />
+                </Loading>
+              </Errored>
+            )}
+          </For>
+        }
         actions={<AgentConfigButtons {...params} buttonType="button" />}
       >
         <SettingsRow
@@ -453,4 +485,9 @@ export function renderAgentContextSection(
       ])}
     </SettingsSection>
   );
+}
+
+function ModelCatalogCompletion(props: { read: Promise<void> }) {
+  const completion = createMemo(() => props.read.then(() => null));
+  return <>{completion()}</>;
 }

@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { provisionDefaultProactiveJob } from "../../../../src/cron/default-proactive-job.js";
+import { loadGatewayTestConfig } from "../../../../src/gateway/test-helpers.config-runtime.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -19,6 +21,7 @@ let started:
       port: number;
       server: Awaited<ReturnType<typeof startTestGatewayServer>>;
       client: Awaited<ReturnType<typeof connectGatewayClient>>;
+      proactiveJobId: string;
     }
   | undefined;
 let observer: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
@@ -45,6 +48,12 @@ beforeAll(async () => {
     throw new Error("OPENCLAW_STATE_DIR is required");
   }
   await loadOrCreateProcessDeviceIdentityAsync();
+  const proactiveJob = await provisionDefaultProactiveJob(loadGatewayTestConfig(), "main", {
+    cadenceMs: 30 * 60 * 1000,
+  });
+  if (!proactiveJob) {
+    throw new Error("Expected setup to provision the default proactive automation");
+  }
   // Suite hooks must retain this server's state through their per-test reset.
   const port = await getGatewayTestPort();
   const server = await startTestGatewayServer(port, {
@@ -57,7 +66,7 @@ beforeAll(async () => {
       token: TOKEN,
       clientDisplayName: "rpc-identity-presence-bootstrap",
     });
-    started = { port, server, client };
+    started = { port, server, client, proactiveJobId: proactiveJob.id };
   } catch (error) {
     await server.close();
     throw error;
@@ -176,10 +185,18 @@ describe("gateway RPC identity and presence", () => {
         enabled: false,
         ok: true,
       });
+      expect(await writer.request("cron.get", { id: started.proactiveJobId })).toMatchObject({
+        id: started.proactiveJobId,
+        enabled: false,
+      });
     } finally {
       expect(await writer.request("set-heartbeats", { enabled: true })).toMatchObject({
         enabled: true,
         ok: true,
+      });
+      expect(await writer.request("cron.get", { id: started.proactiveJobId })).toMatchObject({
+        id: started.proactiveJobId,
+        enabled: true,
       });
     }
   });

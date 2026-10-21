@@ -1,7 +1,9 @@
 // Owner-level allocation probe; see scripts/perf/README.md before interpreting counts.
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
+import os from "node:os";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
 import {
@@ -23,12 +25,20 @@ import {
   resolvePreparedGatewayOperatorAccessAuthority,
   resumeGatewayOperatorAccessGrant,
 } from "../../src/gateway/operator-access-policy.js";
+import { sourceRolePolicy } from "../../src/gateway/operator-role-source-policy.js";
+import { decodeQueuedOperatorRecoverySource } from "../../src/gateway/operator-run-recovery-source.codec.js";
+import { restoreGatewayOperatorSource } from "../../src/gateway/operator-run-recovery.js";
+import type { GatewayRequestContext } from "../../src/gateway/server-methods/shared-types.js";
 import { createUnavailableRuntime } from "../../src/plugins/api-builder.js";
 import type { PluginGatewayAccessAuthority } from "../../src/plugins/gateway-access-policy.types.js";
 import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import { getPluginInstance } from "../../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../../src/plugins/registry.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../../src/plugins/runtime.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../src/state/openclaw-state-db.js";
+import { profileCatalogPath } from "../../src/state/user-profile-identity.read.js";
+import { prepareUserProfileIdentity } from "../../src/state/user-profile-list.js";
+import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import type { UserProfileAccessFacts } from "../../src/state/user-profiles.types.js";
 
 const { values } = parseArgs({
@@ -78,7 +88,15 @@ const profile: UserProfileAccessFacts = Object.freeze({
   githubAccountIds: Object.freeze([12345]),
   assignedRole: "synthetic-operator",
 });
-const counts = { authPolicy: 0, resumeOwner: 0, authorize: 0, resume: 0, pluginAssert: 0 };
+const allowedProfiles = new Set([profile.profileId]);
+const counts = {
+  recoverySource: 0,
+  authPolicy: 0,
+  resumeOwner: 0,
+  authorize: 0,
+  resume: 0,
+  pluginAssert: 0,
+};
 function resetCounts() {
   for (const key of Object.keys(counts) as (keyof typeof counts)[]) {
     counts[key] = 0;
@@ -111,13 +129,13 @@ builder.registry.plugins.push(record);
 builder.createApi(record, { config }).registerGatewayAccessPolicy({
   authorize(context) {
     counts.authorize++;
-    assert.equal(context.profile.profileId, profile.profileId);
+    assert(allowedProfiles.has(context.profile.profileId));
     assert.equal(context.requiredByRole, true);
     return grantLive ? pluginAuthority : undefined;
   },
   resume(context) {
     counts.resume++;
-    assert.equal(context.profile.profileId, profile.profileId);
+    assert(allowedProfiles.has(context.profile.profileId));
     assert.equal(context.grantId, pluginAuthority.grantId);
     return grantLive ? pluginAuthority : undefined;
   },
@@ -196,6 +214,65 @@ const transcript = await withOwnedSessionTranscriptWrites(
   },
   async () => captureOwnedTranscriptWriteAssertion(transcriptTarget),
 );
+let recovery: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefined;
+let recoveryStateDir: string | undefined;
+let recoveryConfig = config;
+if (values.scenario === "all" || values.scenario === "recovery-source") {
+  recoveryStateDir = await mkdtemp(path.join(os.tmpdir(), "operator-authority-measure-"));
+  process.env.OPENCLAW_STATE_DIR = recoveryStateDir;
+  const person = ensureProfileForEmail("recovery@authority.example.test");
+  allowedProfiles.add(person.id);
+  const identity = await prepareUserProfileIdentity(person.id);
+  try {
+    const { profile: facts } = identity.readCurrentFacts();
+    const recoveredAccess = resolvePreparedGatewayOperatorAccessAuthority(
+      { ...facts, role: facts.assignedRole, isCurrent: () => true },
+      config,
+      { requireLivePolicySet: true },
+    );
+    assert(recoveredAccess?.gatewayAccessGrant);
+    // Decode the persisted shape so this is never an already-issued policy identity.
+    const source = decodeQueuedOperatorRecoverySource({
+      kind: "gateway",
+      snapshot: {
+        profileId: person.id,
+        scopes: ["operator.write"],
+        assignedRole: facts.assignedRole,
+        githubLogin: facts.githubLogin ?? null,
+        rolePolicy: sourceRolePolicy(config.gateway?.roles?.definitions["synthetic-operator"]),
+        grant: recoveredAccess.gatewayAccessGrant,
+        aliasBindingIds: identity.emailBindingIds,
+        authPolicy: {
+          ...captureGatewayAuthPolicy(config, {
+            role: "operator",
+            authMethod: "token",
+            verifiedIdentity: "recovery@authority.example.test",
+            browserOrigin: authPolicy.browserOrigin,
+          }),
+          generation: "",
+        },
+        controlUiAdmin: false,
+        localOperator: false,
+        sourceIngress: "control-ui",
+      },
+    });
+    assert(source.kind === "gateway");
+    // Recovery only consumes the config reader and optional owner identities.
+    const context = { getRuntimeConfig: () => recoveryConfig } as GatewayRequestContext;
+    recovery = await restoreGatewayOperatorSource({
+      snapshot: source.snapshot,
+      target: {
+        agentId: "synthetic-agent",
+        sessionKey: "agent:synthetic-agent:recovery",
+        sessionId: "synthetic-recovery",
+      },
+      context,
+      assertCurrent() {},
+    });
+  } finally {
+    identity.release();
+  }
+}
 const scenarios = [
   { name: "auth-policy", check: checkAuth },
   { name: "retained-grant", check: checkGrant },
@@ -203,6 +280,16 @@ const scenarios = [
   { name: "admitted-run", check: admitted },
   { name: "transcript-guard", check: transcript },
 ];
+if (recovery) {
+  const authority = recovery.authority;
+  scenarios.push({
+    name: "recovery-source",
+    check() {
+      counts.recoverySource++;
+      authority.assertCurrent();
+    },
+  });
+}
 assert(
   values.scenario === "all" || scenarios.some(({ name }) => name === values.scenario),
   `Unknown scenario: ${values.scenario}`,
@@ -216,8 +303,26 @@ type SampleNode = {
 };
 function summarizeProfile(root: SampleNode) {
   let bytes = 0;
+  let authPolicyStringifyBytes = 0;
   const sites: { bytes: number; stack: string[] }[] = [];
-  function visit(node: SampleNode, parents: string[]) {
+  function visit(
+    node: SampleNode,
+    parents: string[],
+    inAuthPolicy = false,
+    inAuthStringify = false,
+  ) {
+    const hasAuthPolicy =
+      inAuthPolicy || node.callFrame.functionName === "captureGatewayAuthPolicy";
+    // V8 can inline the public wrapper while retaining its recursive serializer frames.
+    const hasAuthStringify =
+      inAuthStringify ||
+      (hasAuthPolicy &&
+        (node.callFrame.functionName === "stableStringify" ||
+          node.callFrame.functionName === "stringifyStableValue" ||
+          node.callFrame.functionName === "stringifyObjectValue"));
+    if (hasAuthStringify) {
+      authPolicyStringifyBytes += node.selfSize;
+    }
     bytes += node.selfSize;
     const frame = `${node.callFrame.functionName || "(anonymous)"} ${node.callFrame.url}:${node.callFrame.lineNumber + 1}`;
     const stack = [...parents, frame].slice(-8);
@@ -225,11 +330,15 @@ function summarizeProfile(root: SampleNode) {
       sites.push({ bytes: node.selfSize, stack });
     }
     for (const child of node.children) {
-      visit(child, stack);
+      visit(child, stack, hasAuthPolicy, hasAuthStringify);
     }
   }
   visit(root, []);
-  return { bytes, topSites: sites.toSorted((a, b) => b.bytes - a.bytes).slice(0, 15) };
+  return {
+    bytes,
+    authPolicyStringifyBytes,
+    topSites: sites.toSorted((a, b) => b.bytes - a.bytes).slice(0, 15),
+  };
 }
 const results = [];
 const inspector = new Session();
@@ -278,12 +387,22 @@ try {
       threadCpuNsPerCheck: ((cpuUsed.user + cpuUsed.system) * 1000) / iterations,
       estimatedAllocatedBytes: allocation.bytes,
       estimatedBytesPerCheck: allocation.bytes / iterations,
+      estimatedAuthPolicyStringifyBytesPerCheck: allocation.authPolicyStringifyBytes / iterations,
       counts: measuredCounts,
       countsPerCheck: Object.fromEntries(
         Object.entries(measuredCounts).map(([name, count]) => [name, count / iterations]),
       ),
       topSites: allocation.topSites,
     });
+  }
+  let nextCheckConfigRevocationDenied: boolean | undefined;
+  if (recovery) {
+    recoveryConfig = {
+      ...config,
+      gateway: { ...config.gateway, controlUi: { allowedOrigins: [] } },
+    };
+    assert.throws(recovery.authority.assertCurrent);
+    nextCheckConfigRevocationDenied = true;
   }
   // Positive control outside capture: retained plugin answers remain live on the next check.
   grantLive = false;
@@ -299,6 +418,7 @@ try {
     warmup,
     setupCountsExcluded: true,
     nextCheckRevocationDenied: true,
+    nextCheckConfigRevocationDenied,
     results,
   };
   const json = JSON.stringify(report, null, 2);
@@ -312,4 +432,9 @@ try {
   admission.close();
   controller.abort();
   await clearActivePluginRegistry();
+  recovery?.release();
+  if (recoveryStateDir) {
+    await closeOpenClawStateDatabaseByPathAsync(profileCatalogPath({}));
+    await rm(recoveryStateDir, { recursive: true, force: true });
+  }
 }

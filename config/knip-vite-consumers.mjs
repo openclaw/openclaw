@@ -41,5 +41,22 @@ export function compileViteConfigConsumers(source, filePath) {
       imports.push(`import { ${names.join(", ")} } from ${JSON.stringify(relative)};`);
     }
   }
+  // Solid's named lazy export is selected by a string rather than a property
+  // read. Derive the edge from the live loader so deleting it stays detectable.
+  const lazyPath = path.resolve("ui/src/components/settings-sidebar-lazy.tsx");
+  const lazySource = fs.readFileSync(lazyPath, "utf8");
+  for (const [, specifier, name] of lazySource.matchAll(
+    /\blazy\(\(\) => import\("([^"\r\n]+)"\),\s*\{\s*export:\s*"(\w+)"/gu,
+  )) {
+    const relative = path
+      .relative(
+        path.dirname(path.resolve(filePath)),
+        path.resolve(path.dirname(lazyPath), specifier),
+      )
+      .replaceAll("\\", "/");
+    imports.push(
+      `import { ${name} as __solidLazy${imports.length} } from ${JSON.stringify(relative)};`,
+    );
+  }
   return `${source}\n${imports.join("\n")}`;
 }

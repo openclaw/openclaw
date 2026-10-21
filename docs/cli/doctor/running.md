@@ -141,6 +141,14 @@ legacy workspace setup, legacy session stores, and exec approvals. Malformed or
 conflicting input is retained and requires the manual action in the diagnostic.
 The updater uses this repair path before accepting the installed target.
 
+Gateway, node, and macOS app startup prepare pending client credentials automatically,
+including profiles that were offline during the update. Preparation keeps existing
+identities and pairing tokens and captures a backup before retiring their old storage.
+Native clients can invoke the same operation with
+`openclaw doctor --client-credentials --repair --non-interactive`. This command only
+prepares the selected root's client credentials and required source schema. It does not
+run health checks or control services. Add `--json` for a completion report.
+
 Migration checks default to whole-database `quick_check`, full integrity checks
 for tables the migration rewrites or re-indexes, and foreign-key checks. Add
 `--full-integrity-check` to check every table and index during migration:
@@ -289,6 +297,7 @@ openclaw channels status --probe
 | `--repair` / `--fix`            | Apply recommended repairs while coordinating maintenance with the matching managed Gateway (`--fix` is an alias). Refresh outdated Linux policy and reconcile eligible running-service installation drift; preserve stopped launchers and stop state. |
 | `--force`                       | Allow aggressive repair choices. Alone, remains guided; with `--fix`, `--repair`, or `--yes`, uses the same policy-refresh and installation-drift rules.                                                                                              |
 | `--non-interactive`             | Run without prompts; safe automatic migrations still apply. Combine with `--fix`, `--repair`, or `--yes` to enter repair maintenance.                                                                                                                 |
+| `--client-credentials`          | Prepare only client credentials and their required source schema. Requires `--repair` or `--fix` with `--non-interactive`; optionally accepts `--json`.                                                                                               |
 | `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                                                                               |
 | `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                                                                         |
 | `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                                                                                   |

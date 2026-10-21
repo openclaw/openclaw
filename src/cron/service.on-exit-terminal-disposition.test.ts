@@ -52,9 +52,9 @@ it.each<
       });
       expect(f.runCronFailureRepair).not.toHaveBeenCalled();
       expect(f.sendCronFailureAlert).toHaveBeenCalledTimes(alerts);
-      expect(f.enqueueSystemEvent).toHaveBeenCalledTimes(notices);
+      expect(f.enqueueSessionEvent).toHaveBeenCalledTimes(notices);
       if (notices) {
-        expect(f.enqueueSystemEvent).toHaveBeenCalledWith(
+        expect(f.enqueueSessionEvent).toHaveBeenCalledWith(
           expect.stringContaining("auto-disabled"),
           expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
         );
@@ -80,7 +80,7 @@ it.each([true, false])(
       const stored = await f.cron.readJob(job.id);
       expect(stored?.enabled).toBe(enabled);
       expect(stored?.state.autoDisabled).toBeUndefined();
-      expect(f.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(f.enqueueSessionEvent).not.toHaveBeenCalled();
       expect(f.sendCronFailureAlert).not.toHaveBeenCalled();
       expect(f.runCronFailureRepair).not.toHaveBeenCalled();
     });

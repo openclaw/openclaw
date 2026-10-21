@@ -2,6 +2,7 @@
 
 import { createRoot, createSignal, merge } from "solid-js";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { UpdateScheduleState } from "../../api/types.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { projectUpdateSentinel } from "../../app/update-overlay-helpers.ts";
@@ -10,7 +11,7 @@ import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import {
   createUpdatesViewDom,
@@ -543,8 +544,9 @@ describe("renderUpdates", () => {
     }
   });
 
-  it("renders the authoritative waiting countdown as a quiet timer", () => {
-    const onHoldUpdate = vi.fn(async () => true);
+  it("keeps the waiting timer mounted and retries a declined hold", async () => {
+    const holding = createDeferred<boolean>();
+    const onHoldUpdate = vi.fn().mockReturnValueOnce(holding.promise).mockResolvedValue(true);
     const props = createProps({
       update: waitingUpdate({ forceAtMs: 762_000 }),
       onHoldUpdate,
@@ -559,8 +561,48 @@ describe("renderUpdates", () => {
     expect(timer?.textContent).toContain("Waiting for active work · forced update in 11:41");
     const hold = row("Status").querySelector<HTMLButtonElement>("button");
     expect(hold?.textContent?.trim()).toBe("Hold 1 h");
-    hold?.click();
+    hold!.click();
+    flush();
+    expect(hold!.disabled).toBe(true);
+    hold!.click();
     expect(onHoldUpdate).toHaveBeenCalledOnce();
+    expect(row("Status").querySelector("[role='timer']")).toBe(timer);
+    holding.resolve(false);
+    await waitForSolid(() => expect(hold!.disabled).toBe(false));
+    expect(row("Status").querySelector("button")).toBe(hold);
+    hold!.click();
+    expect(onHoldUpdate).toHaveBeenCalledTimes(2);
+    await waitForSolid(() => expect(hold!.disabled).toBe(false));
+  });
+
+  it("keeps a replacement campaign usable while a retired hold settles", async () => {
+    const retired = createDeferred<boolean>();
+    const current = createDeferred<boolean>();
+    const onHoldUpdate = vi
+      .fn()
+      .mockReturnValueOnce(retired.promise)
+      .mockReturnValueOnce(current.promise);
+    renderUpdates({ update: waitingUpdate({ forceAtMs: 762_000 }), onHoldUpdate });
+    const hold = row("Status").querySelector<HTMLButtonElement>("button")!;
+    hold.click();
+    flush();
+    expect(hold.disabled).toBe(true);
+
+    renderUpdates({
+      update: waitingUpdate({ id: "campaign-2", forceAtMs: 762_000 }),
+      onHoldUpdate,
+    });
+    const replacement = row("Status").querySelector<HTMLButtonElement>("button")!;
+    expect(replacement.disabled).toBe(false);
+    retired.resolve(false);
+    await retired.promise;
+    await waitForSolid(() => expect(replacement.disabled).toBe(false));
+    replacement.click();
+    flush();
+    expect(onHoldUpdate).toHaveBeenCalledTimes(2);
+    expect(replacement.disabled).toBe(true);
+    current.resolve(false);
+    await waitForSolid(() => expect(replacement.disabled).toBe(false));
   });
 
   it("shows held campaign timing and hides the one-shot hold action", () => {

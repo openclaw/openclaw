@@ -148,6 +148,13 @@ Override a server with `openclaw mcp configure <server> --approval approve|promp
 
 ## Troubleshooting
 
+### A tool returns an error
+
+When an MCP tool returns `isError: true`, OpenClaw passes its error content to
+the agent so it can follow the server's recovery guidance. The tool's
+`outputSchema` validates successful structured results only; structured error
+details do not need to match that schema.
+
 ### The server appears in Settings but exposes no tools
 
 Run `openclaw mcp doctor <name> --probe`. Doctor validates the saved definition first, then opens a live connection and reports the tools and other capabilities the server advertises. If it connects but expected tools are missing, check `toolFilter.include` and `toolFilter.exclude`.

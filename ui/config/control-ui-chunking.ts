@@ -61,7 +61,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
   switch (controlUiBootManifestKey(id)) {
     case "node_modules/@solidjs/signals/dist/prod/core/action.js":
     case "node_modules/@solidjs/signals/dist/dev/core/action.js":
-      // Solid's shared runtime imports actions; keep the first lazy action user out of boot.
+    case "node_modules/@solidjs/signals/dist/prod/core/verdict.js":
+    case "node_modules/@solidjs/signals/dist/prod/core/lanes.js":
+      // Solid's eager initializers must not pull the route boot groups into startup.
       return "solid-actions-runtime";
     case "ui/src/lib/device-pair-setup.ts":
       // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
@@ -184,6 +186,10 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
         : [
             ...(["shared", "new", "chat"] as const).map((route, index) => {
               const modules = new Set(controlUiBootModules[route]);
+              if (route === "shared") {
+                // Plugin contributions can initialize after the New Session boot capture.
+                modules.add("ui/src/plugins/control-ui-actions.ts");
+              }
               return {
                 name: `control-ui-boot-${route}`,
                 test: (id: string) => modules.has(controlUiBootManifestKey(id)),

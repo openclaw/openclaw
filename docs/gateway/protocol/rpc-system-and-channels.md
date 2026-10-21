@@ -20,7 +20,7 @@ RPC method families for gateway status and identity, models and usage, channels 
 - `system-presence` returns the current presence snapshot for connected operator/node devices.
 - `system-event` appends a system event and can update/broadcast presence context.
 - `last-heartbeat` returns the latest persisted heartbeat event.
-- `set-heartbeats` toggles heartbeat processing on the gateway.
+- `set-heartbeats` enables or disables only the converted/default proactive jobs recorded by Doctor or setup. It does not affect unrelated automations or recreate deleted jobs.
 - `gateway.restart.preflight` is a deprecated, read-only compatibility preview of restart-specific active work. It does not close admission, create a suspension lease, or provide the atomic full-work fence of `gateway.suspend.prepare`; new restart flows should call `gateway.restart.request`.
 - `gateway.suspend.prepare` creates a short cooperative-suspension lease only when tracked Gateway work is idle. While prepared, authenticated WebSocket connects remain available, but only `gateway.suspend.*` and an exact targeted non-safe `gateway.restart.request` may run; safe and untargeted restarts remain fenced. `gateway.suspend.status` checks the lease, and `gateway.suspend.resume` releases it after thaw or an aborted host operation.
 

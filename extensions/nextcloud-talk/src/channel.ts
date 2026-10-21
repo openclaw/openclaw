@@ -1,5 +1,4 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
   adaptScopedAccountAccessor,
@@ -34,10 +33,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import {
   isNextcloudTalkAccountConfigured,
@@ -60,6 +56,8 @@ import {
   stripNextcloudTalkTargetPrefix,
 } from "./normalize.js";
 import {
+  normalizeNextcloudTalkAllowEntry,
+  normalizeNextcloudTalkAllowlist,
   resolveNextcloudTalkGroupRequireMention,
   resolveNextcloudTalkGroupToolPolicy,
 } from "./policy.js";
@@ -76,21 +74,13 @@ import {
 } from "./webhook-route.js";
 import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
 
-function normalizeNextcloudTalkApproverId(value: string | number): string | undefined {
-  return normalizeOptionalLowercaseString(
-    String(value)
-      .trim()
-      .replace(/^(nextcloud-talk|nc-talk|nc):/i, ""),
-  );
-}
-
 const nextcloudTalkApprovalAuth = createChannelApprovalAuth({
   channelLabel: "Nextcloud Talk",
   resolveInputs: ({ cfg, accountId }) => {
     const account = resolveNextcloudTalkAccount({ cfg, accountId });
     return { allowFrom: account.config.allowFrom };
   },
-  normalizeApprover: normalizeNextcloudTalkApproverId,
+  normalizeApprover: (value) => normalizeNextcloudTalkAllowEntry(String(value)) || undefined,
 }).approvalAuth;
 
 function resolveNextcloudTalkOutboundSessionRoute(params: {
@@ -269,11 +259,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           defaultAccountId: resolveDefaultNextcloudTalkAccountId,
           clearBaseFields: ["botSecret", "botSecretFile", "baseUrl", "name"],
           resolveAllowFrom: (account) => account.config.allowFrom,
-          formatAllowFrom: (allowFrom) =>
-            formatAllowFromLowercase({
-              allowFrom,
-              stripPrefixRe: /^(nextcloud-talk|nc-talk|nc):/i,
-            }),
+          formatAllowFrom: normalizeNextcloudTalkAllowlist,
         }),
         isConfigured: isNextcloudTalkAccountConfigured,
         describeAccount: (account) =>
@@ -538,8 +524,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         resolvePolicy: (account) => account.config.dmPolicy,
         resolveAllowFrom: (account) => account.config.allowFrom,
         policyPathSuffix: "dmPolicy",
-        normalizeEntry: (raw) =>
-          normalizeLowercaseStringOrEmpty(raw.trim().replace(/^(nextcloud-talk|nc-talk|nc):/i, "")),
+        normalizeEntry: normalizeNextcloudTalkAllowEntry,
       }),
       collectWarnings: collectNextcloudTalkOpenGroupFindings,
     },

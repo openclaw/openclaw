@@ -8,12 +8,12 @@ import type { PresencePayload } from "../app/user-profile.ts";
 import type { BoardSnapshot } from "../lib/board/types.ts";
 import { createTeamScaleDuplicateReadFixture } from "./control-ui-duplicate-read-fixture.ts";
 import { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
-import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
 import {
   createTeamScaleSessionEvents,
   prepareTeamScaleSidebarListChurn,
   type TeamScaleLiveEvent,
 } from "./control-ui-sidebar-list-fixture.ts";
+import { withTeamScaleConfig } from "./control-ui-team-scale-config.ts";
 import { createTeamScaleHistoryFixture } from "./control-ui-team-scale-history-fixture.ts";
 import {
   createTeamScaleCronInventory,
@@ -359,7 +359,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     ...pinnedKeys.map((key) => `session:${key}`),
     ...plugins.map((plugin) => `plugin:${plugin.pluginId}/overview`),
   ];
-  const scenario: ControlUiMockGatewayScenario = {
+  const scenario = withTeamScaleConfig({
     awaitInitialRoster: false,
     authMethod: "trusted-proxy",
     authMode: "trusted-proxy",
@@ -494,7 +494,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         },
       },
     },
-  };
+  });
   // 125 frames over 20 seconds: streaming is mixed with unrelated Team activity.
   const liveKinds = [
     ...Array<string>(5).fill("presence.offscreen"),

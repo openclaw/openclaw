@@ -480,7 +480,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
             <button
               type="button"
               class="btn btn--sm oc-action oc-action-secondary"
-              onClick={props.onRetry}
+              onClick={() => props.onRetry()}
             >
               {t("pluginsPage.tryAgain")}
             </button>

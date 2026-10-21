@@ -41,5 +41,7 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
       "github_personal_publication_requests",
       "github_repository_publication_requests",
     ],
+    // Only shared-state version and content metadata change.
+    30: [],
   },
 };

@@ -255,7 +255,7 @@ export function projectionOperations(
     ) {
       if (refresh) {
         throw new Error(
-          "Base refresh source is unavailable; retry github_publish refresh_base. Saved work was preserved.",
+          "Workspace integration source is unavailable; retry github_publish prepare_pr for an imported PR, or refresh_base for the selected project. Saved work was preserved.",
         );
       }
       const snapshot = await capture(target);
@@ -544,7 +544,7 @@ export function projectionOperations(
       );
       if (merge.code !== 1) {
         throw new Error(
-          "Workspace base integration is pending; finish github_publish refresh_base before archiving this worktree. Saved files and merge state were preserved.",
+          "Workspace integration is pending; finish the original github_publish prepare_pr or refresh_base action before archiving this worktree. Saved files and merge state were preserved.",
         );
       }
       const accepted = await capture("canonical");

@@ -142,7 +142,7 @@ export function registerBrowserPermissionRoutes(
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     let timeoutMs: number;
     try {
-      timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs, "timeoutMs", { minMs: 1_000 }) ?? 5_000;
+      timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs, { minMs: 1_000 }) ?? 5_000;
     } catch (err) {
       return jsonError(res, 400, formatErrorMessage(err));
     }

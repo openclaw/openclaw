@@ -7,15 +7,22 @@ import {
 } from "../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
+import { prepareAutomationSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveHookExternalContentSource } from "../security/external-content-source.js";
+import { isCronWithinActiveHours } from "./active-hours.js";
+import { isCronExecutionIdle } from "./execution-idle.js";
 import {
   buildCronDeliveryTrace,
   finalizeCronPromptForResolvedTools,
   resolveCronDeliveryContext,
 } from "./isolated-agent/run-delivery-trace.js";
-import { buildCronCommandBody } from "./run-prompt.js";
+import { appendCronJobScratchPrompt, buildCronCommandBody } from "./run-prompt.js";
+import { isCronScratchEffectivelyEmpty } from "./scratch-contract.js";
+import { readCronScratchSnapshot } from "./scratch-read.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { resolveCronJobsStorePathFromConfig } from "./store.js";
 import type { CronResolvedDeliveryState } from "./types.js";
 
 type SessionRun = NonNullable<CronServiceDeps["runSessionEvent"]>;
@@ -30,167 +37,294 @@ export async function runCronSessionTurn(
   const { job } = params;
   await params.prepare?.();
   params.assertCurrent();
+  const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
+  if (
+    params.sessionPreparation &&
+    (params.sessionPreparation.agentId !== params.agentId ||
+      resolveSystemEventQueueKey(
+        params.sessionPreparation.sessionKey,
+        params.sessionPreparation.agentId,
+      ) !== queueKey)
+  ) {
+    throw new Error("Automation session target changed after notice preparation");
+  }
+  const notices =
+    params.sessionPreparation?.notices ??
+    (await prepareAutomationSystemEvents(queueKey, job.id, job.state.runningAtMs));
+  let noticesStarted = false;
   let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
   let controlUiAdmin: true | undefined;
   using operatorLease = new DisposableStack();
   const assertCurrent = () => {
     params.assertCurrent();
     operatorAuthority?.assertCurrent();
-  };
-  const delivery = await resolveCronDeliveryContext(params);
-  assertCurrent();
-  const expectedTarget = await captureSessionEventTarget(params.agentId, params.sessionKey, {
-    assertCurrent,
-  });
-  assertCurrent();
-  if (job.operatorSource) {
-    const { restoreCronOperatorSource } = await import("../gateway/cron-operator-source.js");
-    const operator = await restoreCronOperatorSource({
-      job,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      entry: expectedTarget,
-      signal: params.abortSignal,
-      deliveryAttemptFence: params.deliveryAttemptFence,
-    });
-    if (operator) {
-      operatorLease.defer(operator.release);
-      operatorAuthority = operator.authority;
-      controlUiAdmin = operator.controlUiAdmin ? true : undefined;
+    if (!noticesStarted) {
+      notices.assertCurrent();
     }
+  };
+  try {
+    const delivery =
+      job.payload.kind === "agentTurn" ? await resolveCronDeliveryContext(params) : undefined;
     assertCurrent();
-  }
-  const requestedChat = delivery.deliveryRequested && delivery.deliveryPlan.mode !== "webhook";
-  const deliveryError =
-    requestedChat && !delivery.resolvedDelivery.ok
-      ? delivery.resolvedDelivery.error.message
-      : undefined;
-  // A failed destination resolution must not fall back to the conversation's last route.
-  const route = delivery.resolvedDelivery.ok ? delivery.resolvedDelivery : undefined;
-  const beforeDeliver = async () => {
-    await params.prepare?.();
+    const expectedTarget = await captureSessionEventTarget(params.agentId, params.sessionKey, {
+      assertCurrent,
+    });
     assertCurrent();
-    const cfg = getRuntimeConfig();
-    const current = await resolveCronDeliveryContext({ ...params, cfg });
+    if (job.operatorSource) {
+      const { restoreCronOperatorSource } = await import("../gateway/cron-operator-source.js");
+      const operator = await restoreCronOperatorSource({
+        job,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        entry: expectedTarget,
+        signal: params.abortSignal,
+        deliveryAttemptFence: params.deliveryAttemptFence,
+      });
+      if (operator) {
+        operatorLease.defer(operator.release);
+        operatorAuthority = operator.authority;
+        controlUiAdmin = operator.controlUiAdmin ? true : undefined;
+      }
+      assertCurrent();
+    }
+    const requestedChat = delivery?.deliveryRequested && delivery.deliveryPlan.mode !== "webhook";
+    const deliverySuppressionReason =
+      delivery && !delivery.resolvedDelivery.ok
+        ? delivery.resolvedDelivery.deliverySuppressionReason
+        : undefined;
+    const deliveryError =
+      requestedChat && !delivery.resolvedDelivery.ok && !deliverySuppressionReason
+        ? delivery.resolvedDelivery.error.message
+        : undefined;
+    // Failed owner resolution cannot inherit a remembered group route.
+    const route = delivery
+      ? delivery.resolvedDelivery.ok
+        ? delivery.resolvedDelivery
+        : undefined
+      : params.deliveryContext;
+    let checkedDeliveryConfig: OpenClawConfig | undefined;
+    const assertDeliveryCurrent = () => {
+      // Delivery owners also assert before the first preparation; beforeDeliver
+      // pins policy before transport custody and every subsequent effect check.
+      if (checkedDeliveryConfig && checkedDeliveryConfig !== getRuntimeConfig()) {
+        throw new Error("Automation delivery policy changed before send");
+      }
+    };
+    const beforeDeliver = async () => {
+      await params.prepare?.();
+      assertCurrent();
+      const cfg = getRuntimeConfig();
+      if (delivery) {
+        const current = await resolveCronDeliveryContext({ ...params, cfg });
+        assertCurrent();
+        if (
+          !current.deliveryRequested ||
+          !current.resolvedDelivery.ok ||
+          !route ||
+          current.resolvedDelivery.channel !== route.channel ||
+          current.resolvedDelivery.to !== route.to ||
+          current.resolvedDelivery.accountId !== route.accountId ||
+          current.resolvedDelivery.threadId !== route.threadId
+        ) {
+          throw new Error(
+            "Automation delivery policy or route changed while queued; inspect the run and retry with the current destination",
+          );
+        }
+      }
+      await params.deliveryAttemptFence?.beforeAttempt();
+      assertCurrent();
+      checkedDeliveryConfig = cfg;
+    };
+    const scratch = (
+      params.sessionPreparation?.scratch ??
+      (
+        await readCronScratchSnapshot(
+          resolveCronJobsStorePathFromConfig(params.cfg),
+          { kind: "job", jobId: job.id, createdAtMsFallback: job.createdAtMs },
+          {},
+          { assertCurrent, signal: params.abortSignal },
+        )
+      )?.state
+    )?.scratch;
     assertCurrent();
     if (
-      !current.deliveryRequested ||
-      !current.resolvedDelivery.ok ||
-      !route ||
-      current.resolvedDelivery.channel !== route.channel ||
-      current.resolvedDelivery.to !== route.to ||
-      current.resolvedDelivery.accountId !== route.accountId ||
-      current.resolvedDelivery.threadId !== route.threadId
+      notices.events.length === 0 &&
+      job.payload.kind === "agentTurn" &&
+      job.payload.skipIfScratchEmpty &&
+      isCronScratchEffectivelyEmpty(scratch?.content)
     ) {
-      throw new Error(
-        "Automation delivery policy or route changed while queued; inspect the run and retry with the current destination",
-      );
+      return {
+        status: "skipped",
+        summary: "Automation scratch is explicitly empty",
+        executionStarted: false,
+        delivered: false,
+        deliveryAttempted: false,
+      };
     }
-    await params.deliveryAttemptFence?.beforeAttempt();
-    assertCurrent();
-  };
-  const baseSessionKey = parseAgentSessionKey(params.sessionKey)?.rest ?? params.sessionKey;
-  const externalSource =
-    (job.payload.kind === "agentTurn" ? job.payload.externalContentSource : undefined) ??
-    resolveHookExternalContentSource(baseSessionKey);
-  const promptTimeMs = Date.now();
-  let sessionId: string | undefined;
-  const receipt = enqueueSessionEvent(params.text, {
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    source: "cron",
-    contextKey: `cron:${job.id}`,
-    expectedTarget,
-    createIfMissing: true,
-    deliveryContext: route,
-    abortSignal: params.abortSignal,
-    scheduledAutomation: {
-      job,
-      operatorAuthority,
-      controlUiAdmin,
-      admissionSource: params.admissionSource,
-      prepare: params.prepare,
-      preparePrompt: async (cfg) => {
-        const { commandBody } = await buildCronCommandBody({
-          job,
-          cfg,
-          message: params.text,
-          baseSessionKey,
-          hookExternalContentSource: externalSource,
-          ...resolveCronStyleNow(cfg, promptTimeMs),
-        });
-        return commandBody;
+    const baseSessionKey = parseAgentSessionKey(params.sessionKey)?.rest ?? params.sessionKey;
+    const externalSource =
+      (job.payload.kind === "agentTurn" ? job.payload.externalContentSource : undefined) ??
+      resolveHookExternalContentSource(baseSessionKey);
+    const promptTimeMs = Date.now();
+    let sessionId: string | undefined;
+    const receipt = enqueueSessionEvent(params.text, {
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      source: "cron",
+      contextKey: `cron:${job.id}`,
+      expectedTarget,
+      createIfMissing: true,
+      deliveryContext: route,
+      abortSignal: params.abortSignal,
+      scheduledAutomation: {
+        job,
+        operatorAuthority,
+        controlUiAdmin,
+        admissionSource: params.admissionSource,
+        prepare: params.prepare,
+        preparePrompt: async (cfg) => {
+          const { applyLegacyHeartbeatPromptContribution } =
+            await import("../infra/heartbeat-compat.js");
+          const message = await applyLegacyHeartbeatPromptContribution({
+            cfg,
+            jobId: job.id,
+            name: job.name,
+            agentId: params.agentId,
+            sessionKey: expectedTarget.sessionKey!,
+            prompt: params.text,
+            assertCurrent,
+          });
+          assertCurrent();
+          const { commandBody } = await buildCronCommandBody({
+            job,
+            cfg,
+            message,
+            baseSessionKey,
+            hookExternalContentSource: externalSource,
+            ...resolveCronStyleNow(cfg, promptTimeMs),
+          });
+          assertCurrent();
+          const prompt = appendCronJobScratchPrompt(commandBody, scratch);
+          return notices.events.length
+            ? `${prompt}\n\nPending session notices:\n${notices.events.map((event) => event.text).join("\n")}`
+            : prompt;
+        },
+        executionIdentity: params.executionIdentity,
+        deliveryAttemptFence:
+          requestedChat && route && params.deliveryAttemptFence
+            ? {
+                beforeAttempt: beforeDeliver,
+                assertCurrent: () => {
+                  params.deliveryAttemptFence!.assertCurrent();
+                  assertDeliveryCurrent();
+                },
+              }
+            : params.deliveryAttemptFence,
+        assertCurrent,
+        bindSessionCreation: (operation) => notices.bindCreation(operation),
+        beforeDeliver,
+        assertDeliveryCurrent,
+        waitForIdle: params.waitForIdle
+          ? (signal, operation) => params.waitForIdle!(expectedTarget.sessionKey, signal, operation)
+          : undefined,
+        beforeStart: (operation) => {
+          const cfg = getRuntimeConfig();
+          if (
+            !isCronWithinActiveHours(
+              job.activeHours,
+              Date.now(),
+              cfg.agents?.defaults?.userTimezone,
+            )
+          ) {
+            return "active-hours";
+          }
+          return job.idleOnly &&
+            !isCronExecutionIdle(cfg, job, params.agentId, expectedTarget.sessionKey, operation)
+            ? "busy"
+            : true;
+        },
+        onStarted: () => {
+          notices.start();
+          noticesStarted = true;
+        },
+        sourceDelivery: delivery?.sourceDelivery,
+        finalizePromptForResolvedTools: delivery
+          ? (candidate) =>
+              finalizeCronPromptForResolvedTools({
+                ...candidate,
+                deliveryRequested: delivery.deliveryRequested,
+                resolvedDelivery: delivery.resolvedDelivery,
+                sourceDelivery: delivery.sourceDelivery,
+                messageToolFormatPrompt: delivery.messageToolFormatPrompt,
+              })
+          : undefined,
+        onLaneWait: params.onLaneWait,
+        onExecutionStarted: (info) => {
+          sessionId = info.sessionId;
+          params.onExecutionStarted?.({
+            jobId: job.id,
+            agentId: params.agentId,
+            sessionId,
+            sessionKey: info.sessionKey,
+            runId: info.runId,
+            provider: info.provider,
+            model: info.model,
+            isFallback: info.isFallback,
+            phase: "runner_entered",
+          });
+        },
+        onExecutionPhase: params.onExecutionPhase,
       },
-      executionIdentity: params.executionIdentity,
-      deliveryAttemptFence:
-        requestedChat && route && params.deliveryAttemptFence
-          ? { ...params.deliveryAttemptFence, beforeAttempt: beforeDeliver }
-          : params.deliveryAttemptFence,
-      assertCurrent,
-      beforeDeliver,
-      sourceDelivery: delivery.sourceDelivery,
-      finalizePromptForResolvedTools: (candidate) =>
-        finalizeCronPromptForResolvedTools({
-          ...candidate,
-          deliveryRequested: delivery.deliveryRequested,
-          resolvedDelivery: delivery.resolvedDelivery,
-          sourceDelivery: delivery.sourceDelivery,
-          messageToolFormatPrompt: delivery.messageToolFormatPrompt,
-        }),
-      onLaneWait: params.onLaneWait,
-      onExecutionStarted: (info) => {
-        sessionId = info.sessionId;
-        params.onExecutionStarted?.({
-          jobId: job.id,
-          agentId: params.agentId,
-          sessionId,
-          sessionKey: info.sessionKey,
-          runId: info.runId,
-          provider: info.provider,
-          model: info.model,
-          isFallback: info.isFallback,
-          phase: "runner_entered",
-        });
-      },
-      onExecutionPhase: params.onExecutionPhase,
-    },
-    deliver: requestedChat && !deliveryError,
-  });
-  // The source lease and Cron receipt remain live until the admitted turn settles.
-  const result = await receipt.settled;
-  return {
-    ...result.automationResult,
-    status: result.status === "completed" ? "ok" : "error",
-    interruptedByRestart: result.interruptedByRestart,
-    error:
-      result.error ??
-      (result.status === "cancelled" ? "Automation session turn was cancelled" : undefined),
-    summary: result.summary,
-    sessionId,
-    sessionKey: expectedTarget.sessionKey,
-    executionStarted: result.executionStarted,
-    delivered: result.deliveryAmbiguous ? undefined : result.delivered,
-    deliveryState: result.deliveryAmbiguous
-      ? ({
-          status: "unknown",
-          failureNotification: { status: "not-requested" },
-        } satisfies CronResolvedDeliveryState)
-      : undefined,
-    deliveryError: result.deliveryError ?? deliveryError,
-    deliveryAttempted: result.deliveryAttempted,
-    deliverySuppressionReason: result.deliverySuppressionReason,
-    delivery: buildCronDeliveryTrace({
-      deliveryPlan: delivery.deliveryPlan,
-      resolvedDelivery: delivery.resolvedDelivery,
-      sourceDeliveryOutcome: result.sourceDeliveryOutcome ?? {
-        visibleDeliveries: [],
-        verifiedMessageToolDelivery: false,
-        satisfiesSourceDelivery: result.delivered && !result.deliveryAmbiguous,
-        unverifiedMessageToolDelivery: false,
-      },
-      fallbackUsed: false,
+      deliver: delivery
+        ? Boolean(requestedChat && !deliveryError && !deliverySuppressionReason)
+        : true,
+    });
+    // Source, notice, and Cron custody remain live until the controller settles.
+    const result = await receipt.settled;
+    return {
+      ...result.automationResult,
+      status: result.admissionDeferred ? "skipped" : result.status === "completed" ? "ok" : "error",
+      admissionDeferred: result.admissionDeferred,
+      admissionDeferredReason: result.admissionDeferredReason,
+      interruptedByRestart: result.interruptedByRestart,
+      error:
+        result.error ??
+        (result.status === "cancelled" ? "Automation session turn was cancelled" : undefined),
+      summary: result.summary,
+      sessionId,
+      sessionKey: expectedTarget.sessionKey,
+      executionStarted: result.executionStarted,
       delivered: result.deliveryAmbiguous ? undefined : result.delivered,
-    }),
-    ...(result.nextCheckMs !== undefined ? { nextCheck: { delayMs: result.nextCheckMs } } : {}),
-  };
+      deliveryState: result.deliveryAmbiguous
+        ? ({
+            status: "unknown",
+            failureNotification: { status: "not-requested" },
+          } satisfies CronResolvedDeliveryState)
+        : undefined,
+      deliveryError: result.deliveryError ?? deliveryError,
+      deliveryAttempted: result.deliveryAttempted,
+      deliverySuppressionReason: result.deliverySuppressionReason ?? deliverySuppressionReason,
+      ...(delivery
+        ? {
+            delivery: buildCronDeliveryTrace({
+              deliveryPlan: delivery.deliveryPlan,
+              resolvedDelivery: delivery.resolvedDelivery,
+              sourceDeliveryOutcome: result.sourceDeliveryOutcome ?? {
+                visibleDeliveries: [],
+                verifiedMessageToolDelivery: false,
+                satisfiesSourceDelivery: result.delivered && !result.deliveryAmbiguous,
+                unverifiedMessageToolDelivery: false,
+              },
+              fallbackUsed: false,
+              delivered: result.deliveryAmbiguous ? undefined : result.delivered,
+            }),
+          }
+        : {}),
+      ...(result.nextCheckMs !== undefined ? { nextCheck: { delayMs: result.nextCheckMs } } : {}),
+    };
+  } finally {
+    if (!params.sessionPreparation) {
+      notices.release();
+    }
+  }
 }

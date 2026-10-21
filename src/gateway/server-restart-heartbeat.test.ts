@@ -7,6 +7,7 @@ import { createCronServiceState } from "../cron/service/state.js";
 import { executeJobCoreWithTimeout } from "../cron/service/timer-job-runner.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
 import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
 import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
@@ -35,6 +36,7 @@ it("settles a queued heartbeat monitor before joining its cron run during shutdo
     cfg: { agents: { defaults: { heartbeat: { every: "30m" } } } },
     runOnce: async () => ({ status: "skipped", reason: "requests-in-flight" }),
   });
+  const wakeAccepted = createDeferredCore();
   const state = createCronServiceState({
     scheduler: createTestGatewayScheduler(),
     // The execution core does not open the scheduler store.
@@ -43,24 +45,33 @@ it("settles a queued heartbeat monitor before joining its cron run during shutdo
     log: { debug() {}, info() {}, warn() {}, error() {} },
     enqueueSystemEvent() {},
     requestHeartbeat() {},
-    requestHeartbeatAndWait,
+    requestHeartbeatAndWait: (request, lifecycle) => {
+      const settlement = requestHeartbeatAndWait(request, lifecycle);
+      wakeAccepted.resolve();
+      return settlement;
+    },
     runIsolatedAgentJob: async () => ({ status: "ok" }),
   });
-  const run = executeJobCoreWithTimeout(state, {
-    id: "shutdown-heartbeat-monitor",
-    agentId: "main",
-    name: "heartbeat-main",
-    enabled: true,
-    createdAtMs: Date.now(),
-    updatedAtMs: Date.now(),
-    schedule: { kind: "every", everyMs: 1_800_000 },
-    payload: { kind: "heartbeat" },
-    sessionTarget: "main",
-    wakeMode: "next-heartbeat",
-    state: {},
-  });
+  const run = executeJobCoreWithTimeout(
+    state,
+    {
+      id: "shutdown-heartbeat-monitor",
+      agentId: "main",
+      name: "heartbeat-main",
+      enabled: true,
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+      schedule: { kind: "every", everyMs: 1_800_000 },
+      payload: { kind: "heartbeat" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      state: {},
+    },
+    { migrationPending: false },
+  );
   let close: Promise<void> | undefined;
   try {
+    await wakeAccepted.promise;
     expect(await waitForActiveCronTaskRuns(0)).toEqual({ drained: false, active: 1 });
     // Main-session handoffs have no abortable cron controller; their wake owner settles them.
     expect(abortActiveCronTaskRuns("Gateway restarting.")).toBe(0);

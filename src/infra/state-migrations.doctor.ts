@@ -1499,6 +1499,7 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
         env,
         mode: params.mode,
         requiredness: detected.stateSchema.hasLegacy ? "required" : "conditional",
+        integrityCheck: params.integrityCheck,
       }),
       createRetiredCoreStateStep({
         stateDir,
@@ -2071,7 +2072,6 @@ export async function runLegacyStateMigrations(params: {
   const detected = params.detected;
   const env = params.env ?? process.env;
   const config = params.config ?? ({} as OpenClawConfig);
-  const legacySessionSurfaces = params.legacySessionSurfaces;
   const buildSteps = (pluginStateMigrationInventory?: PluginDoctorStateMigrationInventory) =>
     buildLegacyStateMigrationSteps({
       mode: "doctor",
@@ -2084,7 +2084,7 @@ export async function runLegacyStateMigrations(params: {
       // The health contribution's later session repair consumes preflight's handoff.
       // This migration pass does not own that separate phase.
       deferPostSessionPluginMigrations: false,
-      legacySessionSurfaces,
+      legacySessionSurfaces: params.legacySessionSurfaces,
     });
   const { preparation: preparationSteps, remaining: remainingSteps } = buildSteps();
   const preparation = await runLegacyStateMigrationSteps(

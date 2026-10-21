@@ -290,6 +290,56 @@ Version **2026.9.5** and versions containing
 Updating to a fixed version still needs this workaround when the installed
 updater is affected.
 
+## Extended-stable 2026.9.33 to development builds
+
+When updating an installed **2026.9.33** directly to current development builds,
+activation can fail with `SQLite migration source changed after update capture`.
+The older updater and the candidate use different database fingerprint formats.
+This error alone does not establish that another process changed the database.
+The failed update preserves current databases and recovery snapshots, but may
+leave the Gateway stopped with the candidate package installed.
+
+Before switching to development, create a
+[verified backup](/install/updating#before-updating-create-a-verified-backup),
+then update through **2026.10.5**:
+
+```bash
+openclaw update --channel stable --tag 2026.10.5
+openclaw --version
+openclaw gateway stop
+openclaw update --channel dev
+openclaw gateway start
+```
+
+Continue to the development update only after the first update completes and
+`openclaw --version` reports `2026.10.5`. Keep the same service account, profile,
+and state/configuration paths throughout. Set console logging to `info` for both
+updates as described [above](#debug-logging-blocks-the-update-handoff).
+The older updater can report that automatic database restoration is unavailable
+during the intermediate update; retain your verified backup.
+
+Stop other OpenClaw processes using the same state before the development update.
+For a foreground Gateway, use its original terminal or supervisor to stop and
+restart it. Custom state/configuration paths can make the updater skip service
+management; follow that warning. Doctor reporting `An agent database is in use`
+means maintenance was deferred, even if an earlier step completed.
+
+If the direct update has already failed, preserve its snapshots and candidate.
+Run `openclaw update repair` and follow its process-ownership instructions before
+starting another update. Once the named old updater processes have exited, use
+the installed candidate to finish maintenance:
+
+```bash
+openclaw doctor --fix
+openclaw update repair
+openclaw gateway start
+openclaw gateway status --deep
+```
+
+Do not delete update records, change schema markers, or discard recovery files
+to bypass the refusal. The fingerprint incompatibility needs support across
+migration and rollback receipts; ignoring the mismatch would lose that protection.
+
 ## Candidate migration rehearsal timeouts
 
 Current updaters give snapshot preparation and each candidate check separate

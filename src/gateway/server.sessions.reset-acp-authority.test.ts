@@ -1,20 +1,20 @@
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
+import { createAcpMeta } from "../acp/runtime/session-meta-lifecycle.test-support.js";
 // Install manager and runtime mocks before loading the reset implementation.
 // oxfmt-ignore
 import {
   acpRuntimeMocks,
-  sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+import assert from "node:assert/strict";
 import { afterEach, expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createRequestGate } from "./server-methods.request-gate.test-support.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
-import { writeSessionStore } from "./test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const { seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 
 afterEach(async () => {
   await disposeSessionReadContexts();
@@ -26,15 +26,13 @@ test.each(["already retired", "caller retired"] as const)(
   async (reason) => {
     const acpEntryWriter = await import("../acp/runtime/session-meta-entry.js");
     const { closeAcpRuntimeForSession } = await import("./session-reset-acp.js");
-    const { storePath } = await createSessionStoreDir();
+    const { storePath } = await seedActiveMainSession();
     const sessionKey = "agent:main:main";
-    await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
     seedCanonicalAcpSessionMeta({
       sessionKey,
-      meta: {
+      meta: createAcpMeta({
         backend: "acpx",
         agent: "codex",
-        runtimeSessionName: "runtime:reset",
         identity: {
           state: "resolved",
           acpxRecordId: sessionKey,
@@ -42,28 +40,26 @@ test.each(["already retired", "caller retired"] as const)(
           source: "status",
           lastUpdatedAt: Date.now(),
         },
-        mode: "persistent",
         cwd: "/tmp/acp-session",
-        state: "idle",
-        lastActivityAt: Date.now(),
-      },
+      }),
     });
     acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
       id: "acpx",
       runtime: { prepareFreshSession: vi.fn(async () => {}) },
     });
     const scope = { agentId: "main", sessionKey, storePath };
-    const beforeEntry = structuredClone(loadSessionEntry(scope));
-    const beforeMeta = readAcpSessionEntry({ sessionKey })?.acp;
-    const reached = createDeferred();
-    const release = createDeferred();
+    const readState = () => ({
+      entry: loadSessionEntry(scope),
+      meta: readAcpSessionEntry({ sessionKey })?.acp,
+    });
+    const before = structuredClone(readState());
+    const mutation = createRequestGate();
     const originalWrite = acpEntryWriter.updateAcpSessionStoreEntry;
-    const intercepted = vi
+    using intercepted = vi
       .spyOn(acpEntryWriter, "updateAcpSessionStoreEntry")
       .mockImplementation(async (input) => {
         if (input.mutation.kind === "touch") {
-          reached.resolve();
-          await release.promise;
+          await mutation.pause();
         }
         return await originalWrite(input);
       });
@@ -73,41 +69,28 @@ test.each(["already retired", "caller retired"] as const)(
       agentId: "main",
       sessionKey,
       reason: "session-reset",
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("reset caller retired");
-        }
-      },
+      assertCurrent: () => assert(current, "reset caller retired"),
     });
-    const outcome = resetting.then(
-      (value) => ({ ok: true as const, value }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
+    const outcome = expect(resetting).rejects.toThrow("reset caller retired");
     try {
       if (reason === "already retired") {
-        await expect(outcome).resolves.toMatchObject({ ok: false });
+        await outcome;
         expect(intercepted).not.toHaveBeenCalled();
       } else {
         await Promise.race([
-          reached.promise,
+          mutation.entered,
           outcome.then(() => {
             throw new Error("ACP reset settled before the metadata mutation boundary");
           }),
         ]);
         current = false;
-        release.resolve();
-        const settled = await outcome;
-        expect(settled.ok).toBe(false);
-        if (!settled.ok) {
-          expect(String(settled.error)).toContain("reset caller retired");
-        }
+        mutation.release();
+        await outcome;
       }
-      expect(loadSessionEntry(scope)).toEqual(beforeEntry);
-      expect(readAcpSessionEntry({ sessionKey })?.acp).toEqual(beforeMeta);
+      expect(readState()).toEqual(before);
     } finally {
-      release.resolve();
+      mutation.release();
       await outcome;
-      intercepted.mockRestore();
     }
   },
 );

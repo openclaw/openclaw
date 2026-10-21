@@ -79,19 +79,23 @@ type ControlUiRepresentation = {
   encoding?: ControlUiContentEncoding;
 };
 
-export function resolveControlUiRepresentation(params: {
+export function resolveControlUiAssetEncodings(params: {
   req: IncomingMessage;
-  asset: ControlUiRootAsset;
   contentPath: string;
   precompressed: boolean;
-}): ControlUiRepresentation | null {
-  const { req, asset, precompressed } = params;
-  const encodings = resolveHttpContentEncodings(
-    req.headers?.["accept-encoding"],
-    precompressed && isControlUiCompressibleAsset(params.contentPath)
+}): ControlUiRepresentationEncoding[] {
+  return resolveHttpContentEncodings(
+    params.req.headers?.["accept-encoding"],
+    params.precompressed && isControlUiCompressibleAsset(params.contentPath)
       ? CONTROL_UI_DYNAMIC_ENCODINGS
       : new Set<ControlUiContentEncoding>(),
   );
+}
+
+export function resolveControlUiRepresentation(
+  asset: ControlUiRootAsset,
+  encodings: readonly ControlUiRepresentationEncoding[],
+): ControlUiRepresentation | null {
   // A missing sidecar changes availability, not this request's encoding preferences.
   for (const selected of encodings) {
     if (selected === "identity") {

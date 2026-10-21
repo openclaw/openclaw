@@ -22,6 +22,7 @@ export async function startCronForStore(params: {
   cronEnabled?: boolean;
   enqueueSystemEvent?: CronServiceOptions["enqueueSystemEvent"];
   requestHeartbeat?: CronServiceOptions["requestHeartbeat"];
+  runSessionEvent?: CronServiceOptions["runSessionEvent"];
   runIsolatedAgentJob?: CronServiceOptions["runIsolatedAgentJob"];
   onEvent?: CronServiceOptions["onEvent"];
 }) {
@@ -40,6 +41,7 @@ export async function startCronForStore(params: {
     enqueueSystemEvent,
     requestHeartbeat,
     runIsolatedAgentJob,
+    runSessionEvent: params.runSessionEvent ?? vi.fn(async () => ({ status: "ok" as const })),
     ...(params.onEvent ? { onEvent: params.onEvent } : {}),
   });
   await cron.start();

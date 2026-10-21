@@ -402,7 +402,16 @@ it("promotes while the live runtime state database changes during staged apply",
   const runtimeDatabasePath = path.join(root, "runtime-agent.sqlite");
   let liveClientBytes: Buffer | undefined;
   fixture.install({
-    mutateDuringApply: async () => {
+    mutateDuringApply: async (ctx) => {
+      using stagedCredentials = openClientCredentialCustody(
+        { OPENCLAW_STATE_DIR: ctx.stateDir },
+        { migration: true, readOnly: true },
+      );
+      assert(stagedCredentials, "missing staged credential companion");
+      expect(readClientCredentialReceipt(stagedCredentials.database)).toMatchObject({
+        phase: "complete",
+        receipt: { source: { kind: "canonical", engine: "sqlite" }, legacyImports: {} },
+      });
       registerOpenClawAgentDatabase({
         agentId: "runtime",
         path: runtimeDatabasePath,
@@ -438,7 +447,15 @@ it("promotes while the live runtime state database changes during staged apply",
   );
 });
 
-it.each(["identity", "token", "origin-token", "socket", "import-claim"] as const)(
+it.each([
+  "identity",
+  "token",
+  "origin-token",
+  "socket",
+  "import-claim",
+  "independent-source",
+  "source-identity",
+] as const)(
   "rejects unsupported staged client %s without publishing or retaining the stage",
   async (material) => {
     const { root, currentConfig } = fixture;
@@ -483,7 +500,20 @@ it.each(["identity", "token", "origin-token", "socket", "import-claim"] as const
           });
         } else {
           const stored = readClientCredentialReceipt(owner.database)!;
-          stored.receipt.legacyImports["auth:primary"] = { sha256: null };
+          const source = stored.receipt.source;
+          assert(source, "missing staged bootstrap provenance");
+          switch (material) {
+            case "import-claim":
+              stored.receipt.legacyImports["auth:primary"] = { sha256: null };
+              break;
+            case "independent-source":
+              source.kind = "independent";
+              source.engine = "native-v0";
+              break;
+            case "source-identity":
+              source.identity += ":foreign";
+              break;
+          }
           runSqliteImmediateTransactionSync(owner.database, () =>
             writeClientCredentialReceipt(owner.database, stored.receipt, stored.phase),
           );
