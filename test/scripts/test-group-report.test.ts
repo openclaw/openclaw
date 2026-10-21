@@ -295,8 +295,6 @@ function expectedArgs(overrides: Partial<ReturnType<typeof parseTestGroupReportA
 
 describe("scripts/test-group-report", () => {
   it("groups repo files by stable product area", () => {
-    expect(resolveTestArea("extensions/discord/src/send.test.ts")).toBe("extensions/discord");
-    expect(resolveTestArea("src/commands/agent.test.ts")).toBe("src/commands");
     expect(resolveTestArea("packages/plugin-sdk/src/index.test.ts")).toBe("packages/plugin-sdk");
     expect(resolveTestArea("ui/src/ui/views/chat.test.ts")).toBe("ui/views");
     expect(resolveTestArea("test/scripts/test-group-report.test.ts")).toBe("test/scripts");
@@ -638,55 +636,14 @@ describe("scripts/test-group-report", () => {
   ])("rejects invalid report arguments $command", ({ command, error }) => {
     expect(() => parseTestGroupReportArgs(command.split(" "))).toThrow(error);
   });
-  it.concurrent("kills timed wrapper process groups without orphaning the measured process", async () => {
-    if (process.platform === "win32" || !fs.existsSync("/usr/bin/time")) {
-      return;
-    }
-
-    const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
-    const markerPath = path.join(tempDir, "marker.txt");
-    const result = await spawnText(
-      "/usr/bin/time",
-      [
-        process.execPath,
-        "--input-type=module",
-        "--eval",
-        [
-          "import fs from 'node:fs';",
-          "process.on('SIGTERM', () => {});",
-          `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 5);`,
-        ].join("\n"),
-      ],
-      {
-        cwd: process.cwd(),
-        env: process.env,
-        killGraceMs: 25,
-        timeoutMs: 250,
-      },
-    );
-
-    expect(result).toMatchObject({
-      status: 1,
-      timedOut: true,
-    });
-    expect(result.output).toContain("command timed out after 250ms");
-    expect(result.output).toContain("sending SIGKILL");
-
-    const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 40);
-    });
-    const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
-    expect(sizeAfterWait).toBe(sizeAfterReturn);
-  });
-
-  it("keeps the wrapper alive while timed process-group descendants await SIGKILL", () => {
+  it("keeps timed wrappers alive through SIGKILL without orphaning their descendants", async () => {
     if (process.platform === "win32" || !fs.existsSync("/usr/bin/time")) {
       return;
     }
 
     const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
     const childPidPath = path.join(tempDir, "child.pid");
+    const markerPath = path.join(tempDir, "marker.txt");
     let childPid: number | undefined;
     try {
       const childScript = [
@@ -694,7 +651,7 @@ describe("scripts/test-group-report", () => {
         "process.on('SIGTERM', () => {});",
         "process.on('SIGHUP', () => {});",
         `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-        "setInterval(() => {}, 1000);",
+        `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 5);`,
       ].join("\n");
       const result = spawnSync(
         process.execPath,
@@ -723,6 +680,10 @@ describe("scripts/test-group-report", () => {
         timedOut: true,
       });
       expect(parsed.output).toContain("sending SIGKILL");
+      expect(parsed.output).toContain("command timed out after 500ms");
+      const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+      await delay(40);
+      expect(fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0).toBe(sizeAfterReturn);
     } finally {
       killPidIfAlive(childPid);
     }

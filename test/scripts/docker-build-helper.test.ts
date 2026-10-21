@@ -241,6 +241,14 @@ const SANDBOX_BROWSER_SIDECAR_DOCKER_E2E_PATH = "scripts/e2e/sandbox-browser-sid
 const SANDBOX_BROWSER_SIDECAR_SCENARIO_PATH =
   "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs";
 
+const CURRENT_INSTALL_PROBE_SETUP = `source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
+source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
+install_update_restart_systemctl_shim() { :; }
+openclaw_e2e_maybe_timeout() {
+  shift
+  "$@"
+}`;
+
 function extractUpgradeSurvivorPayload(script: string) {
   const marker = " bash -lc ";
   const start = script.indexOf(marker);
@@ -553,6 +561,29 @@ function writeExecutables(directory: string, files: Record<string, string>): voi
   for (const [name, contents] of Object.entries(files)) {
     writeFileSync(join(directory, name), contents, { mode: 0o755 });
   }
+}
+
+function doctorSwitchFixture(prefix: string, name?: string, selector = name) {
+  const home = tempDirs.make(prefix);
+  // Native manager children do not inherit OpenClaw selectors.
+  const serviceName = name ?? `${basename(home)}.service`;
+  const binDir = join(home, "bin");
+  const unitPath = join(home, ".config/systemd/user", serviceName);
+  writeExecutables(binDir, {
+    busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8").replace(
+      "process.env.OPENCLAW_SYSTEMD_UNIT",
+      JSON.stringify(serviceName),
+    ),
+    "systemd-exec-start.mjs": readFileSync(DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH, "utf8"),
+  });
+  const env = {
+    HOME: home,
+    PATH: `${binDir}:${process.env.PATH}`,
+    OPENCLAW_SYSTEMD_UNIT: selector ?? serviceName,
+    XDG_RUNTIME_DIR: join(home, "runtime"),
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(home, "runtime", "bus")}`,
+  };
+  return { binDir, unitPath, env };
 }
 
 function expectTextToIncludeAll(text: string, snippets: readonly string[]): void {
@@ -3099,13 +3130,7 @@ printf '%s\n' '{"gateway":{"mode":"local"}}' >"$OPENCLAW_CONFIG_PATH"
 unset OPENCLAW_UPDATE_IN_PROGRESS
 unset OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR
 unset OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE
-source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
-source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
-install_update_restart_systemctl_shim() { :; }
-openclaw_e2e_maybe_timeout() {
-  shift
-  "$@"
-}
+${CURRENT_INSTALL_PROBE_SETUP}
 if prepare_update_restart_probe_current_install 18789 "$TMPDIR/gateway.log" >/dev/null 2>&1; then
   echo "doctor unexpectedly succeeded" >&2
   exit 3
@@ -3194,13 +3219,7 @@ export GATEWAY_AUTH_TOKEN_REF=upgrade-survivor-token
 mkdir -p "$OPENCLAW_STATE_DIR"
 authored_config='{"channels":{"discord":{"dm":{"policy":"allowlist","allowFrom":["123"]}}}}'
 printf '%s\n' "$authored_config" >"$OPENCLAW_CONFIG_PATH"
-source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
-source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
-install_update_restart_systemctl_shim() { :; }
-openclaw_e2e_maybe_timeout() {
-  shift
-  "$@"
-}
+${CURRENT_INSTALL_PROBE_SETUP}
 openclaw_e2e_wait_gateway_ready() {
   [ "$FAILURE_STAGE" != readiness ] || return 42
 }
@@ -3258,13 +3277,7 @@ export REAL_CONFIG_PARKING_HELPER="$ROOT_DIR/${UPGRADE_SURVIVOR_CONFIG_PARKING_P
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER="$TMPDIR/bin/config-parking-wrapper.mjs"
 mkdir -p "$OPENCLAW_STATE_DIR"
 printf '%s\n' '{"channels":{"discord":{"dm":{"policy":"allowlist"}}}}' >"$OPENCLAW_CONFIG_PATH"
-source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
-source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
-install_update_restart_systemctl_shim() { :; }
-openclaw_e2e_maybe_timeout() {
-  shift
-  "$@"
-}
+${CURRENT_INSTALL_PROBE_SETUP}
 status=0
 prepare_update_restart_probe_current_install 18789 "$TMPDIR/gateway.log" >/dev/null 2>&1 || status=$?
 printf '%s\n' "$status" >"$TMPDIR/status"
@@ -5292,11 +5305,9 @@ done
   });
 
   it("reports the installed doctor switch unit through the systemd manager", async () => {
-    const home = tempDirs.make("openclaw-doctor-busctl-shim-");
     // Removal must not discover an operator's identically named system service.
-    const serviceName = `${basename(home)}.service`;
-    const unitPath = join(home, ".config", "systemd", "user", serviceName);
-    mkdirSync(join(home, ".config", "systemd", "user"), { recursive: true });
+    const { unitPath, env: loadedEnv } = doctorSwitchFixture("openclaw-doctor-busctl-shim-");
+    mkdirSync(dirname(unitPath), { recursive: true });
     writeFileSync(
       unitPath,
       [
@@ -5316,22 +5327,6 @@ done
       "--port",
       "18789",
     ];
-    const binDir = join(home, "bin");
-    writeExecutables(binDir, {
-      // Native manager children do not inherit OpenClaw selectors.
-      busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8").replace(
-        "process.env.OPENCLAW_SYSTEMD_UNIT",
-        JSON.stringify(serviceName),
-      ),
-      "systemd-exec-start.mjs": readFileSync(DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH, "utf8"),
-    });
-    const loadedEnv = {
-      HOME: home,
-      PATH: `${binDir}:${process.env.PATH}`,
-      OPENCLAW_SYSTEMD_UNIT: serviceName,
-      XDG_RUNTIME_DIR: join(home, "runtime"),
-      DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(home, "runtime", "bus")}`,
-    };
     expect(
       // The production 5s deadline budgets for native busctl; the Node shim's cold
       // spawn can exceed its per-call slice under load, so widen it here.
@@ -5371,25 +5366,12 @@ done
   });
 
   it("distinguishes a missing named doctor switch unit from failed or unsupported inspection", async () => {
-    const home = tempDirs.make("openclaw-doctor-busctl-absence-");
-    const binDir = join(home, "bin");
     const serviceName = "openclaw-gateway-fixture.service";
-    const unitPath = join(home, ".config/systemd/user", serviceName);
-    writeExecutables(binDir, {
-      // Bind fixture identity here: native manager children do not inherit OpenClaw selectors.
-      busctl: readFileSync(DOCTOR_SWITCH_BUSCTL_SHIM_PATH, "utf8").replace(
-        "process.env.OPENCLAW_SYSTEMD_UNIT",
-        JSON.stringify(serviceName),
-      ),
-      "systemd-exec-start.mjs": readFileSync(DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH, "utf8"),
-    });
-    const env = {
-      HOME: home,
-      PATH: `${binDir}:${process.env.PATH}`,
-      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-fixture",
-      XDG_RUNTIME_DIR: join(home, "runtime"),
-      DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(home, "runtime", "bus")}`,
-    };
+    const { binDir, unitPath, env } = doctorSwitchFixture(
+      "openclaw-doctor-busctl-absence-",
+      serviceName,
+      "openclaw-gateway-fixture",
+    );
     expect(
       await readSystemdServiceExecStart(env, { requireEffective: true, timeoutMs: 30_000 }),
     ).toBeNull();
