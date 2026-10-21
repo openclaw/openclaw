@@ -46,6 +46,8 @@ import {
 import {
   OPENAI_GPT_LIVE_MODELS,
   OPENAI_GPT_LIVE_MODEL_PREFIX,
+  isOpenAIGptLiveApiModel,
+  isOpenAIGptLiveModel,
   isOpenAIGptLiveSubscriptionModel,
   resolveOpenAIQuicksilverVoiceCapabilities,
 } from "./realtime-quicksilver.js";
@@ -218,6 +220,49 @@ export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
     azureDeployment,
     azureApiVersion: normalizeOptionalString(raw.azureApiVersion),
   };
+}
+
+/** Query parts of a custom endpoint without `model`, keeping their original escaping. */
+export function readOpenAIRealtimeEndpointQueryParts(endpoint: URL): string[] {
+  // Signed endpoint queries can depend on the original escaping of other fields.
+  return endpoint.search
+    ? endpoint.search
+        .slice(1)
+        .split("&")
+        .filter((part) => !new URLSearchParams(part).has("model"))
+    : [];
+}
+
+/**
+ * GPT-Live sessions endpoint beside a custom Realtime endpoint: `<root>/realtime`
+ * maps to `<root>/live/sessions`. Other paths have no derivable GPT-Live endpoint.
+ */
+export function resolveOpenAIGptLiveSessionsUrl(baseUrl: string): string | undefined {
+  const endpoint = new URL(baseUrl);
+  const path = endpoint.pathname.replace(/\/+$/u, "");
+  if (!path.endsWith("/realtime")) {
+    return undefined;
+  }
+  endpoint.pathname = `${path.slice(0, -"/realtime".length)}/live/sessions`;
+  endpoint.search = readOpenAIRealtimeEndpointQueryParts(endpoint).join("&");
+  return endpoint.toString();
+}
+
+// Custom endpoints speak the public GPT-Live API only: no ChatGPT model, OAuth, or WebRTC.
+export function resolveOpenAIRealtimeCustomEndpointGptLiveRefusal(
+  config: { baseUrl?: string },
+  model: string | undefined,
+): string | undefined {
+  if (!config.baseUrl || !isOpenAIGptLiveModel(model)) {
+    return undefined;
+  }
+  if (!isOpenAIGptLiveApiModel(model)) {
+    return "OpenAI realtime baseUrl supports GPT-Live only with gpt-live-1";
+  }
+  if (!resolveOpenAIGptLiveSessionsUrl(config.baseUrl)) {
+    return "OpenAI realtime baseUrl must end in /realtime to use GPT-Live; its sibling /live/sessions endpoint serves GPT-Live";
+  }
+  return undefined;
 }
 
 export const OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED =

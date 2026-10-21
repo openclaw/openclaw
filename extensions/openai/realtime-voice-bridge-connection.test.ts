@@ -143,6 +143,54 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
+  it("opens custom endpoint GPT-Live on the sibling live sessions path", async () => {
+    const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
+      providerConfig: {
+        apiKey: "test-realtime-key",
+        baseUrl: "http://router.example.test/oai/v1/realtime/?signature=a~b%20c&model=old",
+        model: "gpt-live-1",
+        speakerVoice: "Cedar",
+      },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+    });
+    expect(bridge).toBeInstanceOf(OpenAIQuicksilverGatewayBridge);
+    const connecting = bridge.connect();
+    try {
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = requireSocket();
+      expect(String(socket.args[0])).toBe(
+        "ws://router.example.test/oai/v1/live/sessions?signature=a~b%20c",
+      );
+      const headers = requireRecord(requireRecord(socket.args[1], "options").headers, "headers");
+      expect(headers.Authorization).toBe("Bearer test-realtime-key");
+      openSocket(socket);
+      await vi.waitFor(() =>
+        expect(parseSent(socket)).toContainEqual(
+          expect.objectContaining({
+            type: "session.start",
+            session: expect.objectContaining({
+              model: "gpt-live-1",
+              audio: { output: { voice: "cedar" } },
+            }),
+          }),
+        ),
+      );
+      emitServerEvent(socket, { type: "session.started", session: {} });
+      await connecting;
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    } finally {
+      const closing = bridge.close();
+      const socket = FakeWebSocket.instances[0];
+      if (socket && !socket.closed) {
+        emitServerEvent(socket, { type: "session.closed", reason: "close_requested" });
+      }
+      await Promise.allSettled([connecting, closing]);
+    }
+  });
+
   it.each([true, false])(
     "shares GA policy and retires the gateway binding with throwing callback=%s",
     async (throwingCloseCallback) => {

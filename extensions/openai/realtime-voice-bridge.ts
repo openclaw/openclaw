@@ -35,6 +35,7 @@ import {
   isDirectOpenAIRealtimeWebSocketUrl,
   isOpenAIRealtimeMaxSessionDurationError,
   isOpenAIRealtimeStartupAuthFailure,
+  readOpenAIRealtimeEndpointQueryParts,
   requireOpenAIRealtimeApiKey,
   requireOpenAIRealtimePlatformAuth,
   resolveOpenAIRealtimeSecretInput,
@@ -280,13 +281,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
     let url: string;
     if (cfg.baseUrl) {
       const endpoint = new URL(cfg.baseUrl);
-      // Signed endpoint queries can depend on the original escaping of other fields.
-      const query = endpoint.search
-        ? endpoint.search
-            .slice(1)
-            .split("&")
-            .filter((part) => !new URLSearchParams(part).has("model"))
-        : [];
+      const query = readOpenAIRealtimeEndpointQueryParts(endpoint);
       endpoint.search = [...query, `model=${encodeURIComponent(model)}`].join("&");
       url = endpoint.toString();
     } else if (cfg.azureEndpoint) {

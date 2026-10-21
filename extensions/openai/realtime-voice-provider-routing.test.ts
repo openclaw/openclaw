@@ -177,19 +177,45 @@ describe("OpenAI realtime voice provider routing", () => {
     expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalled();
   });
 
-  it("rejects custom endpoints for the separate GPT-Live protocol", async () => {
+  it("relays gpt-live-1 through a custom endpoint on the Gateway only", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const providerConfig = { ...customEndpoint, model: "gpt-live-1" };
-    expect(() =>
-      provider.createBridge({ providerConfig, onAudio: vi.fn(), onClearAudio: vi.fn() }),
-    ).toThrow("does not support GPT-Live");
+    const internalApi = readInternalRealtimeVoiceProviderApi(provider);
+    expect(await internalApi.isGatewayRelayConfiguredAsync({ providerConfig })).toBe(true);
+    expect(internalApi.validateGatewayRelayLaunch?.({ providerConfig })).toBeUndefined();
+    expect(internalApi.resolveGatewayRelayCapabilities?.({ providerConfig })).toMatchObject({
+      transports: ["gateway-relay"],
+      supportsBrowserSession: false,
+      handlesAgentConsult: true,
+      voiceSelectionPolicy: "allowlist-default",
+    });
     expect(
-      await readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfiguredAsync({
-        providerConfig,
-      }),
-    ).toBe(false);
+      internalApi.projectPublicProjection({ providerConfig, config: providerConfig }),
+    ).toMatchObject({ clientHints: { gatewayRelaySupported: true } });
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
+
+  it.each([
+    { model: "gpt-live-1-codex", baseUrl: customEndpoint.baseUrl, error: "only with gpt-live-1" },
+    {
+      model: "gpt-live-1",
+      baseUrl: "wss://voice.example.test/custom/inference",
+      error: "must end in /realtime",
+    },
+  ])(
+    "rejects custom endpoint GPT-Live for $model at $baseUrl",
+    async ({ model, baseUrl, error }) => {
+      const provider = buildOpenAIRealtimeVoiceProvider();
+      const providerConfig = { ...customEndpoint, baseUrl, model };
+      expect(() =>
+        provider.createBridge({ providerConfig, onAudio: vi.fn(), onClearAudio: vi.fn() }),
+      ).toThrow(error);
+      const internalApi = readInternalRealtimeVoiceProviderApi(provider);
+      expect(await internalApi.isGatewayRelayConfiguredAsync({ providerConfig })).toBe(false);
+      expect(internalApi.validateGatewayRelayLaunch?.({ providerConfig })).toContain(error);
+      expect(FakeWebSocket.instances).toHaveLength(0);
+    },
+  );
 
   it("projects gateway-relay capabilities", () => {
     const expected = {

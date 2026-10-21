@@ -47,6 +47,8 @@ import {
   normalizeOpenAIRealtimeVoice,
   normalizeProviderConfig,
   requireOpenAIRealtimePlatformAuth,
+  resolveOpenAIGptLiveSessionsUrl,
+  resolveOpenAIRealtimeCustomEndpointGptLiveRefusal,
   resolveOpenAIRealtimePlatformAuth,
   resolveOpenAIQuicksilverBridgeAuth,
   type OpenAIRealtimeVoice,
@@ -54,11 +56,23 @@ import {
 } from "./realtime-voice-session-policy.js";
 
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
-const CUSTOM_ENDPOINT_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
-  ...OPENAI_REALTIME_CAPABILITIES,
-  transports: ["gateway-relay"],
-  supportsBrowserSession: false,
-};
+
+// Custom endpoints relay through the Gateway only; GPT-Live keeps its native delegation.
+function resolveCustomEndpointCapabilities(
+  model: string | undefined,
+): RealtimeVoiceProviderCapabilities {
+  return {
+    ...OPENAI_REALTIME_CAPABILITIES,
+    ...(isOpenAIGptLiveModel(model)
+      ? {
+          ...OPENAI_QUICKSILVER_CAPABILITIES,
+          ...resolveOpenAIQuicksilverVoiceCapabilities(model ?? ""),
+        }
+      : {}),
+    transports: ["gateway-relay"],
+    supportsBrowserSession: false,
+  };
+}
 
 function prepareOpenAIRealtimeVoiceConfig({
   rawConfig,
@@ -412,10 +426,12 @@ export function buildOpenAIRealtimeVoiceProvider(
       const config = normalizeProviderConfig(req.providerConfig);
       const model = config.model;
       if (model && isOpenAIGptLiveModel(model)) {
-        if (config.baseUrl) {
-          throw new Error(
-            "OpenAI realtime baseUrl does not support GPT-Live; select a Realtime-compatible model",
-          );
+        const customEndpointRefusal = resolveOpenAIRealtimeCustomEndpointGptLiveRefusal(
+          config,
+          model,
+        );
+        if (customEndpointRefusal) {
+          throw new Error(customEndpointRefusal);
         }
         if (config.azureEndpoint || config.azureDeployment) {
           throw new Error(
@@ -427,6 +443,9 @@ export function buildOpenAIRealtimeVoiceProvider(
           model,
           voice: config.voice,
           instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
+          liveSessionsUrl: config.baseUrl
+            ? resolveOpenAIGptLiveSessionsUrl(config.baseUrl)
+            : undefined,
         };
         const authParams = {
           configuredApiKey: config.apiKey,
@@ -527,7 +546,7 @@ export function buildOpenAIRealtimeVoiceProvider(
     resolveBrowserSessionCapabilities: ({ cfg, providerConfig, agentId, model, clientControl }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.baseUrl) {
-        return CUSTOM_ENDPOINT_CAPABILITIES;
+        return resolveCustomEndpointCapabilities(model ?? config.model);
       }
       const effectiveModel = model ?? config.model ?? "";
       if (isOpenAIGptLiveModel(effectiveModel)) {
@@ -566,7 +585,7 @@ export function buildOpenAIRealtimeVoiceProvider(
     }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.baseUrl) {
-        return CUSTOM_ENDPOINT_CAPABILITIES;
+        return resolveCustomEndpointCapabilities(model ?? config.model);
       }
       const effectiveModel = model ?? config.model ?? "";
       if (isOpenAIGptLiveModel(effectiveModel)) {
@@ -601,7 +620,16 @@ export function buildOpenAIRealtimeVoiceProvider(
       if (!isOpenAIGptLiveModel(config.model)) {
         return undefined;
       }
-      if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {
+      if (config.baseUrl) {
+        return (
+          !resolveOpenAIRealtimeCustomEndpointGptLiveRefusal(config, config.model) &&
+          hasOpenAIRealtimePlatformAuthInput(
+            { configuredApiKey: config.apiKey, cfg, agentId },
+            context,
+          )
+        );
+      }
+      if (config.azureEndpoint || config.azureDeployment) {
         return false;
       }
       return (
@@ -618,7 +646,16 @@ export function buildOpenAIRealtimeVoiceProvider(
       if (!isOpenAIGptLiveModel(config.model)) {
         return undefined;
       }
-      if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {
+      if (config.baseUrl) {
+        return (
+          !resolveOpenAIRealtimeCustomEndpointGptLiveRefusal(config, config.model) &&
+          (await hasOpenAIRealtimePlatformAuthInputAsync(
+            { configuredApiKey: config.apiKey, cfg, agentId },
+            context,
+          ))
+        );
+      }
+      if (config.azureEndpoint || config.azureDeployment) {
         return false;
       }
       return (
@@ -633,7 +670,7 @@ export function buildOpenAIRealtimeVoiceProvider(
     resolveGatewayRelayCapabilities: ({ providerConfig, model }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.baseUrl) {
-        return CUSTOM_ENDPOINT_CAPABILITIES;
+        return resolveCustomEndpointCapabilities(model ?? config.model);
       }
       if (isOpenAIGptLiveModel(model ?? config.model)) {
         return {
@@ -647,8 +684,12 @@ export function buildOpenAIRealtimeVoiceProvider(
     projectPublicProjection: projectRealtimeVoicePublicProjection,
     validateGatewayRelayLaunch: ({ providerConfig, model, autoRespondToAudio }) => {
       const config = normalizeProviderConfig(providerConfig);
-      if (config.baseUrl && isOpenAIGptLiveModel(model ?? config.model)) {
-        return "OpenAI realtime baseUrl does not support GPT-Live; select a Realtime-compatible model";
+      const customEndpointRefusal = resolveOpenAIRealtimeCustomEndpointGptLiveRefusal(
+        config,
+        model ?? config.model,
+      );
+      if (customEndpointRefusal) {
+        return customEndpointRefusal;
       }
       if (autoRespondToAudio === false && isOpenAIGptLiveModel(model ?? config.model)) {
         return "GPT-Live gateway-relay sessions cannot use forced agent consult routing; GPT-Live delegates to the agent natively";

@@ -32,7 +32,11 @@ import {
   OPENAI_GPT_56_SOL_MODEL_ID,
 } from "./model-route-contract.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
+import {
+  isOpenAIGptLiveApiModel,
+  isOpenAIGptLiveModel,
+  isSupportedOpenAIGptLiveModel,
+} from "./realtime-quicksilver.js";
 import { resolveOpenAIModelServiceTiers } from "./service-tier-policy.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
@@ -169,7 +173,9 @@ export function projectRealtimeVoicePublicProjection(ctx: {
       clientHints: {
         gatewayRelaySupported:
           ctx.config.consultRouting !== "force-agent-consult" &&
-          !normalizeOptionalString(ctx.providerConfig.baseUrl) &&
+          // Custom endpoints relay only the public GPT-Live API model.
+          (!normalizeOptionalString(ctx.providerConfig.baseUrl) ||
+            isOpenAIGptLiveApiModel(modelId)) &&
           !normalizeOptionalString(ctx.providerConfig.azureEndpoint) &&
           !normalizeOptionalString(ctx.providerConfig.azureDeployment),
       },

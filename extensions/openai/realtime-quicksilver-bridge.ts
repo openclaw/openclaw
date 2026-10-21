@@ -53,6 +53,8 @@ const WEBSOCKET_OPEN = 1;
 type OpenAIQuicksilverVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   model: string;
   voice?: string;
+  /** Custom OpenAI-compatible GPT-Live WebSocket endpoint; defaults to OpenAI's. */
+  liveSessionsUrl?: string;
   resolveAuth: () => Promise<OpenAIQuicksilverAuth>;
   logger?: Pick<PluginLogger, "warn">;
   mediaSocketFactory?: QuicksilverMediaSocketFactory;
@@ -154,7 +156,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
           },
           requestIds: this.requestIds,
           signal: connection.signal,
-          url: buildOpenAIQuicksilverWebSocketUrl(this.config.model),
+          url: buildOpenAIQuicksilverWebSocketUrl(this.config.model, this.config.liveSessionsUrl),
         },
         this.runtime,
       );

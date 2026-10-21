@@ -153,9 +153,13 @@ export function buildOpenAIQuicksilverSessionUpdate(
   return { type: "session.update", session };
 }
 
-export function buildOpenAIQuicksilverWebSocketUrl(model: string): string {
+/** `liveSessionsUrl` replaces the public GPT-Live endpoint for a custom OpenAI-compatible server. */
+export function buildOpenAIQuicksilverWebSocketUrl(
+  model: string,
+  liveSessionsUrl?: string,
+): string {
   if (isOpenAIGptLiveApiModel(model)) {
-    return OPENAI_LIVE_SESSIONS_URL.replace("https:", "wss:");
+    return liveSessionsUrl ?? OPENAI_LIVE_SESSIONS_URL.replace("https:", "wss:");
   }
   const url = new URL(OPENAI_QUICKSILVER_CALL_URL);
   url.protocol = "wss:";

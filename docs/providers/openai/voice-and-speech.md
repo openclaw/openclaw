@@ -195,9 +195,34 @@ sidebarTitle: "Voice and speech"
     formats, voices, and tools. Provider-specific compatibility, including
     DashScope, is not implied. The API key stays on the Gateway and authenticates
     the socket directly; no browser client-secret endpoint is required.
-    Browser WebRTC, GPT-Live, and Azure endpoint/deployment settings cannot be
-    combined with this override. Those combinations fail rather than sending
-    credentials or audio to the default OpenAI endpoint.
+    Browser WebRTC and Azure endpoint/deployment settings cannot be combined
+    with this override. Those combinations fail rather than sending credentials
+    or audio to the default OpenAI endpoint.
+
+    GPT-Live works through a custom endpoint when the model is `gpt-live-1` and
+    `baseUrl` ends in `/realtime`. OpenClaw replaces that final `/realtime`
+    segment with `/live/sessions` and opens the GPT-Live WebSocket there with the
+    same Platform API key; query parameters other than `model` carry over.
+    `gpt-live-1-codex` and ChatGPT sign-in are not sent to custom endpoints.
+
+    ```json5
+    {
+      talk: {
+        realtime: {
+          provider: "openai",
+          transport: "gateway-relay",
+          model: "gpt-live-1",
+          providers: {
+            openai: {
+              apiKey: "${REALTIME_API_KEY}",
+              // GPT-Live dials wss://router.example.com/v1/live/sessions
+              baseUrl: "https://router.example.com/v1/realtime",
+            },
+          },
+        },
+      },
+    }
+    ```
 
     #### Gateway-controlled Realtime call cleanup
 
