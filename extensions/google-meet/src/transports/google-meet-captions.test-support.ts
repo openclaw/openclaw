@@ -8,12 +8,7 @@ import { meetTranscriptScript } from "./google-meet-caption-scripts.js";
 import { meetStatusScript } from "./google-meet-page-scripts.js";
 
 const MEETING_URL = "https://meet.google.com/abc-defg-hij";
-type CaptionSource = NonNullable<CaptionLine["source"]>;
-type Transcript = MeetingTranscriptSnapshot & {
-  sessionMatched: boolean;
-  epoch: string;
-  pendingLines: CaptionLine[];
-};
+type Transcript = Required<MeetingTranscriptSnapshot> & { sessionMatched: boolean };
 
 export class CaptionNode {
   constructor(
@@ -50,9 +45,7 @@ export function createCaptionPage(initialRows: CaptionNode[]) {
   const timers = new Map<number, { callback: () => void; delay: number }>();
   const observers = new Map<() => void, { attributes?: boolean; attributeFilter?: string[] }>();
   const windowState: Record<string, unknown> = {};
-  const leaveButton = Object.assign(new CaptionNode("", { "aria-label": "Leave call" }), {
-    disabled: false,
-  });
+  const leaveButton = new CaptionNode("", { "aria-label": "Leave call" });
   const context = createContext({
     Date: Object.assign(class extends Date {}, { now: () => now }),
     URL,
@@ -74,9 +67,8 @@ export function createCaptionPage(initialRows: CaptionNode[]) {
       disconnect = () => observers.delete(this.callback);
     },
     setTimeout: (callback: () => void, delay: number) => {
-      const id = ++nextTimer;
-      timers.set(id, { callback, delay });
-      return id;
+      timers.set(++nextTimer, { callback, delay });
+      return nextTimer;
     },
     clearTimeout: (id: number) => timers.delete(id),
     window: windowState,
@@ -95,11 +87,8 @@ export function createCaptionPage(initialRows: CaptionNode[]) {
         }),
       );
     },
-    read(finalize = false, sessionId = "session-1"): Transcript {
-      return JSON.parse(
-        run<string>(meetTranscriptScript(MEETING_URL, sessionId, finalize)),
-      ) as Transcript;
-    },
+    read: (finalize = false, sessionId = "session-1") =>
+      JSON.parse(run<string>(meetTranscriptScript(MEETING_URL, sessionId, finalize))) as Transcript,
     show(nextRows: CaptionNode[]) {
       rows = nextRows;
       observers.forEach((_options, notify) => notify());
@@ -112,9 +101,7 @@ export function createCaptionPage(initialRows: CaptionNode[]) {
         }
       }
     },
-    advance(milliseconds: number) {
-      now += milliseconds;
-    },
+    advance: (milliseconds: number) => (now += milliseconds),
     settle() {
       expect(timers.size).toBeGreaterThan(0);
       // Callbacks may schedule another timer; settle only the current snapshot.
@@ -133,13 +120,12 @@ export function createCaptionPage(initialRows: CaptionNode[]) {
 }
 
 export function onlyLine(lines: CaptionLine[]): CaptionLine {
-  expect(lines).toHaveLength(1);
   const line = lines[0];
-  assert(line, "Expected one captured caption");
+  assert(lines.length === 1 && line, "Expected one captured caption");
   return line;
 }
 
-export function onlySourcedLine(lines: CaptionLine[]): CaptionLine & { source: CaptionSource } {
+export function onlySourcedLine(lines: CaptionLine[]) {
   const line = onlyLine(lines);
   assert(line.source, "Expected caption source identity");
   return { ...line, source: line.source };

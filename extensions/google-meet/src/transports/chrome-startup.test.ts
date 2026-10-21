@@ -11,16 +11,14 @@ import {
 } from "../test-support/fixtures.test-helpers.js";
 import { launchChromeMeet, launchChromeMeetOnNode } from "./chrome.js";
 
+type NodeCall = { command: string; params: { action: string; bridgeId?: string } };
 const processes = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: processes.spawn,
 }));
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-});
+beforeEach(() => vi.spyOn(process, "platform", "get").mockReturnValue("darwin"));
 afterEach(() => vi.restoreAllMocks());
 
 it("retains required commands on local command-pair handles", () => {
@@ -33,17 +31,16 @@ it("retains required commands on local command-pair handles", () => {
 });
 
 it.each(
-  (["chrome", "chrome-node"] as const).flatMap((transport) =>
-    (["opened", "reused", "launch-disabled"] as const).flatMap((ownership) =>
-      (["managed", "configured"] as const).map(
-        (inputSource) => [transport, ownership, inputSource] as const,
-      ),
+  ["chrome", "chrome-node"].flatMap((transport) =>
+    ["opened", "reused", "launch-disabled"].flatMap((ownership) =>
+      ["managed", "configured"].map((inputSource) => [transport, ownership, inputSource] as const),
     ),
   ),
 )(
   "reclaims %s audio with an %s tab and %s input after failed startup",
   async (transport, ownership, inputSource) => {
     const local = transport === "chrome";
+    const managed = inputSource === "managed";
     const events: string[] = [];
     const matching = (prefix: string) => events.filter((event) => event.startsWith(prefix));
     const children: ReturnType<typeof testBridgeProcess>[] = [];
@@ -58,13 +55,10 @@ it.each(
     processes.spawn.mockImplementation((command: string) => {
       events.push(`spawn:${command}`);
       const child = testBridgeProcess({ stdin: new PassThrough(), stdout: new PassThrough() });
+      const kill = child.kill.getMockImplementation()!;
       child.kill.mockImplementation((signal?: NodeJS.Signals) => {
         events.push(`kill:${command}`);
-        child.killed = true;
-        child.signalCode = signal ?? "SIGTERM";
-        child.emit("exit", null, child.signalCode);
-        child.emit("close", null, child.signalCode);
-        return true;
+        return kill(signal);
       });
       children.push(child);
       return child;
@@ -78,22 +72,15 @@ it.each(
       gateway: {
         isAvailable: async () => true,
         request: async (_method: string, params: { path: string }) => browser(params),
-        async readSessionFacts() {
-          throw new Error("Unexpected session facts request");
-        },
       },
       nodes: {
         ...fixture.runtime.nodes,
-        invoke: async (request: {
-          command: string;
-          params: { action: string; path: string; bridgeId?: string };
-        }) => {
-          const { command, params } = request;
+        invoke: async ({ command, params }: NodeCall) => {
           if (command === "browser.proxy") {
             return { payload: { result: await browser(params) } };
           }
           events.push(["node", params.action, params.bridgeId].filter(Boolean).join(":"));
-          return nodeInvoke(request);
+          return nodeInvoke({ command, params });
         },
       },
       system: {
@@ -102,7 +89,7 @@ it.each(
     } as unknown as PluginRuntime;
     const config = resolveGoogleMeetConfig({
       chrome: {
-        ...(inputSource === "configured" ? { audioInputCommand: ["capture"] } : {}),
+        ...(!managed ? { audioInputCommand: ["capture"] } : {}),
         audioOutputCommand: ["play"],
         waitForInCallMs: 1,
         launch: ownership !== "launch-disabled",
@@ -114,7 +101,6 @@ it.each(
       launch({
         runtime,
         config,
-        // Missing-provider rollback must not start unrelated provider runtimes.
         fullConfig: { plugins: { enabled: false } },
         mode: "bidi",
         meetingSessionId: "startup-owner",
@@ -123,13 +109,10 @@ it.each(
       }),
     ).rejects.toThrow(/provider/i);
 
-    expect(fixture.state.audioCaptureEvents).toEqual(
-      inputSource === "managed"
-        ? [
-            { action: "start", captureId: expect.any(String) },
-            { action: "stop", captureId: fixture.state.audioCaptureEvents[0]?.captureId },
-          ]
-        : [],
+    const captures = fixture.state.audioCaptureEvents;
+    expect(captures.map((line) => line.action)).toEqual(managed ? ["start", "stop"] : []);
+    expect(captures.map((line) => line.captureId)).toEqual(
+      managed ? [expect.any(String), captures[0]?.captureId] : [],
     );
     expect(fixture.state.audioCaptureId).toBeUndefined();
 
