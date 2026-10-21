@@ -4,7 +4,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -20,12 +19,14 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withLocalWorkspaceStore } from "../worker-environments/local-workspace-store.js";
-import {
-  localWorkspaceProjectionFixture,
-  observeLocalWorkspaceStoreSql,
-} from "../worker-environments/local-workspace-store.test-support.js";
+import { observeLocalWorkspaceStoreSql } from "../worker-environments/local-workspace-store.test-support.js";
 import { loadSessionDiff, sessionsDiffHandlers } from "./sessions-diff.js";
-import { git, initRepo, fixedStoreConfig } from "./sessions-diff.test-support.js";
+import {
+  git,
+  initRepo,
+  fixedStoreConfig,
+  seedManagedReview,
+} from "./sessions-diff.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -124,11 +125,14 @@ describe("loadSessionDiff", () => {
   };
   const filePaths = (result: { files: Array<{ path: string }> } | undefined) =>
     result?.files.map((file) => file.path);
-  const addedFile = (name: string, additions: number, flags: Record<string, boolean>) => ({
+  const changedFile = (name: string, status: string, additions: number, deletions = 0) => ({
     path: name,
-    status: "added",
+    status,
     additions,
-    deletions: 0,
+    deletions,
+  });
+  const addedFile = (name: string, additions: number, flags: Record<string, boolean>) => ({
+    ...changedFile(name, "added", additions),
     untracked: true,
     ...flags,
   });
@@ -275,13 +279,10 @@ describe("loadSessionDiff", () => {
     const result = await readDiff();
     expect(result.files).toEqual([
       {
-        path: "large.txt",
-        status: "modified",
-        additions: 100_001,
-        deletions: 1,
+        ...changedFile("large.txt", "modified", 100_001, 1),
         truncated: true,
       },
-      { path: "small.txt", status: "modified", additions: 1, deletions: 1, truncated: true },
+      { ...changedFile("small.txt", "modified", 1, 1), truncated: true },
     ]);
     expect(result).toMatchObject({ additions: 100_002, deletions: 2 });
     expect(trackedDiffCommands).toBeLessThanOrEqual(1);
@@ -331,16 +332,13 @@ describe("loadSessionDiff", () => {
 
     expect(result.files).toEqual([
       addedFile("binary.bin", 0, { binary: true }),
-      { path: "changed.txt", status: "modified", additions: 2, deletions: 1 },
-      { path: "committed.txt", status: "added", additions: 1, deletions: 0 },
-      { path: "deleted.txt", status: "deleted", additions: 0, deletions: 2 },
+      changedFile("changed.txt", "modified", 2, 1),
+      changedFile("committed.txt", "added", 1),
+      changedFile("deleted.txt", "deleted", 0, 2),
       addedFile("loose file.txt", 2, {}),
       {
-        path: "renamed-next.txt",
+        ...changedFile("renamed-next.txt", "renamed", 0),
         oldPath: "renamed.txt",
-        status: "renamed",
-        additions: 0,
-        deletions: 0,
       },
     ]);
     expect(result).toMatchObject({ additions: 5, deletions: 3 });
@@ -443,25 +441,7 @@ describe("loadSessionDiff", () => {
       const acceptedBase = revision();
       repoGit("checkout", "-qb", "task");
       const worktree = { id, repoRoot, branch: "task" };
-      await insertRegistryWorktree(process.env, {
-        ...worktree,
-        name: "review",
-        repoFingerprint: "review-fixture",
-        path: repoRoot,
-        baseRef: "main",
-        ownerKind: "session",
-        ownerId: sessionKey,
-        createdAt: 0,
-        lastActiveAt: 0,
-      });
-      await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
-        store.create({
-          ...localWorkspaceProjectionFixture(id, stateRoot),
-          session_key: sessionKey,
-          session_id: "s1",
-          base_commit: acceptedBase,
-        }),
-      );
+      await seedManagedReview(worktree, { sessionKey, sessionId: "s1" }, stateRoot, acceptedBase);
       mockSession(repoRoot, { worktree });
       write("task.txt", "authored change\n");
       using cleanup = new DisposableStack();

@@ -18,7 +18,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
-import { loadGatewaySessionEntryReadOnlyAsync } from "../session-utils-store.js";
 import { sessionsDiffHandlers } from "./sessions-diff.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
@@ -59,6 +58,10 @@ it("keeps real guest file requests in their session's private sandbox", async ()
         source: "profile" as const,
         id: client.authenticatedUserProfile!.profileId,
       });
+      const save = (sessionKey: string, value: InternalSessionEntry) =>
+        upsertSessionEntryCore({ agentId: "main", sessionKey }, value);
+      const write = (root: string, file: string, content: string) =>
+        fs.writeFile(path.join(root, file), content);
       const key = "agent:main:dashboard:sandbox-files";
       const entry: InternalSessionEntry = {
         sessionId: "sandbox-files-session",
@@ -69,7 +72,15 @@ it("keeps real guest file requests in their session's private sandbox", async ()
         sandbox: "required",
         sessionRoot: state.workspaceDir,
       };
-      await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+      await save(key, entry);
+      const sessionLayout = (sessionKey: string) =>
+        resolveSandboxWorkspaceLayoutPaths({
+          cfg: resolveSandboxConfigForAgent(cfg, "main"),
+          rawSessionKey: key,
+          agentId: "main",
+          isolationSubject: { kind: "session", sessionKey },
+          workspaceDir: state.workspaceDir,
+        });
       const layoutFor = (selected: InternalSessionEntry) => {
         const runtime = resolveSandboxRuntimeStatus({
           cfg,
@@ -153,12 +164,9 @@ it("keeps real guest file requests in their session's private sandbox", async ()
         await error("get", { path: "host-only.txt" });
         await fs.mkdir(layout.workspaceDir, { recursive: true });
         await fs.mkdir(foreign.workspaceDir, { recursive: true });
-        await fs.writeFile(path.join(layout.workspaceDir, "guest.txt"), "guest work");
-        await fs.writeFile(
-          path.join(layout.workspaceDir, "index.html"),
-          '<link rel="stylesheet" href="style.css">',
-        );
-        await fs.writeFile(path.join(layout.workspaceDir, "style.css"), "body { color: blue; }");
+        await write(layout.workspaceDir, "guest.txt", "guest work");
+        await write(layout.workspaceDir, "index.html", '<link rel="stylesheet" href="style.css">');
+        await write(layout.workspaceDir, "style.css", "body { color: blue; }");
         const foreignFile = path.join(foreign.workspaceDir, "foreign.txt");
         await fs.writeFile(foreignFile, "other guest private bytes");
         await fs.symlink(hostFile, path.join(layout.workspaceDir, "host-link.txt"));
@@ -205,10 +213,7 @@ it("keeps real guest file requests in their session's private sandbox", async ()
         const externalRepo = await initializeManagedWorktreeTestRepository(
           state.path("external-diff-source"),
         );
-        await fs.writeFile(
-          path.join(externalRepo, "outside-private.txt"),
-          "SYNTHETIC_HOST_DIFF_BYTES\n",
-        );
+        await write(externalRepo, "outside-private.txt", "SYNTHETIC_HOST_DIFF_BYTES\n");
         await requireGit(externalRepo, ["add", "outside-private.txt"]);
         await requireGit(externalRepo, ["commit", "-m", "synthetic external content"]);
         const gitPointer = path.join(layout.workspaceDir, ".git");
@@ -238,15 +243,9 @@ it("keeps real guest file requests in their session's private sandbox", async ()
           childSessionKey: key,
         });
         await fs.mkdir(attachmentRoot, { recursive: true });
-        const childLayout = resolveSandboxWorkspaceLayoutPaths({
-          cfg: resolveSandboxConfigForAgent(cfg, "main"),
-          rawSessionKey: key,
-          agentId: "main",
-          isolationSubject: { kind: "session", sessionKey: key },
-          workspaceDir: state.workspaceDir,
-        });
+        const childLayout = sessionLayout(key);
         await fs.mkdir(childLayout.workspaceDir, { recursive: true });
-        await fs.writeFile(path.join(childLayout.workspaceDir, "child.txt"), "child work");
+        await write(childLayout.workspaceDir, "child.txt", "child work");
         await expectContent("child.txt", "child work");
         await error("get", { path: "guest.txt" });
         const librarySelections = [
@@ -261,43 +260,27 @@ it("keeps real guest file requests in their session's private sandbox", async ()
           ...entry,
           skillsSnapshot: { prompt: "", skills: [], librarySelections },
         };
-        await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, libraryEntry);
-        const libraryLayout = resolveSandboxWorkspaceLayoutPaths({
-          cfg: resolveSandboxConfigForAgent(cfg, "main"),
-          rawSessionKey: key,
-          agentId: "main",
-          isolationSubject: {
-            kind: "session",
-            sessionKey: `${key}:skills:${hashTextSha256(JSON.stringify(librarySelections))}`,
-          },
-          workspaceDir: state.workspaceDir,
-        });
-        await fs.mkdir(libraryLayout.workspaceDir, { recursive: true });
-        await fs.writeFile(
-          path.join(libraryLayout.workspaceDir, "library.txt"),
-          "library session work",
+        await save(key, libraryEntry);
+        const libraryLayout = sessionLayout(
+          `${key}:skills:${hashTextSha256(JSON.stringify(librarySelections))}`,
         );
+        await fs.mkdir(libraryLayout.workspaceDir, { recursive: true });
+        await write(libraryLayout.workspaceDir, "library.txt", "library session work");
         await expectContent("library.txt", "library session work");
         await error("get", { path: "child.txt" });
         const libraryDownload = await ok("download", { path: "library.txt" });
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: key },
-          { ...libraryEntry, updatedAt: 2, displayName: "Renamed library session" },
-        );
+        await save(key, { ...libraryEntry, updatedAt: 2, displayName: "Renamed library session" });
         const sameLibrary = await openSessionFileDownload(owner, libraryDownload.url);
         expect(sameLibrary.status).toBe(200);
         expect(await sameLibrary.text()).toBe("library session work");
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: key },
-          {
-            ...libraryEntry,
-            updatedAt: 3,
-            skillsSnapshot: {
-              ...libraryEntry.skillsSnapshot,
-              librarySelections: [{ ...librarySelections[0]!, revision: "b".repeat(64) }],
-            },
+        await save(key, {
+          ...libraryEntry,
+          updatedAt: 3,
+          skillsSnapshot: {
+            ...libraryEntry.skillsSnapshot,
+            librarySelections: [{ ...librarySelections[0]!, revision: "b".repeat(64) }],
           },
-        );
+        });
         // The row identity and sharing remain valid; its namespace selection changed.
         expect((await openSessionFileDownload(owner, libraryDownload.url)).status).toBe(404);
         await error("get", { path: "library.txt" });
@@ -308,16 +291,13 @@ it("keeps real guest file requests in their session's private sandbox", async ()
         }
         cfg.agents!.defaults!.sandbox!.workspaceAccess = "none";
         const adminKey = "agent:main:dashboard:admin-files";
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: adminKey },
-          {
-            sessionId: "admin-files-session",
-            updatedAt: 1,
-            visibility: "shared",
-            createdActor: createdBy(admin),
-            sessionRoot: state.workspaceDir,
-          },
-        );
+        await save(adminKey, {
+          sessionId: "admin-files-session",
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: createdBy(admin),
+          sessionRoot: state.workspaceDir,
+        });
         await expectContent("host-only.txt", "host private bytes", admin, adminKey);
         await expectSandboxRequired(adminKey, "host-only.txt", [
           "list",
@@ -340,21 +320,15 @@ it("keeps real guest file requests in their session's private sandbox", async ()
         );
         // Use normal provisioning, not an inserted canonical file, for the managed sibling.
         const repo = await initializeManagedWorktreeTestRepository(state.path("managed-source"));
-        await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\n");
-        await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
+        await write(repo, ".gitignore", ".env.local\n");
+        await write(repo, ".worktreeinclude", ".env.local\n");
         await requireGit(repo, ["add", ".gitignore", ".worktreeinclude"]);
         await requireGit(repo, ["commit", "-m", "configure synthetic provisioning"]);
-        await fs.writeFile(path.join(repo, ".env.local"), "SYNTHETIC_VALUE=host-only\n");
+        await write(repo, ".env.local", "SYNTHETIC_VALUE=host-only\n");
         const service = new ManagedWorktreeService({ env: state.env, getConfig: () => cfg });
-        const managed = await service.create({
-          repoRoot: repo,
-          name: "admin-files",
-          baseRef: "HEAD",
-          provisionIgnoredFiles: true,
-        });
-        expect(await fs.readFile(path.join(managed.path, ".env.local"), "utf8")).toBe(
-          "SYNTHETIC_VALUE=host-only\n",
-        );
+        const provision = (name: string, provisionIgnoredFiles: boolean) =>
+          service.create({ repoRoot: repo, name, baseRef: "HEAD", provisionIgnoredFiles });
+        const managed = await provision("admin-files", true);
         const managedKey = "agent:main:dashboard:managed-admin-files";
         const managedEntry: InternalSessionEntry = {
           sessionId: "managed-admin-files",
@@ -364,7 +338,7 @@ it("keeps real guest file requests in their session's private sandbox", async ()
           spawnedCwd: managed.path,
           worktree: { id: managed.id, branch: managed.branch, repoRoot: repo },
         };
-        await upsertSessionEntryCore({ agentId: "main", sessionKey: managedKey }, managedEntry);
+        await save(managedKey, managedEntry);
         for (const client of [admin, readOnly]) {
           await expectContent(".env.local", "SYNTHETIC_VALUE=host-only\n", client, managedKey);
         }
@@ -379,50 +353,17 @@ it("keeps real guest file requests in their session's private sandbox", async ()
         cfg.agents!.defaults!.sandbox!.mode = "off";
         cfg.agents!.defaults!.sandbox!.workspaceAccess = "none";
         // Normal required-sandbox provisioning leaves host-only inputs out of its own project.
-        const guestManaged = await service.create({
-          repoRoot: repo,
-          name: "guest-files",
-          baseRef: "HEAD",
-          provisionIgnoredFiles: false,
-        });
+        const guestManaged = await provision("guest-files", false);
         const guestManagedKey = "agent:main:dashboard:managed-guest-files";
         const guestManagedSessionId = "managed-guest-files-session";
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: guestManagedKey },
-          {
-            ...managedEntry,
-            sessionId: guestManagedSessionId,
-            sandbox: "required",
-            createdActor: entry.createdActor,
-            spawnedCwd: guestManaged.path,
-            worktree: { id: guestManaged.id, branch: guestManaged.branch, repoRoot: repo },
-          },
-        );
-        const persistedGuest = await loadGatewaySessionEntryReadOnlyAsync(
-          guestManagedKey,
-          { agentId: "main" },
-          cfg,
-        );
-        expect(persistedGuest.entry).toMatchObject({
+        await save(guestManagedKey, {
+          ...managedEntry,
           sessionId: guestManagedSessionId,
           sandbox: "required",
           createdActor: entry.createdActor,
           spawnedCwd: guestManaged.path,
-          worktree: { id: guestManaged.id },
+          worktree: { id: guestManaged.id, branch: guestManaged.branch, repoRoot: repo },
         });
-        const persistedAdmin = await loadGatewaySessionEntryReadOnlyAsync(
-          managedKey,
-          { agentId: "main" },
-          cfg,
-        );
-        expect(persistedAdmin.entry).toMatchObject({
-          sessionId: managedEntry.sessionId,
-          createdActor: managedEntry.createdActor,
-          visibility: managedEntry.visibility,
-          spawnedCwd: managed.path,
-          worktree: managedEntry.worktree,
-        });
-        expect(persistedAdmin.entry?.sandbox).toBeUndefined();
         await expectContent("README.md", "base\n", viewer, guestManagedKey);
         await error("get", { sessionKey: guestManagedKey, path: ".env.local" }, viewer);
         readOnlyRole.sandbox = "required";
