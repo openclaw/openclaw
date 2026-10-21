@@ -2,7 +2,12 @@ import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../../test/helpers/gateway-integration-fixtures.js";
 import { resolveAgentDir } from "../../agents/agent-scope-config.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   refreshPreparedModelRuntimeSnapshots,
@@ -22,6 +27,7 @@ import {
 import { clearPluginMetadataLifecycleCaches } from "../plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshot } from "../plugin-metadata-snapshot.js";
 import {
+  createColdPluginConfig,
   createColdPluginFixture,
   createColdPluginHermeticEnv,
 } from "../test-helpers/cold-plugin-fixtures.js";
@@ -58,14 +64,8 @@ it("admits new completions from a retained engine context after another plugin r
       })}\n\ndata: [DONE]\n\n`,
     );
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const baseUrl = await listenLoopback(server);
   try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Completion fixture did not expose a TCP port");
-    }
     const config: OpenClawConfig = {
       agents: { defaults: { workspace: root, model: `${fixture.providerId}/retained-model` } },
       models: {
@@ -73,25 +73,21 @@ it("admits new completions from a retained engine context after another plugin r
           [fixture.providerId]: {
             api: "openai-completions",
             apiKey: "fixture-key",
-            baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            baseUrl: `${baseUrl}/v1`,
             models: [
-              {
-                id: "retained-model",
+              modelDefinition("retained-model", {
                 name: "Retained model",
                 reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 8192,
                 maxTokens: 1024,
-              },
+              }),
             ],
           },
         },
       },
       plugins: {
-        load: { paths: [fixture.rootDir] },
+        ...createColdPluginConfig(fixture.rootDir, fixture.pluginId).plugins,
         slots: { memory: "none" },
-        entries: { [fixture.pluginId]: { enabled: true } },
       },
     };
     const env = {
@@ -144,10 +140,7 @@ it("admits new completions from a retained engine context after another plugin r
       }
     });
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await closeHttpServer(server);
     roots.cleanup();
   }
 });

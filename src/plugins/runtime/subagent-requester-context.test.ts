@@ -15,6 +15,17 @@ function getActiveRequester(): PluginSubagentRequesterContext | undefined {
   }
 }
 
+function makeRequester(id: string) {
+  const requester = createPluginSubagentRequesterContext({
+    sessionKey: `agent:main:telegram:direct:${id}`,
+    origin: { channel: "telegram", to: `telegram:${id}`, accountId: id },
+  });
+  if (!requester) {
+    throw new Error("expected valid requester context");
+  }
+  return requester;
+}
+
 describe("plugin subagent requester context", () => {
   it("normalizes and freezes host-owned requester lineage", () => {
     const requester = createPluginSubagentRequesterContext({
@@ -55,13 +66,7 @@ describe("plugin subagent requester context", () => {
   });
 
   it("expires requester authority when the hook invocation returns", async () => {
-    const requester = createPluginSubagentRequesterContext({
-      sessionKey: "agent:main:telegram:direct:123",
-      origin: { channel: "telegram", to: "telegram:123" },
-    });
-    if (!requester) {
-      throw new Error("expected valid requester context");
-    }
+    const requester = makeRequester("123");
 
     const detachedGate = createDeferred();
     let detachedRead: Promise<PluginSubagentRequesterContext | undefined> | undefined;
@@ -79,38 +84,21 @@ describe("plugin subagent requester context", () => {
   });
 
   it("isolates concurrent requester scopes", async () => {
-    const first = createPluginSubagentRequesterContext({
-      sessionKey: "agent:main:telegram:direct:first",
-      origin: { channel: "telegram", to: "telegram:first", accountId: "first" },
-    });
-    const second = createPluginSubagentRequesterContext({
-      sessionKey: "agent:main:telegram:direct:second",
-      origin: { channel: "telegram", to: "telegram:second", accountId: "second" },
-    });
-    if (!first || !second) {
-      throw new Error("expected valid requester contexts");
-    }
-
     const gate = createDeferred();
-    const firstStarted = createDeferred();
-    const secondStarted = createDeferred();
-
-    const firstRun = withPluginSubagentRequesterContext(first, async () => {
-      expect(getActiveRequester()).toBe(first);
-      firstStarted.resolve();
-      await gate.promise;
-      expect(getActiveRequester()).toBe(first);
+    const runs = ["first", "second"].map((id) => {
+      const requester = makeRequester(id);
+      const started = createDeferred();
+      const run = withPluginSubagentRequesterContext(requester, async () => {
+        expect(getActiveRequester()).toBe(requester);
+        started.resolve();
+        await gate.promise;
+        expect(getActiveRequester()).toBe(requester);
+      });
+      return { started: started.promise, run };
     });
-    const secondRun = withPluginSubagentRequesterContext(second, async () => {
-      expect(getActiveRequester()).toBe(second);
-      secondStarted.resolve();
-      await gate.promise;
-      expect(getActiveRequester()).toBe(second);
-    });
-
-    await Promise.all([firstStarted.promise, secondStarted.promise]);
+    await Promise.all(runs.map(({ started }) => started));
     gate.resolve();
-    await Promise.all([firstRun, secondRun]);
+    await Promise.all(runs.map(({ run }) => run));
     expect(getActiveRequester()).toBeUndefined();
   });
 });
