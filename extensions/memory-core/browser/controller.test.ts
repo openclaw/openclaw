@@ -145,6 +145,7 @@ describe("Memory overview request ownership", () => {
     const read = f.controller.load();
     expect(f.request).toHaveBeenCalledTimes(1);
     f.abort.abort();
+    f.controller.dispose();
     f.controller.refresh();
     f.controller.probe();
     await f.controller.load();

@@ -60,7 +60,6 @@ export function bindRoleRefsTarget(page: Page, cdpUrl: string, targetId?: string
   state.roleRefsTargetKey = key;
 }
 
-/** Store role refs on the page and target cache. */
 export function storeRoleRefsForTarget(opts: {
   page: Page;
   cdpUrl: string;
@@ -114,7 +113,6 @@ function currentTargetRoleRefsMode(
   return roleRefsByTarget.get(state.roleRefsTargetKey)?.mode;
 }
 
-/** Restore cached role refs onto a newly resolved page. */
 export function restoreRoleRefsForTarget(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -139,7 +137,6 @@ export function restoreRoleRefsForTarget(opts: {
   state.roleRefsMode = cached.mode;
 }
 
-/** Ensure and attach state listeners for a Playwright page. */
 export function ensurePageState(page: Page): PageState {
   const existing = pageStates.get(page);
   if (existing) {
@@ -268,7 +265,6 @@ export function ensurePageState(page: Page): PageState {
   return state;
 }
 
-/** Read observed dialog state from a Playwright page. */
 export function getObservedBrowserStateForPage(page: Page): BrowserObservedState {
   const state = ensurePageState(page);
   return serializeObservedBrowserState(state);
@@ -295,7 +291,6 @@ export async function respondToObservedDialogOnPage(opts: {
   });
 }
 
-/** Mark pending observed dialogs as handled by a remote/browser-side hook. */
 export function markObservedDialogsHandledRemotelyForPage(
   page: Page,
   dialogs: readonly BrowserObservedDialogRecord[],
@@ -312,7 +307,6 @@ export function markObservedDialogsHandledRemotelyForPage(
   return serializeObservedBrowserState(state);
 }
 
-/** Arm a one-shot automatic dialog response for a page. */
 export function armObservedDialogResponseOnPage(opts: {
   page: Page;
   accept: boolean;
@@ -339,7 +333,6 @@ export function armObservedDialogResponseOnPage(opts: {
   state.armedDialogResponse = response;
 }
 
-/** Create an abort signal that fires while a dialog blocks the page. */
 export function createObservedDialogAbortSignalForPage(opts: {
   page: Page;
   parentSignal?: AbortSignal;
