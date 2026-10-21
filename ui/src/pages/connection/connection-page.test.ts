@@ -50,6 +50,29 @@ const gatewayActivity = {
 } satisfies Pick<SystemInfoResult, "eventLoop" | "processMemory">;
 const gatewaySystemInfo = { ...deviceSystemInfo, ...gatewayActivity } satisfies SystemInfoResult;
 
+function makeClient(
+  request: GatewayBrowserClient["request"] = vi.fn().mockResolvedValue(deviceSystemInfo),
+) {
+  return { request } as unknown as GatewayBrowserClient;
+}
+
+function mockVisibility() {
+  let value: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => value);
+  return (next: DocumentVisibilityState) => {
+    value = next;
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
+}
+
+function text(page: HTMLElement, selector: string) {
+  return page.querySelector(selector)?.textContent;
+}
+
+function input(page: HTMLElement, label: string) {
+  return control(page, `input[aria-label="${label}"]`);
+}
+
 function source(
   client: GatewayBrowserClient,
   pingRequest: (...args: Parameters<GatewayBrowserClient["request"]>) => Promise<unknown> = vi
@@ -174,9 +197,7 @@ describe("ConnectionPage browser sign-in", () => {
         return;
       }
       await waitForPage(() => expect(gateway.forgetDeviceToken).toHaveBeenCalledOnce());
-      await waitForPage(() => {
-        expect(forget()).toBeUndefined();
-      });
+      await waitForPage(() => expect(forget()).toBeUndefined());
     },
   );
 });
@@ -184,9 +205,9 @@ describe("ConnectionPage browser sign-in", () => {
 describe("ConnectionPage ping", () => {
   it("starts diagnostics for a bound lazy route before insertion and stops at disposal", async () => {
     vi.useFakeTimers();
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    mockVisibility();
     const request = vi.fn().mockResolvedValue(gatewaySystemInfo);
-    const current = source({ request } as unknown as GatewayBrowserClient);
+    const current = source(makeClient(request));
     const { provider, unmount } = await mount(current.gateway, { attached: false });
     expect(provider.isConnected).toBe(false);
     expect(request.mock.calls.map(([method]) => method)).toEqual(["system.info"]);
@@ -211,10 +232,9 @@ describe("ConnectionPage ping", () => {
         disconnect() {}
       },
     );
-    let visibility: DocumentVisibilityState = "visible";
-    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    const setVisibility = mockVisibility();
     const request = vi.fn().mockResolvedValue(gatewaySystemInfo);
-    const current = source({ request } as unknown as GatewayBrowserClient);
+    const current = source(makeClient(request));
     Object.assign(current.gateway, {
       eventLog: [],
       subscribeEventLog: () => () => undefined,
@@ -234,12 +254,10 @@ describe("ConnectionPage ping", () => {
     await vi.advanceTimersByTimeAsync(55_000);
     expect(statusReads()).toHaveLength(7);
 
-    visibility = "hidden";
-    document.dispatchEvent(new Event("visibilitychange"));
+    setVisibility("hidden");
     await vi.advanceTimersByTimeAsync(60_000);
     expect(statusReads()).toHaveLength(7);
-    visibility = "visible";
-    document.dispatchEvent(new Event("visibilitychange"));
+    setVisibility("visible");
     globalThis.dispatchEvent(new Event("focus"));
     await vi.advanceTimersByTimeAsync(0);
     expect(statusReads()).toHaveLength(8);
@@ -255,15 +273,9 @@ describe("ConnectionPage ping", () => {
     return term?.nextElementSibling?.textContent?.replace(/\s+/g, " ").trim();
   }
 
-  function pingClient() {
-    return {
-      request: vi.fn().mockResolvedValue(deviceSystemInfo),
-    } as unknown as GatewayBrowserClient;
-  }
-
   it("shows average and nearest-rank percentiles for the last 100 successful round trips", async () => {
     vi.useFakeTimers();
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    mockVisibility();
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     const durations = [9_999, ...Array.from({ length: 100 }, (_, index) => 100 - index)];
@@ -271,7 +283,7 @@ describe("ConnectionPage ping", () => {
       now += durations.shift()!;
       return null;
     });
-    const { page } = await mount(source(pingClient(), pingRequest).gateway);
+    const { page } = await mount(source(makeClient(), pingRequest).gateway);
     await waitForPage(() => expect(pingStat(page, "Avg ping")).toBe("9999.0 ms"));
 
     await vi.advanceTimersByTimeAsync(1_000_000);
@@ -281,26 +293,23 @@ describe("ConnectionPage ping", () => {
       expect(pingStat(page, "p50")).toBe("50.0 ms");
       expect(pingStat(page, "p95")).toBe("95.0 ms");
       expect(pingStat(page, "p99")).toBe("99.0 ms");
-      expect(page.querySelector(".connection-ping")?.textContent).toContain("Samples: 100/100");
+      expect(text(page, ".connection-ping")).toContain("Samples: 100/100");
     });
   });
 
   it("keeps one ping in flight, excludes failures and hidden responses, and cancels on exit", async () => {
     vi.useFakeTimers();
-    let visibility: DocumentVisibilityState = "visible";
-    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    const setVisibility = mockVisibility();
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     const responses = Array.from({ length: 5 }, () => deferred<null>());
     let nextResponse = 0;
     const pingRequest = vi.fn().mockImplementation(() => responses[nextResponse++]!.promise);
-    const { page, unmount } = await mount(source(pingClient(), pingRequest).gateway);
-    expect(page.querySelector(".connection-ping")?.textContent).toContain("Measuring ping…");
+    const { page, unmount } = await mount(source(makeClient(), pingRequest).gateway);
+    expect(text(page, ".connection-ping")).toContain("Measuring ping…");
     now = 20;
     responses[0]!.resolve(null);
-    await waitForPage(() => {
-      expect(pingStat(page, "Avg ping")).toBe("20.0 ms");
-    });
+    await waitForPage(() => expect(pingStat(page, "Avg ping")).toBe("20.0 ms"));
 
     await vi.advanceTimersByTimeAsync(20_000);
     expect(pingRequest).toHaveBeenCalledTimes(2);
@@ -310,32 +319,28 @@ describe("ConnectionPage ping", () => {
     });
     responses[1]!.reject(new Error("Gateway request timed out"));
     await waitForPage(() => {
-      expect(page.querySelector(".connection-ping")?.textContent).toContain("Last ping failed.");
+      expect(text(page, ".connection-ping")).toContain("Last ping failed.");
       expect(pingStat(page, "Avg ping")).toBe("20.0 ms");
     });
     await vi.advanceTimersByTimeAsync(10_000);
     expect(pingRequest).toHaveBeenCalledTimes(3);
 
-    visibility = "hidden";
-    document.dispatchEvent(new Event("visibilitychange"));
+    setVisibility("hidden");
     expect(pingRequest.mock.calls[2]?.[2].signal.aborted).toBe(true);
     now = 10_000;
     responses[2]!.resolve(null);
     await vi.advanceTimersByTimeAsync(10_000);
     await waitForPage(() => {
       expect(pingRequest).toHaveBeenCalledTimes(3);
-      expect(page.querySelector(".connection-ping")?.textContent).toContain("Samples: 1/100");
+      expect(text(page, ".connection-ping")).toContain("Samples: 1/100");
     });
 
-    visibility = "visible";
-    document.dispatchEvent(new Event("visibilitychange"));
+    setVisibility("visible");
     now += 40;
     responses[3]!.resolve(null);
     await waitForPage(() => {
       expect(pingStat(page, "Avg ping")).toBe("30.0 ms");
-      expect(page.querySelector(".connection-ping")?.textContent).not.toContain(
-        "Last ping failed.",
-      );
+      expect(text(page, ".connection-ping")).not.toContain("Last ping failed.");
     });
     await vi.advanceTimersByTimeAsync(10_000);
     unmount();
@@ -349,7 +354,7 @@ describe("ConnectionPage ping", () => {
     "clears samples and rejects late replies after a %s change",
     async (change) => {
       vi.useFakeTimers();
-      vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+      mockVisibility();
       let now = 0;
       vi.spyOn(performance, "now").mockImplementation(() => now);
       const stale = deferred<null>();
@@ -369,19 +374,17 @@ describe("ConnectionPage ping", () => {
         })
         .mockReturnValueOnce(stale.promise)
         .mockReturnValueOnce(fresh.promise);
-      const client = { request: systemInfoRequest } as unknown as GatewayBrowserClient;
+      const client = makeClient(systemInfoRequest);
       const first = source(client, pingRequest);
       const { page, context, setContext } = await mount(first.gateway);
       await waitForPage(() => expect(pingStat(page, "Avg ping")).toBe("20.0 ms"));
-      const activity = () => page.querySelector(".connection-activity")?.textContent;
+      const activity = () => text(page, ".connection-activity");
       await waitForPage(() => expect(activity()).toContain("432 MB"));
       await vi.advanceTimersByTimeAsync(10_000);
 
       if (change === "reconnect") {
         first.publish({ ...first.gateway.snapshot, phase: "reconnecting" });
-        await waitForPage(() => {
-          expect(page.querySelector(".connection-ping")).toBeNull();
-        });
+        await waitForPage(() => expect(page.querySelector(".connection-ping")).toBeNull());
         first.publish({
           ...first.gateway.snapshot,
           phase: "connected",
@@ -395,10 +398,7 @@ describe("ConnectionPage ping", () => {
       } else {
         first.publish({
           ...first.gateway.snapshot,
-          client: source(
-            { request: systemInfoRequest } as unknown as GatewayBrowserClient,
-            pingRequest,
-          ).gateway.snapshot.client,
+          client: source(makeClient(systemInfoRequest), pingRequest).gateway.snapshot.client,
         });
       }
       await waitForPage(() => {
@@ -411,7 +411,7 @@ describe("ConnectionPage ping", () => {
       await waitForPage(() => {
         expect(pingStat(page, "Avg ping")).toBe("—");
         expect(activity()).not.toContain("432 MB");
-        expect(page.querySelector(".connection-ping")?.textContent).toContain("Measuring ping…");
+        expect(text(page, ".connection-ping")).toContain("Measuring ping…");
       });
       now += 10;
       fresh.resolve(null);
@@ -421,7 +421,7 @@ describe("ConnectionPage ping", () => {
       });
       await waitForPage(() => {
         expect(pingStat(page, "Avg ping")).toBe("510.0 ms");
-        expect(page.querySelector(".connection-ping")?.textContent).toContain("Samples: 1/100");
+        expect(text(page, ".connection-ping")).toContain("Samples: 1/100");
         expect(activity()).toContain("70%");
       });
     },
@@ -429,8 +429,7 @@ describe("ConnectionPage ping", () => {
 
   it("shares one host and activity poll independently of ping and reports failed refreshes", async () => {
     vi.useFakeTimers();
-    let visibility: DocumentVisibilityState = "visible";
-    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    const setVisibility = mockVisibility();
     const initial = deferred<SystemInfoResult>();
     const next = deferred<SystemInfoResult>();
     const systemInfoRequest = vi
@@ -439,9 +438,7 @@ describe("ConnectionPage ping", () => {
       .mockReturnValueOnce(next.promise)
       .mockRejectedValueOnce(new Error("unavailable"))
       .mockResolvedValue(gatewaySystemInfo);
-    const { page, unmount } = await mount(
-      source({ request: systemInfoRequest } as unknown as GatewayBrowserClient).gateway,
-    );
+    const { page, unmount } = await mount(source(makeClient(systemInfoRequest)).gateway);
     const host = () => page.querySelector("#settings-connection-host");
     const placeholders = () => host()?.querySelectorAll('.skeleton[aria-hidden="true"]');
     expect(placeholders()?.length).toBeGreaterThan(0);
@@ -465,7 +462,7 @@ describe("ConnectionPage ping", () => {
       expect(placeholders()).toHaveLength(0);
       expect(host()?.textContent).toBe(loadedHostText);
       expect(host()?.getAttribute("aria-busy")).toBe("true");
-      expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("Gateway");
+      expect(text(page, ".config-host__name")?.trim()).toBe("Gateway");
       expect(page.querySelectorAll('[role="meter"]').length).toBeGreaterThan(0);
       expect(systemInfoRequest.mock.calls.map(([method]) => method)).toEqual([
         "system.info",
@@ -486,7 +483,7 @@ describe("ConnectionPage ping", () => {
     });
     await waitForPage(() => {
       expect(activity()?.textContent).toContain("60%");
-      expect(page.querySelector(".config-host__name")?.textContent).toContain("Fresh host");
+      expect(text(page, ".config-host__name")).toContain("Fresh host");
       expect(activity()?.querySelectorAll("polyline")).toHaveLength(3);
       expect(activity()?.querySelector(".gateway-vital--cpu")?.hasAttribute("data-degraded")).toBe(
         true,
@@ -497,32 +494,26 @@ describe("ConnectionPage ping", () => {
       expect(activity()?.textContent).toContain("Activity refresh failed.");
       expect(placeholders()).toHaveLength(0);
       expect(host()?.getAttribute("aria-busy")).toBe("false");
-      expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("Fresh host");
+      expect(text(page, ".config-host__name")?.trim()).toBe("Fresh host");
       expect(activity()?.textContent).toContain("60%");
     });
     await vi.advanceTimersByTimeAsync(10_000);
-    await waitForPage(() => {
-      expect(activity()?.textContent).not.toContain("Activity refresh failed.");
-    });
+    await waitForPage(() =>
+      expect(activity()?.textContent).not.toContain("Activity refresh failed."),
+    );
     const hidden = deferred<SystemInfoResult>();
     systemInfoRequest.mockReturnValueOnce(hidden.promise);
     await vi.advanceTimersByTimeAsync(10_000);
-    visibility = "hidden";
-    document.dispatchEvent(new Event("visibilitychange"));
+    setVisibility("hidden");
     expect(systemInfoRequest.mock.calls[4]?.[2].signal.aborted).toBe(true);
     hidden.resolve({ ...gatewaySystemInfo, machineName: "Hidden stale host" });
     await vi.advanceTimersByTimeAsync(10_000);
     await waitForPage(() => {
       expect(systemInfoRequest).toHaveBeenCalledTimes(5);
-      expect(page.querySelector(".config-host__name")?.textContent).not.toContain(
-        "Hidden stale host",
-      );
+      expect(text(page, ".config-host__name")).not.toContain("Hidden stale host");
     });
-    visibility = "visible";
-    document.dispatchEvent(new Event("visibilitychange"));
-    await waitForPage(() => {
-      expect(systemInfoRequest).toHaveBeenCalledTimes(6);
-    });
+    setVisibility("visible");
+    await waitForPage(() => expect(systemInfoRequest).toHaveBeenCalledTimes(6));
     unmount();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(systemInfoRequest).toHaveBeenCalledTimes(6);
@@ -530,9 +521,9 @@ describe("ConnectionPage ping", () => {
 });
 
 function editInput(page: HTMLElement, label: string, value: string) {
-  const input = control(page, `input[aria-label="${label}"]`);
-  input.value = value;
-  input.dispatchEvent(new Event("input", { bubbles: true }));
+  const field = input(page, label);
+  field.value = value;
+  field.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 describe("ConnectionPage credentials", () => {
@@ -548,9 +539,7 @@ describe("ConnectionPage credentials", () => {
   ])(
     "replaces credentials without retaining a hidden secret: $displayed, $change",
     async ({ token, password, displayed, change }) => {
-      const current = source({
-        request: vi.fn().mockResolvedValue(deviceSystemInfo),
-      } as unknown as GatewayBrowserClient);
+      const current = source(makeClient());
       Object.assign(current.gateway.connection, {
         gatewayUrl: "wss://gateway.example/openclaw",
         token,
@@ -558,7 +547,7 @@ describe("ConnectionPage credentials", () => {
       });
       const connect = vi.spyOn(current.gateway, "connect");
       const { page } = await mount(current.gateway);
-      const secret = () => control(page, 'input[aria-label="Gateway secret"]');
+      const secret = () => input(page, "Gateway secret");
       expect(page.querySelectorAll(".settings-secret input")).toHaveLength(1);
       expect(secret().value).toBe(displayed);
       expect(page.querySelector('[role="radiogroup"]')).toBeNull();
@@ -566,14 +555,10 @@ describe("ConnectionPage credentials", () => {
       expect(connect).toHaveBeenLastCalledWith();
       if (change === "url") {
         editInput(page, "Gateway URL", "wss://other-gateway.example/openclaw");
-        await waitForPage(() => {
-          expect(secret().value).toBe("");
-        });
+        await waitForPage(() => expect(secret().value).toBe(""));
       } else {
         editInput(page, "Gateway secret", "");
-        await waitForPage(() => {
-          expect(secret().value).toBe("");
-        });
+        await waitForPage(() => expect(secret().value).toBe(""));
         editInput(page, "Gateway secret", "edited-secret");
         flush();
       }
@@ -592,9 +577,7 @@ describe("ConnectionPage credentials", () => {
   );
 
   it("offers connection actions only while the draft differs", async () => {
-    const current = source({
-      request: vi.fn().mockResolvedValue(deviceSystemInfo),
-    } as unknown as GatewayBrowserClient);
+    const current = source(makeClient());
     const { page } = await mount(current.gateway);
     const actions = () =>
       [...page.querySelectorAll<HTMLButtonElement>(".settings-group button")].filter((button) =>
@@ -605,18 +588,14 @@ describe("ConnectionPage credentials", () => {
     const labels = () => actions().map((button) => button.textContent?.trim());
     expect(labels()).toEqual([]);
     editInput(page, "Gateway secret", "draft-token");
-    await waitForPage(() => {
-      expect(labels()).toEqual(["Discard changes", "Apply and reconnect"]);
-    });
+    await waitForPage(() => expect(labels()).toEqual(["Discard changes", "Apply and reconnect"]));
     editInput(page, "Gateway secret", "");
-    await waitForPage(() => {
-      expect(labels()).toEqual([]);
-    });
+    await waitForPage(() => expect(labels()).toEqual([]));
     editInput(page, "Gateway secret", "draft-token");
     flush();
     control(page, ".connection-actions button").click();
     await waitForPage(() => {
-      expect(control(page, 'input[aria-label="Gateway secret"]').value).toBe("");
+      expect(input(page, "Gateway secret").value).toBe("");
       expect(labels()).toEqual([]);
     });
   });
@@ -624,17 +603,13 @@ describe("ConnectionPage credentials", () => {
 
 describe("ConnectionPage session selection", () => {
   it("saves and discards session edits independently of the pending connection", async () => {
-    const current = source({
-      request: vi.fn().mockResolvedValue(deviceSystemInfo),
-    } as unknown as GatewayBrowserClient);
+    const current = source(makeClient());
     const connect = vi.spyOn(current.gateway, "connect");
     current.gateway.setSessionKey = vi.fn((sessionKey) => {
       current.publish({ ...current.gateway.snapshot, sessionKey: sessionKey.trim() });
     });
     const { page } = await mount(current.gateway);
-    const sessionSection = control(page, 'input[aria-label="Default session"]').closest(
-      ".settings-section",
-    );
+    const sessionSection = input(page, "Default session").closest(".settings-section");
     if (!sessionSection) {
       throw new Error("Missing Session section");
     }
@@ -651,48 +626,39 @@ describe("ConnectionPage session selection", () => {
     editInput(page, "Default session", "main-other");
     flush();
     editInput(page, "Default session", "main");
-    await waitForPage(() => {
-      expect(sessionSection.querySelector("button")).toBeNull();
-    });
+    await waitForPage(() => expect(sessionSection.querySelector("button")).toBeNull());
     editInput(page, "Default session", "  saved-session  ");
     flush();
     button("Save").click();
     await waitForPage(() => {
       expect(current.gateway.snapshot.sessionKey).toBe("saved-session");
-      expect(control(page, 'input[aria-label="Default session"]').value).toBe("saved-session");
-      expect(control(page, 'input[aria-label="Gateway secret"]').value).toBe("pending-token");
+      expect(input(page, "Default session").value).toBe("saved-session");
+      expect(input(page, "Gateway secret").value).toBe("pending-token");
       expect(page.textContent).toContain("Saved");
       expect(connect).not.toHaveBeenCalled();
     });
     editInput(page, "Default session", " ");
-    await waitForPage(() => {
-      expect(button("Save").disabled).toBe(true);
-    });
+    await waitForPage(() => expect(button("Save").disabled).toBe(true));
     button("Discard changes").click();
-    await waitForPage(() => {
-      expect(control(page, 'input[aria-label="Default session"]').value).toBe("saved-session");
-    });
+    await waitForPage(() => expect(input(page, "Default session").value).toBe("saved-session"));
   });
 });
 
 describe("ConnectionPage Gateway lifecycle", () => {
   it("keeps an edited draft through reconnect and resets it for a replacement source", async () => {
     const request = vi.fn().mockResolvedValue(deviceSystemInfo);
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = makeClient(request);
     const first = source(client);
     const { page, context, setContext } = await mount(first.gateway);
-    const input = (label: string) => control(page, `input[aria-label="${label}"]`);
     editInput(page, "Gateway secret", "draft-secret");
     editInput(page, "Default session", "draft-session");
     control(page, 'button[aria-label="Toggle secret visibility"]').click();
-    await waitForPage(() => {
-      expect(input("Gateway secret").type).toBe("text");
-    });
+    await waitForPage(() => expect(input(page, "Gateway secret").type).toBe("text"));
 
     first.publish({ ...first.gateway.snapshot, phase: "reconnecting" });
     await waitForPage(() => {
-      expect(input("Gateway secret").type).toBe("password");
-      expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("—");
+      expect(input(page, "Gateway secret").type).toBe("password");
+      expect(text(page, ".config-host__name")?.trim()).toBe("—");
     });
     first.publish({
       ...first.gateway.snapshot,
@@ -701,9 +667,9 @@ describe("ConnectionPage Gateway lifecycle", () => {
       hello: gatewayHelloForMethods(["system.info"]),
     });
     await waitForPage(() => {
-      expect(input("Gateway secret").value).toBe("draft-secret");
-      expect(input("Default session").value).toBe("draft-session");
-      expect(input("Gateway secret").type).toBe("password");
+      expect(input(page, "Gateway secret").value).toBe("draft-secret");
+      expect(input(page, "Default session").value).toBe("draft-session");
+      expect(input(page, "Gateway secret").type).toBe("password");
       expect(request).toHaveBeenCalledTimes(2);
     });
 
@@ -714,9 +680,9 @@ describe("ConnectionPage Gateway lifecycle", () => {
     });
     setContext({ ...context, gateway: second.gateway });
     await waitForPage(() => {
-      expect(input("Gateway secret").value).toBe("replacement-token");
-      expect(input("Default session").value).toBe("main");
-      expect(input("Gateway secret").type).toBe("password");
+      expect(input(page, "Gateway secret").value).toBe("replacement-token");
+      expect(input(page, "Default session").value).toBe("main");
+      expect(input(page, "Gateway secret").type).toBe("password");
       expect(request).toHaveBeenCalledTimes(3);
     });
   });
@@ -731,7 +697,7 @@ describe("ConnectionPage Gateway lifecycle", () => {
         .fn()
         .mockReturnValueOnce(firstResponse.promise)
         .mockReturnValueOnce(secondResponse.promise);
-      const client = { request } as unknown as GatewayBrowserClient;
+      const client = makeClient(request);
       const first = source(client);
       const second = source(client);
       const { page, context, setContext } = await mount(first.gateway);
@@ -740,9 +706,7 @@ describe("ConnectionPage Gateway lifecycle", () => {
         firstResponse.resolve({ ...deviceSystemInfo, machineName: "Stale" });
       }
       setContext({ ...context, gateway: second.gateway });
-      await waitForPage(() => {
-        expect(request).toHaveBeenCalledTimes(2);
-      });
+      await waitForPage(() => expect(request).toHaveBeenCalledTimes(2));
 
       if (outcome === "response") {
         firstResponse.resolve({ ...deviceSystemInfo, machineName: "Stale" });
@@ -756,15 +720,13 @@ describe("ConnectionPage Gateway lifecycle", () => {
       }
       await waitForPage(() => {
         expect(page.querySelector(".config-host__name .skeleton")).not.toBeNull();
-        expect(page.querySelector(".config-host__name")?.textContent).not.toContain("Stale");
+        expect(text(page, ".config-host__name")).not.toContain("Stale");
       });
       await vi.advanceTimersByTimeAsync(10_000);
       expect(request).toHaveBeenCalledTimes(2);
 
       secondResponse.resolve({ ...deviceSystemInfo, machineName: "Current" });
-      await waitForPage(() => {
-        expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("Current");
-      });
+      await waitForPage(() => expect(text(page, ".config-host__name")?.trim()).toBe("Current"));
     },
   );
 
@@ -790,13 +752,11 @@ describe("ConnectionPage Gateway lifecycle", () => {
       .mockResolvedValueOnce(deviceSystemInfo)
       .mockRejectedValueOnce(error)
       .mockResolvedValue(deviceSystemInfo);
-    const { page } = await mount(source({ request } as unknown as GatewayBrowserClient).gateway);
+    const { page } = await mount(source(makeClient(request)).gateway);
     await vi.advanceTimersByTimeAsync(10_000);
-    await waitForPage(() => {
-      expect(page.querySelector(".config-host__name")?.textContent?.trim() ?? null).toBe(
-        retry ? "Gateway" : null,
-      );
-    });
+    await waitForPage(() =>
+      expect(text(page, ".config-host__name")?.trim() ?? null).toBe(retry ? "Gateway" : null),
+    );
     await vi.advanceTimersByTimeAsync(10_000);
     expect(request).toHaveBeenCalledTimes(retry ? 3 : 2);
   });
@@ -809,7 +769,7 @@ describe("ConnectionPage Gateway lifecycle", () => {
         .fn()
         .mockReturnValueOnce(response.promise)
         .mockResolvedValue(deviceSystemInfo);
-      const current = source({ request } as unknown as GatewayBrowserClient);
+      const current = source(makeClient(request));
       const { page } = await mount(current.gateway);
       current.publish({
         ...current.gateway.snapshot,
@@ -819,15 +779,13 @@ describe("ConnectionPage Gateway lifecycle", () => {
         ),
       });
       response.resolve(deviceSystemInfo);
-      await waitForPage(() => {
-        expect(page.querySelector(".config-host__name")).toBeNull();
-      });
+      await waitForPage(() => expect(page.querySelector(".config-host__name")).toBeNull());
       current.publish({
         ...current.gateway.snapshot,
         hello: gatewayHelloForMethods(["system.info"]),
       });
       await waitForPage(() => {
-        expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("Gateway");
+        expect(text(page, ".config-host__name")?.trim()).toBe("Gateway");
         expect(request).toHaveBeenCalledTimes(2);
       });
     },
