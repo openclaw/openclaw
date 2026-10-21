@@ -3,6 +3,7 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { createWebPushCapability } from "../../app/web-push.ts";
@@ -82,12 +83,15 @@ it("leaves the notifications route before an admitted Web Push command settles",
     hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
   });
   const capability = createWebPushCapability(gateway);
-  const notifications = pages.find((page) => page.id === "notifications")!;
+  const notifications = pages.find(
+    (page): page is Extract<(typeof pages)[number], { id: ConfigPageId }> =>
+      page.id === "notifications",
+  )!;
   const production = await notifications.component();
   const ConfigRoute = production.renderSolid;
   const module = {
     ...production,
-    renderSolid: (props: Parameters<typeof ConfigRoute>[0]) => (
+    renderSolid: (props: SolidRouteProps<ConfigPageRouteData>) => (
       <Provider>
         <ConfigRoute {...props} />
       </Provider>
@@ -96,7 +100,7 @@ it("leaves the notifications route before an admitted Web Push command settles",
   const router = createRouter<
     ConfigPageId | "usage",
     ApplicationContext,
-    typeof module,
+    Pick<typeof module, "renderSolid">,
     ConfigPageRouteData
   >({
     routes: [
