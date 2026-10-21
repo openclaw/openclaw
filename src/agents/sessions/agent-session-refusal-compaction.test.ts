@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { streamAnthropic } from "../../../packages/ai/src/providers/anthropic.js";
 import {
   appendHistory,
+  collectCompactionEnds,
   createAssistant,
   createAutoCompactionSettings,
   createTestSession,
@@ -16,11 +17,7 @@ import {
   streamMocks,
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
-import {
-  compactionHandler,
-  createResourceLoader,
-} from "./agent-session-loop-resource-loader.test-support.js";
-import type { AgentSessionEvent } from "./agent-session-types.js";
+import { compactionHandler } from "./agent-session-loop-resource-loader.test-support.js";
 import type { ExtensionFactory } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -159,14 +156,11 @@ describe("AgentSession refusal compaction", () => {
         model,
         sessionManager,
         settingsManager: createAutoCompactionSettings(),
-        resourceLoader: await createResourceLoader(handlers),
+        extension: handlers,
       });
-      const compactions: Array<Extract<AgentSessionEvent, { type: "compaction_end" }>> = [];
+      const compactions = collectCompactionEnds(session);
       const assistants: AssistantMessage[] = [];
       session.subscribe((event) => {
-        if (event.type === "compaction_end") {
-          compactions.push(event);
-        }
         if (event.type === "message_end" && event.message.role === "assistant") {
           assistants.push(event.message);
         }
@@ -184,22 +178,15 @@ describe("AgentSession refusal compaction", () => {
       }
       expect(firstTurnRequests).toBe(expectedRequests);
       expect(requests.every(({ url }) => url === "/v1/messages")).toBe(true);
-      if (threshold) {
+      if (threshold || overflow) {
         expect(compactions).toContainEqual(
           expect.objectContaining({
-            reason: "threshold",
-            outcome: expect.objectContaining({ status: "completed", willRetry: false }),
+            reason: overflow ? "overflow" : "threshold",
+            outcome: expect.objectContaining({ status: "completed", willRetry: Boolean(overflow) }),
           }),
         );
       }
-      if (overflow) {
-        expect(compactions).toContainEqual(
-          expect.objectContaining({
-            reason: "overflow",
-            outcome: expect.objectContaining({ status: "completed", willRetry: true }),
-          }),
-        );
-      } else {
+      if (!overflow) {
         expect(
           compactions.some(({ outcome }) => outcome.status === "completed" && outcome.willRetry),
         ).toBe(false);

@@ -110,6 +110,14 @@ function mockToolTurn(content: AssistantMessage["content"]) {
     );
 }
 
+function createSourceSession(
+  sessionManager: SessionManager,
+  tools: ReturnType<typeof createCodeModeHarness>["tools"],
+  options: NonNullable<Parameters<typeof createTestSession>[0]> = {},
+) {
+  return createTestSession({ sessionManager, customTools: toToolDefinitions(tools), ...options });
+}
+
 function toolCall(
   id: string,
   args: Record<string, unknown>,
@@ -183,10 +191,7 @@ it.each(sourceCases)(
         details: { status: "completed", value: 42 },
       });
     }
-    const { session } = await createTestSession({
-      sessionManager: manager,
-      customTools: toToolDefinitions(tools),
-    });
+    const { session } = await createSourceSession(manager, tools);
     const model = session.agent.state.model!;
     let modelCallSeq = 0;
     session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn!, {
@@ -215,10 +220,7 @@ it.each(sourceCases)(
       content: [{ text: source }, { arguments: originalArgs }],
     });
     const reopened = await expectReopens(session, manager, scope, dir);
-    const { session: nextSession } = await createTestSession({
-      sessionManager: reopened,
-      customTools: toToolDefinitions(tools),
-    });
+    const { session: nextSession } = await createSourceSession(reopened, tools);
     await nextSession.prompt("Recall the earlier calculation.");
     const providerContext = streamMocks.streamSimple.mock.calls.at(-1)![1];
     const assistant = providerContext.messages.find((message) => message.role === "assistant");
@@ -291,11 +293,7 @@ it.each(["message_end", "before_message_write"] as const)(
       );
     }
     guardSessionManager(manager, { config: {}, allowedToolNames: ["exec", "wait"] });
-    const { session } = await createTestSession({
-      sessionManager: manager,
-      customTools: toToolDefinitions(tools),
-      resourceLoader,
-    });
+    const { session } = await createSourceSession(manager, tools, { resourceLoader });
     for (const nextAction of ["mutate", "replace", "remove", "collision"]) {
       action = nextAction;
       mockToolTurn([
@@ -367,8 +365,7 @@ it("preserves mixed tool arguments through a reentrant direct SQLite append", as
     toolCall("mixed_code", { title: "Compute the harmless number", code: source }),
     toolCall("mixed_other", { code: source }, "other"),
   ]);
-  const { session } = await createTestSession({
-    sessionManager: manager,
+  const { session } = await createSourceSession(manager, tools, {
     customTools: [...toToolDefinitions(tools), other],
   });
   await session.prompt("Run both independent calls.");
@@ -420,8 +417,7 @@ it("preserves source across reused managers and ordinary append batches", async 
           : { command: source },
       ),
     ]);
-    const { session } = await createTestSession({
-      sessionManager: manager,
+    const { session } = await createSourceSession(manager, tools, {
       customTools: mode === "code" ? toToolDefinitions(tools) : [shell],
     });
     await session.prompt(`Use ${mode} mode.`);
@@ -483,11 +479,11 @@ describe("provider source fidelity", () => {
     result?.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
 
   it.each([
-    ["anthropic-messages", "read", ".env"],
-    ["openai-responses", "read", "fixture.txt"],
+    ["anthropic-messages", "anthropic", "claude-sonnet-4-6", ".env"],
+    ["openai-responses", "openai", "gpt-4.1", "fixture.txt"],
   ] as const)(
-    "preserves file bytes for %s after %s returns %s",
-    async (api, toolName, filename) => {
+    "preserves file bytes for %s (%s/%s) after read returns %s",
+    async (api, provider, id, filename) => {
       const cwd = providerDirs.make("openclaw-tool-source-fidelity-");
       const fakeSecret = "fixture-registered-secret-0123456789";
       const vendorSecret = `sk-${"fixture".repeat(6)}`;
@@ -497,27 +493,23 @@ describe("provider source fidelity", () => {
       const fileContent = `${benignMarker}\nVALUE=${fakeSecret}\n${vendorSecret}\n${sourceAssignment}\n`;
       await fs.writeFile(path.join(cwd, filename), fileContent);
       const readTool = createOpenClawReadTool(createReadTool(cwd), { cwd });
-      const readControl = await readTool.execute("direct-read-control", { path: filename });
-      const readControlText = textContent(readControl);
+      const readControlText = textContent(
+        await readTool.execute("direct-read-control", { path: filename }),
+      );
       expect(readControlText).toBe(fileContent);
 
       const model: Model = {
         ...testModel,
         api,
-        provider: api === "anthropic-messages" ? "anthropic" : "openai",
-        id: api === "anthropic-messages" ? "claude-sonnet-4-6" : "gpt-4.1",
+        provider,
+        id,
         baseUrl: "https://router.invalid",
       };
-      const scope = {
-        agentId: "main",
-        sessionId: "tool-source-fidelity",
-        sessionKey: "agent:main:tool-source-fidelity",
-        storePath: path.join(cwd, "openclaw-agent.sqlite"),
-      };
+      const scope = sessionTarget(path.join(cwd, "openclaw-agent.sqlite"), "tool-source-fidelity");
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const sessionManager = guardSessionManager(await SessionManager.openAsync(scope, cwd), {
         config: {},
-        allowedToolNames: [toolName],
+        allowedToolNames: ["read"],
       });
       const resourceLoader = new DefaultResourceLoader({
         cwd,
@@ -534,12 +526,7 @@ describe("provider source fidelity", () => {
       let liveContext: Context | undefined;
       const currentResult = () =>
         liveContext?.messages.findLast((message) => message.role === "toolResult");
-      const probe = {
-        type: "toolCall" as const,
-        id: "probe-read",
-        name: toolName,
-        arguments: { path: filename },
-      };
+      const probe = toolCall("probe-read", { path: filename }, "read");
       streamMocks.streamSimple
         .mockImplementationOnce((activeModel: Model) =>
           createAssistantResultStream(createAssistant(activeModel, [probe], "toolUse")),
@@ -574,7 +561,7 @@ describe("provider source fidelity", () => {
         contextWindowTokens: 32_768,
       });
       try {
-        expect(session.getActiveToolNames().join(",")).toBe(toolName);
+        expect(session.getActiveToolNames().join(",")).toBe("read");
         await session.prompt(`Read ${filename}.`);
         expect(providerPayload !== undefined).toBe(true);
         const stored = JSON.stringify(sessionManager.getEntries());

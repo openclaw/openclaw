@@ -89,6 +89,7 @@ afterEach(() => {
 it.each(["allowed", "refused", "revoked"] as const)(
   "retains the independent embedded caller guard through real enqueue: %s",
   async (caller) => {
+    const allowed = caller === "allowed";
     const { session } = await createTestSession();
     const enqueue = vi.spyOn(session.agent, "admitSteeringMessage");
     const entered = createDeferredCore();
@@ -151,18 +152,16 @@ it.each(["allowed", "refused", "revoked"] as const)(
         canInject = false;
         resume.resolve();
       }
-      if (caller !== "allowed") {
+      if (!allowed) {
         await expect(outcome).rejects.toThrow("independent caller revoked");
       } else {
         await expect(outcome).resolves.toMatchObject({ status: "accepted" });
       }
-      if (caller === "allowed") {
-        expect(enqueue).toHaveBeenCalledOnce();
-        expect(session.getSteeringMessages()).toEqual(["independent caller input"]);
+      expect(enqueue).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(session.getSteeringMessages()).toEqual(allowed ? ["independent caller input"] : []);
+      if (allowed) {
         expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
       } else {
-        expect(enqueue).not.toHaveBeenCalled();
-        expect(session.getSteeringMessages()).toEqual([]);
         expect(onQueueAccepted).not.toHaveBeenCalledWith(true);
       }
     } finally {
@@ -444,24 +443,20 @@ it.each([
           accepted,
           "Steering settled before recorder preparation",
         );
-        if (
-          change === "legacy-session" ||
-          change === "legacy-revision" ||
-          change === "legacy-metadata"
-        ) {
+        const policyUpdate =
+          change === "worker-revoked"
+            ? undefined
+            : change === "legacy-session"
+              ? { sessionId: "replacement" }
+              : change === "legacy-revision"
+                ? { lifecycleRevision: "replacement" }
+                : change === "legacy-metadata"
+                  ? { label: "renamed" }
+                  : { sandboxMode: undefined };
+        if (policyUpdate) {
           await updateSessionEntry(
             { agentId: "main", sessionKey: policyKey, storePath: database.path },
-            () =>
-              change === "legacy-session"
-                ? { sessionId: "replacement" }
-                : change === "legacy-revision"
-                  ? { lifecycleRevision: "replacement" }
-                  : { label: "renamed" },
-          );
-        } else if (change !== "worker-revoked") {
-          await updateSessionEntry(
-            { agentId: "main", sessionKey: policyKey, storePath: database.path },
-            () => ({ sandboxMode: undefined }),
+            () => policyUpdate,
           );
         }
         releaseRecorder.resolve();
@@ -502,10 +497,8 @@ it.each([
     const release = createDeferredCore();
     const cleanupError = new Error("admission cleanup failed");
     const notificationError = new Error("queue notification failed");
-    const cleanupFails =
-      outcome === "cleanup-failed" || outcome === "cleanup-and-notification-failed";
-    const notificationFails =
-      outcome === "notification-failed" || outcome === "cleanup-and-notification-failed";
+    const cleanupFails = outcome.includes("cleanup");
+    const notificationFails = outcome.includes("notification");
     let insideAdmission = false;
     let callerCurrent = true;
     const prepare = async () => {};

@@ -27,21 +27,15 @@ import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-a
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import {
-  createTestSession,
+  createModelSelectionSession,
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
-import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
-import type {
-  ExtensionFactory,
-  ExtensionEvent,
-  ThinkingLevelSelectEvent,
-} from "./extensions/types.js";
+import type { ExtensionEvent, ThinkingLevelSelectEvent } from "./extensions/types.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import * as metadataRuntime from "./session-manager-metadata-runtime.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
-import { SettingsManager } from "./settings-manager.js";
 
 const startModel = {
   ...testModel,
@@ -143,32 +137,16 @@ describe("model transitions after SQLite write admission", () => {
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const transitions: Array<{ previous: string | undefined; next: string }> = [];
-    const handlers: ExtensionFactory = (api) => {
-      api.on("model_select", async (event) => {
-        const selection = event as ModelSelectEvent;
-        transitions.push({ previous: selection.previousModel?.id, next: selection.model.id });
-        await onSelect?.(selection);
-      });
-      api.on(
-        "thinking_level_select",
-        async (event) => await onThinkingSelect?.(event as ThinkingLevelSelectEvent),
-      );
-    };
-    const resourceLoader = await createResourceLoader(handlers);
-    const fixture = await createTestSession({
+    const fixture = await createModelSelectionSession({
       model: startModel,
-      sessionManager: SessionManager.open(target, root),
-      settingsManager: SettingsManager.inMemory({
-        compaction: { enabled: false },
-        retry: { enabled: false },
-        defaultThinkingLevel: "medium",
-      }),
-      resourceLoader,
-    });
-    fixture.modelRegistry.registerProvider(startModel.provider, {
-      api: startModel.api,
-      baseUrl: startModel.baseUrl,
       models,
+      thinkingLevel: "medium",
+      sessionManager: SessionManager.open(target, root),
+      onModelSelect: async (event) => {
+        transitions.push({ previous: event.previousModel?.id, next: event.model.id });
+        await onSelect?.(event);
+      },
+      onThinkingSelect: async (event) => await onThinkingSelect?.(event),
     });
     const options = toDatabaseOptions(resolveSqliteReadScope(target));
     return {
@@ -176,7 +154,6 @@ describe("model transitions after SQLite write admission", () => {
       target,
       options,
       transitions,
-      extensionRuntime: resourceLoader.getExtensions().runtime,
       readModelChanges: () =>
         SessionManager.open(target, root)
           .getEntries()

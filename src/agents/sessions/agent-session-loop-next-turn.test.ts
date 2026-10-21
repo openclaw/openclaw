@@ -57,8 +57,8 @@ const imageQueues = [
 const toolResult = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
 const makeTool = (
   name: string,
-  execute: ToolDefinition["execute"] = async () => toolResult("done"),
-): ToolDefinition => ({
+  execute: AgentTool["execute"] = async () => toolResult("done"),
+): AgentTool => ({
   name,
   label: name,
   description: name,
@@ -812,13 +812,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
 
   it("preserves explicit updates from an existing next-turn hook", async () => {
     const hookModel = { ...testModel, id: "hook-model" };
-    const hookTool: AgentTool = {
-      name: "hook_tool",
-      label: "Hook tool",
-      description: "provided by the existing turn hook",
-      parameters: Type.Object({}),
-      execute: async () => ({ content: [{ type: "text", text: "done" }], details: {} }),
-    };
+    const hookTool = makeTool("hook_tool");
     const hookContext = {
       systemPrompt: "hook prompt",
       messages: [],
@@ -866,13 +860,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
   });
 
   it("preserves fields omitted by an existing next-turn context replacement", async () => {
-    const sessionTool: AgentTool = {
-      name: "session_tool",
-      label: "Session tool",
-      description: "available in session state",
-      parameters: Type.Object({}),
-      execute: async () => toolResult("done"),
-    };
+    const sessionTool = makeTool("session_tool");
     const initialHook = vi.fn(() => ({
       context: { systemPrompt: "stale prompt", messages: [], tools: [sessionTool] },
     }));

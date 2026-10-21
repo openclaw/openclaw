@@ -37,6 +37,7 @@ import { compactWithSafetyTimeout } from "../embedded-agent-runner/compaction-sa
 import { subscribeEmbeddedAgentSession } from "../embedded-agent-subscribe.js";
 import { estimateContextTokens } from "../runtime/index.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
   compactionSettings,
   extensionFixture,
@@ -88,6 +89,28 @@ function createStaleThinkingContent(): AssistantMessage["content"] {
     { type: "redacted_thinking", data: "stale-redacted" },
     { type: "text", text: "retained answer" },
   ] as unknown as AssistantMessage["content"];
+}
+
+function expectRetainedThinking(
+  session: Awaited<ReturnType<typeof createTestSession>>["session"],
+  resetUsage = false,
+) {
+  const retained = session.messages.find(
+    (message) =>
+      message.role === "assistant" &&
+      message.content.some((block) => block.type === "text" && block.text === "retained answer"),
+  );
+  expect(retained).toMatchObject({
+    role: "assistant",
+    ...(resetUsage ? { usage: { input: 0, output: 0, totalTokens: 0 } } : {}),
+    content: [
+      { type: "thinking", thinking: "old think" },
+      { type: "thinking", thinking: "old think" },
+      { type: "thinking", thinking: "old think" },
+      { type: "redacted_thinking" },
+      { type: "text", text: "retained answer" },
+    ],
+  });
 }
 
 function createResultHandlers(
@@ -292,7 +315,7 @@ describe("AgentSession compaction", () => {
     const { session } = await createTestSession({
       sessionManager,
       settingsManager: createAutoCompactionSettings(),
-      resourceLoader: await createResourceLoader(createResultHandlers("condensed history")),
+      extension: createResultHandlers("condensed history"),
     });
     const compactionEvents = collectCompactionEnds(session);
     // Embedded attempt preparation removes the ingress-persisted user from model state.
@@ -358,73 +381,58 @@ describe("AgentSession compaction", () => {
     subscription.unsubscribe();
   });
 
-  it("projects a rejected automatic cancellation as aborted without recording compaction", async () => {
-    const sessionManager = SessionManager.inMemory();
-    const syntheticError = new Error("synthetic cancellation rejection");
-    let thresholdRequestState: string | undefined;
-    const abortActiveCompaction = () => session.abortCompaction();
-    const handlers: ExtensionFactory = (api) => {
-      api.on("session_before_compact", async (event: unknown) => {
-        thresholdRequestState = (event as { preparation: { latestUnresolvedUserRequest?: string } })
-          .preparation.latestUnresolvedUserRequest;
-        abortActiveCompaction();
-        throw syntheticError;
+  it.each(["automatic", "manual"] as const)(
+    "projects a rejected %s cancellation as aborted without recording compaction",
+    async (mode) => {
+      const manual = mode === "manual";
+      const sessionManager = manual ? oldHistory() : SessionManager.inMemory();
+      const syntheticError = new Error(
+        manual ? "synthetic manual cancellation rejection" : "synthetic cancellation rejection",
+      );
+      let thresholdRequestState: string | undefined;
+      const { session } = await createTestSession({
+        sessionManager,
+        settingsManager: manual ? undefined : createAutoCompactionSettings(),
+        extension: manual
+          ? undefined
+          : (api) => {
+              api.on("session_before_compact", async ({ preparation }) => {
+                thresholdRequestState = preparation.latestUnresolvedUserRequest;
+                session.abortCompaction();
+                throw syntheticError;
+              });
+            },
       });
-    };
-    streamMocks.streamSimple.mockImplementation(
-      (activeModel: Model, _context: Context, options?: SimpleStreamOptions) => {
-        if (options?.signal?.aborted) {
-          throw syntheticError;
-        }
-        return createAssistantResultStream(
-          createAssistant(activeModel, "complete answer", "stop", activeModel.contextWindow),
-        );
-      },
-    );
-    const { session } = await createTestSession({
-      sessionManager,
-      settingsManager: createAutoCompactionSettings(),
-      resourceLoader: await createResourceLoader(handlers),
-    });
-    const onAgentEvent = vi.fn<AgentEventHandler>();
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run-rejected-cancellation",
-      onAgentEvent,
-    });
-
-    await session.prompt("continue");
-
-    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-    expectAbortedProjection(onAgentEvent.mock.calls, sessionManager, subscription);
-    expect(thresholdRequestState).toBeUndefined();
-    subscription.unsubscribe();
-  });
-
-  it("projects a rejected manual cancellation as aborted without recording compaction", async () => {
-    const sessionManager = oldHistory();
-    const syntheticError = new Error("synthetic manual cancellation rejection");
-    streamMocks.streamSimple.mockImplementation(
-      (_activeModel: Model, _context: Context, options?: SimpleStreamOptions) => {
-        expect(options?.signal?.aborted).toBe(false);
-        session.abortCompaction();
-        throw syntheticError;
-      },
-    );
-    const { session } = await createTestSession({ sessionManager });
-    const onAgentEvent = vi.fn<AgentEventHandler>();
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run-rejected-manual-cancellation",
-      onAgentEvent,
-    });
-
-    await expect(session.compact()).rejects.toBe(syntheticError);
-
-    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-    expectAbortedProjection(onAgentEvent.mock.calls, sessionManager, subscription, true);
-    subscription.unsubscribe();
-  });
+      streamMocks.streamSimple.mockImplementation(
+        (activeModel: Model, _context: Context, options?: SimpleStreamOptions) => {
+          if (manual) {
+            expect(options?.signal?.aborted).toBe(false);
+            session.abortCompaction();
+            throw syntheticError;
+          }
+          if (options?.signal?.aborted) {
+            throw syntheticError;
+          }
+          return textStream(activeModel, "complete answer", "stop", activeModel.contextWindow);
+        },
+      );
+      const onAgentEvent = vi.fn<AgentEventHandler>();
+      const subscription = subscribeEmbeddedAgentSession({
+        session,
+        runId: manual ? "run-rejected-manual-cancellation" : "run-rejected-cancellation",
+        onAgentEvent,
+      });
+      if (manual) {
+        await expect(session.compact()).rejects.toBe(syntheticError);
+      } else {
+        await session.prompt("continue");
+        expect(thresholdRequestState).toBeUndefined();
+      }
+      expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+      expectAbortedProjection(onAgentEvent.mock.calls, sessionManager, subscription, manual);
+      subscription.unsubscribe();
+    },
+  );
 
   it("caps extension summaries before persistence and manual return", async () => {
     const sessionManager = oldHistory();
@@ -432,11 +440,9 @@ describe("AgentSession compaction", () => {
     let manualRequestState: string | undefined;
     const { session } = await createTestSession({
       sessionManager,
-      resourceLoader: await createResourceLoader(
-        createResultHandlers(oversizedSummary, undefined, (preparation) => {
-          manualRequestState = preparation.latestUnresolvedUserRequest;
-        }),
-      ),
+      extension: createResultHandlers(oversizedSummary, undefined, (preparation) => {
+        manualRequestState = preparation.latestUnresolvedUserRequest;
+      }),
     });
 
     const result = await session.compact();
@@ -482,7 +488,7 @@ describe("AgentSession compaction", () => {
       };
       const { session } = await createTestSession({
         settingsManager: createAutoCompactionSettings(),
-        resourceLoader: await createResourceLoader(handlers),
+        extension: handlers,
       });
       const compactionEvents = collectCompactionEnds(session);
 
@@ -594,7 +600,7 @@ describe("AgentSession compaction", () => {
     });
     const { session } = await createTestSession({
       settingsManager: createAutoCompactionSettings(),
-      resourceLoader: await createResourceLoader(createCompactionExtension()),
+      extension: createCompactionExtension(),
     });
     session[agentSessionSetContextReplacementHook](() => contextState.clear());
     session.subscribe((event) => {
@@ -621,7 +627,7 @@ describe("AgentSession compaction", () => {
     });
     const { session } = await createTestSession({
       settingsManager: createAutoCompactionSettings(),
-      resourceLoader: await createResourceLoader(createCompactionExtension()),
+      extension: createCompactionExtension(),
     });
     const compactionEvents = collectCompactionEnds(session);
 
@@ -649,16 +655,7 @@ describe("AgentSession compaction", () => {
       ...createAssistant(testModel, createStaleThinkingContent()),
       timestamp: Date.now() - 2,
     });
-    const handlers: ExtensionFactory = (api) => {
-      api.on("session_before_compact", async (event: unknown) => ({
-        compaction: {
-          summary: "condensed history",
-          firstKeptEntryId: retainedAssistantId,
-          tokensBefore: (event as { preparation: { tokensBefore: number } }).preparation
-            .tokensBefore,
-        },
-      }));
-    };
+    const handlers = createResultHandlers("condensed history", retainedAssistantId);
     const requests: Context[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
       requests.push(context);
@@ -671,27 +668,13 @@ describe("AgentSession compaction", () => {
     const { session } = await createTestSession({
       sessionManager,
       settingsManager: createAutoCompactionSettings(),
-      resourceLoader: await createResourceLoader(handlers),
+      extension: handlers,
     });
 
     await session.prompt("long request");
 
     expect(requests).toHaveLength(2);
-    const retained = session.messages.find(
-      (message) =>
-        message.role === "assistant" &&
-        message.content.some((block) => block.type === "text" && block.text === "retained answer"),
-    );
-    expect(retained).toMatchObject({
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "old think" },
-        { type: "thinking", thinking: "old think" },
-        { type: "thinking", thinking: "old think" },
-        { type: "redacted_thinking" },
-        { type: "text", text: "retained answer" },
-      ],
-    });
+    expectRetainedThinking(session);
     expect(JSON.stringify(requests[1]?.messages)).not.toContain("stale-");
   });
 
@@ -713,13 +696,8 @@ describe("AgentSession compaction", () => {
     sessionManager.appendMessage({
       ...createAssistant(model, [], "error"),
       usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
+        ...createZeroUsageFixture(),
         contextUsage: { state: "unavailable" },
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
       errorMessage: "temporary provider error",
       timestamp: now + 1_001,
@@ -736,7 +714,7 @@ describe("AgentSession compaction", () => {
       model,
       sessionManager,
       settingsManager,
-      resourceLoader: await createResourceLoader(createCompactionExtension()),
+      extension: createCompactionExtension(),
     });
     session.subscribe((event) => {
       if (event.type === "compaction_start" || event.type === "compaction_end") {
@@ -744,22 +722,7 @@ describe("AgentSession compaction", () => {
       }
     });
 
-    const retained = session.messages.find(
-      (message) =>
-        message.role === "assistant" &&
-        message.content.some((block) => block.type === "text" && block.text === "retained answer"),
-    );
-    expect(retained).toMatchObject({
-      role: "assistant",
-      usage: { input: 0, output: 0, totalTokens: 0 },
-      content: [
-        { type: "thinking", thinking: "old think" },
-        { type: "thinking", thinking: "old think" },
-        { type: "thinking", thinking: "old think" },
-        { type: "redacted_thinking" },
-        { type: "text", text: "retained answer" },
-      ],
-    });
+    expectRetainedThinking(session, true);
 
     await session.prompt("continue restored session");
 
@@ -792,7 +755,7 @@ describe("compaction writer admission", () => {
     };
     const { session } = await createTestSession({
       sessionManager,
-      resourceLoader: await createResourceLoader(handlers),
+      extension: handlers,
     });
     const persistedBefore = await loadTranscriptEvents(target);
     const contextBefore = sessionManager.buildSessionContext();
@@ -835,7 +798,7 @@ describe("compaction writer admission", () => {
     const { session } = await createTestSession({
       sessionManager: manager,
       settingsManager: compactionSettings(),
-      resourceLoader: await createResourceLoader(handlers),
+      extension: handlers,
     });
     const before = await loadTranscriptEvents(target);
     const messagesBefore = [...session.messages];
