@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { Agent, createServer } from "node:https";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-context.js";
+import { wrapToolWithGatewayCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
+import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
 import type {
   ChannelMessageActionContext,
@@ -12,13 +15,24 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../src/config/config.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
+import {
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../src/gateway/message-action-turn-capability.js";
+import { createAgentRuntimeAuthorityGuard } from "../src/gateway/server-methods/agent-runtime-authority.js";
+import type { GatewayClient, GatewayRequestContext } from "../src/gateway/server-methods/types.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../src/infra/agent-run-registry.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import type { PluginRuntime } from "../src/plugins/runtime/types.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 import { loadBundledPluginFacade } from "../src/test-utils/bundled-plugin-public-surface.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "./helpers/tls-fixture.js";
-import { createMessageReadAuthority } from "./message-read-authority.test-support.js";
 
 const transport = vi.hoisted(() => ({ agent: undefined as Agent | undefined }));
 vi.mock("openclaw/plugin-sdk/extension-shared", async (original) => {
@@ -46,17 +60,72 @@ type ActionResult = NonNullable<Awaited<ReturnType<typeof dispatchChannelMessage
 type ProviderRequest = { method: string; path: string; query: URLSearchParams };
 
 function createOriginatingRun(currentChat = CURRENT) {
-  return createMessageReadAuthority({
-    runId: `feishu-read-${randomUUID()}`,
-    sessionKey: `agent:main:feishu:channel:${currentChat}`,
+  const sessionKey = `agent:main:feishu:channel:${currentChat}`;
+  const operationalRunInstance = createOperationalRunInstanceRef(`feishu-read-${randomUUID()}`);
+  const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  const toolContext = {
+    currentChannelProvider: "feishu",
+    currentChannelId: currentChat,
+    currentChatType: currentChat === DIRECT ? ("direct" as const) : ("group" as const),
+  };
+  const turnCapability = mintMessageActionTurnCapability({
+    agentId: "main",
+    runId: operationalRunInstance.runId,
+    sessionKey,
+    requesterAccountId: "default",
     requesterSenderId: SELF,
-    gatewayContext: "expiry-only",
-    toolContext: {
-      currentChannelProvider: "feishu",
-      currentChannelId: currentChat,
-      currentChatType: currentChat === DIRECT ? "direct" : "group",
-    },
+    toolContext,
   });
+  const assert = createAgentRuntimeAuthorityGuard(
+    {
+      internal: {
+        agentRuntimeIdentity: {
+          kind: "agentRuntime",
+          agentId: "main",
+          sessionKey,
+          operationalRunInstance,
+          delegatedAuthority: { kind: "local", ...delegatedAuthority },
+          messageActionContext: { expiresAtMs: Date.now() + 60_000, turnCapability },
+        },
+      },
+    } as GatewayClient,
+    {
+      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+    } as GatewayRequestContext,
+    () => {},
+  ).commitGuard;
+  if (!assert) {
+    throw new Error("Expected originating Feishu run authority");
+  }
+  assert();
+  return {
+    assert,
+    toolContext,
+    revokeTurn: () => revokeMessageActionTurnCapability(turnCapability),
+    releaseClaim: () => releaseAgentRunDelegatedAuthority(delegatedAuthority),
+    createTool: (config: OpenClawConfig) =>
+      wrapToolWithGatewayCallerIdentity(
+        createMessageTool({
+          agentId: "main",
+          agentAccountId: "default",
+          agentSessionKey: sessionKey,
+          runId: operationalRunInstance.runId,
+          messageActionTurnCapability: turnCapability,
+          ...toolContext,
+          config,
+        }),
+        {
+          agentId: "main",
+          sessionKey,
+          operationalRunInstance,
+          receiptAuthority: () => validateAgentRunDelegatedAuthority(delegatedAuthority),
+        },
+      ),
+    dispose: () => {
+      revokeMessageActionTurnCapability(turnCapability);
+      releaseAgentRunDelegatedAuthority(delegatedAuthority);
+    },
+  };
 }
 
 let feishuPlugin: ChannelPlugin;

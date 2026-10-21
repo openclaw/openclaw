@@ -714,100 +714,30 @@ export default defineConfig({
     type Replay = { child: ChildCompletion; report: JsonTestResults; capture: VitestReportCapture };
     const passedFile = ({ report }: Replay) =>
       report.testResults.find((file) => file.status === "passed")!;
+    // Native report-owner tests cover malformed reports and process outcomes.
+    // Keep controls for this fixture's identity, completion, and exact-case proof.
     const faults: [string, (replay: Replay) => void][] = [
-      ["missing project", ({ capture }) => capture.projects.pop()],
       [
         "wrong module project",
         ({ capture }) => Object.assign(capture.modules[0]!, { name: "other" }),
       ],
-      ["omitted module", ({ capture }) => capture.modules.pop()],
-      ["duplicated module", ({ capture }) => capture.modules.splice(1, 1, capture.modules[0]!)],
-      ["unexpected module", ({ capture }) => Object.assign(capture.modules[0]!, { file: "other" })],
-      ["omitted file", ({ report }) => report.testResults.pop()],
-      ["duplicated file", ({ report }) => report.testResults.splice(1, 1, report.testResults[0]!)],
-      ["unexpected file", ({ report }) => Object.assign(report.testResults[0]!, { name: "other" })],
+      ["missing native completion", ({ capture }) => Object.assign(capture, { ended: undefined })],
+      ["wrong native process", ({ capture }) => Object.assign(capture, { pid: child.pid! + 1 })],
       [
-        "extra collection error",
-        (replay) => Object.assign(passedFile(replay), { message: "other" }),
+        "skipped assertion",
+        (replay) => Object.assign(passedFile(replay).assertionResults[0]!, { status: "skipped" }),
       ],
-      ["extra failed file", (replay) => Object.assign(passedFile(replay), { status: "failed" })],
+      ["omitted assertion", (replay) => passedFile(replay).assertionResults.pop()],
       [
-        "wrong collection error",
-        ({ report }) =>
-          Object.assign(
-            report.testResults.find((file) => file.name.endsWith("/01-a-crash.test.ts"))!,
-            { message: "other" },
-          ),
-      ],
-      ["inconsistent totals", ({ report }) => Object.assign(report, { numPassedTests: 44 })],
-    ];
-    function patchFaults(label: string, target: (replay: Replay) => object, patches: object[]) {
-      for (const patch of patches) {
-        faults.push([
-          `${label}: ${JSON.stringify(patch)}`,
-          (replay) => Object.assign(target(replay), patch),
-        ]);
-      }
-    }
-    patchFaults("invalid native capture", ({ capture }) => capture, [
-      { ended: undefined },
-      { processTimedOut: true },
-      { pid: child.pid! + 1 },
-      { root: "other" },
-    ]);
-    patchFaults("invalid native end", ({ capture }) => capture.ended!, [
-      { reason: "interrupted" },
-      { reason: "passed" },
-      { unhandledErrors: 1 },
-      { failedModules: 4 },
-      { failedModules: 7 },
-      { suiteErrors: 4 },
-      { suiteErrors: 7 },
-    ]);
-    patchFaults("abnormal child completion", ({ child: replayChild }) => replayChild, [
-      { code: 0 },
-      { code: 2 },
-      { code: 143 },
-      { exitCode: 0 },
-      { exitCode: 2 },
-      { exitCode: null },
-      { signalCode: "SIGTERM" },
-      { killed: true },
-    ] satisfies Partial<ChildCompletion>[]);
-    const nativeReport: JsonTestResults = JSON.parse(originals[0]!);
-    for (const [index, file] of nativeReport.testResults.entries()) {
-      if (!file.assertionResults.length) {
-        continue;
-      }
-      const name = path.basename(file.name);
-      const assertionFault = (
-        label: string,
-        mutate: (tests: typeof file.assertionResults) => void,
-      ) => {
-        faults.push([
-          `${name}: ${label}`,
-          ({ report }) => mutate(report.testResults[index]!.assertionResults),
-        ]);
-      };
-      for (const status of ["pending", "skipped", "todo", "failed", "passed"] as const) {
-        if (status === file.assertionResults[0]!.status) {
-          continue;
-        }
-        assertionFault(`unexpected ${status} assertion`, (tests) => {
-          tests.at(-1)!.status = status;
-        });
-      }
-      assertionFault("omitted assertion", (tests) => tests.pop());
-      assertionFault("extra assertion", (tests) => tests.push(file.assertionResults[0]!));
-      assertionFault("failure messages", (tests) =>
-        Object.assign(tests[0]!, { failureMessages: ["unexpected failure"] }),
-      );
-      if (file.assertionResults.length > 1) {
-        assertionFault("duplicated assertion replacing its sibling", (tests) => {
+        "duplicated lifecycle assertion",
+        ({ report }) => {
+          const tests = report.testResults.find(
+            (file) => file.assertionResults.length > 1,
+          )!.assertionResults;
           tests[1] = tests[0]!;
-        });
-      }
-    }
+        },
+      ],
+    ];
     for (const generation of ["producer", "observer"]) {
       for (const phase of ["afterAll", "resource teardown"]) {
         faults.push([

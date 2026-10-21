@@ -217,11 +217,10 @@ describe("installTestEnv", () => {
         } } },
       }`,
     );
-    writeFile(path.join(openClawHome, ".openclaw", "credentials", "token.txt"), "secret\n");
-    writeFile(
-      path.join(openClawHome, ".openclaw", "external-plugins", "glueclaw", "openclaw.plugin.json"),
-      '{"id":"glueclaw"}\n',
-    );
+    writeHomeFiles(openClawHome, {
+      ".openclaw/credentials/token.txt": "secret\n",
+      ".openclaw/external-plugins/glueclaw/openclaw.plugin.json": '{"id":"glueclaw"}\n',
+    });
     const realStateDir = path.join(openClawHome, ".openclaw");
     const realAgentDir = path.join(realStateDir, "agents", "main", "agent");
     const liveAuthStore = {
@@ -259,16 +258,19 @@ describe("installTestEnv", () => {
         }),
       );
     });
-    writeHomeFiles(realHome, {
+    const copiedFiles = {
       ".claude/.credentials.json": '{"accessToken":"token"}\n',
-      ".claude/projects/old-session.jsonl": "session\n",
       ".codex/auth.json": '{"OPENAI_API_KEY":"token"}\n',
       ".codex/config.toml": 'model = "gpt-5.4"\n',
-      ".codex/sessions/2026/02/26/rollout.jsonl": "session\n",
       ".gemini/oauth_creds.json": '{"token":"gemini"}\n',
       ".gemini/settings.json": '{"theme":"dark"}\n',
       ".gemini/commands/Cache/review.toml": "prompt\n",
       ".minimax/Cache/credentials.json": "minimax\n",
+    };
+    writeHomeFiles(realHome, {
+      ...copiedFiles,
+      ".claude/projects/old-session.jsonl": "session\n",
+      ".codex/sessions/2026/02/26/rollout.jsonl": "session\n",
       ".gemini/antigravity-browser-profile/Default/Cache/Cache_Data/blob": "cached-browser-bytes\n",
       ".gemini/antigravity/browser_recordings/session.webm": "recording\n",
       ".gemini/cli-browser-profile/Default/History": "browser-history\n",
@@ -327,13 +329,7 @@ describe("installTestEnv", () => {
       [
         ".openclaw/credentials/token.txt",
         ".openclaw/external-plugins/glueclaw/openclaw.plugin.json",
-        ".claude/.credentials.json",
-        ".codex/auth.json",
-        ".codex/config.toml",
-        ".gemini/oauth_creds.json",
-        ".gemini/settings.json",
-        ".gemini/commands/Cache/review.toml",
-        ".minimax/Cache/credentials.json",
+        ...Object.keys(copiedFiles),
       ],
       [
         ".openclaw/agents/main/agent/auth-profiles.json",
@@ -548,9 +544,7 @@ describe("installTestEnv", () => {
         OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "FIXTURE_AUTH_REF",
         OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
       };
-      for (const [key, value] of Object.entries(supervisorEnv)) {
-        setTestEnvValue(key, value);
-      }
+      setEnv(supervisorEnv);
       setTestEnvValue("TEST_UNRELATED_SERVICE_HINT", "preserved");
 
       const testEnv = install({ mode });
