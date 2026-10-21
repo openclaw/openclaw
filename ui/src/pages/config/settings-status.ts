@@ -1,5 +1,4 @@
-import { createDeferred } from "@solidjs/signals";
-import { createMemo, createSignal, isPending, onCleanup, onSettled } from "solid-js";
+import { createMemo, createSignal, isPending, latest, onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import type { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
@@ -20,7 +19,7 @@ export function createSettingsStatus<T>(
   const gatewayProjection = projectGateway(context.gateway);
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
   let disposed = false;
-  let request: AbortController | undefined;
+  let abortRequest: (() => void) | undefined;
   const client = () => {
     const snapshot = gatewayProjection.read().snapshot;
     return !disposed &&
@@ -45,22 +44,20 @@ export function createSettingsStatus<T>(
         ? (current.promise?.then((outcome) => outcome ?? previous) ?? previous)
         : undefined;
     });
-    return { value, available: createDeferred(value, { loadingValue: undefined }) };
+    return value;
   });
   const pending = createMemo(
-    () =>
-      Boolean(client()) &&
-      (isPending(() => reads().available()) || reads().available() === undefined),
+    () => Boolean(client()) && (isPending(() => reads()()) || latest(reads()) === undefined),
   );
   const result = createMemo(() => {
-    const outcome = reads().available();
+    const outcome = latest(reads());
     return outcome && "result" in outcome ? outcome.result : undefined;
   });
   const read = () => {
     if (!client()) {
       return result();
     }
-    const outcome = reads().value();
+    const outcome = reads()();
     if (outcome && "error" in outcome) {
       throw outcome.error;
     }
@@ -82,7 +79,7 @@ export function createSettingsStatus<T>(
           connection[0] !== next[0] ||
           (next[1] === "connected" && !options.access(next[3] ?? null));
         connection = next;
-        request?.abort();
+        abortRequest?.();
         // A same-turn reconnect must replace the retired read even if the final key is equal.
         lastRequestKey = undefined;
         if (identityChanged) {
@@ -130,17 +127,23 @@ export function createSettingsStatus<T>(
     }
     const [currentClient, hash] = key;
     lastRequestKey = key;
-    request?.abort();
+    abortRequest?.();
     if (!currentClient) {
       return;
     }
     const controller = new AbortController();
-    request = controller;
+    const retired = Promise.withResolvers<undefined>();
+    // Retiring the read must release its frame even if the transport settles later.
+    const abort = () => {
+      controller.abort();
+      retired.resolve(undefined);
+    };
+    abortRequest = abort;
     const ownsConnection = capture();
     const isConnectionCurrent = () => ownsConnection() && configHash() === hash;
     const isCurrent = () =>
-      !controller.signal.aborted && request === controller && isConnectionCurrent();
-    const promise = currentClient
+      !controller.signal.aborted && abortRequest === abort && isConnectionCurrent();
+    const response = currentClient
       .request<T>(options.method, {}, { signal: controller.signal })
       .then(
         (status) => {
@@ -158,6 +161,7 @@ export function createSettingsStatus<T>(
           return undefined;
         },
       );
+    const promise = Promise.race([response, retired.promise]);
     setIssued({ scope, promise });
   }
   // Config receipts admit a new status read after the current write has settled.
@@ -165,7 +169,7 @@ export function createSettingsStatus<T>(
   onSettled(refreshIfChanged);
   onCleanup(() => {
     disposed = true;
-    request?.abort();
+    abortRequest?.();
   });
   return {
     client,

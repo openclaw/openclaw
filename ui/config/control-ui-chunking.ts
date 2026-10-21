@@ -59,10 +59,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
-    case "node_modules/@solidjs/signals/dist/prod/deferred.js":
-    case "node_modules/@solidjs/signals/dist/prod/affects-marks.js":
-      // Keep the deferred scheduler and its marks together, outside page chunks and boot.
-      return "solid-deferred-runtime";
     case "node_modules/@solidjs/signals/dist/prod/core/action.js":
     case "node_modules/@solidjs/signals/dist/dev/core/action.js":
     case "node_modules/@solidjs/signals/dist/prod/core/verdict.js":
