@@ -1,20 +1,13 @@
 import type {
-  ControlUiChannelSettingsContext,
+  ControlUiChannelSettingsContext as SettingsContext,
   ControlUiChannelSettingsSnapshot,
 } from "openclaw/plugin-sdk/control-ui";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { settingsViews } from "./index.tsx";
 
-const cleanups: Array<() => void> = [];
 const emptyLogin = { message: null, qrDataUrl: null, connected: null, busy: false };
-afterEach(() => {
-  for (const cleanup of cleanups.splice(0)) {
-    cleanup();
-  }
-  document.body.replaceChildren();
-});
 function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
   let snapshot: ControlUiChannelSettingsSnapshot = {
     channelId: "whatsapp",
@@ -51,26 +44,23 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
     formatRelativeTimestamp: () => "recently",
     formatError: String,
     formatExternalText: String,
-    formatPhoneNumber: (value: string) => `display:${value}`,
-    formatDuration: () => "1m",
-    confirm: vi
-      .fn<NonNullable<ControlUiChannelSettingsContext["confirm"]>>()
-      .mockResolvedValue(false),
+    confirm: vi.fn<NonNullable<SettingsContext["confirm"]>>().mockResolvedValue(false),
     login: {
       start: vi.fn<(force: boolean) => Promise<void>>().mockResolvedValue(),
       wait: vi.fn<() => Promise<void>>().mockResolvedValue(),
       captureLogout: () => ({ accountId: "work/account", logout }),
     },
-  } satisfies ControlUiChannelSettingsContext;
-  const container = document.createElement("div");
-  document.body.append(container);
+  } satisfies SettingsContext;
+  const container = document.body.appendChild(document.createElement("div"));
   const mounted = settingsViews[0]!.mount(container, context);
-  cleanups.push(() => {
+  onTestFinished(() => {
     abort.abort();
     mounted.dispose();
+    container.remove();
   });
   flush();
   const buttons = () => [...container.querySelectorAll("button")];
+  const rows = () => [...container.querySelectorAll("dt")];
   const button = (label: string) => {
     const node = buttons().find((candidate) => candidate.textContent?.trim() === label);
     if (!node) {
@@ -78,16 +68,16 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
     }
     return node;
   };
-  const fact = (label: string) =>
-    [...container.querySelectorAll("dt")].find((node) => node.textContent === label)
-      ?.nextElementSibling?.textContent;
   return {
     ...context,
     ...context.login,
     container,
     buttons,
     button,
-    fact,
+    expectFacts(expected: Record<string, string>) {
+      const facts = rows().map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]);
+      expect(Object.fromEntries(facts)).toMatchObject(expected);
+    },
     logout,
     configDispose,
     update(nextPatch: Partial<ControlUiChannelSettingsSnapshot>) {
@@ -130,19 +120,16 @@ it("uses the declared default account for configured fallback and keeps absent s
     ],
     defaultAccountId: "selected",
   });
-  expect(f.fact("Configured")).toBe("Yes");
-  for (const label of ["Linked", "Running", "Connected"]) {
-    expect(f.fact(label)).toBe("No");
-  }
+  f.expectFacts({ Configured: "Yes", Linked: "No", Running: "No", Connected: "No" });
   expect(f.container.querySelector(".settings-count")?.textContent).toBe("2");
   f.update({ status: { configured: false } });
-  expect(f.fact("Configured")).toBe("No");
+  f.expectFacts({ Configured: "No" });
   f.update({
     status: {},
     defaultAccountId: "missing",
     accounts: [{ accountId: "first", configured: true }],
   });
-  expect(f.fact("Configured")).toBe("Yes");
+  f.expectFacts({ Configured: "Yes" });
   expect(f.container.querySelector(".settings-count")).toBeNull();
 });
 
@@ -173,7 +160,5 @@ it("updates translated labels and disposes the host configuration slot without r
   expect(f.container.textContent).not.toContain("Link WhatsApp Web and monitor connection health.");
   f.dispose();
   expect(f.configDispose).toHaveBeenCalledOnce();
-  expect(f.start).not.toHaveBeenCalled();
-  expect(f.wait).not.toHaveBeenCalled();
-  expect(f.logout).not.toHaveBeenCalled();
+  expect([f.start, f.wait, f.logout].map((mock) => mock.mock.calls)).toEqual([[], [], []]);
 });
