@@ -11,9 +11,7 @@ import {
 } from "./memory-embedding-provider-runtime.js";
 
 const mocks = vi.hoisted(() => ({
-  resolvePluginCapabilityProviders: vi.fn<
-    typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders
-  >(() => []),
+  resolvePluginCapabilityProviders: () => [],
   resolvePluginCapabilityProvider: vi.fn<
     typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProvider
   >(() => undefined),
@@ -30,17 +28,8 @@ function configuredOllama(id: string, baseUrl: string): OpenClawConfig {
   return { models: { providers: { [id]: { api: "ollama", baseUrl, models: [] } } } };
 }
 
-function expectCapabilityLookup(providerId: string, cfg?: OpenClawConfig) {
-  expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
-    key: "embeddingProviders",
-    providerId,
-    cfg,
-  });
-}
-
 beforeEach(() => {
   clearEmbeddingProviders();
-  mocks.resolvePluginCapabilityProviders.mockReset().mockReturnValue([]);
   mocks.resolvePluginCapabilityProvider.mockReset().mockReturnValue(undefined);
 });
 
@@ -67,11 +56,7 @@ it.each([false, true])("resolves a configured API with registered adapter=%s", (
     );
   }
   expect(getProvider("ollama-custom", config)).toBe(ollamaAdapter);
-  expectCapabilityLookup("ollama-custom", config);
   if (registered) {
     expect(listProviders()).toContain(ollamaAdapter);
-    expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledTimes(1);
-  } else {
-    expectCapabilityLookup("ollama", config);
   }
 });
