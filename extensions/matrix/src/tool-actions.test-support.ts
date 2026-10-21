@@ -1,29 +1,59 @@
-// Shared public-entry Matrix action fixture; module mocks precede the runtime import.
 import { vi } from "vitest";
 import type { ChannelMessageActionContext } from "../runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
-const mocks = vi.hoisted(() => ({
-  voteMatrixPoll: vi.fn(),
-  reactMatrixMessage: vi.fn(),
-  editMatrixMessage: vi.fn(),
-  deleteMatrixMessage: vi.fn(),
-  readMatrixMessage: vi.fn(),
-  readMatrixMessages: vi.fn(),
-  listMatrixEmojis: vi.fn(),
-  listMatrixReactions: vi.fn(),
-  removeMatrixReactions: vi.fn(),
-  sendMatrixMessage: vi.fn(),
-  pinMatrixMessage: vi.fn(),
-  unpinMatrixMessage: vi.fn(),
-  listMatrixPins: vi.fn(),
-  getMatrixMemberInfo: vi.fn(),
-  getMatrixRoomInfo: vi.fn(),
-  applyMatrixProfileUpdate: vi.fn(),
-  listMatrixVerifications: vi.fn(),
-  matrixClient: { id: "matrix-client" },
-  withAuthorizedMatrixReadTarget: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  const respond = (value: unknown) =>
+    vi.fn<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve(value));
+  const matrixClient = { id: "matrix-client" };
+  return {
+    voteMatrixPoll: respond({
+      eventId: "evt-poll-vote",
+      roomId: "!room:example",
+      pollId: "$poll",
+      answerIds: ["a1", "a2"],
+      labels: ["Pizza", "Sushi"],
+      maxSelections: 2,
+    }),
+    reactMatrixMessage: vi.fn(),
+    editMatrixMessage: vi.fn(),
+    deleteMatrixMessage: vi.fn(),
+    readMatrixMessage: vi.fn(),
+    readMatrixMessages: vi.fn(),
+    listMatrixEmojis: respond([
+      { name: "party", identifier: "party", url: "mxc://example.org/party" },
+    ]),
+    listMatrixReactions: respond([{ key: "👍", count: 1, users: ["@u:example"] }]),
+    removeMatrixReactions: respond({ removed: 1 }),
+    sendMatrixMessage: vi.fn(),
+    pinMatrixMessage: respond({ pinned: ["$existing", "$pin"] }),
+    unpinMatrixMessage: respond({ pinned: ["$existing"] }),
+    listMatrixPins: vi.fn(),
+    getMatrixMemberInfo: vi.fn(),
+    getMatrixRoomInfo: vi.fn(),
+    applyMatrixProfileUpdate: respond({
+      accountId: "ops",
+      displayName: "Ops Bot",
+      avatarUrl: "mxc://example/avatar",
+      profile: {
+        displayNameUpdated: true,
+        avatarUpdated: true,
+        resolvedAvatarUrl: "mxc://example/avatar",
+        uploadedAvatarSource: null,
+        convertedAvatarFromHttp: false,
+      },
+      configPath: "channels.matrix.accounts.ops",
+    }),
+    listMatrixVerifications: respond([]),
+    matrixClient,
+    withAuthorizedMatrixReadTarget: vi.fn(
+      async (params: {
+        roomId: string;
+        run: (target: { client: unknown; roomId: string }) => Promise<unknown>;
+      }) => await params.run({ client: matrixClient, roomId: params.roomId.replace(/^room:/, "") }),
+    ),
+  };
+});
 
 vi.mock("./matrix/read-policy.js", () => ({
   withAuthorizedMatrixReadTarget: mocks.withAuthorizedMatrixReadTarget,
@@ -62,54 +92,16 @@ vi.mock("./matrix/send.js", async (importOriginal) => ({
 }));
 
 vi.mock("./profile-update.js", () => ({
-  applyMatrixProfileUpdate: (...args: unknown[]) => mocks.applyMatrixProfileUpdate(...args),
+  applyMatrixProfileUpdate: mocks.applyMatrixProfileUpdate,
 }));
 
 // Load the adapter only after its lower-operation and read-policy mocks are registered.
 const { matrixMessageActions } = await import("./actions.js");
 
-export function getMatrixActionMocks() {
-  return mocks;
-}
+export const getMatrixActionMocks = () => mocks;
 
 export function resetMatrixActionMocks() {
-  vi.clearAllMocks();
-  mocks.withAuthorizedMatrixReadTarget.mockImplementation(
-    async (params: {
-      roomId: string;
-      run: (target: { client: unknown; roomId: string }) => Promise<unknown>;
-    }) =>
-      await params.run({ client: mocks.matrixClient, roomId: params.roomId.replace(/^room:/, "") }),
-  );
-  mocks.voteMatrixPoll.mockResolvedValue({
-    eventId: "evt-poll-vote",
-    roomId: "!room:example",
-    pollId: "$poll",
-    answerIds: ["a1", "a2"],
-    labels: ["Pizza", "Sushi"],
-    maxSelections: 2,
-  });
-  mocks.listMatrixReactions.mockResolvedValue([{ key: "👍", count: 1, users: ["@u:example"] }]);
-  mocks.listMatrixEmojis.mockResolvedValue([
-    { name: "party", identifier: "party", url: "mxc://example.org/party" },
-  ]);
-  mocks.pinMatrixMessage.mockResolvedValue({ pinned: ["$existing", "$pin"] });
-  mocks.unpinMatrixMessage.mockResolvedValue({ pinned: ["$existing"] });
-  mocks.removeMatrixReactions.mockResolvedValue({ removed: 1 });
-  mocks.listMatrixVerifications.mockResolvedValue([]);
-  mocks.applyMatrixProfileUpdate.mockResolvedValue({
-    accountId: "ops",
-    displayName: "Ops Bot",
-    avatarUrl: "mxc://example/avatar",
-    profile: {
-      displayNameUpdated: true,
-      avatarUpdated: true,
-      resolvedAvatarUrl: "mxc://example/avatar",
-      uploadedAvatarSource: null,
-      convertedAvatarFromHttp: false,
-    },
-    configPath: "channels.matrix.accounts.ops",
-  });
+  vi.resetAllMocks();
 }
 
 export function runMatrixAction(
