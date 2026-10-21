@@ -42,6 +42,13 @@ function setup() {
       }
       pending.resolve(result);
     },
+    rejectPull(error: Error) {
+      const pending = pulls.shift();
+      if (!pending) {
+        throw new Error("Browser audio pull was not requested");
+      }
+      pending.reject(error);
+    },
     nativeTransport,
     callBrowser,
     nativeInput: (audio: Buffer) => nativeInput?.(audio),
@@ -109,6 +116,68 @@ describe("isolated meeting browser audio transport", () => {
     expect(fatal).toHaveBeenCalledOnce();
     expect(received).not.toHaveBeenCalled();
     expect(next.nativeTransport.stop).toHaveBeenCalledOnce();
+    await nextTransport.stop();
+  });
+
+  it("keeps the call through one stalled pull and ends it on a second in a row", async () => {
+    vi.useFakeTimers();
+    const fixture = setup();
+    const transport = await fixture.create();
+    const received = vi.fn();
+    const fatal = vi.fn();
+    transport.onFatal(fatal);
+    transport.startInput(received);
+    await setImmediate();
+    const stalled = new Error("browser request timed out");
+    fixture.rejectPull(stalled);
+    await vi.advanceTimersByTimeAsync(50);
+    const remote = Buffer.from([3, 0, 4, 0]);
+    fixture.resolvePull({ isolated: true, base64: remote.toString("base64") });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(received.mock.calls).toEqual([[remote]]);
+    expect(fatal).not.toHaveBeenCalled();
+
+    // A success resets the count; two failures in a row mean the browser capture is gone.
+    fixture.rejectPull(stalled);
+    await vi.advanceTimersByTimeAsync(50);
+    fixture.rejectPull(stalled);
+    await setImmediate();
+    expect(fatal).toHaveBeenCalledOnce();
+    expect(fixture.nativeTransport.stop).toHaveBeenCalledOnce();
+    await transport.stop();
+  });
+
+  it("ends the call when pulled audio keeps failing to reach the model", async () => {
+    vi.useFakeTimers();
+    const fixture = setup();
+    const transport = await fixture.create();
+    const fatal = vi.fn();
+    transport.onFatal(fatal);
+    // A browser request that succeeds is not enough: unusable audio still counts as a failure.
+    const incomplete = { isolated: true, base64: Buffer.from([1]).toString("base64") };
+    transport.startInput(vi.fn());
+    await setImmediate();
+    fixture.resolvePull(incomplete);
+    await vi.advanceTimersByTimeAsync(50);
+    fixture.resolvePull(incomplete);
+    await setImmediate();
+    expect(fatal).toHaveBeenCalledOnce();
+    await transport.stop();
+
+    const next = setup();
+    const nextTransport = await next.create();
+    const nextFatal = vi.fn();
+    nextTransport.onFatal(nextFatal);
+    nextTransport.startInput(() => {
+      throw new Error("model input rejected");
+    });
+    await setImmediate();
+    const audio = { isolated: true, base64: Buffer.from([3, 0]).toString("base64") };
+    next.resolvePull(audio);
+    await vi.advanceTimersByTimeAsync(50);
+    next.resolvePull(audio);
+    await setImmediate();
+    expect(nextFatal).toHaveBeenCalledOnce();
     await nextTransport.stop();
   });
 });
