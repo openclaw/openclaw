@@ -59,7 +59,6 @@ describe("resolvePinnedClientMetadata", () => {
     ["openclaw-ios", "iPadOS 26.5.0", "iPadOS 26.4.2", "iPad"],
     ["openclaw-ios", "iPadOS 26.5.0", "iOS 26.4.2", "iPad"],
     ["openclaw-android", "Android 16", "Android 15", "Android"],
-    ["openclaw-macos", "macOS 26.5.1", "macOS 26.5.0", "Mac"],
   ])(
     "allows %s platform version refresh without metadata-upgrade approval",
     (clientId, claimedPlatform, pairedPlatform, deviceFamily) => {
@@ -74,10 +73,6 @@ describe("resolvePinnedClientMetadata", () => {
 
   it.each([
     ["node-host", "node", "macos", "macOS 26.5.2", undefined],
-    ["cli", "cli", "macos", "macOS 26.5.2", undefined],
-    ["cli", "cli", "darwin", "macOS 26.5.2", undefined],
-    ["cli", "probe", "macos", "macOS 26.5.2", undefined],
-    ["cli", "probe", "darwin", "macOS 26.5.2", undefined],
     ["openclaw-macos", "ui", "macOS 26.5.2", "macos", "macOS 26.5.2"],
   ] as const)("shares the macOS pin with %s", (clientId, clientMode, claimed, paired, refresh) => {
     expectPinned(

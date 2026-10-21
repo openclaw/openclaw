@@ -190,27 +190,21 @@ describe("policy writer response ownership", () => {
           }),
         );
         const request = fixture.dispatch("bound-writer", "config.patch", source.id);
-        try {
-          await Promise.race([gate.entered, request]);
+        await gate.during(request, () => {
           linkEmail("policy-source@example.test", target.id);
           // The accepted policy writer may bypass transport invalidation, never profile binding.
           fixture.invalidate();
-          gate.release();
-          await request;
-          expect(await fixture.harness.awaitResponseFrame("bound-writer")).toEqual({
-            type: "res",
-            id: "bound-writer",
-            ok: false,
-            payload: undefined,
-            error: expect.objectContaining({
-              details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
-            }),
-          });
-          expect(fixture.socketClose).toHaveBeenCalledOnce();
-        } finally {
-          gate.release();
-          await request;
-        }
+        });
+        expect(await fixture.harness.awaitResponseFrame("bound-writer")).toEqual({
+          type: "res",
+          id: "bound-writer",
+          ok: false,
+          payload: undefined,
+          error: expect.objectContaining({
+            details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
+          }),
+        });
+        expect(fixture.socketClose).toHaveBeenCalledOnce();
       });
     },
   );
@@ -243,8 +237,7 @@ describe("policy writer response ownership", () => {
         )({ ...options, params: {} });
       });
       const dispatch = fixture.dispatch("writer");
-      try {
-        await gate.entered;
+      await gate.during(dispatch, async () => {
         expect(fixture.client.invalidated).toBe(true);
         expect(fixture.socketClose).not.toHaveBeenCalled();
         await fixture.dispatch("revoked", "health");
@@ -258,10 +251,7 @@ describe("policy writer response ownership", () => {
         await fixture.closed.promise;
         expect(fixture.socketClose).toHaveBeenCalledExactlyOnceWith(4001, "gateway auth changed");
         expect(fixture.harness.send).toHaveBeenCalledBefore(fixture.socketClose);
-      } finally {
-        gate.release();
-        await dispatch;
-      }
+      });
     },
   );
 
@@ -346,8 +336,7 @@ describe("policy writer response ownership", () => {
       });
     });
     const dispatch = fixture.dispatch("writer", "device.token.rotate");
-    try {
-      await gate.entered;
+    await gate.during(dispatch, async () => {
       // Invalidation is the authority fence; defer transport close so the test
       // detects an illicit held response even when the socket could still send.
       fixture.client.invalidated = true;
@@ -364,10 +353,7 @@ describe("policy writer response ownership", () => {
         reason: "device-token-rotated",
       });
       expect(disconnectClientsForDevice).toHaveBeenCalledWith("self", { role: "operator" });
-    } finally {
-      gate.release();
-      await dispatch;
-    }
+    });
   });
 
   it("releases a revoked writer when its handler returns without responding", async () => {

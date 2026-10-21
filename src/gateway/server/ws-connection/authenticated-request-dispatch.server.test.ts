@@ -289,13 +289,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
     };
     const { client, harness, revoke } = createAuthorityScenario(testCase.change, handler);
     const dispatch = harness.dispatcher.dispatch(traceRequest("active"), client);
-    try {
-      await gate.entered;
-      revoke();
-    } finally {
-      gate.release();
-      await dispatch;
-    }
+    await gate.during(dispatch, revoke);
     expect(observedAuthority).toBe(false);
     expectAuthorityClosed(harness, "active", testCase.closeReason);
   });

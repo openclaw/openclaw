@@ -11,10 +11,8 @@ import {
 import { GatewayConnectionWork } from "../../server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
-import { GatewayClientRegistry } from "../client-registry.js";
 import { gatewayTestTextTransport } from "../connection-transport.test-support.js";
-import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
-import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
+import { createAdmissionHandler } from "./message-handler.admission.test-support.js";
 
 const { loadConfigMock, upsertPresenceMock } = vi.hoisted(() => ({
   loadConfigMock: vi.fn(() => ({ gateway: { auth: { mode: "none" } } })),
@@ -62,7 +60,6 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
   const connectionWork = new GatewayConnectionWork();
   let onMessage: ((data: WebSocket.RawData) => void) | undefined;
   let finishSocketSend: (() => void) | undefined;
-  let client: unknown = null;
   let closed = false;
   const socketSend = vi.fn((_payload: string, callback?: (error?: Error) => void) => {
     if (params.deferSocketSend && !closed) {
@@ -90,60 +87,23 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
     connectionWork.beginClose();
     await connectionWork.drain();
   });
-  const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
-  const setCloseCause = vi.fn();
-  const setClient = vi.fn((next: unknown) => {
-    client = next;
-    return true;
-  });
-
-  attachGatewayWsMessageHandler({
-    clients: new GatewayClientRegistry(),
+  const handler = createAdmissionHandler({
     socket: gatewayTestTextTransport(socket),
-    prepareAuthenticatedReceive: () => ({ ok: true, value: vi.fn() }),
     connectionWork,
-    bootId: "suspension-admission-test-boot",
     upgradeReq: {
       headers: { host: "127.0.0.1:19001" },
       socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
     } as unknown as IncomingMessage,
-    ingressAttribution: {
-      kind: "direct-local",
-      clientIp: "127.0.0.1",
-      rateLimit: {
-        subject: { key: "127.0.0.1" },
-        resetOnSuccess: true,
-      },
-    },
-    connId: "suspension-connect",
-    remoteAddr: "127.0.0.1",
-    localAddr: "127.0.0.1",
-    requestHost: "127.0.0.1:19001",
     connectNonce: "suspension-connect-nonce",
     getResolvedAuth: () => ({ mode: "none", allowTailscale: false }),
     isStartupPending: () => params.startupPending === true,
-    gatewayMethods: [],
-    events: [],
-    extraHandlers: {},
     // Backend admission cases never publish presence; hello is mocked above.
     buildRequestContext: () => ({}) as GatewayRequestContext,
-    nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
-    send,
     close,
     isClosed: () => closed,
-    clearHandshakeTimer: vi.fn(),
-    getClient: () => client as never,
-    setClient: setClient as never,
-    setHandshakeState: vi.fn(),
-    advanceHandshakePhase: vi.fn(),
-    setCloseCause,
-    setLastFrameMeta: vi.fn(),
-    originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
-    logGateway: createLogger() as never,
-    logHealth: createLogger() as never,
-    logWsControl: createLogger() as never,
   });
+  attachGatewayWsMessageHandler(handler);
   if (!onMessage) {
     throw new Error("expected websocket message handler");
   }
@@ -164,7 +124,7 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
     close,
     finishSocketSend: () => finishSocketSend?.(),
     get client() {
-      return client;
+      return handler.getClient();
     },
     sendConnect: () => sendConnect("connect-1", connectParams),
     sendWorkerConnect: () => sendConnect("worker-connect", { role: "worker" }),
@@ -183,9 +143,9 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
           nonce: "suspension-connect-nonce",
         },
       }),
-    send,
-    setCloseCause,
-    setClient,
+    send: handler.send,
+    setCloseCause: handler.setCloseCause,
+    setClient: handler.setClient,
     socketSend,
   };
 }

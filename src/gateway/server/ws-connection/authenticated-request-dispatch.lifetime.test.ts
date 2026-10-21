@@ -1,5 +1,5 @@
-import "../../../test-utils/prepare-compiled-subprocesses.js";
 import { EventEmitter } from "node:events";
+import "../../../test-utils/prepare-compiled-subprocesses.js";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -99,14 +99,9 @@ describe("authenticated request completion", { concurrent: false }, () => {
         requestFrame("revoked", "test.lifetime"),
         client,
       );
-      try {
-        await gate.entered;
+      await gate.during(dispatch, () => {
         grant.abort(new Error("Access ended"));
-      } finally {
-        gate.release();
-        await dispatch;
-        gate.cleanup();
-      }
+      });
       expect(handleGatewayRequest).not.toHaveBeenCalled();
       expect([...harness.clients.authorityClients]).toEqual([]);
     },
@@ -186,18 +181,15 @@ describe("authenticated request completion", { concurrent: false }, () => {
           dispatched = true;
           selection.OPENCLAW_STATE_DIR = restoredRoot;
         });
-      try {
-        await gate.entered;
-        await nextTurn();
-        expect.soft(dispatched, `${stage} is still executing`).toBe(false);
-        expect([...harness.clients.authorityClients]).toEqual([client]);
-      } finally {
-        // Join the handler independently: the broken dispatcher returns before it finishes.
-        gate.release();
-        await finished.promise;
-        await dispatch;
-        gate.cleanup();
-      }
+      await gate.during(
+        dispatch,
+        async () => {
+          await nextTurn();
+          expect.soft(dispatched, `${stage} is still executing`).toBe(false);
+          expect([...harness.clients.authorityClients]).toEqual([client]);
+        },
+        Promise.all([finished.promise, dispatch]),
+      );
       expect(selectedRoot).toBe(initialRoot);
       expect(dispatched).toBe(true);
       expect([...harness.clients.authorityClients]).toEqual([]);

@@ -230,24 +230,16 @@ describe("authenticated operator request starts", () => {
           }
           return responsesById.size === ids.length;
         });
-        // Cleanup below still awaits this promise; attach a rejection observer now
-        // so a fixture failure cannot produce an unrelated unhandled rejection.
+        // Observe failures immediately; cleanup still joins the response promise.
         void allResponses.catch(() => {});
         const markerResponse = onceMessage(
           ws,
           (value) => value.type === "res" && value.id === ids.at(-1),
         );
+        // Chrome also compresses small requests when the extension is negotiated.
         injectReceiveChunk(
           stream,
-          ids.map((id) =>
-            maskedFrame(
-              0x81,
-              rpc(id),
-              // Chrome compresses small requests whenever the extension is negotiated;
-              // the server's outbound threshold cannot keep these frames raw.
-              true,
-            ),
-          ),
+          ids.map((id) => maskedFrame(0x81, rpc(id), true)),
         );
 
         await expect(markerResponse).resolves.toMatchObject({ ok: true });
@@ -489,12 +481,7 @@ describe("authenticated operator request starts", () => {
         text: string,
         send = () => socket.send(rpc(id, "test.echo", { text })),
       ) => {
-        const response = onceMessage<{
-          type: "res";
-          id: string;
-          ok: boolean;
-          payload: { echoed: string };
-        }>(socket, (value) => value.type === "res" && value.id === id);
+        const response = onceMessage(socket, (value) => value.type === "res" && value.id === id);
         const before = stream.bytesWritten;
         send();
         await expect(response).resolves.toMatchObject({
@@ -523,14 +510,14 @@ describe("authenticated operator request starts", () => {
       // Live session/tool events stay raw below the threshold.
       const smallText = "x".repeat(GATEWAY_PER_MESSAGE_DEFLATE.threshold / 2);
       expect(await echo("small", smallText)).toBeGreaterThan(smallText.length);
-      const mediumText = "x".repeat(6 * 1024);
-      expect(await echo("medium", mediumText)).toBeLessThan(mediumText.length / 4);
-      // Compressed requests and replies above the preauth cap.
       const inlineText = "x".repeat(MAX_PREAUTH_PAYLOAD_BYTES * 2);
-      expect(await echo("inline", inlineText)).toBeLessThan(inlineText.length / 4);
-      // Repetitive requests inflate far past their frame size.
-      const repetitiveText = "x".repeat(2 * 1024 * 1024);
-      expect(await echo("repetitive", repetitiveText)).toBeLessThan(repetitiveText.length / 4);
+      for (const [id, text] of [
+        ["medium", "x".repeat(6 * 1024)],
+        ["inline", inlineText],
+        ["repetitive", "x".repeat(2 * 1024 * 1024)],
+      ] as const) {
+        expect(await echo(id, text)).toBeLessThan(text.length / 4);
+      }
       // Repeats farther apart than the negotiated window must not be referenced.
       const windowText = randomBytes(1536).toString("base64").repeat(16);
       await echo("window", windowText);

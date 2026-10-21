@@ -258,28 +258,6 @@ describe("update report live authority boundary", () => {
     await fs.rm(stateDir, { force: true, recursive: true });
   });
 
-  it.each(["gateway-owner", "system-admin"] as const)(
-    "permits a current %s to preview, reserve a receipt, and reach the GitHub CLI transport",
-    async (authority) => {
-      const generation = "current";
-      const client = createOperatorWsClient({ connId: `report-current-${authority}` });
-      grantReportAuthority(client, authority);
-      client.usesSharedGatewayAuth = true;
-      client.sharedGatewaySessionGeneration = generation;
-      const { harness, preview, submit } = createReportHarness(client, () => generation);
-      const previewDigest = await preview("preview-allowed");
-      expect(await countReportFiles()).toBe(0);
-
-      await submit("allowed", previewDigest);
-      const response = await harness.awaitResponseFrame("allowed");
-
-      expect(mocks.submitGithubIssue).toHaveBeenCalledOnce();
-      expect(await countReportFiles()).toBe(0);
-      expect(await countReportReceipts()).toBe(1);
-      expect(response).toMatchObject(createdResponse);
-    },
-  );
-
   it.each([
     { authority: "gateway-owner", retire: true, boundary: "auth" },
     { authority: "system-admin", retire: true, boundary: "auth" },
@@ -295,6 +273,8 @@ describe("update report live authority boundary", () => {
       );
       const client = createOperatorWsClient({ connId: `report-runtime-${authority}-${retire}` });
       grantReportAuthority(client, authority);
+      client.usesSharedGatewayAuth = true;
+      client.sharedGatewaySessionGeneration = "current";
       const claim = claimAgentRunDelegatedAuthority({
         instanceId: client.connId,
         runId: client.connId,
@@ -346,6 +326,7 @@ describe("update report live authority boundary", () => {
       try {
         expect(validateAuthority(identity)).toBe(true);
         const previewDigest = await preview("runtime-preview");
+        expect(await countReportFiles()).toBe(0);
         const finished = waitForNextHandler();
         const dispatch = submit("runtime-submit", previewDigest);
         await entered.promise;
@@ -360,6 +341,7 @@ describe("update report live authority boundary", () => {
         await dispatch;
 
         expect(validateAuthority(identity)).toBe(!retire);
+        expect(mocks.submitGithubIssue).toHaveBeenCalledOnce();
 
         expect
           .soft(runGh.mock.calls.map(([args]) => args[0]))
