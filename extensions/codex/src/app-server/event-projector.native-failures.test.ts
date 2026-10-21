@@ -69,7 +69,7 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       });
       const item = createNativeCommandItem({ id: "command-outcome", status, durationMs: 1 });
       await notify(projector, { ...item, status: "inProgress" });
-      await notify(projector, item);
+      await projector.handleNotification(h.forCurrentTurn("item/completed", { item }));
 
       const results = recordEvent.mock.calls.filter(([type]) => type === "tool.result");
       expect(results).toHaveLength(1);
