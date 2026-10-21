@@ -52,6 +52,54 @@ least 10% adverse in both pairs. Follow the host's production load, dirty-page, 
 event-loop guard before and during every pair. Keep fixture recording and all
 preparation outside the measurement CPU allocation.
 
+## Session pull-request subscriptions
+
+`session-pr-subscriptions-measure.ts` runs a real source Gateway in a separate
+process, with signed synthetic WebSocket clients and the standard 5,000-session
+fixture. Prepare fixtures sequentially outside measurement CPU allocations:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts \
+  --state-dir /path/to/new-fixture --sessions 5000 --runs 4000 \
+  --approvals 0 --cron 0 --projects 0 --transcript-mib 0 --port 41567
+node --import ./scripts/tsx.mjs scripts/perf/session-pr-subscriptions-measure.ts \
+  --root /path/to/new-fixture --output /path/to/results --port 41567 \
+  --clients 8 --keys 50 --operations 1000 --subscribes 256 --interval-ms 50 \
+  --start-at <future-epoch-ms>
+```
+
+Each tab watches one active and 49 passive session PR targets. The measured
+writer alternates an unrelated session's category through `sessions.patch`;
+category commits exercise the stored-row notification path even when PR
+snapshots remain unchanged. The child counts eligible row notifications, samples
+all main-isolate allocations (including collected objects), and captures GC and
+promotion. Controller and socket-driver allocation is excluded. Reported notify
+latency is the category RPC round trip, not a claim of individual asynchronous
+listener completion. Setup identifies the subscription owner's native work scope
+from its direct caller stack, then restores the original tracking method before
+measurement. Exactly one scope must be found; connection and ingress lifetimes
+are excluded. A native idle barrier joins this owner inside the allocation capture and records settlement
+duration; failure to settle within 30 seconds fails the run. Every client must
+receive all watched keys before measurement. Final observations after settlement
+must match the initial snapshots; canonical hashes sort clients and session keys,
+while raw frames preserve delivery order for inspection.
+
+Use separate identical fixtures and ports for both sides. The common
+`--start-at` starts subscribe timing; notification timing starts 30 seconds later.
+A missed scheduled phase fails the run. Compare concurrent pairs under one
+host measurement lock, use interleaved physical cores, and swap sides for the
+second pair. Repeat with `--clients 1` to distinguish fixed from per-tab costs.
+The result includes sample counts for every tail: p95 requires at least 200 and
+p99 at least 1,000 observations to gate. Major GC is context below 50 collections
+per side; total GC remains the gate. Reject a mean paired regression of at least
+20%, or a metric at least 10% worse in both pairs. Inspect family allocation
+share and snapshot captures alongside total allocation at the matched workload.
+To compare a small owner-only change without another source tree, place candidate
+copies of `control-ui-session-task-prs.ts` and `control-ui-session-pr-subscriptions.ts`
+beside the originals with a `.candidate.ts` suffix and pass `--owner-suffix candidate`.
+The child verifies both substitutions loaded; results record both owner hashes
+and the optional `--revision` label.
+
 ## Async context allocation
 
 `async-store-measure.mjs` compares Node's native runner, the shared single-copy
