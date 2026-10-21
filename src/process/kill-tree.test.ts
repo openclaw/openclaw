@@ -177,15 +177,30 @@ describe("killProcessTree", () => {
     await vi.advanceTimersByTimeAsync(10);
   }
 
-  it("on Windows skips delayed force-kill when PID is already gone", async () => {
-    failProbe(4242);
-    platform.mockReturnValue("win32");
-    killProcessTree(4242, { graceMs: 25 });
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    expectTaskkillCall(0, ["/T", "/PID", "4242"]);
-    await vi.advanceTimersByTimeAsync(25);
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-  });
+  it.each(["gone", "reused", "alive", "spawn-error"] as const)(
+    "on Windows handles taskkill failure with a %s process",
+    async (state) => {
+      const child = taskkillChild();
+      let alive = state === "alive" || state === "spawn-error";
+      failProbe(4712, () => !alive);
+      platform.mockReturnValue("win32");
+      killProcessTree(4712, { graceMs: 25 });
+      expectTaskkillCall(0, ["/T", "/PID", "4712"]);
+      if (state === "spawn-error") {
+        expect(() => child.emit("error", new Error("spawn ENOENT"))).not.toThrow();
+        child.emit("close", -4058);
+      } else if (state !== "gone") {
+        child.emit("close", 128);
+      }
+      expect(spawnMock).toHaveBeenCalledTimes(state === "alive" ? 2 : 1);
+      alive = state !== "gone";
+      await vi.advanceTimersByTimeAsync(25);
+      expect(spawnMock).toHaveBeenCalledTimes(state === "alive" || state === "spawn-error" ? 2 : 1);
+      if (state === "alive" || state === "spawn-error") {
+        expectTaskkillCall(1, ["/F", "/T", "/PID", "4712"]);
+      }
+    },
+  );
 
   it("on Unix force-kills after an EPERM existence probe", async () => {
     const permissionError = Object.assign(new Error("permission denied"), { code: "EPERM" });
@@ -194,45 +209,6 @@ describe("killProcessTree", () => {
     killProcessTree(5253, { graceMs: 10, detached: false });
     await vi.advanceTimersByTimeAsync(10);
     expectSignals([5253], ["SIGTERM", "SIGKILL"]);
-  });
-
-  it("on Windows does not force-kill a disappeared or reused PID after taskkill fails", async () => {
-    const gracefulTaskkill = taskkillChild();
-    let processWasReused = false;
-    failProbe(4712, () => !processWasReused);
-    platform.mockReturnValue("win32");
-    killProcessTree(4712, { graceMs: 25 });
-    gracefulTaskkill.emit("close", 128);
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-
-    processWasReused = true;
-    await vi.advanceTimersByTimeAsync(25);
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("on Windows force-kills only once when taskkill failure races the grace timer", async () => {
-    killSpy.mockReturnValue(true);
-    const gracefulTaskkill = taskkillChild();
-    platform.mockReturnValue("win32");
-    killProcessTree(4713, { graceMs: 20 });
-    gracefulTaskkill.emit("close", 128);
-    expect(spawnMock).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(20);
-    expect(spawnMock).toHaveBeenCalledTimes(2);
-    expectTaskkillCall(1, ["/F", "/T", "/PID", "4713"]);
-  });
-
-  it("on Windows waits for the grace timer when graceful taskkill cannot start", async () => {
-    killSpy.mockReturnValue(true);
-    const gracefulTaskkill = taskkillChild();
-    platform.mockReturnValue("win32");
-    killProcessTree(4714, { graceMs: 15 });
-    expect(() => gracefulTaskkill.emit("error", new Error("spawn ENOENT"))).not.toThrow();
-    gracefulTaskkill.emit("close", -4058);
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(15);
-    expect(spawnMock).toHaveBeenCalledTimes(2);
-    expectTaskkillCall(1, ["/F", "/T", "/PID", "4714"]);
   });
 
   it("on Windows keeps an explicitly requested failed tree signal single-shot", async () => {
@@ -341,48 +317,34 @@ describe("killProcessTree", () => {
     expect(killSpy.mock.calls.some(([pid]) => pid < 0)).toBe(false);
   });
 
-  it("on Linux binds each child identity before traversing its own descendants", async () => {
-    killSpy.mockReturnValue(true);
-    attachedTree({
-      // Its identity disappeared before capture. Do not read the replacement's children.
-      [childPid]: { children: [grandchildPid] },
-    });
-    await killAttached();
-    expect(readFileSyncMock).toHaveBeenCalledWith(`/proc/${childPid}/stat`, "utf8");
-    expect(readFileSyncMock).not.toHaveBeenCalledWith(
-      `/proc/${childPid}/task/${childPid}/children`,
-      "utf8",
-    );
-    expectSignals([rootPid], ["SIGTERM", "SIGKILL"]);
-    expect(killSpy).not.toHaveBeenCalledWith(childPid, expect.anything());
-    expect(killSpy).not.toHaveBeenCalledWith(grandchildPid, expect.anything());
-  });
-
-  it("on Linux rejects a recycled child PID whose replacement no longer belongs to the parent", async () => {
-    killSpy.mockReturnValue(true);
-    attachedTree({
-      [childPid]: { starttime: "888", ppid: foreignPid, children: [grandchildPid] },
-      [grandchildPid]: { starttime: "889", ppid: childPid },
-    });
-    await killAttached();
-    expectSignals([rootPid], ["SIGTERM", "SIGKILL"]);
-    expect(killSpy).not.toHaveBeenCalledWith(childPid, expect.anything());
-    expect(killSpy).not.toHaveBeenCalledWith(grandchildPid, expect.anything());
-  });
-
-  it("on Linux revalidates a non-root parent before reading its children", async () => {
-    killSpy.mockReturnValue(true);
-    attachedTree({
-      [childPid]: {
-        ppid: rootPid,
-        children: [grandchildPid],
-        starttime: replacedIdentity("200", "777"),
-      },
-      [grandchildPid]: { starttime: "778", ppid: childPid },
-    });
-    await killAttached();
-    expectSignals([rootPid], ["SIGTERM", "SIGKILL"]);
-  });
+  it.each(["missing", "foreign", "replaced"] as const)(
+    "rejects a %s child identity before traversing its descendants",
+    async (identity) => {
+      killSpy.mockReturnValue(true);
+      attachedTree({
+        [childPid]: {
+          children: [grandchildPid],
+          ppid: identity === "foreign" ? foreignPid : rootPid,
+          starttime:
+            identity === "missing"
+              ? undefined
+              : identity === "foreign"
+                ? "888"
+                : replacedIdentity("200", "777"),
+        },
+        [grandchildPid]: { starttime: "889", ppid: childPid },
+      });
+      await killAttached();
+      expect(readFileSyncMock).toHaveBeenCalledWith(`/proc/${childPid}/stat`, "utf8");
+      expect(readFileSyncMock).not.toHaveBeenCalledWith(
+        `/proc/${childPid}/task/${childPid}/children`,
+        "utf8",
+      );
+      expectSignals([rootPid], ["SIGTERM", "SIGKILL"]);
+      expect(killSpy).not.toHaveBeenCalledWith(childPid, expect.anything());
+      expect(killSpy).not.toHaveBeenCalledWith(grandchildPid, expect.anything());
+    },
+  );
 
   it("on Linux revalidates the root identity before reading its children", async () => {
     killSpy.mockReturnValue(true);
@@ -608,28 +570,19 @@ describe("killProcessTree", () => {
     );
   });
 
-  it("on Windows exposes taskkill completion", async () => {
+  it.each(["close", "timeout"])("completes Windows taskkill on %s", async (completion) => {
     const child = taskkillChild();
-    platform.mockReturnValue("win32");
-    const completed = vi.fn();
-    signalProcessTree(8989, "SIGKILL", { onComplete: completed });
-    await Promise.resolve();
-    expect(completed).not.toHaveBeenCalled();
-
-    child.emit("close", 0);
-    await Promise.resolve();
-    expect(completed).toHaveBeenCalledOnce();
-    expectTaskkillCall(0, ["/F", "/T", "/PID", "8989"]);
-  });
-
-  it("on Windows bounds taskkill completion when no event arrives", async () => {
-    taskkillChild();
     platform.mockReturnValue("win32");
     const completed = vi.fn();
     signalProcessTree(9090, "SIGKILL", { onComplete: completed });
     await vi.advanceTimersByTimeAsync(2_999);
     expect(completed).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
+    if (completion === "close") {
+      child.emit("close", 0);
+      await Promise.resolve();
+    } else {
+      await vi.advanceTimersByTimeAsync(1);
+    }
     expect(completed).toHaveBeenCalledOnce();
     expectTaskkillCall(0, ["/F", "/T", "/PID", "9090"]);
   });
