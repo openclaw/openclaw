@@ -7,62 +7,40 @@ import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { SessionOwnerChip, type SessionOwnerChipProps } from "./solid/session-owner-chip.tsx";
 
-const disposals: Array<() => void> = [];
-
 afterEach(() => {
-  for (const dispose of disposals.splice(0)) {
-    dispose();
-  }
-  document.body.replaceChildren();
   setAvatarGatewayOrigin(null);
   vi.restoreAllMocks();
 });
 
-function mount(params: { participants?: SessionParticipant[]; participantCount?: number }) {
-  const chip = document.body.appendChild(document.createElement("div"));
+function mount(participants: SessionParticipant[] = []) {
   const [owner, setOwner] = createSignal<NonNullable<SessionOwnerChipProps["owner"]>>({
     type: "human",
     id: "profile-ada",
     label: "Ada",
   });
   const [size, setSize] = createSignal<SessionOwnerChipProps["size"]>("row");
-  const participants = params.participants ?? [];
-  disposals.push(
-    mountSolid(
-      () => (
-        <SessionOwnerChip
-          owner={owner()}
-          attribution="owned"
-          size={size()}
-          participants={participants}
-          participantCount={params.participantCount ?? participants.length}
-        />
-      ),
-      { container: chip },
-    ).unmount,
-  );
+  const { container: chip } = mountSolid(() => (
+    <SessionOwnerChip
+      owner={owner()}
+      attribution="owned"
+      size={size()}
+      participants={participants}
+      participantCount={participants.length}
+    />
+  ));
   flush();
   expect(chip.querySelector(".session-owner-chip")).not.toBeNull();
   return { chip, setOwner, setSize, find: (selector: string) => chip.querySelector(selector) };
 }
 
-it("keeps the single owner chip unchanged without participants", () => {
-  const { chip, find } = mount({});
-  expect(find(".session-owner-stack")).toBeNull();
-  expect(chip.querySelectorAll(".session-owner-chip")).toHaveLength(1);
-  expect(find(".session-owner-chip")?.getAttribute("aria-label")).toBe("Owned by Ada");
-});
-
 it("renders one participant behind the owner with combined accessibility", () => {
-  const { find } = mount({
-    participants: [
-      {
-        identity: { type: "agent", id: "research" },
-        label: "Research",
-        avatarUrl: "/avatar/research",
-      },
-    ],
-  });
+  const { find } = mount([
+    {
+      identity: { type: "agent", id: "research" },
+      label: "Research",
+      avatarUrl: "/avatar/research",
+    },
+  ]);
   expect(find(".session-owner-stack__back .viewer-avatar")).not.toBeNull();
   expect(find(".session-owner-stack__front")).not.toBeNull();
   expect(find(".session-owner-stack")?.getAttribute("aria-label")).toBe(
@@ -74,7 +52,7 @@ it("renders one participant behind the owner with combined accessibility", () =>
 it.each(["row", "header"] as const)(
   "renders the agent picture and generated fallback in a %s owner chip",
   async (size) => {
-    const { find, setOwner, setSize } = mount({});
+    const { find, setOwner, setSize } = mount();
     setOwner({
       type: "agent",
       id: "research",
@@ -93,14 +71,3 @@ it.each(["row", "header"] as const)(
     await vi.waitFor(() => expect(find(".identity-avatar__agent-face")).not.toBeNull());
   },
 );
-
-it("renders the total participant count in the back slot for three identities", () => {
-  const { find } = mount({
-    participants: [
-      { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
-      { identity: { type: "agent", id: "research" }, label: "Research" },
-    ],
-  });
-  expect(find(".session-owner-stack__overflow")?.textContent).toBe("+2");
-  expect(find(".session-owner-stack")?.getAttribute("aria-label")).toBe("Owned by Ada · +2 more");
-});

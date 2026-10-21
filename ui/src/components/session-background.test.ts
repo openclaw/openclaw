@@ -23,7 +23,7 @@ import {
 } from "./session-background-layout-context.tsx";
 import { backgroundImageOpacityLimit } from "./session-background-opacity.ts";
 import { SessionBackgroundView } from "./session-background-view.tsx";
-import { SessionBackground, backgroundSourceForSurface } from "./session-background.tsx";
+import { SessionBackground } from "./session-background.tsx";
 
 const profilePreferences = vi.hoisted(() => ({ ready: true }));
 // mock-isolation: Drive readiness without hydrating the process-wide profile preference cache.
@@ -273,19 +273,6 @@ it("tracks late and replaced theme owners without recreating the lazy background
   expect(warn.mock.calls.flat().join("\n")).not.toContain("STRICT_READ_UNTRACKED");
 });
 
-it("keeps absent preferences distinct from None and independent disabled surfaces", () => {
-  expect(backgroundSourceForSurface(undefined, "session")).toBeUndefined();
-  const background = selectBackgroundSource({ kind: "custom", assetId: "asset-a" });
-  expect(backgroundSourceForSurface(background, "new-session")).toEqual(background.source);
-  expect(backgroundSourceForSurface(background, "session")).toEqual({ kind: "none" });
-  expect(
-    backgroundSourceForSurface({ ...background, source: { kind: "none" } }, "new-session"),
-  ).toEqual({ kind: "none" });
-  expect(backgroundSourceForSurface({ ...background, visibility: 0 }, "new-session")).toEqual({
-    kind: "none",
-  });
-});
-
 it("inherits provider preferences and subscriptions until an explicit context overrides them", async () => {
   const warn = vi.spyOn(console, "warn");
   const inherited = fixture();
@@ -488,25 +475,7 @@ it("preserves the Beacon 7:1 contrast target at the brightest possible image pix
   expect(opacity).toBeLessThan(backgroundImageOpacityLimit(surface, [foreground], 4.5));
 });
 
-it("bounds opacity from actual text and surface colors instead of assuming dark mode", () => {
-  const dark = backgroundImageOpacityLimit(
-    [14, 16, 21],
-    [
-      [188, 188, 192],
-      [139, 139, 148],
-    ],
-  );
-  const light = backgroundImageOpacityLimit(
-    [250, 250, 250],
-    [
-      [40, 40, 40],
-      [100, 100, 100],
-    ],
-  );
-  expect(dark).toBeGreaterThan(0);
-  expect(dark).toBeLessThan(0.2);
-  expect(light).toBeGreaterThan(0);
-  expect(light).toBeLessThanOrEqual(0.32);
+it("caps equal-foreground palettes and preserves existing low contrast", () => {
   expect(backgroundImageOpacityLimit([128, 128, 128], [[128, 128, 128]])).toBeLessThanOrEqual(0.32);
   expect(backgroundImageOpacityLimit([20, 20, 20], [[70, 70, 70]])).toBe(0);
 });

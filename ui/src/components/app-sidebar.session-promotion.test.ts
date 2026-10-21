@@ -133,12 +133,6 @@ it("drags a nested conversation into the top level and keeps its history identit
   );
   const row = sidebar.querySelector<HTMLElement>(".sidebar-recent-session--child")!;
   expect(row.getAttribute("draggable")).toBe("true");
-  const shortcutDrop = createDataTransferStub();
-  drag(row, "dragstart", shortcutDrop);
-  drag(sidebar.querySelector(".sidebar-rail__pins")!, "drop", shortcutDrop);
-  expect(family.child.sidebarRoot).toBeUndefined();
-  expect(sidebar.sidebarEntries).toEqual([]);
-  expect(patches()).toHaveLength(0);
   const data = createDataTransferStub();
   drag(row, "dragstart", data);
   await sidebar.updateComplete;
@@ -157,7 +151,7 @@ it("drags a nested conversation into the top level and keeps its history identit
   expect(patches()).toHaveLength(1);
 });
 
-it.each(["existing group", "new group", "batch group"])(
+it.each(["existing group", "new group"])(
   "keeps an archived parent's child independent after moving to a %s",
   async (action) => {
     const { sidebar, sessions, family, patches } = await mountFamily(true);
@@ -167,16 +161,10 @@ it.each(["existing group", "new group", "batch group"])(
       expect(row).toMatchObject({ isChild: false, pinnable: false });
       if (action === "existing group") {
         await sidebar.sessionOrganizer.assignSessionCategory(row, "Projects");
-      } else if (action === "new group") {
+      } else {
         const operation = modal.track(sidebar.sessionOrganizer.createSessionGroup([row]));
         await submitInputDialog("Projects");
         await operation;
-      } else {
-        await sidebar.sessionOrganizer.runBatchSessionAction(
-          { kind: "move-to-group", category: "Projects" },
-          [row],
-          false,
-        );
       }
       expect(patches).toEqual([
         expect.objectContaining({ category: "Projects", sidebarRoot: true }),

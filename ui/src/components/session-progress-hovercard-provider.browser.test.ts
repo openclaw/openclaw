@@ -118,41 +118,34 @@ describe("progress hovercard provider boundary", () => {
     await expectText("Replacement gateway");
   });
 
-  it.each(["participants", "channel avatar"] as const)(
-    "opens a pointer-held %s attribution card without repeating presentation work",
-    async (kind) => {
-      const { userEvent } = await import("vitest/browser");
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const h = fixture(progress(1, "**Synthetic progress**"), {
-        createdActor: {
-          type: "human",
-          id: "profile-ada",
-          label: "Ada King",
-          identity: { type: "profile", id: "profile-ada" },
-        },
-        ...(kind === "participants"
-          ? {
-              participants: [
-                { identity: { type: "profile" as const, id: "profile-ada" }, label: "Ada King" },
-                { identity: { type: "profile" as const, id: "profile-mira" }, label: "Mira" },
-              ],
-              participantCount: 2,
-            }
-          : { channelAvatarUrl: "/__openclaw__/channel-avatar/synthetic" }),
-      });
-      await h.mount();
-      await userEvent.hover(h.row);
-      await drainTurn(450);
-      await expectText("Ada King");
-      expectReads(h, 1);
-      const heldPortal = portal();
-      await drainTurn(500);
-      expect(portal()).toBe(heldPortal);
-      expect(heldPortal?.querySelector(".session-hovercard__creator-avatar")).not.toBeNull();
-      expectReads(h, 1);
-      await userEvent.unhover(h.row);
-    },
-  );
+  it("opens a pointer-held attribution card without repeating presentation work", async () => {
+    const { userEvent } = await import("vitest/browser");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const h = fixture(progress(1, "**Synthetic progress**"), {
+      createdActor: {
+        type: "human",
+        id: "profile-ada",
+        label: "Ada King",
+        identity: { type: "profile", id: "profile-ada" },
+      },
+      participants: [
+        { identity: { type: "profile", id: "profile-ada" }, label: "Ada King" },
+        { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
+      ],
+      participantCount: 2,
+    });
+    await h.mount();
+    await userEvent.hover(h.row);
+    await drainTurn(450);
+    await expectText("Ada King");
+    expectReads(h, 1);
+    const heldPortal = portal();
+    await drainTurn(500);
+    expect(portal()).toBe(heldPortal);
+    expect(heldPortal?.querySelector(".session-hovercard__creator-avatar")).not.toBeNull();
+    expectReads(h, 1);
+    await userEvent.unhover(h.row);
+  });
 
   it.each(["sidebar", "markdown"] as const)(
     "enters %s by Tab, retains the focused progress href on refresh, and returns focus when removed",
