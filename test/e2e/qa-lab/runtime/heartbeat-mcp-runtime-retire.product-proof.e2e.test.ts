@@ -15,9 +15,9 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../../helpers/fixture-receipts.js";
-import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { writeFixtureReply } from "./gateway-recovery.test-support.js";
 import {
   closeNativeProvider,
   createNativeProvider,
@@ -59,33 +59,14 @@ type CronJob = {
 };
 type CronRunEntry = { error?: string; runId?: string; status?: string };
 type ProbeCount = { count: number; pids: number[] };
-type ProofCount = ProbeCount & { stage: string };
 
 function writeTextResponse(response: ServerResponse, text: string): void {
-  const message = {
-    type: "message",
-    id: `hb-mcp-retire-${randomUUID()}`,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress", content: [] },
-    },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.completed",
-      response: {
-        id: `hb-mcp-retire-response-${randomUUID()}`,
-        status: "completed",
-        output: [message],
-        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-      },
-    },
-  ]);
+  writeFixtureReply(
+    response,
+    text,
+    `hb-mcp-retire-${randomUUID()}`,
+    `hb-mcp-retire-response-${randomUUID()}`,
+  );
 }
 
 async function startMockProvider() {
@@ -212,15 +193,6 @@ it.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
     const provider = await startMockProvider();
     cleanups.push(() => provider.stop());
 
-    const counts: ProofCount[] = [];
-    const record = async (stage: string, probe?: ProbeCount) => {
-      const entry = {
-        stage,
-        ...(probe ?? (await countProbeProcesses(marker))),
-      };
-      counts.push(entry);
-      return entry;
-    };
     // Settlement doesn't prove process closure; poll until the signal aborts.
     const settle = async (stage: string, isExpected: (probe: ProbeCount) => boolean) => {
       let probe: ProbeCount | undefined;
@@ -229,16 +201,13 @@ it.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
           signal.throwIfAborted();
           probe = await withinTest(countProbeProcesses(marker, signal), signal);
           if (isExpected(probe)) {
-            return record(stage, probe);
+            return probe;
           }
           await sleep(100, undefined, { signal });
         }
       } catch (error) {
         if (!signal.aborted) {
           throw error;
-        }
-        if (probe) {
-          await record(stage, probe);
         }
         throw new Error(
           `MCP process census aborted during ${stage}; last census=${probe ? JSON.stringify(probe) : "unavailable"}`,
@@ -254,7 +223,6 @@ it.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
       return probe.count === (VARIANT === "fixed" ? 0 : run);
     };
 
-    await record("before-gateway-start");
     const gatewayOwner = createQaGatewayChild();
     cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
     const gateway = await gatewayOwner.start({
@@ -297,7 +265,6 @@ it.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
         return config;
       },
     });
-    await record("after-gateway-start");
     const call = <T>(method: string, params: Record<string, unknown>) =>
       gateway.call(method, params, { timeoutMs: 15_000 }) as Promise<T>;
 
@@ -356,40 +323,29 @@ it.runIf(process.env.OPENCLAW_HEARTBEAT_MCP_RETIRE_PROOF === "1")(
         }
       }
       sharedPid ??= peak.pids[0];
-      await record(`during-heartbeat-${run}-peak`, peak);
+      expect(peak.count, `heartbeat ${run} should observe the MCP child mid-run`).toBeGreaterThan(
+        0,
+      );
+      if (SESSION_MODE === "shared") {
+        expect(sharedPid).toBeDefined();
+        expect(peak.pids).toEqual([sharedPid]);
+      }
       const status = {
         status: entry?.status,
         providerRequests: provider.responsesRequests - requestsBefore,
       };
       expect(status.status).toBe("ok");
       expect(status.providerRequests).toBeGreaterThan(0);
-      await settle(`after-heartbeat-${run}`, expectedAfterRun(run));
+      const settled = await settle(`after-heartbeat-${run}`, expectedAfterRun(run));
+      if (SESSION_MODE === "shared") {
+        expect(settled.pids).toEqual([sharedPid]);
+      } else {
+        expect(settled.count).toBe(VARIANT === "fixed" ? 0 : run);
+      }
     }
 
     await stopQaGatewayFixture(gatewayOwner);
-    await settle("after-gateway-stop", (probe) => probe.count === 0);
-
-    const afterRuns = counts.filter((entry) => entry.stage.startsWith("after-heartbeat-"));
-    const peaks = counts.filter((entry) => entry.stage.startsWith("during-heartbeat-"));
-    expect(afterRuns).toHaveLength(HEARTBEAT_RUNS);
-    expect(peaks).toHaveLength(HEARTBEAT_RUNS);
-    for (const entry of peaks) {
-      expect(entry.count, `${entry.stage} should observe the MCP child mid-run`).toBeGreaterThan(0);
-    }
-    if (SESSION_MODE === "shared") {
-      expect(sharedPid).toBeDefined();
-      for (const entry of [...peaks, ...afterRuns]) {
-        expect(entry.pids, `${entry.stage} should reuse the shared MCP child`).toEqual([sharedPid]);
-      }
-    } else if (VARIANT === "fixed") {
-      for (const entry of afterRuns) {
-        expect(entry.count, `${entry.stage} should retire the MCP child`).toBe(0);
-      }
-    } else {
-      for (const [index, entry] of afterRuns.entries()) {
-        expect(entry.count, `${entry.stage} should leak one child per run`).toBe(index + 1);
-      }
-    }
-    expect(counts.at(-1)?.count, "gateway shutdown must reap every probe").toBe(0);
+    const stopped = await settle("after-gateway-stop", (probe) => probe.count === 0);
+    expect(stopped.count, "gateway shutdown must reap every probe").toBe(0);
   },
 );

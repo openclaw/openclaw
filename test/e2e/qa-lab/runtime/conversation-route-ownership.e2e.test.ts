@@ -9,7 +9,7 @@ import {
   startQaBusServer,
 } from "../../../../extensions/qa-lab/api.js";
 import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const CHANNEL_ID = "qa-channel";
 const primary = { agentId: "main", accountId: "default", peerId: "primary-peer" };
@@ -105,25 +105,15 @@ function route({ agentId, accountId }: Pick<Owner, "agentId" | "accountId">) {
 }
 
 afterEach(async () => {
-  const cleanupErrors: unknown[] = [];
   try {
-    if (gatewayOwner) {
-      await stopQaGatewayFixture(gatewayOwner);
-    }
-  } catch (error) {
-    cleanupErrors.push(error);
+    await runQaGatewayFixture(
+      async () => {},
+      () => gatewayOwner && stopQaGatewayFixture(gatewayOwner),
+      () => bus?.stop(),
+    );
   } finally {
     gatewayOwner = undefined;
-  }
-  try {
-    await bus?.stop();
-  } catch (error) {
-    cleanupErrors.push(error);
-  } finally {
     bus = undefined;
-  }
-  if (cleanupErrors.length > 0) {
-    throw new AggregateError(cleanupErrors, "conversation route ownership proof cleanup failed");
   }
 });
 

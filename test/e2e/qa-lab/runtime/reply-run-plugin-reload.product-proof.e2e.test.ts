@@ -12,7 +12,7 @@ import {
 } from "../../../../extensions/qa-lab/api.js";
 import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const CHANNEL_ID = "qa-channel";
 const PEER_ID = "reload-peer";
@@ -106,22 +106,16 @@ const waitForFile = (file: string, timeout: number, interval = 500) =>
   waitFor(file, () => (fs.existsSync(file) ? true : undefined), timeout, interval);
 
 afterEach(async () => {
-  const errors: unknown[] = [];
-  for (const stop of [
-    () => gatewayOwner && stopQaGatewayFixture(gatewayOwner),
-    () => bus?.stop(),
-  ]) {
-    try {
-      await stop();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  gatewayOwner = undefined;
-  bus = undefined;
-  vi.unstubAllEnvs();
-  if (errors.length > 0) {
-    throw new AggregateError(errors, "reload repro cleanup failed");
+  try {
+    await runQaGatewayFixture(
+      async () => {},
+      () => gatewayOwner && stopQaGatewayFixture(gatewayOwner),
+      () => bus?.stop(),
+    );
+  } finally {
+    gatewayOwner = undefined;
+    bus = undefined;
+    vi.unstubAllEnvs();
   }
 });
 

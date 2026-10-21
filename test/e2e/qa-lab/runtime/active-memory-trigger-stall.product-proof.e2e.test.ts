@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -9,6 +9,7 @@ import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { listenLoopback, writeFixtureReply } from "./gateway-recovery.test-support.js";
+import { closeNativeProvider, createNativeProvider } from "./native-provider-proof-fixture.js";
 
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const RESPONSE_MARKER = "ACTIVE_MEMORY_TRIGGER_STALL_PROOF_OK";
@@ -88,12 +89,8 @@ function writeToolCallResponse(
 
 async function startMockProvider() {
   const requests: ModelRequest[] = [];
-  const server = createServer((request, response) => {
-    void (async () => {
-      let body = "";
-      for await (const chunk of request) {
-        body += String(chunk);
-      }
+  const server = createNativeProvider(
+    async (request, response, body) => {
       if (request.method === "GET" && request.url === "/v1/models") {
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify({ data: [{ id: "gpt-5.6-luna", object: "model" }] }));
@@ -154,23 +151,19 @@ async function startMockProvider() {
       }
       requests.push({ kind: "recall-tool", injected: false });
       writeToolCallResponse(response, "memory_search", { query: "deploy window decision" });
-    })().catch((error: unknown) => {
+    },
+    (error, response) => {
       if (!response.headersSent) {
         response.writeHead(500);
       }
       response.end(error instanceof Error ? error.message : String(error));
-    });
-  });
+    },
+  );
   const baseUrl = await listenLoopback(server, "mock provider did not bind a loopback port");
   return {
     baseUrl,
     requests,
-    stop: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
+    stop: () => closeNativeProvider(server),
   };
 }
 
