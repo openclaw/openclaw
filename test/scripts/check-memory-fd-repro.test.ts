@@ -419,18 +419,13 @@ describe("check-memory-fd-repro", () => {
           SAMPLE_DELAY_MS: "soon",
           SETTLE_DELAY_MS: "later",
         },
-        [
-          "--files",
-          "20",
-          "--max-workspace-reg-fds",
-          "4",
-          "--invoke-timeout-ms",
-          "1000",
-          "--sample-delay-ms",
-          "0",
-          "--settle-delay-ms",
-          "0",
-        ],
+        Object.entries({
+          "--files": 20,
+          "--max-workspace-reg-fds": 4,
+          "--invoke-timeout-ms": 1000,
+          "--sample-delay-ms": 0,
+          "--settle-delay-ms": 0,
+        }).flatMap(([flag, value]) => [flag, String(value)]),
       ),
     ).toMatchObject({
       fileCount: 20,
@@ -458,21 +453,15 @@ describe("check-memory-fd-repro", () => {
     }
   });
 
-  it("stops parsing options after the argument terminator", () => {
-    expect(parseArgs(["--files", "20", "--", "--files", "99"])).toMatchObject({
-      fileCount: 20,
-    });
-
-    expect(parseEnv({ FILES: "17" }, ["--", "--unknown"])).toMatchObject({
-      fileCount: 17,
-    });
-  });
-
-  it("accepts the leading package-manager argument separator", () => {
-    expect(parseArgs(["--", "--files", "20", "--allow-non-darwin"])).toMatchObject({
-      allowNonDarwin: true,
-      fileCount: 20,
-    });
+  it.each([
+    { args: ["--files", "20", "--", "--files", "99"], expected: { fileCount: 20 } },
+    { args: ["--", "--unknown"], env: { FILES: "17" }, expected: { fileCount: 17 } },
+    {
+      args: ["--", "--files", "20", "--allow-non-darwin"],
+      expected: { allowNonDarwin: true, fileCount: 20 },
+    },
+  ])("handles separators in $args", ({ args, env, expected }) => {
+    expect(parseEnv(env ?? {}, args)).toMatchObject(expected);
   });
 
   it("clamps oversized timers and sends the matching memory probe", async () => {
