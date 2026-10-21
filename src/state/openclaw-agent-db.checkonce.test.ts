@@ -3,7 +3,10 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
-import { readSqliteDatabaseCleanClose as isClean } from "../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseCleanClose as isClean,
+  readSqliteDatabaseIntegrityVerification,
+} from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import {
@@ -140,6 +143,8 @@ it("reuses live agent admission and its seal after writer idle retirement", asyn
     try {
       const first = openAgent(options);
       const firstNative = first.db;
+      const verification = readSqliteDatabaseIntegrityVerification(first.path);
+      expect(verification).toEqual({ verifiedAt: expect.any(Number) });
       expect(
         exec.mock.calls.filter(
           ([sql], index) =>
@@ -168,6 +173,7 @@ it("reuses live agent admission and its seal after writer idle retirement", asyn
       const reopened = openAgent(options);
       expect(reopened.db === firstNative).toBe(false);
       expect(reopened.db.isOpen).toBe(true);
+      expect(readSqliteDatabaseIntegrityVerification(reopened.path)).toEqual(verification);
       expect(reopened.db.prepare("PRAGMA busy_timeout").get()).toEqual({
         timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
       });

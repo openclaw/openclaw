@@ -98,11 +98,10 @@ function ownedMaintenance(pathname: string) {
       try {
         await maintenance.close();
       } finally {
-        try {
-          await pending;
-        } finally {
-          owner.release();
-        }
+        // Native maintenance resources settle first; release the offline fence before
+        // joining optional timer work that is deliberately waiting for that fence.
+        owner.release();
+        await pending;
       }
     },
   };
@@ -464,9 +463,9 @@ it("joins private timer cancellation after publisher failure", async () => {
 
     await maintenance.close();
     await scheduledWork;
-    expect(periodicMaintenance).toBeDefined();
-    expect(periodicSettled).toBe(true);
-    await expect(periodicMaintenance).resolves.toBeUndefined();
+    // Optional timer work does not borrow an offline owner, even for a private handle.
+    expect(periodicMaintenance).toBeUndefined();
+    expect(periodicSettled).toBe(false);
     expect(database?.db.isOpen).toBe(false);
   } finally {
     registration.mockRestore();
@@ -554,35 +553,43 @@ it("refuses adoption once cached-handle retirement starts", async () => {
   }
 });
 
-it("does not borrow a timer caller's maintenance authority", async ({ signal }) => {
-  const { database, periodic } = openWithPeriodicMaintenance(makeDatabasePath("authority"));
-  const { maintenance, close } = ownedMaintenance(database.path);
-  const before = sqliteBytes(database.path);
-  const { observations, wait, stop } = observeCheckpoints(database.path);
-  const prepare = vi.spyOn(database.db, "prepare");
-  let periodicWork: Promise<unknown> | undefined;
-  try {
-    periodicWork = Promise.resolve(maintenance.run(() => periodic()));
-    await wait(signal);
-    expect(observations).toEqual(["error"]);
-    expect(database.walMaintenance.health?.error).toContain(
-      "without an active schema lease or maintenance scope",
-    );
-    expect(prepare).not.toHaveBeenCalled();
-    expect(database.walMaintenance.checkpoint()).toBe(false);
-    expect(observations).toEqual(["error", "error"]);
-    expect(prepare).not.toHaveBeenCalled();
-    expect(database.db.isOpen).toBe(true);
-    expect(sqliteBytes(database.path)).toEqual(before);
-  } finally {
-    prepare.mockRestore();
-    stop();
-    await close(periodicWork);
-  }
-  await expectPeriodicCheckpoint(database, periodic, signal, (states) => {
-    expect(states[0]).toBe("complete");
-  });
-});
+it.for(["before", "queued"] as const)(
+  "defers %s admission without borrowing the timer caller's maintenance authority",
+  async (fence, { signal }) => {
+    const { database, periodic } = openWithPeriodicMaintenance(makeDatabasePath("authority"));
+    const queued = fence === "queued" ? Promise.resolve(periodic()) : undefined;
+    const { maintenance, close } = ownedMaintenance(database.path);
+    const before = sqliteBytes(database.path);
+    const { observations, wait, stop } = observeCheckpoints(database.path);
+    const prepare = vi.spyOn(database.db, "prepare");
+    let periodicWork: Promise<unknown> | undefined;
+    try {
+      maintenance.run(() => {
+        periodicWork = queued ?? Promise.resolve(periodic());
+      });
+      await wait(signal);
+      expect(observations).toEqual(["deferred"]);
+      expect(database.walMaintenance.health).toMatchObject({
+        reason: "offline-maintenance",
+        ownerPid: process.pid,
+        warning: false,
+      });
+      expect(prepare).not.toHaveBeenCalled();
+      expect(database.walMaintenance.checkpoint()).toBe(false);
+      expect(observations).toEqual(["deferred", "error"]);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(database.db.isOpen).toBe(true);
+      expect(sqliteBytes(database.path)).toEqual(before);
+    } finally {
+      prepare.mockRestore();
+      stop();
+      await close(periodicWork);
+    }
+    await expectPeriodicCheckpoint(database, periodic, signal, (states) => {
+      expect(states[0]).toBe("complete");
+    });
+  },
+);
 
 // Windows cannot rename a directory while SQLite retains its native files.
 it.runIf(process.platform !== "win32")(

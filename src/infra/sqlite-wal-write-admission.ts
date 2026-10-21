@@ -61,6 +61,7 @@ export function createSqliteWalMaintenanceScheduler(
   onError: (error: unknown) => void,
   pageBudget: () => number,
   stopCheckpointTick: () => void,
+  defer?: () => Promise<void> | undefined,
 ): () => Promise<void> {
   const existingAdmission = admissions.get(database);
   admissions.set(database, { ...existingAdmission, stopCheckpointTick });
@@ -72,6 +73,11 @@ export function createSqliteWalMaintenanceScheduler(
         let remaining = pageBudget();
         let continuation = false;
         while (true) {
+          const deferred = defer?.();
+          if (deferred) {
+            await deferred;
+            return;
+          }
           const request = prepare(remaining);
           // A delegated writer's checkpoint-only tick would round-trip through its worker
           // and race store replacement; worker connections to the same WAL tick inline.
@@ -88,6 +94,10 @@ export function createSqliteWalMaintenanceScheduler(
           const admission = admissions.get(database);
           if (admission?.execute) {
             result = await admission.execute(request);
+            if (!result) {
+              await defer?.();
+              return;
+            }
             if (result?.checkpoint) {
               observe(result.checkpoint);
             }

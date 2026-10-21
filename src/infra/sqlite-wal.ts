@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { waitForAbortSignal } from "./abort-signal.js";
 import { GatewayScheduler, type GatewayScheduledJob } from "./gateway-scheduler.js";
 import {
   normalizeSqliteNonNegativeInteger,
@@ -118,6 +119,10 @@ export type SqliteWalMaintenanceOptions = SqliteWalCheckpointOptions & {
   checkpointMode?: SqliteWalCheckpointMode;
   /** Owner-held synchronous exclusion around maintenance writes, including periodic vacuum. */
   runMaintenance?: (operation: () => boolean) => boolean;
+  /** A local owner suspends periodic admission, never explicit caller-owned checkpoints. */
+  deferPeriodic?: () =>
+    | { reason: "offline-maintenance"; ownerPid: number; until: AbortSignal }
+    | undefined;
   /** Offline maintenance retains the worker but excludes autonomous checkpoint writes. */
   isScheduledMaintenanceSuspended?: () => boolean;
 };
@@ -472,6 +477,24 @@ export function configureSqliteWalMaintenance(
       return budget;
     },
     () => stopCheckpointTick?.(),
+    () => {
+      if (scope.signal.aborted) {
+        return undefined;
+      }
+      const deferred = options.deferPeriodic?.();
+      if (!deferred) {
+        return undefined;
+      }
+      checkpointOwner.defer(deferred.reason, deferred.ownerPid);
+      // Keep the cadence pending without another timer or a worker request. Stop
+      // cancels this wait; accepted worker work still settles through the same scope.
+      return waitForAbortSignal(AbortSignal.any([deferred.until, scope.signal])).then(() => {
+        if (!scope.signal.aborted) {
+          // Ownership loss is not successful maintenance completion.
+          options.deferPeriodic?.();
+        }
+      });
+    },
   );
   const schedule = (phase: string, intervalMs: number, run: () => Promise<void>) =>
     runInDetachedAsyncContext(() =>

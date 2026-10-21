@@ -305,6 +305,73 @@ it("does not recreate a removed parent during existing database hardening", () =
   expectPayload(path.join(preservedDirectory, path.basename(params.pathname)));
 });
 
+it.each(["resume", "cancel"] as const)(
+  "defers WAL ticks behind its own offline fence and %s exactly once",
+  async (outcome) => {
+    const { params } = acquisitionFixture();
+    const database = acquire(params);
+    const owner = acquireGatewayStateOwner({ databasePath: database.path });
+    const prepare = vi.spyOn(database.db, "prepare");
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(database.walMaintenance.health).toMatchObject({
+        state: "deferred",
+        reason: "offline-maintenance",
+        ownerPid: process.pid,
+        warning: false,
+      });
+      const deferred = database.walMaintenance.health;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(database.walMaintenance.health).toEqual(deferred);
+      expect(prepare).not.toHaveBeenCalled();
+      if (outcome === "cancel") {
+        await database.walMaintenance.stop();
+      }
+      owner.release();
+      await vi.advanceTimersByTimeAsync(10_000);
+      if (outcome === "resume") {
+        expect(prepare.mock.calls.filter(([sql]) => sql.includes("wal_checkpoint"))).toEqual([
+          ["PRAGMA wal_checkpoint(PASSIVE);"],
+        ]);
+        expect(database.walMaintenance.health).toMatchObject({ state: "complete" });
+      } else {
+        expect(prepare).not.toHaveBeenCalled();
+      }
+      expect(database.db.prepare("SELECT value FROM payload").all()).toEqual([
+        { value: "committed" },
+      ]);
+    } finally {
+      owner.release();
+      await database.walMaintenance.stop();
+      closeAcquisition(database);
+    }
+  },
+);
+
+it("reports loss of a deferred offline owner rather than treating it as release", async () => {
+  const { params } = acquisitionFixture();
+  const database = acquire(params);
+  const owner = acquireGatewayStateOwner({ databasePath: database.path });
+  const prepare = vi.spyOn(database.db, "prepare");
+  try {
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(database.walMaintenance.health?.state).toBe("deferred");
+    fs.unlinkSync(owner.path);
+    expect(owner.assertCurrent).toThrow(/no longer current/);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(database.walMaintenance.health).toMatchObject({
+      state: "error",
+      warning: true,
+      error: expect.stringContaining("ownership is no longer current"),
+    });
+    expect(prepare).not.toHaveBeenCalled();
+  } finally {
+    await database.walMaintenance.stop();
+    owner.release();
+    closeAcquisition(database);
+  }
+});
+
 it("records and reports SQLite errors from scheduled shared-state checkpoints", async () => {
   await withCheckpointLogging(async (warn) => {
     const { params, open } = acquisitionFixture();
@@ -333,9 +400,25 @@ it("records and reports SQLite errors from scheduled shared-state checkpoints", 
         message: "Shared-state WAL maintenance failed",
         error: "checkpoint storage unavailable",
         path: params.pathname,
-        checkpoint: database.walMaintenance.health,
+        checkpoint: expect.objectContaining({ state: "error", warning: true }),
       }),
     );
+    const warning = warn.mock.calls.at(-1)![0];
+    expect(warning).not.toContain("readerDiagnostics");
+    expect(warning).not.toContain("activeReaders");
+    const owner = acquireGatewayStateOwner({ databasePath: database.path });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(database.walMaintenance.health).toMatchObject({
+        state: "deferred",
+        reason: "offline-maintenance",
+        warning: true,
+        error: "checkpoint storage unavailable",
+      });
+    } finally {
+      owner.release();
+      await vi.advanceTimersByTimeAsync(0);
+    }
     intercepted.mockRestore();
     await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
     expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });

@@ -16,6 +16,7 @@ import {
   createSqliteWalCheckpoint,
   onSqliteWalCheckpoint,
   publishSqliteWalCheckpointObservation,
+  summarizeSqliteWalHealth,
   type SqliteWalCheckpointSnapshot,
 } from "./sqlite-wal-checkpoint.js";
 import type { SqliteWalMaintenanceOptions } from "./sqlite-wal.js";
@@ -167,7 +168,14 @@ it.each([
       warning: false,
     });
     expect(maintenance.checkpoint()).toBe(false);
-    expect(maintenance.health).toMatchObject({ consecutiveBlocked: 2, warning: true });
+    expect(maintenance.health).toMatchObject({
+      consecutiveBlocked: 2,
+      warning: true,
+      reason: checkpointMode === "PASSIVE" ? "reader" : "busy",
+    });
+    expect(maintenance.checkpoint()).toBe(false);
+    expect(onCheckpointError).toHaveBeenCalledOnce();
+    expect(maintenance.health?.consecutiveBlocked).toBe(3);
     reader.exec("ROLLBACK;");
     expect(maintenance.checkpoint()).toBe(true);
     expect(maintenance.health).toMatchObject({
@@ -249,6 +257,19 @@ it("bounds named Kysely reader diagnostics without claiming a blocking owner", (
   });
   expect(maintenance.health?.activeReaders).toHaveLength(8);
   expect(maintenance.health?.readerDiagnostics?.[0]?.connections).toHaveLength(8);
+  const summary = summarizeSqliteWalHealth(maintenance.health);
+  expect(summary).toMatchObject({
+    state: "blocked",
+    reason: "reader",
+    observedReaderCount: 10,
+    oldestObservedReader: {
+      operation: expect.stringMatching(/^fixture.reader-/),
+      pid: process.pid,
+    },
+  });
+  expect(summary).not.toHaveProperty("activeReaders");
+  expect(summary).not.toHaveProperty("readerDiagnostics");
+  expect(JSON.stringify(summary).length).toBeLessThan(1024);
   expect(JSON.stringify(maintenance.health)).not.toContain("SELECT");
   for (const iterator of held) {
     iterator.return?.();

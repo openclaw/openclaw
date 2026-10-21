@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import plugin from "./index.js";
 
@@ -105,8 +105,12 @@ describe("Bifrost setup over HTTP", () => {
     baseUrl = `http://127.0.0.1:${claim.port}/v1`;
   });
   beforeEach(() => {
+    // Keep fixture traffic on its local listener when the host uses an HTTP proxy.
+    vi.stubEnv("NO_PROXY", "127.0.0.1");
+    vi.stubEnv("no_proxy", "127.0.0.1");
     requests.length = 0;
   });
+  afterEach(() => vi.unstubAllEnvs());
   afterAll(async () => {
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
