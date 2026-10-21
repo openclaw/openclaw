@@ -349,3 +349,35 @@ it.each([1, 2])("bounds restored images and reuses their prepared snapshot (%s)"
     }
   }),
 );
+
+it.each(["throws", "rejects"] as const)(
+  "returns the bounded seed when the context observer %s",
+  (failure) =>
+    withOpenClawTestState({ label: "native-seed-observer" }, async (state) => {
+      const fixture = await seedFixture(state, "observer");
+      const manager = await fixture.open();
+      await appendUser(manager, "old".repeat(1000), 1);
+      await appendUser(manager, "recent request", 2);
+      const onAgentEvent = vi.fn(() => {
+        if (failure === "throws") {
+          throw new Error("observer down");
+        }
+        return Promise.reject(new Error("observer down"));
+      });
+      const prepare = expectDefined(
+        fixture.bind({
+          config: {
+            agents: {
+              defaults: { compaction: { enabled: false, maxActiveTranscriptBytes: 1024 } },
+            },
+          },
+          onAgentEvent,
+        })?.prepareBoundedSeed,
+        "seed capability",
+      );
+      const seed = await prepare({ assertCurrent: () => {} });
+      expect(JSON.stringify(seed)).toContain("Older history outside that window is omitted");
+      expect(seed).toContainEqual(makeUserMessage("recent request", 2));
+      expect(onAgentEvent).toHaveBeenCalledOnce();
+    }),
+);

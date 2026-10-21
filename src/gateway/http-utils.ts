@@ -55,7 +55,6 @@ export {
   resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveSharedSecretHttpOperatorScopes,
   resolveTrustedHttpOperatorScopes,
-  type AuthorizedControlUiSessionOwnerReadRequest,
   type AuthorizedGatewayHttpRequest,
 } from "./http-auth-utils.js";
 

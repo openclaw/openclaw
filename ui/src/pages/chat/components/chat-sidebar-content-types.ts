@@ -89,7 +89,10 @@ export type SessionDiffScope =
   | { scope: "all" | "uncommitted" }
   | { scope: "commit"; commit: string };
 
-type SessionDiffLoader = (params: SessionDiffScope) => Promise<SessionsDiffResult>;
+type SessionDiffLoader = (
+  params: SessionDiffScope,
+  options?: { refresh?: boolean },
+) => Promise<SessionsDiffResult>;
 
 type SessionDiffFileTextLoader = (path: string) => Promise<string | null>;
 

@@ -25,7 +25,7 @@ import { prepareGitHubPublicationRequesterV2 } from "./github-publication-reques
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
-  params: Exclude<SessionGitHubActionParams, { action: "refresh_base" }>;
+  params: Exclude<SessionGitHubActionParams, { action: "refresh_base" | "inspect_pr" }>;
 };
 type SessionRead = Awaited<ReturnType<typeof prepareGitHubPublicationSession>>;
 

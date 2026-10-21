@@ -184,6 +184,85 @@ it("retires pending detail loading immediately on disconnect and ignores its lat
   expect(find("[data-claws-confirm] button")).toHaveProperty("disabled", false);
 });
 
+it("cancels superseded Explore debounce and ignores an older search result", async () => {
+  const { page, request } = createPage();
+  await waitForSolid(() => expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
+  const original = request.getMockImplementation()!;
+  const stale = createDeferredCore<{ entries: (typeof workflowOperator)[] }>();
+  request.mockImplementation((method, params, options) => {
+    if (method === "claws.catalog.search") {
+      const query = params && typeof params === "object" ? Reflect.get(params, "query") : undefined;
+      if (query === "stale") {
+        return stale.promise;
+      }
+      if (query === "fresh") {
+        return { entries: [{ ...workflowOperator, displayName: "Fresh result" }] };
+      }
+    }
+    return original(method, params, options);
+  });
+  vi.useFakeTimers();
+  const search = page.querySelector<HTMLInputElement>("[data-claws-explore] [data-claws-search]")!;
+  const enter = (query: string) => {
+    search.value = query;
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+  };
+  enter("cancelled");
+  enter("stale");
+  expect(page.querySelectorAll(".agents-home__claw-skeleton")).toHaveLength(4);
+  await vi.advanceTimersByTimeAsync(149);
+  expect(request).not.toHaveBeenCalledWith("claws.catalog.search", { query: "stale" });
+  await vi.advanceTimersByTimeAsync(1);
+  expect(request).toHaveBeenCalledWith("claws.catalog.search", { query: "stale" });
+  expect(request).not.toHaveBeenCalledWith("claws.catalog.search", { query: "cancelled" });
+
+  enter("fresh");
+  await vi.advanceTimersByTimeAsync(150);
+  await waitForSolid(() =>
+    expect(page.querySelector("[data-claws-results]")?.textContent).toContain("Fresh result"),
+  );
+  stale.resolve({ entries: [workflowOperator] });
+  await stale.promise;
+  flush();
+  expect(page.querySelector("[data-claws-results]")?.textContent).toContain("Fresh result");
+  expect(page.querySelector("[data-claws-results]")?.textContent).not.toContain(
+    "Workflow Operator",
+  );
+});
+
+it("retries the current Explore query after a failed search", async () => {
+  const { page, request } = createPage();
+  await waitForSolid(() => expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
+  const original = request.getMockImplementation()!;
+  let attempts = 0;
+  request.mockImplementation((method, params, options) => {
+    const query = params && typeof params === "object" ? Reflect.get(params, "query") : undefined;
+    if (method === "claws.catalog.search" && query === "retry") {
+      if (++attempts === 1) {
+        throw new Error("Search temporarily unavailable");
+      }
+      return { entries: [workflowOperator] };
+    }
+    return original(method, params, options);
+  });
+  const search = page.querySelector<HTMLInputElement>("[data-claws-explore] [data-claws-search]")!;
+  search.value = "retry";
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  await waitForSolid(() =>
+    expect(page.querySelector("[data-claws-explore] [role=alert]")?.textContent).toContain(
+      "Search temporarily unavailable",
+    ),
+  );
+  page.querySelector<HTMLButtonElement>("[data-claws-explore] [role=alert] button")!.click();
+  await waitForSolid(() =>
+    expect(page.querySelectorAll("[data-claws-results] [data-claws-entry]")).toHaveLength(1),
+  );
+  expect(attempts).toBe(2);
+  expect(search.value).toBe("retry");
+  expect(page.querySelector("[data-claws-explore] [role=alert]")).toBeNull();
+});
+
 it("retains the selected Claw on revalidation and clears it when the package changes", async () => {
   const { request, setPackageName, find, calls } = createDetail();
 

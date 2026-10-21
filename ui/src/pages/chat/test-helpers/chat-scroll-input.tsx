@@ -8,108 +8,69 @@ type NativeKeyFixture = {
   scrollTop?: number;
 };
 
-type NativeKeyCase = readonly [
-  name: string,
-  key: string,
-  content: () => JSX.Element,
-  controlOwned: boolean,
-  fixture: NativeKeyFixture,
-];
+type NativeKeyCase = readonly [string, string, () => JSX.Element, boolean, NativeKeyFixture];
 
+function staticControl(markup: string) {
+  return () => {
+    const template = document.createElement("template");
+    template.innerHTML = markup;
+    return template.content;
+  };
+}
 const controls = [
-  ["input", () => <input value="Several words to edit" />],
-  ["textarea", () => <textarea>Several words to edit</textarea>],
-  [
-    "editable",
-    () => (
-      <div contenteditable="true">
-        <span>Several words to edit</span>
-      </div>
-    ),
-  ],
-  [
-    "select",
-    () => (
-      <select>
-        <option>First</option>
-        <option selected>Second</option>
-        <option>Third</option>
-      </select>
-    ),
-  ],
+  ["input", staticControl('<input value="Text">')],
+  ["textarea", staticControl("<textarea>Text</textarea>")],
+  ["editable", staticControl('<div contenteditable="true"><span>Text</span></div>')],
+  ["select", staticControl("<select><option>1<option selected>2<option>3</select>")],
 ] as const;
+const boundaryKeys = ["Home", "End"];
+const pageKeys = [...boundaryKeys, "PageUp", "PageDown"];
+export const nativeControlNavigationCases: NativeKeyCase[] = [];
+function addKeys(
+  name: string,
+  content: () => JSX.Element,
+  keys: readonly string[],
+  owned: boolean | ((key: string) => boolean),
+  fixture: NativeKeyFixture,
+): void {
+  for (const key of keys) {
+    const controlOwned = typeof owned === "function" ? owned(key) : owned;
+    nativeControlNavigationCases.push([`${name}${key}`, key, content, controlOwned, fixture]);
+  }
+}
 
-export const nativeControlNavigationCases: NativeKeyCase[] = [
-  ...(
-    [
-      ["video", () => <video controls></video>],
-      ["audio", () => <audio controls></audio>],
-    ] as const
-  ).flatMap(([name, content]) =>
-    [
-      ...[" ", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].map(
-        (key) => [key, {}] as const,
-      ),
-      ...["Home", "End"].flatMap((key) =>
-        [{ shiftKey: true }, { ctrlKey: true }].map((fixture) => [key, fixture] as const),
-      ),
-    ].map(([key, fixture]): NativeKeyCase => [
-      `${name} ${JSON.stringify(fixture)} ${key}`,
-      key,
-      content,
-      !key.startsWith("Page"),
-      fixture,
-    ]),
-  ),
-  ...["Win32", "Linux x86_64"].flatMap((platform) =>
-    controls.flatMap(([name, content]) =>
-      ["Home", "End", "PageUp", "PageDown"].map((key): NativeKeyCase => [
-        `${platform} ${name} ${key}`,
-        key,
-        content,
-        name !== "input" || key === "Home" || key === "End",
-        { platform },
-      ]),
-    ),
-  ),
-  ...controls
-    .filter(([name]) => name === "select")
-    .flatMap(([name, content]) =>
-      ["Win32", "Linux x86_64"].flatMap((platform) =>
-        ["Home", "End"].map((key): NativeKeyCase => [
-          `${platform} ${name} Ctrl+${key}`,
-          key,
-          content,
-          false,
-          { platform, ctrlKey: true },
-        ]),
-      ),
-    ),
-  ...controls.flatMap(([name, content]) =>
-    ["Home", "End"].map((key): NativeKeyCase => [
-      `Mac ${name} Shift+${key}`,
-      key,
-      content,
-      true,
-      { platform: "MacIntel", shiftKey: true },
-    ]),
-  ),
-  ...controls
-    .filter(([name]) => name === "input" || name === "select")
-    .flatMap(([name, content]) =>
-      ["Home", "End"].map((key): NativeKeyCase => [
-        `Mac ${name} ${key}`,
-        key,
-        content,
-        false,
-        { platform: "MacIntel" },
-      ]),
-    ),
-  ...controls
-    .filter(([name]) => name === "textarea" || name === "editable")
-    .flatMap(([name, content]) =>
-      ["Home", "End", "PageUp", "PageDown"].flatMap((key) =>
-        [true, false].map((inside): NativeKeyCase => [
+for (const name of ["video", "audio"]) {
+  const content = staticControl(`<${name} controls></${name}>`);
+  const ownsKey = (key: string) => !key.startsWith("Page");
+  for (const [keys, fixture] of [
+    [[" ", "ArrowUp", "ArrowDown", ...pageKeys], {}],
+    [boundaryKeys, { shiftKey: true }],
+    [boundaryKeys, { ctrlKey: true }],
+  ] as const) {
+    addKeys(`${name} ${JSON.stringify(fixture)} `, content, keys, ownsKey, fixture);
+  }
+}
+for (const [name, content] of controls) {
+  const ownsKey = (key: string) => name !== "input" || boundaryKeys.includes(key);
+  for (const platform of ["Win32", "Linux x86_64"]) {
+    addKeys(`${platform} ${name} `, content, pageKeys, ownsKey, { platform });
+    if (name === "select") {
+      addKeys(`${platform} select Ctrl+`, content, boundaryKeys, false, {
+        platform,
+        ctrlKey: true,
+      });
+    }
+  }
+  addKeys(`Mac ${name} Shift+`, content, boundaryKeys, true, {
+    platform: "MacIntel",
+    shiftKey: true,
+  });
+  if (name === "input" || name === "select") {
+    addKeys(`Mac ${name} `, content, boundaryKeys, false, { platform: "MacIntel" });
+  } else {
+    for (const key of pageKeys) {
+      for (const inside of [true, false]) {
+        nativeControlNavigationCases.push([
           `Mac ${name} ${key} at ${inside ? "inner content" : "inner edge"}`,
           key,
           content,
@@ -118,10 +79,11 @@ export const nativeControlNavigationCases: NativeKeyCase[] = [
             platform: "MacIntel",
             scrollTop: inside ? 240 : key === "Home" || key === "PageUp" ? 0 : 480,
           },
-        ]),
-      ),
-    ),
-];
+        ]);
+      }
+    }
+  }
+}
 
 export function configureNativeKeyTarget(control: Element, fixture: NativeKeyFixture = {}) {
   const platform = fixture.platform

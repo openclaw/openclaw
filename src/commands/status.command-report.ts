@@ -1,10 +1,24 @@
-import type { ConnectPairingRequiredReason } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildPairingConnectRecoveryTitle,
+  describePairingConnectRequirement,
+  type ConnectPairingRequiredReason,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { TableColumn } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.js";
 import type { resolveOsSummary } from "../infra/os-summary.js";
+import { formatPluginCompatibilityNotice } from "../plugins/status-compatibility.js";
 import type { SecurityAuditReport } from "../security/audit.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
+import type { StatusSummary } from "../status/summary.js";
+import { formatDeliveryQueueHealthLine, formatHealthChannelLines } from "./health-format.js";
+import type { HealthSummary } from "./health.js";
+import { formatSqliteWalHealthWarning } from "./sqlite-wal-health.js";
 import {
   buildStatusChannelsTableRows,
   statusChannelsTableColumns,
@@ -13,21 +27,188 @@ import { statusOverviewTableColumns } from "./status-all/report-tables.js";
 import { appendStatusReportLines, appendStatusReportTable } from "./status-all/text-report.js";
 import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
 import { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
-import {
-  buildStatusFooterLines,
-  buildStatusHealthRows,
-  buildStatusModelSelectionLines,
-  buildStatusPairingRecoveryLines,
-  buildStatusPluginCompatibilityLines,
-  buildStatusSecurityAuditLines,
-  buildStatusSessionsRows,
-  buildStatusSystemEventsRows,
-  buildStatusSystemEventsTrailer,
-  statusHealthColumns,
-} from "./status.command-sections.js";
+import { formatPromptCacheCompact, formatTokensCompact } from "./status.format.js";
 import type { StatusScanResult } from "./status.scan-result.ts";
 import { formatUpdateAvailableHint } from "./status.update.js";
 import { shortenText } from "./text-format.js";
+
+const statusHealthColumns: TableColumn[] = [
+  { key: "Item", header: "Item", minWidth: 10 },
+  { key: "Status", header: "Status", minWidth: 8 },
+  { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
+];
+
+function buildStatusSecurityAuditLines(params: {
+  securityAudit: {
+    summary: { critical: number; warn: number; info: number };
+    findings: Array<{
+      severity: "critical" | "warn" | "info";
+      title: string;
+      detail: string;
+      remediation?: string | null;
+    }>;
+  };
+}) {
+  const fmtSummary = (value: { critical: number; warn: number; info: number }) => {
+    return [
+      theme.error(`${value.critical} critical`),
+      theme.warn(`${value.warn} warn`),
+      theme.muted(`${value.info} info`),
+    ].join(" · ");
+  };
+  const lines = [theme.muted(`Summary: ${fmtSummary(params.securityAudit.summary)}`)];
+  const importantFindings = params.securityAudit.findings.filter(
+    (f) => f.severity === "critical" || f.severity === "warn",
+  );
+  if (importantFindings.length === 0) {
+    lines.push(theme.muted("No critical or warn findings detected."));
+  } else {
+    const severityLabel = (sev: "critical" | "warn" | "info") =>
+      sev === "critical"
+        ? theme.error("CRITICAL")
+        : sev === "warn"
+          ? theme.warn("WARN")
+          : theme.muted("INFO");
+    const sevRank = (sev: "critical" | "warn" | "info") =>
+      sev === "critical" ? 0 : sev === "warn" ? 1 : 2;
+    const shown = importantFindings
+      // Always show critical findings before warnings, regardless of audit insertion order.
+      .toSorted((a, b) => sevRank(a.severity) - sevRank(b.severity))
+      .slice(0, 6);
+    for (const finding of shown) {
+      lines.push(`  ${severityLabel(finding.severity)} ${finding.title}`);
+      lines.push(`    ${shortenText(finding.detail.replaceAll("\n", " "), 160)}`);
+      if (finding.remediation?.trim()) {
+        lines.push(`    ${theme.muted(`Fix: ${finding.remediation.trim()}`)}`);
+      }
+    }
+    if (importantFindings.length > shown.length) {
+      lines.push(theme.muted(`… +${importantFindings.length - shown.length} more`));
+    }
+  }
+  lines.push(theme.muted(`Full report: ${formatCliCommand("openclaw security audit")}`));
+  lines.push(theme.muted(`Deep check: ${formatCliCommand("openclaw security audit --deep")}`));
+  return lines;
+}
+
+function buildStatusHealthRows(params: {
+  health: HealthSummary;
+  sqliteWal?: StatusSummary["sqliteWal"];
+}) {
+  const rows: Array<{ Item: string; Status: string; Detail: string }> = [
+    {
+      Item: "Gateway",
+      Status: theme.success("reachable"),
+      Detail: `${params.health.durationMs}ms`,
+    },
+  ];
+  const childRuntimeWarning = params.health.childRuntime
+    ? formatMissingChildRuntimeWarning(params.health.childRuntime)
+    : undefined;
+  if (childRuntimeWarning) {
+    rows.push({
+      Item: "Gateway runtime",
+      Status: theme.warn("WARN"),
+      Detail: childRuntimeWarning,
+    });
+  }
+  const sqliteWalWarning = formatSqliteWalHealthWarning(params.sqliteWal);
+  if (sqliteWalWarning) {
+    rows.push({ Item: "SQLite WAL", Status: theme.warn("WARN"), Detail: sqliteWalWarning });
+  }
+  if (params.health.eventLoop) {
+    rows.push({
+      Item: "Event loop",
+      Status: params.health.eventLoop.degraded ? theme.warn("WARN") : theme.success("OK"),
+      Detail: formatEventLoopHealthDetail(params.health.eventLoop),
+    });
+  }
+  const healthLines = formatHealthChannelLines(params.health, { accountMode: "all" });
+  const deliveryQueueLine = formatDeliveryQueueHealthLine(params.health);
+  if (deliveryQueueLine) {
+    healthLines.push(deliveryQueueLine);
+  }
+  for (const line of healthLines) {
+    const colon = line.indexOf(":");
+    if (colon === -1) {
+      continue;
+    }
+    const item = line.slice(0, colon).trim();
+    const detail = line.slice(colon + 1).trim();
+    const normalized = normalizeLowercaseStringOrEmpty(detail);
+    // Shared health text uses known prefixes to classify table status chips.
+    const status =
+      normalized === "healthy" || normalized.startsWith("ok") || normalized.startsWith("configured")
+        ? theme.success("OK")
+        : normalized.startsWith("not configured") || normalized.startsWith("disabled")
+          ? theme.muted("OFF")
+          : normalized.startsWith("linked")
+            ? theme.success("LINKED")
+            : normalized.startsWith("not linked")
+              ? theme.warn("UNLINKED")
+              : theme.warn("WARN");
+    rows.push({ Item: item, Status: status, Detail: detail });
+  }
+  return rows;
+}
+
+function formatEventLoopHealthDetail(eventLoop: NonNullable<HealthSummary["eventLoop"]>): string {
+  const parts = [
+    eventLoop.degraded && eventLoop.degradedSinceMs != null
+      ? `degraded for ${formatDurationCompact(eventLoop.degradedSinceMs) ?? "0s"}`
+      : null,
+    eventLoop.reasons.length > 0 ? `reasons ${eventLoop.reasons.join(",")}` : "healthy",
+    `max ${Math.round(eventLoop.delayMaxMs)}ms`,
+    `p99 ${Math.round(eventLoop.delayP99Ms)}ms`,
+    `util ${eventLoop.utilization}`,
+    `cpu ${eventLoop.cpuCoreRatio}`,
+  ];
+  return parts.filter((part): part is string => part !== null).join(" · ");
+}
+
+/** Explains sessions pinned to a selected model different from the current configured default. */
+function buildStatusModelSelectionLines(recent: StatusSummary["sessions"]["recent"]) {
+  const mismatches = recent.filter((sess) => {
+    if (!sess.configuredModel || !sess.selectedModel || !sess.modelSelectionReason) {
+      return false;
+    }
+    return (
+      sess.configuredModel !== sess.selectedModel &&
+      // Runtime aliases such as provider-qualified model refs should not warn as real mismatches.
+      !areRuntimeModelRefsEquivalent(sess.configuredModel, sess.selectedModel)
+    );
+  });
+  if (mismatches.length === 0) {
+    return [];
+  }
+
+  const lines: string[] = [];
+  for (const sess of mismatches.slice(0, 3)) {
+    const key = shortenText(sess.key, 48);
+    const configured = sess.configuredModel ?? "unknown";
+    const selected = sess.selectedModel ?? "unknown";
+    const isFallback = sess.modelSelectionReason === "fallback selected";
+    const intro = isFallback
+      ? `Session ${key} is running ${selected} (auto fallback); config primary is ${configured}.`
+      : `Session ${key} is pinned to ${selected}; config primary ${configured} will apply to new/unpinned sessions.`;
+    const reasonLine = `  Reason: ${sess.modelSelectionReason ?? "session override"}`;
+    const clearLine = isFallback
+      ? "  Action: check provider availability or retry with /model"
+      : "  Clear with: /model default";
+    lines.push(
+      theme.warn(intro),
+      `  Configured default: ${configured}`,
+      `  Session selected: ${selected}`,
+      reasonLine,
+      clearLine,
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-strictness",
+    );
+  }
+  if (mismatches.length > 3) {
+    lines.push(theme.muted(`  … +${mismatches.length - 3} more pinned session(s)`));
+  }
+  return lines;
+}
 
 export async function buildStatusCommandReportLines(
   input: Omit<
@@ -91,10 +272,42 @@ export async function buildStatusCommandReportLines(
         theme.muted(`Deep check: ${formatCliCommand("openclaw status --deep")}`),
       ];
   const width = params.tableWidth;
-  const pluginCompatibilityLines = buildStatusPluginCompatibilityLines(params.pluginCompatibility);
-  const pairingRecoveryLines = buildStatusPairingRecoveryLines({
-    pairingRecovery: params.pairingRecovery,
-  });
+  const pluginCompatibilityLines =
+    params.pluginCompatibility.length === 0
+      ? []
+      : [
+          ...params.pluginCompatibility.slice(0, 8).map((notice) => {
+            const label = notice.severity === "warn" ? theme.warn("WARN") : theme.muted("INFO");
+            return `  ${label} ${formatPluginCompatibilityNotice(notice)}`;
+          }),
+          ...(params.pluginCompatibility.length > 8
+            ? [theme.muted(`  … +${params.pluginCompatibility.length - 8} more`)]
+            : []),
+        ];
+  const pairingRecoveryLines = params.pairingRecovery
+    ? [
+        theme.warn(buildPairingConnectRecoveryTitle(params.pairingRecovery.reason ?? undefined)),
+        ...(params.pairingRecovery.reason
+          ? [
+              theme.muted(
+                `Reason: ${describePairingConnectRequirement(params.pairingRecovery.reason)}.`,
+              ),
+            ]
+          : []),
+        ...(params.pairingRecovery.remediationHint
+          ? [theme.muted(`Hint: ${params.pairingRecovery.remediationHint}`)]
+          : []),
+        ...(params.pairingRecovery.requestId
+          ? [
+              theme.muted(
+                `Recovery: ${formatCliCommand(`openclaw devices approve ${params.pairingRecovery.requestId}`)}`,
+              ),
+            ]
+          : []),
+        theme.muted(`Fallback: ${formatCliCommand("openclaw devices approve --latest")}`),
+        theme.muted(`Inspect: ${formatCliCommand("openclaw devices list")}`),
+      ]
+    : [];
   const modelSelectionLines = buildStatusModelSelectionLines(params.summary.sessions.recent);
   const channelsColumns = statusChannelsTableColumns;
   const channelsRows = buildStatusChannelsTableRows({
@@ -106,12 +319,23 @@ export async function buildStatusCommandReportLines(
     accentDim: theme.accentDim,
     formatIssueMessage: (message) => shortenText(message, 84),
   });
-  const sessionsRows = buildStatusSessionsRows({
-    recent: params.summary.sessions.recent,
-    verbose: params.opts.verbose,
-  });
-  const systemEventsRows = buildStatusSystemEventsRows(params.summary.queuedSystemEvents);
-  const systemEventsTrailer = buildStatusSystemEventsTrailer(params.summary.queuedSystemEvents);
+  const sessionsRows = params.summary.sessions.recent.map((sess) => ({
+    Key: shortenText(sess.key, 32),
+    Kind: sess.kind,
+    Age: sess.updatedAt && sess.age != null ? formatTimeAgo(sess.age) : "no activity",
+    Model: sess.model ?? "unknown",
+    Runtime: sess.runtime ?? "unknown",
+    Tokens: formatTokensCompact(sess),
+    ...(params.opts.verbose ? { Cache: formatPromptCacheCompact(sess) || theme.muted("—") } : {}),
+  }));
+  const systemEventsRows =
+    params.summary.queuedSystemEvents.length === 0
+      ? undefined
+      : params.summary.queuedSystemEvents.slice(0, 5).map((event) => ({ Event: event }));
+  const systemEventsTrailer =
+    params.summary.queuedSystemEvents.length > 5
+      ? theme.muted(`… +${params.summary.queuedSystemEvents.length - 5} more`)
+      : null;
   const healthColumns = params.health ? statusHealthColumns : undefined;
   const healthRows = params.health
     ? buildStatusHealthRows({
@@ -120,12 +344,22 @@ export async function buildStatusCommandReportLines(
       })
     : undefined;
   const usageLines = params.usageLines;
-  const footerLines = buildStatusFooterLines({
-    updateHint: formatUpdateAvailableHint(params.surface.update),
-    nodeOnlyGateway: params.surface.nodeOnlyGateway,
-    gatewayReachable: params.surface.gatewayReachable,
-    gatewayStartupPhase: params.surface.gatewayProbe?.startupPhase,
-  });
+  const updateHint = formatUpdateAvailableHint(params.surface.update);
+  const footerLines = [
+    "FAQ: https://docs.openclaw.ai/faq",
+    "Troubleshooting: https://docs.openclaw.ai/troubleshooting",
+    ...(updateHint ? ["", theme.warn(updateHint)] : []),
+    "Next steps:",
+    `  Need to share?      ${formatCliCommand("openclaw status --all")}`,
+    `  Need to debug live? ${formatCliCommand("openclaw logs --follow")}`,
+    params.surface.nodeOnlyGateway
+      ? `  Need node service?  ${formatCliCommand("openclaw node status")}`
+      : params.surface.gatewayProbe?.startupPhase
+        ? `  Retry after startup: ${formatCliCommand("openclaw status --deep")}`
+        : params.surface.gatewayReachable
+          ? `  Need to test channels? ${formatCliCommand("openclaw status --deep")}`
+          : `  Fix reachability first: ${formatCliCommand("openclaw gateway probe")}`,
+  ];
 
   const lines: string[] = [];
   lines.push(theme.heading("OpenClaw status"));

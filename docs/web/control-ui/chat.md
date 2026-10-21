@@ -814,7 +814,8 @@ cancel native clipboard writes that the browser has already accepted.
 
 Markdown tables wrap headings and cell text to fit the conversation. On wide desktop
 panes, top-level assistant tables stay at the reading width when their content fits
-and use extra space only as needed, without widening the surrounding prose. Long
+and use extra space only as needed, without widening the surrounding prose or
+borrowing the space reserved for an open Details panel. Long
 cells wrap within the pane limit; genuinely dense tables still scroll horizontally.
 Short values such as byte counts stay intact beside long filenames or hashes, including on mobile.
 Table controls appear below the table. Wide desktop tables use compact icon-only
