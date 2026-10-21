@@ -5,7 +5,8 @@ import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 const suggestedProfile = { id: "cloud", providerId: "crabbox", providerDisplayId: "aws" };
 const profile = { ...suggestedProfile, executionModes: ["worker-turn"] };
 
-async function fixture(adopt: () => Promise<unknown>) {
+async function fixture(adopt?: () => Promise<unknown>) {
+  const adoption = Promise.withResolvers<unknown>();
   let saved = false;
   const result = createDraftFixture({
     methods: [
@@ -24,7 +25,7 @@ async function fixture(adopt: () => Promise<unknown>) {
         };
       }
       if (method === "environments.adoptSuggestedProfile") {
-        const response = await adopt();
+        const response = await (adopt ? adopt() : adoption.promise);
         saved = true;
         return response;
       }
@@ -32,18 +33,14 @@ async function fixture(adopt: () => Promise<unknown>) {
     },
   });
   await result.gateway.refreshCloudProfiles();
-  return result;
+  return { ...result, adoption };
 }
 
-afterEach(() => {
-  sessionStorage.clear();
-  localStorage.clear();
-});
+afterEach(() => [sessionStorage, localStorage].forEach((storage) => storage.clear()));
 
 describe("suggested Cloud adoption", () => {
   it("keeps the suggestion undispatchable until adoption saves and selects a configured profile", async () => {
-    const adoption = Promise.withResolvers<unknown>();
-    const { place, gateway, flow, request } = await fixture(() => adoption.promise);
+    const { place, gateway, flow, request, adoption } = await fixture();
     flow.setMessage("Prepare this repository");
     expect(gateway.cloudProfiles).toEqual([]);
     expect(gateway.suggestedProfile).toEqual(suggestedProfile);
@@ -89,8 +86,7 @@ describe("suggested Cloud adoption", () => {
   });
 
   it("does not replace a newer local selection when saving finishes", async () => {
-    const adoption = Promise.withResolvers<unknown>();
-    const { place, gateway } = await fixture(() => adoption.promise);
+    const { place, gateway, adoption } = await fixture();
     const selecting = place.suggestedCloudProfile.adopt();
     place.selectDevice("");
     adoption.resolve({ profile });
@@ -100,8 +96,7 @@ describe("suggested Cloud adoption", () => {
   });
 
   it("discards adoption after the Gateway connection changes", async () => {
-    const adoption = Promise.withResolvers<unknown>();
-    const { place, gateway, context } = await fixture(() => adoption.promise);
+    const { place, gateway, context, adoption } = await fixture();
     const selecting = place.suggestedCloudProfile.adopt();
     context.gateway.snapshot.phase = "connecting";
     gateway.synchronize(context.gateway);
