@@ -125,6 +125,12 @@
   padding: 0;
 }
 
+@property --chat-details-space {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
 /* Flex sizes the frame, not the query container. A definite containing block
    keeps editor autosizing from re-evaluating height queries at intermediate
    flex sizes and rebuilding the footer's layout tree on every keystroke. */
@@ -1247,12 +1253,15 @@ openclaw-chat-sidebar-region,
     grid-template-rows var(--desktop-frame-motion);
 }
 
-/* Share the inspector's curve: reserving its column must not jump the transcript
-   to the destination before the surface arrives. No text scaling or remount. */
+/* Animate the shared gutter once: the conversation, scrollport, and reading
+   column must consume the same intermediate width, including during reversal. */
+.sidebar-region--desktop .chat-main__conversation-frame {
+  transition: --chat-details-space var(--chat-details-motion);
+}
+
 .sidebar-region--desktop .chat-main__conversation {
   /* The frame clips the pane; the scrollport may extend through the Details gutter. */
   overflow: visible;
-  transition: inset-inline-end var(--chat-details-motion);
 }
 
 /* Keep the scrollbar at the frame edge while the reading column, composer,
@@ -1271,9 +1280,9 @@ openclaw-chat-sidebar-region,
   grid-column: 1;
 }
 
-.sidebar-region--desktop [data-details-instant] > .chat-main__conversation,
-.sidebar-region--desktop [data-details-restoring] > .chat-main__conversation,
-.sidebar-region--desktop[data-sidebar-resizing] .chat-main__conversation {
+.sidebar-region--desktop .chat-main__conversation-frame[data-details-instant],
+.sidebar-region--desktop .chat-main__conversation-frame[data-details-restoring],
+.sidebar-region--desktop[data-sidebar-resizing] .chat-main__conversation-frame {
   transition: none;
 }
 
@@ -1483,7 +1492,7 @@ openclaw-chat-sidebar-region,
 
 @media (prefers-reduced-motion: reduce) {
   .sidebar-region--desktop,
-  .sidebar-region--desktop .chat-main__conversation,
+  .sidebar-region--desktop .chat-main__conversation-frame,
   .sidebar-region--desktop :is([data-region="side"], [data-region-header="side"]) {
     transition: none;
   }

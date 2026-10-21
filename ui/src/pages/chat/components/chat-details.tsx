@@ -60,6 +60,7 @@ export type ChatDetails = { open(source: HTMLElement): void };
 let nextId = 0;
 
 const DETAILS_WIDTH = 300;
+const DETAILS_DESKTOP_INLINE_INSET = 13;
 // Preserve the 48rem reading column plus its gutters before offering automatic docking.
 const DETAILS_DOCK_MIN_WIDTH = 1200;
 
@@ -237,8 +238,10 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight) - 8,
       );
       const right = Math.min(
-        bounds.right - 8,
-        (viewport?.offsetLeft ?? 0) + (viewport?.width ?? window.innerWidth) - 8,
+        bounds.right - DETAILS_DESKTOP_INLINE_INSET,
+        (viewport?.offsetLeft ?? 0) +
+          (viewport?.width ?? window.innerWidth) -
+          DETAILS_DESKTOP_INLINE_INSET,
       );
       const width = Math.max(0, Math.min(DETAILS_WIDTH, right - bounds.left - 8));
       panel.style.left = `${right - width - (conversationVisible ? bounds.left : 0)}px`;
@@ -445,7 +448,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       frame?.toggleAttribute("data-details-restoring", panel.hasAttribute("data-restoring"));
       frame?.style.setProperty(
         "--chat-details-space",
-        dock ? `${DETAILS_WIDTH + (isDesktop ? 8 : 0)}px` : "0px",
+        dock ? `${DETAILS_WIDTH + (isDesktop ? DETAILS_DESKTOP_INLINE_INSET : 0)}px` : "0px",
       );
       if (open && isDesktop) {
         position(layout);
