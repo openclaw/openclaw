@@ -3,9 +3,27 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { publishSessionTranscriptUpdateByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
+
+// This suite drives watcher notifications instead of the fixture's silent observer.
+vi.mock("./test-runtime-mocks.js", () => ({}));
+vi.mock("./local-file-watcher.js", async (original) => {
+  const { MemoryFileWatcher } = await import("./file-watcher.js");
+  return {
+    ...(await original<typeof import("./local-file-watcher.js")>()),
+    LocalMemoryFileWatcher: MemoryFileWatcher,
+  };
+});
+const observer = await vi.hoisted(async () => {
+  const { createMemoryObservationHarness } = await import("./watcher-test-support.js");
+  return createMemoryObservationHarness();
+});
+vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/file-access-runtime")>()),
+  watch: observer.watch,
+}));
 
 const activity = vi.hoisted(() => ({
   listener: undefined as ((busy: boolean) => void) | undefined,
@@ -32,9 +50,19 @@ describe("background reindex resumption", () => {
     getMemorySearchManager,
     closeAllMemorySearchManagers,
   });
+  beforeEach(() => observer.reset());
   afterEach(() => vi.restoreAllMocks());
 
-  it.for(["idle", "bootstrap", "changed", "targeted", "close", "unsupported", "fallback"] as const)(
+  it.for([
+    "idle",
+    "watch",
+    "bootstrap",
+    "changed",
+    "targeted",
+    "close",
+    "unsupported",
+    "fallback",
+  ] as const)(
     "settles a background reindex interrupted by a foreground turn: %s",
     { timeout: 30_000 },
     async (resume, { signal }) => {
@@ -47,7 +75,7 @@ describe("background reindex resumption", () => {
           false,
         );
       }
-      const mixedSources = resume === "idle" || resume === "changed";
+      const mixedSources = resume === "idle" || resume === "changed" || resume === "watch";
       const memoryPaths = mixedSources ? ["memory/2026-01-12.md", "memory/sibling.md"] : [];
       if (mixedSources) {
         await fs.writeFile(
@@ -158,7 +186,14 @@ describe("background reindex resumption", () => {
       signal.addEventListener("abort", releaseOnAbort, { once: true });
       try {
         await idle();
-        await vi.advanceTimersByTimeAsync(30_000);
+        if (resume === "watch") {
+          await (manager as unknown as { memoryWatcherReady: Promise<void> }).memoryWatcherReady;
+          // Start through the filesystem observation boundary before the session idle timer.
+          observer.observations.at(-1)!.dirty();
+          await vi.advanceTimersByTimeAsync(5_000);
+        } else {
+          await vi.advanceTimersByTimeAsync(30_000);
+        }
         await idle();
         expect(groups).toHaveLength(1);
         expect(groups[0]).toHaveLength(8);
@@ -189,6 +224,13 @@ describe("background reindex resumption", () => {
         }
         const expectedPaths = [...sessionPaths];
         const expectedMemoryWrites = [...memoryPaths];
+        if (resume === "watch") {
+          observer.observations.at(-1)!.dirty();
+          await vi.advanceTimersByTimeAsync(5_000);
+          await idle();
+          expect(groups).toHaveLength(1);
+          expect(publish).not.toHaveBeenCalled();
+        }
         if (resume === "unsupported") {
           expect(shadows.size).toBe(1);
           for (const shadow of shadows) {

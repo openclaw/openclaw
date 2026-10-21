@@ -335,13 +335,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     });
   }
 
-  protected async syncBackground(params: MemorySyncParams): Promise<void> {
-    return await this.syncAdmitted(params, { background: true, queuedSessionOwner: true });
-  }
-
   protected async syncPublishedIndexInBackground(params: { reason: string }): Promise<void> {
     if (this.syncing || this.reindexProgress) {
-      return await this.syncAdmitted(params);
+      return await this.syncBackground(params);
     }
     await this.syncOutcomes.track(() =>
       runMemorySearchMaintenance({
