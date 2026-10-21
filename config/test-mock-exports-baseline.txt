@@ -818,7 +818,6 @@
 ["extensions/msteams/src/channel.actions.test.ts","./channel.runtime.js","f50728ea75a018f60e9b777ea87bf7347008ccb7fff80b6baef1868a0abd5e6c",1]
 ["extensions/msteams/src/feedback-reflection.test.ts","./messenger.js","6a9bd93daa90ee5adb4b89fb1e3e91607fd8347686620ba9d46c7fc0325a2ebd",1]
 ["extensions/msteams/src/feedback-reflection.test.ts","./sdk-proactive.js","eaa1c779fd64e7ac5dcefb66a73d4bdfeb254eaf69e946a65e70f534350a00b8",1]
-["extensions/msteams/src/feedback-reflection.test.ts","openclaw/plugin-sdk/channel-inbound","b3ed2712fa6959f3301aad10f9a0a032b90d5b6407e8a4bb22ea35124bbb34d5",1]
 ["extensions/msteams/src/graph-group-management.test.ts","./conversation-store-state.js","e6235f6de8a6700cbd0ceab6355dcb681e754b6a12c8a7f935aa9d866d7a8fa7",1]
 ["extensions/msteams/src/graph-messages.test-helpers.ts","./conversation-store-state.js","41f13d3f2abf742c282828bf50a94fc13edbe3a8b5b25fc75be42d668b0204df",1]
 ["extensions/msteams/src/graph.read-authority.test.ts","./sdk.js","1983d81936602aa00e9acafc650b22d1eaa4fe7f70fb783aa16e2ace7da4ed23",1]
