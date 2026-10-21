@@ -31,6 +31,22 @@ describe("mime detection", () => {
     zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
   });
 
+  it("recognizes SQL filenames without overriding detected binary content", async () => {
+    const sql = Buffer.from("SELECT name FROM widgets;\n");
+    expect(mimeTypeFromFilePath("query.SQL")).toBe("text/x-sql");
+    expect(extensionForMime("text/x-sql")).toBe(".sql");
+    expect(extensionForMime("application/sql")).toBe(".sql");
+    expect(await detectMime({ buffer: sql, filePath: "query.sql", headerMime: "text/plain" })).toBe(
+      "text/x-sql",
+    );
+    expect(
+      await detectMime({
+        buffer: Buffer.from("89504e470d0a1a0a0000000d49484452", "hex"),
+        filePath: "query.sql",
+      }),
+    ).toBe("image/png");
+  });
+
   it("normalizes byte-detected AVI without filename or header hints", async () => {
     const buffer = Buffer.from("524946463800000041564920" + "00".repeat(52), "hex");
     const detected = await detectMime({ buffer });

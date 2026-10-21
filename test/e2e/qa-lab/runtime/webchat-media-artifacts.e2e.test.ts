@@ -29,6 +29,7 @@ const FIXTURES = [
   ["deploy.yaml", "application/yaml", "attachment", "artifact"],
   ["notes.md", "text/markdown", "attachment", "artifact"],
   ["readme.txt", "text/plain", "attachment", "artifact"],
+  ["schema.sql", "text/x-sql", "attachment", "artifact"],
   ["page.html", "text/html", "attachment", "artifact"],
   ["vector.svg", "image/svg+xml", "attachment", "visible-error"],
   ["report.pdf", "application/pdf", "attachment", "artifact"],
@@ -53,7 +54,7 @@ const REJECTED_FIXTURES = FIXTURES.filter((fixture) => fixture[3] === "visible-e
 const MIXED_BATCH = [
   ["deploy.yaml", "artifact"],
   ["settings.toml", "unsupported-format"],
-  ["schema.sql", "unsupported-format"],
+  ["schema.sql", "artifact"],
   ["events.ndjson", "unsupported-format"],
   ["font.ttf", "unsupported-format"],
   ["font.woff2", "unsupported-format"],

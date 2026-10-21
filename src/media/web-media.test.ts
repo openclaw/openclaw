@@ -393,6 +393,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     { name: "notes.txt", body: ",,,,,,,,,,\n", contentType: "text/plain" },
+    { name: "query.sql", body: "SELECT name FROM widgets;\n", contentType: "text/x-sql" },
     {
       name: "legacy.csv",
       body: Buffer.from("caf\xe9,ni\xf1o\n", "latin1"),
@@ -411,6 +412,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     { name: "debug.log", body: "plain text\n" },
+    { name: "binary.sql", body: Buffer.from([0x00, 0xff, 0x10, 0x80]) },
     { name: "secret.pdf", body: "secret" },
     { name: "report.html", body: "status,value\nok,1\n" },
     { name: "outside.html", body: "<!doctype html><h1>outside</h1>", outside: true },
