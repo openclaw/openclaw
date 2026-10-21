@@ -130,17 +130,23 @@ function resolveAgentIdFromModel(
   return normalizeAgentId(agentId);
 }
 
-/** Checks OpenClaw routing-model syntax without resolving fleet ownership. */
-export function isOpenClawAgentModelId(model: string | undefined): boolean {
+/** Maps accepted OpenClaw routing-model spellings to the canonical id listed by `/v1/models`. */
+export function canonicalizeOpenClawAgentModelId(model: string | undefined): string | undefined {
   const raw = model?.trim();
   if (!raw) {
-    return false;
+    return undefined;
   }
   const lowered = normalizeLowercaseStringOrEmpty(raw);
   if (lowered === OPENCLAW_MODEL_ID || lowered === OPENCLAW_DEFAULT_MODEL_ID) {
-    return true;
+    return lowered;
   }
-  return AGENT_MODEL_PATTERN.test(raw);
+  const agentId = raw.match(AGENT_MODEL_PATTERN)?.groups?.agentId;
+  return agentId ? `openclaw/${normalizeAgentId(agentId)}` : undefined;
+}
+
+/** Checks OpenClaw routing-model syntax without resolving fleet ownership. */
+export function isOpenClawAgentModelId(model: string | undefined): boolean {
+  return canonicalizeOpenClawAgentModelId(model) !== undefined;
 }
 
 /** Validates and resolves the `x-openclaw-model` override for OpenAI-compatible requests. */
