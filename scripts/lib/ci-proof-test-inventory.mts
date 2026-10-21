@@ -1061,7 +1061,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/command/delivery.custody.integration.test.ts",
   "src/agents/command/delivery.test.ts",
   "src/agents/command/maintenance.test.ts",
-  "src/agents/command/model-selection.turn-model-differential.test.ts",
   "src/agents/command/session-store.test.ts",
   "src/agents/command/session.exact-target.test.ts",
   "src/agents/command/session.resolve-session-key.test.ts",

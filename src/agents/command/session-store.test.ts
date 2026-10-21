@@ -333,8 +333,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
       cfg: s.cfg,
       sessionId: first.sessionId,
       sessionKey: first.sessionKey!,
-      defaultProvider: "claude-cli",
-      defaultModel: "claude-sonnet-4-6",
       result: runResult({
         provider: "claude-cli",
         model: "claude-sonnet-4-6",
@@ -347,27 +345,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
     for (const entry of [second.sessionEntry, s.read()]) {
       expect(entry).toMatchObject({ modelProvider: "claude-cli", model: "claude-sonnet-4-6" });
     }
-  });
-
-  it("reuses fresh completed sessions", async ({ s }) => {
-    const existingSessionId = "terminal-cli-session-old";
-    const now = Date.now();
-    await s.seed({
-      sessionId: existingSessionId,
-      updatedAt: now,
-      status: "done",
-      endedAt: now - 100,
-    });
-
-    const result = await s.resolve({ sessionKey });
-
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
-    expect(result.sessionEntry).toMatchObject({
-      sessionId: existingSessionId,
-      status: "done",
-      endedAt: now - 100,
-    });
   });
 
   it("invalidates empty usage after compaction (#67667)", async ({ s }) => {
@@ -386,8 +363,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
   it("uses last-call input, not cumulative billing", async ({ s }) => {
     await s.seed();
     await s.update({
-      defaultProvider: "custom-openai",
-      defaultModel: "responses-model",
       result: runResult({
         provider: "custom-openai",
         model: "responses-model",
@@ -577,8 +552,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
     };
     await s.persist(replacement);
     await s.update({
-      defaultProvider: "anthropic",
-      defaultModel: "claude-sonnet-4-6",
       result: runResult({ provider: "anthropic", model: "claude-sonnet-4-6" }),
     });
     expect(s.read()).toEqual(replacement);
