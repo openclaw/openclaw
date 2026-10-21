@@ -343,14 +343,7 @@ describe("Subagents panel data ownership", () => {
     publish(item);
     expect(view(f)?.activity).toBe(item.meta);
     for (const flag of ["hideFromChannelProgress", "suppressChannelProgress"]) {
-      publish({
-        ...item,
-        itemId: flag,
-        toolCallId: flag,
-        title: "Exec Hidden purpose",
-        meta: "Hidden purpose",
-        [flag]: true,
-      });
+      publish(execItem(flag, "Hidden purpose", { toolCallId: flag, [flag]: true }));
       expect(view(f)?.activity).toBe(item.meta);
     }
     publish({ ...item, progressText: "Public progress" });
@@ -380,14 +373,7 @@ describe("Subagents panel data ownership", () => {
     expect(view(f)?.activity).toBeUndefined();
     expect(view(f)?.callCount).toEqual({ count: 1, exact: true });
 
-    publish("continuation-run", {
-      ...previous,
-      itemId: "continuation-item",
-      phase: "update",
-      status: "running",
-      title: "Exec Continue the repair",
-      meta: "Continue the repair",
-    });
+    publish("continuation-run", execItem("continuation-item", "Continue the repair"));
     expect(view(f)).toMatchObject({
       activity: "Continue the repair",
       callCount: { count: 2, exact: true },

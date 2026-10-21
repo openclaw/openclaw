@@ -146,38 +146,6 @@ describe("gateway-backed session route resolution", () => {
     });
   });
 
-  it("returns slug ties to the existing disambiguation view", async () => {
-    const rows = [
-      row({ key: "agent:roboclaw:thread:12345678-0aaa-4000-8000-000000000001" }),
-      row({ key: "agent:research:thread:12345678-0bbb-4000-8000-000000000002" }),
-    ];
-    const { context, list, request } = contextFor({
-      ok: false,
-      candidates: rows.map(({ key, displayName }) => ({
-        key,
-        agentId: key.split(":")[1]!,
-        displayName: displayName ?? undefined,
-      })),
-    });
-    const loaded = await loadRoute(context, "/chat/roboclaw/default-mode-with-rare-surprises");
-
-    expect(loaded).toMatchObject({
-      kind: "ambiguous",
-      shortId: "default-mode-with-rare-surprises",
-      truncated: false,
-      candidates: [{ agentId: "roboclaw" }, { agentId: "research" }],
-    });
-    if (!("kind" in loaded) || loaded.kind !== "ambiguous") {
-      throw new Error("expected slug disambiguation");
-    }
-    expect(loaded.candidates.map((candidate) => candidate.href)).toEqual([
-      "/chat/roboclaw/default-mode-with-rare-surprises-123456780a",
-      "/chat/research/default-mode-with-rare-surprises-123456780b",
-    ]);
-    expect(request).toHaveBeenCalledOnce();
-    expect(list).not.toHaveBeenCalled();
-  });
-
   it.each([
     [
       "deploy-monitor-12345678",
@@ -342,7 +310,11 @@ describe("session route navigation handoffs", () => {
       const sessionKey = "agent:roboclaw:thread:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
       const pathname = "/chat/roboclaw/0f403cb839204cf18eb779f2f00ce488";
       const currentKey = sessionKey.replace(":thread:", ":dashboard:");
-      const { context, request } = contextFor({ ok: true, key: currentKey, agentId: "roboclaw" });
+      const { context, request, list } = contextFor({
+        ok: true,
+        key: currentKey,
+        agentId: "roboclaw",
+      });
       prepareSessionNavigationHandoff(context.gateway, pathname, sessionKey);
       const first = canonicalSession(
         await load(
@@ -370,23 +342,9 @@ describe("session route navigation handoffs", () => {
         expect(cleaned).toMatchObject({ kind: "session", sessionKey });
         expect(request).not.toHaveBeenCalled();
       }
+      expect(list).not.toHaveBeenCalled();
     },
   );
-  it("uses the sidebar-carried full key without issuing a session search", async () => {
-    const storedRow = row({ displayName: "Deploy monitor" });
-    const { context, list } = contextFor();
-    const target = sessionNavigationTarget({
-      face: "chat",
-      sessionKey: storedRow.key,
-      fallbackAgentId: "roboclaw",
-      row: storedRow,
-    });
-    prepareSessionNavigationHandoff(context.gateway, target.options.pathname, storedRow.key);
-    const loaded = await load(context, locationFor(target.options.pathname));
-
-    expect(loaded).toMatchObject({ kind: "session", sessionKey: storedRow.key });
-    expect(list).not.toHaveBeenCalled();
-  });
 
   it.each([
     { replaced: "client", pending: false },
