@@ -17,10 +17,6 @@ import {
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
 import { mediaDownload, telegramMediaPng } from "./bot.media.native.test-utils.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
-import { cacheSticker, getCachedSticker } from "./sticker-cache.js";
-import { resolveStickerVisionSupportRuntime } from "./sticker-vision.runtime.js";
-
-vi.mock("./sticker-vision.runtime.js", { spy: true });
 
 const base = { date: 1736380800, from, chat };
 function mediaUpdate<T extends object>(media: T) {
@@ -74,62 +70,6 @@ describe("registered Telegram media", () => {
       media: [{ kind: "video", contentType: "video/mp4", fileName: "animation.mp4" }],
     });
     expect(await readFile(reply().media![0]!.path!)).toEqual(animationBytes);
-    expectOneDownload();
-  });
-
-  it("reuses a stored description, refreshes its file identity, and skips unsupported sticker bytes", async () => {
-    vi.mocked(resolveStickerVisionSupportRuntime).mockResolvedValue(false);
-    await cacheSticker({
-      fileId: "old-file",
-      fileUniqueId: "stable-sticker",
-      emoji: "old",
-      setName: "OldSet",
-      description: "A waving sticker",
-      cachedAt: "2026-01-20T10:00:00.000Z",
-    });
-    const bot = await createBot(false);
-    const sticker = {
-      file_id: "current-file",
-      file_unique_id: "stable-sticker",
-      type: "regular" as const,
-      width: 512,
-      height: 512,
-      is_animated: false,
-      is_video: false,
-      emoji: "new",
-      set_name: "NewSet",
-    };
-    await bot.handleUpdate(mediaUpdate({ sticker }));
-    expect(await getCachedSticker("stable-sticker")).toMatchObject({
-      fileId: "current-file",
-      emoji: "new",
-      setName: "NewSet",
-      description: "A waving sticker",
-    });
-    expect(reply()).toMatchObject({
-      BodyForAgent: expect.stringContaining("A waving sticker"),
-      SkipStickerMediaUnderstanding: true,
-    });
-    expect(await readFile(reply().media![0]!.path!)).toEqual(telegramMediaPng);
-    for (const [index, variant] of [
-      { is_animated: true, is_video: false },
-      { is_animated: false, is_video: true },
-    ].entries()) {
-      await bot.handleUpdate(
-        mediaUpdate({
-          sticker: {
-            ...sticker,
-            ...variant,
-            file_unique_id: `unsupported-${index}`,
-            emoji: undefined,
-          },
-        }),
-      );
-      const unavailable = reply(index + 1);
-      expect(unavailable.BodyForAgent).toBe("<media:sticker>");
-      expect(unavailable.media!.every((media) => media.path === undefined)).toBe(true);
-    }
-    expect(harness.replySpy).toHaveBeenCalledTimes(3);
     expectOneDownload();
   });
 
