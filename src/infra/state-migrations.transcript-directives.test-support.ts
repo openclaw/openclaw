@@ -203,21 +203,24 @@ export function readEventJson(databasePath: string, sessionId: string, seq: numb
 }
 
 export function readGeneration(databasePath: string, sessionId: string): string {
-  const { DatabaseSync } = requireNodeSqlite();
-  using database = new DatabaseSync(databasePath, { readOnly: true });
-  const row = database
-    .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
-    .get(sessionId) as { generation: string };
+  const row = readDatabaseRow(
+    databasePath,
+    "SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?",
+    sessionId,
+  ) as { generation: string };
   return row.generation;
 }
 
-export function readMigrationCursor(databasePath: string): unknown {
+export function readDatabaseRow(databasePath: string, sql: string, ...values: SQLInputValue[]) {
   const { DatabaseSync } = requireNodeSqlite();
   using database = new DatabaseSync(databasePath, { readOnly: true });
-  const row = database
-    .prepare(
-      "SELECT app_version FROM schema_meta WHERE meta_key = 'historical-transcript-directives-v1'",
-    )
-    .get() as { app_version: string } | undefined;
+  return database.prepare(sql).get(...values);
+}
+
+export function readMigrationCursor(databasePath: string): unknown {
+  const row = readDatabaseRow(
+    databasePath,
+    "SELECT app_version FROM schema_meta WHERE meta_key = 'historical-transcript-directives-v1'",
+  ) as { app_version: string } | undefined;
   return row ? JSON.parse(row.app_version) : undefined;
 }

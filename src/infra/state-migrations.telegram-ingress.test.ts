@@ -1,35 +1,33 @@
 import fsSync, { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
-import {
-  coercePluginDoctorContractModule,
-  type PluginDoctorContractModule,
-  type PluginDoctorStateMigration,
-} from "../plugins/doctor-contract-module.js";
+import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
+import {
+  expectFile as expectBytes,
+  expectMissing,
+  runPluginMigrations,
+} from "./state-migrations.store.test-support.js";
 
 type MigrationInput = Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];
 const receivedAt = Date.now() - 60_000;
 
 async function runDetectedMigrations(input: MigrationInput) {
-  const { stateMigrations } = coercePluginDoctorContractModule(
-    await vi.importActual<PluginDoctorContractModule>(
-      fileURLToPath(new URL("../../extensions/telegram/doctor-contract-api.ts", import.meta.url)),
-    ),
-  );
-  const results = [];
-  for (const migration of stateMigrations) {
-    if (await migration.detectLegacyState(input)) {
-      results.push(await migration.migrateLegacyState(input));
-    }
-  }
-  return results;
+  return (await runPluginMigrations("telegram", input)).map(({ result }) => result);
+}
+
+function expectSingleWarning(
+  result: Awaited<ReturnType<typeof runDetectedMigrations>>[number] | undefined,
+  warning: string,
+  disposition?: "recoverable",
+) {
+  expect(result?.warnings).toEqual([expect.stringContaining(warning)]);
+  expect(result?.warningDisposition).toBe(disposition);
 }
 
 function pending(updateId: number, text = "legacy update") {
@@ -85,12 +83,6 @@ function migrationInput(env: NodeJS.ProcessEnv, stateDir: string, assertCurrent 
   return { config: {}, env, stateDir, oauthDir: path.join(stateDir, "credentials"), context };
 }
 
-async function expectBytes(file: string, bytes: string) {
-  await expect(fs.readFile(file, "utf8")).resolves.toBe(bytes);
-}
-async function expectMissing(file: string) {
-  await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
-}
 describe("Telegram JSON spool Doctor import", () => {
   it.each(["stale", "fresh", "message-date", "edited-message", "missing-receipt"] as const)(
     "%s legacy update passes through migration before the drain can dispatch",
@@ -151,13 +143,12 @@ describe("Telegram JSON spool Doctor import", () => {
           await drain.waitForIdle();
           expect(handleUpdate).toHaveBeenCalledTimes(shouldDispatch ? 1 : 0);
           if (!shouldDispatch) {
-            expect(results[0]?.warnings).toEqual([
-              expect.stringContaining(
-                `${scenario === "stale" ? 2 : 1} stale legacy Telegram update`,
-              ),
-            ]);
+            expectSingleWarning(
+              results[0],
+              `${scenario === "stale" ? 2 : 1} stale legacy Telegram update`,
+              "recoverable",
+            );
             expect(results[0]?.warnings[0]).toContain(new Date(message.date * 1000).toISOString());
-            expect(results[0]?.warningDisposition).toBe("recoverable");
             const failed = await queue.listFailed?.();
             expect(failed).toHaveLength(scenario === "stale" ? 2 : 1);
             expect(failed).toEqual(
@@ -380,14 +371,12 @@ describe("Telegram JSON spool Doctor import", () => {
             expect(claims).toHaveLength(1);
             await expectBytes(file(claims[0]!), bytes);
           }
-          expect(results[0]?.warningDisposition).toBe(
-            failure === "expired-authority" ? undefined : "recoverable",
-          );
-          expect(results[0]?.warnings).toHaveLength(1);
-          expect(results[0]?.warnings[0]).toContain(
+          expectSingleWarning(
+            results[0],
             failure === "expired-authority"
               ? "repair owner expired during cleanup"
               : `Retained Telegram spool source ${source}`,
+            failure === "expired-authority" ? undefined : "recoverable",
           );
           await expectBytes(`${source}.migrated`, bytes);
           const queue = createChannelIngressQueue({ channelId: "telegram", stateDir });
