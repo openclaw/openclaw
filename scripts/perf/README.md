@@ -451,16 +451,23 @@ It excludes `--activity-session` and `--activity-cron`. Catalog observations
 retain model rows for before/after option comparisons; use only synthetic
 catalogs. Compare warm session-scoped request counts and activity blocking time,
 keeping the initial catalogs separate from the activity window.
+Add `--activity-catalog-refresh` to request unchanged catalog renewal from a
+separate controller every third activity step. The fixture's live provider returns
+the same rows as its static catalog. Controller requests are recorded in `activity`
+and excluded from browser request counts. This isolates browser invalidation after
+explicit renewal; it does not prove which production action triggered a renewal.
 With `--open-details`, the final check reopens Details for the selected conversation
 after the activity window, then compares its session identity, label, model, status
 note, and thinking level with a fresh controller-side descriptor. It records this
-as an input-state comparison, then separately checks the rendered model in Details
-and the visible conversation header's label. The controller read is excluded
+as an input-state comparison, then separately checks the visible conversation
+header's label. The controller read is excluded
 from browser request counts; compare activity requests only between
 `activityStartedAtMs` and `activityEndedAtMs`. Request traces retain the preceding
 event's session key, reason, timestamp, and revision to distinguish event-driven
 reads from navigation or idle reads. Use `--request-stacks` for caller diagnosis,
 then omit it for paired timing.
+Failed attempts retain the available browser probe under `failure`, including
+failures in the final Details assertions; they are diagnostics, not accepted samples.
 
 For active-session loads, add `--activity-session <synthetic-key>` and configure
 that isolated Gateway with two loopback mock-provider models:
