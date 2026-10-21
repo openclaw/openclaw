@@ -8,7 +8,7 @@ import {
   runLegacyStateMigrations,
 } from "./state-migrations.doctor.js";
 
-let stateDatabase = await import("../state/openclaw-state-db.js");
+const stateDatabase = await import("../state/openclaw-state-db.js");
 
 const tempDirs = createTrackedTempDirs();
 
