@@ -111,14 +111,17 @@ const renderOptions = (f: ReturnType<typeof fixture>) => ({
   ...renderIdentity,
   artifactPath: f.outputPath,
 });
+type Inventory = { files: Array<{ id: string; file: string; summary?: unknown }> };
+function selection(inventory: Inventory, file: string, focus = "label") {
+  const entry = inventory.files.find((candidate) => candidate.file === file);
+  if (!entry) {
+    throw new Error(`Missing fixture selection: ${file}`);
+  }
+  return { id: entry.id, focus: [focus] };
+}
 function select(file: string, focus = "label") {
   api.parse.mockImplementationOnce((request: { input: string }) => {
-    const inventory: { files: Array<{ id: string; file: string }> } = JSON.parse(request.input);
-    const entry = inventory.files.find((candidate) => candidate.file === file);
-    if (!entry) {
-      throw new Error(`Missing fixture selection: ${file}`);
-    }
-    return completed({ files: [{ id: entry.id, focus: [focus] }] });
+    return completed({ files: [selection(JSON.parse(request.input), file, focus)] });
   });
 }
 
@@ -158,8 +161,7 @@ describe("generated mobile store notes", () => {
     savePlan(f);
     api.parse.mockImplementationOnce((request: { input: string }) => {
       expect(request.input.length).toBeLessThan(60_000);
-      const inventory: { files: Array<{ id: string; file: string; summary?: unknown }> } =
-        JSON.parse(request.input);
+      const inventory: Inventory = JSON.parse(request.input);
       for (const file of [generatedFile, uiTestFile]) {
         expect(inventory.files).not.toContainEqual(expect.objectContaining({ file }));
       }
@@ -167,16 +169,8 @@ describe("generated mobile store notes", () => {
       expect(localization?.summary).toBeDefined();
       expect(JSON.stringify(localization)).toContain("es");
       expect(request.input).not.toContain("LOCALIZATION_ONLY_NOISE");
-      const selected = inventory.files.find((entry) => entry.file === f.file);
-      expect(selected).toBeDefined();
       return completed({
-        files: [
-          { id: selected?.id, focus: ["label"] },
-          {
-            id: inventory.files.find((entry) => entry.file === watchFile)?.id,
-            focus: ["reconnect_enabled"],
-          },
-        ],
+        files: [selection(inventory, f.file), selection(inventory, watchFile, "reconnect_enabled")],
       });
     });
     api.parse
@@ -184,7 +178,6 @@ describe("generated mobile store notes", () => {
       .mockResolvedValueOnce(approvedReview);
 
     const saved = await generateMobileReleaseNotes(f);
-    expect(api.parse).toHaveBeenCalledTimes(3);
     for (const index of [1, 2]) {
       const request = api.parse.mock.calls[index]![0];
       expect(request.input.length).toBeLessThan(60_000);

@@ -151,15 +151,10 @@ describe("tsdown config", () => {
     },
   );
 
-  it.each([
-    {
-      exportName: "OPENCLAW_STATE_SCHEMA_SQL",
-      modulePath: "src/state/openclaw-state-schema.ts",
-      schemaPath: "src/state/openclaw-state-schema.sql",
-      sourceValue: OPENCLAW_STATE_SCHEMA_SQL,
-    },
-  ])("inlines canonical schema bytes for $modulePath", (schema) => {
+  it("inlines canonical state schema bytes", () => {
     const rootDir = process.cwd();
+    const modulePath = path.resolve(rootDir, "src/state/openclaw-state-schema.ts");
+    const schemaPath = path.resolve(rootDir, "src/state/openclaw-state-schema.sql");
     const watchedPaths: string[] = [];
     const plugin = createStateSchemaInlinePlugin(rootDir);
     let cacheKeyGenerator: ((context: { id: string }) => string | undefined) | undefined;
@@ -170,22 +165,17 @@ describe("tsdown config", () => {
     });
     const result = plugin.load.call(
       { addWatchFile: (filePath: string) => watchedPaths.push(filePath) },
-      path.resolve(rootDir, schema.modulePath),
+      modulePath,
     );
-    const schemaPath = path.resolve(rootDir, schema.schemaPath);
     const canonicalSql = readFileSync(schemaPath, "utf8");
 
     expect(result).not.toBeNull();
-    const match = result?.code.match(
-      new RegExp(`^export const ${schema.exportName} = (.*);\\n$`, "su"),
-    );
+    const match = result?.code.match(/^export const OPENCLAW_STATE_SCHEMA_SQL = (.*);\n$/su);
     expect(match?.[1]).toBeDefined();
     expect(JSON.parse(match?.[1] ?? "null")).toBe(canonicalSql);
-    expect(schema.sourceValue).toBe(canonicalSql);
+    expect(OPENCLAW_STATE_SCHEMA_SQL).toBe(canonicalSql);
     expect(watchedPaths).toEqual([schemaPath]);
-    expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, schema.modulePath) })).toBe(
-      canonicalSql,
-    );
+    expect(cacheKeyGenerator?.({ id: modulePath })).toBe(canonicalSql);
     expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, "src/index.ts") })).toBeUndefined();
   });
 
@@ -194,12 +184,6 @@ describe("tsdown config", () => {
     const unifiedGraph = requireUnifiedDistGraph();
     const workerGraph = configs.find(
       (config) => entrySources(config)["worker/worker"] === "src/worker/worker-deploy-entry.ts",
-    );
-    const handoffGraph = configs.find((config) =>
-      entryKeys(config).includes("managed-handoff-runtime"),
-    );
-    const activationGraph = configs.find((config) =>
-      entryKeys(config).includes("package-update-activation-recovery"),
     );
     const executableGraphs = new Set([
       ...configs.filter((config) =>
@@ -217,8 +201,8 @@ describe("tsdown config", () => {
       requireStandaloneRuntimeGraph("worker/sqlite-source-revision.worker"),
       requireStandaloneRuntimeGraph("worker/openclaw-state-read.worker"),
       requireStandaloneRuntimeGraph("worker/worker-native-lifecycle.worker"),
-      expectDefined(handoffGraph, "managed handoff graph"),
-      expectDefined(activationGraph, "package activation graph"),
+      requireStandaloneRuntimeGraph("managed-handoff-runtime"),
+      requireStandaloneRuntimeGraph("package-update-activation-recovery"),
       requireNativeHookRelayGraph(),
       requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),
       requireStandaloneRuntimeGraph("infra/sqlite-source-revision.worker"),
@@ -295,39 +279,15 @@ describe("tsdown config", () => {
   });
 
   it.each([
-    {
-      label: "plugin preparation worker",
-      entry: "plugins/plugin-generation-preparation.worker",
-      source: "src/plugins/plugin-generation-preparation.worker.ts",
-    },
-    {
-      label: "read-only snapshot child",
-      entry: "infra/sqlite-readonly-location.worker",
-      source: "src/infra/sqlite-readonly-location.worker.ts",
-    },
-    {
-      label: "raw source revision child",
-      entry: "infra/sqlite-source-revision.worker",
-      source: "src/infra/sqlite-source-revision.worker.ts",
-    },
-    {
-      label: "native hook locator worker",
-      entry: "agents/harness/native-hook-relay-client.worker",
-      source: "src/agents/harness/native-hook-relay-client.worker.ts",
-    },
-    {
-      label: "spawn broker",
-      entry: "process/spawn-broker/worker",
-      source: "src/process/spawn-broker/worker.ts",
-    },
-    {
-      label: "state lease heartbeat",
-      entry: "state/openclaw-state-lease-heartbeat.worker",
-      source: "src/state/openclaw-state-lease-heartbeat.worker.ts",
-    },
-  ])("emits the $label once without sealing its package loaders", ({ entry, source }) => {
+    "plugins/plugin-generation-preparation.worker",
+    "infra/sqlite-readonly-location.worker",
+    "infra/sqlite-source-revision.worker",
+    "agents/harness/native-hook-relay-client.worker",
+    "process/spawn-broker/worker",
+    "state/openclaw-state-lease-heartbeat.worker",
+  ])("emits %s once without sealing its package loaders", (entry) => {
     const child = requireStandaloneRuntimeGraph(entry);
-    expect(entrySources(child)).toEqual({ [entry]: path.resolve(source) });
+    expect(entrySources(child)).toEqual({ [entry]: path.resolve(`src/${entry}.ts`) });
     expect(child.outputOptions).toMatchObject({
       codeSplitting:
         entry === "infra/sqlite-readonly-location.worker" ||

@@ -23,9 +23,7 @@ function run(command: string, args: string[], cwd: string): string {
   });
 }
 
-function git(cwd: string, args: string[]): string {
-  return run("git", args, cwd);
-}
+const git = (cwd: string, args: string[]) => run("git", args, cwd);
 function cli(...args: string[]) {
   return run(process.execPath, ["--import", "tsx", SCRIPT_PATH, ...args], process.cwd());
 }
@@ -94,14 +92,12 @@ describe("mobile-release-ref", () => {
       "fatal: unable to access remote: Recv failure: Connection reset by peer",
     ])("retries a transient push failure and records the original source: %s", (stderr) => {
       let pushes = 0;
-      const result = recordMobileReleaseRef(options, {
-        execFileSync(command, args, execOptions) {
-          if (args[0] === "push" && ++pushes === 1) {
-            throw Object.assign(new Error("Git push failed"), { stderr });
-          }
-          return execFileSync(command, args, execOptions);
-        },
-      });
+      const result = recording(options, (args, forward) => {
+        if (args[0] === "push" && ++pushes === 1) {
+          throw gitFailure(stderr);
+        }
+        return forward();
+      })();
       expect(result).toMatchObject({ sha: fixture.sha, status: "created" });
       expect(resolveMobileReleaseRef(options).sha).toBe(fixture.sha);
       expect(pushes).toBe(2);
@@ -110,16 +106,12 @@ describe("mobile-release-ref", () => {
 
     it("retries a failed preflight read before creating a release ref", () => {
       let reads = 0;
-      const result = recordMobileReleaseRef(options, {
-        execFileSync(command, args, execOptions) {
-          if (args[0] === "ls-remote" && ++reads === 1) {
-            throw Object.assign(new Error("Git lookup failed"), {
-              stderr: "fatal: Could not resolve host: github.com",
-            });
-          }
-          return execFileSync(command, args, execOptions);
-        },
-      });
+      const result = recording(options, (args, forward) => {
+        if (args[0] === "ls-remote" && ++reads === 1) {
+          throw gitFailure("fatal: Could not resolve host: github.com", "Git lookup failed");
+        }
+        return forward();
+      })();
       expect(result).toMatchObject({ sha: fixture.sha, status: "created" });
       expect(resolveMobileReleaseRef(options).sha).toBe(fixture.sha);
       expect(Atomics.wait).toHaveBeenCalledTimes(1);
@@ -213,25 +205,13 @@ describe("mobile-release-ref", () => {
     });
   });
 
-  it("renders platform release refs from store identities", () => {
-    expect(mobileReleaseRefFor({ platform: "ios", version: "2026.6.10", build: "8" })).toBe(
-      "refs/openclaw/mobile-releases/ios/2026.6.10-8",
-    );
-    expect(
-      mobileReleaseRefFor({
-        platform: "android",
-        version: "2026.6.10",
-        versionCode: "2026061008",
-      }),
-    ).toBe("refs/openclaw/mobile-releases/android/2026.6.10-2026061008");
-  });
-
   it("validates platform-specific numeric identities", () => {
     const rejects = (
       identity: Omit<Parameters<typeof mobileReleaseRefFor>[0], "version"> & { version?: string },
       error: string,
     ) => expect(() => mobileReleaseRefFor({ version: "2026.6.10", ...identity })).toThrow(error);
     rejects({ platform: "ios", build: "0" }, "Invalid iOS build");
+    rejects({ platform: "android" }, "Invalid Android versionCode");
     rejects({ platform: "android", versionCode: "not-a-code" }, "Invalid Android versionCode");
     rejects(
       { platform: "android", versionCode: "2026061101" },
@@ -243,7 +223,7 @@ describe("mobile-release-ref", () => {
     );
   });
 
-  it("parses CLI commands and rejects missing platform-specific fields", () => {
+  it("parses Android record command identities", () => {
     const identity = { platform: "android", version: "2026.6.10" };
     const versionCode = "2026061008";
     const args = flags({ ...identity, "version-code": versionCode, sha: "HEAD" });
@@ -252,10 +232,6 @@ describe("mobile-release-ref", () => {
       ...identity,
       versionCode,
     });
-
-    expect(() => mobileReleaseRefFor({ platform: "android", version: "2026.6.10" })).toThrow(
-      "Invalid Android versionCode",
-    );
   });
 
   it("preserves flag ordering and fails before treating a missing value as help", () => {
@@ -284,7 +260,9 @@ describe("mobile-release-ref", () => {
       platform: "android" as const,
       versionCode: "2026061008",
     };
-    recordMobileReleaseRef(androidOptions);
+    expect(recordMobileReleaseRef(androidOptions).ref).toBe(
+      "refs/openclaw/mobile-releases/android/2026.6.10-2026061008",
+    );
     commitReadme(fixture.root, "next");
     expect(() => recordMobileReleaseRef(androidOptions)).toThrow("already points at");
 

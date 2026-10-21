@@ -263,23 +263,13 @@ function evaluateWorkflowExpression(expression: string, context: Record<string, 
 }
 
 function releaseArtifactFiles(workflowFile: string, artifactPrefix: string, runnerTemp: string) {
-  const workflow = parse(readText(workflowFile)) as {
-    jobs: {
-      release: {
-        steps: Array<{
-          if?: string;
-          uses?: string;
-          with?: { name?: string; path?: string };
-        }>;
-      };
-    };
-  };
-  const upload = workflow.jobs.release.steps.find(
+  const upload = releaseSteps(workflowFile).find(
     (step) =>
       step.uses?.startsWith("actions/upload-artifact@") &&
-      step.with?.name?.startsWith(artifactPrefix),
+      typeof step.with?.name === "string" &&
+      step.with.name.startsWith(artifactPrefix),
   );
-  if (!upload?.with?.path) {
+  if (typeof upload?.with?.path !== "string" || !upload.with.path) {
     throw new Error(`Missing ${artifactPrefix} upload in ${workflowFile}`);
   }
   expect(

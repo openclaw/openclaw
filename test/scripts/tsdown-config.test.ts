@@ -1,5 +1,5 @@
 // Tsdown config tests protect package artifact build contracts.
-import { execFile } from "node:child_process";
+import { execFile, type ExecFileOptions } from "node:child_process";
 import fs from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
@@ -38,6 +38,23 @@ const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
 const { createTempDir } = createScriptTestHarness();
 const testNodeExecPath = resolveTestNodeExecPath();
 afterEach(() => vi.unstubAllEnvs());
+
+function runNode(args: string[], options: ExecFileOptions) {
+  return new Promise<{ error: Error | null; stdout: string; stderr: string }>((resolve) => {
+    execFile(
+      testNodeExecPath,
+      args,
+      { timeout: 30_000, ...options, encoding: "utf8" },
+      (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+    );
+  });
+}
+
+async function dispose(bundles: Awaited<ReturnType<typeof build>>["bundles"]) {
+  for (const bundle of bundles) {
+    await bundle[Symbol.asyncDispose]();
+  }
+}
 
 type TsdownConfig = (typeof configs)[number];
 type OutExtensions = NonNullable<TsdownConfig["outExtensions"]>;
@@ -98,9 +115,7 @@ it("keeps the standalone launcher bootstrap within its measured metadata-only bo
       fs.statSync(path.join(root, "node-host-launcher-bootstrap.js")).size,
     ).toBeLessThanOrEqual(64 * 1024);
   } finally {
-    for (const bundle of bundles) {
-      await bundle[Symbol.asyncDispose]();
-    }
+    await dispose(bundles);
   }
 });
 
@@ -134,9 +149,7 @@ it("keeps catalog projections independent of discovery I/O", async () => {
       ),
     ).toEqual([]);
   } finally {
-    for (const bundle of bundles) {
-      await bundle[Symbol.asyncDispose]();
-    }
+    await dispose(bundles);
   }
 });
 
@@ -327,19 +340,10 @@ describe("tsdown config", () => {
         assert.equal(lazy, identity);
         assert.equal(value, "bundled plugin dependency");
       `;
-        const result = await new Promise<{ error: Error | null; stderr: string }>((resolve) => {
-          execFile(
-            testNodeExecPath,
-            ["--input-type=module", "-e", script],
-            { cwd: root, timeout: 30_000 },
-            (error, _stdout, stderr) => resolve({ error, stderr }),
-          );
-        });
+        const result = await runNode(["--input-type=module", "-e", script], { cwd: root });
         expect(result.error, result.stderr).toBeNull();
       } finally {
-        for (const bundle of bundles) {
-          await bundle[Symbol.asyncDispose]();
-        }
+        await dispose(bundles);
       }
     },
   );
@@ -437,32 +441,24 @@ describe("tsdown config", () => {
           }
           console.log("bundled memory store persists and recalls without image dependencies");
         `;
-        const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-          (resolve) => {
-            execFile(
-              testNodeExecPath,
-              [
-                "--input-type=module",
-                "-e",
-                script,
-                root,
-                path.join(root, "dist", `${entryName}.js`),
-                path.join(root, "dist", `${runtimeEntryName}.js`),
-                JSON.stringify(Object.keys(manifest.optionalDependencies)),
-              ],
-              { cwd: root, timeout: 30_000 },
-              (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-            );
-          },
+        const result = await runNode(
+          [
+            "--input-type=module",
+            "-e",
+            script,
+            root,
+            path.join(root, "dist", `${entryName}.js`),
+            path.join(root, "dist", `${runtimeEntryName}.js`),
+            JSON.stringify(Object.keys(manifest.optionalDependencies)),
+          ],
+          { cwd: root },
         );
         expect(result.error, result.stderr).toBeNull();
         expect(result.stdout.trim()).toBe(
           "bundled memory store persists and recalls without image dependencies",
         );
       } finally {
-        for (const bundle of bundles) {
-          await bundle[Symbol.asyncDispose]();
-        }
+        await dispose(bundles);
       }
     },
   );
@@ -491,28 +487,16 @@ describe("tsdown config", () => {
       logLevel: "silent",
     });
     try {
-      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-        (resolve) => {
-          execFile(
-            testNodeExecPath,
-            [
-              fileURLToPath(new URL("./imap-packaged-service.test-support.mjs", import.meta.url)),
-              root,
-            ],
-            {
-              cwd: root,
-              env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
-              timeout: 30_000,
-            },
-            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-          );
+      const result = await runNode(
+        [fileURLToPath(new URL("./imap-packaged-service.test-support.mjs", import.meta.url)), root],
+        {
+          cwd: root,
+          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
         },
       );
       expect(result.error, result.stderr || result.stdout).toBeNull();
     } finally {
-      for (const bundle of bundles) {
-        await bundle[Symbol.asyncDispose]();
-      }
+      await dispose(bundles);
     }
   });
 
@@ -603,9 +587,7 @@ describe("tsdown config", () => {
         }
       }
     } finally {
-      for (const bundle of bundles) {
-        await bundle[Symbol.asyncDispose]();
-      }
+      await dispose(bundles);
     }
   });
 
@@ -732,24 +714,16 @@ describe("tsdown config", () => {
         }
         console.log("retained config APIs migrate without plugin installation or capability grants");
       `;
-      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-        (resolve) => {
-          execFile(
-            testNodeExecPath,
-            ["--input-type=module", "-e", script, root, JSON.stringify(Object.keys(entries))],
-            { cwd: root, timeout: 30_000 },
-            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-          );
-        },
+      const result = await runNode(
+        ["--input-type=module", "-e", script, root, JSON.stringify(Object.keys(entries))],
+        { cwd: root },
       );
       expect(result.error, result.stderr).toBeNull();
       expect(result.stdout.trim()).toBe(
         "retained config APIs migrate without plugin installation or capability grants",
       );
     } finally {
-      for (const bundle of bundles) {
-        await bundle[Symbol.asyncDispose]();
-      }
+      await dispose(bundles);
     }
   });
 
@@ -811,14 +785,11 @@ describe("tsdown config", () => {
           );
         }
       }
-      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-        (resolve) => {
-          execFile(
-            testNodeExecPath,
-            [
-              "--input-type=module",
-              "--eval",
-              `
+      const result = await runNode(
+        [
+          "--input-type=module",
+          "--eval",
+          `
 import assert from "node:assert/strict";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
@@ -844,21 +815,16 @@ try {
 }
 console.log("relocated Bash parser works without native grammar package");
 `,
-              path.join(installed, "dist", `${entry}.${worker ? "mjs" : "js"}`),
-            ],
-            { cwd: installed, timeout: 30_000 },
-            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-          );
-        },
+          path.join(installed, "dist", `${entry}.${worker ? "mjs" : "js"}`),
+        ],
+        { cwd: installed },
       );
       expect(result.error, result.stderr).toBeNull();
       expect(result.stdout.trim()).toBe(
         "relocated Bash parser works without native grammar package",
       );
     } finally {
-      for (const bundle of bundles) {
-        await bundle[Symbol.asyncDispose]();
-      }
+      await dispose(bundles);
     }
   });
 
@@ -887,14 +853,11 @@ console.log("relocated Bash parser works without native grammar package");
           fs.readFileSync(path.join(installed, "dist/assets/session-card", notice), "utf8"),
         ).toContain("SIL OPEN FONT LICENSE");
       }
-      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-        (resolve) => {
-          execFile(
-            testNodeExecPath,
-            [
-              "--input-type=module",
-              "--eval",
-              `
+      const result = await runNode(
+        [
+          "--input-type=module",
+          "--eval",
+          `
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 const { renderPublicSessionCardPng } = await import(pathToFileURL(process.argv[1]).href);
@@ -911,19 +874,14 @@ assert.equal(png.readUInt32BE(16), 1200);
 assert.equal(png.readUInt32BE(20), 630);
 console.log("relocated session card renders with bundled fonts");
 `,
-              path.join(installed, "dist", `${entry}.js`),
-            ],
-            { cwd: installed, timeout: 30_000 },
-            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-          );
-        },
+          path.join(installed, "dist", `${entry}.js`),
+        ],
+        { cwd: installed },
       );
       expect(result.error, result.stderr).toBeNull();
       expect(result.stdout.trim()).toBe("relocated session card renders with bundled fonts");
     } finally {
-      for (const bundle of bundles) {
-        await bundle[Symbol.asyncDispose]();
-      }
+      await dispose(bundles);
     }
   });
 
@@ -966,9 +924,7 @@ console.log("relocated session card renders with bundled fonts");
             ...bundles.flatMap((bundle) => bundle.chunks.map((chunk) => `dist/${chunk.fileName}`)),
           );
         } finally {
-          for (const bundle of bundles) {
-            await bundle[Symbol.asyncDispose]();
-          }
+          await dispose(bundles);
         }
       }
       expect(files).toEqual(
@@ -1077,40 +1033,32 @@ console.log("relocated session card renders with bundled fonts");
         ) => {
           const rootDir = path.join(relocatedRoot, name);
           fs.mkdirSync(rootDir);
-          const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
-            (resolve) => {
-              execFile(
-                testNodeExecPath,
-                [
-                  "--input-type=module",
-                  "--eval",
-                  FS_SAFE_CALLER_PROBE,
-                  entry,
-                  observer,
-                  rootDir,
-                  mode,
-                  outcome,
-                  worker ? "sealed" : "",
-                  bundledNativeAsset,
-                ],
-                {
-                  cwd: relocatedRoot,
-                  encoding: "utf8",
-                  timeout: 30_000,
-                  env: {
-                    PATH: process.env.PATH,
-                    SystemRoot: process.env.SystemRoot,
-                    WINDIR: process.env.WINDIR,
-                    HOME: temporaryRoot,
-                    USERPROFILE: temporaryRoot,
-                    TMPDIR: temporaryRoot,
-                    TMP: temporaryRoot,
-                    TEMP: temporaryRoot,
-                    ...override,
-                  },
-                },
-                (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-              );
+          const result = await runNode(
+            [
+              "--input-type=module",
+              "--eval",
+              FS_SAFE_CALLER_PROBE,
+              entry,
+              observer,
+              rootDir,
+              mode,
+              outcome,
+              worker ? "sealed" : "",
+              bundledNativeAsset,
+            ],
+            {
+              cwd: relocatedRoot,
+              env: {
+                PATH: process.env.PATH,
+                SystemRoot: process.env.SystemRoot,
+                WINDIR: process.env.WINDIR,
+                HOME: temporaryRoot,
+                USERPROFILE: temporaryRoot,
+                TMPDIR: temporaryRoot,
+                TMP: temporaryRoot,
+                TEMP: temporaryRoot,
+                ...override,
+              },
             },
           );
           expect(result.error, `${name}\n${result.stdout}\n${result.stderr}`).toBeNull();
@@ -1156,9 +1104,7 @@ console.log("relocated session card renders with bundled fonts");
           ]);
         }
       } finally {
-        for (const bundle of bundles) {
-          await bundle[Symbol.asyncDispose]();
-        }
+        await dispose(bundles);
       }
     },
   );
@@ -1291,9 +1237,7 @@ console.log("relocated session card renders with bundled fonts");
           expectedImports.toSorted(),
         );
       } finally {
-        for (const bundle of bundles) {
-          await bundle[Symbol.asyncDispose]();
-        }
+        await dispose(bundles);
       }
     },
   );
@@ -1404,13 +1348,12 @@ console.log("relocated session card renders with bundled fonts");
         (name) => name.startsWith("extensions/") && excluded.has(name.split("/")[1]!),
       ),
     ).toEqual([]);
-    expect(entries["plugin-sdk/codex-mcp-projection"]).toBe(
-      "src/plugin-sdk/codex-mcp-projection.ts",
-    );
-    expect(entries["plugin-sdk/codex-session-transcript-runtime"]).toBe(
-      "src/plugin-sdk/codex-session-transcript-runtime.ts",
-    );
-    expect(entries["plugins/public-surface-runtime"]).toBe("src/plugins/public-surface-runtime.ts");
+    expect(entries).toMatchObject({
+      "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
+      "plugin-sdk/codex-session-transcript-runtime":
+        "src/plugin-sdk/codex-session-transcript-runtime.ts",
+      "plugins/public-surface-runtime": "src/plugins/public-surface-runtime.ts",
+    });
     expect(Object.values(entries)).toEqual(
       expect.arrayContaining([
         "extensions/vault/vault-secret-id.js",
@@ -1499,24 +1442,26 @@ console.log("relocated session card renders with bundled fonts");
       SEALED_RUNTIME_BUILD: "true",
       WORKER_DEPLOY_VERSION: JSON.stringify(packageVersion),
     });
-    expect(workerConfig?.alias).toMatchObject({
-      bufferutil: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
-      "chromium-bidi/lib/cjs/bidiMapper/BidiMapper": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
-      "chromium-bidi/lib/cjs/cdp/CdpConnection": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
-      "electron/index.js": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
-      fsevents: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
-      kerberos: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
-      "utf-8-validate": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
-    });
-    expect(workerConfig?.outDir).toBe("dist");
-    expect(workerConfig?.shims).toBe(true);
-    expect(workerConfig?.plugins).toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: "openclaw:worker-deploy" })]),
-    );
-    expect(workerConfig?.outputOptions).toMatchObject({
-      codeSplitting: true,
-      chunkFileNames: "worker/worker-chunk-[hash].mjs",
-      assetFileNames: "worker/[name][extname]",
+    expect(workerConfig).toMatchObject({
+      alias: Object.fromEntries(
+        [
+          "bufferutil",
+          "chromium-bidi/lib/cjs/bidiMapper/BidiMapper",
+          "chromium-bidi/lib/cjs/cdp/CdpConnection",
+          "electron/index.js",
+          "fsevents",
+          "kerberos",
+          "utf-8-validate",
+        ].map((name) => [name, WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID]),
+      ),
+      plugins: expect.arrayContaining([
+        expect.objectContaining({ name: "openclaw:worker-deploy" }),
+      ]),
+      outputOptions: {
+        codeSplitting: true,
+        chunkFileNames: "worker/worker-chunk-[hash].mjs",
+        assetFileNames: "worker/[name][extname]",
+      },
     });
     for (const config of [receiverConfig, launcherConfig]) {
       expect(config?.define).toBeUndefined();
@@ -1539,17 +1484,18 @@ console.log("relocated session card renders with bundled fonts");
       pkgType: "module",
     } as Parameters<OutExtensions>[0];
     for (const config of Object.values(workerConfigs)) {
-      expect(config?.dts).toBe(false);
-      expect(config?.outDir).toBe("dist");
-      expect(config?.shims).toBe(true);
-      expect(config?.deps?.onlyBundle).toBe(false);
-      expect(config?.deps?.alwaysBundle).toBeTypeOf("function");
+      expect(config).toMatchObject({
+        dts: false,
+        outDir: "dist",
+        shims: true,
+        platform: "node",
+        deps: { onlyBundle: false, alwaysBundle: expect.any(Function) },
+      });
       const alwaysBundle = config?.deps?.alwaysBundle;
       if (typeof alwaysBundle !== "function") {
         throw new Error("worker deploy config must define dependency bundling");
       }
       expect(alwaysBundle("json5", undefined)).toBe(true);
-      expect(config?.platform).toBe("node");
       expect(config?.outExtensions?.(context)).toEqual({ js: ".mjs", dts: ".d.ts" });
     }
   });
