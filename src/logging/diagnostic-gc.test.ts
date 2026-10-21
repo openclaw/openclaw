@@ -127,7 +127,8 @@ it("drains final short-task GC on retirement without sampling each task or count
     samples.length = 0;
     await flush();
     expect(samples).toHaveLength(1);
-    expect(samples[0]).toMatchObject({ flushed: true, gc: undefined });
+    expect(samples[0]).toMatchObject({ flushed: true });
+    expect(samples[0]).not.toHaveProperty("gc");
     memory.setTaskMetrics(false);
     expect(memory.collectTask()).toBeUndefined();
   } finally {

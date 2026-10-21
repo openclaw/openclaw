@@ -66,7 +66,7 @@ export function serveWorkerMemorySamples(
       gc = undefined;
     }
   };
-  const sample = (flushed?: true) => {
+  const sample = () => {
     const { heapUsed, heapTotal, external, arrayBuffers } = process.memoryUsage();
     const heapSpaces = process.versions.bun
       ? undefined
@@ -84,7 +84,6 @@ export function serveWorkerMemorySamples(
       heapSpaces,
       retainedData: retainedData?.(),
       gc,
-      flushed,
     });
     gc = undefined;
   };
@@ -111,7 +110,9 @@ export function serveWorkerMemorySamples(
     ) => {
       if (request && "flush" in request) {
         flushGcSamples();
-        sample(true);
+        flushGc();
+        // Only this heap counter survives retirement; RSS, spaces and retained data do not.
+        port1.postMessage({ flushed: true, heapUsed: getHeapStatistics().used_heap_size });
         return;
       }
       if (request && "captureGcProfile" in request) {

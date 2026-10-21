@@ -78,11 +78,10 @@ describe("worker CPU lifecycle", () => {
       expect(flushWorkerDiagnostics(worker, "rotation")).toBe(flush);
       expect(flush.read().status).toBe("pending");
       port2.postMessage({
-        heapUsed: heapUsed / 2,
-        heapTotal: 4096,
-        external: 0,
-        arrayBuffers: 0,
         gc: [{ kind: "scavenge", reason: "other", durationMs, reclaimedBytes }],
+      });
+      port2.postMessage({
+        heapUsed: heapUsed / 2,
         flushed: true,
       });
       // The retained cleanup path must make progress without running port callbacks.

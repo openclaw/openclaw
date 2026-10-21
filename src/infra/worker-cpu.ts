@@ -33,7 +33,6 @@ type WorkerMemorySample = Pick<
   heapSpaces?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["heapSpaces"];
   retainedData?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["retainedData"];
   gc?: GcSample[];
-  flushed?: true;
 };
 
 type WorkerCpuHandle = {
@@ -521,10 +520,22 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     (
       record:
         | WorkerMemorySample
+        | { flushed: true; heapUsed: number }
         | { gc: GcSample[] }
         | { gcStorm: WorkerGcStorm }
         | { retireWorkerId: string },
     ) => {
+      if ("flushed" in record) {
+        recordWorkerMessage("memory", "from_worker", 8);
+        if (source.taskMetrics) {
+          source.taskMetrics.heapUsedHighWaterBytes = Math.max(
+            source.taskMetrics.heapUsedHighWaterBytes,
+            record.heapUsed,
+          );
+        }
+        source.memoryFlush?.resolve();
+        return;
+      }
       if ("retireWorkerId" in record) {
         recordWorkerMessage("memory", "from_worker");
         gcStorm.publish(record.retireWorkerId);
@@ -619,9 +630,6 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
       };
       source.memoryPending = false;
       source.memoryUnavailable = false;
-      if (record.flushed) {
-        source.memoryFlush?.resolve();
-      }
     },
   );
   port.once("close", close);
