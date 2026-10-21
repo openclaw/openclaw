@@ -6,6 +6,7 @@ const mockState = vi.hoisted(() => ({
   autoHello: true,
 }));
 
+// mock-isolation: Startup fixtures supply endpoint/auth facts without reading operator config.
 vi.mock("../gateway/client-bootstrap.js", () => ({
   resolveGatewayClientBootstrap: vi.fn<typeof resolveGatewayClientBootstrap>(async () => ({
     url: "wss://127.0.0.1:18789",
@@ -20,6 +21,7 @@ vi.mock("../gateway/client-bootstrap.js", () => ({
   })),
 }));
 
+// mock-isolation: The hello handshake is controlled without opening a real Gateway connection.
 vi.mock("../gateway/client.js", () => ({
   GatewayClient: class MockGatewayClient {
     constructor(private readonly options: Record<string, unknown>) {
@@ -37,6 +39,7 @@ vi.mock("../gateway/client.js", () => ({
     async stopAndWait(): Promise<void> {}
   },
 }));
+// mock-isolation: Start the synthetic client directly without the real event-loop readiness wait.
 vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: vi.fn(async (client: { start: () => void }) => {
     client.start();

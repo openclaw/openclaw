@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { readFileSync } from "node:fs";
-import { URL } from "node:url";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiffViewerPayload } from "./types.js";
@@ -9,7 +9,10 @@ import type { DiffViewerPayload } from "./types.js";
 const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
 (globalThis as typeof globalThis & Record<symbol, unknown>)[disableAutoStartKey] = true;
 
-const VIEWER_CLIENT_SRC = readFileSync(new URL("./viewer-client.ts", import.meta.url), "utf8");
+const VIEWER_CLIENT_SRC = readFileSync(
+  path.join(process.cwd(), "extensions/diffs/src/viewer-client.ts"),
+  "utf8",
+);
 
 const { fileDiffHydrateMock, fileDiffRerenderMock, fileDiffSetOptionsMock } = vi.hoisted(() => ({
   fileDiffHydrateMock: vi.fn(),

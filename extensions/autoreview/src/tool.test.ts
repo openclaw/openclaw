@@ -11,7 +11,7 @@ type CommandOptions = Exclude<Parameters<Command>[1], number>;
 function json(data: unknown, code = 0, stderr = "") {
   return { code, stdout: JSON.stringify(data), stderr };
 }
-function rejectOnAbort(signal: AbortSignal | undefined, error: unknown) {
+function rejectOnAbort(signal: AbortSignal | undefined, error: Error) {
   return new Promise<never>((_resolve, reject) => {
     signal?.addEventListener("abort", () => reject(error), { once: true });
   });

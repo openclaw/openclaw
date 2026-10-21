@@ -9,6 +9,7 @@ const { runSearxngSearch } = vi.hoisted(() => ({
   runSearxngSearch: vi.fn(async (params: Record<string, unknown>) => params),
 }));
 
+// mock-isolation: Provider argument mapping must not execute real search requests.
 vi.mock("./searxng-client.js", () => ({ runSearxngSearch }));
 
 function configWithBaseUrl(baseUrl: unknown): OpenClawConfig {

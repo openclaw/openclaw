@@ -39,6 +39,7 @@ vi.mock("../config/config.js", () => ({
   captureRuntimeConfigAsyncReader: () => async () => ({}),
 }));
 
+// mock-isolation: Inject a bridge-close failure without starting a real Gateway bridge.
 vi.mock("./channel-bridge.js", () => ({
   OpenClawChannelBridge: class MockOpenClawChannelBridge {
     setServer() {}
