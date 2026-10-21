@@ -9,7 +9,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { embeddedRunMock, rpcReq } from "./test-helpers.js";
 import {
-  seedSessionTranscript,
+  seedLinearSessionTranscript,
   sessionStoreEntry,
   setupGatewaySessionsTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -17,6 +17,8 @@ import {
 import "./server-methods/sessions-compact.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const initial = { compactionCount: 2, totalTokens: 120, totalTokensFresh: true };
+const committed = { label: "Edited during summary", compactionCount: 4, totalTokens: 80 };
 
 function loadSessionEntry(scope: Parameters<typeof loadAccessorSessionEntry>[0]) {
   return loadAccessorSessionEntry({ ...scope, readConsistency: "latest" });
@@ -32,27 +34,17 @@ test.each([55, undefined])(
       sessionKey: "agent:main:main",
       storePath,
     };
-    await upsertSessionEntryCore(
-      scope,
-      sessionStoreEntry(scope.sessionId, {
-        compactionCount: 2,
-        totalTokens: 120,
-        totalTokensFresh: true,
-      }),
-    );
-    await seedSessionTranscript({
+    await upsertSessionEntryCore(scope, sessionStoreEntry(scope.sessionId, initial));
+    await seedLinearSessionTranscript({
       ...scope,
-      messages: [
-        { role: "user", content: "Retained first message" },
-        { role: "user", content: "Retained second message" },
-      ],
+      contents: ["Retained first message", "Retained second message"],
     });
     embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(
       async (_params, hostInput) => {
         const host = hostInput as QueuedCompactionHostOptions;
         const manager = host.preparedSession?.sessionManager;
-        const firstKeptEntryId = manager?.getEntries()[0]?.id;
-        if (!manager || !firstKeptEntryId || !host.withCompactionPersistenceAsync) {
+        const keptId = manager?.getEntries()[0]?.id;
+        if (!manager || !keptId || !host.withCompactionPersistenceAsync) {
           throw new Error("expected prepared Gateway compaction persistence");
         }
         await upsertSessionEntryCore(scope, {
@@ -61,30 +53,18 @@ test.each([55, undefined])(
           label: "Edited during summary",
           compactionCount: 3,
         });
+        const boundary = ["summary", keptId, 120, undefined, undefined, undefined, 80] as const;
         await withSessionCompactionPersistenceAsync(
           manager,
           host.withCompactionPersistenceAsync,
-          () =>
-            manager.appendCompactionAsync(
-              "summary",
-              firstKeptEntryId,
-              120,
-              undefined,
-              undefined,
-              undefined,
-              80,
-            ),
+          () => manager.appendCompactionAsync(...boundary),
         );
-        expect(loadSessionEntry(scope)).toMatchObject({
-          label: "Edited during summary",
-          compactionCount: 4,
-          totalTokens: 80,
-        });
+        expect(loadSessionEntry(scope)).toMatchObject(committed);
         return {
           ok: true,
           compacted: true,
           compactionKind: "context-engine",
-          result: { summary: "summary", firstKeptEntryId, tokensBefore: 120, tokensAfter },
+          result: { summary: "summary", firstKeptEntryId: keptId, tokensBefore: 120, tokensAfter },
         };
       },
     );
@@ -92,17 +72,20 @@ test.each([55, undefined])(
     const { ws } = await openClient();
     try {
       const response = await rpcReq(ws, "sessions.compact", { key: "main" });
-      expect(response.ok, JSON.stringify(response)).toBe(true);
-      expect(response.payload).toMatchObject({ key: "agent:main:main", compacted: true });
+      expect(response, JSON.stringify(response)).toMatchObject({
+        ok: true,
+        payload: { key: "agent:main:main", compacted: true },
+      });
       const entry = loadSessionEntry(scope);
-      expect(entry).toMatchObject({ label: "Edited during summary", compactionCount: 4 });
-      expect(entry?.totalTokens).toBe(tokensAfter ?? 80);
-      expect(entry?.totalTokensFresh).toBe(tokensAfter !== undefined);
+      expect(entry).toMatchObject({
+        ...committed,
+        totalTokens: tokensAfter ?? 80,
+        totalTokensFresh: tokensAfter !== undefined,
+      });
       expect(entry?.totalTokensVersion).toBe(
         tokensAfter !== undefined ? SESSION_TOTAL_TOKENS_VERSION : undefined,
       );
-      const transcript = await loadTranscriptEvents(scope);
-      expect(transcript).toMatchObject([
+      expect(await loadTranscriptEvents(scope)).toMatchObject([
         { type: "session" },
         { type: "message", message: { content: "Retained first message" } },
         { type: "message", message: { content: "Retained second message" } },

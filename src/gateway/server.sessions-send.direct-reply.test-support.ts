@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { bindAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -14,20 +14,16 @@ export async function runDirectSessionReplyScenario(params: {
   resolveGatewayContext: GatewayContextResolver;
 }): Promise<void> {
   const { dir, sessionKey, expectedAccountId } = params;
-  const sendCalls: Array<{ to?: string; text?: string; accountId?: string | null }> = [];
+  const sendText = vi.fn(async () => ({ channel: "feishu", messageId: "direct-reply-proof" }));
   const feishuPlugin = createOutboundTestPlugin({
     id: "feishu",
-    label: "Feishu",
     outbound: {
       deliveryMode: "direct",
       resolveTarget: ({ to }) =>
         to?.startsWith("user:")
           ? { ok: true, to }
           : { ok: false, error: new Error("expected a direct user target") },
-      sendText: async (ctx) => {
-        sendCalls.push({ to: ctx.to, text: ctx.text, accountId: ctx.accountId });
-        return { channel: "feishu", messageId: "direct-reply-proof" };
-      },
+      sendText,
     },
     messaging: {
       normalizeTarget: (raw) => raw,
@@ -45,13 +41,11 @@ export async function runDirectSessionReplyScenario(params: {
   await writeSessionStore({
     entries: { [sessionKey]: { sessionId, updatedAt: Date.now() } },
   });
-  const entry = loadSessionEntry({ sessionKey, storePath });
-  expect(entry?.sessionId).toBe(sessionId);
+  const session = { agentId: "main", sessionKey, storePath, sessionId };
+  const entry = loadSessionEntry(session);
 
   await runSessionsSendA2AFlow({
-    callGateway: bindAgentToolGatewayRequest({
-      resolveGatewayContext: params.resolveGatewayContext,
-    }),
+    callGateway: bindAgentToolGatewayRequest(params),
     runId: "direct-reply-proof",
     targetAgentId: "main",
     targetSessionKey: sessionKey,
@@ -60,10 +54,7 @@ export async function runDirectSessionReplyScenario(params: {
     requesterSessionKey: sessionKey,
     requesterChannel: "feishu",
     requesterDeliveryGeneration: {
-      agentId: "main",
-      storePath,
-      sessionKey,
-      sessionId,
+      ...session,
       lifecycleRevision: entry?.lifecycleRevision ?? null,
     },
     replyTimeoutMs: 5_000,
@@ -74,11 +65,11 @@ export async function runDirectSessionReplyScenario(params: {
     },
   });
 
-  expect(sendCalls).toMatchObject([
-    {
+  expect(sendText).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
       to: "user:ou_reply_recipient",
       text: "same-session reply delivered",
       ...(expectedAccountId ? { accountId: expectedAccountId } : {}),
-    },
-  ]);
+    }),
+  );
 }
