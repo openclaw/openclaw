@@ -22,7 +22,7 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     port: { type: "string", default: "41570" },
     samples: { type: "string", default: "200" },
-    "rss-mib": { type: "string", default: "8192" },
+    "ballast-mib": { type: "string", default: "8192" },
     "start-at": { type: "string" },
     "snapshot-owner": { type: "string" },
     output: { type: "string" },
@@ -35,7 +35,7 @@ assert(values["state-dir"] && values.output, "--state-dir and --output are requi
 const port = integer(values.port, "--port", 40000);
 assert(port <= 65535);
 const samples = integer(values.samples, "--samples", 1);
-const targetRssBytes = integer(values["rss-mib"], "--rss-mib", 1) * 1024 * 1024;
+const ballastBytes = integer(values["ballast-mib"], "--ballast-mib", 1) * 1024 * 1024;
 const startAt = values["start-at"] ? integer(values["start-at"], "--start-at", 1) : undefined;
 const root = path.resolve(values["state-dir"]);
 mkdirSync(root); // Never adopt another run's state or orphan registrations.
@@ -242,8 +242,9 @@ async function startup() {
 }
 
 try {
-  while (process.memoryUsage().rss < targetRssBytes) {
-    resident.push(Buffer.alloc(64 * 1024 * 1024, 0x5a)); // Touch every page before timing.
+  // Startup and worker heaps shrink after readiness; fixed ballast preserves the memory shape.
+  for (let bytes = 0; bytes < ballastBytes; bytes += 64 * 1024 * 1024) {
+    resident.push(Buffer.alloc(Math.min(64 * 1024 * 1024, ballastBytes - bytes), 0x5a));
     await setImmediate();
   }
   await startup(); // Warm module/database setup; cold startup is not mixed into warm samples.
@@ -282,7 +283,7 @@ try {
       "Synthetic stdio peer; no model turn, account setup, or full run-attempt policy preparation",
     samples,
     gatewayPid: process.pid,
-    targetRssBytes,
+    ballastBytes,
     touchedBufferBytes: resident.reduce((sum, buffer) => sum + buffer.length, 0),
     snapshotOwnerLoads,
     elapsedMs: measurementEnd - measurementStart,
@@ -329,8 +330,8 @@ try {
     "resident fixture was not retained",
   );
   assert(
-    report.rssBytes.min >= targetRssBytes * 0.95,
-    "resident memory dropped below the requested shape",
+    report.rssBytes.min >= ballastBytes * 0.95,
+    "resident memory dropped below the touched ballast",
   );
   writeFileSync(values.output, `${JSON.stringify(report, null, 2)}\n`);
   console.log(JSON.stringify({ ...report, rows: undefined }));

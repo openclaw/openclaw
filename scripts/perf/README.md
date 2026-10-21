@@ -100,7 +100,6 @@ beside the originals with a `.candidate.ts` suffix and pass `--owner-suffix cand
 The child verifies both substitutions loaded; results record both owner hashes
 and the optional `--revision` label.
 
-
 ## Async context allocation
 
 `async-store-measure.mjs` compares Node's native runner, the shared single-copy
@@ -189,8 +188,8 @@ remain valid. Swap the CPU halves for the next pair and compare paired differenc
 
 ## Codex process inspection
 
-`codex-process-inspection-measure.ts` starts a real isolated Gateway, touches memory
-to reach `--rss-mib 8192`, then measures `CodexAppServerClient.start`, durable child
+`codex-process-inspection-measure.ts` starts a real isolated Gateway, touches and
+retains `--ballast-mib 8192` of fixed memory, then measures `CodexAppServerClient.start`, durable child
 registration, and `initialize` against a synthetic stdio peer. It verifies the
 initialized notification, registration fingerprint, polite shutdown, and deletion
 of the registration after each sample. It does not run model turns or full attempt
@@ -200,14 +199,16 @@ state and loopback ports for each side:
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/codex-process-inspection-measure.ts \
   --state-dir /srv/perf-sandbox/<lane>/state-a --port 41570 \
-  --samples 200 --rss-mib 8192 --start-at <future-epoch-ms> \
+  --samples 200 --ballast-mib 8192 --start-at <future-epoch-ms> \
   --output /srv/perf-sandbox/<lane>/result-a.json
 ```
 
 Use `--snapshot-owner <baseline-sibling.ts>` to replace only the process snapshot
 owner through a module resolution hook. Reports separate actual main-thread peer
 and inspection spawns and their synchronous durations, startup and cleanup time,
-CPU, observed RSS, event-loop sample counts, and total/major GC. Setup and one warmup
+CPU, observed RSS, event-loop sample counts, and total/major GC. Actual RSS includes
+the 8 GiB ballast plus Gateway/worker heaps; those heaps can shrink after setup, so
+the fixture never sizes ballast against transient startup RSS. Setup and one warmup
 are excluded; whole-run CPU/GC also include the registration verification reads.
 Hold one shared quiet lock around each concurrent pair, give its sides interleaved
 CPUs, then swap sides for the second pair. Use the production guard before and
