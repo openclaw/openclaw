@@ -533,68 +533,42 @@ describe("gateway chat metadata auth deadlines", () => {
     }
   });
 
-  test.each([{ at: 20_000, available: false }])(
-    "reads a cached static token at $at without publication",
-    async ({ at, available }) => {
-      const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
-      const authStore: AuthProfileStore = {
-        version: 1,
-        profiles: {
-          "acme:primary": {
-            type: "token",
-            provider: "acme",
-            token: "synthetic-token",
-            expires: 20_000,
-          },
-        },
-      };
-      const { cached, fresh } = createAuthHarnesses(authStore, "synthetic-token");
-      try {
-        await cached.runtime.refresh();
-        await expect(cached.runtime.read({ agentId: "main" })).resolves.toMatchObject({
-          models: [{ id: "model", provider: "acme", available: true }],
-        });
-        clock.mockReturnValue(at);
-        await fresh.runtime.refresh();
-        const expected = await fresh.runtime.read({ agentId: "main" });
-        expect(expected).toMatchObject({
-          models: [{ id: "model", provider: "acme", available }],
-        });
-        expect(await cached.runtime.read({ agentId: "main" })).toEqual(expected);
-      } finally {
-        await Promise.all([cached.runtime.stop(), fresh.runtime.stop()]);
-        clock.mockRestore();
-      }
-    },
-  );
-
   test.each([
-    { name: "cooldown end", cooldownUntil: 20_000, at: 20_000, before: false, after: true },
+    { name: "token expiry", token: true, before: true, after: false },
+    { name: "cooldown end", token: false, before: false, after: true },
   ])(
     "keeps cached metadata current at $name without publication",
-    async ({ cooldownUntil, at, before, after }) => {
+    async ({ token, before, after }) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+      const credential = token
+        ? { type: "token" as const, token: "synthetic-token", expires: 20_000 }
+        : { type: "api_key" as const, key: "synthetic-key" };
       const authStore: AuthProfileStore = {
         version: 1,
-        profiles: { "acme:primary": { type: "api_key", provider: "acme", key: "synthetic-key" } },
-        usageStats: { "acme:primary": { cooldownUntil } },
+        profiles: { "acme:primary": { ...credential, provider: "acme" } },
+        ...(token ? {} : { usageStats: { "acme:primary": { cooldownUntil: 20_000 } } }),
       };
-      const { cached, fresh } = createAuthHarnesses(authStore, "synthetic-key");
+      const { cached, fresh } = createAuthHarnesses(
+        authStore,
+        token ? "synthetic-token" : "synthetic-key",
+      );
       try {
-        await cached.runtime.refresh();
-        await expect(cached.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+        await cached.refresh();
+        await expect(cached.read()).resolves.toMatchObject({
           models: [{ id: "model", provider: "acme", available: before }],
         });
-        clock.mockReturnValue(at);
-        await fresh.runtime.refresh();
-        const expected = await fresh.runtime.read({ agentId: "main" });
+        clock.mockReturnValue(20_000);
+        await fresh.refresh();
+        const expected = await fresh.read();
         expect(expected).toMatchObject({
           models: [{ id: "model", provider: "acme", available: after }],
         });
         cached.getPreparedAuthStore.mockClear();
-        expect(await cached.runtime.read({ agentId: "main" })).toEqual(expected);
-        expect(cached.getPreparedAuthStore).not.toHaveBeenCalled();
-        expect(cached.buildCommands).toHaveBeenCalledTimes(2);
+        expect(await cached.read()).toEqual(expected);
+        if (!token) {
+          expect(cached.getPreparedAuthStore).not.toHaveBeenCalled();
+          expect(cached.buildCommands).toHaveBeenCalledTimes(2);
+        }
       } finally {
         await Promise.all([cached.runtime.stop(), fresh.runtime.stop()]);
         clock.mockRestore();

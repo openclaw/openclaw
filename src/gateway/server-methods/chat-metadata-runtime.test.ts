@@ -115,19 +115,15 @@ describe("gateway chat metadata runtime", () => {
   test("invalidates models after same-snapshot owner replacement", async () => {
     const onChanged = vi.fn();
     const harness = createChatMetadataHarness(undefined, { onChanged });
-    try {
-      await harness.refresh();
-      onChanged.mockClear();
-      // Materialization publications can retain both the runtime and catalog objects.
-      harness.runtime.invalidate();
-      await harness.refresh();
-      expect(onChanged).toHaveBeenCalledExactlyOnceWith({
-        modelCatalogChanged: true,
-        authChanged: true,
-      });
-    } finally {
-      await harness.runtime.stop();
-    }
+    await harness.refresh();
+    onChanged.mockClear();
+    // Materialization publications can retain both the runtime and catalog objects.
+    harness.runtime.invalidate();
+    await harness.refresh();
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+      modelCatalogChanged: true,
+      authChanged: true,
+    });
   });
 
   test("prepares a projection lazily after its owner publishes", async () => {
@@ -437,42 +433,17 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("keeps live provider discovery off chat metadata projection", async () => {
-    const config = createOpenAIChatMetadataConfig();
-    const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
-    const discoveryCredentials: AgentCredentialMap = {
-      openai: {
-        type: "oauth",
-        access: "rejected-access-token",
-        refresh: "rejected-refresh-token",
-        expires: Date.now() + 30 * 60_000,
-      },
-    };
-    const owner = createChatMetadataOwner(
-      config,
-      "gpt-5.6-luna",
-      discoveryCredentials,
-      "openai",
-      "openai-chatgpt-responses",
-    );
+    const { harness, owner, auth } = openaiFixture(createOpenAIChatMetadataConfig());
     const fullCatalog = {
       ...owner.modelCatalog,
       providerOutcomes: [{ provider: "openai", status: "auth-rejected" as const }],
     };
     const loadFullModelCatalog = vi.fn(async () => fullCatalog);
-    harness.setOwner({
-      ...owner,
-      loadFullModelCatalog,
-    });
+    harness.setOwner({ ...owner, loadFullModelCatalog });
     harness.setAuthStore({
       version: 1,
       profiles: {
-        "openai:chatgpt": {
-          type: "oauth",
-          provider: "openai",
-          access: "rejected-access-token",
-          refresh: "rejected-refresh-token",
-          expires: Date.now() + 30 * 60_000,
-        },
+        "openai:chatgpt": { ...auth.openai!, provider: "openai" },
       },
     });
 

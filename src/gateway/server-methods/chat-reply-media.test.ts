@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { onTestFinished, afterEach, beforeEach, assert, expect, it, vi } from "vitest";
+import { onTestFinished, assert, expect, it, vi } from "vitest";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.replies.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
@@ -11,26 +11,17 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { saveMediaBuffer } from "../../media/store.js";
-import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
 import { createManagedOutgoingMediaBlocks as createManagedOutgoingImageBlocks } from "../managed-image-attachments.js";
 import {
   buildAssistantReplyContent as buildReplyContent,
   buildAssistantReplyContentFromInputs,
 } from "./chat-assistant-content.js";
+import { AUDIO_BYTES, PNG_BYTES, useMediaState } from "./chat-media-fixture.test-support.js";
 import {
   captureWebchatReplyMediaScope,
   normalizeWebchatReplyMediaPathsForDisplay,
 } from "./chat-reply-media.js";
 import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
-
-const PNG_BYTES = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-  "base64",
-);
 const TEST_SESSION_KEY = "agent:main:webchat:direct:user";
 
 type ReplyMediaPayloads = Parameters<
@@ -38,22 +29,10 @@ type ReplyMediaPayloads = Parameters<
 >[0]["payloads"];
 type ReplyMediaPayload = ReplyMediaPayloads[number];
 
-let testState: OpenClawTestState;
-
-beforeEach(async () => {
-  testState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-webchat-reply-media-",
-  });
-});
-
-afterEach(async () => {
-  await drainGlobalSingletonLifecycleState();
-  await testState.cleanup();
-});
+const getState = useMediaState();
 
 function createMediaTestContext() {
-  const stateDir = testState.stateDir;
+  const stateDir = getState().stateDir;
   const agentDir = path.join(stateDir, "agents", "main", "agent");
   const workspaceDir = path.join(stateDir, "workspace");
   const cfg: OpenClawConfig = {
@@ -71,7 +50,7 @@ async function writeMedia(file: string, bytes: Buffer | string) {
 }
 
 async function createAudioFile(audioPath: string): Promise<void> {
-  await writeMedia(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+  await writeMedia(audioPath, AUDIO_BYTES);
 }
 
 const dataImageUrl = `data:image/png;base64,${PNG_BYTES.toString("base64")}`;

@@ -54,6 +54,57 @@ import {
 const policyMessage =
   "OpenCode cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.";
 
+type DispatchOptions = Parameters<typeof createChatSendDispatchErrorLifecycle>[0];
+function dispatchLifecycle(
+  registration: ReturnType<typeof registerRpcSourceForTest>,
+  overrides: Partial<Omit<DispatchOptions, "admission" | "context" | "session">> & {
+    admission?: Partial<DispatchOptions["admission"]>;
+    context?: Partial<Omit<DispatchOptions["context"], "logGateway">> & {
+      logGateway?: Pick<DispatchOptions["context"]["logGateway"], "warn">;
+    };
+    session?: Partial<DispatchOptions["session"]>;
+  } = {},
+) {
+  const { admission, context, session, ...rest } = overrides;
+  const target = expectDefined(registration.entry.input.target, "source target");
+  return createChatSendDispatchErrorLifecycle({
+    admission: {
+      activeRunAbort: registration,
+      cleanupAdmittedRun: vi.fn(),
+      lifecycleGeneration: "test-generation",
+      restartSafeAdmission: undefined,
+      ...admission,
+    },
+    context: {
+      agentRunSeq: new Map(),
+      broadcast: vi.fn(),
+      chatRunState: createChatRunState(),
+      dedupe: new Map(),
+      getRuntimeConfig: () => ({}),
+      logGateway: { warn: vi.fn() },
+      nodeSendToSession: vi.fn(),
+      removeChatRun: vi.fn(),
+      ...context,
+    } as DispatchOptions["context"],
+    session: {
+      agentId: "main",
+      storePath: target.storeScope,
+      cfg: {},
+      clientRunId: expectDefined(registration.entry.input.protocolRunId, "source run"),
+      now: 1,
+      rawSessionKey: target.sessionKey,
+      sessionKey: target.sessionKey,
+      ...session,
+    },
+    isQueuedFollowupEnqueued: () => false,
+    isAgentRunStarted: () => false,
+    persistUserTurnTranscript: vi.fn(),
+    terminalizeRestartSafeAdmission: vi.fn(),
+    userTurnRecorder: { hasPersisted: () => false, isBlocked: () => false },
+    ...rest,
+  });
+}
+
 async function captureTerminalTarget(scope: {
   agentId?: string;
   sessionKey: string;
@@ -171,38 +222,18 @@ describe("handleChatSendSetupError", () => {
 
 describe("createChatSendDispatchErrorLifecycle", () => {
   it.each([
-    { settlement: "fallback", missingProfile: false, policyFailure: false, sessionChanged: false },
+    { settlement: "fallback" },
     { settlement: "fallback", stateContention: true },
     { settlement: "fallback", restartFailure: true },
     { settlement: "restart-safe", restartFailure: true },
     { settlement: "restart-safe", stateContention: true },
-    {
-      settlement: "restart-safe",
-      missingProfile: false,
-      policyFailure: false,
-      sessionChanged: false,
-    },
-    { settlement: "fallback", missingProfile: true, policyFailure: false, sessionChanged: false },
-    {
-      settlement: "restart-safe",
-      missingProfile: true,
-      policyFailure: false,
-      sessionChanged: false,
-    },
-    { settlement: "fallback", missingProfile: false, policyFailure: true, sessionChanged: false },
-    {
-      settlement: "restart-safe",
-      missingProfile: false,
-      policyFailure: true,
-      sessionChanged: false,
-    },
-    { settlement: "fallback", missingProfile: false, policyFailure: false, sessionChanged: true },
-    {
-      settlement: "restart-safe",
-      missingProfile: false,
-      policyFailure: false,
-      sessionChanged: true,
-    },
+    { settlement: "restart-safe" },
+    { settlement: "fallback", missingProfile: true },
+    { settlement: "restart-safe", missingProfile: true },
+    { settlement: "fallback", policyFailure: true },
+    { settlement: "restart-safe", policyFailure: true },
+    { settlement: "fallback", sessionChanged: true },
+    { settlement: "restart-safe", sessionChanged: true },
   ])(
     "records the rejected input and bounded error through $settlement settlement (missing profile: $missingProfile, policy refusal: $policyFailure, session changed: $sessionChanged)",
     async ({
@@ -262,14 +293,13 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           isCurrent: () => true,
         });
         const previewGroup = chatRunState.runs.get(runId)?.liveTextGroup;
-        const lifecycle = createChatSendDispatchErrorLifecycle({
+        const registration = registerRpcSourceForTest({
+          runId,
+          ...target,
+          storeScope: target.storePath,
+        });
+        const lifecycle = dispatchLifecycle(registration, {
           admission: {
-            activeRunAbort: registerRpcSourceForTest({
-              runId,
-              ...target,
-              storeScope: target.storePath,
-            }),
-            cleanupAdmittedRun: vi.fn(),
             lifecycleGeneration,
             restartSafeAdmission: restartSafe
               ? { requestFingerprint: "test-fingerprint" }
@@ -280,24 +310,12 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             broadcast,
             broadcastToConnIds: vi.fn(),
             chatRunState,
-            dedupe: new Map(),
-            getRuntimeConfig: () => ({}),
             getSessionEventSubscriberConnIds: () => new Set<string>(),
             logGateway: { warn },
-            nodeSendToSession: vi.fn(),
-            removeChatRun: vi.fn(),
-          } as never,
-          isQueuedFollowupEnqueued: () => false,
-          isAgentRunStarted: () => false,
+          },
           persistUserTurnTranscript,
           session: {
-            agentId: target.agentId,
-            storePath: target.storePath,
-            cfg: {},
-            clientRunId: runId,
             now: 1_000,
-            rawSessionKey: target.sessionKey,
-            sessionKey: target.sessionKey,
           },
           terminalizeRestartSafeAdmission: (terminal) =>
             terminalizeRestartSafeChatAdmission({
@@ -531,37 +549,17 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         sessionKey: "agent:main:main",
         agentId: "main",
       });
-      const lifecycle = createChatSendDispatchErrorLifecycle({
+      const lifecycle = dispatchLifecycle(registration, {
         admission: {
-          activeRunAbort: registration,
           cleanupAdmittedRun,
-          lifecycleGeneration: "test-generation",
-          restartSafeAdmission: undefined,
         },
         context: {
-          agentRunSeq: new Map(),
           broadcast,
-          chatRunState: createChatRunState(),
           dedupe,
-          getRuntimeConfig: () => ({}),
           logGateway: { warn },
-          nodeSendToSession: vi.fn(),
           removeChatRun,
-        } as never,
-        isQueuedFollowupEnqueued: () => true,
-        isAgentRunStarted: () => false,
-        persistUserTurnTranscript: vi.fn(),
-        session: {
-          agentId: "main",
-          storePath: expectDefined(registration.entry.input.target, "source target").storeScope,
-          cfg: {},
-          clientRunId: "run-1",
-          now: 1,
-          rawSessionKey: "agent:main:main",
-          sessionKey: "agent:main:main",
         },
-        terminalizeRestartSafeAdmission: vi.fn(),
-        userTurnRecorder: { hasPersisted: () => false, isBlocked: () => false },
+        isQueuedFollowupEnqueued: () => true,
       });
 
       await lifecycle.handleError(new Error("late failure"));
@@ -622,34 +620,17 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           ),
         ).toEqual({ aborted: true });
 
-        const lifecycle = createChatSendDispatchErrorLifecycle({
+        const lifecycle = dispatchLifecycle(registration, {
           admission: {
-            activeRunAbort: registration,
             cleanupAdmittedRun: registration.cleanup,
-            lifecycleGeneration: "test-generation",
             restartSafeAdmission: {} as never,
           },
           context: {
-            agentRunSeq: new Map(),
             broadcast,
             chatRunState,
             dedupe,
-            getRuntimeConfig: () => ({}),
             logGateway: { warn },
-            nodeSendToSession: vi.fn(),
             removeChatRun,
-          } as never,
-          isQueuedFollowupEnqueued: () => false,
-          isAgentRunStarted: () => false,
-          persistUserTurnTranscript: vi.fn(),
-          session: {
-            agentId: "main",
-            storePath: expectDefined(registration.entry.input.target, "source target").storeScope,
-            cfg: {},
-            clientRunId: runId,
-            now: 1,
-            rawSessionKey: sessionKey,
-            sessionKey,
           },
           terminalizeRestartSafeAdmission,
           userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
@@ -696,36 +677,8 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       const chatRunState = createChatRunState();
       const dedupe = new Map();
       const broadcast = vi.fn();
-      const lifecycle = createChatSendDispatchErrorLifecycle({
-        admission: {
-          activeRunAbort: registration,
-          cleanupAdmittedRun: vi.fn(),
-          lifecycleGeneration: "test-generation",
-          restartSafeAdmission: undefined,
-        },
-        context: {
-          agentRunSeq: new Map(),
-          broadcast,
-          chatRunState,
-          dedupe,
-          getRuntimeConfig: () => ({}),
-          logGateway: { warn: vi.fn() },
-          nodeSendToSession: vi.fn(),
-          removeChatRun: vi.fn(),
-        } as never,
-        isQueuedFollowupEnqueued: () => false,
-        isAgentRunStarted: () => false,
-        persistUserTurnTranscript: vi.fn(),
-        session: {
-          agentId: "main",
-          storePath: expectDefined(registration.entry.input.target, "source target").storeScope,
-          cfg: {},
-          clientRunId: "signal-only-dispatch-rejection",
-          now: 1,
-          rawSessionKey: "agent:main:main",
-          sessionKey: "agent:main:main",
-        },
-        terminalizeRestartSafeAdmission: vi.fn(),
+      const lifecycle = dispatchLifecycle(registration, {
+        context: { broadcast, chatRunState, dedupe },
         userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
       });
 
@@ -771,36 +724,12 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       const broadcast = vi.fn();
       const chatRunState = createChatRunState();
       chatRunState.getOrCreate(runId).buffer = "Native-owned output";
-      const lifecycle = createChatSendDispatchErrorLifecycle({
+      const lifecycle = dispatchLifecycle(registration, {
         admission: {
-          activeRunAbort: registration,
           cleanupAdmittedRun: registration.cleanup,
-          lifecycleGeneration: "test-generation",
-          restartSafeAdmission: undefined,
         },
-        context: {
-          agentRunSeq: new Map(),
-          broadcast,
-          chatRunState,
-          dedupe,
-          getRuntimeConfig: () => ({}),
-          logGateway: { warn: vi.fn() },
-          nodeSendToSession: vi.fn(),
-          removeChatRun: vi.fn(),
-        } as never,
-        isQueuedFollowupEnqueued: () => false,
+        context: { broadcast, chatRunState, dedupe },
         isAgentRunStarted: () => true,
-        persistUserTurnTranscript: vi.fn(),
-        session: {
-          agentId: "main",
-          storePath: expectDefined(registration.entry.input.target, "source target").storeScope,
-          cfg: {},
-          clientRunId: runId,
-          now: 1,
-          rawSessionKey: sessionKey,
-          sessionKey,
-        },
-        terminalizeRestartSafeAdmission: vi.fn(),
         userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
       });
 
@@ -869,38 +798,24 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     );
 
     try {
-      const lifecycle = createChatSendDispatchErrorLifecycle({
+      const lifecycle = dispatchLifecycle(registration, {
         admission: {
           activeRunAbort: { ...registration, cleanup: activeRunCleanup },
           cleanupAdmittedRun,
-          lifecycleGeneration: "test-generation",
-          restartSafeAdmission: undefined,
         },
         context: {
-          agentRunSeq: new Map(),
           broadcast,
           broadcastToConnIds: vi.fn(),
-          chatRunState: createChatRunState(),
           dedupe,
           getRuntimeConfig: () => cfg,
           getSessionEventSubscriberConnIds: () => new Set<string>(),
-          logGateway: { warn: vi.fn() },
-          nodeSendToSession: vi.fn(),
-          removeChatRun: vi.fn(),
-        } as never,
-        isQueuedFollowupEnqueued: () => false,
-        isAgentRunStarted: () => false,
-        persistUserTurnTranscript: vi.fn(),
+        },
         session: {
           agentId: "ops",
-          storePath: target.scope,
           cfg,
-          clientRunId,
-          now: 1,
           rawSessionKey: "global",
           sessionKey: "global",
         },
-        terminalizeRestartSafeAdmission: vi.fn(),
         userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
       });
 

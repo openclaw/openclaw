@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -89,15 +88,9 @@ it("serves commands independently of another agent's remembered model list", asy
       const models = harness.runtime.readModelsList(request);
       pending.push(models);
       await withinTest(entered.promise, signal);
-      console.info("chat-metadata-readiness", { phase: "other model list held" });
-      const started = performance.now();
       const reading = readCommands();
       pending.push(reading);
       await withinTest(reading, signal);
-      console.info("chat-metadata-readiness", {
-        phase: "commands completed while other model list held",
-        elapsedMs: performance.now() - started,
-      });
       release.resolve();
       await Promise.all(pending);
       await expect(harness.runtime.readModelsList(request)).resolves.toMatchObject({
