@@ -62,7 +62,20 @@ function createCompletionRuntime(
     stream: providerStream,
     streamSimple: providerStream,
   });
-  return { model: bindModelLlmRuntime(model, runtime), runtime, message, providerStream };
+  const boundModel = bindModelLlmRuntime(model, runtime);
+  const run = (options?: SimpleStreamOptions, assertCurrent?: () => void) =>
+    completeSimple(boundModel, { messages: [] }, options, assertCurrent);
+  const limit = (organization: string, retryAfterMs: number) => {
+    const output = createAssistantMessageEventStream();
+    output.end({
+      ...message,
+      stopReason: "error",
+      retryAfterMs,
+      errorMessage: `Rate limit reached in organization org-synthetic-${organization} on tokens per min (TPM).`,
+    });
+    return output;
+  };
+  return { model: boundModel, runtime, message, providerStream, run, limit };
 }
 
 describe("LLM completion transport host", () => {
@@ -111,13 +124,19 @@ describe("LLM completion transport host", () => {
     ]);
   });
 
-  it.each(["current", "retired", "aborted"] as const)(
-    "checks %s host-prepared authority after deferred transport initialization",
-    async (authority) => {
-      const { runHostPreparedIsolatedCompletion } =
-        await import("../agents/host-prepared-isolated-completion.js");
+  it.each(
+    (["host-prepared", "full"] as const).flatMap((entry) =>
+      (["current", "retired", "aborted"] as const).map((authority) => ({ entry, authority })),
+    ),
+  )(
+    "checks $authority $entry authority after transport initialization",
+    async ({ entry, authority }) => {
       const { model, message, providerStream } = createCompletionRuntime(
         (_runtimeModel, context, options) => {
+          if (entry === "full") {
+            expect(context.messages).toEqual([]);
+            return;
+          }
           expect(context.messages).toEqual([
             { role: "user", content: "Title this chat.", timestamp: expect.any(Number) },
           ]);
@@ -128,28 +147,35 @@ describe("LLM completion transport host", () => {
       const controller = new AbortController();
       const authorityError = new Error("Completion owner retired.");
       let current = true;
-      const completion = runHostPreparedIsolatedCompletion({
-        provider: model.provider,
-        modelId: model.id,
-        authorization: {
-          owner: "host",
-          model,
-          auth: { mode: "api-key", source: "test", apiKey: "synthetic-completion-key" },
-        },
-        config: {},
-        agentId: "main",
-        agentDir: "/test/agent",
-        workspaceDir: "/test/workspace",
-        systemPrompt: "Return a brief title.",
-        prompt: "Title this chat.",
-        timeoutMs: 10_000,
-        abortSignal: controller.signal,
-        assertCurrent: () => {
-          if (!current) {
-            throw authorityError;
-          }
-        },
-      });
+      const assertCurrent = () => {
+        if (!current) {
+          throw authorityError;
+        }
+      };
+      const options = { signal: controller.signal };
+      const completion =
+        entry === "full"
+          ? complete(model, { messages: [] }, options, assertCurrent)
+          : (
+              await import("../agents/host-prepared-isolated-completion.js")
+            ).runHostPreparedIsolatedCompletion({
+              provider: model.provider,
+              modelId: model.id,
+              authorization: {
+                owner: "host",
+                model,
+                auth: { mode: "api-key", source: "test", apiKey: "synthetic-completion-key" },
+              },
+              config: {},
+              agentId: "main",
+              agentDir: "/test/agent",
+              workspaceDir: "/test/workspace",
+              systemPrompt: "Return a brief title.",
+              prompt: "Title this chat.",
+              timeoutMs: 10_000,
+              abortSignal: controller.signal,
+              assertCurrent,
+            });
       // Even a warm transport host yields before it invokes the provider.
       current = authority !== "retired";
       if (authority === "aborted") {
@@ -157,8 +183,13 @@ describe("LLM completion transport host", () => {
       }
 
       if (authority === "current") {
-        await expect(completion).resolves.toEqual({ assistant: message });
+        await expect(completion).resolves.toEqual(
+          entry === "full" ? message : { assistant: message },
+        );
         expect(providerStream).toHaveBeenCalledOnce();
+        if (entry === "full") {
+          expect(providerStream.mock.calls[0]?.[2]).toBe(options);
+        }
       } else {
         await expect(completion).rejects.toBe(authorityError);
         expect(providerStream).not.toHaveBeenCalled();
@@ -166,40 +197,9 @@ describe("LLM completion transport host", () => {
       expect(controller.signal.aborted).toBe(authority === "aborted");
     },
   );
-
-  it.each(["current", "retired", "aborted"] as const)(
-    "checks %s full-completion authority after transport initialization",
-    async (authority) => {
-      const { model, message, providerStream } = createCompletionRuntime();
-      const controller = new AbortController();
-      const retired = new Error("Completion owner retired.");
-      const options = { signal: controller.signal };
-      let current = true;
-      const completion = complete(model, { messages: [] }, options, () => {
-        if (!current) {
-          throw retired;
-        }
-      });
-      // Even a warm transport host yields before it invokes the provider.
-      current = authority !== "retired";
-      if (authority === "aborted") {
-        controller.abort(retired);
-      }
-
-      if (authority === "current") {
-        await expect(completion).resolves.toEqual(message);
-        expect(providerStream).toHaveBeenCalledOnce();
-        expect(providerStream.mock.calls[0]?.[2]).toBe(options);
-      } else {
-        await expect(completion).rejects.toBe(retired);
-        expect(providerStream).not.toHaveBeenCalled();
-      }
-      expect(controller.signal.aborted).toBe(authority === "aborted");
-    },
-  );
   it("paces 30 shared-account sessions once per request and admits interactive work first", async () => {
-    const { model, runtime, message, providerStream } = createCompletionRuntime();
-    await completeSimple(model, { messages: [] });
+    const { model, runtime, message, providerStream, run } = createCompletionRuntime();
+    await run();
     const { resolveEmbeddedAgentStream } =
       await import("../agents/embedded-agent-runner/stream-resolution.js");
     vi.useFakeTimers();
@@ -243,20 +243,9 @@ describe("LLM completion transport host", () => {
     }
     await seed.result();
     limited = false;
-    await completeSimple(
-      model,
-      { messages: [] },
-      {
-        apiKey: "unrelated-account-key",
-        sessionId: "other-account",
-      },
-    );
+    await run({ apiKey: "unrelated-account-key", sessionId: "other-account" });
     const background = Array.from({ length: 20 }, (_, index) =>
-      completeSimple(
-        model,
-        { messages: [] },
-        { apiKey: "synthetic-priority-key", sessionId: `background-${index}` },
-      ),
+      run({ apiKey: "synthetic-priority-key", sessionId: `background-${index}` }),
     );
     const waits: number[] = [];
     const stoppedWaiting = vi.fn();
@@ -298,40 +287,27 @@ describe("LLM completion transport host", () => {
 
     // Ongoing successful traffic must not keep the recovery gate alive forever.
     await vi.advanceTimersByTimeAsync(60_000 - Date.now());
-    const active = completeSimple(model, { messages: [] }, { apiKey: "synthetic-priority-key" });
+    const active = run({ apiKey: "synthetic-priority-key" });
     await vi.advanceTimersByTimeAsync(0);
     await active;
     await vi.advanceTimersByTimeAsync(1001);
-    const recovered = [0, 1].map(() =>
-      completeSimple(model, { messages: [] }, { apiKey: "synthetic-priority-key" }),
-    );
+    const recovered = [0, 1].map(() => run({ apiKey: "synthetic-priority-key" }));
     await vi.advanceTimersByTimeAsync(0);
     expect(calls).toHaveLength(35);
     await Promise.all(recovered);
   });
 
   it("merges credentials identified by the same organization and extends queued waits", async () => {
-    const { model, message, providerStream } = createCompletionRuntime();
-    await completeSimple(model, { messages: [] });
+    const { message, providerStream, run, limit } = createCompletionRuntime();
+    await run();
     vi.useFakeTimers();
-    const limited = (retryAfterMs: number) => {
-      const output = createAssistantMessageEventStream();
-      output.end({
-        ...message,
-        stopReason: "error",
-        retryAfterMs,
-        errorMessage:
-          "Rate limit reached in organization org-synthetic-merge on tokens per min (TPM).",
-      });
-      return output;
-    };
-    providerStream.mockImplementationOnce(() => limited(1000));
-    await completeSimple(model, { messages: [] }, { apiKey: "merge-first-key" });
-    const first = completeSimple(model, { messages: [] }, { apiKey: "merge-first-key" });
+    providerStream.mockImplementationOnce(() => limit("merge", 1000));
+    await run({ apiKey: "merge-first-key" });
+    const first = run({ apiKey: "merge-first-key" });
     await vi.advanceTimersByTimeAsync(100);
-    providerStream.mockImplementationOnce(() => limited(2000));
-    await completeSimple(model, { messages: [] }, { apiKey: "merge-second-key" });
-    const second = completeSimple(model, { messages: [] }, { apiKey: "merge-second-key" });
+    providerStream.mockImplementationOnce(() => limit("merge", 2000));
+    await run({ apiKey: "merge-second-key" });
+    const second = run({ apiKey: "merge-second-key" });
     providerStream.mockClear();
     await vi.advanceTimersByTimeAsync(1999);
     expect(providerStream).not.toHaveBeenCalled();
@@ -344,34 +320,21 @@ describe("LLM completion transport host", () => {
   });
 
   it("returns excessive shared floors to failover, including a floor extended while queued", async () => {
-    const { model, message, providerStream } = createCompletionRuntime();
-    await completeSimple(model, { messages: [] });
+    const { model, message, providerStream, run, limit } = createCompletionRuntime();
+    await run();
     vi.useFakeTimers();
-    const limited = (retryAfterMs: number) => {
-      const output = createAssistantMessageEventStream();
-      output.end({
-        ...message,
-        stopReason: "error",
-        retryAfterMs,
-        errorMessage:
-          "Rate limit reached in organization org-synthetic-cap on tokens per min (TPM).",
-      });
-      return output;
-    };
     const options = { apiKey: "synthetic-cap-key", maxRetryDelayMs: 1500 };
-    providerStream.mockImplementationOnce(() => limited(1000));
-    await completeSimple(model, { messages: [] }, options);
-    const queued = completeSimple(model, { messages: [] }, options);
+    providerStream.mockImplementationOnce(() => limit("cap", 1000));
+    await run(options);
+    const queued = run(options);
     const queuedProof = expect(queued).rejects.toMatchObject({ reason: "rate_limit", status: 429 });
     await vi.advanceTimersByTimeAsync(1);
-    providerStream.mockImplementationOnce(() => limited(90_000));
-    await completeSimple(model, { messages: [] }, { apiKey: "synthetic-cap-second-key" });
+    providerStream.mockImplementationOnce(() => limit("cap", 90_000));
+    await run({ apiKey: "synthetic-cap-second-key" });
     await queuedProof;
     providerStream.mockClear();
 
-    await expect(
-      completeSimple(model, { messages: [] }, { apiKey: options.apiKey }),
-    ).rejects.toMatchObject({
+    await expect(run({ apiKey: options.apiKey })).rejects.toMatchObject({
       reason: "rate_limit",
       status: 429,
       message: expect.stringContaining("Retry-After: 90 seconds"),
@@ -381,7 +344,7 @@ describe("LLM completion transport host", () => {
       errorMessage: expect.stringContaining("Retry-After: 90 seconds"),
     });
     expect(providerStream).not.toHaveBeenCalled();
-    const uncapped = completeSimple(model, { messages: [] }, { ...options, maxRetryDelayMs: 0 });
+    const uncapped = run({ ...options, maxRetryDelayMs: 0 });
     await vi.advanceTimersByTimeAsync(89_999);
     expect(providerStream).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -391,31 +354,17 @@ describe("LLM completion transport host", () => {
   });
 
   it("cancels admission and rechecks authority without sending queued requests", async () => {
-    const { model, runtime, message, providerStream } = createCompletionRuntime();
-    await completeSimple(model, { messages: [] });
+    const { model, runtime, providerStream, run, limit } = createCompletionRuntime();
+    await run();
     const { resolveEmbeddedAgentStream } =
       await import("../agents/embedded-agent-runner/stream-resolution.js");
     vi.useFakeTimers();
-    providerStream.mockImplementationOnce(() => {
-      const output = createAssistantMessageEventStream();
-      output.end({
-        ...message,
-        stopReason: "error",
-        errorMessage:
-          "Rate limit reached for test in organization org-synthetic-cancel on tokens per min (TPM).",
-        retryAfterMs: 1000,
-      });
-      return output;
-    });
+    providerStream.mockImplementationOnce(() => limit("cancel", 1000));
     const options = { apiKey: "synthetic-cancel-key" };
-    await completeSimple(model, { messages: [] }, options);
+    await run(options);
     providerStream.mockClear();
     const controller = new AbortController();
-    const aborted = completeSimple(
-      model,
-      { messages: [] },
-      { ...options, signal: controller.signal },
-    );
+    const aborted = run({ ...options, signal: controller.signal });
     const abortProof = expect(aborted).rejects.toThrow("stopped");
     const embedded = resolveEmbeddedAgentStream({
       model,
@@ -430,7 +379,7 @@ describe("LLM completion transport host", () => {
       Promise.resolve(embedded(model, { messages: [] })),
     ).rejects.toThrow("stopped");
     let current = true;
-    const retired = completeSimple(model, { messages: [] }, options, () => {
+    const retired = run(options, () => {
       if (!current) {
         throw new Error("retired");
       }

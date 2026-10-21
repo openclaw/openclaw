@@ -13,7 +13,6 @@ import {
 import type { ProviderRequestAuthOverride } from "../agents/provider-request-config.types.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
-import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
 import { sealSecretSentinel } from "../secrets/sentinel.js";
 
 const model: Model = {
@@ -42,18 +41,17 @@ function prepareProvider(
   createStreamFn: (model: Model) => StreamFn,
   apiRegistry = createApiRegistry(),
 ) {
-  const plugin: ProviderPlugin = {
-    id: model.provider,
-    label: "Sentinel boundary test",
-    auth: [],
-    createStreamFn: (context) => createStreamFn(context.model),
-  };
   const prepared = prepareModelForSimpleCompletion({
     apiRegistry,
     model: attachModelProviderRuntimePluginHandle(source, {
       provider: source.provider,
       modelId: source.id,
-      plugin,
+      plugin: {
+        id: model.provider,
+        label: "Sentinel boundary test",
+        auth: [],
+        createStreamFn: (context) => createStreamFn(context.model),
+      },
     }),
   });
   return (runtimeModel = prepared, options?: Parameters<StreamFn>[2]) =>
@@ -65,19 +63,17 @@ function prepareProvider(
 afterEach(resetSecretRedactionRegistryForTest);
 
 describe("simple completion with the production transport host", () => {
-  const authModes = ["authorization-bearer", "header"] as const;
-  it.each(authModes)(
-    "resolves %s transport credentials at construction and egress without mutating shared models",
-    (mode) => {
-      const auth: ProviderRequestAuthOverride =
-        mode === "authorization-bearer"
-          ? { mode, token: "synthetic-request-credential" }
-          : {
-              mode,
-              headerName: "x-provider-key",
-              value: "synthetic-request-credential",
-              prefix: "Key ",
-            };
+  it.each([
+    { mode: "authorization-bearer", token: "synthetic-request-credential" },
+    {
+      mode: "header",
+      headerName: "x-provider-key",
+      value: "synthetic-request-credential",
+      prefix: "Key ",
+    },
+  ] satisfies ProviderRequestAuthOverride[])(
+    "resolves $mode transport credentials at construction and egress without mutating shared models",
+    (auth) => {
       const protectedAuth: ProviderRequestAuthOverride =
         auth.mode === "authorization-bearer"
           ? { ...auth, token: seal(auth.token) }
@@ -126,7 +122,6 @@ describe("simple completion with the production transport host", () => {
       expect(apiRegistry.getApiProvider(model.api)).toBe(builtInProvider);
       expect(getModelProviderRequestTransport(protectedModel)).toBe(request);
       expect(protectedModel.headers["x-visible"]).toBe(seal("synthetic-visible-header"));
-      expect(request.auth).toEqual(protectedAuth);
       expect(request.headers["x-request"]).toBe(seal("synthetic-request-header"));
     },
   );

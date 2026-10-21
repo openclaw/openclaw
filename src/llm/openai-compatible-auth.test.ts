@@ -1,8 +1,5 @@
 import type { Context, Model } from "@openclaw/ai";
 import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/internal/openai";
-// OpenAI-compatible auth tests cover API key and base URL normalization.
-// Lives in core: it proves the facade-installed guarded fetch routes provider
-// requests through OpenClaw's SSRF guard.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -14,11 +11,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../infra/net/fetch-guard.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
-    "../infra/net/fetch-guard.js",
-  );
   return {
-    ...actual,
+    ...(await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
+      "../infra/net/fetch-guard.js",
+    )),
     fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
   };
 });
@@ -52,25 +48,20 @@ function createBaseModel<TApi extends "openai-completions" | "openai-responses">
 }
 
 describe("OpenAI-compatible provider credentials", () => {
-  it("does not use ambient OPENAI_API_KEY for generic chat-completions providers", async () => {
-    process.env.OPENAI_API_KEY = "sk-openai-ambient";
-
-    const stream = streamOpenAICompletions(createBaseModel("openai-completions"), context);
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe("No API key for provider: custom-openai-compatible");
-  });
-
-  it("does not use ambient OPENAI_API_KEY for generic responses providers", async () => {
-    process.env.OPENAI_API_KEY = "sk-openai-ambient";
-
-    const stream = streamOpenAIResponses(createBaseModel("openai-responses"), context);
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe("No API key for provider: custom-openai-compatible");
-  });
+  it.each(["openai-completions", "openai-responses"] as const)(
+    "does not use ambient OPENAI_API_KEY for generic %s providers",
+    async (api) => {
+      process.env.OPENAI_API_KEY = "sk-openai-ambient";
+      const stream =
+        api === "openai-completions"
+          ? streamOpenAICompletions(createBaseModel(api), context)
+          : streamOpenAIResponses(createBaseModel(api), context);
+      expect(await stream.result()).toMatchObject({
+        stopReason: "error",
+        errorMessage: "No API key for provider: custom-openai-compatible",
+      });
+    },
+  );
 
   it("sends explicit API keys as bearer auth for generic chat-completions providers", async () => {
     let capturedHeaders: Headers | undefined;
@@ -130,18 +121,9 @@ describe("OpenAI-compatible provider credentials", () => {
               {
                 type: "text",
                 text: "Checking.",
-                textSignature: JSON.stringify({
-                  v: 1,
-                  id: "msg_prior",
-                  phase: "commentary",
-                }),
+                textSignature: JSON.stringify({ v: 1, id: "msg_prior", phase: "commentary" }),
               },
-              {
-                type: "toolCall",
-                id: "call_abc|fc_prior",
-                name: "lookup",
-                arguments: {},
-              },
+              { type: "toolCall", id: "call_abc|fc_prior", name: "lookup", arguments: {} },
             ],
           },
         ],
@@ -157,27 +139,16 @@ describe("OpenAI-compatible provider credentials", () => {
 
     const result = await stream.result();
 
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe("stop after payload");
+    expect(result).toMatchObject({ stopReason: "error", errorMessage: "stop after payload" });
     expect(capturedPayload?.store).toBe(false);
-    const reasoningItem = capturedPayload?.input?.find((item) => item.type === "reasoning");
-    expect(reasoningItem).toMatchObject({
-      type: "reasoning",
-      encrypted_content: "ciphertext",
-      summary: [],
-    });
-    expect(reasoningItem).not.toHaveProperty("id");
-    const messageItem = capturedPayload?.input?.find((item) => item.type === "message");
-    expect(messageItem).toMatchObject({
-      type: "message",
-      phase: "commentary",
-    });
-    expect(messageItem).not.toHaveProperty("id");
-    const functionCall = capturedPayload?.input?.find((item) => item.type === "function_call");
-    expect(functionCall).toMatchObject({
-      type: "function_call",
-      call_id: "call_abc",
-    });
-    expect(functionCall).not.toHaveProperty("id");
+    for (const expected of [
+      { type: "reasoning", encrypted_content: "ciphertext", summary: [] },
+      { type: "message", phase: "commentary" },
+      { type: "function_call", call_id: "call_abc" },
+    ]) {
+      const item = capturedPayload?.input?.find((candidate) => candidate.type === expected.type);
+      expect(item).toMatchObject(expected);
+      expect(item).not.toHaveProperty("id");
+    }
   });
 });
