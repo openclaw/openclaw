@@ -1,23 +1,22 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { BuzzConfigInput } from "./config-schema.js";
 import { listBuzzAccountIds, resolveBuzzAccount, resolveDefaultBuzzAccountId } from "./types.js";
 
 const PRIVATE_KEY = "11".repeat(32);
 const ENV_PRIVATE_KEY = "22".repeat(32);
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+function buzzConfig(buzz: BuzzConfigInput): OpenClawConfig {
+  return { channels: { buzz } } as OpenClawConfig;
+}
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe("listBuzzAccountIds", () => {
   it("discovers the default account from a configured private-key SecretRef", () => {
-    const cfg = {
-      channels: {
-        buzz: {
-          privateKey: { source: "file", provider: "vault", id: "/buzz/private-key" },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = buzzConfig({
+      privateKey: { source: "file", provider: "vault", id: "/buzz/private-key" },
+    });
 
     expect(listBuzzAccountIds(cfg)).toEqual(["default"]);
   });
@@ -25,15 +24,11 @@ describe("listBuzzAccountIds", () => {
 
 describe("resolveBuzzAccount", () => {
   it("defaults group access to allowlist", () => {
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.com",
-          privateKey: PRIVATE_KEY,
-          groups: { "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {} },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = buzzConfig({
+      relayUrl: "wss://buzz.example.com",
+      privateKey: PRIVATE_KEY,
+      groups: { "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {} },
+    });
 
     expect(resolveBuzzAccount({ cfg }).config.groupPolicy).toBe("allowlist");
   });
@@ -42,22 +37,18 @@ describe("resolveBuzzAccount", () => {
     vi.stubEnv("BUZZ_PRIVATE_KEY", ENV_PRIVATE_KEY);
     vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth");
     vi.stubEnv("BUZZ_RELAY_URL", "wss://ambient.example.com");
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://root.example.com",
-          privateKey: PRIVATE_KEY,
-          authTag: "root-auth",
-          name: "Root bot",
-          groupPolicy: "open",
-          groups: { "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {} },
-          accounts: {
-            ada: { relayUrl: "wss://ada.example.com", privateKey: "33".repeat(32), name: "Ada" },
-            empty: {},
-          },
-        },
+    const cfg = buzzConfig({
+      relayUrl: "wss://root.example.com",
+      privateKey: PRIVATE_KEY,
+      authTag: "root-auth",
+      name: "Root bot",
+      groupPolicy: "open",
+      groups: { "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c": {} },
+      accounts: {
+        ada: { relayUrl: "wss://ada.example.com", privateKey: "33".repeat(32), name: "Ada" },
+        empty: {},
       },
-    } as OpenClawConfig;
+    });
     expect(listBuzzAccountIds(cfg)).toEqual(["ada", "default", "empty"]);
     expect(resolveDefaultBuzzAccountId(cfg)).toBe("default");
     expect(resolveBuzzAccount({ cfg, accountId: "ada" })).toMatchObject({
@@ -83,16 +74,12 @@ describe("resolveBuzzAccount", () => {
     vi.stubEnv("BUZZ_PRIVATE_KEY", ENV_PRIVATE_KEY);
     vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth");
     vi.stubEnv("BUZZ_RELAY_URL", "wss://ambient.example.com");
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://root.example.com",
-          privateKey: PRIVATE_KEY,
-          authTag: "root-auth",
-          accounts: { default: { name: "Explicit default" } },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = buzzConfig({
+      relayUrl: "wss://root.example.com",
+      privateKey: PRIVATE_KEY,
+      authTag: "root-auth",
+      accounts: { default: { name: "Explicit default" } },
+    });
     expect(resolveBuzzAccount({ cfg })).toMatchObject({
       accountId: "default",
       name: "Explicit default",
@@ -106,15 +93,11 @@ describe("resolveBuzzAccount", () => {
   it("selects a configured default deterministically and applies the global disabled gate", () => {
     vi.stubEnv("BUZZ_PRIVATE_KEY", "");
     vi.stubEnv("BUZZ_RELAY_URL", "");
-    const cfg = {
-      channels: {
-        buzz: {
-          enabled: false,
-          defaultAccount: "second",
-          accounts: { first: {}, second: { enabled: true } },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = buzzConfig({
+      enabled: false,
+      defaultAccount: "second",
+      accounts: { first: {}, second: { enabled: true } },
+    });
     expect(listBuzzAccountIds(cfg)).toEqual(["first", "second"]);
     expect(resolveDefaultBuzzAccountId(cfg)).toBe("second");
     expect(resolveBuzzAccount({ cfg })).toMatchObject({ accountId: "second", enabled: false });
@@ -170,11 +153,7 @@ describe("resolveBuzzAccount", () => {
     for (const [name, value] of Object.entries(env)) {
       vi.stubEnv(name, value);
     }
-    const cfg = {
-      channels: {
-        buzz: { relayUrl: "wss://buzz.example.com", ...credentials },
-      },
-    } as OpenClawConfig;
+    const cfg = buzzConfig({ relayUrl: "wss://buzz.example.com", ...credentials });
 
     expect(resolveBuzzAccount({ cfg })).toMatchObject(expected);
   });
