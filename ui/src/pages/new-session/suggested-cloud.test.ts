@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 
 const suggestedProfile = { id: "cloud", providerId: "crabbox", providerDisplayId: "aws" };
 const profile = { ...suggestedProfile, executionModes: ["worker-turn"] };
+const emptyCatalog = () => ({ environments: [], profiles: [], suggestedProfile });
 
-async function fixture(adopt?: () => Promise<unknown>) {
+async function fixture() {
   const adoption = Promise.withResolvers<unknown>();
   let saved = false;
   const result = createDraftFixture({
@@ -18,14 +19,10 @@ async function fixture(adopt?: () => Promise<unknown>) {
     scopes: ["operator.admin", "operator.read", "operator.write"],
     request: async (method) => {
       if (method === "environments.list") {
-        return {
-          environments: [],
-          profiles: saved ? [profile] : [],
-          ...(saved ? {} : { suggestedProfile }),
-        };
+        return saved ? { environments: [], profiles: [profile] } : emptyCatalog();
       }
       if (method === "environments.adoptSuggestedProfile") {
-        const response = await (adopt ? adopt() : adoption.promise);
+        const response = await adoption.promise;
         saved = true;
         return response;
       }
@@ -38,73 +35,61 @@ async function fixture(adopt?: () => Promise<unknown>) {
 
 afterEach(() => [sessionStorage, localStorage].forEach((storage) => storage.clear()));
 
-describe("suggested Cloud adoption", () => {
-  it("keeps the suggestion undispatchable until adoption saves and selects a configured profile", async () => {
-    const { place, gateway, flow, request, adoption } = await fixture();
+it.each(["successful save", "save failure", "local reselection", "Gateway reconnection"])(
+  "settles suggested Cloud adoption after %s without dispatching or replacing newer intent",
+  async (outcome) => {
+    const { place, gateway, flow, request, adoption, context } = await fixture();
     flow.setMessage("Prepare this repository");
-    expect(gateway.cloudProfiles).toEqual([]);
-    expect(gateway.suggestedProfile).toEqual(suggestedProfile);
+    expect(gateway).toMatchObject({ cloudProfiles: [], suggestedProfile });
     const selecting = place.suggestedCloudProfile.adopt();
     expect(place.cloudProfileId).toBe("");
     expect(flow.submitBlock()?.gate).toBe("cloud");
     expect(request).toHaveBeenCalledWith("environments.adoptSuggestedProfile", {});
     expect(request.mock.calls.some(([method]) => method === "sessions.dispatch")).toBe(false);
-    adoption.resolve({ profile });
+    if (outcome === "local reselection") {
+      place.selectDevice("");
+    }
+    if (outcome === "Gateway reconnection") {
+      context.gateway.snapshot.phase = "connecting";
+      gateway.synchronize(context.gateway);
+      place.invalidateGatewayDiscovery(true);
+    }
+    if (outcome === "save failure") {
+      adoption.reject(new Error("Crabbox login expired"));
+    } else {
+      adoption.resolve({ profile });
+    }
     await selecting;
-    expect(place.cloudProfileId).toBe("cloud");
-    expect(gateway.cloudProfiles.map((entry) => entry.id)).toEqual(["cloud"]);
-    expect(gateway.suggestedProfile).toBeUndefined();
-    expect(place.suggestedCloudProfile.pending).toBe(false);
-  });
-
-  it("keeps the adopted profile when an older catalog read finishes", async () => {
-    const { place, gateway, request } = await fixture(async () => ({ profile }));
-    const staleCatalog = Promise.withResolvers<unknown>();
-    request.mockImplementationOnce((method) => {
-      expect(method).toBe("environments.list");
-      return staleCatalog.promise;
+    expect(place).toMatchObject({
+      cloudProfileId: outcome === "successful save" ? "cloud" : "",
+      suggestedCloudProfile: { pending: false },
     });
-    const refreshing = gateway.refreshCloudProfiles();
-    await place.suggestedCloudProfile.adopt();
-    expect(place.cloudProfileId).toBe("cloud");
+    const saved = outcome === "successful save" || outcome === "local reselection";
+    expect(gateway.cloudProfiles.map((entry) => entry.id)).toEqual(saved ? ["cloud"] : []);
+    if (saved) {
+      expect(gateway.suggestedProfile).toBeUndefined();
+    }
+    if (outcome === "save failure") {
+      expect(flow.error).toBe("Crabbox login expired");
+    }
+  },
+);
 
-    staleCatalog.resolve({ environments: [], profiles: [], suggestedProfile });
-    await refreshing;
-    expect(place.cloudProfileId).toBe("cloud");
-    expect(gateway.cloudProfiles.map((entry) => entry.id)).toEqual(["cloud"]);
-    expect(gateway.suggestedProfile).toBeUndefined();
+it("keeps the adopted profile when an older catalog read finishes", async () => {
+  const { place, gateway, request, adoption } = await fixture();
+  const staleCatalog = Promise.withResolvers<unknown>();
+  request.mockImplementationOnce((method) => {
+    expect(method).toBe("environments.list");
+    return staleCatalog.promise;
   });
+  const refreshing = gateway.refreshCloudProfiles();
+  const selecting = place.suggestedCloudProfile.adopt();
+  adoption.resolve({ profile });
+  await selecting;
+  expect(place.cloudProfileId).toBe("cloud");
 
-  it("shows the adoption method's error and keeps the current selection", async () => {
-    const { place, flow } = await fixture(async () => {
-      throw new Error("Crabbox login expired");
-    });
-    await place.suggestedCloudProfile.adopt();
-    expect(flow.error).toBe("Crabbox login expired");
-    expect(place.cloudProfileId).toBe("");
-    expect(place.suggestedCloudProfile.pending).toBe(false);
-  });
-
-  it("does not replace a newer local selection when saving finishes", async () => {
-    const { place, gateway, adoption } = await fixture();
-    const selecting = place.suggestedCloudProfile.adopt();
-    place.selectDevice("");
-    adoption.resolve({ profile });
-    await selecting;
-    expect(place.cloudProfileId).toBe("");
-    expect(gateway.cloudProfiles.map((entry) => entry.id)).toEqual(["cloud"]);
-  });
-
-  it("discards adoption after the Gateway connection changes", async () => {
-    const { place, gateway, context, adoption } = await fixture();
-    const selecting = place.suggestedCloudProfile.adopt();
-    context.gateway.snapshot.phase = "connecting";
-    gateway.synchronize(context.gateway);
-    place.invalidateGatewayDiscovery(true);
-    adoption.resolve({ profile });
-    await selecting;
-    expect(place.cloudProfileId).toBe("");
-    expect(gateway.cloudProfiles).toEqual([]);
-    expect(place.suggestedCloudProfile.pending).toBe(false);
-  });
+  staleCatalog.resolve(emptyCatalog());
+  await refreshing;
+  expect(place.cloudProfileId).toBe("cloud");
+  expect(gateway).toMatchObject({ cloudProfiles: [{ id: "cloud" }], suggestedProfile: undefined });
 });
