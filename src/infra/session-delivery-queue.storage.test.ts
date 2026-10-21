@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -13,7 +12,6 @@ import {
   failSessionDelivery as fail,
   loadPendingSessionDelivery as loadPending,
   loadPendingSessionDeliveries as listPending,
-  markSessionDeliveryAttemptStarted as markStarted,
   markSessionDeliverySettlement as markSettlement,
   mergeSessionDeliveryPreparedMediaBlocks as mergePrepared,
   moveSessionDeliveryToFailed as moveToFailed,
@@ -144,49 +142,6 @@ describe("session-delivery queue storage", () => {
     });
   });
 
-  it("retains ambiguous attempt ownership and clears it only for a safe retry", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueue(agentTurn("image:task-attempt-owner:agent-loop"), queueContext);
-      const entry = await loadPending(id, queueContext);
-      assert(entry, "Expected pending session delivery");
-
-      await markStarted(entry, queueContext);
-      expect(await loadPending(id, queueContext)).toMatchObject({
-        deliveryStartedAt: expect.any(Number),
-      });
-
-      await fail(id, "ambiguous failure after send", queueContext);
-      expect(await loadPending(id, queueContext)).toMatchObject({
-        deliveryStartedAt: expect.any(Number),
-      });
-
-      await fail(id, "safe failure before commit", queueContext, {
-        releaseAttemptOwnership: true,
-      });
-      expect(await loadPending(id, queueContext)).not.toHaveProperty("deliveryStartedAt");
-    });
-  });
-
-  it("records which agent run attempt consumed retry budget", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const id = await enqueue(agentTurn("image:task-charge:agent-loop"), queueContext);
-
-      await fail(id, "delivery failed", queueContext);
-      expect(await loadPending(id, queueContext)).toMatchObject({
-        retryCount: 1,
-        lastChargedAgentRunAttempt: 0,
-      });
-
-      await advanceRun(id, undefined, queueContext);
-      await fail(id, "fresh delivery failed", queueContext);
-      expect(await loadPending(id, queueContext)).toMatchObject({
-        retryCount: 2,
-        agentRunAttempt: 1,
-        lastChargedAgentRunAttempt: 1,
-      });
-    });
-  });
-
   it("persists agent-loop routing and provenance for restart replay", async () => {
     await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
       await enqueue(
@@ -283,6 +238,12 @@ describe("session-delivery queue storage", () => {
             "/tmp/one.png": [{ type: "image", artifactId: "artifact-one" }],
             "/tmp/two.png": [{ type: "image", artifactId: "artifact-two" }],
           },
+        });
+        await fail(id, "fresh delivery failed", queueContext);
+        expect(await loadPending(id, queueContext)).toMatchObject({
+          retryCount: 2,
+          agentRunAttempt: 1,
+          lastChargedAgentRunAttempt: 1,
         });
       });
       sqlCalls.expectIdle();

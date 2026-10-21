@@ -2,11 +2,11 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { ModelCostConfig } from "@openclaw/llm-core";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
@@ -24,6 +24,45 @@ import {
   loadSessionLogs,
   loadSessionUsageTimeSeries,
 } from "./session-cost-usage.js";
+import type { CostBreakdown } from "./session-cost-usage.types.js";
+
+const breakdown = (input = 0, output = 0, cacheRead = 0, cacheWrite = 0) => ({
+  input,
+  output,
+  cacheRead,
+  cacheWrite,
+});
+const zeroPricing = breakdown();
+const flatPricing = breakdown(1, 2, 0.5);
+type Pricing = ModelDefinitionConfig["cost"];
+const tieredPricing: Pricing = {
+  ...flatPricing,
+  tieredPricing: [
+    { ...flatPricing, range: [0, 1_000] },
+    { ...breakdown(2, 4, 1), range: [1_000, 100_000] },
+  ],
+};
+
+type PricingCase = [
+  name: string,
+  expectedCost: number | undefined,
+  pricing?: Pricing,
+  recordedCost?: CostBreakdown,
+  expectedBreakdown?: ReturnType<typeof breakdown>,
+  mode?: "top-level" | "unavailable",
+];
+const priorityParts = breakdown(0.004, 0.004, 0.0004);
+const billedZero: CostBreakdown = { total: 0, totalOrigin: "provider-billed" };
+const interimBill = { ...billedZero, total: 0.001 };
+const priorityBill = { total: 0.0084, ...priorityParts };
+
+const textBlock = (value: string) => ({ type: "text", text: value });
+const logMessage = (role: string, content: unknown, extra: Record<string, unknown> = {}) => ({
+  role,
+  content,
+  ...extra,
+});
+const tool = (type: string, name: string, id = name) => ({ type, name, id });
 
 const defaultConfig: OpenClawConfig = {};
 
@@ -35,8 +74,8 @@ async function refreshSessionCostUsageForTest(sessionFile: string): Promise<void
   });
 }
 
-function pricingConfig(provider: string, id: string, input: number) {
-  const cost: ModelCostConfig = { input, output: 0, cacheRead: 0, cacheWrite: 0 };
+function pricingConfig(provider: string, id: string, input: number | Pricing) {
+  const cost = typeof input === "number" ? breakdown(input) : input;
   return {
     models: {
       providers: {
@@ -750,5 +789,123 @@ describe("session cost usage", () => {
     const logs = await readLogs(sessionFile, 2);
 
     expect(logs?.map((log) => log.content)).toEqual(["third", "fourth"]);
+  });
+  it.each<PricingCase>([
+    [
+      "top-level usage",
+      0.0021,
+      flatPricing,
+      undefined,
+      breakdown(0.001, 0.001, 0.0001),
+      "top-level",
+    ],
+    ["unknown zero", undefined, undefined, { total: 0 }],
+    ["zero pricing", 0, zeroPricing, { total: 0 }],
+    ["interrupted placeholder", undefined, zeroPricing, { total: 0 }, undefined, "unavailable"],
+    ["interrupted billing", undefined, undefined, interimBill, undefined, "unavailable"],
+    // A later catalog cannot recover the recorded call's service tier.
+    ["flat estimate survives tiers", 0.001, tieredPricing, { total: 0.001 }],
+    ["priority estimate survives tiers", 0.0084, tieredPricing, priorityBill, priorityParts],
+    ["tiered estimate", 0.0042, tieredPricing, undefined, breakdown(0.002, 0.002, 0.0002)],
+    ["billed zero survives tiers", 0, tieredPricing, billedZero],
+    ["zero with component evidence", 0, undefined, { total: 0, input: 0.25 }, breakdown(0.25)],
+  ])(
+    "keeps logs, summaries, and charts consistent for %s",
+    async (_name, expectedCost, pricing, recordedCost, expectedBreakdown, mode) => {
+      const usageUnavailable = mode === "unavailable";
+      const topLevelUsage = mode === "top-level";
+      const timestamp = Date.UTC(2026, 7, 1, 12);
+      const usage = {
+        ...breakdown(1_000, 500, 200),
+        totalTokens: 1_700,
+        ...(usageUnavailable ? { usageReport: { state: "unavailable" } } : {}),
+        ...(recordedCost ? { cost: recordedCost } : {}),
+      };
+      const sessionFile = await writeMessages({
+        provider: "reporting",
+        model: "fixture-model",
+        ...(topLevelUsage ? { usage } : {}),
+        message: logMessage("assistant", "Answer", {
+          timestamp,
+          ...(topLevelUsage ? {} : { usage }),
+        }),
+      });
+      const config = pricing ? pricingConfig("reporting", "fixture-model", pricing) : {};
+
+      const params = { agentId: "main", sessionFile, config };
+      const logs = await loadSessionLogs(params);
+      expect(logs).toEqual([
+        {
+          ...logMessage("assistant", "Answer", { timestamp }),
+          tokens: usageUnavailable ? undefined : 1_700,
+          cost: expectedCost,
+        },
+      ]);
+
+      const summary = await loadSessionCostSummary(params);
+      const expectedReport = usageUnavailable ? { state: "unavailable" } : undefined;
+      expect(summary).toMatchObject({
+        totalTokens: usageUnavailable ? 0 : 1_700,
+        missingCostEntries: expectedCost === undefined ? 1 : 0,
+      });
+      expect([
+        summary?.usageReport,
+        summary?.dailyBreakdown?.[0]?.usageReport,
+        summary?.modelUsage?.[0]?.totals.usageReport,
+        summary?.dailyModelUsage?.[0]?.usageReport,
+        summary?.utcQuarterHourTokenUsage?.find((bucket) => bucket.quarterIndex === 48)
+          ?.usageReport,
+      ]).toEqual(Array(5).fill(expectedReport));
+      expect(summary?.totalCost).toBeCloseTo(expectedCost ?? 0, 8);
+      for (const field of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+        expect(summary?.[`${field}Cost`]).toBeCloseTo(expectedBreakdown?.[field] ?? 0, 8);
+      }
+
+      const series = await loadSessionUsageTimeSeries(params);
+      expect(series?.usageReport).toEqual(expectedReport);
+      expect(series?.points).toMatchObject(
+        usageUnavailable
+          ? []
+          : [{ totalTokens: 1_700, cost: expect.closeTo(expectedCost ?? 0, 8) }],
+      );
+    },
+  );
+
+  it("preserves canonical tool calls and mixed content order in session logs", async () => {
+    const timestamp = Date.UTC(2026, 7, 1, 12);
+    const messages = [
+      logMessage("user", "Question"),
+      logMessage("assistant", [tool("toolCall", "read", "call-only")]),
+      logMessage("assistant", [tool(" toolUse ", " legacy-only ")]),
+      logMessage("assistant", [
+        textBlock("Before"),
+        tool(" TOOL_CALL ", "read"),
+        textBlock("Between"),
+        tool("toolCall", "read"),
+        tool("tool_use", " legacy "),
+        tool("tooluse", "lowercase"),
+        textBlock("After"),
+      ]),
+      logMessage("assistant", [textBlock("Ordinary answer")]),
+      logMessage("toolResult", [textBlock("Done")], { toolCallId: "call-only", toolName: "read" }),
+    ];
+    const sessionFile = await writeMessages(
+      ...messages.map((entry, index) =>
+        transcriptEntry(new Date(timestamp + index).toISOString(), entry),
+      ),
+    );
+
+    const logs = await loadSessionLogs({ agentId: "main", sessionFile, config: {} });
+    expect(logs?.map(({ role, content }) => [role, content])).toEqual([
+      ["user", "Question"],
+      ["assistant", "[Tool: read]"],
+      ["assistant", "[Tool:  legacy-only ]"],
+      [
+        "assistant",
+        "Before\n[Tool: read]\nBetween\n[Tool: read]\n[Tool:  legacy ]\n[Tool: lowercase]\nAfter",
+      ],
+      ["assistant", "Ordinary answer"],
+      ["toolResult", "[Tool: read]\n[Tool Result]\nDone"],
+    ]);
   });
 });

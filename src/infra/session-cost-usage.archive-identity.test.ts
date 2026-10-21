@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
@@ -30,6 +31,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
@@ -38,11 +40,13 @@ import {
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
+import { requestCostUsageCacheRefresh } from "./session-cost-usage-cache-runtime.js";
 import { readSessionCostUsageRollupRows as readRollups } from "./session-cost-usage-cache.test-support.js";
 import {
   listUsageCountedTranscriptStats as listTranscripts,
   resolveUsageCostTranscriptFile as resolveTranscript,
 } from "./session-cost-usage-collection.test-support.js";
+import { createUsageTranscriptEntry } from "./session-cost-usage-fixtures.test-support.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import { decodeUsageCostRollupEnvelope } from "./session-cost-usage-rollup-codec.js";
 import {
@@ -55,6 +59,7 @@ import {
   loadSessionUsageTimeSeries as timeSeries,
   resolveUsageSessionSource,
 } from "./session-cost-usage.js";
+import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const usageRange = (agentId: string, scopedConfig = config) => ({
   agentId,
@@ -606,5 +611,123 @@ describe("usage archive identity", () => {
     ]);
     await expect(refreshCostUsageCacheForAgent(main)).rejects.toThrow();
     expect(readRollups("main")).toEqual(rows);
+  });
+  async function writeUsageFile(id: string, content: string) {
+    const directory = state.sessionsDir();
+    await fs.mkdir(directory, { recursive: true });
+    const file = path.join(directory, `${id}.jsonl`);
+    await fs.writeFile(file, content, "utf8");
+    return file;
+  }
+
+  it("does not crash when the transcript stream emits an error mid-read", async () => {
+    const sessionHeader = JSON.stringify({ type: "session", version: 1, id: "sess-stream-error" });
+    const sessionFile = await writeUsageFile("sess-stream-error", `${sessionHeader}\n`);
+
+    vi.spyOn(fsSync, "createReadStream").mockImplementationOnce(() => {
+      const stream = new PassThrough();
+      stream.write(`${sessionHeader}\n`);
+      process.nextTick(() => {
+        stream.destroy(new Error("stream read failed"));
+      });
+      return stream as unknown as fsSync.ReadStream;
+    });
+
+    expect(await loadSessionLogs({ agentId: "main", sessionFile })).toEqual([]);
+  });
+
+  it("keeps readable usage and complete checkpoints after background and report stream errors", async () => {
+    const usageEntry = (timestamp: string, input: number) =>
+      JSON.stringify(createUsageTranscriptEntry(input, { timestamp, cost: input / 1000 }));
+    const stateDir = state.stateDir;
+    const sessionsDir = state.sessionsDir();
+    const sessionFile = await writeUsageFile(
+      "sess-cache-stream-error",
+      `${usageEntry("2026-07-06T12:00:00.000Z", 10)}\n`,
+    );
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-readable.jsonl"),
+      `${usageEntry("2026-07-06T12:00:00.000Z", 7)}\n`,
+      "utf-8",
+    );
+    const appendedEntry = `${usageEntry("2026-07-06T12:01:00.000Z", 20)}\n`;
+    const armed = path.join(stateDir, "fail-next-stream");
+    const failed = path.join(stateDir, "stream-failed");
+    const preload = path.join(stateDir, "fail-usage-stream.cjs");
+    await fs.writeFile(
+      preload,
+      `const fs = require("node:fs");
+const { Readable } = require("node:stream");
+const { isMainThread } = require("node:worker_threads");
+if (!isMainThread) {
+  const createReadStream = fs.createReadStream;
+  fs.createReadStream = function(file, ...args) {
+    if (String(file) === ${JSON.stringify(sessionFile)} && fs.existsSync(${JSON.stringify(armed)})) {
+      fs.unlinkSync(${JSON.stringify(armed)});
+      return Readable.from((async function* () {
+        yield ${JSON.stringify(appendedEntry)};
+        fs.writeFileSync(${JSON.stringify(failed)}, "stream read failed");
+        throw new Error("stream read failed");
+      })());
+    }
+    return Reflect.apply(createReadStream, this, [file, ...args]);
+  };
+  require("node:module").syncBuiltinESMExports();
+}
+`,
+    );
+    await withEnvAsync(
+      { OPENCLAW_STATE_DIR: stateDir, ...sqliteWorkerPreloadEnv(preload) },
+      async () => {
+        const query = {
+          config: {},
+          agentId: "main",
+          startMs: Date.UTC(2026, 6, 6),
+          endMs: Date.UTC(2026, 6, 7),
+        };
+        await loadCostUsageSummary(query);
+        const rollupsBefore = readRollups();
+
+        await fs.appendFile(sessionFile, appendedEntry, "utf-8");
+        await fs.writeFile(armed, "armed");
+
+        const work = new AsyncWorkScope();
+        try {
+          await work.track(async () =>
+            requestCostUsageCacheRefresh({
+              config: query.config,
+              agentId: query.agentId,
+              storePath: path.join(sessionsDir, "sessions.json"),
+            }),
+          );
+          await work.runWhenIdle(() => undefined);
+        } finally {
+          await work.drain();
+        }
+        const readSummary = () =>
+          loadCostUsageSummaryFromCache({ ...query, requestRefresh: false });
+        const afterRefresh = await readSummary();
+        expect(await fs.readFile(failed, "utf8")).toBe("stream read failed");
+        expect(readRollups()).toEqual(rollupsBefore);
+        expect(afterRefresh).toMatchObject({
+          totals: { totalTokens: 17 },
+          cacheStatus: { status: "partial", cachedFiles: 2, pendingFiles: 1 },
+        });
+
+        await fs.unlink(failed);
+        await fs.writeFile(armed, "armed");
+        const afterReplay = await readSummary();
+        expect(await fs.readFile(failed, "utf8")).toBe("stream read failed");
+        expect(afterReplay).toMatchObject({
+          totals: { totalTokens: 7 },
+          cacheStatus: { status: "partial", cachedFiles: 1, pendingFiles: 1 },
+        });
+        expect(readRollups()).toEqual(rollupsBefore);
+        const recovered = await readSummary();
+        expect(recovered.totals.totalTokens).toBe(17);
+        expect(readRollups()).toEqual(rollupsBefore);
+      },
+    );
   });
 });

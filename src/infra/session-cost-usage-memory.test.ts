@@ -17,7 +17,6 @@ import type { SessionActorStorageWrites } from "../config/sessions/session-actor
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { buildUsageOverview } from "../shared/usage-overview.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runSessionActorUsage } from "./session-cost-usage-memory.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
@@ -411,13 +410,15 @@ describe("actor memory usage", () => {
     expect(await refresh()).toEqual({ kind: "refresh", changed: false });
   });
 
-  it("includes all selected memory sessions in overview totals before limiting rows", async () => {
+  it("refreshes and reports every selected memory session through the worker adapter", async () => {
     const first = await fixture();
-    const secondTarget = {
-      sessionKey: "agent:main:dashboard:incognito-usage-second",
-      sessionId: "usage-2",
-    };
-    const second = await fixture({}, secondTarget);
+    const second = await fixture(
+      {},
+      {
+        sessionKey: "agent:main:dashboard:incognito-usage-second",
+        sessionId: "usage-2",
+      },
+    );
     const cost = { input: 0.8, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 1 };
     await first.append(8, cost);
     await second.append(8, cost);
@@ -442,26 +443,7 @@ describe("actor memory usage", () => {
     expect(cached).toMatchObject({
       kind: "sessions",
       cacheStatus: { status: "fresh", cachedFiles: 2 },
-    });
-    if (cached.kind !== "sessions") {
-      throw new Error("Expected selected memory usage summaries");
-    }
-    expect(
-      buildUsageOverview({
-        rows: [first, second].map((target, index) => ({
-          key: target.sessionKey,
-          sessionId: target.sessionId,
-          agentId: "main",
-          updatedAt: 10_000,
-          usage: cached.summaries[index] ?? null,
-        })),
-        options: { limit: 1 },
-        dayBucket,
-      }),
-    ).toMatchObject({
-      totals: { totalTokens: 20, totalCost: 2 },
-      sessions: [{ usage: { totalTokens: 10, totalCost: 1 } }],
-      overview: { total: 2, selectedRowCount: 2, limit: 1 },
+      summaries: Array.from({ length: 2 }, () => ({ totalTokens: 10, totalCost: 1 })),
     });
   });
 

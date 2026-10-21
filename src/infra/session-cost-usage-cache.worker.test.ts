@@ -4,7 +4,11 @@ import type { StatementSync } from "node:sqlite";
 import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withTestTimeout,
+} from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { maybeRepairLegacyRuntimeFiles } from "../commands/doctor-usage-cost-cache.js";
 import {
@@ -105,6 +109,29 @@ function readSession(
   });
 }
 
+type HostRequestResult = ReturnType<NonNullable<WorkerTaskOptions<unknown>["onRequest"]>>;
+function observeHostRequests(
+  observe: (value: unknown, next: () => HostRequestResult) => HostRequestResult,
+) {
+  // oxlint-disable-next-line typescript/unbound-method -- Forward with the original pool receiver.
+  const run = WorkerTaskPool.prototype.run;
+  return vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
+    this: WorkerTaskPool<unknown, unknown>,
+    input,
+    options,
+  ) {
+    const onRequest = options.onRequest;
+    return run.call(this, input, {
+      ...options,
+      onRequest: onRequest && ((value, context) => observe(value, () => onRequest(value, context))),
+    });
+  });
+}
+
+function waitForHost(gate: Promise<void>, operation: Promise<unknown>, message: string) {
+  return withTestTimeout(awaitGateBeforeSettlement(gate, operation, message), 10_000, message);
+}
+
 it("batches full-refresh snapshots within payload bounds and preserves targeted refreshes and later writes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "usage-prune-refresh";
@@ -146,40 +173,22 @@ it("batches full-refresh snapshots within payload bounds and preserves targeted 
     expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(98);
 
     const pruneRequests: Array<{ kind: string; keys: string[]; bytes: number }> = [];
-    // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
-    const run = WorkerTaskPool.prototype.run;
-    const observer = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
-      this: WorkerTaskPool<unknown, unknown>,
-      input: WorkerTaskInput<unknown>,
-      options: WorkerTaskOptions<unknown>,
-    ) {
-      const onRequest = options.onRequest;
-      return run.call(this, input, {
-        ...options,
-        onRequest:
-          onRequest &&
-          ((value, context) => {
-            if (isRecord(value) && value.kind === "prune-rows" && Array.isArray(value.input)) {
-              const keys: string[] = [];
-              let bytes = 0;
-              for (const row of value.input) {
-                if (
-                  !isRecord(row) ||
-                  typeof row.key !== "string" ||
-                  !(row.value instanceof Uint8Array)
-                ) {
-                  throw new Error("Expected a transferred usage prune snapshot");
-                }
-                keys.push(row.key);
-                bytes += row.value.byteLength + 2 * row.key.length;
-              }
-              pruneRequests.push({ kind: value.kind, keys, bytes });
-            } else if (isRecord(value) && value.kind === "prune") {
-              pruneRequests.push({ kind: value.kind, keys: [], bytes: 0 });
-            }
-            return onRequest(value, context);
-          }),
-      });
+    const observer = observeHostRequests((value, next) => {
+      if (isRecord(value) && value.kind === "prune-rows" && Array.isArray(value.input)) {
+        const keys: string[] = [];
+        let bytes = 0;
+        for (const row of value.input) {
+          if (!isRecord(row) || typeof row.key !== "string" || !(row.value instanceof Uint8Array)) {
+            throw new Error("Expected a transferred usage prune snapshot");
+          }
+          keys.push(row.key);
+          bytes += row.value.byteLength + 2 * row.key.length;
+        }
+        pruneRequests.push({ kind: value.kind, keys, bytes });
+      } else if (isRecord(value) && value.kind === "prune") {
+        pruneRequests.push({ kind: value.kind, keys: [], bytes: 0 });
+      }
+      return next();
     });
     try {
       await refreshCostUsageCacheForAgent({ config, agentId });
@@ -467,34 +476,19 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
     const releaseWrite = createDeferred();
     let heldWrite = false;
     let refreshFinished = false;
-    // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
-    const run = WorkerTaskPool.prototype.run;
-    const observer = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
-      this: WorkerTaskPool<unknown, unknown>,
-      input: WorkerTaskInput<unknown>,
-      options: WorkerTaskOptions<unknown>,
-    ) {
-      const onRequest = options.onRequest;
-      if (!onRequest) {
-        return run.call(this, input, options);
+    const observer = observeHostRequests(async (value, next) => {
+      if (
+        !heldWrite &&
+        isRecord(value) &&
+        value.kind === "write" &&
+        Array.isArray(value.input) &&
+        value.input.some((row) => isRecord(row) && row.key === growingFile)
+      ) {
+        heldWrite = true;
+        writeEntered.resolve();
+        await releaseWrite.promise;
       }
-      return run.call(this, input, {
-        ...options,
-        onRequest: async (value, context) => {
-          if (
-            !heldWrite &&
-            isRecord(value) &&
-            value.kind === "write" &&
-            Array.isArray(value.input) &&
-            value.input.some((row) => isRecord(row) && row.key === growingFile)
-          ) {
-            heldWrite = true;
-            writeEntered.resolve();
-            await releaseWrite.promise;
-          }
-          return onRequest(value, context);
-        },
-      });
+      return next();
     });
     const published = vi.fn();
     sessionCostUsageNotifications.onUpdated = published;
@@ -511,16 +505,7 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
       requestRefresh: false,
     };
     try {
-      await withTestTimeout(
-        Promise.race([
-          writeEntered.promise,
-          refresh.then(() => {
-            throw new Error("Refresh completed before requesting its rollup write");
-          }),
-        ]),
-        10_000,
-        "Refresh did not reach its host write",
-      );
+      await waitForHost(writeEntered.promise, refresh, "Refresh did not reach its host write");
       const fresh = readSession(agentId, steadyFile);
       const partial = loadCostUsageSummaryFromCache(summaryParams);
       const stale = readSession(agentId, growingFile);
@@ -772,16 +757,7 @@ it("retains a late host write failure after cancellation and releases the lock o
       },
     );
     try {
-      await withTestTimeout(
-        Promise.race([
-          writeAccepted.promise,
-          outcome.then((error) => {
-            throw new Error("Refresh ended before committing its host write", { cause: error });
-          }),
-        ]),
-        10_000,
-        "Refresh did not reach its host write",
-      );
+      await waitForHost(writeAccepted.promise, outcome, "Refresh did not reach its host write");
       events.push("canceled");
       work.beginClose(cancellation);
       await expect
@@ -909,16 +885,7 @@ it("settles canceled refresh cleanup without waiting for its admitted successor"
     );
     let refreshB: Promise<"refreshed" | "busy"> | undefined;
     try {
-      await withTestTimeout(
-        Promise.race([
-          enteredA.promise,
-          outcomeA.then((outcome) => {
-            throw new Error("First refresh ended before its host write", { cause: outcome });
-          }),
-        ]),
-        10_000,
-        "First refresh did not reach its host write",
-      );
+      await waitForHost(enteredA.promise, outcomeA, "First refresh did not reach its host write");
       watchSuccessor = true;
       refreshB = refreshCostUsageCacheForAgent({
         config,
@@ -935,14 +902,9 @@ it("settles canceled refresh cleanup without waiting for its admitted successor"
           return { error };
         },
       );
-      await withTestTimeout(
-        Promise.race([
-          queuedB.promise,
-          outcomeB.then((outcome) => {
-            throw new Error("Successor ended before worker admission", { cause: outcome });
-          }),
-        ]),
-        10_000,
+      await waitForHost(
+        queuedB.promise,
+        outcomeB,
         "Successor was not queued behind the first refresh",
       );
       workA.beginClose(canceled);
