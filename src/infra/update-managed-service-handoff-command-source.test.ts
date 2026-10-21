@@ -46,27 +46,30 @@ it.each([
   ["/Run", undefined, undefined, 15_000, 0],
   ["systemctl", 120_000, 120_000, 120_000],
   ["launchctl", 120_000, 120_000, 120_000],
-] as const)("bounds %s command duration", async (operation, deadline, cap, elapsed, closeCode) => {
-  const helper = createHelper(closeCode);
-  const scheduled = operation.startsWith("/");
-  const settled = vi.fn<(result: CommandResult) => void>();
-  const command = scheduled ? "schtasks.exe" : operation;
-  const args = scheduled ? [operation] : ["stop"];
-  const completed = helper.run(command, args, undefined, deadline, cap).then(settled);
-  if (scheduled) {
-    helper.child.stderr.emit("data", "native diagnostic");
-  } else {
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(settled).not.toHaveBeenCalled();
-  }
-  await vi.advanceTimersByTimeAsync(elapsed - (scheduled ? 0 : 15_000));
-  const detail = `schtasks ${operation} timed out after ${elapsed}ms`;
-  expect(settled).toHaveBeenCalledExactlyOnceWith(
-    output(scheduled ? 124 : 1, scheduled ? `${detail}\nnative diagnostic` : ""),
-  );
-  expect(helper.appendLog.mock.calls).toEqual(scheduled ? [[detail]] : []);
-  await completed;
-});
+] as const)(
+  "bounds %s command duration",
+  async (operation, deadline, cap, elapsed, closeCode: number | undefined = undefined) => {
+    const helper = createHelper(closeCode);
+    const scheduled = operation.startsWith("/");
+    const settled = vi.fn<(result: CommandResult) => void>();
+    const command = scheduled ? "schtasks.exe" : operation;
+    const args = scheduled ? [operation] : ["stop"];
+    const completed = helper.run(command, args, undefined, deadline, cap).then(settled);
+    if (scheduled) {
+      helper.child.stderr.emit("data", "native diagnostic");
+    } else {
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(settled).not.toHaveBeenCalled();
+    }
+    await vi.advanceTimersByTimeAsync(elapsed - (scheduled ? 0 : 15_000));
+    const detail = `schtasks ${operation} timed out after ${elapsed}ms`;
+    expect(settled).toHaveBeenCalledExactlyOnceWith(
+      output(scheduled ? 124 : 1, scheduled ? `${detail}\nnative diagnostic` : ""),
+    );
+    expect(helper.appendLog.mock.calls).toEqual(scheduled ? [[detail]] : []);
+    await completed;
+  },
+);
 
 it("does not dispatch a Scheduled Task command after its lease is lost", async () => {
   const helper = createHelper();

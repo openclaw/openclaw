@@ -66,8 +66,8 @@ describe("scheduled command timeouts", () => {
           expect(result).toMatchObject({
             status: "error",
             error: "Cancelled by operator.",
-            failureNotificationDetail: undefined,
           });
+          expect(result.failureNotificationDetail).toBeUndefined();
           return;
         }
         expect(result).toMatchObject({

@@ -15,7 +15,13 @@ function update(updateId: number, messageId: number, topic: number | "reaction")
       message_reaction: { ...base, old_reaction: [], new_reaction: [] },
     };
   }
-  const message = { ...base, message_thread_id: topic, is_topic_message: true, text: "message" };
+  const message = {
+    ...base,
+    from: { id: 1, is_bot: false, first_name: "Ada" },
+    message_thread_id: topic,
+    is_topic_message: true,
+    text: "message",
+  };
   return { update_id: updateId, message };
 }
 

@@ -7,6 +7,7 @@ import {
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
+// mock-isolation: Fixed command spans keep approval registration independent of native parsing.
 vi.mock("./bash-tools.exec-approval-request.runtime.js", () => ({
   resolveExecApprovalCommandSpans: async (command: string) =>
     command === "node"

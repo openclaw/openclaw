@@ -71,7 +71,13 @@ it.each([true, false])("coalesces wheel bursts at the %s live-stream cadence", a
   await vi.advanceTimersByTimeAsync(1);
   expect(request).toHaveBeenCalledOnce();
   const action = request.mock.calls[0]?.[1];
-  expect(action).toMatchObject({ path: "/act", body: { targetId: "tab-a", kind: "evaluate" } });
-  expect(action?.body?.fn).toEqual(expect.stringContaining("window.scrollBy(12, 100)"));
+  expect(action).toMatchObject({
+    path: "/act",
+    body: {
+      targetId: "tab-a",
+      kind: "evaluate",
+      fn: expect.stringContaining("window.scrollBy(12, 100)"),
+    },
+  });
   controller.suspendView();
 });

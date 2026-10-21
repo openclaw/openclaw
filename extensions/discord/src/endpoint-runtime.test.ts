@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { text } from "node:stream/consumers";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -28,9 +27,16 @@ afterEach(async () => {
 
 async function startEndpointServer() {
   const requests: [string | undefined, string | undefined, string][] = [];
-  server = createServer(async (request, response) => {
-    requests.push([request.url, request.headers.authorization, await text(request)]);
-    response.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
+  server = createServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk: string) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      requests.push([request.url, request.headers.authorization, body]);
+      response.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
+    });
   });
   await once(server.listen(0, "127.0.0.1"), "listening");
   const address = server.address();

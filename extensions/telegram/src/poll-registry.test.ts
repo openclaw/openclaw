@@ -91,8 +91,8 @@ describe("telegram poll registry", () => {
         ...poll,
         pollId: "poll-invalid-chat",
         chat,
-        threadSpec,
-        messageThreadId,
+        ...(threadSpec === undefined ? {} : { threadSpec }),
+        ...(messageThreadId === undefined ? {} : { messageThreadId }),
       });
 
       await expect(

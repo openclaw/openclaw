@@ -7,6 +7,7 @@ import { resetProcessRegistryForTests } from "./bash-process-registry.test-suppo
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 
 const createChildAdapterMock = vi.hoisted(() => vi.fn());
+// mock-isolation: Controlled adapters expose finalization and extinction without spawning children.
 vi.mock("../process/supervisor/adapters/child.js", () => ({
   createChildAdapter: createChildAdapterMock,
 }));

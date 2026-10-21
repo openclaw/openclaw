@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMocks = vi.hoisted(() => ({ sendTypingSignal: vi.fn(), sendMessageSignal: vi.fn() }));
+// mock-isolation: Native approval delivery is observed through synthetic transport calls only.
 vi.mock("./send.js", () => sendMocks);
 const { transport } = (await import("./approval-handler.runtime.js")).signalApprovalNativeRuntime;
 const to = "+15551230000";

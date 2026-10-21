@@ -36,7 +36,7 @@ function loadBundle(
 }
 
 const skill = "---\ndescription: fixture\n---\n";
-const bundleFiles: Record<string, Record<string, string | object>> = {
+const bundleFiles = {
   "sample-bundle": {
     ".codex-plugin/plugin.json": { name: "Sample Bundle", skills: "skills" },
     "skills/SKILL.md": skill,
@@ -59,7 +59,7 @@ const bundleFiles: Record<string, Record<string, string | object>> = {
       },
     },
   },
-};
+} satisfies Record<string, Record<string, string | object>>;
 
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);

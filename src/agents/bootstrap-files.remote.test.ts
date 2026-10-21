@@ -16,6 +16,7 @@ import { loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
 
 const { classify } = vi.hoisted(() => ({ classify: vi.fn() }));
 
+// mock-isolation: Workspace classification is fixed without loading unrelated memory plugins.
 vi.mock("../plugins/memory-runtime.js", () => ({
   classifyActiveMemoryWorkspacePaths: classify,
 }));

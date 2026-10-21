@@ -45,7 +45,8 @@ afterEach(() => {
 
 const rows = (frame: string) => stripAnsi(frame).split("\n").filter(Boolean);
 const frames = (output: string[]) => output.filter((chunk) => chunk.includes("\x1b[K"));
-const listenerCounts = () => [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
+const listenerCounts = () =>
+  [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")] as const;
 
 async function runStatic() {
   process.stdout.isTTY = false;
@@ -77,16 +78,24 @@ describe("printClawBanner", () => {
     expect(animation).toHaveLength(16);
     const openClaws = "•●•.:.        .:.•●•\n:●●●•:        :•●●●:";
     expect(
-      animation.flatMap((frame, index) => (stripAnsi(frame).startsWith(openClaws) ? [index] : [])),
+      animation.flatMap((frame, index) =>
+        rows(frame)
+          .slice(0, 2)
+          .map((row) => row.slice(0, 20))
+          .join("\n") === openClaws
+          ? [index]
+          : [],
+      ),
     ).toEqual([13]);
     expect(rows(animation.at(-1) ?? "")).toEqual(staticRows);
   });
 
   it("installs scoped signal handlers only while animating", async () => {
     const before = listenerCounts();
-    let during = [-1, -1];
+    let during: [number, number] = [-1, -1];
     vi.mocked(sleep).mockImplementation(async () => {
-      during = listenerCounts().map((count, index) => Math.max(during[index], count));
+      const counts = listenerCounts();
+      during = [Math.max(during[0], counts[0]), Math.max(during[1], counts[1])];
     });
     await printClawBanner(runtime);
     expect(during).toEqual(before.map((count) => count + 1));

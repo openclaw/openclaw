@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -98,6 +99,7 @@ it.each([
       },
     ]);
     const [request] = requests;
+    assert(request, "expected the affinity HTTP request");
     expect(JSON.parse(request.body)).toMatchObject({
       model: "affinity-fixture",
       stream: true,

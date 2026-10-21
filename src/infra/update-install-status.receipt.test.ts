@@ -68,7 +68,11 @@ it("preserves valid legacy sources without letting unusable receipts veto discov
     receipt: { ...matching, upstreamRef: upstream },
     expected: { upstream, upstreamSha, behind },
   });
-  const receipts = [
+  const receipts: Array<{
+    name: string;
+    receipt: VerifiedGitUpdateReceipt | null;
+    expected?: ReturnType<typeof sourceCase>["expected"];
+  }> = [
     { name: "absent", receipt: null },
     sourceCase("matching custom source", "upstream/main"),
     sourceCase("abbreviated fetch source", "refs/status/main"),

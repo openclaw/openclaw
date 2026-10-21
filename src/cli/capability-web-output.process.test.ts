@@ -21,9 +21,9 @@ describe.skipIf(process.platform === "win32")("web CLI failure output completion
     ["capability", "search", "--query", "failure"],
   ])("drains %s web %s JSON before its failure exit", async (alias, action, flag, input) => {
     const root = tempDirs.make("openclaw-web-output-");
-    const [pluginDir, workspace, tmp] = ["plugin", "workspace", "tmp"].map((name) =>
-      path.join(root, name),
-    );
+    const pluginDir = path.join(root, "plugin");
+    const workspace = path.join(root, "workspace");
+    const tmp = path.join(root, "tmp");
     for (const dir of [pluginDir, workspace, tmp]) {
       await fs.mkdir(dir);
     }
