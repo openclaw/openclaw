@@ -115,6 +115,8 @@ type RouteWithTabParams<T> = {
    * Leave false only for routes that navigate, activate, close, or otherwise manage the tab.
    */
   enforceCurrentUrlAllowed?: boolean;
+  /** Reuse this request's admitted address only for response URL redaction. */
+  reuseAdmittedUrlForResponse?: boolean;
   run: (ctx: RouteTabContext) => Promise<T>;
 };
 
@@ -141,12 +143,19 @@ export async function withRouteTabContext<T>(
           signal,
           timeoutMs: params.ctx.state().resolved.actionTimeoutMs,
         });
+        let admittedNavigation: { url: string; policyKey: string } | undefined;
         if (params.enforceCurrentUrlAllowed) {
+          const url = tab.url;
+          const navigationPolicy = browserNavigationPolicyForProfile(params.ctx, profileCtx);
+          const policyKey = JSON.stringify(navigationPolicy);
           await assertBrowserNavigationResultAllowed({
-            url: tab.url,
+            url,
             signal,
-            ...browserNavigationPolicyForProfile(params.ctx, profileCtx),
+            ...navigationPolicy,
           });
+          if (params.reuseAdmittedUrlForResponse) {
+            admittedNavigation = { url, policyKey };
+          }
         }
         if (assertCurrent) {
           await assertCurrent();
@@ -165,6 +174,7 @@ export async function withRouteTabContext<T>(
               fallbackUrl,
               signal,
               timeoutMs: params.ctx.state().resolved.actionTimeoutMs,
+              admittedNavigation,
             }),
         });
       },
@@ -186,6 +196,7 @@ export async function resolveSafeRouteTabUrl(params: {
   fallbackUrl?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  admittedNavigation?: { url: string; policyKey: string };
 }): Promise<string | undefined> {
   let tabs: Array<{ targetId: string; url: string }>;
   try {
@@ -200,10 +211,20 @@ export async function resolveSafeRouteTabUrl(params: {
     return undefined;
   }
   try {
+    params.signal?.throwIfAborted();
+    const navigationPolicy = browserNavigationPolicyForProfile(params.ctx, params.profileCtx);
+    // This only projects this request's already-admitted address. Actions and
+    // navigation retain their own guards, even for a same-URL document reload.
+    if (
+      params.admittedNavigation?.url === candidateUrl &&
+      params.admittedNavigation.policyKey === JSON.stringify(navigationPolicy)
+    ) {
+      return candidateUrl;
+    }
     await assertBrowserNavigationResultAllowed({
       url: candidateUrl,
       signal: params.signal,
-      ...browserNavigationPolicyForProfile(params.ctx, params.profileCtx),
+      ...navigationPolicy,
     });
     return candidateUrl;
   } catch {
