@@ -131,7 +131,6 @@ it(
             workspace: state.workspaceDir,
             skipBootstrap: true,
             utilityModel: "",
-            heartbeat: { every: "0m" },
             model: { primary: model.modelRef },
             models: {
               [model.modelRef]: {
