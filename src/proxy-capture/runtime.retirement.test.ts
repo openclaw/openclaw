@@ -42,6 +42,7 @@ vi.mock("./store.sqlite.js", () => ({
   safeJsonString: JSON.stringify,
 }));
 
+// mock-isolation: Drive retirement and lost terminal writes without opening a capture database.
 vi.mock("./store.async.js", () => ({
   createDebugProxyCaptureStoreForContext: () => {
     fixture.acquisitions += 1;

@@ -6,6 +6,7 @@ import { listenGatewayHttpServer } from "./http-listen.js";
 
 const sleepMock = vi.hoisted(() => vi.fn(async (_ms: number) => {}));
 
+// mock-isolation: Control retry timing without loading unrelated utility dependencies.
 vi.mock("../../utils.js", () => ({ sleep: (ms: number) => sleepMock(ms) }));
 
 function createFakeHttpServer(errors: string[]) {

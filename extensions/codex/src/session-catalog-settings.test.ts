@@ -29,6 +29,7 @@ function nativeThread(overrides: Partial<CodexThread> = {}): CodexThread {
     ...threadStartResult().thread,
     ...catalogThread(persisted),
     status: { type: "idle" },
+    source: "cli",
     ...overrides,
   };
 }

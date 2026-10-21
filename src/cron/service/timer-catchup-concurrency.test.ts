@@ -91,10 +91,9 @@ describe("cron startup catch-up concurrency", () => {
         await catchup;
         const replacedSchedule = change === "schedule" || change === "reactivated";
         const expected = replacedSchedule ? reconciled.state.nextRunAtMs : now + 5_000;
-        expect(await readJobState(storePath, deferred.id)).toMatchObject({
-          nextRunAtMs: expected,
-          startupCatchupAtMs: replacedSchedule ? undefined : expected,
-        });
+        const persisted = await readJobState(storePath, deferred.id);
+        expect(persisted?.nextRunAtMs).toBe(expected);
+        expect(persisted?.startupCatchupAtMs).toBe(replacedSchedule ? undefined : expected);
         // A fresh scheduler must see the durable pacing fact, not replay the old due slot.
         const restarted = createCronServiceState(state.deps);
         await runMissedJobs(restarted);
@@ -132,11 +131,10 @@ describe("cron startup catch-up concurrency", () => {
       release.resolve();
       await catchup;
 
-      expect(await readJobState(storePath, deferred.id)).toMatchObject({
-        lastRunAtMs: foreignNow,
-        nextRunAtMs: foreignCompleted?.nextRunAtMs,
-        startupCatchupAtMs: undefined,
-      });
+      const persisted = await readJobState(storePath, deferred.id);
+      expect(persisted?.lastRunAtMs).toBe(foreignNow);
+      expect(persisted?.nextRunAtMs).toBe(foreignCompleted?.nextRunAtMs);
+      expect(persisted?.startupCatchupAtMs).toBeUndefined();
     } finally {
       release.resolve();
       await catchup;

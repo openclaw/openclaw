@@ -30,6 +30,7 @@ vi.mock("node:crypto", async (importOriginal) => {
     },
   };
 });
+// mock-isolation: Keep CA generation independent of host OpenSSL discovery.
 vi.mock("../infra/resolve-system-bin.js", () => ({ resolveSystemBin: () => "/usr/bin/openssl" }));
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
