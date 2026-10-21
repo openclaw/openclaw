@@ -1214,8 +1214,11 @@ soak with `--github-options-connected`. Generation registers the synthetic
 `openclaw-fixture/soak` origin before recording each repository fingerprint;
 existing disconnected fixtures cannot be reused for this mode. The harness gives
 the isolated Gateway a synthetic native GitHub token, serves `/user`, repository
-metadata, an empty PR list, and the preview issue entirely in process. Each route
-cycles through deterministic 300, 600, and 900 ms delays. No request reaches GitHub.
+metadata, an empty PR list, and the preview issue entirely in process. Account
+verification (`/user`) cycles through deterministic 300, 600, and 900 ms delays;
+other routes retain the existing preview fixture's immediate responses. Delaying
+every preview request would exceed its shared two-second budget across serial
+visibility checks and item reads. No request reaches GitHub.
 This measures shared-account verification and discovery, not personal OAuth refresh.
 Setup creates session-owned managed worktrees through `sessions.create` and uses
 their returned roots for the foreground and diff sessions. This mode requires

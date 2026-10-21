@@ -555,7 +555,7 @@ globalThis.fetch = async (input, options) => {
     const route = url.pathname + url.search;
     const sequence = (routeRequests.get(route) ?? 0) + 1;
     routeRequests.set(route, sequence);
-    const delayMs = connected ? 300 + ((sequence - 1) % 3) * 300 : 0;
+    const delayMs = connected && url.pathname === '/user' ? 300 + ((sequence - 1) % 3) * 300 : 0;
     const startedAtEpochMs = performance.timeOrigin + performance.now();
     let status = 0;
     try {
@@ -4119,7 +4119,7 @@ try {
                   githubOptionsConnected: {
                     additionalScopedSockets: githubOptionsClients.length,
                     accountId: 1516,
-                    upstreamDelayMs: [300, 600, 900],
+                    accountVerificationDelayMs: [300, 600, 900],
                     accountRenameAfterMs: 60_000,
                     upstreamRequests: githubFixtureRequests,
                     upstreamByRoute: Object.fromEntries(
