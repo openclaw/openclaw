@@ -50,7 +50,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu scrolling
       });
 
     const clickedMenuShown = menuShown();
-    trigger.click();
+    await page.elementLocator(trigger).click();
     await expect.poll(() => activeRow()?.dataset.value).toBe("agent:agent-39");
     await expect.poll(() => document.activeElement).toBe(activeRow());
     // Focus settles before the opening animation and selected-row reveal.

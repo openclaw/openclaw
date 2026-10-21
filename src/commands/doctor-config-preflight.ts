@@ -1,9 +1,11 @@
+import { existsSync } from "node:fs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveFutureConfigActionBlock } from "../config/future-version-guard.js";
 import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveIsConfigReadOnly, resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
 import type {
   LegacyStateMigrationStepReceipt,
@@ -14,6 +16,7 @@ import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db-permissions.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership-preflight.js";
 import {
@@ -27,7 +30,6 @@ import {
 } from "./doctor-config-preflight-legacy-config.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import { assertDoctorPreflightMigrationsComplete } from "./doctor-config-preflight-migrations.js";
-import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
 import { createDoctorPluginMigrationPreparation } from "./doctor-config-preflight-plugin-migrations.js";
 import { runDoctorPluginConvergence } from "./doctor-config-preflight-plugin-verification.js";
 import * as cronMigration from "./doctor-config-preflight.cron.js";
@@ -81,13 +83,18 @@ async function runDoctorConfigPreflightOperation(
   const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>
     measureDoctorConfigPreflightStep(name, run, options.measure);
   if (stateMigrationsRequested) {
-    await measurePreflightStep("state-write-admission", () =>
-      assertOpenClawStateWriteAllowedAtPath({
-        databasePath: resolveOpenClawStateSqlitePath(process.env),
+    await measurePreflightStep("state-write-admission", async () => {
+      const databasePath = resolveOpenClawStateSqlitePath(process.env);
+      await assertOpenClawStateWriteAllowedAtPath({
+        databasePath,
         env: process.env,
         recoverOrphanedSidecars: true,
-      }),
-    );
+      });
+      if (existsSync(databasePath)) {
+        // Harden before SQLite can retain a read-only handle for an owned 0444 file.
+        ensureOpenClawStatePermissions(databasePath, process.env);
+      }
+    });
   }
   await measurePreflightStep("stale-update-runs", () =>
     noteStaleUpdateRuns({ migrateState: stateMigrationsRequested }),
@@ -150,6 +157,7 @@ async function runDoctorConfigPreflightOperation(
     pluginMetadata.run({ config: configSnapshot.sourceConfig ?? configSnapshot.config ?? {} }, () =>
       planAutomaticConfigRepair(configSnapshot),
     );
+  // Updater-managed rewrites may leave plugin validation stale until convergence.
   const planAdmittedConfigRepair = (
     configSnapshot: ConfigFileSnapshot,
     prepared: Awaited<ReturnType<typeof planAutomaticConfigRepair>> = null,
@@ -159,7 +167,7 @@ async function runDoctorConfigPreflightOperation(
     canPlanAutomaticConfigRepair(configSnapshot) &&
     !skipLegacyParentConfigWrite &&
     (options.repairPrefixedConfig === true ||
-      !shouldSkipPluginValidationForDoctorConfigPreflight()) &&
+      !isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS)) &&
     !resolveIsConfigReadOnly(process.env) &&
     !resolveFutureConfigActionBlock({ action: "normalize legacy config", snapshot: configSnapshot })
       ? (prepared ?? planScopedConfigRepair(configSnapshot))
@@ -172,7 +180,7 @@ async function runDoctorConfigPreflightOperation(
         includePluginMetadata: options.preparePluginMetadataSnapshot === true,
         measure: options.measure,
         observe: options.observe,
-        skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
+        skipPluginValidation: isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS),
         prepareSnapshot: getSnapshotPreparation(options.doctorOnlyStateMigrations === true),
         ...(await pluginMigrations.snapshotOptions()),
       }),

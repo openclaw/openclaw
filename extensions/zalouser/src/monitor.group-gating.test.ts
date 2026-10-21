@@ -672,7 +672,6 @@ describe("zalouser monitor group mention gating", () => {
     await processMessageThroughMonitor({
       message: createDmMessage({
         quotedGlobalMsgId: "987654321234",
-        quotedOwnerId: "555444333",
         quotedBody: "Previous bot message content",
       }),
     });

@@ -1,19 +1,9 @@
 import type { JSX } from "@solidjs/web";
-import { onCleanup } from "solid-js";
+import { onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { listen } from "../../lib/reactive/listener.ts";
-import type { CheckoutChipOptions } from "./checkout-chip.ts";
-
-type PickerState = Pick<
-  CheckoutChipOptions,
-  | "submitting"
-  | "pendingPlacement"
-  | "popoverOpen"
-  | "onPopoverShow"
-  | "onPopoverHide"
-  | "onPopoverAfterHide"
->;
+import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 export function SessionPicker(props: {
   kind: "where" | "project" | "checkout";
@@ -25,7 +15,7 @@ export function SessionPicker(props: {
     JSX.HTMLAttributes<HTMLButtonElement>,
     "title" | "aria-label" | "aria-description"
   > & { [name: `data-${string}`]: string | undefined };
-  state: PickerState;
+  params: NewSessionPlaceControlsOptions;
   children: JSX.Element;
   onAfterHide?: () => void;
   ref?: (handle: PopoverHandle) => void;
@@ -33,7 +23,7 @@ export function SessionPicker(props: {
   let trigger!: HTMLButtonElement;
   let popover!: PopoverHandle;
   let cleanup: (() => void) | undefined;
-  onCleanup(() => cleanup?.());
+  onSettled(() => () => cleanup?.());
   return (
     <>
       <span
@@ -53,8 +43,12 @@ export function SessionPicker(props: {
           class="new-session-page__trigger"
           aria-haspopup="dialog"
           aria-controls={`new-session-${props.kind}-popover`}
-          aria-expanded={props.state.popoverOpen ? "true" : "false"}
-          disabled={props.state.submitting || props.state.pendingPlacement}
+          aria-expanded={props.params.place.browser.popoverOpen(props.kind) ? "true" : "false"}
+          disabled={
+            props.params.submitting ||
+            props.params.pendingPlacement ||
+            (props.kind === "where" && props.params.place.suggestedCloudProfile.pending)
+          }
           onClick={() => popover.overlay.request(!popover.overlay.open)}
         >
           <span class="new-session-page__target-icon" aria-hidden="true">
@@ -90,9 +84,12 @@ export function SessionPicker(props: {
           `new-session-page__${props.kind}-popover`,
           "new-session-page__picker-popover",
         ]}
-        open={props.state.popoverOpen}
+        open={props.params.place.browser.popoverOpen(props.kind)}
         placement="bottom-start"
-        onOpenChange={(open) => (open ? props.state.onPopoverShow() : props.state.onPopoverHide())}
+        onOpenChange={(open) => {
+          const callbacks = props.params.place.browser.popoverCallbacks(props.kind);
+          callbacks[open ? "onPopoverShow" : "onPopoverHide"]();
+        }}
         ref={(handle) => {
           popover = handle;
           const surface = handle.overlay.surface;
@@ -103,7 +100,7 @@ export function SessionPicker(props: {
                 if (!active || active === surface.ownerDocument.body || surface.contains(active)) {
                   trigger.focus();
                 }
-                props.state.onPopoverAfterHide();
+                props.params.place.browser.popoverCallbacks(props.kind).onPopoverAfterHide();
                 props.onAfterHide?.();
               }
             }),

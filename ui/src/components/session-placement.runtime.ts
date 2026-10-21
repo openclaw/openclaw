@@ -20,6 +20,10 @@ import {
   sessionPlacementRetry,
   sessionPlacementTargetReason,
 } from "./session-placement-action.ts";
+import type {
+  SessionPlacementPresentation,
+  SessionPlacementSource,
+} from "./session-placement-move-dialog.tsx";
 
 registerNewSessionSetupEnglish();
 
@@ -29,9 +33,35 @@ async function selectSessionPlacementTarget(params: {
   mode: "dispatch" | "move" | "restart";
   row: GatewaySessionRow;
   requiredProfile?: string;
+  presentation?: SessionPlacementPresentation;
+  source?: SessionPlacementSource;
 }): Promise<SessionMoveTarget | null> {
   const { showSessionPlacementTargetDialog } = await import("./session-placement-move-dialog.tsx");
   const runtime = params.row.agentRuntime;
+  const placement = params.row.placement;
+  const source: SessionPlacementSource | undefined =
+    params.source ??
+    (placement?.state === "active"
+      ? placement.runner?.deviceId
+        ? {
+            label: placement.runner.deviceId,
+            target: { kind: "device", deviceId: placement.runner.deviceId },
+          }
+        : placement.profileId
+          ? {
+              label: placement.profileId,
+              providerId: placement.providerId,
+              target: {
+                kind: "profile",
+                profileId: placement.profileId,
+                ...(placement.machine?.class ? { machineClass: placement.machine.class } : {}),
+                ...(placement.machine?.os ? { os: placement.machine.os } : {}),
+              },
+            }
+          : { label: placement.environmentId }
+      : placement?.state === "local"
+        ? { label: t("newSession.gateway"), target: { kind: "gateway" } }
+        : undefined);
   const gatewayAccess = readSessionMethodAccess(params.gatewaySnapshot, {
     method: params.mode === "restart" ? "sessions.reclaim" : "sessions.move",
     requiredScope: "operator.write",
@@ -42,6 +72,8 @@ async function selectSessionPlacementTarget(params: {
   });
   return showSessionPlacementTargetDialog({
     mode: params.mode,
+    presentation: params.presentation,
+    source,
     sessionLabel: params.row.label || params.row.key,
     activeRun: params.row.hasActiveRun === true,
     repositoryOnly: repositorySessionNeedsWorker(params.row),
@@ -91,6 +123,8 @@ export async function changeSessionPlacement(params: {
   currentGatewaySnapshot: () => ApplicationGatewaySnapshot;
   requiredProfile: () => string | undefined;
   mode: "move" | "recover";
+  presentation?: SessionPlacementPresentation;
+  source?: SessionPlacementSource;
   pendingKey: string | null;
   row: GatewaySessionRow;
   fallbackAgentId: string;
@@ -177,6 +211,8 @@ export async function changeSessionPlacement(params: {
       mode: movingPlacement ? "move" : restartPlacement ? "restart" : "dispatch",
       row: params.row,
       requiredProfile: params.requiredProfile(),
+      presentation: params.presentation,
+      source: params.source,
     });
   }
   if (!target) {

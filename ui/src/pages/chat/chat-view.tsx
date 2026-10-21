@@ -1,6 +1,6 @@
 import { dynamic } from "@solidjs/web";
 import type { Component } from "solid-js";
-import { createMemo, Show, untrack } from "solid-js";
+import { createMemo, merge, Show } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { ExecApprovalCard } from "../../components/exec-approval-card-solid.tsx";
@@ -14,28 +14,35 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { projectPresentation } from "../../lib/reactive/presentation.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { orderSessionPullRequests } from "../../lib/session-pull-request-presentation.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
+import { listSubagents } from "./chat-subagent-wait.ts";
 import { createChatViewFrame, type ChatProps, type ChatViewFrame } from "./chat-view-frame.ts";
 import {
   renderChatComposerNotices as ChatComposerNoticesView,
   renderChatTopbarNotices as ChatTopbarNotices,
 } from "./chat-view-notices.tsx";
-import { subscribeAsyncQuestionState } from "./components/chat-async-question.ts";
+import type { ChatActivityPillsProps } from "./components/chat-activity-pills.tsx";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
 import {
   ComposerQuestionDock,
   createComposerQuestionPanel,
 } from "./components/chat-composer-question.tsx";
+import type { ComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ComposerQueue } from "./components/chat-composer-regions.tsx";
-import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
+import {
+  getChatComposerState,
+  hasTerminalRunStatus,
+  isChatRunWorking,
+} from "./components/chat-composer-state.ts";
 import { ChatComposer } from "./components/chat-composer.tsx";
+import { ChatConversationHistoryError } from "./components/chat-conversation-history-error.tsx";
+import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
 import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
@@ -52,12 +59,14 @@ import "../../components/resizable-divider.ts";
 export type { ChatProps } from "./chat-view-frame.ts";
 
 type ChatViewInput = {
+  questions: ComposerQuestions;
   props: ChatProps;
   frame: ChatViewFrame;
   presented: boolean;
   application?: ApplicationContext;
   bindTranscriptViewport: (element: HTMLDivElement) => () => void;
   getTranscriptElement: () => HTMLDivElement | null;
+  getScrollToLatestElement: () => HTMLButtonElement | null;
 };
 
 function ChatTranscript(input: ChatViewInput) {
@@ -70,7 +79,12 @@ function ChatTranscript(input: ChatViewInput) {
   );
 }
 
-function ChatFooterContent(input: ChatViewInput) {
+function ChatFooterContent(
+  input: ChatViewInput & {
+    mobileComposition?: boolean;
+    activities?: ChatActivityPillsProps;
+  },
+) {
   const pendingInputs = () => input.frame.pendingInputs;
   const pendingButton = (page: "earlier" | "latest") => (
     <button
@@ -109,7 +123,11 @@ function ChatFooterContent(input: ChatViewInput) {
           <Show when={pendingInputs()?.before !== undefined}>{pendingButton("latest")}</Show>
         </div>
       </Show>
-      <Show when={input.props.inlineApproval && input.props.onApprovalDecision}>
+      <Show
+        when={
+          !input.mobileComposition && input.props.inlineApproval && input.props.onApprovalDecision
+        }
+      >
         <div class="chat-inline-approval">
           <ExecApprovalCard
             props={{
@@ -127,7 +145,7 @@ function ChatFooterContent(input: ChatViewInput) {
       </Show>
       <Show when={!input.props.detailsEnabled}>
         <ChatPullRequests
-          pullRequests={input.props.pullRequests ?? []}
+          pullRequests={input.activities?.pullRequests ? [] : (input.props.pullRequests ?? [])}
           gateway={input.props.pullRequestsGateway}
           sessionId={input.props.pullRequestsSessionId}
           sessionKey={scopedSessionArtifactKey(
@@ -135,13 +153,13 @@ function ChatFooterContent(input: ChatViewInput) {
             input.props.currentAgentId ?? undefined,
           )}
           presented={input.props.presented ?? true}
-          branch={input.props.pullRequestsBranch}
+          branch={input.activities?.publication ? undefined : input.props.pullRequestsBranch}
           branchDismissed={input.props.pullRequestsBranchDismissed}
           status={input.props.pullRequestsStatus ?? "ready"}
           onDismiss={(pullRequest) => input.props.onDismissPullRequest?.(pullRequest)}
           onDismissBranch={input.props.onDismissPullRequestsBranch}
           onOpenSessionDiff={input.props.onOpenSessionDiff}
-          publication={input.props.githubPublication}
+          publication={input.activities?.publication ? undefined : input.props.githubPublication}
         />
       </Show>
       <ChatSessionSuggestions
@@ -168,17 +186,98 @@ function ChatFooterContent(input: ChatViewInput) {
 }
 
 function ChatComposerView(input: ChatViewInput) {
+  const activities = createMemo((): ChatActivityPillsProps | undefined => {
+    if (!input.props.mobileComposer) {
+      return undefined;
+    }
+    const destinations = input.props.mobileActivities;
+    const goal = input.props.selectedSession?.goal;
+    const card = input.props.progressCard;
+    return {
+      presented: input.presented,
+      approvalPending: Boolean(input.props.inlineApproval),
+      subagents: destinations?.onOpenSubagents
+        ? { activities: listSubagents(input.props), onOpen: destinations.onOpenSubagents }
+        : undefined,
+      goal:
+        goal && destinations?.goal
+          ? { ...destinations.goal, value: goal, recovery: input.props.goalRecovery }
+          : undefined,
+      // The pane's chat projection already applies the single Show in chat preference.
+      progress:
+        card && destinations?.onOpenProgress
+          ? {
+              card,
+              showInChat: true,
+              sessionStatus: input.props.selectedSession?.status,
+              startedAt: input.props.selectedSession?.startedAt,
+              endedAt: input.props.selectedSession?.endedAt,
+              hasActiveRun: isChatRunWorking(input.props),
+              refresh: input.props.progressCardRefresh?.state,
+              onOpen: destinations.onOpenProgress,
+            }
+          : undefined,
+      pullRequests: destinations?.onOpenPullRequest
+        ? {
+            items: orderSessionPullRequests(input.props.pullRequests ?? []),
+            status: input.props.pullRequestsStatus ?? "ready",
+            onOpen: destinations.onOpenPullRequest,
+          }
+        : undefined,
+      publication:
+        input.props.githubPublication && destinations?.publication?.eligible
+          ? { view: input.props.githubPublication, onOpen: destinations.publication.onOpen }
+          : undefined,
+    };
+  });
   return (
     <ChatComposer
       {...input.props}
+      questions={input.questions}
       getTranscriptElement={input.getTranscriptElement}
-      progressCard={input.props.detailsEnabled ? null : input.props.progressCard}
-      progressCardInitialLoading={
-        input.props.detailsEnabled ? false : input.props.progressCardInitialLoading
+      getScrollToLatestElement={input.getScrollToLatestElement}
+      progressCard={
+        input.props.detailsEnabled || activities()?.progress ? null : input.props.progressCard
       }
-      asyncQuestions={input.frame.asyncQuestions}
+      progressCardInitialLoading={
+        input.props.detailsEnabled || activities()?.progress
+          ? false
+          : input.props.progressCardInitialLoading
+      }
       displayQueue={input.frame.displayQueue}
-      footerContent={<ChatFooterContent {...input} />}
+      footerContent={
+        <ChatFooterContent
+          {...input}
+          mobileComposition={input.props.mobileComposer}
+          activities={activities()}
+        />
+      }
+      mobileActivityPills={activities()}
+      mobileApprovalContent={
+        <Show
+          when={
+            input.props.mobileComposer &&
+            input.props.inlineApproval &&
+            input.props.onApprovalDecision
+          }
+        >
+          <div class="agent-chat__mobile-approval">
+            <ExecApprovalCard
+              props={{
+                approval: input.props.inlineApproval!,
+                sourceSession: input.frame.approvalSourceSession,
+                busy: input.props.approvalBusy ?? false,
+                connected: input.props.connected,
+                canGrant: input.props.approvalCanGrant,
+                error: input.props.approvalErrors?.get(input.props.inlineApproval!.id) ?? null,
+                variant: "inline",
+                presentation: "mobile",
+                onDecision: input.props.onApprovalDecision!,
+              }}
+            />
+          </div>
+        </Show>
+      }
       notices={<ChatComposerNoticesView {...input.props} presented={input.presented} />}
       onToggleRealtimeTalk={
         input.props.suggestionComposer ? undefined : input.props.onToggleRealtimeTalk
@@ -189,15 +288,10 @@ function ChatComposerView(input: ChatViewInput) {
 }
 
 function ChatComposerCompanion(input: ChatViewInput) {
-  // The companion belongs to this pane's lifetime; replacement panes mount a new owner.
-  const initialPaneId = untrack(() => input.props.paneId);
   const questionPanel = createComposerQuestionPanel(
-    () => ({
-      ...input.props,
-      asyncQuestions: input.frame.asyncQuestions,
-      getTranscriptElement: input.getTranscriptElement,
-    }),
-    getChatComposerState(initialPaneId),
+    () => input.questions,
+    undefined,
+    () => input.getTranscriptElement,
   );
   return (
     <div class="chat-footer__context">
@@ -207,7 +301,7 @@ function ChatComposerCompanion(input: ChatViewInput) {
       </div>
       <ComposerQuestionDock panel={questionPanel()} />
       <ComposerQueue
-        composer={{ ...input.props, displayQueue: input.frame.displayQueue }}
+        composer={merge(input.props, { displayQueue: input.frame.displayQueue })}
         showAbortableUi={
           Boolean(input.props.canAbort && input.props.onAbort) &&
           !hasTerminalRunStatus(input.props.runStatus)
@@ -226,17 +320,19 @@ function ChatComposerCompanion(input: ChatViewInput) {
   );
 }
 
-/** Plugin mountDefault creates a separate root and must carry its application scope. */
+/** Plugin mountDefault creates a separate root; restore application and conversation context here. */
 function ChatSurfaceContent(input: { view: Component<ChatViewInput>; viewProps: ChatViewInput }) {
   const View = dynamic(() => input.view);
   return (
-    <Show when={input.viewProps.application} keyed fallback={<View {...input.viewProps} />}>
-      {(application) => (
-        <ApplicationProvider value={application}>
-          <View {...input.viewProps} />
-        </ApplicationProvider>
-      )}
-    </Show>
+    <ChatConversationMobile value={() => input.viewProps.props.mobileComposer === true}>
+      <Show when={input.viewProps.application} keyed fallback={<View {...input.viewProps} />}>
+        {(application) => (
+          <ApplicationProvider value={application}>
+            <View {...input.viewProps} />
+          </ApplicationProvider>
+        )}
+      </Show>
+    </ChatConversationMobile>
   );
 }
 
@@ -270,19 +366,27 @@ function ChatSurface(input: {
   );
 }
 
-export function ChatView(input: { props: ChatProps; application?: ApplicationContext }) {
+export function ChatView(input: {
+  props: ChatProps;
+  application?: ApplicationContext;
+  questions: ComposerQuestions;
+}) {
   return (
-    <Show when={input.application} keyed fallback={<ChatContent props={input.props} />}>
+    <Show
+      when={input.application}
+      keyed
+      fallback={<ChatContent props={input.props} questions={input.questions} />}
+    >
       {(application) => (
         <ApplicationProvider value={application}>
-          <ChatContent props={input.props} />
+          <ChatContent props={input.props} questions={input.questions} />
         </ApplicationProvider>
       )}
     </Show>
   );
 }
 
-function ChatContent(input: { props: ChatProps }) {
+function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) {
   // Composer sizing needs the viewport even before the virtualizer has rows.
   let transcriptViewport: HTMLDivElement | undefined;
   const bindTranscriptViewport = (element: HTMLDivElement) => {
@@ -294,6 +398,17 @@ function ChatContent(input: { props: ChatProps }) {
     };
   };
   const getTranscriptElement = () => (transcriptViewport?.isConnected ? transcriptViewport : null);
+  let scrollToLatestButton: HTMLButtonElement | undefined;
+  const bindScrollToLatestButton = (element: HTMLButtonElement) => {
+    scrollToLatestButton = element;
+    return () => {
+      if (scrollToLatestButton === element) {
+        scrollToLatestButton = undefined;
+      }
+    };
+  };
+  const getScrollToLatestElement = () =>
+    scrollToLatestButton?.isConnected ? scrollToLatestButton : null;
   let replacementComposer: HTMLElement | undefined;
   const registerReplacementComposer = (element: HTMLElement) => {
     replacementComposer = element;
@@ -325,63 +440,56 @@ function ChatContent(input: { props: ChatProps }) {
       }),
   });
   const presentation = createMemo(() => projectPresentation(input.props.presented ?? true));
-  const transcriptVisibility = createMemo(() =>
-    projectPresentation(input.props.transcriptVisible ?? true),
-  );
   const presented = () => presentation().read();
-  const paneId = createMemo(() => input.props.paneId);
-  const questions = createMemo(() =>
-    projectSource(getTranscriptState(paneId()), {
-      read: (state) => state.asyncQuestionRevision,
-      subscribe: subscribeAsyncQuestionState,
-      equality: "revision",
-    }),
-  );
-  const questionRevision = createParkedProjection(
-    () => questions().read(),
-    () => transcriptVisibility().read(),
-    paneId,
-  );
   const frame = createMemo(() => {
-    questionRevision();
-    return createChatViewFrame(input.props, (replacement) => {
-      const target =
-        replacement && replacementComposer?.isConnected
-          ? replacementComposer
-          : getChatComposerState(input.props.paneId).composerTextarea;
-      target?.focus({ preventScroll: true });
-    });
+    return createChatViewFrame(
+      input.props,
+      (replacement) => {
+        const target =
+          replacement && replacementComposer?.isConnected
+            ? replacementComposer
+            : getChatComposerState(input.props.paneId).composerTextarea;
+        target?.focus({ preventScroll: true });
+      },
+      // This view mounts only while its pane's question source exists.
+      input.questions.source()!.asyncQuestions,
+    );
   });
   const viewProps = () => ({
+    questions: input.questions,
     props: input.props,
     frame: frame(),
     presented: presented(),
     application,
     bindTranscriptViewport,
     getTranscriptElement,
+    getScrollToLatestElement,
   });
   const historyMessage = () => {
     const state = frame().historyLoadState;
     return state?.phase === "failed" ? state.message : "";
+  };
+  const retryHistory = () => {
+    const state = input.props.historyState;
+    if (state && getChatHistoryLoadState(state).phase === "failed") {
+      input.props.onRefresh();
+    }
   };
   const historyFailure = (inline: boolean) => (
     <div
       class={["chat-history-error", { "chat-history-error--inline": inline }]}
       role={inline ? "status" : "alert"}
     >
-      <span>{historyMessage()}</span>
-      <button
-        class="btn btn--sm"
-        type="button"
-        onClick={() => {
-          const state = input.props.historyState;
-          if (state && getChatHistoryLoadState(state).phase === "failed") {
-            input.props.onRefresh();
-          }
-        }}
-      >
-        {t("common.retry")}
-      </button>
+      {inline ? (
+        <>
+          <span>{historyMessage()}</span>
+          <button class="btn btn--sm" type="button" onClick={retryHistory}>
+            {t("common.retry")}
+          </button>
+        </>
+      ) : (
+        <ChatConversationHistoryError message={historyMessage()} onRetry={retryHistory} />
+      )}
     </div>
   );
   return (
@@ -495,6 +603,7 @@ function ChatContent(input: { props: ChatProps }) {
                       <div class="chat-scroll-to-bottom-wrap">
                         <button
                           class="chat-scroll-to-bottom"
+                          ref={elementRef(bindScrollToLatestButton)}
                           data-visible={input.props.showNewMessages ? "true" : "false"}
                           type="button"
                           inert={!input.props.showNewMessages}

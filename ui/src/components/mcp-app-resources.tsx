@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type {
   McpAppMentionResult,
   McpAppResourceLink,
@@ -11,7 +11,6 @@ import { createMcpAppCatalog } from "../lib/mcp-app-catalog.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 import "../styles/mcp-app-extensions.css";
 
@@ -25,9 +24,9 @@ export type McpAppResourceMentionDetail = {
   resource: McpAppResourceLink;
 };
 type McpAppResourcesProps = { sessionKey: string; agentId: string };
-type McpAppResourcesElement = SolidBridgeElement<McpAppResourcesProps>;
 
-function McpAppResourcesContent(props: McpAppResourcesProps, host: HTMLElement) {
+export function McpAppResources(props: McpAppResourcesProps) {
+  let host!: HTMLElement;
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   let generation = 0;
@@ -39,7 +38,7 @@ function McpAppResourcesContent(props: McpAppResourcesProps, host: HTMLElement) 
     sessionKey: props.sessionKey,
     agentId: props.agentId,
   }));
-  onCleanup(() => {
+  onSettled(() => () => {
     mounted = false;
     generation++;
   });
@@ -160,114 +159,89 @@ function McpAppResourcesContent(props: McpAppResourcesProps, host: HTMLElement) 
     );
   }
   return (
-    <Show when={servers().length}>
-      <section class="mcp-app-resources">
-        <button
-          type="button"
-          class="btn btn--sm"
-          aria-expanded={view().expanded ? "true" : "false"}
-          onClick={() => {
-            setView((previous) => ({ ...previous, expanded: !previous.expanded }));
-          }}
-        >
-          <Icon name="link" /> {t("mcpApp.resources")}
-        </button>
-        <Show when={view().expanded}>
-          <p class="muted">{t("mcpApp.resourceDescription")}</p>
-          <form
-            class="mcp-app-resources__search"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void search();
+    <openclaw-mcp-app-resources ref={(element) => (host = element)}>
+      <Show when={servers().length}>
+        <section class="mcp-app-resources">
+          <button
+            type="button"
+            class="btn btn--sm"
+            aria-expanded={view().expanded ? "true" : "false"}
+            onClick={() => {
+              setView((previous) => ({ ...previous, expanded: !previous.expanded }));
             }}
           >
-            <select
-              ref={(element) => (serverSelect = element)}
-              aria-label={t("mcpApp.title")}
-              value={serverName()}
-              disabled={view().busy}
-              onChange={(event) => {
-                setServerName(event.currentTarget.value);
-                generation++;
-                setView((previous) => ({ ...previous, resources: [], searched: false }));
+            <Icon name="link" /> {t("mcpApp.resources")}
+          </button>
+          <Show when={view().expanded}>
+            <p class="muted">{t("mcpApp.resourceDescription")}</p>
+            <form
+              class="mcp-app-resources__search"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void search();
               }}
             >
-              <For each={servers()} keyed={(server) => server.serverName}>
-                {(server) => <option value={server().serverName}>{server().label}</option>}
+              <select
+                ref={(element) => (serverSelect = element)}
+                aria-label={t("mcpApp.title")}
+                value={serverName()}
+                disabled={view().busy}
+                onChange={(event) => {
+                  setServerName(event.currentTarget.value);
+                  generation++;
+                  setView((previous) => ({ ...previous, resources: [], searched: false }));
+                }}
+              >
+                <For each={servers()} keyed={(server) => server.serverName}>
+                  {(server) => <option value={server().serverName}>{server().label}</option>}
+                </For>
+              </select>
+              <input
+                ref={(element) => (queryInput = element)}
+                type="search"
+                aria-label={t("mcpApp.resourceSearch")}
+                placeholder={t("mcpApp.resourceQuery")}
+                value={view().query}
+                onInput={(event) => {
+                  const query = event.currentTarget.value;
+                  generation++;
+                  setView((previous) => ({
+                    ...previous,
+                    query,
+                    busy: false,
+                    resources: [],
+                    searched: false,
+                  }));
+                }}
+              />
+              <button class="btn" type="submit" disabled={view().busy || !catalog().available}>
+                {t("mcpApp.resourceSearch")}
+              </button>
+            </form>
+            <div class="mcp-app-resources__results">
+              <For each={view().resources}>
+                {(resource) => (
+                  <button
+                    type="button"
+                    class="btn mcp-app-resources__result"
+                    disabled={view().busy || !catalog().available}
+                    onClick={() => attach(resource)}
+                  >
+                    <span>{resource.title || resource.name}</span>
+                    <small>{resource.description || resource.uri}</small>
+                  </button>
+                )}
               </For>
-            </select>
-            <input
-              ref={(element) => (queryInput = element)}
-              type="search"
-              aria-label={t("mcpApp.resourceSearch")}
-              placeholder={t("mcpApp.resourceQuery")}
-              value={view().query}
-              onInput={(event) => {
-                const query = event.currentTarget.value;
-                generation++;
-                setView((previous) => ({
-                  ...previous,
-                  query,
-                  busy: false,
-                  resources: [],
-                  searched: false,
-                }));
-              }}
-            />
-            <button class="btn" type="submit" disabled={view().busy || !catalog().available}>
-              {t("mcpApp.resourceSearch")}
-            </button>
-          </form>
-          <div class="mcp-app-resources__results">
-            <For each={view().resources}>
-              {(resource) => (
-                <button
-                  type="button"
-                  class="btn mcp-app-resources__result"
-                  disabled={view().busy || !catalog().available}
-                  onClick={() => attach(resource)}
-                >
-                  <span>{resource.title || resource.name}</span>
-                  <small>{resource.description || resource.uri}</small>
-                </button>
-              )}
-            </For>
-          </div>
-          <Show when={view().searched && !view().resources.length}>
-            <p role="status">{t("mcpApp.noResources")}</p>
+            </div>
+            <Show when={view().searched && !view().resources.length}>
+              <p role="status">{t("mcpApp.noResources")}</p>
+            </Show>
           </Show>
-        </Show>
-        <Show when={view().error}>
-          <p role="alert">{view().error}</p>
-        </Show>
-      </section>
-    </Show>
+          <Show when={view().error}>
+            <p role="alert">{view().error}</p>
+          </Show>
+        </section>
+      </Show>
+    </openclaw-mcp-app-resources>
   );
-}
-
-defineSolidBridge<McpAppResourcesProps>("openclaw-mcp-app-resources", McpAppResourcesContent, {
-  properties: {
-    sessionKey: { default: "", attribute: false },
-    agentId: { default: "", attribute: false },
-  },
-});
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-mcp-app-resources": McpAppResourcesElement;
-  }
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-mcp-app-resources": HTMLAttributes<McpAppResourcesElement> &
-        Properties<McpAppResourcesElement> & {
-          "onOpenclaw-mcp-app-resource-mention"?: EventHandlerUnion<
-            McpAppResourcesElement,
-            CustomEvent<McpAppResourceMentionDetail>
-          >;
-        };
-    }
-  }
 }

@@ -4,7 +4,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hasBuildArtifactAffectingChange } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
+import {
+  createNodeTestShardBundles,
+  createSelectedNodeTestShardBundles,
+} from "../../scripts/lib/ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
 import {
   isCiProofTestFile,
@@ -673,8 +676,22 @@ describe("CI changed Node test plan", () => {
       expected: [
         "src/gateway/server.agent-execution-shutdown.test.ts",
         "src/gateway/server.agent-late-admission.test.ts",
+        "test/gateway-session-end-shutdown.e2e.test.ts",
       ],
     })),
+    // Child-process E2Es: the import graph reaches only the test-instance helper.
+    {
+      changedPath: "src/gateway/server-startup-observers.ts",
+      expected: ["test/gateway-background-process-restart.e2e.test.ts"],
+    },
+    {
+      changedPath: "src/process/command-queue.capacity-groups.ts",
+      expected: ["test/gateway-hook-concurrency.e2e.test.ts"],
+    },
+    {
+      changedPath: "node-runtime-recovery.mjs",
+      expected: ["test/scripts/node-runtime-recovery.built-cli.e2e.test.ts"],
+    },
     {
       changedPath: "src/auto-reply/reply/abort.test.ts",
       expected: ["test/scripts/tsgo-core-test-shards.test.ts"],
@@ -831,23 +848,43 @@ describe("CI changed Node test plan", () => {
         owners.flatMap((group) => group.includePatterns ?? []).toSorted(),
       );
       expect(selectedOwners.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
-      for (const owner of owners) {
-        const fullJob = expectDefined(
-          full.find((job) => job.groups.includes(owner)),
-          "canonical commands job",
+      // Selected owners retain their singleton worker ceiling when serial rows share setup.
+      const canonical = expectDefined(
+        createSelectedNodeTestShardBundles(selectedFiles(shards), {
+          includePrExemptRuntimeTests: true,
+          includeReleaseOnlyRuntimeTests: true,
+        }),
+        "canonical selected commands jobs",
+      );
+      for (const group of selectedOwners) {
+        const owner = expectDefined(
+          owners.find((candidate) => candidate.shard_name === group.shard_name),
+          "canonical commands owner",
+        );
+        expect(group.configs).toEqual(owner.configs);
+        expect(group.env).toEqual(owner.env);
+        expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
+        expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
+        const ownerJob = expectDefined(
+          canonical.find((job) =>
+            job.groups.some((candidate) => candidate.shard_name === group.shard_name),
+          ),
+          "canonical selected commands job",
         );
         const selectedJob = expectDefined(
-          shards?.find((job) => job.groups?.some((group) => group.shard_name === owner.shard_name)),
+          shards?.find((job) => job.groups?.includes(group)),
           "selected commands job",
         );
-        expect(selectedJob.runner).toBe(fullJob.runner);
-        const singleton = selectedJob.groups?.length === 1 && fullJob.planConcurrency === 2;
+        expect(selectedJob.runner).toBe(ownerJob.runner);
+        const singleton = selectedJob.groups?.length === 1 && ownerJob.planConcurrency === 2;
         expect(selectedJob.env).toEqual(
-          singleton ? { ...fullJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" } : fullJob.env,
+          singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+            ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
+            : ownerJob.env,
         );
-        expect(selectedJob.planConcurrency).toBe(singleton ? 1 : fullJob.planConcurrency);
-        expect(selectedJob.pretestBuildMode).toBe(fullJob.pretestBuildMode);
-        expect(selectedJob.timeoutMinutes).toBe(fullJob.timeoutMinutes);
+        expect(selectedJob.planConcurrency).toBe(singleton ? 1 : ownerJob.planConcurrency);
+        expect(selectedJob.pretestBuildMode).toBe(ownerJob.pretestBuildMode);
+        expect(selectedJob.timeoutMinutes).toBe(ownerJob.timeoutMinutes);
       }
       const configs = groups.flatMap((group) => group.configs);
       expect(configs).not.toContain("test/vitest/vitest.cron.config.ts");

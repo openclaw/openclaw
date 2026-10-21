@@ -2,6 +2,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { fetchLiveProviderModelIds } from "../plugin-sdk/provider-catalog-live-runtime.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
@@ -556,3 +557,54 @@ it("reuses prepared results within provider scope", async () => {
   expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
   expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
 });
+
+it.each([
+  [0, false],
+  [5_000, false],
+  [180_000, true],
+])(
+  "lets a six-second catalog complete only within its %ims acquisition",
+  async (timeoutMs, ready) => {
+    const fetchGuard = vi.fn(async (request: { timeoutMs?: number; url: string }) => {
+      const response = await new Promise<Response>((resolve, reject) => {
+        const completion = setTimeout(() => {
+          clearTimeout(deadline);
+          resolve(new Response(JSON.stringify({ data: [{ id: "slow-healthy" }] })));
+        }, 6_000);
+        const deadline = setTimeout(() => {
+          clearTimeout(completion);
+          reject(new Error("catalog transport exceeded its admitted deadline"));
+        }, request.timeoutMs);
+      });
+      return { response, finalUrl: request.url, release: async () => undefined };
+    });
+    mocks.runProviderCatalog.mockImplementation(async () => {
+      const modelIds = await fetchLiveProviderModelIds({
+        providerId: "openai",
+        endpoint: "https://catalog.example.test/v1/models",
+        fetchGuard,
+      });
+      return {
+        providers: {
+          openai: catalogConfig(
+            "https://catalog.example.test/v1",
+            modelIds.map((id) => createTextModel(id, id)),
+          ),
+        },
+      };
+    });
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const result = discover({ providerDiscoveryTimeoutMs: timeoutMs });
+      await vi.waitFor(() => expect(fetchGuard).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(6_100);
+      const providers = await result;
+      expect(providers?.openai?.models.map((model) => model.id) ?? []).toEqual(
+        ready ? ["slow-healthy"] : [],
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);

@@ -221,7 +221,11 @@ account.
 Catalog discovery fences and settles historical peers through the same
 request-owned native writer as the refreshing credential. Each peer update
 retains its captured database file identity and compares the credential inside
-the write transaction; empty agent stores do not block a shared-store refresh.
+the write transaction. An identity-bound read skips definitely unrelated refresh
+generations before write admission, so empty retained stores from completed agent
+deletions do not block a shared-store refresh. Matching generations still require
+write admission and remain blocked by completed deletion. Unreadable or
+identity-replaced stores fail closed.
 If peer fencing fails before the provider refresh starts, claimed credentials
 are restored. Once the provider request starts, failed refreshes remain terminal
 because the provider may already have consumed the old refresh token.
@@ -394,6 +398,29 @@ For script compatibility, check errors keep this first line unchanged:
 `Auth profile credentials are missing or expired.`
 
 Human-friendly detail and the stable reason code follow on subsequent lines in the form `↳ Auth reason [code]: ...`.
+
+## Client identities and paired tokens
+
+Client private identities and paired device-token caches live in the separately
+versioned local `client/credentials.sqlite`, including when the Gateway uses
+PostgreSQL. These are distinct from model-provider auth profiles. Native bootstrap
+does not open the selected Gateway database. Gateway-issued pairing and revocation
+remain under the Gateway's authority; a local cache does not grant authorization.
+
+Migration preserves exact private keys, tokens, scope strings, and timestamps.
+Legacy JSON imports record consumption atomically with the local write. Revocation
+retains that record, so a restored or rewritten legacy file cannot resurrect its
+token. Refresh and removal compare the observed token with the current local row.
+
+If the shared SQLite main file is missing while its WAL, shared-memory file, or
+rollback journal remains, credential startup and session import require recovery.
+Restore the matching main database and sidecars before retrying. OpenClaw does not
+create a replacement identity from an incomplete source.
+
+Automatic rollback restores the pre-upgrade shared credentials. Credentials issued
+between upgrade and rollback are lost; affected clients pair again. A subsequent
+upgrade rebuilds any stale local store from the restored shared source. See
+[credential migration and recovery](/reference/database-schemas/versioning#local-client-credentials).
 
 ## Related
 

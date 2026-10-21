@@ -1,5 +1,6 @@
 import type { AssistantMessageEventStreamLike, SimpleStreamOptions } from "@openclaw/llm-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { recoverAfterTransportDrop } from "../../../../src/agents/embedded-agent-runner/run/attempt-recovery.test-support.js";
 import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { isResponsesOutputLimitToolCallError } from "../providers/openai-responses-terminal-usage.js";
@@ -42,6 +43,7 @@ import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import {
   argumentDelta,
+  completedResponse,
   collectEventTypes,
   outputItem,
   wireCall,
@@ -111,6 +113,89 @@ afterEach(() => {
   vi.useRealTimers();
   sseState.signal = undefined;
   configureAiTransportHost(initialHost);
+});
+
+it("aborts whitespace argument churn and recovers through the same-model retry owner", async () => {
+  let emittedDeltas = 0;
+  let closed = false;
+  const call = wireCall("churn", "exec", "");
+  queueStream(async function* () {
+    try {
+      yield outputItem("added", call);
+      yield argumentDelta(call.id, '{"code":"return 1;');
+      for (let index = 0; index < 40; index++) {
+        emittedDeltas += 1;
+        yield argumentDelta(call.id, " \r\r\n".repeat(256));
+      }
+      yield completedResponse("resp_churn", [{ ...call, arguments: '{"code":"return 1;"}' }]);
+    } finally {
+      closed = true;
+    }
+  });
+
+  const { events, result } = await collect(await run());
+  expect(result).toMatchObject({ stopReason: "error", errorCode: "degenerate_output" });
+  expect(emittedDeltas).toBe(4);
+  expect(closed).toBe(true);
+  expect(sseState.signal).toMatchObject({
+    aborted: true,
+    reason: { code: "degenerate_output" },
+  });
+  expect(events).not.toContain("toolcall_end");
+  expect(logWarn).toHaveBeenCalledWith(
+    "openai-transport",
+    expect.stringContaining("abortReason=degenerate_output"),
+    undefined,
+  );
+  expect(JSON.stringify(logWarn.mock.calls)).not.toContain("return 1;");
+
+  vi.useFakeTimers();
+  const recovering = recoverAfterTransportDrop({
+    assistant: result,
+    noTools: true,
+    replaySafe: true,
+  });
+  await vi.advanceTimersByTimeAsync(10_000);
+  const recovered = await recovering;
+  expect(recovered.recovery).toMatchObject({
+    action: "retry",
+    lastRetryFailoverReason: "server_error",
+  });
+  expect(recovered.onAgentEvent).toHaveBeenCalledWith(
+    expect.objectContaining({
+      stream: "run_status",
+      data: expect.objectContaining({ phase: "retrying", retryAttempt: 1 }),
+    }),
+  );
+  vi.useRealTimers();
+  const retryCall = wireCall("retry", "exec", '{"code":"return 1;"}');
+  queueEvents(outputItem("added", retryCall), completedResponse("resp_retry", [retryCall]));
+  expect((await collect(await run())).result).toMatchObject({
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", arguments: { code: "return 1;" } }],
+  });
+});
+
+it("accepts 200 KiB of arguments with whitespace runs interrupted by code", async () => {
+  const call = wireCall("large", "exec", "");
+  const codeChunk = `${" ".repeat(1023)};`;
+  const code = codeChunk.repeat(200);
+  const args = JSON.stringify({ code });
+  queueStream(async function* () {
+    yield outputItem("added", call);
+    yield argumentDelta(call.id, '{"code":"');
+    for (let index = 0; index < 200; index++) {
+      yield argumentDelta(call.id, codeChunk);
+    }
+    yield argumentDelta(call.id, '"}');
+    yield completedResponse("resp_large", [{ ...call, arguments: args }]);
+  });
+  const { result } = await collect(await run());
+  expect(result).toMatchObject({
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", arguments: { code } }],
+  });
+  expect(sseState.signal?.aborted).toBe(false);
 });
 
 it("logs the actual output budget, served tier, and usage after a long incomplete stream", async () => {

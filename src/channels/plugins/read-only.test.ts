@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { agentsListCommand } from "../../commands/agents.commands.list.js";
-import { createTestRuntime } from "../../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -17,6 +16,7 @@ import {
   restorePluginMetadataSnapshot,
 } from "../../plugins/plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -112,13 +112,9 @@ vi.mock("../../state/agent-provenance.js", () => ({
 
 async function providerLines(cfg: ReturnType<typeof providerFixture>["cfg"]) {
   providerConfig = cfg;
-  const runtime = {
-    ...createTestRuntime(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn<(value: unknown) => void>(),
-  };
-  await agentsListCommand({ bindings: true, json: true }, runtime);
-  return runtime.writeJson.mock.calls[0]?.[0];
+  const json = vi.spyOn(defaultRuntime, "writeJson").mockReturnValue(undefined).mockClear();
+  await agentsListCommand({ bindings: true, json: true });
+  return json.mock.calls[0]?.[0];
 }
 
 function manifestFixture(
@@ -252,6 +248,7 @@ function expectExternalChatSetupOnlyPluginLoaded(params: {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   resetPluginLoaderTestStateForTest();
   resetPluginRuntimeStateForTest();

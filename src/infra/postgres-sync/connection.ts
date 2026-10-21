@@ -7,6 +7,7 @@ import {
   Worker,
   type MessagePort,
 } from "node:worker_threads";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { assertEngineStoreExecutionAllowed } from "../database-engine/admission-scope.js";
 import { observeDatabaseOperation } from "../database-engine/observation.js";
 import {
@@ -24,8 +25,6 @@ import {
 } from "../sqlite-database-admission.js";
 import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
 import { SqliteWorkerError } from "../sqlite-worker-contract.js";
-import { deferSqliteWorkerCommitReceipt } from "../sqlite-worker-operation-admission.js";
-import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
 import { recordWorkerMessage } from "../worker-message-metrics.js";
 import { takeIdlePostgresBridge, retainIdlePostgresBridge } from "./idle-bridges.js";
 import {
@@ -75,9 +74,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     const lockTimeoutMs = options?.lockTimeoutMs ?? POSTGRES_LOCK_TIMEOUT_MS;
     const statementTimeoutMs = options?.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS;
     this.reuseKey = options?.reuse
-      ? createHash("sha256")
-          .update(JSON.stringify([url, schema, storeId, lockTimeoutMs, statementTimeoutMs]))
-          .digest("hex")
+      ? sha256Hex(JSON.stringify([url, schema, storeId, lockTimeoutMs, statementTimeoutMs]))
       : undefined;
     const idle = this.reuseKey ? takeIdlePostgresBridge(this.reuseKey) : undefined;
     if (idle) {
@@ -269,14 +266,10 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       this.pendingWrite = true;
       beginSqliteDatabaseWrite(sqlPublicationAnchor(this), mutation === "unscoped");
     }
-    const autocommitWrite = !wasTransaction && mutated;
     if (!this.isTransaction && (mutated || wasTransaction)) {
       withSqlitePostCommitPublications(sqlPublicationAnchor(this), () => {
         // No pending mutation means no receipt, including empty writable transactions.
         this.finishWrite();
-        if (autocommitWrite && currentSqliteWorkerOperationAdmission.getStore()?.active) {
-          deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(this), {});
-        }
       });
     }
     this.outcomeUnknown = !this.isTransaction;

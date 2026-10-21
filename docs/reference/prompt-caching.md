@@ -215,6 +215,52 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 - Captured consecutive Responses request bodies retained byte-identical history prefixes, so history rewriting did not explain the observed shortfall. Provider breakpoint placement can affect reported `cacheRead`: OpenAI documents message-end breakpoints for GPT-5.6 and later on the Platform API, while the ChatGPT-backed Responses route was observed to report hits in 1,024-token steps. See [OpenAI live expectations](#openai-live-expectations) below.
 - On Responses routes the whole system prompt, including the volatile suffix below the cache boundary, is sent as `instructions`. A suffix change (date rollover, timezone, elevated level, watched sessions, model identity, Project Memory facts) re-caches from the changed point on the next request; the stable prefix and tools are not split into a separate cached block the way Anthropic checkpoints are. Cache observations report this as a `systemPromptSuffix` change.
 
+### OpenAI 12-hour cache lifetime
+
+Set `params.promptCacheTtl` to `"12h"` (or `"30m"`) for GPT-5.6 and later
+on the OpenAI Responses API. This is a request-level default for cache
+breakpoints, mapped to `prompt_cache_options.ttl`; it does not change caching
+mode or add explicit breakpoints. Prefer a per-model setting:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-6.1-sol": {
+          agentRuntime: { id: "openclaw" },
+          params: { promptCacheTtl: "12h" },
+        },
+      },
+    },
+  },
+}
+```
+
+The same parameter can be set in `agents.defaults.params` or
+`agents.entries.<id>.params` using the normal [merge order](#primary-knobs).
+Omitting it preserves existing behavior. An explicit value overrides the
+lifetime requested by `cacheRetention: "long"` for these Responses models;
+`cacheRetention: "none"` suppresses the lifetime field. Older models, Chat
+Completions, and the ChatGPT/Codex backend do not receive this new setting.
+Compatible Responses endpoints must explicitly opt into prompt-cache key
+support and must not disable long retention.
+
+According to [OpenAI's cache lifetime guide](https://developers.openai.com/api/docs/guides/prompt-caching#cache-lifetime),
+30-minute writes cost **1.25×** ordinary input and 12-hour writes cost **2.5×**.
+These are total write rates, not additive fees. Reads use the same cached-input
+rate with either lifetime; consult [OpenAI pricing](https://developers.openai.com/api/docs/pricing)
+for model, tier, and context-length rates. The lifetime is a **minimum**, not a
+deletion deadline or a guarantee of cache hits; unchanged prefixes, eligible
+breakpoints, and routing still matter. It does not change OpenAI's maximum
+data-retention policy. This is separate from older models' `prompt_cache_retention`
+(`in_memory` / `24h`).
+
+When OpenAI reports `input_tokens_details.cache_write_tokens_details`, cost
+estimates price its `ttl_30m_tokens` and `ttl_12h_tokens` separately, including
+breakpoint overrides of the request default. Compatible endpoints without a
+coherent breakdown retain an estimate based on the requested lifetime.
+
 ### Amazon Bedrock
 
 - Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`, plus AWS system inference profile prefixes `us.`/`eu.`/`global.anthropic.claude*`) support explicit `cacheRetention` pass-through.
@@ -461,7 +507,7 @@ read/write counts and preserve the last measured comparison baseline. A later
 reported zero still counts as a measured miss. This distinction applies to local
 engines with optional cache metrics as well as compatible cloud APIs.
 
-The comparison baseline resets when the session ID changes, even if an isolated cron job reuses its provider cache key. A fresh transcript can legitimately reuse fewer tokens than the previous run's final request. Within a session, `no tracked cache input change` means the tracked fingerprints stayed stable; it does not prove identical final provider payloads or diagnose cache expiry. Compare request timing and final payloads before attributing a drop to provider caching.
+The comparison baseline resets when the session ID changes, even if an isolated cron job reuses its provider cache key. Session reset, deletion, shutdown, and completion of a detached Skill Workshop review release the retired session's diagnostic fingerprints; active sessions keep their cross-turn baselines. A fresh transcript can legitimately reuse fewer tokens than the previous run's final request. Within a session, `no tracked cache input change` means the tracked fingerprints stayed stable; it does not prove identical final provider payloads or diagnose cache expiry. Compare request timing and final payloads before attributing a drop to provider caching.
 
 For encoded provider requests, `providerPrefix` compares the serialized instructions, tools, and up to 512 input items. It names the first changed item, with bounded protocol fields for the first 32 items, such as `message:3.encrypted_content`, plus changed request parameters such as `parameters:prompt_cache_key`. Values and unknown field names are never logged. `order` means object key order changed without a tracked field-value change; it is wire evidence, not proof that the provider rendered different tokens. Beyond the item limit, a tail digest can detect changes but cannot locate the first differing item.
 

@@ -1,12 +1,16 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
   clearAccountFieldsFromConfigSection,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  buildChannelOutboundSessionRoute,
+  createChatChannelPlugin,
+} from "openclaw/plugin-sdk/channel-core";
 import {
   createAccountStatusSink,
   runPassiveAccountLifecycle,
@@ -21,12 +25,19 @@ import {
   createAllowlistProviderRouteAllowlistWarningCollector,
   createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   buildWebhookChannelStatusSummary,
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import {
   isNextcloudTalkAccountConfigured,
@@ -36,16 +47,17 @@ import {
   resolveDefaultNextcloudTalkAccountId,
   resolveNextcloudTalkAccount,
 } from "./accounts.js";
-import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
 import { DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
 import { NextcloudTalkChannelConfigSchema } from "./config-schema.js";
 import { nextcloudTalkDoctor } from "./doctor.js";
+import { handleNextcloudTalkInbound } from "./inbound.js";
 import { nextcloudTalkMessageActions } from "./message-actions.js";
-import { monitorNextcloudTalkProvider } from "./monitor-runtime.js";
+import { registerNextcloudTalkWebhook } from "./monitor.js";
 import {
   looksLikeNextcloudTalkTargetId,
   normalizeNextcloudTalkMessagingTarget,
+  stripNextcloudTalkTargetPrefix,
 } from "./normalize.js";
 import {
   resolveNextcloudTalkGroupRequireMention,
@@ -54,10 +66,64 @@ import {
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { sendMessageNextcloudTalk } from "./send.js";
-import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
 import { nextcloudTalkSetupContract } from "./setup-core.js";
 import { nextcloudTalkSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
+import {
+  DEFAULT_NEXTCLOUD_TALK_WEBHOOK_PATH,
+  describeNextcloudTalkWebhookRouteConflict,
+  resolveNextcloudTalkLegacyWebhook,
+} from "./webhook-route.js";
+import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
+
+function normalizeNextcloudTalkApproverId(value: string | number): string | undefined {
+  return normalizeOptionalLowercaseString(
+    String(value)
+      .trim()
+      .replace(/^(nextcloud-talk|nc-talk|nc):/i, ""),
+  );
+}
+
+const nextcloudTalkApprovalAuth = createChannelApprovalAuth({
+  channelLabel: "Nextcloud Talk",
+  resolveInputs: ({ cfg, accountId }) => {
+    const account = resolveNextcloudTalkAccount({ cfg, accountId });
+    return { allowFrom: account.config.allowFrom };
+  },
+  normalizeApprover: normalizeNextcloudTalkApproverId,
+}).approvalAuth;
+
+function resolveNextcloudTalkOutboundSessionRoute(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  accountId?: string | null;
+  target: string;
+}) {
+  const roomId = stripNextcloudTalkTargetPrefix(params.target);
+  if (!roomId) {
+    return null;
+  }
+  return buildChannelOutboundSessionRoute({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: "nextcloud-talk",
+    accountId: params.accountId,
+    // Room tokens do not reveal whether inbound keys by room or sender id.
+    // Keep delivery behavior, but reject this route for explicit session selection.
+    recipientSessionExact: false,
+    peer: {
+      kind: "group",
+      id: roomId,
+    },
+    chatType: "group",
+    from: `nextcloud-talk:room:${roomId}`,
+    to: `nextcloud-talk:${roomId}`,
+  });
+}
+
+function normalizeOrigin(value: string): string | null {
+  return URL.parse(value)?.origin.toLowerCase() ?? null;
+}
 
 function sendNextcloudTalkMessage(
   ctx: Omit<ChannelMessageSendTextContext, "onDeliveryResult">,
@@ -72,6 +138,23 @@ function sendNextcloudTalkMessage(
   });
 }
 
+function isWebAttachmentUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      !url.username &&
+      !url.password &&
+      !Array.from(value).some((character) => {
+        const code = character.charCodeAt(0);
+        return code <= 0x20 || code === 0x7f;
+      })
+    );
+  } catch {
+    return false;
+  }
+}
+
 const nextcloudTalkMessageAdapter = defineChannelMessageAdapter({
   id: "nextcloud-talk",
   durableFinal: {
@@ -83,11 +166,33 @@ const nextcloudTalkMessageAdapter = defineChannelMessageAdapter({
   },
   send: {
     text: sendNextcloudTalkMessage,
-    media: (ctx) =>
-      sendNextcloudTalkMessage(
-        ctx,
-        ctx.mediaUrl ? `${ctx.text}\n\nAttachment: ${ctx.mediaUrl}` : ctx.text,
-      ),
+    media: async (ctx) => {
+      if (!ctx.mediaUrl) {
+        return sendNextcloudTalkMessage(ctx);
+      }
+      const account = resolveNextcloudTalkAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
+      if (
+        account.enabled &&
+        !account.config.apiUser?.trim() &&
+        account.config.apiPassword === undefined &&
+        !account.config.apiPasswordFile?.trim() &&
+        isWebAttachmentUrl(ctx.mediaUrl)
+      ) {
+        ctx.signal?.throwIfAborted();
+        return sendNextcloudTalkMessage(
+          {
+            ...ctx,
+            assertDirectAdapterHandoff: () => {
+              ctx.signal?.throwIfAborted();
+              ctx.assertDirectAdapterHandoff?.();
+            },
+          },
+          `${ctx.text}\n\nAttachment: ${ctx.mediaUrl}`,
+        );
+      }
+      const { sendMediaNextcloudTalk } = await import("./outbound-media.js");
+      return sendMediaNextcloudTalk(ctx);
+    },
   },
 });
 
@@ -265,14 +370,119 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
 
           await runPassiveAccountLifecycle({
             abortSignal: ctx.abortSignal,
-            start: async () =>
-              await monitorNextcloudTalkProvider({
+            start: async () => {
+              const core = getNextcloudTalkRuntime();
+              const cfg = ctx.cfg;
+              const monitoredAccount = resolveNextcloudTalkAccount({
+                cfg,
                 accountId: account.accountId,
-                config: ctx.cfg,
-                runtime: ctx.runtime,
+              });
+              const runtime = resolveLoggerBackedRuntime(
+                ctx.runtime,
+                core.logging.getChildLogger(),
+              );
+              if (!monitoredAccount.secret) {
+                throw new Error(
+                  `Nextcloud Talk bot secret not configured for account "${monitoredAccount.accountId}"`,
+                );
+              }
+              const path =
+                monitoredAccount.config.webhookPath ?? DEFAULT_NEXTCLOUD_TALK_WEBHOOK_PATH;
+              const gatewayPort = resolveGatewayPort({ gateway: cfg.gateway });
+              const legacyListener = resolveNextcloudTalkLegacyWebhook(monitoredAccount.config);
+              const routeConflict = describeNextcloudTalkWebhookRouteConflict(path, gatewayPort);
+              if (routeConflict && !legacyListener) {
+                throw new Error(`[nextcloud-talk:${monitoredAccount.accountId}] ${routeConflict}`);
+              }
+              const logger = core.logging.getChildLogger({
+                channel: "nextcloud-talk",
+                accountId: monitoredAccount.accountId,
+              });
+              const expectedBackendOrigin = normalizeOrigin(monitoredAccount.baseUrl);
+              const spool = createNextcloudTalkWebhookSpool({
+                accountId: monitoredAccount.accountId,
+                runtime,
                 abortSignal: ctx.abortSignal,
-                statusSink,
-              }),
+                deliver: async (message, lifecycle) => {
+                  core.channel.activity.record({
+                    channel: "nextcloud-talk",
+                    accountId: monitoredAccount.accountId,
+                    direction: "inbound",
+                    at: message.timestamp,
+                  });
+                  await handleNextcloudTalkInbound({
+                    message,
+                    account: monitoredAccount,
+                    config: cfg,
+                    runtime,
+                    statusSink,
+                    turnAdoptionLifecycle: lifecycle,
+                  });
+                },
+              });
+              let unregister: (() => Promise<void>) | undefined;
+              let stopPromise: Promise<void> | undefined;
+              const stop = () => {
+                stopPromise ??= (async () => {
+                  await unregister?.();
+                  unregister = undefined;
+                  await spool.stop();
+                })();
+                return stopPromise;
+              };
+              if (!ctx.abortSignal.aborted) {
+                ctx.abortSignal.addEventListener("abort", () => void stop(), { once: true });
+              }
+              if (ctx.abortSignal.aborted) {
+                await stop();
+                return { stop };
+              }
+              try {
+                await spool.ready();
+                if (ctx.abortSignal.aborted) {
+                  await stop();
+                  return { stop };
+                }
+                unregister = registerNextcloudTalkWebhook({
+                  accountId: monitoredAccount.accountId,
+                  legacyListener,
+                  path,
+                  secret: monitoredAccount.secret,
+                  isBackendAllowed: (backend) =>
+                    !expectedBackendOrigin || normalizeOrigin(backend) === expectedBackendOrigin,
+                  onWebhook: spool.receive,
+                  onError: (error) => {
+                    logger.error(
+                      `[nextcloud-talk:${monitoredAccount.accountId}] webhook error: ${error.message}`,
+                    );
+                  },
+                  trustedProxies: cfg.gateway?.trustedProxies,
+                  allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
+                });
+              } catch (error) {
+                await stop();
+                throw error;
+              }
+              statusSink(channelReadyPatch());
+              if (routeConflict && legacyListener) {
+                logger.warn(
+                  `[nextcloud-talk:${monitoredAccount.accountId}] ${routeConflict} ` +
+                    `Legacy webhook listener ${legacyListener.host}:${legacyListener.port} remains available; verify the new route before removing the legacyWebhook pin.`,
+                );
+                return { stop };
+              }
+              logger.info(
+                `[nextcloud-talk:${monitoredAccount.accountId}] Gateway webhook route ready at port ${gatewayPort}${path}; ` +
+                  "point the Nextcloud bot callback or reverse-proxy upstream here.",
+              );
+              if (legacyListener) {
+                logger.info(
+                  `[nextcloud-talk:${monitoredAccount.accountId}] legacy webhook listener ${legacyListener.host}:${legacyListener.port} forwards to the Gateway route. ` +
+                    "After verifying the callback or proxy upstream uses the Gateway port, remove the legacyWebhook pin; use legacyWebhook: false to override an inherited endpoint.",
+                );
+              }
+              return { stop };
+            },
             stop: async (monitor) => {
               await monitor.stop();
             },

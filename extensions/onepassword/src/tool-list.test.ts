@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -58,28 +58,33 @@ describe("onepassword list with SQLite grants", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("onepassword-list-") };
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
   });
 
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
+    vi.restoreAllMocks();
   });
 
   function openGrants() {
-    return createPluginStateKeyedStoreForTests<StandingGrant>("onepassword", {
-      namespace: "grants",
-      maxEntries: 1_024,
-      overflowPolicy: "evict-oldest",
-      env,
-    });
+    return createPluginStateKeyedStoreV2ForTests<StandingGrant>(
+      "onepassword",
+      {
+        namespace: "grants",
+        maxEntries: 1_024,
+        overflowPolicy: "evict-oldest",
+        env,
+      },
+      { assertCurrent() {} },
+    );
   }
 
-  function setup(slugs: string[], grants: PluginStateKeyedStore<StandingGrant>) {
+  function setup(slugs: string[], grants: PluginStateKeyedStore<StandingGrant, 2>) {
     const getItem = vi.fn(async () => {
       throw new Error("list must not retrieve a secret");
     });
     const broker = new OnePasswordBroker({
-      now: () => NOW,
       resolveConfig: () => configured(slugs),
       opClient: { getItem },
       stores: { grants, audit: new MemoryKeyedStore(), pending: new MemoryKeyedStore() },
@@ -89,7 +94,7 @@ describe("onepassword list with SQLite grants", () => {
     return { list, getItem };
   }
 
-  it.each([true, false])("validates selected grants with bulk support=%s", async (bulk) => {
+  it("validates selected grants", async () => {
     const grants = openGrants();
     const slugs = ["wrong-slug", "wrong-agent", "retargeted", "missing", "expired", "active"];
     for (const slug of slugs.filter((value) => value !== "missing")) {
@@ -101,8 +106,7 @@ describe("onepassword list with SQLite grants", () => {
         ...(slug === "retargeted" ? { targetFingerprint: "old-target" } : {}),
       });
     }
-    const { lookupMany: _lookupMany, ...olderStore } = grants;
-    const { list, getItem } = setup(slugs, bulk ? grants : olderStore);
+    const { list, getItem } = setup(slugs, grants);
     expect((await list()).details).toEqual({
       ok: true,
       items: [...slugs].toSorted().map((slug) => ({
@@ -135,11 +139,6 @@ describe("onepassword list with SQLite grants", () => {
     expect((await setup(["selected"], grants).list()).details).toMatchObject({
       ok: true,
       items: [{ slug: "selected", standingGrantActive: true }],
-    });
-    const { lookupMany: _lookupMany, ...olderStore } = grants;
-    expect((await setup(["selected"], olderStore).list()).details).toMatchObject({
-      ok: false,
-      error: { code: "PLUGIN_STATE_CORRUPT" },
     });
   });
 

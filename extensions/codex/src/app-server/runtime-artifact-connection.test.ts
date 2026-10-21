@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { CodexAppServerRuntimeIdentity } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
-  captureCodexConfiguredConnection,
-  finalizeCodexConfiguredConnection,
-  validateCodexConfiguredConnectionCapture,
+  captureCodexConfiguredConnection as captureConnection,
+  finalizeCodexConfiguredConnection as finalizeConnection,
+  validateCodexConfiguredConnectionCapture as validateConnection,
 } from "./runtime-artifact-connection.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -25,11 +25,15 @@ const runtimeIdentity: CodexAppServerRuntimeIdentity = {
 };
 
 function captureBinding(options = start, identity = runtimeIdentity) {
-  return finalizeCodexConfiguredConnection({
-    before: captureCodexConfiguredConnection(options),
+  return finalizeConnection({
+    before: captureConnection(options),
     startOptions: options,
     runtimeIdentity: identity,
   });
+}
+
+function validates(options = start, binding = captureBinding()) {
+  return validateConnection(binding, captureConnection(options));
 }
 
 describe("configured Codex connection verification", () => {
@@ -39,28 +43,20 @@ describe("configured Codex connection verification", () => {
     { headers: { "x-service-token": "rotated-header" } },
     { transport: "unix" as const, url: "unix:///tmp/codex.sock" },
   ])("invalidates a verified connection when selection changes to %j", (change) => {
-    const binding = captureBinding();
-    expect(
-      validateCodexConfiguredConnectionCapture(binding, captureCodexConfiguredConnection(start)),
-    ).toBe(true);
-    expect(
-      validateCodexConfiguredConnectionCapture(
-        binding,
-        captureCodexConfiguredConnection({ ...start, ...change }),
-      ),
-    ).toBe(false);
+    expect(validates()).toBe(true);
+    expect(validates({ ...start, ...change })).toBe(false);
   });
 
   it("ignores local launch settings that a remote service does not consume", () => {
     const binding = captureBinding();
-    const capture = captureCodexConfiguredConnection({
+    const capture = captureConnection({
       ...start,
       command: "/another/local/codex",
       args: ["app-server", "--another-local-option"],
       env: { PATH: "/another/local/path", CODEX_HOME: "/local/home" },
       codexHome: "/another/local/home",
     });
-    expect(validateCodexConfiguredConnectionCapture(binding, capture)).toBe(true);
+    expect(validateConnection(binding, capture)).toBe(true);
   });
 
   it("binds the home-resolved canonical Unix socket", () => {
@@ -71,23 +67,17 @@ describe("configured Codex connection verification", () => {
       env: { CODEX_HOME: "/remote/first-home" },
     };
     const binding = captureBinding(canonical);
+    expect(validates({ ...canonical, env: { CODEX_HOME: "/remote/second-home" } }, binding)).toBe(
+      false,
+    );
     expect(
-      validateCodexConfiguredConnectionCapture(
-        binding,
-        captureCodexConfiguredConnection({
-          ...canonical,
-          env: { CODEX_HOME: "/remote/second-home" },
-        }),
-      ),
-    ).toBe(false);
-    expect(
-      validateCodexConfiguredConnectionCapture(
-        binding,
-        captureCodexConfiguredConnection({
+      validates(
+        {
           ...canonical,
           url: "unix:///remote/first-home/app-server-control/app-server-control.sock",
           env: { CODEX_HOME: "/ignored" },
-        }),
+        },
+        binding,
       ),
     ).toBe(true);
   });
@@ -104,8 +94,8 @@ describe("configured Codex connection verification", () => {
 
   it("rejects connection changes between capture and initialize", () => {
     expect(() =>
-      finalizeCodexConfiguredConnection({
-        before: captureCodexConfiguredConnection(start),
+      finalizeConnection({
+        before: captureConnection(start),
         startOptions: { ...start, authToken: "rotated-token" },
         runtimeIdentity,
       }),
@@ -114,13 +104,13 @@ describe("configured Codex connection verification", () => {
 
   it("requires an initialized identity and an explicit endpoint", () => {
     expect(() =>
-      finalizeCodexConfiguredConnection({
-        before: captureCodexConfiguredConnection(start),
+      finalizeConnection({
+        before: captureConnection(start),
         startOptions: start,
         runtimeIdentity: undefined,
       }),
     ).toThrow("did not report an initialized runtime identity");
-    expect(() => captureCodexConfiguredConnection({ ...start, url: undefined })).toThrow(
+    expect(() => captureConnection({ ...start, url: undefined })).toThrow(
       "configured socket endpoint",
     );
   });
@@ -138,14 +128,14 @@ describe("configured Codex connection verification", () => {
 
   it("rejects corrupt and noncanonical bindings", () => {
     const binding = captureBinding();
-    const capture = captureCodexConfiguredConnection(start);
+    const capture = captureConnection(start);
     for (const invalid of [
       { ...binding, fingerprint: "0".repeat(64) },
       { ...binding, id: `${binding.id}=` },
       { ...binding, id: "codex-app-server:connection:v1:bad" },
       { ...binding, id: `codex-app-server:connection:v1:${"a".repeat(2048)}` },
     ]) {
-      expect(validateCodexConfiguredConnectionCapture(invalid, capture)).toBe(false);
+      expect(validateConnection(invalid, capture)).toBe(false);
     }
   });
 });

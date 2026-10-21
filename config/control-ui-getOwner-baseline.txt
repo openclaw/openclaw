@@ -3,7 +3,6 @@
 ui/src/app/app-host.tsx	1
 ui/src/app/app-root.tsx	1
 ui/src/components/app-sidebar.tsx	1
-ui/src/components/session-menu-view.tsx	1
 ui/src/components/solid/overlay-control.ts	1
 ui/src/lib/reactive/projection.ts	1
 ui/src/pages/chat/components/chat-agent-run-frame.tsx	1

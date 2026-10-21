@@ -130,16 +130,16 @@ describe("ollama provider models", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const first = await buildOllamaProvider("https://ollama.example.com", {
-      apiKey: "account-a",
-    });
-    const second = await buildOllamaProvider("https://ollama.example.com", {
-      apiKey: "account-b",
-    });
+    const [first, second, third] = await Promise.all(
+      ["account-a", "account-b", "account-a"].map(
+        async (apiKey) => await buildOllamaProvider("https://ollama.example.com", { apiKey }),
+      ),
+    );
 
-    expect(first.models?.[0]?.contextWindow).toBe(16_000);
-    expect(second.models?.[0]?.contextWindow).toBe(32_000);
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(first?.models?.[0]?.contextWindow).toBe(16_000);
+    expect(second?.models?.[0]?.contextWindow).toBe(32_000);
+    expect(third?.models?.[0]?.contextWindow).toBe(16_000);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
   it.each([

@@ -8,6 +8,7 @@ import {
   settleReplyPendingFinalDelivery,
   suppressPendingFinalDelivery,
 } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
+import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { isReplyDispatchDeliveryPending } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
 import { withReplySystemEventContext } from "../../auto-reply/reply/system-event-session-key.js";
@@ -41,6 +42,7 @@ import { copyChannelParticipantAdmissionEvidence } from "../message-access/admis
 import { resolveMessageReceiptPrimaryId } from "../message/receipt.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import { recordInboundSession } from "../session.js";
+import { bindChannelDeliveryOwner } from "./delivery-owner.js";
 import {
   createSuppressedChannelDeliveryResult,
   isChannelPartialDeliveryError,
@@ -380,17 +382,16 @@ async function dispatchChannelTurnWithDeliveryOwner(
   const [params, ownership] = args;
   const replyPipeline = resolveAssembledReplyPipeline(params);
   const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
-  // Observe-only turns still run the agent, but transport delivery must remain impossible for
-  // every assembled-turn entry point, including direct SDK dispatch.
   const delivery: AnyChannelDeliveryAdapter =
     params.admission?.kind === "observeOnly"
       ? { deliver: async () => ({ visibleReplySent: false }) }
-      : params.delivery;
+      : bindChannelDeliveryOwner(params.delivery);
   const pendingAttempts: PendingChannelDeliveryAttempt[] = [];
   const suppressedAttempts: PendingChannelDeliveryAttempt[] = [];
   let agentRun: [runId?: string, executionIdentityToken?: ExecutionToken] = [];
-  const replyOptions: NonNullable<AssembledChannelTurn["replyOptions"]> = {
+  const replyOptions: InternalGetReplyOptions = {
     ...replyPipeline.replyOptions,
+    assertChannelAuthority: params.assertAuthority,
     ...observeAgentRunStart(replyPipeline.replyOptions, (start) => {
       agentRun = [start.runId, start.executionIdentityToken];
     }),

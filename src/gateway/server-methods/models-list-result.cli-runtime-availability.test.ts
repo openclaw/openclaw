@@ -109,12 +109,14 @@ afterEach(() => {
 });
 
 it.each([
-  [true, false, false, true, undefined],
-  [false, true, false, false, "missing-auth"],
-  [true, false, true, false, "missing-auth"],
+  ["api_key", false, false, true, undefined],
+  [{ source: "native", mode: "oauth" }, false, false, true, undefined],
+  [undefined, true, false, false, "missing-auth"],
+  ["api_key", false, true, false, "missing-auth"],
+  [{ source: "native", mode: "oauth" }, false, true, false, "missing-auth"],
 ] as const)(
-  "reports native login=%s, provider key=%s, plugin disabled=%s",
-  async (authenticated, providerApiKey, pluginDisabled, available, reason) => {
+  "reports CLI auth=%j, provider key=%s, plugin disabled=%s",
+  async (authMode, providerApiKey, pluginDisabled, available, reason) => {
     vi.stubEnv("ANTHROPIC_API_KEY", providerApiKey ? "test-key" : "");
     const result = await listModels({
       catalog: [],
@@ -122,7 +124,7 @@ it.each([
       cfg: pluginDisabled
         ? { ...config, plugins: { entries: { anthropic: { enabled: false } } } }
         : config,
-      preparedAuthModes: authenticated ? { "claude-cli": "api_key" } : {},
+      preparedAuthModes: authMode ? { "claude-cli": authMode } : {},
       catalogComplete: true,
       view: "configured",
       includeDefaultModels: false,
@@ -157,6 +159,49 @@ it("keeps every Claude CLI model listed as needing login before the full catalog
       .map(({ id, available, unavailableReason }) => ({ id, available, unavailableReason }))
       .toSorted((left, right) => left.id.localeCompare(right.id)),
   ).toEqual(pinned.map((id) => ({ id, available: false, unavailableReason: "missing-auth" })));
+});
+
+it.each<{
+  name: string;
+  available: boolean;
+  oauth?: boolean;
+  order?: Record<string, string[]>;
+  disabled?: boolean;
+}>([
+  { name: "saved setup tokens", available: true },
+  { name: "saved OAuth subscription", oauth: true, available: true },
+  { name: "empty CLI account order", order: { "claude-cli": [] }, available: false },
+  { name: "empty provider account order", order: { anthropic: [] }, available: false },
+  { name: "API-key-only account order", order: { anthropic: ["api"] }, available: false },
+  { name: "disabled plugin", disabled: true, available: false },
+])("evaluates unpinned Claude CLI models with $name and no native login", async (testCase) => {
+  const result = await listModels({
+    cfg: {
+      ...config,
+      auth: { order: testCase.order },
+      ...(testCase.disabled ? { plugins: { entries: { anthropic: { enabled: false } } } } : {}),
+    },
+    catalog: [providerCatalogEntry("anthropic", "claude-opus-5")],
+    preparedAuthModes: {},
+    preparedAuthStore: {
+      version: 1,
+      profiles: {
+        first: testCase.oauth ? oauthCredential("anthropic") : token("anthropic"),
+        second: token("anthropic", testCase.oauth),
+        api: { type: "api_key", provider: "anthropic", key: "synthetic-api-key" },
+      },
+    },
+    view: "configured",
+    includeDefaultModels: false,
+  });
+  expect(result.models).toEqual([
+    expect.objectContaining({
+      id: "claude-opus-5",
+      available: testCase.available,
+      agentRuntime: expect.objectContaining({ id: "claude-cli" }),
+    }),
+  ]);
+  expect(result.models[0]?.unavailableReason).toBe(testCase.available ? undefined : "missing-auth");
 });
 
 it.each([

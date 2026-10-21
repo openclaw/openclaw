@@ -8,6 +8,7 @@ import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controlle
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { log } from "../embedded-agent-runner/logger.js";
 import { reserveMcpFormQuestion } from "../mcp-form-resource-context.js";
 import {
   getGatewayToolCallerIdentity,
@@ -519,7 +520,12 @@ function runAgentHarnessSecretInput(
       params.delivery,
       params.questions,
       params.promptOptions,
-    ).catch(() => finish());
+    ).catch(() => {
+      if (finish()) {
+        // Delivery errors can contain secret prompt data; record only the failed outcome.
+        log.warn("Secret input prompt delivery failed; the pending input request was cancelled.");
+      }
+    });
   });
 }
 

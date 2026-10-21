@@ -4,6 +4,14 @@ import type { OpenClawConfig } from "../config/config.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
+type ExecConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
+function execConfig(global: ExecConfig, agent?: ExecConfig): OpenClawConfig {
+  return {
+    tools: { exec: global },
+    agents: { entries: agent ? { ops: { tools: { exec: agent } } } : { main: {} } },
+  };
+}
+
 function hasFinding(
   checkId:
     | "tools.exec.safe_bins_interpreter_unprofiled"
@@ -29,56 +37,15 @@ describe("security audit exec safe-bin findings", () => {
   it.each([
     {
       name: "missing profiles",
-      cfg: {
-        tools: {
-          exec: {
-            safeBins: ["python3"],
-          },
-        },
-        agents: {
-          entries: {
-            ops: {
-              tools: {
-                exec: {
-                  safeBins: ["node"],
-                },
-              },
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
+      cfg: execConfig({ safeBins: ["python3"] }, { safeBins: ["node"] }),
       expected: true,
     },
     {
       name: "profiles configured",
-      cfg: {
-        tools: {
-          exec: {
-            safeBins: ["python3"],
-            safeBinProfiles: {
-              python3: {
-                maxPositional: 0,
-              },
-            },
-          },
-        },
-        agents: {
-          entries: {
-            ops: {
-              tools: {
-                exec: {
-                  safeBins: ["node"],
-                  safeBinProfiles: {
-                    node: {
-                      maxPositional: 0,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
+      cfg: execConfig(
+        { safeBins: ["python3"], safeBinProfiles: { python3: { maxPositional: 0 } } },
+        { safeBins: ["node"], safeBinProfiles: { node: { maxPositional: 0 } } },
+      ),
       expected: false,
     },
   ])(
@@ -96,26 +63,12 @@ describe("security audit exec safe-bin findings", () => {
   it.each([
     {
       name: "jq configured globally",
-      cfg: {
-        agents: { entries: { main: {} } },
-        tools: {
-          exec: {
-            safeBins: ["jq"],
-          },
-        },
-      } satisfies OpenClawConfig,
+      cfg: execConfig({ safeBins: ["jq"] }),
       expected: true,
     },
     {
       name: "jq not configured",
-      cfg: {
-        agents: { entries: { main: {} } },
-        tools: {
-          exec: {
-            safeBins: ["cut"],
-          },
-        },
-      } satisfies OpenClawConfig,
+      cfg: execConfig({ safeBins: ["cut"] }),
       expected: false,
     },
   ])(
@@ -132,24 +85,12 @@ describe("security audit exec safe-bin findings", () => {
       process.platform === "win32"
         ? [String.raw`C:\Users\ci-user\bin`, String.raw`C:\Users\ci-user\.local\bin`]
         : ["/usr/local/bin", "/tmp/openclaw-safe-bins"];
-    const findings = await collectSecurityAuditFindings({
-      tools: {
-        exec: {
-          safeBinTrustedDirs: riskyGlobalTrustedDirs,
-        },
-      },
-      agents: {
-        entries: {
-          ops: {
-            tools: {
-              exec: {
-                safeBinTrustedDirs: ["./relative-bin-dir"],
-              },
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig);
+    const findings = await collectSecurityAuditFindings(
+      execConfig(
+        { safeBinTrustedDirs: riskyGlobalTrustedDirs },
+        { safeBinTrustedDirs: ["./relative-bin-dir"] },
+      ),
+    );
 
     const riskyFinding = requireFinding("tools.exec.safe_bin_trusted_dirs_risky", findings);
     expect(riskyFinding.severity).toBe("warn");
@@ -162,14 +103,7 @@ describe("security audit exec safe-bin findings", () => {
     expect(
       hasFinding(
         "tools.exec.safe_bin_trusted_dirs_risky",
-        await collectSecurityAuditFindings({
-          agents: { entries: { main: {} } },
-          tools: {
-            exec: {
-              safeBinTrustedDirs: ["/usr/libexec"],
-            },
-          },
-        } satisfies OpenClawConfig),
+        await collectSecurityAuditFindings(execConfig({ safeBinTrustedDirs: ["/usr/libexec"] })),
       ),
     ).toBe(false);
   });

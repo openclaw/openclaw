@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   danger,
   logVerbose,
@@ -24,7 +25,6 @@ import {
 import { resolveDefaultLineAccountId, resolveLineAccount } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
-import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
 import { prepareLineReplyPayload } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
 import { showLoadingAnimation } from "./send.js";
@@ -174,14 +174,23 @@ export async function monitorLineProvider(opts: MonitorLineProviderOptions) {
                 // Core renders presentations inside the outbound send pipeline only,
                 // so this path resolves them before either branch reads channelData.
                 preparePayload: (payload) => prepareLineReplyPayload(payload, ctxPayload.From),
-                durable: (payload, info) =>
-                  resolveLineDurableReplyOptions({
-                    payload,
-                    infoKind: info.kind,
-                    to: ctxPayload.From,
-                    replyToken,
-                    replyTokenUsed,
-                  }),
+                durable: (payload, info) => {
+                  if (info.kind !== "final") {
+                    return false;
+                  }
+                  if (replyToken && !replyTokenUsed) {
+                    return false;
+                  }
+                  const lineData = payload.channelData?.line;
+                  if (lineData && Object.keys(lineData).length > 0) {
+                    return false;
+                  }
+                  const reply = resolveSendableOutboundReplyParts(payload);
+                  if (reply.hasMedia || !reply.hasText) {
+                    return false;
+                  }
+                  return { to: ctxPayload.From };
+                },
                 deliver: async (payload) => {
                   const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
 

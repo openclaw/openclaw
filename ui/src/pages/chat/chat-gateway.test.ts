@@ -104,7 +104,6 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     toolStreamById: new Map(),
     toolStreamOrder: [],
     chatRunStartup: null,
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     client: null,
     connected: true,
@@ -1416,7 +1415,6 @@ describe("loadChatHistory filtering", () => {
     });
     await loadChatHistory(state);
     expect(state.chatMessages).toEqual(visible);
-    expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatVerboseLevel).toBe("full");
     expect(state.chatLoading).toBe(false);
   });
@@ -1800,14 +1798,12 @@ describe("loadChatHistory retry handling", () => {
     const request = vi.fn().mockRejectedValue(new GatewayRequestError(scopeError));
     const state = createHistoryState(request, {
       chatMessages: [textMessage("assistant", "old")],
-      chatThinkingLevel: "high",
       chatVerboseLevel: "full",
     });
 
     await loadChatHistory(state);
 
     expect(state.chatMessages).toStrictEqual([]);
-    expect(state.chatThinkingLevel).toBeNull();
     expect(state.chatVerboseLevel).toBeNull();
     expect(getChatHistoryLoadState(state)).toMatchObject({
       phase: "failed",
@@ -1905,14 +1901,12 @@ describe("loadChatHistory retry handling", () => {
     await staleLoad;
 
     expect(state.chatMessages).toEqual([visibleMessage]);
-    expect(state.chatThinkingLevel).toBeNull();
     expect(state.chatLoading).toBe(true);
 
     freshRequest.resolve(createAssistantHistory("fresh history", { thinkingLevel: "low" }));
     await freshLoad;
 
     expect(state.chatMessages).toEqual([textMessage("assistant", "fresh history")]);
-    expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
   });
 
@@ -1961,7 +1955,6 @@ describe("loadChatHistory retry handling", () => {
 
     expect(state.chatLoading).toBe(false);
     expect(state.chatMessages).toEqual([textMessage("assistant", "visible old")]);
-    expect(state.chatThinkingLevel).toBeNull();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

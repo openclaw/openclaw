@@ -138,6 +138,13 @@ and full producer frontmatter. Internal OKF links rewrite to the generated
 wiki concept pages and also emit structured `relationships` entries with
 `kind: okf-link`.
 
+Keep handwritten notes in the page's `## Notes` slot, between
+`<!-- openclaw:human:start -->` and `<!-- openclaw:human:end -->`. Re-import
+preserves that marked block exactly; text outside it is producer-owned and
+can be replaced. Legacy OKF pages without a marked block regenerate with an
+empty Notes slot. If a marker is missing from an existing block, restore it
+before retrying the import. Existing-page read failures leave that page unchanged.
+
 ## Structured claims and evidence
 
 Pages carry structured `claims` frontmatter, not just freeform text. Each
@@ -316,6 +323,18 @@ includes compact `Claim:` and `Evidence:` lines when available.
 `wiki_search` has a 30-second deadline and honors turn cancellation. A timeout
 or cancellation returns a tool error rather than an empty result, and stops
 the ongoing page scan. For a known page, use `wiki_get` with its id or path.
+The page scan itself (reading, parsing and scoring every page when the compiled
+digest cannot narrow the search, resolving `wiki_get` id lookups and misses,
+and `wiki_apply` metadata updates) runs in a plugin-owned pool of two worker
+threads, so the gateway event loop stays responsive while a large vault is
+scanned. Every 64 pages a scan checks whether another task is waiting for its
+shared compute slot or its worker, such as `memory_search` retrieval on a small
+host or a third concurrent scan, and if so hands it over and resumes afterwards
+instead of making it wait for the whole scan. The pool adds no deadline of its
+own: `wiki_search` keeps its 30-second deadline and turn
+cancellation, and CLI, RPC and lookup scans run to completion as before.
+Single-page reads (`wiki_get` by exact path or claim id) stay on the calling
+thread and never wait behind a scan.
 
 The plugin also registers a non-exclusive memory corpus supplement, so shared
 `memory_search` and `memory_get` can reach the wiki when the active memory

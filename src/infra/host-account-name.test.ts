@@ -8,6 +8,9 @@ vi.mock("../process/exec.js", () => ({ runExec: runExecMock }));
 
 let resolveHostAccountName: typeof import("./host-account-name.js").resolveHostAccountName;
 let freshModuleId = 0;
+const platform = (value: NodeJS.Platform) =>
+  vi.spyOn(process, "platform", "get").mockReturnValue(value);
+const stdout = (value: string) => runExecMock.mockResolvedValue({ stdout: value, stderr: "" });
 
 beforeEach(async () => {
   ({ resolveHostAccountName } = await importFreshModule<typeof import("./host-account-name.js")>(
@@ -30,9 +33,8 @@ afterEach(() => {
 
 describe("resolveHostAccountName", () => {
   it("trims the macOS full name and shares one lookup across concurrent callers", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    runExecMock.mockResolvedValue({ stdout: "  Ada Lovelace \n", stderr: "" });
-
+    platform("darwin");
+    stdout("  Ada Lovelace \n");
     expect(await Promise.all([resolveHostAccountName(), resolveHostAccountName()])).toEqual([
       "Ada Lovelace",
       "Ada Lovelace",
@@ -44,11 +46,11 @@ describe("resolveHostAccountName", () => {
 
   it.each(["RealName: Ada Lovelace\n", "RealName:\n Ada Lovelace\n"])(
     "reads a macOS directory full name after id fails: %s",
-    async (stdout) => {
+    async (directoryOutput) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
       runExecMock
         .mockRejectedValueOnce(new Error("id failed"))
-        .mockResolvedValueOnce({ stdout, stderr: "" });
+        .mockResolvedValueOnce({ stdout: directoryOutput, stderr: "" });
 
       await expect(resolveHostAccountName()).resolves.toBe("Ada Lovelace");
       expect(runExecMock).toHaveBeenLastCalledWith(
@@ -66,33 +68,27 @@ describe("resolveHostAccountName", () => {
     { gecos: "ada", expected: null },
     { gecos: `${"A".repeat(255)}🤖`, expected: "A".repeat(255) },
   ])("uses only a bounded human name from Linux GECOS: $gecos", async ({ gecos, expected }) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    runExecMock.mockResolvedValue({
-      stdout: `ada:x:1000:1000:${gecos}:/home/ada:/bin/sh\n`,
-      stderr: "",
-    });
-
+    platform("linux");
+    stdout(`ada:x:1000:1000:${gecos}:/home/ada:/bin/sh\n`);
     await expect(resolveHostAccountName()).resolves.toBe(expected);
     expect(runExecMock).toHaveBeenCalledWith("getent", ["passwd", "ada"], expect.any(Object));
   });
 
   it("selects the host account from passwd when getent is unavailable", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    platform("linux");
     runExecMock.mockRejectedValue(new Error("getent unavailable"));
     const readFile = vi
       .spyOn(fs, "readFile")
       .mockResolvedValue(
         "root:x:0:0:root:/root:/bin/sh\nada:x:1000:1000:Ada Lovelace,Room 42:/home/ada:/bin/sh\n",
       );
-
     await expect(resolveHostAccountName()).resolves.toBe("Ada Lovelace");
     expect(readFile).toHaveBeenCalledWith("/etc/passwd", "utf8");
   });
 
   it("bounds subprocess timeouts and caches lookup failure without throwing", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    platform("darwin");
     runExecMock.mockRejectedValue(Object.assign(new Error("timed out"), { timedOut: true }));
-
     await expect(resolveHostAccountName()).resolves.toBeNull();
     await expect(resolveHostAccountName()).resolves.toBeNull();
     expect(runExecMock).toHaveBeenCalledTimes(2);
@@ -111,15 +107,14 @@ describe("resolveHostAccountName", () => {
   });
 
   it("ignores unavailable OS account metadata and unreadable passwd files", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    platform("linux");
     runExecMock.mockRejectedValue(new Error("getent unavailable"));
     vi.spyOn(fs, "readFile").mockRejectedValue(new Error("permission denied"));
-
     await expect(resolveHostAccountName()).resolves.toBeNull();
   });
 
-  it.each(["win32", "freebsd"] as const)("returns no name on %s", async (platform) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  it.each(["win32", "freebsd"] as const)("returns no name on %s", async (hostPlatform) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue(hostPlatform);
 
     await expect(resolveHostAccountName()).resolves.toBeNull();
     expect(runExecMock).not.toHaveBeenCalled();

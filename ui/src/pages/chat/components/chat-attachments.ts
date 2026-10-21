@@ -114,7 +114,6 @@ export function appendChatAttachmentFiles(
     {
       resizeImages: true,
       compressVideos: true,
-      onRejected: (file, message) => reads.reject(file, message),
     },
   );
   if (files.length === 0) {
@@ -170,7 +169,12 @@ export function handleChatAttachmentPaste(
     imageFiles.push(pasted.file);
   }
   if (imageFiles.length === 0) {
-    if (options.imagesOnly || !text || text.length <= LARGE_PASTE_TEXT_THRESHOLD) {
+    if (
+      options.imagesOnly ||
+      !text ||
+      text.length <= LARGE_PASTE_TEXT_THRESHOLD ||
+      !(props.getDraft?.() ?? props.draft ?? "")
+    ) {
       return;
     }
     e.preventDefault();

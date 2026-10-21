@@ -9,6 +9,8 @@ import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import { projectHealthSummary } from "./health/presentation.js";
+import type { HealthSummary } from "./health/types.js";
 import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import { acceptsPresenceDeltas, preparePresenceDelivery } from "./presence-delivery.js";
 import { concatGatewayFrame } from "./serialized-json.js";
@@ -154,6 +156,8 @@ type FrameBase = FrameFields & {
 type PreparedFrames = {
   fields?: FrameFields;
   snapshot?: FrameBase;
+  healthSummary?: FrameBase;
+  toolNarration?: FrameBase;
   delta?: FrameBase;
   reservedBytes?: number;
 };
@@ -241,7 +245,6 @@ export function createGatewayBroadcaster(params: {
     explicitPluginScope?: GatewayPluginEventScope,
     retained?: {
       client: GatewayWsClient;
-      socket: GatewayWsClient["socket"];
       frames: PreparedFrames;
       publication?: LiveTextPublication;
     },
@@ -301,10 +304,11 @@ export function createGatewayBroadcaster(params: {
       isPlainEventPayload(payload) &&
       payload.state === "status" &&
       payload.phase === "waiting_for_model";
+    const toolNarrationPayload = narration.prepareToolPayload(event, payload);
     let sessionReadContext: boolean | undefined;
     const hasSessionReadContext = () =>
       (sessionReadContext ??=
-        (event === "users.prefs.changed" && isTargeted) ||
+        ((event === "users.prefs.changed" || event === "mentions.changed") && isTargeted) ||
         (params.canReceiveSessionEvent !== undefined &&
           sessionKeys.length > 0 &&
           sessionKeys.every((key) => key.trim().length > 0)) ||
@@ -350,7 +354,6 @@ export function createGatewayBroadcaster(params: {
       // Closing nodes remain discoverable until their owner drains admitted lifecycle work.
       if (
         !params.clients.has(c) ||
-        (retained && c.socket !== retained.socket) ||
         c.invalidated === true ||
         c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE ||
         (modelWaitStatus &&
@@ -414,14 +417,7 @@ export function createGatewayBroadcaster(params: {
       }
       // Narration consumes producer snapshots before the per-socket wire
       // projection below removes cumulative text from foreground appends.
-      if (
-        (event === "session.narration" && !narration.isNarration(c.connId, sessionKeys)) ||
-        ((event === "chat" ||
-          event === "agent" ||
-          event === "session.tool" ||
-          event === "session.observer") &&
-          narration.consume(c, event, payload, sessionKeys, opts))
-      ) {
+      if (narration.consume(c, event, payload, sessionKeys, opts)) {
         continue;
       }
       if (!outboundEventLogged) {
@@ -524,7 +520,6 @@ export function createGatewayBroadcaster(params: {
             if (previous) {
               delivery.takePending(state, previous);
             }
-            const socket = c.socket;
             const queuedPublication = delivery.coalescePublication(
               publication,
               previous?.publication,
@@ -539,7 +534,6 @@ export function createGatewayBroadcaster(params: {
               send: () =>
                 broadcastInternal(event, nextPayload, opts, targetConnIds, explicitPluginScope, {
                   client: c,
-                  socket,
                   frames: prepared,
                   publication: queuedPublication,
                 }),
@@ -558,7 +552,6 @@ export function createGatewayBroadcaster(params: {
         delivery.drain(state, live.group);
         broadcastInternal(event, payload, opts, targetConnIds, explicitPluginScope, {
           client: c,
-          socket: c.socket,
           frames,
           publication,
         });
@@ -571,9 +564,16 @@ export function createGatewayBroadcaster(params: {
       const useDelta = delivery.canSendDelta(state, live, publication);
       const projection = live?.projection;
       const getDeliveryFrameBase = () =>
-        useDelta && projection
-          ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
-          : (frames.snapshot ??= frameBaseFor(payload));
+        toolNarrationPayload && narration.isNarration(c.connId, sessionKeys)
+          ? (frames.toolNarration ??= frameBaseFor(toolNarrationPayload()))
+          : event === "health" && c.connect.caps?.includes(GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY)
+            ? (frames.healthSummary ??= frameBaseFor(
+                // SAFETY: Only internal health producers can publish this reserved event.
+                projectHealthSummary(payload as HealthSummary),
+              ))
+            : useDelta && projection
+              ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
+              : (frames.snapshot ??= frameBaseFor(payload));
       let frame: Buffer | undefined;
       let delivered: (() => void) | undefined;
       let presenceDelivery: ReturnType<typeof preparePresenceDelivery> | undefined;

@@ -35,9 +35,7 @@ export class MeetingSessionCleanupTracker {
     const setup = Promise.resolve()
       .then(prepare)
       .finally(() => {
-        if (state.setup === setup) {
-          state.setup = undefined;
-        }
+        state.setup = undefined;
       });
     state.setup = setup;
     return setup;
@@ -77,9 +75,7 @@ export class MeetingSessionCleanupTracker {
         throwIfSettledRejected(results, "Meeting runtime cleanup failed");
       })
       .finally(() => {
-        if (state.stopping === stopping) {
-          state.stopping = undefined;
-        }
+        state.stopping = undefined;
       });
     state.stopping = stopping;
     return stopping;

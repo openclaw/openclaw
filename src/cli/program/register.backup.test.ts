@@ -1,148 +1,116 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { registerBackupCommand } from "./register.backup.js";
 
-const mocks = vi.hoisted(() => ({
-  backupCreateCommand: vi.fn(),
-  backupGitLogCommand: vi.fn(),
-  backupGitRestoreCommand: vi.fn(),
-  backupGitVerifyCommand: vi.fn(),
-  backupRestoreCommand: vi.fn(),
-  backupSqliteCreateCommand: vi.fn(),
-  backupSqliteListCommand: vi.fn(),
-  backupSqliteRestoreCommand: vi.fn(),
-  backupSqliteVerifyCommand: vi.fn(),
-  backupVerifyCommand: vi.fn(),
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
+const handlers = vi.hoisted(() => ({
+  create: vi.fn(),
+  verify: vi.fn(),
+  restore: vi.fn(),
+  gitLog: vi.fn(),
+  gitRestore: vi.fn(),
+  gitVerify: vi.fn(),
+  sqliteCreate: vi.fn(),
+  sqliteList: vi.fn(),
+  sqliteRestore: vi.fn(),
+  sqliteVerify: vi.fn(),
+  runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
 }));
 
-vi.mock("../../commands/backup.js", () => ({
-  backupCreateCommand: mocks.backupCreateCommand,
-}));
-
-// mock-isolation: Argument parsing must not open database owners or launch backup workers.
+// mock-isolation: argument parsing must not create real backup archives.
+vi.mock("../../commands/backup.js", () => ({ backupCreateCommand: handlers.create }));
+// Argument parsing must not open database owners or launch backup workers.
+// mock-isolation: argument parsing must not open repositories or launch backup workers.
 vi.mock("../../commands/backup-git.js", () => ({
-  backupGitLogCommand: mocks.backupGitLogCommand,
-  backupGitRestoreCommand: mocks.backupGitRestoreCommand,
-  backupGitVerifyCommand: mocks.backupGitVerifyCommand,
+  backupGitLogCommand: handlers.gitLog,
+  backupGitRestoreCommand: handlers.gitRestore,
+  backupGitVerifyCommand: handlers.gitVerify,
 }));
-
-vi.mock("../../commands/backup-restore.js", () => ({
-  backupRestoreCommand: mocks.backupRestoreCommand,
-}));
-
-vi.mock("../../commands/backup-verify.js", () => ({
-  backupVerifyCommand: mocks.backupVerifyCommand,
-}));
-
+// mock-isolation: argument parsing must not restore or overwrite operator data.
+vi.mock("../../commands/backup-restore.js", () => ({ backupRestoreCommand: handlers.restore }));
+// mock-isolation: argument parsing must not read real backup archives.
+vi.mock("../../commands/backup-verify.js", () => ({ backupVerifyCommand: handlers.verify }));
+// mock-isolation: argument parsing must not open database owners or backup workers.
 vi.mock("../../commands/backup-sqlite.js", () => ({
-  backupSqliteCreateCommand: mocks.backupSqliteCreateCommand,
-  backupSqliteListCommand: mocks.backupSqliteListCommand,
-  backupSqliteRestoreCommand: mocks.backupSqliteRestoreCommand,
-  backupSqliteVerifyCommand: mocks.backupSqliteVerifyCommand,
+  backupSqliteCreateCommand: handlers.sqliteCreate,
+  backupSqliteListCommand: handlers.sqliteList,
+  backupSqliteRestoreCommand: handlers.sqliteRestore,
+  backupSqliteVerifyCommand: handlers.sqliteVerify,
 }));
+// mock-isolation: capture JSON and exit requests without writing to the real terminal or exiting.
+vi.mock("../../runtime.js", () => ({ defaultRuntime: handlers.runtime }));
 
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: mocks.runtime,
-}));
-
-const { runtime } = mocks;
+const { runtime } = handlers;
+const gitOptions = { repository: "/repo", ref: "HEAD", global: false, json: true };
+async function parse(args: string) {
+  const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+  registerBackupCommand(program);
+  await program.parseAsync(["backup", ...args.split(" ")], { from: "user" });
+}
 beforeEach(() => vi.resetAllMocks());
 
-describe("registered backup routes", () => {
-  it.each([
+it.each([
+  [
+    "create --output /repo --json --dry-run",
+    handlers.create,
     {
-      args: "create --output /tmp/backups --json --dry-run",
-      command: mocks.backupCreateCommand,
-      options: {
-        output: "/tmp/backups",
-        json: true,
-        dryRun: true,
-        verify: false,
-        onlyConfig: false,
-        includeWorkspace: true,
-      },
+      output: "/repo",
+      json: true,
+      dryRun: true,
+      verify: false,
+      onlyConfig: false,
+      includeWorkspace: true,
     },
-    {
-      args: "verify /tmp/backup.tar.gz --json",
-      command: mocks.backupVerifyCommand,
-      options: { archive: "/tmp/backup.tar.gz", json: true },
-    },
-    {
-      args: "restore /tmp/backup.tar.gz --target /tmp/restored --json",
-      command: mocks.backupRestoreCommand,
-      options: { archive: "/tmp/backup.tar.gz", target: "/tmp/restored", json: true },
-    },
-    {
-      args: "sqlite create --global --repository /tmp/snapshots --json",
-      command: mocks.backupSqliteCreateCommand,
-      options: { global: true, agent: undefined, repository: "/tmp/snapshots", json: true },
-    },
-    {
-      args: "sqlite list --repository /tmp/snapshots --json",
-      command: mocks.backupSqliteListCommand,
-      options: { repository: "/tmp/snapshots", json: true },
-    },
-    {
-      args: "git restore --repository /tmp/backups --store team-reports --target /tmp/restored.sqlite --json",
-      command: mocks.backupGitRestoreCommand,
-      options: {
-        repository: "/tmp/backups",
-        store: "team-reports",
-        target: "/tmp/restored.sqlite",
-        ref: "HEAD",
-        global: false,
-        json: true,
-      },
-    },
-    {
-      args: "git verify --repository /tmp/backups --store workboard --json",
-      command: mocks.backupGitVerifyCommand,
-      options: {
-        repository: "/tmp/backups",
-        store: "workboard",
-        ref: "HEAD",
-        global: false,
-        json: true,
-      },
-    },
-  ])("dispatches backup $args", async ({ args, command, options }) => {
-    const program = new Command();
-    registerBackupCommand(program);
-    await program.parseAsync(["backup", ...args.split(" ")], { from: "user" });
-    expect(command).toHaveBeenCalledExactlyOnceWith(runtime, options);
-  });
+  ],
+  ["verify /backup.tgz --json", handlers.verify, { archive: "/backup.tgz", json: true }],
+  [
+    "restore /backup.tgz --target /restored --json",
+    handlers.restore,
+    { archive: "/backup.tgz", target: "/restored", json: true },
+  ],
+  [
+    "sqlite create --global --repository /repo --json",
+    handlers.sqliteCreate,
+    { global: true, agent: undefined, repository: "/repo", json: true },
+  ],
+  [
+    "sqlite list --repository /repo --json",
+    handlers.sqliteList,
+    { repository: "/repo", json: true },
+  ],
+  [
+    "git restore --repository /repo --store team-reports --target /restored.sqlite --json",
+    handlers.gitRestore,
+    { ...gitOptions, store: "team-reports", target: "/restored.sqlite" },
+  ],
+  [
+    "git verify --repository /repo --store workboard --json",
+    handlers.gitVerify,
+    { ...gitOptions, store: "workboard" },
+  ],
+] as const)("dispatches backup %s", async (args, command, options) => {
+  await parse(args);
+  expect(command).toHaveBeenCalledExactlyOnceWith(runtime, options);
+});
 
-  it.each([
-    {
-      args: "verify /tmp/snapshots/one --scratch /tmp/scratch --json",
-      command: mocks.backupSqliteVerifyCommand,
-      options: { scratch: "/tmp/scratch", json: true },
-    },
-    {
-      args: "restore /tmp/snapshots/one --target /tmp/restored.sqlite --json",
-      command: mocks.backupSqliteRestoreCommand,
-      options: { target: "/tmp/restored.sqlite", json: true },
-    },
-  ])("dispatches backup sqlite $args", async ({ args, command, options }) => {
-    const program = new Command();
-    registerBackupCommand(program);
-    await program.parseAsync(["backup", "sqlite", ...args.split(" ")], { from: "user" });
-    expect(command).toHaveBeenCalledExactlyOnceWith(runtime, "/tmp/snapshots/one", options);
-  });
+it.each([
+  [
+    "verify /snapshot --scratch /scratch --json",
+    handlers.sqliteVerify,
+    { scratch: "/scratch", json: true },
+  ],
+  [
+    "restore /snapshot --target /restored.sqlite --json",
+    handlers.sqliteRestore,
+    { target: "/restored.sqlite", json: true },
+  ],
+] as const)("dispatches backup sqlite %s", async (args, command, options) => {
+  await parse(`sqlite ${args}`);
+  expect(command).toHaveBeenCalledExactlyOnceWith(runtime, "/snapshot", options);
+});
 
-  it("rejects partial Git log limits before dispatch", async () => {
-    const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
-    registerBackupCommand(program);
-    await expect(
-      program.parseAsync("backup git log --repository /tmp/backups --limit 1oops".split(" "), {
-        from: "user",
-      }),
-    ).rejects.toThrow("--limit must be a positive integer.");
-    expect(mocks.backupGitLogCommand).not.toHaveBeenCalled();
-  });
+it("rejects partial Git log limits before dispatch", async () => {
+  await expect(parse("git log --repository /repo --limit 1oops")).rejects.toThrow(
+    "--limit must be a positive integer.",
+  );
+  expect(handlers.gitLog).not.toHaveBeenCalled();
 });

@@ -12,7 +12,6 @@ import {
 import {
   nativeWindowsContextSchema,
   managementRequestSchema,
-  originsSchema,
   WINDOWS_NATIVE_EXE,
   WINDOWS_OFFICIAL_ORIGIN,
   type NativeWindowsContext,
@@ -181,14 +180,12 @@ async function operate(params: {
   try {
     params.signal?.throwIfAborted();
     const context = await selectedContext(params.browserProfile ?? "chrome", params.pluginRoot);
-    const origins = originsSchema.parse(
-      [
-        ...new Set([
-          WINDOWS_OFFICIAL_ORIGIN,
-          ...(params.extensionIds ?? []).map((id) => "chrome-extension://" + id + "/"),
-        ]),
-      ].toSorted(),
-    );
+    const origins = [
+      ...new Set([
+        WINDOWS_OFFICIAL_ORIGIN,
+        ...(params.extensionIds ?? []).map((id) => "chrome-extension://" + id + "/"),
+      ]),
+    ].toSorted();
     const request = managementRequestSchema.parse({
       v: 1,
       mode: "native-windows-cli",

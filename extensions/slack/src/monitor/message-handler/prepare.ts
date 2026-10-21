@@ -70,6 +70,7 @@ import {
 } from "../context.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
 import type { SlackEventScope } from "../event-scope.js";
+import { getOrCreateWeakOwnerMap } from "../lru-map-cache.js";
 import type { SlackMediaResult } from "../media-types.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
@@ -118,7 +119,6 @@ function mergeSlackAssistantThreadContext(
   return {
     assistantChannelId: primary.assistantChannelId || fallback.assistantChannelId,
     threadTs: primary.threadTs || fallback.threadTs,
-    userId: primary.userId ?? fallback.userId,
     channelId: primary.channelId ?? fallback.channelId,
     teamId: primary.teamId ?? fallback.teamId,
     enterpriseId: primary.enterpriseId !== undefined ? primary.enterpriseId : fallback.enterpriseId,
@@ -147,7 +147,6 @@ function resolveSlackMessageAssistantThreadContext(
   return {
     assistantChannelId,
     threadTs,
-    userId: normalizeOptionalString(thread.user_id) ?? message.user,
     channelId: normalizeOptionalString(context?.channel_id),
     teamId: normalizeOptionalString(context?.team_id),
     enterpriseId:
@@ -175,7 +174,6 @@ async function restoreSlackAssistantThreadContextFromMetadata(params: {
       client: params.eventScope?.client ?? params.ctx.app.client,
       channelId: params.message.channel,
       threadTs,
-      userId: params.message.user,
     });
   } catch (err) {
     logVerbose(
@@ -196,11 +194,7 @@ function resolveCachedMentionRegexes(
     normalizeOptionalString(options?.conversationId ?? undefined),
     options?.providerPolicy ? JSON.stringify(options.providerPolicy) : "",
   ].join("\u001f");
-  let byAgent = mentionRegexCache.get(ctx);
-  if (!byAgent) {
-    byAgent = new Map<string, RegExp[]>();
-    mentionRegexCache.set(ctx, byAgent);
-  }
+  const byAgent = getOrCreateWeakOwnerMap(mentionRegexCache, ctx);
   const cached = byAgent.get(key);
   if (cached) {
     return cached;

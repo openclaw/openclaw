@@ -1,15 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { OutputRuntimeEnv } from "../runtime.js";
+import { defaultRuntime } from "../runtime.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   plugins: vi.fn<() => ChannelPlugin[]>(() => []),
@@ -35,15 +34,12 @@ vi.mock("../state/agent-provenance.js", () => ({
 const { agentsListCommand } = await import("./agents.commands.list.js");
 
 async function list(options: Parameters<typeof agentsListCommand>[0]) {
-  const runtime = {
-    ...createTestRuntime(),
-    writeStdout: vi.fn<OutputRuntimeEnv["writeStdout"]>(),
-    writeJson: vi.fn<OutputRuntimeEnv["writeJson"]>(),
-  };
-  await agentsListCommand(options, runtime);
+  const log = vi.spyOn(defaultRuntime, "log").mockReturnValue(undefined).mockClear();
+  const json = vi.spyOn(defaultRuntime, "writeJson").mockReturnValue(undefined).mockClear();
+  await agentsListCommand(options);
   return {
-    json: runtime.writeJson.mock.calls[0]?.[0],
-    text: runtime.log.mock.calls.flat().join("\n"),
+    json: json.mock.calls[0]?.[0],
+    text: log.mock.calls.flat().join("\n"),
   };
 }
 
@@ -56,6 +52,7 @@ function setEntries(
 }
 
 describe("agentsListCommand", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
     setEntries({ main: {} }, telegramBinding);
@@ -121,6 +118,27 @@ describe("agentsListCommand", () => {
       "Agents:\n- main (Main)\n  - child (Child)\n- legacy (Legacy)\n- orphan (Orphan)",
     );
     expect(mocks.plugins).not.toHaveBeenCalled();
+  });
+  it("shows requested routing rules beneath their agent in tree output", async () => {
+    setEntries({ main: { name: "Main" }, child: { name: "Child" }, unbound: { name: "Unbound" } }, [
+      { agentId: "child", match: { channel: "telegram" } },
+    ]);
+    mocks.provenance.mockResolvedValue([
+      { agentId: "child", createdVia: "agent", creatorAgentId: "main", createdAtMs: 2 },
+    ]);
+
+    const plainTree = (await list({ tree: true })).text;
+    const treeWithBindings = (await list({ tree: true, bindings: true })).text;
+    expect(plainTree).toBe("Agents:\n- main (Main)\n  - child (Child)\n- unbound (Unbound)");
+    expect(treeWithBindings).toBe(
+      "Agents:\n- main (Main)\n  - child (Child)\n    Routing rules:\n      - telegram\n- unbound (Unbound)",
+    );
+    expect((await list({ bindings: true })).text).toContain("    - telegram");
+    expect((await list({ json: true, bindings: true })).json).toMatchObject([
+      { id: "main" },
+      { id: "child", bindingDetails: ["telegram"] },
+      { id: "unbound" },
+    ]);
   });
   it("lists configured, inherited, and local avatar identities without changing the workspace", async () => {
     await withTestDir({ prefix: "openclaw-agent-identity-list-" }, async (workspace) => {

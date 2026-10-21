@@ -13,6 +13,17 @@ import {
   createThrowingTestRuntime,
 } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
+import {
+  readClientCredentialReceipt,
+  writeClientCredentialReceipt,
+} from "../infra/client-credential-readiness.js";
+import { openClientCredentialCustody } from "../infra/client-credential-store.js";
+import {
+  generateStoredDeviceIdentity,
+  storedDeviceIdentityToRow,
+} from "../infra/device-identity-material.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import type {
   MigrationApplyResult,
@@ -389,13 +400,32 @@ it("promotes while the live runtime state database changes during staged apply",
   const stateDir = path.join(root, "openclaw-state");
   const liveEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const runtimeDatabasePath = path.join(root, "runtime-agent.sqlite");
+  let liveClientBytes: Buffer | undefined;
   fixture.install({
-    mutateDuringApply: async () => {
+    mutateDuringApply: async (ctx) => {
+      using stagedCredentials = openClientCredentialCustody(
+        { OPENCLAW_STATE_DIR: ctx.stateDir },
+        { migration: true, readOnly: true },
+      );
+      assert(stagedCredentials, "missing staged credential companion");
+      expect(readClientCredentialReceipt(stagedCredentials.database)).toMatchObject({
+        phase: "complete",
+        receipt: { source: { kind: "canonical", engine: "sqlite" }, legacyImports: {} },
+      });
       registerOpenClawAgentDatabase({
         agentId: "runtime",
         path: runtimeDatabasePath,
         env: liveEnv,
       });
+      {
+        using credentials = openClientCredentialCustody(liveEnv, { migration: true });
+        expect(credentials).toBeDefined();
+        credentials!.run({
+          kind: "identity.create",
+          identity: storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(42), 42),
+        });
+      }
+      liveClientBytes = await fs.readFile(resolveClientCredentialStorePath(liveEnv));
     },
   });
   await expect(fixture.run()).resolves.toEqual({
@@ -404,6 +434,11 @@ it("promotes while the live runtime state database changes during staged apply",
   expect(await fixture.memory()).toBe("remember this\n");
   expect(JSON.stringify(currentConfig.value)).not.toContain(".openclaw-migration-");
   expect(mocks.verify).not.toHaveBeenCalled();
+  expect(liveClientBytes).toBeDefined();
+  expect(await fs.readFile(resolveClientCredentialStorePath(liveEnv))).toEqual(liveClientBytes);
+  expect(
+    (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-migration-")),
+  ).toEqual([]);
   expect(listOpenClawRegisteredAgentDatabases({ env: liveEnv })).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ agentId: "main" }),
@@ -411,6 +446,92 @@ it("promotes while the live runtime state database changes during staged apply",
     ]),
   );
 });
+
+it.each([
+  "identity",
+  "token",
+  "origin-token",
+  "socket",
+  "import-claim",
+  "independent-source",
+  "source-identity",
+] as const)(
+  "rejects unsupported staged client %s without publishing or retaining the stage",
+  async (material) => {
+    const { root, currentConfig } = fixture;
+    fixture.install({
+      mutateDuringApply: async (ctx) => {
+        using credentials = openClientCredentialCustody(
+          { OPENCLAW_STATE_DIR: ctx.stateDir },
+          { migration: true },
+        );
+        expect(credentials).toBeDefined();
+        const owner = credentials!;
+        if (material === "identity") {
+          owner.run({
+            kind: "identity.create",
+            identity: storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(42), 42),
+          });
+        } else if (material === "token" || material === "origin-token") {
+          owner.run({
+            kind: "token.replace",
+            key: {
+              device_id: "synthetic-device",
+              role: "operator",
+              ...(material === "origin-token" ? { gateway_scope: "https://example.invalid" } : {}),
+            },
+            token: {
+              device_id: "synthetic-device",
+              role: "operator",
+              token: "synthetic-staged-token",
+              scopes_json: '["operator.read"]',
+              updated_at_ms: 42,
+            },
+          });
+        } else if (material === "socket") {
+          owner.run({
+            kind: "socket.ensure",
+            fallback: {
+              socket_key: "current",
+              socket_path: path.join(ctx.stateDir, "exec-approvals.sock"),
+              socket_token: "synthetic-staged-socket",
+              updated_at_ms: 42,
+            },
+          });
+        } else {
+          const stored = readClientCredentialReceipt(owner.database)!;
+          const source = stored.receipt.source;
+          assert(source, "missing staged bootstrap provenance");
+          switch (material) {
+            case "import-claim":
+              stored.receipt.legacyImports["auth:primary"] = { sha256: null };
+              break;
+            case "independent-source":
+              source.kind = "independent";
+              source.engine = "native-v0";
+              break;
+            case "source-identity":
+              source.identity += ":foreign";
+              break;
+          }
+          runSqliteImmediateTransactionSync(owner.database, () =>
+            writeClientCredentialReceipt(owner.database, stored.receipt, stored.phase),
+          );
+        }
+      },
+    });
+
+    await expect(fixture.run()).rejects.toThrow("unsupported staged client credentials");
+    expect(currentConfig.value).toEqual({});
+    await expect(fs.access(path.join(root, "workspace", "MEMORY.md"))).rejects.toThrow();
+    await expect(
+      fs.access(path.join(root, "openclaw-state", "client", "credentials.sqlite")),
+    ).rejects.toThrow();
+    expect(
+      (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-migration-")),
+    ).toEqual([]);
+  },
+);
 
 it("routes deferred writes through the canonical runtime and retries only failed activations", async () => {
   const { root } = fixture;

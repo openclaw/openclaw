@@ -238,15 +238,18 @@ describe("AppSidebar session attention", () => {
     });
     await settleLitElement(sidebar);
     expect(dom.query('[data-session-attention="question"]')).toBeNull();
-    expect(dom.query('[data-session-attention="agent"]')).not.toBeNull();
-    expect(sidebar.textContent).toContain("Blocked: need the staging password");
+    expect(attentionLabel(sidebar, "agent")).toBe("Blocked: need the staging password");
   });
 
   it("shows hourglass attention ahead of a run error", async () => {
     const { sidebar, dom } = await mountAttention([agentAttentionRow(sessionKey, {}, "hourglass")]);
 
     expect(dom.query('[data-session-attention="agent"] svg circle')).not.toBeNull();
-    expect(sidebar.textContent).toContain("Blocked: need the staging password");
+    expect(attentionLabel(sidebar, "agent")).toBe("Blocked: need the staging password");
+    // The default sidebar keeps the note on the icon; it does not add a second line.
+    expect(
+      dom.query(`[data-session-key="${sessionKey}"] .sidebar-recent-session__subtitle`),
+    ).toBeNull();
     expect(sidebar.textContent).not.toContain("Run failed:");
   });
 

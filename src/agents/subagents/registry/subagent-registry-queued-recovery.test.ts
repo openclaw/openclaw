@@ -1,3 +1,5 @@
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -23,6 +25,7 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { isSwarmRunActive, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
@@ -52,18 +55,15 @@ vi.mock("../../../config/sessions/session-accessor.js", () => ({
 vi.mock("../../../config/sessions/session-accessor.sqlite-replacement-projection.js", () => ({
   applySessionEntryExactReplacements: vi.fn(async () => undefined),
 }));
-vi.mock("./subagent-control-session.js", () => ({
+vi.mock("./subagent-control-session.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-control-session.js")>()),
   prepareSubagentKillSession: async (
     _config: unknown,
     _sessionKey: string,
     assertOwner: () => void,
   ) => ({
     storePath: "/synthetic-retained-session/sessions.json",
-    entry: {
-      sessionId: fixture.sessionId,
-      lifecycleRevision: fixture.lifecycleRevision,
-      updatedAt: 1,
-    },
+    entry: { ...fixture, updatedAt: 1 },
     assertCurrent: assertOwner,
     prepareRead: () => undefined,
     withPublication: async <T>(run: () => Promise<T>) => {
@@ -76,11 +76,7 @@ vi.mock("./subagent-control-session.js", () => ({
 vi.mock("../../../gateway/call.js", () => ({ callGateway: vi.fn() }));
 vi.mock("./subagent-session-reconciliation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./subagent-session-reconciliation.js")>()),
-  loadSubagentSessionEntry: vi.fn(async () => ({
-    sessionId: fixture.sessionId,
-    lifecycleRevision: fixture.lifecycleRevision,
-    updatedAt: 1,
-  })),
+  loadSubagentSessionEntry: vi.fn(async () => ({ ...fixture, updatedAt: 1 })),
 }));
 
 let state: OpenClawTestState;
@@ -91,6 +87,7 @@ afterAll(async () => {
   await state.cleanup();
 });
 beforeEach(() => {
+  vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
   vi.mocked(getRuntimeConfig).mockReturnValue({});
   vi.mocked(applySessionEntryExactReplacements).mockClear();
   subagentRuns.clear();
@@ -177,7 +174,7 @@ function createRestorer(
     cleanupCollectorLaunchResources: async () => true,
     settleFailedQueuedSubagentLaunch: async () => true,
     completeCollectorLaunchCleanup: async () => {},
-    warn: () => {},
+    warn: subagentRegistryLog.warn,
     ...options,
   });
 }
@@ -839,6 +836,7 @@ it.each(["current", "during hydration"] as const)(
     context.resolveGatewayContext = resolver;
     const failure = new Error("requester transfer temporarily unavailable");
     let firstAttempts = 0;
+    const restoredRows: WeakRef<SubagentRunRecord>[] = [];
     const settleRequesterTurn = vi.fn<
       Parameters<typeof createSubagentRegistryRestorer>[0]["settleRequesterTurn"]
     >(async (params) => {
@@ -852,6 +850,7 @@ it.each(["current", "during hydration"] as const)(
         [runId],
         (rows) => {
           const entry = expectDefined(rows.get(runId), "restored requester child");
+          restoredRows.push(new WeakRef(entry));
           return {
             value: undefined,
             postimages: new Map([[runId, { ...entry, requesterTurnRunId: undefined }]]),
@@ -864,14 +863,12 @@ it.each(["current", "during hydration"] as const)(
     const ensureListener = vi.fn();
     const startSweeper = vi.fn();
     const resumeRun = vi.fn();
-    const warn = vi.fn();
     const restorer = createRestorer({
       getGatewayContextResolver: () => resolver,
       settleRequesterTurn,
       ensureListener,
       startSweeper,
       resumeRun,
-      warn,
     });
     try {
       if (owner === "during hydration") {
@@ -889,14 +886,19 @@ it.each(["current", "during hydration"] as const)(
       expect(resumeRun).toHaveBeenCalledWith("later-child");
       expect(subagentRuns.get("first-child")?.requesterTurnRunId).toBe("first-child-turn");
       expect(subagentRuns.get("later-child")?.requesterTurnRunId).toBeUndefined();
-      expect(firstAttempts).toBe(1);
       await restorer.activate();
-      expect(firstAttempts).toBe(2);
       expect(subagentRuns.get("first-child")?.requesterTurnRunId).toBeUndefined();
       expect(settleRequesterTurn).toHaveBeenCalledTimes(3);
       expect(ensureListener).toHaveBeenCalledTimes(2);
       expect(startSweeper).toHaveBeenCalledOnce();
       expect(resumeRun).toHaveBeenCalledTimes(2);
+      // Session-read mock arguments retain the recovery authority closures.
+      vi.clearAllMocks();
+      await setImmediate();
+      queryObjects(WeakRef);
+      expect(restoredRows.map((entry) => entry.deref())).toEqual([undefined, undefined]);
+      await restorer.activate();
+      expect(resumeRun).not.toHaveBeenCalled();
     } finally {
       restorer.reset();
     }

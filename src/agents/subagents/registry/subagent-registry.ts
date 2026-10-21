@@ -1,10 +1,8 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-import type { GatewayStartupTrace } from "../../../gateway/server-startup-trace.js";
-import { onAgentEvent } from "../../../infra/agent-events.js";
+import { measureStartup, type GatewayStartupTrace } from "../../../gateway/server-startup-trace.js";
 import { registerSystemEventStoreOwner } from "../../../infra/system-event-ownership.js";
-import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   runWithGatewayDetachedWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
@@ -28,7 +26,6 @@ import {
   createSubagentRegistryGatewayCaller,
   loadSubagentAnnounceModule,
   loadSubagentBrowserCleanupModule,
-  resetSubagentRegistryRuntimeLoadersForTests,
 } from "./subagent-registry-deps.js";
 import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
 import {
@@ -36,6 +33,7 @@ import {
   GATEWAY_ADMISSION_RETRY_DELAY_MS,
 } from "./subagent-registry-helpers.js";
 import { suspendReplacedStoreNotifications } from "./subagent-registry-lifecycle-cleanup.js";
+import { subagentRegistryLog as log } from "./subagent-registry-lifecycle-log.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
 import {
@@ -77,7 +75,6 @@ import {
 
 export { SubagentSessionCleanupRevocationChangedError } from "./subagent-registry-lifecycle.js";
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
-const log = createSubsystemLogger("agents/subagent-registry");
 const warn = (message: string, meta?: Record<string, unknown>) => log.warn(message, meta);
 
 const completionRetryTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -114,7 +111,6 @@ const resumeReader = createSubagentResumeReader({
   getGatewayContextResolver: () => activeGatewayContextResolver,
   resume: resumeCheckedSubagentRun,
   retryAfterDrain: (...args) => subagentLifecycleController.resumeAfterDrain(...args),
-  warn,
 });
 
 const completionRuntime = createSubagentRegistryCompletionRuntime({
@@ -124,7 +120,6 @@ const completionRuntime = createSubagentRegistryCompletionRuntime({
   completeSubagentRun: (params) => completeSubagentRun(params),
   scheduleSweep: scheduleSubagentRegistrySweep,
   resumeRun: (runId) => resumeSubagentRun(runId),
-  warn,
 });
 const pendingLifecycle = completionRuntime.pendingLifecycle;
 const clearPendingLifecycleError = pendingLifecycle.clearError;
@@ -133,7 +128,6 @@ const clearPendingLifecycleTimeout = pendingLifecycle.clearTimeout;
 const contextCleanup = createSubagentRegistryContextCleanup({
   isEndedHookOwnerCurrent: (entry): boolean =>
     subagentLifecycleController.isEndedHookOwnerCurrent(entry),
-  warn,
 });
 
 const subagentLifecycleController = new SubagentLifecycleController({
@@ -471,7 +465,12 @@ const subagentRestorer = createSubagentRegistryRestorer({
   ensureListener: () => subagentListener.ensure(),
   startSweeper: () => subagentSweeper.start(),
   scheduleSweep: scheduleSubagentRegistrySweep,
-  recoverInterruptedRuns: (entries) => subagentSweeper.recoverInterruptedRuns(entries),
+  recoverInterruptedRuns: (entries, startupTrace) =>
+    measureStartup(startupTrace, "background.subagent-interrupted", () =>
+      subagentSweeper.recoverInterruptedRuns(entries),
+    ).catch((error: unknown) => {
+      log.warn("interrupted subagent recovery remains pending", { error });
+    }),
   resumeRun: (runId) => resumeSubagentRun(runId, "restore"),
   listSwarmRunsForGroup: (groupId, requesterSessionKey, requesterAgentId) =>
     listSwarmRunsForGroup(groupId, requesterSessionKey, requesterAgentId),
@@ -598,7 +597,6 @@ const subagentSweeper = createSubagentRegistrySweeper({
 const subagentListener = createSubagentRegistryListener({
   runs: subagentRuns,
   pendingLifecycle,
-  onAgentEvent,
   resumeRequesterSettleWake,
   adoptPausedSubagentRunIntoSuccessor: (entry) =>
     subagentRunManager.adoptPausedSubagentRunIntoSuccessor({
@@ -607,7 +605,6 @@ const subagentListener = createSubagentRegistryListener({
     }),
   refreshFrozenResultFromSession,
   completeSubagentRunWithRecovery: completionRuntime.completeSubagentRunWithRecovery,
-  warn,
 });
 
 const subagentRunManager = createSubagentRunManager({
@@ -673,10 +670,7 @@ async function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   completionRetryTimers.clear();
   subagentRuns.clear();
   resumedRuns.clear();
-  resumeReader.reset();
   pendingLifecycle.clearAll();
-  resetSubagentRegistryRuntimeLoadersForTests();
-  contextCleanup.reset();
   clearSubagentRunsReadCacheForTest();
   const sweeperRetirement = subagentSweeper.reset();
   subagentRestorer.reset();

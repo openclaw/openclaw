@@ -15,9 +15,9 @@ import {
 } from "./chat-metadata-cache.ts";
 import {
   beginChatMetadataPublication,
-  loadChatMetadata,
   loadChatMetadataRefresh,
   peekChatMetadata,
+  revalidateChatMetadata,
   retireChatMetadataRefresh,
   subscribeChatMetadata,
 } from "./chat-metadata-store.ts";
@@ -216,7 +216,13 @@ describe("automatic metadata admission", () => {
         vi.fn(() => metadata.promise),
         vi.fn(() => catalog.promise),
       );
-      mount(client, undefined, (update) => updates.push(update));
+      const commandsPublished = pending(commands);
+      mount(client, undefined, (update) => {
+        updates.push(update);
+        if (update.type === "result") {
+          commandsPublished.resolve(update.result);
+        }
+      });
       invalidateChatMetadataForSessionEvent(
         client,
         { ...scope, reason: "patch", catalogChanged: true },
@@ -228,9 +234,8 @@ describe("automatic metadata admission", () => {
         "models.list",
         "chat.metadata",
       ]);
-      const commandsRead = loadChatMetadata(client, scope);
       metadata.resolve(commands);
-      await expect(commandsRead).resolves.toEqual(commands);
+      await expect(commandsPublished.promise).resolves.toEqual(commands);
       expect(peekChatMetadata(client, scope)).toEqual(commands);
       const failure = new Error("Catalog unavailable");
       if (outcome === "failed") {
@@ -384,7 +389,7 @@ describe("automatic metadata admission", () => {
     );
     let active = true;
     mount(client, () => active);
-    const explicit = loadChatMetadata(client, scope);
+    const explicit = revalidateChatMetadata(client, scope);
     beginChatMetadataPublication(client, scope);
     const startup = refresh(client, { kind: "startup" });
     active = false;

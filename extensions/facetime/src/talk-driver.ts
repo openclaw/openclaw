@@ -33,7 +33,6 @@ import {
 import { createFaceTimeInitialGreeting } from "./talk-initial-greeting.js";
 
 export type FaceTimeTalkDriver = {
-  readonly callUUID: string;
   readonly recentTalkEvents: readonly TalkEvent[];
   readyForAudio(): Promise<void>;
   processOutputSuppressed(): boolean;
@@ -110,7 +109,6 @@ export async function startFaceTimeTalkDriver(params: {
     | undefined;
   const settledResponseIds = new Set<string>();
   let suppressNextUnkeyedLegacyTerminal = false;
-  const consultRef: { current?: ReturnType<typeof createFaceTimeConsultController> } = {};
   let failurePromise: Promise<boolean> | undefined;
   let activated = false;
   let providerReady = false;
@@ -170,7 +168,7 @@ export async function startFaceTimeTalkDriver(params: {
     mediaSuspensionError ??= new Error(`FaceTime model media suspended: ${reason}`);
     mediaSuspendedDeferred.reject(mediaSuspensionError);
     interruptProviderConnect?.();
-    consultRef.current?.abortForClose();
+    consultController.abortForClose();
     suspendMediaPromise = (async () => {
       try {
         await bridge?.close();
@@ -309,7 +307,7 @@ export async function startFaceTimeTalkDriver(params: {
   };
   const resetProviderContinuity = () => {
     modelMediaGeneration += 1;
-    consultRef.current?.abortForClose();
+    consultController.abortForClose();
     pump?.clearOutputAudio();
     resetResponsePlayback();
     finishOutputAudio("continuity-reset");
@@ -337,7 +335,6 @@ export async function startFaceTimeTalkDriver(params: {
     close,
     onHangupRequested: params.onHangupRequested,
   });
-  consultRef.current = consultController;
 
   remember({ type: "session.started", payload: { callUUID: params.callUUID } });
   const pump = startFaceTimeAudioPump({
@@ -627,7 +624,6 @@ export async function startFaceTimeTalkDriver(params: {
     throw error;
   }
   return {
-    callUUID: params.callUUID,
     get recentTalkEvents() {
       return talk.recentEvents;
     },

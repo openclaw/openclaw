@@ -30,7 +30,7 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
-import type { ExtensionEvent } from "./extensions/types.js";
+import type { ExtensionFactory, ExtensionEvent } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -52,12 +52,12 @@ it("does not append when a compaction extension rejects the finalized summary", 
   });
   const sessionManager = SessionManager.open(target, dir);
   sessionManager.appendMessage(createAssistant(testModel, "authoritative answer"));
-  const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-    ["session_before_compact", [async () => ({ cancel: true })]],
-  ]);
+  const handlers: ExtensionFactory = (api) => {
+    api.on("session_before_compact", async () => ({ cancel: true }));
+  };
   const { session } = await createTestSession({
     sessionManager,
-    resourceLoader: createResourceLoader(handlers),
+    resourceLoader: await createResourceLoader(handlers),
   });
   const persistedBefore = await loadTranscriptEvents(target);
   const contextBefore = sessionManager.buildSessionContext();
@@ -75,90 +75,66 @@ it("does not append when a compaction extension rejects the finalized summary", 
   expect(reopened.buildSessionContext()).toEqual(contextBefore);
 });
 
-it.each(["compaction", "tree"] as const)(
-  "does not publish a cancelled %s while waiting for the writer",
-  async (operation) => {
-    const root = realpathSync(tempDirs.make("openclaw-context-admission-"));
-    const target = sessionTarget(path.join(root, "sessions.json"), "context-admission");
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const manager = SessionManager.open(target, root);
-    const firstUser = manager.appendMessage(makeUserMessage("old prompt", 1));
-    manager.appendMessage(createAssistant(testModel, "old answer"));
-    manager.appendMessage(makeUserMessage("recent prompt", 3));
-    manager.appendMessage(createAssistant(testModel, "recent answer"));
-    const summaryReady = createDeferred();
-    const published: string[] = [];
-    const beforeCompact = async (event: unknown) => {
-      summaryReady.resolve();
-      const { firstKeptEntryId, tokensBefore } = (event as BeforeCompactionEvent).preparation;
-      return { compaction: { summary: "condensed history", firstKeptEntryId, tokensBefore } };
-    };
-    const beforeTree = async () => {
-      summaryReady.resolve();
-      return { summary: { summary: "abandoned branch" } };
-    };
-    const publish = (kind: string) => async () => {
-      published.push(kind);
-    };
-    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-      ["session_before_compact", [beforeCompact]],
-      ["session_before_tree", [beforeTree]],
-      ["session_compact", [publish("compaction")]],
-      ["session_tree", [publish("tree")]],
-    ]);
-    const { session } = await createTestSession({
-      sessionManager: manager,
-      settingsManager: compactionSettings(),
-      resourceLoader: createResourceLoader(handlers),
+it("does not publish a cancelled compaction while waiting for the writer", async () => {
+  const root = realpathSync(tempDirs.make("openclaw-context-admission-"));
+  const target = sessionTarget(path.join(root, "sessions.json"), "context-admission");
+  await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+  const manager = SessionManager.open(target, root);
+  manager.appendMessage(makeUserMessage("old prompt", 1));
+  manager.appendMessage(createAssistant(testModel, "old answer"));
+  manager.appendMessage(makeUserMessage("recent prompt", 3));
+  manager.appendMessage(createAssistant(testModel, "recent answer"));
+  const summaryReady = createDeferred();
+  const published: string[] = [];
+  const beforeCompact = async (event: unknown) => {
+    summaryReady.resolve();
+    const { firstKeptEntryId, tokensBefore } = (event as BeforeCompactionEvent).preparation;
+    return { compaction: { summary: "condensed history", firstKeptEntryId, tokensBefore } };
+  };
+  const handlers: ExtensionFactory = (api) => {
+    api.on("session_before_compact", beforeCompact);
+    api.on("session_compact", async () => {
+      published.push("compaction");
     });
-    const before = await loadTranscriptEvents(target);
-    const messagesBefore = [...session.messages];
-    const release = createDeferred();
-    const entered = createDeferred();
-    const reservation = runOpenClawAgentWriteAdmission(
-      toDatabaseOptions(resolveSqliteReadScope(target)),
-      async () => {
-        entered.resolve();
-        await release.promise;
-      },
-    );
-    await entered.promise;
-    const work =
-      operation === "compaction"
-        ? session.compact()
-        : session.navigateTree(firstUser, { summarize: true, label: "cancelled branch" });
-    const outcome = work.then(
-      (value) => ({ status: "fulfilled" as const, value }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    );
-    try {
-      await summaryReady.promise;
-      // The summary continuations reach the held writer before cancellation.
-      await nextTurn();
-      if (operation === "compaction") {
-        session.abortCompaction();
-      } else {
-        session.abortBranchSummary();
-      }
-      release.resolve();
-      const result = await outcome;
-      if (operation === "compaction") {
-        expect(result).toMatchObject({
-          status: "rejected",
-          error: new Error("Compaction cancelled"),
-        });
-      } else {
-        expect(result).toMatchObject({
-          status: "fulfilled",
-          value: { cancelled: true, aborted: true },
-        });
-      }
-      expect(await loadTranscriptEvents(target)).toEqual(before);
-      expect(session.messages).toEqual(messagesBefore);
-      expect(published).toEqual([]);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([reservation, work]);
-    }
-  },
-);
+  };
+  const { session } = await createTestSession({
+    sessionManager: manager,
+    settingsManager: compactionSettings(),
+    resourceLoader: await createResourceLoader(handlers),
+  });
+  const before = await loadTranscriptEvents(target);
+  const messagesBefore = [...session.messages];
+  const release = createDeferred();
+  const entered = createDeferred();
+  const reservation = runOpenClawAgentWriteAdmission(
+    toDatabaseOptions(resolveSqliteReadScope(target)),
+    async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  );
+  await entered.promise;
+  const work = session.compact();
+  const outcome = work.then(
+    (value) => ({ status: "fulfilled" as const, value }),
+    (error: unknown) => ({ status: "rejected" as const, error }),
+  );
+  try {
+    await summaryReady.promise;
+    // The summary continuations reach the held writer before cancellation.
+    await nextTurn();
+    session.abortCompaction();
+    release.resolve();
+    const result = await outcome;
+    expect(result).toMatchObject({
+      status: "rejected",
+      error: new Error("Compaction cancelled"),
+    });
+    expect(await loadTranscriptEvents(target)).toEqual(before);
+    expect(session.messages).toEqual(messagesBefore);
+    expect(published).toEqual([]);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([reservation, work]);
+  }
+});

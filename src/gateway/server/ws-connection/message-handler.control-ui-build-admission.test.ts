@@ -1,7 +1,5 @@
 // Raw WebSocket proof for the pre-registration Control UI build admission boundary.
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
@@ -10,6 +8,7 @@ import {
   readControlUiBuildMismatchId,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -97,15 +96,18 @@ import { attachGatewayWsMessageHandler } from "./message-handler.js";
 
 // A stale Control UI browser still owns a device identity; the build check is
 // only reachable once the device passes connect auth and silent local pairing.
-const temporaryIdentityPaths: string[] = [];
+const temporaryIdentityDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function prepareSignedControlUiDevice(nonce: string) {
   const { buildDeviceAuthPayload } =
     await import("../../../../packages/gateway-client/src/device-auth.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
     await import("../../../infra/device-identity.js");
-  const identityPath = path.join(tmpdir(), `openclaw-build-admission-${randomUUID()}.sqlite`);
-  temporaryIdentityPaths.push(identityPath);
+  const identityPath = path.join(
+    temporaryIdentityDirs.make("openclaw-build-admission-"),
+    "client",
+    "credentials.sqlite",
+  );
   const identity = loadOrCreateDeviceIdentity({ path: identityPath });
   const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
   // Prepare pairing workers before timing admission; connect must still approve this device.
@@ -159,20 +161,10 @@ beforeEach(() => {
   setRuntimeConfigSnapshot(gatewayConfig);
 });
 
-afterEach(async () => {
+afterEach(() => {
   clearRuntimeConfigSnapshot();
   vi.clearAllMocks();
   resolveRuntimeServiceBuildIdMock.mockReturnValue("gateway-build");
-  const { rm } = await import("node:fs/promises");
-  await Promise.all(
-    temporaryIdentityPaths
-      .splice(0)
-      .flatMap((identityPath) =>
-        [identityPath, `${identityPath}-wal`, `${identityPath}-shm`].map((file) =>
-          rm(file, { force: true }),
-        ),
-      ),
-  );
 });
 
 describe("Control UI build admission over WebSocket", () => {

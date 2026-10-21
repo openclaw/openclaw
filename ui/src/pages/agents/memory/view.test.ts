@@ -1,14 +1,16 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createDreamingViewState, type DreamingViewState } from "./dreaming.ts";
 import {
   renderDreamingView,
   fullDreamingViewAccess,
   installDreamingViewTestTranslations,
 } from "./view.test-helpers.ts";
-import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.tsx";
+import { renderDreaming } from "./view.tsx";
 
 type DreamingProps = Parameters<typeof renderDreaming>[0];
 
@@ -253,6 +255,52 @@ function textItems(container: Element, selector: string): Array<string | undefin
 describe("dreaming view", () => {
   beforeEach(() => {
     viewState = createDreamingViewState();
+  });
+
+  it("retains diary controls and focus across same-tab snapshot refreshes", () => {
+    setDreamSubTab("diary");
+    const initial = buildProps();
+    let update!: (next: DreamingProps) => void;
+    const { container } = mountSolid(() => {
+      const [props, setProps] = createSignal(initial);
+      update = setProps;
+      return renderDreaming({
+        ...initial,
+        get viewState() {
+          return props().viewState;
+        },
+        get dreamDiaryContent() {
+          return props().dreamDiaryContent;
+        },
+      });
+    });
+    flush();
+    const diary = expectElement(container, ".dreams-diary");
+    const day = container.querySelector<HTMLButtonElement>(".dreams-diary__day-chip");
+    expect(day).toBeInstanceOf(HTMLButtonElement);
+    day?.focus();
+    expect(document.activeElement).toBe(day);
+
+    update({
+      ...initial,
+      viewState: { ...initial.viewState },
+      dreamDiaryContent:
+        initial.dreamDiaryContent?.replace(
+          "The repository whispered of forgotten endpoints tonight.",
+          "A refreshed dream is still on the same diary day.",
+        ) ?? null,
+    });
+    flush();
+
+    expect(container.querySelector(".dreams-diary")).toBe(diary);
+    expect(container.querySelector(".dreams-diary__day-chip")).toBe(day);
+    expect(document.activeElement).toBe(day);
+    expect(container.textContent).toContain("A refreshed dream is still on the same diary day.");
+
+    update({ ...initial, viewState: { ...initial.viewState, activeSubTab: "scene" } });
+    flush();
+    expect(diary.isConnected).toBe(false);
+    expectElement(container, ".dreams__lobster");
   });
 
   it("renders the active dream scene chrome and selects another view", () => {

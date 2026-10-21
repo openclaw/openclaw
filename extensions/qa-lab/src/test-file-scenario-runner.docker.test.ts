@@ -4,24 +4,35 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveQaArtifactPath } from "./cli-paths.js";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
+import type {
+  QaScenarioCommandExecution,
+  runQaScenarioCommandLifecycle,
+} from "./test-file-scenario-command-lifecycle.js";
 import {
   dockerE2eLaneName,
-  prepareDockerE2eEnvironment,
+  prepareDockerE2eEnvironment as prepareActualDockerE2eEnvironment,
   type QaPreparedDockerEvidence,
 } from "./test-file-scenario-docker-batch.js";
-import {
-  runQaTestFileScenarios,
-  type QaScenarioCommandExecution,
-} from "./test-file-scenario-runner.js";
 import {
   QA_TEST_RUNNER_DEFAULTS,
   createScenarioRunnerTestHarness,
   makeDockerE2eScenario,
   makeTestFileScenario,
   resolveScriptAttemptOutputDir,
+  runQaTestFileScenariosWithCommand as runQaTestFileScenarios,
+  withQaScenarioCommand,
   writeDockerCandidateManifest,
   writeScriptProducerEvidence,
 } from "./test-file-scenario-runner.test-support.js";
+
+async function prepareDockerE2eEnvironment({
+  runCommand,
+  ...params
+}: Parameters<typeof prepareActualDockerE2eEnvironment>[0] & {
+  runCommand?: typeof runQaScenarioCommandLifecycle;
+}) {
+  return withQaScenarioCommand(runCommand, () => prepareActualDockerE2eEnvironment(params));
+}
 
 const harness = createScenarioRunnerTestHarness();
 const makeTempRepo = (prefix: string) => harness.makeTempRepo(prefix);

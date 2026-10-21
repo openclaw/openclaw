@@ -2,7 +2,7 @@ import type { PluginHookName } from "./types.js";
 
 export class HookIsolationError extends Error {}
 
-function containsSharedMemory(value: unknown, seen: Set<object>): boolean {
+function containsSharedMemory(value: unknown, seen: Set<object>, sourceData = false): boolean {
   if (typeof SharedArrayBuffer !== "undefined" && value instanceof SharedArrayBuffer) {
     return true;
   }
@@ -10,7 +10,13 @@ function containsSharedMemory(value: unknown, seen: Set<object>): boolean {
     return false;
   }
   if (ArrayBuffer.isView(value)) {
-    return typeof SharedArrayBuffer !== "undefined" && value.buffer instanceof SharedArrayBuffer;
+    // Native clones read backing slots, not custom view properties or accessors.
+    const prototype =
+      value instanceof DataView ? DataView.prototype : Object.getPrototypeOf(Uint8Array.prototype);
+    return (
+      typeof SharedArrayBuffer !== "undefined" &&
+      Reflect.get(prototype, "buffer", value) instanceof SharedArrayBuffer
+    );
   }
   if (value instanceof ArrayBuffer) {
     return false;
@@ -36,7 +42,10 @@ function containsSharedMemory(value: unknown, seen: Set<object>): boolean {
   if (value instanceof Map) {
     const entries = Map.prototype.entries.call(value) as IterableIterator<[unknown, unknown]>;
     for (const [key, entry] of entries) {
-      if (containsSharedMemory(key, seen) || containsSharedMemory(entry, seen)) {
+      if (
+        containsSharedMemory(key, seen, sourceData) ||
+        containsSharedMemory(entry, seen, sourceData)
+      ) {
         return true;
       }
     }
@@ -45,15 +54,33 @@ function containsSharedMemory(value: unknown, seen: Set<object>): boolean {
   if (value instanceof Set) {
     const entries = Set.prototype.values.call(value) as IterableIterator<unknown>;
     for (const entry of entries) {
-      if (containsSharedMemory(entry, seen)) {
+      if (containsSharedMemory(entry, seen, sourceData)) {
         return true;
       }
     }
     return false;
   }
+  if (sourceData && !(value instanceof Error) && !Array.isArray(value)) {
+    const prototype = Object.getPrototypeOf(value);
+    // Non-plain values retain their native clone semantics. Inspect their
+    // actual snapshots below rather than their ignored custom properties.
+    if (prototype !== Object.prototype && prototype !== null) {
+      return false;
+    }
+  }
   for (const key of Reflect.ownKeys(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (descriptor && "value" in descriptor && containsSharedMemory(descriptor.value, seen)) {
+    const crossesBoundary =
+      !sourceData ||
+      (value instanceof Error
+        ? key === "cause"
+        : typeof key === "string" && descriptor?.enumerable);
+    if (
+      crossesBoundary &&
+      descriptor &&
+      "value" in descriptor &&
+      containsSharedMemory(descriptor.value, seen, sourceData)
+    ) {
       return true;
     }
   }
@@ -62,6 +89,11 @@ function containsSharedMemory(value: unknown, seen: Set<object>): boolean {
 
 export function cloneHookIsolationValue<T>(hookName: PluginHookName, value: T): T {
   try {
+    // The pinned Bun clone omits Error.cause. Validate source data edges too;
+    // accessors are evaluated only once, by the native clone below.
+    if (containsSharedMemory(value, new Set<object>(), true)) {
+      throw new TypeError("shared memory cannot be isolated");
+    }
     const cloned = structuredClone(value);
     // Inspect exactly what crosses the boundary, including values produced by getters.
     if (containsSharedMemory(cloned, new Set<object>())) {

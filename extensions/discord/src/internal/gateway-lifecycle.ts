@@ -9,7 +9,6 @@ export class GatewayHeartbeatTimers {
     isAcked: () => boolean;
     onAckTimeout: () => void;
     onHeartbeat: () => void;
-    random?: () => number;
   }): void {
     this.stop();
     const scheduleHeartbeatCycle = () => {
@@ -24,14 +23,13 @@ export class GatewayHeartbeatTimers {
       }, params.intervalMs);
       this.heartbeatInterval.unref?.();
     };
-    const random = params.random ?? Math.random;
     this.firstHeartbeatTimeout = setTimeout(
       () => {
         this.firstHeartbeatTimeout = undefined;
         params.onHeartbeat();
         scheduleHeartbeatCycle();
       },
-      Math.max(0, params.intervalMs * random()),
+      Math.max(0, params.intervalMs * Math.random()),
     );
     this.firstHeartbeatTimeout.unref?.();
   }

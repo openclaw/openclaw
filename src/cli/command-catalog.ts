@@ -193,6 +193,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "gateway-status" },
   },
   {
+    commandPath: ["gateway", "recover-lock"],
+    exact: true,
+    // Recovery must reach the lock before config preflight can request state ownership.
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["gateway", "call"],
     exact: true,
     policy: PASSIVE_STARTUP_POLICY,
@@ -367,9 +373,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: {
       configGuard: "skip",
       loadPlugins: "never",
-      // Shared-state maintenance must acquire exclusive ownership before any
-      // config-health observation can open the canonical SQLite database.
-      networkProxy: ({ argv }) => (hasCliOption(argv, "--state-sqlite") ? "bypass" : "default"),
+      // Local maintenance must acquire ownership before config-health observation
+      // can open the canonical database.
+      networkProxy: ({ argv }) =>
+        hasCliOption(argv, "--state-sqlite") || hasCliOption(argv, "--client-credentials")
+          ? "bypass"
+          : "default",
     },
   },
   {

@@ -20,9 +20,8 @@ import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
-import type { EmbeddedStateSignalProcess } from "../infra/embedded-state-lock.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
-import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
+import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
@@ -535,18 +534,13 @@ function formatActiveGatewayTuiRefusal(identity: GatewayLockIdentity): string {
 /** Hold canonical state ownership for the complete lifetime of a local TUI. */
 export async function withEmbeddedTuiStateLock<T>(
   run: (signal: AbortSignal) => Promise<T>,
-  deps: {
-    gatewayLockOptions?: GatewayLockOptions;
-    process?: EmbeddedStateSignalProcess;
-  } = {},
 ): Promise<T> {
   const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
     await import("../infra/embedded-state-lock.js");
-  const signalBridge = createEmbeddedStateSignalBridge(deps.process ?? process);
+  const signalBridge = createEmbeddedStateSignalBridge();
   let stateLock: Awaited<ReturnType<typeof acquireEmbeddedStateLock>> | undefined;
   try {
     stateLock = await acquireEmbeddedStateLock({
-      options: deps.gatewayLockOptions,
       signal: signalBridge.signal,
       formatActiveGatewayRefusal: formatActiveGatewayTuiRefusal,
     });

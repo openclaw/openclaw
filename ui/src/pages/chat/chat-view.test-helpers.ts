@@ -13,9 +13,10 @@ import { normalizeApplicationContext } from "../../test-helpers/application-cont
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidComponent } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createComposerContainer } from "./chat-composer.test-support.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { composerContextWrapper, createComposerContainer } from "./chat-composer.test-support.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { registerMessageActionElements } from "./components/chat-message-action-elements.ts";
 import {
   prepareChatMessageRender,
@@ -277,8 +278,10 @@ export function renderChatPropsInto(
     }
     const [current, setCurrent] = createSignal({ props, application });
     const view = mountSolid(
-      () =>
-        createComponent(ChatView, {
+      () => {
+        const questions = createComposerQuestions(props.paneId, () => current().props);
+        return createComponent(ChatView, {
+          questions,
           get props() {
             return current().props;
           },
@@ -286,8 +289,9 @@ export function renderChatPropsInto(
             const value = current().application;
             return value && normalizeApplicationContext(value);
           },
-        }),
-      { container },
+        });
+      },
+      { container, wrapper: composerContextWrapper(container) },
     );
     mountedViews.set(container, {
       update: (nextProps, nextApplication) =>

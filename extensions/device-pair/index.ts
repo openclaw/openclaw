@@ -598,22 +598,6 @@ export default definePluginEntry({
 
           api.logger.info?.(`device-pair: QR fallback channel=${channel} target=${target}`);
           if (channel === "webchat") {
-            try {
-              const { renderQrPngDataUrl } = await loadDevicePairApiModule();
-              await renderQrPngDataUrl(setupCode);
-            } catch (err) {
-              const { revokeDeviceBootstrapToken } = await loadDevicePairApiModule();
-              api.logger.warn?.(
-                `device-pair: webchat QR render failed, falling back (${(err as Error)?.message ?? err})`,
-              );
-              await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
-              payload = await issueSetupPayload(setupRequest);
-              return {
-                text:
-                  "QR image delivery is not available on this channel right now, so I generated a pasteable setup code instead.\n\n" +
-                  formatSetupReply(payload, authLabel),
-              };
-            }
             return {
               text: [
                 "Scan this QR code with the OpenClaw iOS app:",

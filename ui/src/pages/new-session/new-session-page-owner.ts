@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createLazyCustomElementRequests } from "../../app/lazy-custom-element.ts";
@@ -13,8 +14,8 @@ import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { ChatWelcomeProps } from "../chat/components/chat-welcome.tsx";
+import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import * as catalog from "./catalog-target.ts";
-import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import type { NewSessionComposerOptions } from "./composer.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -51,7 +52,7 @@ export type PageHost = SolidBridgeElement<
 >;
 
 export class NewSessionPageOwner {
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
   private contextSubscriptions: Array<() => void> = [];
   isConnected = false;
   private pendingChange = false;
@@ -70,14 +71,9 @@ export class NewSessionPageOwner {
         }
       });
     }
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   };
-  subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
   context?: ApplicationContext;
   get data() {
     return this.host.data;
@@ -122,7 +118,7 @@ export class NewSessionPageOwner {
   readonly browser: DraftPlaceBrowser;
   readonly place: DraftPlaceState;
   readonly submission: DraftSubmissionFlow;
-  readonly dictation: NewSessionDictationControl;
+  readonly dictation: DirectDictationControl;
   titlePreparation?: ReturnType<typeof createNewSessionTitle>;
   readonly flushDraft = () => this.submission.draftPersistence.persistNow();
   readonly setImageLightbox = (item: ImageLightboxItem | null) => {
@@ -186,7 +182,7 @@ export class NewSessionPageOwner {
       () => ({ client: this.gateway.client, connected: this.gateway.connected }),
       this.changed,
     );
-    this.dictation = new NewSessionDictationControl({
+    this.dictation = new DirectDictationControl({
       textarea: this.submission.composerTextarea,
       getClient: () => this.gateway.client,
       isConnected: () => this.gateway.connected,

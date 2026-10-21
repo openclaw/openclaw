@@ -156,7 +156,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         this.scheduleSessionIndexPass();
       });
     });
-    const unsubscribeTranscripts = this.subscribeSessionTranscriptUpdates((update) => {
+    const unsubscribeTranscripts = onInternalSessionTranscriptUpdate((update) => {
       this.runInBackgroundContext(() => {
         if (this.closing || this.closed) {
           return;
@@ -182,18 +182,17 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     };
   }
 
-  protected subscribeSessionTranscriptUpdates(
-    listener: (update: MemorySessionTranscriptUpdate) => void,
-  ): () => void {
-    return onInternalSessionTranscriptUpdate(listener);
-  }
-
   private async scheduleCorpusSessionFileDirty(sessionFile: string): Promise<void> {
     const resolvedSessionFile = path.resolve(sessionFile);
     const corpusEntries = await this.listSessionCorpusEntries({
       archiveFiles: [resolvedSessionFile],
     });
-    if (corpusEntries.length > 0) {
+    if (
+      corpusEntries.length > 0 ||
+      this.reindexProgress?.corpusEntries?.some(
+        (entry) => entry.sessionFile === resolvedSessionFile,
+      )
+    ) {
       this.scheduleSessionDirty(resolvedSessionFile);
     }
   }
@@ -348,8 +347,10 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     }
     if (typeof target === "string") {
       this.sessionPendingFiles.add(target);
+      this.reindexProgress?.changedSessionFiles.add(target);
     } else {
       this.sessionPendingTargets.set(memorySessionSyncTargetKey(target), target);
+      this.reindexProgress?.changedSessionTargets.set(memorySessionSyncTargetKey(target), target);
     }
     this.sessionPendingSince ??= Date.now();
     this.noteSessionIndexActivity();
@@ -379,6 +380,12 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     files: string[],
     corpusEntries: readonly SessionTranscriptCorpusEntry[] = [],
   ): void {
+    if (this.reindexProgress?.yielded) {
+      // The shadow owns unfinished groups; only new source facts need queue entries.
+      this.sessionFullSyncPending = true;
+      this.sessionPendingSince ??= Date.now();
+      return;
+    }
     const entriesByFile = new Map(corpusEntries.map((entry) => [entry.sessionFile, entry]));
     for (const file of files) {
       const entry = entriesByFile.get(file);
@@ -473,7 +480,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       let completed = false;
       let interrupted = false;
       try {
-        await this.sync(
+        await this.syncBackground(
           fullSync
             ? { reason: "session-startup-catchup" }
             : { reason: "session-delta", sessions: pendingTargets, archiveFiles: pending },
@@ -567,7 +574,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     return normalized.size > 0 ? normalized : null;
   }
 
-  private resolveArchiveFilesForSyncTargets(
+  protected resolveArchiveFilesForSyncTargets(
     sessions: Iterable<MemorySessionSyncTarget> | undefined,
     corpusEntries: readonly SessionTranscriptCorpusEntry[],
   ): Set<string> {

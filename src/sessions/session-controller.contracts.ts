@@ -3,10 +3,6 @@ import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.j
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
-import type {
-  SourceReplyDeliveryMode,
-  TaskSuggestionDeliveryMode,
-} from "../auto-reply/get-reply-options.types.js";
 import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
 import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
@@ -478,7 +474,12 @@ export type Effect = {
   handoffs: Set<string>;
   validated: Deferred;
 };
-export type SessionMutationKind = "reset" | "delete" | "compaction";
+export type SessionMutationKind =
+  | "reset"
+  | "delete"
+  | "compaction"
+  | "read-marker"
+  | "background-result";
 
 export type Mutation = {
   diagnostic?: LifecycleDiagnosticOperation;
@@ -625,7 +626,6 @@ export type SessionControllerMailbox = {
     summaryLines: string[];
     sourceRefs: Map<FollowupRun, FollowupRun>;
   }>;
-  evictedSummaryCount: number;
   lastRun?: FollowupRun["run"];
   recentSources: Map<string, { input: SessionControllerInput; expires: number }>;
 };
@@ -759,10 +759,7 @@ export type EmbeddedAgentQueueHandle = {
     revokeApprovals: () => void,
   ) => Promise<boolean>;
   /** Atomically consumes one plain-text answer for this run's pending user-input request. */
-  claimPendingUserInputAnswer?: (
-    text: string,
-    options?: EmbeddedAgentQueueMessageOptions,
-  ) => Promise<boolean>;
+  claimPendingUserInputAnswer?: ReplyBackendHandle["claimPendingUserInputAnswer"];
   /** Cancels this run's pending user-input request before an image is queued as a later turn. */
   cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
   /** Exact heartbeat owner retained after its reply-operation registration clears. */
@@ -790,9 +787,9 @@ export type EmbeddedAgentQueueHandle = {
   readonly supportsCrossProfileSteering?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: (reason?: "restart") => void;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceReplyDeliveryMode?: ReplyBackendHandle["sourceReplyDeliveryMode"];
   terminalReplyExpectation?: ReplyExpectation;
-  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+  taskSuggestionDeliveryMode?: ReplyBackendHandle["taskSuggestionDeliveryMode"];
 };
 
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;

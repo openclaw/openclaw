@@ -69,11 +69,9 @@ describe("Logbook request ownership", () => {
   it("does not overlap silent poll refreshes and resumes after settlement", async () => {
     vi.useFakeTimers();
     const status = createDeferred<unknown>();
-    const days = createDeferred<unknown>();
     const timeline = createDeferred<unknown>();
     const firstBatch = new Map([
       ["logbook.status", status],
-      ["logbook.days", days],
       ["logbook.timeline", timeline],
     ]);
     const request = vi.fn((method: string) => {
@@ -85,30 +83,25 @@ describe("Logbook request ownership", () => {
       if (method === "logbook.status") {
         return Promise.resolve(statusFor("2026-07-04"));
       }
-      if (method === "logbook.days") {
-        return Promise.resolve({ days: [] });
-      }
       return Promise.resolve(timelineFor("2026-07-04", "Resumed poll"));
     });
 
     const model = createModel(clientWithRequest(request));
     const state = model.state;
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(2);
 
     await vi.advanceTimersByTimeAsync(90_000);
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(2);
 
     status.resolve(statusFor("2026-07-04"));
-    days.resolve({ days: [] });
     timeline.resolve(timelineFor("2026-07-04", "First poll"));
     await vi.advanceTimersByTimeAsync(0);
     expect(state.timeline?.cards[0]?.title).toBe("First poll");
 
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(request).toHaveBeenCalledTimes(6);
+    expect(request).toHaveBeenCalledTimes(4);
     expect(request.mock.calls.filter(([method]) => method === "logbook.status")).toHaveLength(2);
-    expect(request.mock.calls.filter(([method]) => method === "logbook.days")).toHaveLength(2);
     expect(request.mock.calls.filter(([method]) => method === "logbook.timeline")).toHaveLength(2);
     expect(state.timeline?.cards[0]?.title).toBe("Resumed poll");
   });
@@ -116,11 +109,9 @@ describe("Logbook request ownership", () => {
   it("shares the background refresh owner with analysis completion", async () => {
     vi.useFakeTimers();
     const status = createDeferred<unknown>();
-    const days = createDeferred<unknown>();
     const timeline = createDeferred<unknown>();
     const pending = new Map([
       ["logbook.status", status],
-      ["logbook.days", days],
       ["logbook.timeline", timeline],
     ]);
     const request = vi.fn((method: string) => {
@@ -135,9 +126,6 @@ describe("Logbook request ownership", () => {
       if (method === "logbook.status") {
         return Promise.resolve(statusFor("2026-07-04"));
       }
-      if (method === "logbook.days") {
-        return Promise.resolve({ days: [] });
-      }
       return Promise.resolve(timelineFor("2026-07-04", "Resumed poll"));
     });
     const client = clientWithRequest(request);
@@ -145,19 +133,18 @@ describe("Logbook request ownership", () => {
     const model = createModel(client);
     const state = model.state;
     await model.analyze();
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenCalledTimes(3);
 
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenCalledTimes(3);
 
     status.resolve(statusFor("2026-07-04"));
-    days.resolve({ days: [] });
     timeline.resolve(timelineFor("2026-07-04", "Analysis refresh"));
     await vi.advanceTimersByTimeAsync(0);
     expect(state.timeline?.cards[0]?.title).toBe("Analysis refresh");
 
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(request).toHaveBeenCalledTimes(7);
+    expect(request).toHaveBeenCalledTimes(5);
     expect(state.timeline?.cards[0]?.title).toBe("Resumed poll");
   });
 
@@ -171,9 +158,6 @@ describe("Logbook request ownership", () => {
       }
       if (method === "logbook.status") {
         return Promise.resolve(statusFor(state.day));
-      }
-      if (method === "logbook.days") {
-        return Promise.resolve({ days: [] });
       }
       return Promise.resolve(timelineFor(state.day, "Current analysis"));
     });
@@ -219,11 +203,9 @@ describe("Logbook request ownership", () => {
   it("queues an analysis refresh behind an in-flight poll", async () => {
     vi.useFakeTimers();
     const status = createDeferred<unknown>();
-    const days = createDeferred<unknown>();
     const timeline = createDeferred<unknown>();
     const pending = new Map([
       ["logbook.status", status],
-      ["logbook.days", days],
       ["logbook.timeline", timeline],
     ]);
     const request = vi.fn((method: string) => {
@@ -238,9 +220,6 @@ describe("Logbook request ownership", () => {
       if (method === "logbook.status") {
         return Promise.resolve(statusFor("2026-07-04"));
       }
-      if (method === "logbook.days") {
-        return Promise.resolve({ days: [] });
-      }
       return Promise.resolve(timelineFor("2026-07-04", "Post-analysis refresh"));
     });
     const client = clientWithRequest(request);
@@ -248,28 +227,25 @@ describe("Logbook request ownership", () => {
     const model = createModel(client);
     const state = model.state;
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(2);
 
     await model.analyze();
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenCalledTimes(3);
 
     status.resolve(statusFor("2026-07-04"));
-    days.resolve({ days: [] });
     timeline.resolve(timelineFor("2026-07-04", "Pre-analysis refresh"));
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(request).toHaveBeenCalledTimes(7);
+    expect(request).toHaveBeenCalledTimes(5);
     expect(state.timeline?.cards[0]?.title).toBe("Post-analysis refresh");
   });
 
   it("drops a queued analysis refresh when polling stops", async () => {
     vi.useFakeTimers();
     const status = createDeferred<unknown>();
-    const days = createDeferred<unknown>();
     const timeline = createDeferred<unknown>();
     const pending = new Map([
       ["logbook.status", status],
-      ["logbook.days", days],
       ["logbook.timeline", timeline],
     ]);
     const request = vi.fn((method: string) => {
@@ -288,27 +264,24 @@ describe("Logbook request ownership", () => {
     const model = createModel(client);
     const state = model.state;
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(2);
     await model.analyze();
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenCalledTimes(3);
 
     model.dispose();
     status.resolve(statusFor("2026-07-04"));
-    days.resolve({ days: [] });
     timeline.resolve(timelineFor("2026-07-04", "Detached host"));
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenCalledTimes(3);
     expect(state.timeline).toBeNull();
   });
 
   it("does not let an older day load overwrite a newer selection", async () => {
     const oldStatus = createDeferred<unknown>();
-    const oldDays = createDeferred<unknown>();
     const oldTimeline = createDeferred<unknown>();
     const oldResponses = new Map([
       ["logbook.status", oldStatus],
-      ["logbook.days", oldDays],
       ["logbook.timeline", oldTimeline],
     ]);
     const oldRequest = vi.fn((method: string) => {
@@ -321,9 +294,6 @@ describe("Logbook request ownership", () => {
     const newerRequest = vi.fn(async (method: string) => {
       if (method === "logbook.status") {
         return statusFor("2026-07-05");
-      }
-      if (method === "logbook.days") {
-        return { days: [{ day: "2026-07-05", cards: 1, firstMs: 1, lastMs: 2 }] };
       }
       return timelineFor("2026-07-05", "New day");
     });
@@ -340,13 +310,11 @@ describe("Logbook request ownership", () => {
     expect(state.timeline?.cards[0]?.title).toBe("New day");
 
     oldStatus.resolve(statusFor("2026-07-04"));
-    oldDays.resolve({ days: [{ day: "2026-07-04", cards: 1, firstMs: 1, lastMs: 2 }] });
     oldTimeline.resolve(timelineFor("2026-07-04", "Old day"));
     await olderLoad;
 
     expect(state.day).toBe("2026-07-05");
     expect(state.status?.today).toBe("2026-07-05");
-    expect(state.days[0]?.day).toBe("2026-07-05");
     expect(state.timeline?.cards[0]?.title).toBe("New day");
     expect(state.loading).toBe(false);
   });
@@ -356,9 +324,6 @@ describe("Logbook request ownership", () => {
     const client = clientWithRequest((method) => {
       if (method === "logbook.status") {
         return Promise.resolve(statusFor("2026-07-05"));
-      }
-      if (method === "logbook.days") {
-        return Promise.resolve({ days: [] });
       }
       if (method === "logbook.timeline") {
         return Promise.resolve(timelineFor("2026-07-05", "Next day"));
@@ -381,9 +346,6 @@ describe("Logbook request ownership", () => {
     const client = clientWithRequest((method) => {
       if (method === "logbook.status") {
         return Promise.resolve(statusFor("2026-07-05"));
-      }
-      if (method === "logbook.days") {
-        return Promise.resolve({ days: [] });
       }
       if (method === "logbook.timeline") {
         return Promise.resolve(timelineFor("2026-07-05", "Next day"));

@@ -37,6 +37,7 @@ import {
   UpdateDoctorDeferredInspectionCheckIdsSchema,
   type UpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
+import { UPDATE_DOCTOR_HISTORICAL_SCANS_ENV } from "../../infra/update-doctor-scan-receipts.js";
 import { createUpdateDoctorSectionTiming } from "../../infra/update-doctor-section-timing.js";
 import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
@@ -56,7 +57,10 @@ import { parseUpdateTimeoutMs, resolveNodeRunner, type UpdateCommandOptions } fr
 import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import { readUpdateTargetCliOptions } from "./update-command-cli-options.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
-import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
+import {
+  consumeUpdateDoctorHistoricalScans,
+  recordUpdateDatabaseWrites,
+} from "./update-command-database-receipts.js";
 import {
   assertUpdateDoctorChildSucceeded,
   inspectUpdateDoctorChildSupport,
@@ -137,6 +141,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   ];
   const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
   delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
+  delete baseEnv[UPDATE_DOCTOR_HISTORICAL_SCANS_ENV];
   const doctorResultPath = createUpdatePostInstallDoctorResultPath();
   let doctorResult: UpdatePostInstallDoctorResult | null | undefined;
   let doctorSettled = true;
@@ -170,6 +175,20 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
         ...(params.phase === "post-plugin" ? { [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1" } : {}),
       },
     };
+    const reusableScans =
+      params.phase === "post-plugin" && params.databaseBackup
+        ? consumeUpdateDoctorHistoricalScans(params.databaseBackup, {
+            ...baseEnv,
+            ...commandOptions.env,
+            ...sectionTiming.env,
+          })
+        : undefined;
+    if (reusableScans) {
+      commandOptions.env = {
+        ...commandOptions.env,
+        [UPDATE_DOCTOR_HISTORICAL_SCANS_ENV]: reusableScans,
+      };
+    }
     const workerCommand = [
       params.nodeRunner ?? resolveNodeRunner(),
       path.join(

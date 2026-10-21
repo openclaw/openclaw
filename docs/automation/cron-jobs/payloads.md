@@ -60,7 +60,11 @@ New jobs that can run tools always store an explicit tool policy. A job created 
 `--tools` (or with `*`) stores `*`: each run uses the owner session's current tool policy,
 including its group, agent, sandbox, and runtime restrictions. An agent that requests a
 finite list is capped to the tools available to its creating turn and cannot widen the
-stored list. `automations edit --clear-tools` restores `*`. Existing jobs that predate an
+stored list. If a requested name, group, or pattern matches no captured tool, agent-created
+jobs and agent tool-cap edits fail with that entry in the error instead of saving a partial
+list. This includes Codex app tools that the creator runtime cannot carry. Use a supported
+tool name and runtime, or explicitly remove the unavailable entry.
+`automations edit --clear-tools` restores `*`. Existing jobs that predate an
 explicit tool policy retain their current behavior until their tool policy is explicitly
 edited or the job is recreated. Agent-created script payloads, condition triggers, and jobs
 whose creator captured Codex app authority store the creating turn's tools instead: scripts
@@ -378,7 +382,7 @@ With `announce`, agent, command, and script results belong to the chat or topic 
 
     `current` binds conversation context, not the original agent execution or its worktree; announce results belong to the resolved delivery destination. The detached run has its own session identity and uses the scheduled agent's workspace and captured tool restrictions. It does not inherit the conversation's cloud worker placement. Messages sent to the job's cron session address its latest detached run, independently of the bound conversation. In-flight turns sent through that stable cron key are canceled if the key is reassigned. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
 
-    Custom-session agent turns wait for active work in that session before preparing or resetting its context, so a scheduled tick cannot invalidate an in-progress compaction.
+    Custom-session agent turns enter the session's ordinary turn queue and wait for active work before preparing context, so a scheduled tick cannot invalidate an in-progress compaction. The automation remains running until that turn settles; queue acceptance alone does not count as success. Saved authenticated continuations retain their original source and its current permissions through execution and delivery.
 
     To come back to this conversation later (for example, to recheck CI), add a one-shot `at` job with `payload: { kind: "agentTurn", message: "Instructions for your next turn" }` and `sessionTarget: "session:<your session key from Runtime>"`. It runs inside the existing conversation with the same history and saved workspace/worktree.
 
@@ -401,6 +405,8 @@ With `announce`, agent, command, and script results belong to the chat or topic 
 
   </Accordion>
   <Accordion title="Subagent and Discord delivery">
+    Child completion does not resume an isolated automation turn. If the orchestrator must act on child results (for example, integrate or verify their work), it must spawn with `collect: true` and collect the results with `agents_wait` before ending its turn; fire-and-forget delegation is valid when the child output itself is the deliverable.
+
     When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendant tasks are still running or settling, OpenClaw suppresses that partial parent update instead of announcing it. This includes a yielded orchestrator waiting for its successor to start and completed descendants whose result delivery is still pending. The wait shares the existing run deadline and stops on cancellation. A `delivery.mode: "none"` run whose turn only handed work to a child waits for the child under the same deadline and records the child's final reply as the run output without sending it. Subagents must return a meaningful result or a concrete blocker, even when delivery is `none`. A child that returns only `NO_REPLY` enters [missing-answer recovery](/tools/subagents/announce#announce); if it still produces no result or times out, the automation fails.
 
     For text-only Discord announce targets, OpenClaw sends the final assistant text once instead of replaying both streamed/intermediate text and the final answer. Media and structured Discord payloads are still delivered separately so attachments and components are not dropped.

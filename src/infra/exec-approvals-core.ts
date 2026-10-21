@@ -1,7 +1,10 @@
 // Shared exec approval types and mode normalization.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
-import type { ApprovalScope } from "../../packages/gateway-protocol/src/schema/approvals.js";
+import type {
+  ApprovalScope,
+  StreamApprovalProposal,
+} from "../../packages/gateway-protocol/src/schema/approvals.js";
 import type { ExecApprovalRequestParams } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
@@ -13,6 +16,7 @@ export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 export type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+export const EXEC_APPROVAL_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 export type ExecApprovalUnavailableDecision = "allow-always";
 
 const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
@@ -177,6 +181,8 @@ export type ExecApprovalRequestPayload = {
   security?: string | null;
   ask?: string | null;
   warningText?: string | null;
+  /** Display metadata attached by the native stream mutation owner. */
+  streamProposal?: StreamApprovalProposal;
   /** Owner-declared blast-radius facts; display-only, never authorization. */
   scope?: ApprovalScope | null;
   commandAnalysis?: CommandExplanationSummary | null;

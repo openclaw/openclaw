@@ -10,7 +10,6 @@ import type { EventLogEntry } from "../api/event-log.ts";
 import {
   GatewayBrowserClient,
   resolveGatewayErrorDetailCode,
-  type GatewayBrowserClientOptions,
   type GatewayEventListener,
   type GatewayHelloOk,
 } from "../api/gateway.ts";
@@ -66,7 +65,6 @@ export function createApplicationGateway(
   initialSettings: ReturnType<typeof loadSettings>,
   initialPassword = "",
   initialBootstrapToken = "",
-  createClient = (opts: GatewayBrowserClientOptions) => new GatewayBrowserClient(opts),
   options: ApplicationGatewayOptions = {},
 ): ApplicationGateway {
   let settings = initialSettings;
@@ -146,15 +144,14 @@ export function createApplicationGateway(
     },
     onError: (error) => setSnapshot({ lastError: formatUiError(error) }),
   });
-  const publishEventLogRetirement = (events: readonly EventLogEntry[]) => {
-    // Retirement remains valid after a reentrant stop or same-account client replacement.
+  // Retirement remains valid after a reentrant stop or same-account client replacement.
+  const publishEventLogRetirement = (events: readonly EventLogEntry[]) =>
     notifyGatewayObservers(
       eventLogListeners,
       events,
       "event",
       (current) => current === eventLog.entries,
     );
-  };
   const setSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
     const previous = snapshot;
     snapshot = { ...previous, ...patch };
@@ -407,7 +404,7 @@ export function createApplicationGateway(
         ),
       });
     };
-    const nextClient = createClient({
+    const nextClient = new GatewayBrowserClient({
       ...credentials.prepare(nextConnection, credentialsChanged, client),
       clientName: options.clientOptions?.clientName ?? "openclaw-control-ui",
       clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
@@ -524,6 +521,7 @@ export function createApplicationGateway(
         void deferredIntents.flush();
         setSnapshot({});
       },
+      onConnecting: () => client === nextClient && setSnapshot({ reconnectAt: undefined }),
       onReconnectScheduled: (delayMs) => {
         if (client === nextClient) {
           setSnapshot({ reconnectAt: Date.now() + delayMs });

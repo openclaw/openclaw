@@ -27,6 +27,7 @@ import type { SolidRouteProps } from "./app-route-types.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
 import { retryControlUiImport } from "./app/stale-chunk-reload.ts";
+import { i18n } from "./i18n/lib/translate.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
 import { page as agentsHomePage } from "./pages/agents-home/route.ts";
@@ -137,7 +138,12 @@ for (const route of APP_ROUTE_TREE as readonly AppRoute[]) {
   const loader = route.loader;
   appRoutes.push({
     ...route,
-    component: () => retryControlUiImport(route.component),
+    component: () =>
+      retryControlUiImport(async () => {
+        const module = await route.component();
+        await i18n.prepareLocale();
+        return module;
+      }),
     loader: loader
       ? (context, options) => retryControlUiImport(() => loader(context, options), options.signal)
       : undefined,
@@ -270,7 +276,6 @@ export async function startApplicationRouter(
     listen: (listener) => {
       let listening = true;
       let recoveryQueued = false;
-      const revalidatedCache = new WeakSet<AbortController>();
       let lastHello = context.gateway.snapshot.hello;
       let interrupted:
         | {
@@ -316,10 +321,6 @@ export async function startApplicationRouter(
               (reference.kind === "literal" && reference.slugCandidate)
             )
           ) {
-            return;
-          }
-          if (data.sessionResolutionFromCache === "snapshot") {
-            await router.revalidate(context, target.routeId);
             return;
           }
           const { querySessionReference } =
@@ -374,18 +375,7 @@ export async function startApplicationRouter(
         if (target.status === "success" && !target.isFetching) {
           const pendingVerification = interrupted;
           interrupted = undefined;
-          // Snapshot admission can finish after hello; verify it once even without
-          // an interrupted connection, using the loader's authoritative replacement.
-          // SAFETY: This branch accepts only session routes loaded by loadChatRoute.
-          const data = target.data as ChatRouteData | undefined;
-          if (
-            data?.kind === "session" &&
-            data.sessionResolutionFromCache === "snapshot" &&
-            !revalidatedCache.has(target.abortController)
-          ) {
-            revalidatedCache.add(target.abortController);
-            void verifyReconnectedSession(target, false);
-          } else if (pendingVerification) {
+          if (pendingVerification) {
             void verifyReconnectedSession(target, pendingVerification.verifySession);
           }
         }

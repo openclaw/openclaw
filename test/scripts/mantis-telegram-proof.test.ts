@@ -270,10 +270,13 @@ it("prepares closed pairing state without the observer private key", async () =>
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
     expect(Object.values(database.prepare("PRAGMA integrity_check").get() ?? {})).toEqual(["ok"]);
-    const counts = ["device_pairing_paired", "device_pairing_pending", "device_identities"].map(
+    const counts = ["device_pairing_paired", "device_pairing_pending"].map(
       (table) => database.prepare(`SELECT count(*) AS count FROM ${table}`).get()?.count,
     );
-    expect(counts).toEqual([1, 0, 0]);
+    expect(counts).toEqual([1, 0]);
+    expect(
+      database.prepare("SELECT name FROM sqlite_schema WHERE name = 'device_identities'").get(),
+    ).toBeUndefined();
   } finally {
     database.close();
   }

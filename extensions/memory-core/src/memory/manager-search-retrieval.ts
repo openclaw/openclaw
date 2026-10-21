@@ -141,7 +141,10 @@ export abstract class MemorySearchRetrieval extends MemoryProviderLifecycle {
         // Automatic recall runs before the model. Keep repair admitted for teardown
         // without holding the reply; unclassified sources stay excluded.
         void this.withManagerOperation(() =>
-          this.syncAdmitted({ reason: "search" }, { allowEmbeddingBootstrapFallback: true }),
+          this.syncAdmitted(
+            { reason: "search" },
+            { allowEmbeddingBootstrapFallback: true, background: true },
+          ),
         ).catch((err: unknown) => {
           log.warn(`memory sync failed (automatic candidates): ${formatErrorMessage(err)}`);
         });
@@ -200,6 +203,7 @@ export abstract class MemorySearchRetrieval extends MemoryProviderLifecycle {
       results: eligible,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
+      extraPaths: this.settings.extraPaths,
       sessionSourceMtimes: this.loadSourceMtimes("sessions", params.results),
       memorySourceMtimes: this.loadSourceMtimes("memory", params.results),
     });

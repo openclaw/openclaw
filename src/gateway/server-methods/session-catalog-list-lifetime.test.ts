@@ -37,7 +37,7 @@ function admit(origin: string, signals: AbortSignal[] = []) {
   const before = getActiveGatewayRootWorkHolders();
   const root = tryBeginGatewayRootWorkAdmission(origin);
   expect(root).not.toBeNull();
-  const lifetime = new SessionCatalogListLifetime(signals, [catalog.id]);
+  const lifetime = new SessionCatalogListLifetime(signals);
   const run: typeof lifetime.runProvider = (publish, provider) =>
     root!.run(() => lifetime.runProvider(publish, provider));
   return {
@@ -170,7 +170,7 @@ describe("catalog list completion ownership", () => {
   it("retains each catalog host's latest late publication while subscriber preparation waits", async () => {
     const catalogIds = ["alpha", "beta"];
     const hostIds = ["node:first", "node:second"];
-    const lifetime = new SessionCatalogListLifetime([], catalogIds);
+    const lifetime = new SessionCatalogListLifetime([]);
     const owner = new GatewayConnectionWork();
     const publish = createDeferredCore();
     const { release, prepare } = preparationGate();
@@ -339,7 +339,7 @@ describe("catalog list completion ownership", () => {
     expect(foreignRoot).not.toBeNull();
     const owner = new GatewayConnectionWork();
     const foreign = new GatewayConnectionWork();
-    const lifetime = new SessionCatalogListLifetime([owner.signal], [catalog.id]);
+    const lifetime = new SessionCatalogListLifetime([owner.signal]);
     lifetime.subscribe("active", ignore, current);
     const callback = new EventEmitter();
     const registered = createDeferredCore();

@@ -4,10 +4,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareClientCredentialMigration } from "../infra/client-credential-migration.js";
+import { createClientCredentialMigrationFixture } from "../infra/client-credential-migration.test-support.js";
+import { runClientCredentialOperation } from "../infra/client-credential-store.js";
 import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
@@ -107,6 +111,58 @@ describe("Doctor NOCOW recovery identities", () => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
   });
+
+  it.each([false, true])(
+    "preserves migrated credentials only for the rewritten generation (replaced beforehand: %s)",
+    async (replaced) => {
+      fs.rmSync(shared);
+      const fixture = await createClientCredentialMigrationFixture(root);
+      try {
+        fixture.maintenance.run(() =>
+          runSqliteImmediateTransactionSync(fixture.source, () => {
+            prepareClientCredentialMigration(fixture.source, {
+              path: shared,
+              env,
+              fromVersion: 25,
+              capture: fixture.maintenance.capture,
+            });
+            fixture.source.exec(
+              "UPDATE schema_meta SET schema_version=29; PRAGMA user_version=29;",
+            );
+          }),
+        );
+      } finally {
+        fixture.source.close();
+        await fixture.maintenance.close();
+      }
+      const readToken = () =>
+        runClientCredentialOperation(env, {
+          kind: "token.read",
+          key: { device_id: fixture.identity.deviceId, role: "v2.gateway.operator" },
+        });
+      expect(readToken()).toMatchObject({
+        kind: "token",
+        token: { token: "token-original", scopes_json: '["operator.read"]' },
+      });
+      if (replaced) {
+        const replacement = path.join(root, "replacement.sqlite");
+        fs.copyFileSync(shared, replacement);
+        fs.renameSync(replacement, shared);
+      }
+      const rewritten = await rewrite();
+      expect(rewritten.changes).toHaveLength(1);
+      if (replaced) {
+        expect(rewritten.warnings.join("\n")).toContain("recorded generation");
+        expect(readToken).toThrow("migration is incomplete or stale");
+      } else {
+        expect(rewritten.warnings).toEqual([]);
+        expect(readToken()).toMatchObject({
+          kind: "token",
+          token: { token: "token-original", scopes_json: '["operator.read"]' },
+        });
+      }
+    },
+  );
 
   it("retires a recorded recovery original after a NOCOW rewrite without changing live data", async () => {
     const backupPath = await prepareCompletedBackup();

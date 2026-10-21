@@ -458,31 +458,38 @@ describe("runtime parity", () => {
     expect(cell.runtimeErrorClass).toBe("timeout");
   });
 
-  it("records resolved mock calls as provider-plan evidence", async () => {
-    const cell = await captureRuntimeParityWithMockRequests({
-      requests: [
-        { plannedToolName: "read_file", plannedToolArgs: { path: "README.md" } },
-        { toolOutput: JSON.stringify({ ok: true }) },
-      ],
-    });
+  it.each([
+    { name: "object", toolOutput: '{"ok":true}', expected: { ok: true } },
+    { name: "array", toolOutput: '[{"ok":true}]', expected: '[{"ok":true}]' },
+    { name: "malformed JSON", toolOutput: "not-json", expected: "not-json" },
+  ])(
+    "records resolved mock calls as provider-plan evidence ($name)",
+    async ({ toolOutput, expected }) => {
+      const cell = await captureRuntimeParityWithMockRequests({
+        requests: [
+          { plannedToolName: "read_file", plannedToolArgs: { path: "README.md" } },
+          { toolOutput },
+        ],
+      });
 
-    expect(cell.toolCalls).toEqual([]);
-    expect(cell.providerPlanToolCalls).toEqual([
-      {
-        tool: "read_file",
-        argsHash: stableHash({ path: "README.md" }),
-        resultHash: stableHash({ ok: true }),
-      },
-    ]);
+      expect(cell.toolCalls).toEqual([]);
+      expect(cell.providerPlanToolCalls).toEqual([
+        {
+          tool: "read_file",
+          argsHash: stableHash({ path: "README.md" }),
+          resultHash: stableHash(expected),
+        },
+      ]);
 
-    const result = await runRuntimeParityScenario({
-      scenarioId: "resolved-tool",
-      runCell: async (runtime) => ({ status: "pass", cell: { ...cell, runtime } }),
-    });
+      const result = await runRuntimeParityScenario({
+        scenarioId: "resolved-tool",
+        runCell: async (runtime) => ({ status: "pass", cell: { ...cell, runtime } }),
+      });
 
-    expect(result.drift).toBe("none");
-    expect(result.runtimeParityUsage).toEqual({ expectation: "assistant-message-required" });
-  });
+      expect(result.drift).toBe("none");
+      expect(result.runtimeParityUsage).toEqual({ expectation: "assistant-message-required" });
+    },
+  );
 
   it("preserves explicit usage-not-applicable metadata on parity results", async () => {
     const result = await runRuntimeParityScenario({

@@ -1,4 +1,3 @@
-// Runtime forwarder tests cover channel plugin runtime method delegation and fallback handling.
 import { describe, expect, it, vi } from "vitest";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
@@ -6,6 +5,9 @@ import {
   createRuntimeOutboundDelegates,
 } from "./runtime-forwarders.js";
 import type { ChannelOutboundAdapter } from "./types.adapters.js";
+
+const ctx = { cfg: {}, to: "a", text: "hi" };
+const directoryCtx = { cfg: {}, runtime: {} as never };
 
 describe("createRuntimeDirectoryLiveAdapter", () => {
   it("forwards live directory calls through the runtime getter", async () => {
@@ -17,12 +19,12 @@ describe("createRuntimeDirectoryLiveAdapter", () => {
       listPeersLive: (runtime) => runtime.listPeersLive,
     });
 
-    await expect(adapter.self?.({ cfg: {} as never, runtime: {} as never })).resolves.toEqual({
+    await expect(adapter.self?.(directoryCtx)).resolves.toEqual({
       kind: "user",
       id: "self",
     });
     await expect(
-      adapter.listPeersLive?.({ cfg: {} as never, runtime: {} as never, query: "a", limit: 1 }),
+      adapter.listPeersLive?.({ ...directoryCtx, query: "a", limit: 1 }),
     ).resolves.toEqual([{ kind: "user", id: "alice" }]);
     expect(self).toHaveBeenCalled();
     expect(listPeersLive).toHaveBeenCalled();
@@ -39,7 +41,6 @@ describe("createRuntimeOutboundDelegates", () => {
       sendText: { resolve: (runtime: { sendText: typeof firstSender }) => runtime.sendText },
     };
     const outbound = createRuntimeOutboundDelegates(params);
-    const ctx = { cfg: {}, to: "a", text: "hi" };
 
     expect(params.getRuntime).not.toHaveBeenCalled();
     await expect(outbound.sendText?.(ctx)).resolves.toMatchObject({ messageId: "first" });
@@ -60,11 +61,7 @@ describe("createRuntimeOutboundDelegates", () => {
     });
 
     const error = await outbound
-      .sendPoll?.({
-        cfg: {} as never,
-        to: "a",
-        poll: { question: "q", options: ["a"] },
-      })
+      .sendPoll?.({ ...ctx, poll: { question: "q", options: ["a"] } })
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(error).toMatchObject({ message: "poll unavailable" });
@@ -73,17 +70,13 @@ describe("createRuntimeOutboundDelegates", () => {
   it("classifies outbound runtime loading failures before method dispatch", async () => {
     const loadError = new Error("runtime import failed");
     const outbound = createRuntimeOutboundDelegates({
-      getRuntime: async () => {
-        throw loadError;
-      },
+      getRuntime: () => Promise.reject(loadError),
       sendText: {
         resolve: (runtime: { sendText?: ChannelOutboundAdapter["sendText"] }) => runtime.sendText,
       },
     });
 
-    await expect(
-      outbound.sendText?.({ cfg: {} as never, to: "a", text: "hi" }),
-    ).rejects.toMatchObject({
+    await expect(outbound.sendText?.(ctx)).rejects.toMatchObject({
       name: "PlatformMessageNotDispatchedError",
       message: "runtime import failed",
       cause: loadError,
@@ -93,9 +86,7 @@ describe("createRuntimeOutboundDelegates", () => {
   it("preserves presentation runtime loading failures without classifying dispatch", async () => {
     const loadError = new Error("renderer import failed");
     const outbound = createRuntimeOutboundDelegates({
-      getRuntime: async () => {
-        throw loadError;
-      },
+      getRuntime: () => Promise.reject(loadError),
       renderPresentation: {
         resolve: () => undefined,
         unavailableMessage: "renderer unavailable",
@@ -106,7 +97,7 @@ describe("createRuntimeOutboundDelegates", () => {
       outbound.renderPresentation?.({
         payload: { text: "raw" },
         presentation: { blocks: [{ type: "text", text: "shown" }] },
-        ctx: { cfg: {}, to: "a", text: "raw", payload: { text: "raw" } },
+        ctx: { ...ctx, text: "raw", payload: { text: "raw" } },
       }),
     ).rejects.toBe(loadError);
   });

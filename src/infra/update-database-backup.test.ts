@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -10,10 +10,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as durability from "./directory-durability.js";
 import * as diskSpace from "./disk-space.js";
-import { retireExpiredStandaloneDoctorCaptures } from "./doctor-capture-retention.js";
 import * as fileDescriptor from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import * as sqliteIntegrity from "./sqlite-integrity.js";
@@ -28,9 +26,9 @@ import {
   createUpdateDatabaseBackup,
   createUpdateDatabaseBackupInProcess,
 } from "./update-database-backup.js";
-import * as databaseGenerations from "./update-database-generations.js";
+import * as databaseGenerations from "./update-physical-database-generations.js";
+import type { UpdateRecoveryBaselineRef } from "./update-recovery-baseline-capture.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
-import { getUpdateRunAsync } from "./update-run-reader.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -487,6 +485,44 @@ async function originalCaptureFixture(externalAgents = false) {
   };
 }
 
+async function expectOriginalDatabase(ref: UpdateRecoveryBaselineRef, sourcePath: string) {
+  const raw = await fs.readFile(ref.manifestPath, "utf8");
+  expect(createHash("sha256").update(raw).digest("hex")).toBe(ref.manifestSha256);
+  const manifest = parseUpdateRecoveryBackupManifest(raw);
+  const entry = manifest.entries.find((candidate) => candidate.sourcePath === sourcePath);
+  assert(entry?.kind === "file" && entry.sqlite);
+  const payloadPath = path.join(ref.directory, entry.archivePath);
+  const bytes = await fs.readFile(payloadPath);
+  expect(entry).toMatchObject({
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    size: bytes.length,
+  });
+  using retained = new DatabaseSync(payloadPath, { readOnly: true });
+  expect(retained.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  expect(retained.prepare("SELECT rowid,value FROM payload ORDER BY rowid").all()).toEqual([
+    { rowid: 42, value: "retained" },
+  ]);
+}
+
+it("refuses an original capture before writing when its payload will not fit", async () => {
+  const f = await originalCaptureFixture();
+  const payloadBytes = 2 * 1024 * 1024;
+  await fs.truncate(f.applicationFile, payloadBytes);
+  const store = resolveUpdateCaptureRoot(f.stateDir);
+  vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+    targetPath,
+    checkedPath: targetPath,
+    availableBytes: 65 * 1024 * 1024,
+    totalBytes: 1024 * 1024 * 1024,
+  }));
+
+  await expect(f.captureOriginal("capacity")).rejects.toThrow(
+    `Original update capture needs 66 MiB near ${store}, but only 65 MiB is available`,
+  );
+  await expect(fs.lstat(store)).rejects.toMatchObject({ code: "ENOENT" });
+  expect((await fs.stat(f.applicationFile)).size).toBe(payloadBytes);
+});
+
 it("seals equivalent original bytes under isolated and maintenance-owned capture", async () => {
   const f = await originalCaptureFixture(true);
   const retainedState = path.join(f.stateDir, "voice-calls", "state", "openclaw.sqlite");
@@ -568,7 +604,6 @@ it("seals equivalent original bytes under isolated and maintenance-owned capture
 
   const worker = vi.spyOn(inspection, "runUpdateStateInspectionWorker");
   const parentDiscovery = vi.spyOn(candidateState, "discoverUpdateStateSchemaInspectionInProcess");
-  const isolatedGenerations = vi.spyOn(candidateState, "readUpdateDatabaseGenerationsIsolated");
   const isolatedSizes = vi.spyOn(databaseSizes, "readUpdateStateDatabaseSizes");
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
@@ -608,7 +643,7 @@ it("seals equivalent original bytes under isolated and maintenance-owned capture
     ] as const) {
       expect(maintainedManifest[field], field).toEqual(manifest[field]);
     }
-    expect(worker).toHaveBeenCalledTimes(2);
+    expect(worker).toHaveBeenCalledOnce();
     expect(parentDiscovery).toHaveBeenCalledOnce();
     expect(parentDiscovery).toHaveBeenCalledWith(
       expect.objectContaining({ preserveSourceArtifacts: true }),
@@ -632,12 +667,6 @@ it("seals equivalent original bytes under isolated and maintenance-owned capture
     expect(maintainedManifest.entries).toContainEqual(
       expect.objectContaining({ sourcePath: f.registryOnly, kind: "file", sqlite: true }),
     );
-    // Only absent databases need metadata checks for retained journals; captured images are not reread.
-    expect(isolatedGenerations).toHaveBeenCalledOnce();
-    const generationPaths = isolatedGenerations.mock.calls[0]![0];
-    expect(generationPaths).toContain(f.missingDatabase);
-    expect(generationPaths).not.toContain(f.shared);
-    expect(generationPaths).not.toContain(f.registryOnly);
     expect(isolatedSizes).not.toHaveBeenCalled();
     expect(await Promise.all(f.familyPaths.map((file) => fs.readFile(file)))).toEqual(f.family);
     expect(await Promise.all(f.external.map((source) => fs.readFile(source)))).toEqual(
@@ -662,7 +691,6 @@ it.each(["large", "live-reads-admitted"] as const)(
       );
     }
     const worker = vi.spyOn(inspection, "runUpdateStateInspectionWorker");
-    const isolatedGenerations = vi.spyOn(candidateState, "readUpdateDatabaseGenerationsIsolated");
     const isolatedSizes = vi.spyOn(databaseSizes, "readUpdateStateDatabaseSizes");
     const scope = createOpenClawDatabaseMaintenanceScope({
       schemaMaintenance: true,
@@ -683,19 +711,15 @@ it.each(["large", "live-reads-admitted"] as const)(
         expect(worker.mock.calls.map(([request]) => request.input.mode)).toEqual([
           "discover",
           "database-backup",
-          "database-generations",
         ]);
-        expect(isolatedGenerations).toHaveBeenCalledOnce();
-        expect(isolatedGenerations.mock.calls[0]![0]).not.toContain(f.shared);
         expect(manifest.entries).toContainEqual(
           expect.objectContaining({ sourcePath: f.shared, kind: "file", sqlite: true }),
         );
       } else {
         assert(originalManifest);
         expect(manifest.entries).toEqual(originalManifest.entries);
-        expect(isolatedGenerations).toHaveBeenCalledOnce();
         expect(isolatedSizes).toHaveBeenCalled();
-        expect(worker).toHaveBeenCalledTimes(3);
+        expect(worker).toHaveBeenCalledTimes(2);
       }
     } finally {
       await scope.close();
@@ -708,82 +732,6 @@ it("rejects an already-aborted in-process size inventory", async () => {
   await expect(
     databaseSizes.readUpdateStateDatabaseSizesInProcess(["never-read.sqlite"], signal),
   ).rejects.toBe(signal.reason);
-});
-
-it("retires only expired sealed standalone Doctor captures and preserves incomplete or linked copies", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const now = Date.parse("2026-09-30T12:00:00.000Z");
-    const day = 24 * 60 * 60_000;
-    const store = resolveUpdateCaptureRoot(state.stateDir);
-    const sealed = async (runId: string, ageDays: number, directory = path.join(store, runId)) => {
-      const manifest = {
-        schemaVersion: 2,
-        kind: "update-recovery",
-        generation: { kind: "baseline" },
-        databases: [],
-        runId,
-        installRoot: state.root,
-        stateDir: state.stateDir,
-        configPath: state.configPath,
-        configPaths: [state.configPath],
-        creator: { host: "fixture", pid: 1, startIdentity: "1" },
-        drivers: [],
-        createdAt: new Date(now - ageDays * day).toISOString(),
-        roots: [state.configPath],
-        excludedRoots: [],
-        protectedPaths: [state.configPath],
-        entries: [
-          { kind: "missing", sourcePath: state.configPath, sqlite: false, directory: false },
-        ],
-      };
-      const raw = JSON.stringify(manifest);
-      parseUpdateRecoveryBackupManifest(raw);
-      await fs.mkdir(directory, { recursive: true });
-      await fs.writeFile(path.join(directory, "manifest.json"), raw);
-      expect(await getUpdateRunAsync(runId)).toBeUndefined();
-      return directory;
-    };
-    const expired = await sealed(`doctor-${randomUUID()}`, 31);
-    const recent = await sealed(`doctor-${randomUUID()}`, 1);
-    const incomplete = path.join(store, `doctor-${randomUUID()}`);
-    await fs.mkdir(incomplete);
-    const update = await sealed(randomUUID(), 40);
-    const linkedId = `doctor-${randomUUID()}`;
-    const linkedTarget = await sealed(linkedId, 31, state.path("linked-capture"));
-    const linked = path.join(store, linkedId);
-    await fs.symlink(linkedTarget, linked, "dir");
-    const interrupted: string[] = [];
-    for (const kind of ["linked", "copied", "conflicting"]) {
-      const retained = await sealed(`doctor-${randomUUID()}`, 31);
-      const finalPath = path.join(retained, "manifest.json");
-      const partialPath = `${finalPath}.partial`;
-      if (kind === "linked") {
-        await fs.link(finalPath, partialPath);
-      } else if (kind === "copied") {
-        await fs.copyFile(finalPath, partialPath);
-      } else {
-        await fs.writeFile(partialPath, "different, unverified bytes");
-      }
-      interrupted.push(retained);
-    }
-    const assertCurrent = vi.fn();
-
-    const result = await retireExpiredStandaloneDoctorCaptures({
-      stateDir: state.stateDir,
-      keepRunId: path.basename(recent),
-      now,
-      assertCurrent,
-    });
-
-    expect(result).toEqual({ retired: [expired], warnings: [] });
-    expect(assertCurrent).toHaveBeenCalled();
-    await expect(fs.lstat(expired)).rejects.toMatchObject({ code: "ENOENT" });
-    for (const retained of [recent, incomplete, update, linkedTarget, ...interrupted]) {
-      expect((await fs.lstat(retained)).isDirectory()).toBe(true);
-    }
-    expect((await fs.lstat(linked)).isSymbolicLink()).toBe(true);
-    expect(await fs.readlink(linked)).toBe(linkedTarget);
-  });
 });
 
 it.each([
@@ -823,16 +771,16 @@ it.each([
       return copy(...args);
     });
   } else {
-    const readGenerations = candidateState.readUpdateDatabaseGenerationsIsolated;
-    vi.spyOn(candidateState, "readUpdateDatabaseGenerationsIsolated").mockImplementationOnce(
-      async (...args) => {
+    const publish = durability.publishFileExclusive;
+    vi.spyOn(durability, "publishFileExclusive").mockImplementation(async (...args) => {
+      if (path.basename(args[0].targetPath) === "manifest.json") {
         await mutate();
-        return readGenerations(...args);
-      },
-    );
+      }
+      return publish(...args);
+    });
   }
   const capture = f.captureOriginal(`${change}-${phase}`);
-  if (change === "content") {
+  if (change === "content" && phase === "during") {
     await expect(capture).rejects.toMatchObject({
       cause: expect.objectContaining({
         message: expect.stringMatching(/Original update (file|resource) changed/),
@@ -893,7 +841,7 @@ it.each(["-wal", "-journal"] as const)(
   },
 );
 
-it("retains an unsealed capture when the database changes after its snapshot", async () => {
+it("seals the chosen manual image without discarding later live writes", async () => {
   const f = await originalCaptureFixture();
   const owner = await import("./update-database-backup.js");
   const capture = owner.createUpdateDatabaseBackup;
@@ -905,16 +853,8 @@ it("retains an unsealed capture when the database changes after its snapshot", a
     }
     return captured;
   });
-  await expect(f.captureOriginal("changed")).rejects.toMatchObject({
-    cause: expect.objectContaining({
-      message: `Original database generation changed or could not be verified; capture is unsealed.\n${f.shared}: generation changed after its snapshot.`,
-    }),
-  });
-  const directory = path.join(`${f.stateDir}.update-captures`, "changed");
-  await expect(fs.lstat(path.join(directory, "manifest.json"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-  expect((await fs.readdir(path.join(directory, "payload"))).length).toBeGreaterThan(0);
+  const captured = await f.captureOriginal("changed");
+  await expectOriginalDatabase(captured.ref, f.shared);
   using source = new DatabaseSync(f.shared, { readOnly: true });
   expect(source.prepare("SELECT value FROM payload ORDER BY rowid").all()).toEqual([
     { value: "retained" },
@@ -922,7 +862,7 @@ it("retains an unsealed capture when the database changes after its snapshot", a
   ]);
 });
 
-it("names the database and its backup warning when no stable generation was recorded", async () => {
+it("seals a verified manual image with its unavailable-generation warnings", async () => {
   const f = await originalCaptureFixture();
   const owner = await import("./update-database-backup.js");
   const capture = owner.createUpdateDatabaseBackup;
@@ -943,20 +883,10 @@ it("names the database and its backup warning when no stable generation was reco
       ],
     };
   });
-  await expect(f.captureOriginal("unverified")).rejects.toMatchObject({
-    cause: expect.objectContaining({
-      message: [
-        "Original database generation changed or could not be verified; capture is unsealed.",
-        `${f.shared}: no stable generation was recorded during its snapshot.`,
-        ...producerWarnings,
-      ].join("\n"),
-    }),
-  });
-  const directory = path.join(`${f.stateDir}.update-captures`, "unverified");
-  await expect(fs.lstat(path.join(directory, "manifest.json"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-  expect((await fs.readdir(path.join(directory, "payload"))).length).toBeGreaterThan(0);
+  const captured = await f.captureOriginal("unverified");
+  await expectOriginalDatabase(captured.ref, f.shared);
+  expect(captured.diagnostics.databaseWarnings).toEqual(expect.arrayContaining(producerWarnings));
+  expect(await Promise.all(f.familyPaths.map((file) => fs.readFile(file)))).toEqual(f.family);
 });
 
 it.each(["insufficient", "unknown"] as const)(

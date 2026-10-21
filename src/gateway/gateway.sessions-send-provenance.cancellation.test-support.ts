@@ -1,19 +1,18 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import {
+  configureProofCollaboration,
   createScenario,
+  FOLLOWUP_REPLY,
   humanReplies,
-  outbound,
-  patchProofConfig,
+  proofDeliveries,
   providerErrors,
   runHuman,
+  settleProofScenario,
+  waitForProofGate,
 } from "./gateway.sessions-send-provenance.test-support.js";
 
 export async function verifyCollaborativeCancellation(signal: AbortSignal) {
@@ -28,17 +27,10 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
   const contracts = await import("../sessions/session-controller.contracts.js");
   const previousSetting = getRuntimeConfig().messages?.queue?.allowCollaborativeSteering;
   try {
-    await patchProofConfig(
-      {
-        messages: { queue: { allowCollaborativeSteering: true } },
-        tools: { toolsBySender: { "id:alice": { deny: null }, "id:bob": { deny: ["message"] } } },
-      },
-      ["tools.toolsBySender.id:alice.deny"],
-    );
+    await configureProofCollaboration(true, true);
     for (const phase of ["preparation", "injection", "queued"] as const) {
       for (const cancel of ["source", "incumbent"] as const) {
         const id = `collaborative_cancel_${phase}_${cancel}`;
-        console.log("[collaborative cancellation start]", id);
         const scenario = createScenario(
           { name: id, id, sender: "bob", agent: "main", denied: true },
           `agent:main:telegram:group:provenance-${id}`,
@@ -57,13 +49,11 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
         let bob: ReturnType<typeof runHuman> | undefined;
         let queuedPreparation: Promise<void> | undefined;
         try {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              scenario.incumbentStarted.promise,
-              alice,
-              "Alice did not start",
-            ),
+          await waitForProofGate(
+            scenario.incumbentStarted.promise,
+            alice,
             signal,
+            "Alice did not start",
           );
           const loaded = await resolveGatewaySessionStoreTargetInWorker({
             cfg: getRuntimeConfig(),
@@ -98,13 +88,11 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
                 await resume.promise;
               },
             );
-            await withinTest(
-              awaitGateBeforeSettlement(
-                blockerEntered.promise,
-                queuedPreparation,
-                "Injection queue blocker did not start",
-              ),
+            await waitForProofGate(
+              blockerEntered.promise,
+              queuedPreparation,
               signal,
+              "Injection queue blocker did not start",
             );
           }
           let injectionStarted = false;
@@ -160,10 +148,7 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
             (result) => ({ result, error: undefined }),
             (error: unknown) => ({ result: undefined, error }),
           );
-          await withinTest(
-            awaitGateBeforeSettlement(entered.promise, bob, `Bob missed ${phase} preparation`),
-            signal,
-          );
+          await waitForProofGate(entered.promise, bob, signal, `Bob missed ${phase} preparation`);
           expect(scenario.sourceRequests).toEqual([]);
           if (cancel === "source") {
             source.abort();
@@ -176,63 +161,44 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
           const [aliceResult, bobResult] = await Promise.all([aliceOutcome, bobOutcome]);
           await queuedPreparation;
           await waitForGatewayActiveWork(30_000);
-          expect(providerErrors).toEqual([]);
-          expect(outbound.filter((entry) => entry.to === scenario.recipient)).toEqual([]);
-          expect(
-            outbound
-              .filter((entry) => entry.to === `${scenario.recipient}-incumbent`)
-              .map((entry) => entry.text),
-          ).toEqual(
-            (cancel === "source" ? [1, 2] : [1]).map(
-              (index) => `${scenario.marker}_INCUMBENT_${index}`,
-            ),
+          const replies = humanReplies.slice(firstReply);
+          const incumbentTexts = (cancel === "source" ? [1, 2] : [1]).map(
+            (index) => `${scenario.marker}_INCUMBENT_${index}`,
           );
+          expect(providerErrors).toEqual([]);
+          expect(proofDeliveries(scenario.recipient)).toEqual([]);
+          expect(
+            proofDeliveries(`${scenario.recipient}-incumbent`).map((entry) => entry.text),
+          ).toEqual(incumbentTexts);
           if (cancel === "source") {
             expect(aliceResult.error).toBeUndefined();
             if (bobResult.error !== undefined) {
               expect(bobResult.error).toMatchObject({ name: "AbortError" });
             }
             expect(bobResult.result?.deferredToActiveRun).toBeUndefined();
-            expect(scenario.sourceRequests).toEqual([]);
-            expect(scenario.targetRequests).toEqual([]);
-            expect(
-              humanReplies.slice(firstReply).filter((reply) => reply.sender === "bob"),
-            ).toEqual([]);
+            expect([scenario.sourceRequests, scenario.targetRequests]).toEqual([[], []]);
+            expect(replies.filter((reply) => reply.sender === "bob")).toEqual([]);
           } else {
             expect(bobResult.error, id).toBeUndefined();
             expect(bobResult.result?.deferredToActiveRun).toBe("followup");
-            expect(humanReplies.slice(firstReply)).toContainEqual({
+            expect(replies).toContainEqual({
               sender: "bob",
-              text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
+              text: FOLLOWUP_REPLY,
             });
             expect(scenario.accepted).toMatchObject({ status: "accepted" });
             expect(scenario.sourceRequests.length).toBeGreaterThan(0);
             expect(scenario.targetRequests.length).toBeGreaterThan(0);
-            expect(
-              [...scenario.sourceRequests, ...scenario.targetRequests].some((request) =>
-                request.tools.includes("message"),
-              ),
-            ).toBe(false);
+            expect(scenario.targetRequests[1]?.output).toMatch(
+              /^(Tool message not found|message is not available in this turn\.)/,
+            );
           }
         } finally {
           resume.resolve();
-          scenario.releaseIncumbent.resolve();
-          await Promise.allSettled([queuedPreparation, alice, bob]);
-          await waitForGatewayActiveWork(30_000);
+          await settleProofScenario(scenario, [queuedPreparation, alice, bob]);
         }
       }
     }
   } finally {
-    await patchProofConfig(
-      {
-        messages: { queue: { allowCollaborativeSteering: previousSetting ?? null } },
-        tools: { toolsBySender: { "id:alice": { deny: null }, "id:bob": { deny: null } } },
-      },
-      [
-        "messages.queue.allowCollaborativeSteering",
-        "tools.toolsBySender.id:alice.deny",
-        "tools.toolsBySender.id:bob.deny",
-      ],
-    );
+    await configureProofCollaboration(previousSetting);
   }
 }

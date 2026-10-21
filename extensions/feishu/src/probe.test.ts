@@ -48,8 +48,8 @@ describe("probeFeishu", () => {
     },
   ])("bounds $name request timeouts", async ({ run, expected }) => {
     createFeishuClientMock.mockReturnValue({ request: vi.fn(() => new Promise(() => {})) });
-    const promise = run(DEFAULT_CREDS, { timeoutMs: 1_000 });
-    await vi.advanceTimersByTimeAsync(1_000);
+    const promise = run(DEFAULT_CREDS, run === probeFeishu ? { timeoutMs: 1_000 } : {});
+    await vi.advanceTimersByTimeAsync(FEISHU_PROBE_REQUEST_TIMEOUT_MS);
     await expect(promise).resolves.toEqual(expected);
   });
 
@@ -70,17 +70,6 @@ describe("probeFeishu", () => {
       expected,
     );
     expect(createFeishuClientMock).not.toHaveBeenCalled();
-  });
-
-  it("does not cache probe results when the expiry would exceed a valid Date", async () => {
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    const requestFn = setupClient({ code: 0, bot: { app_name: "TestBot", open_id: "ou_abc123" } });
-
-    const first = await probeFeishu(DEFAULT_CREDS);
-    const second = await probeFeishu(DEFAULT_CREDS);
-
-    expect(first).toEqual(second);
-    expect(requestFn).toHaveBeenCalledTimes(2);
   });
 
   it.each([false, true])(

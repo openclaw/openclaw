@@ -1,4 +1,4 @@
-import "../lib/toast-host.ts";
+import "../lib/toast-host.tsx";
 import type { ControlUiFocusTarget } from "@openclaw/session-url-contract";
 import { render, type JSX as SolidJSX } from "@solidjs/web";
 import {
@@ -11,7 +11,6 @@ import {
   createSignal,
   getOwner,
   lazy,
-  onCleanup,
   onSettled,
   runWithOwner,
 } from "solid-js";
@@ -142,20 +141,6 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
   const lazyCustomElements = createLazyCustomElementRequests(lazyHost, closeDocument);
   const lazyState = projectOwner(lazyCustomElements, (owner) => owner.visibleState);
   const loginLoadState = projectOwner(loginGateLoader, (owner) => owner.visibleState);
-  const disconnectViewport = connectShellViewport();
-  const disconnectTooltips = installTitleTooltips(host.ownerDocument);
-  const embedHost = nativeEmbedHost();
-  host.ownerDocument.documentElement.classList.toggle("openclaw-native-embed", embedHost !== null);
-  host.toggleAttribute(
-    "data-native-titlebar",
-    embedHost?.platform === "macos" &&
-      embedHost.formFactor === "desktop" &&
-      embedHost.surface === "conversation",
-  );
-  if (embedHost) {
-    void import("../styles/native-embed.css");
-  }
-  void import("../components/session-progress-hovercard-registration.ts");
 
   const initialConnectPending = () =>
     runtime.documentMode === null &&
@@ -212,12 +197,6 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     return readiness?.hook;
   };
   const window = host.ownerDocument.defaultView;
-  if (window) {
-    Object.defineProperty(window, "openclawControlUi", {
-      configurable: true,
-      get: loadReadiness,
-    });
-  }
   // The lazy observer reads these current facts only after automation requests it.
   function trackRoot(): void {
     gateway.revision();
@@ -239,6 +218,29 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
   }
 
   onSettled(() => {
+    const disconnectViewport = connectShellViewport();
+    const disconnectTooltips = installTitleTooltips(host.ownerDocument);
+    const embedHost = nativeEmbedHost();
+    host.ownerDocument.documentElement.classList.toggle(
+      "openclaw-native-embed",
+      embedHost !== null,
+    );
+    host.toggleAttribute(
+      "data-native-titlebar",
+      embedHost?.platform === "macos" &&
+        embedHost.formFactor === "desktop" &&
+        embedHost.surface === "conversation",
+    );
+    if (embedHost) {
+      void import("../styles/native-embed.css");
+    }
+    void import("../components/session-progress-hovercard-registration.ts");
+    if (window) {
+      Object.defineProperty(window, "openclawControlUi", {
+        configurable: true,
+        get: loadReadiness,
+      });
+    }
     if (focusTarget) {
       const element = {
         terminal: TERMINAL_PANEL_ELEMENT,
@@ -278,25 +280,22 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
         }
       })
       .catch((error: unknown) => console.error("[openclaw] application start failed", error));
-  });
-  onCleanup(() => {
-    active = false;
-    readiness?.disconnect();
-    if (
-      window &&
-      Object.getOwnPropertyDescriptor(window, "openclawControlUi")?.get === loadReadiness
-    ) {
-      delete window.openclawControlUi;
-    }
-    for (const projection of [gateway, config, selection, router, theme, translations]) {
-      projection.dispose();
-    }
-    disconnectViewport();
-    disconnectTooltips();
-    focusDashboardAbort.abort();
-    lazyCustomElements.abandon();
-    loginGateLoader.abandon();
-    runtime.stop();
+    return () => {
+      active = false;
+      readiness?.disconnect();
+      if (
+        window &&
+        Object.getOwnPropertyDescriptor(window, "openclawControlUi")?.get === loadReadiness
+      ) {
+        delete window.openclawControlUi;
+      }
+      disconnectViewport();
+      disconnectTooltips();
+      focusDashboardAbort.abort();
+      lazyCustomElements.abandon();
+      loginGateLoader.abandon();
+      runtime.stop();
+    };
   });
 
   function Escape(escapeProps: { label: string }): SolidJSX.Element {

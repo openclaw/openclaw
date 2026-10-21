@@ -1,5 +1,3 @@
-// Image description routing-identity tests cover the OpenCode session header that a vision
-// completion needs; OpenCode rejects an image request that carries none.
 import { describe, expect, it, vi } from "vitest";
 import {
   imageCompletion,
@@ -26,18 +24,15 @@ const OPENCODE_GO_IMAGE = {
   baseUrl: "https://opencode.ai/zen/go/v1",
 };
 
-function stubProviderStream(text = "vision ok") {
-  const streamResult = {
-    result: vi.fn(async () =>
-      imageCompletion(
-        "openai-completions",
-        OPENCODE_GO_IMAGE.provider,
-        OPENCODE_GO_IMAGE.model,
-        text,
-      ),
-    ),
-  };
-  const streamFn = vi.fn(() => streamResult);
+const completion = () =>
+  imageCompletion(
+    "openai-completions",
+    OPENCODE_GO_IMAGE.provider,
+    OPENCODE_GO_IMAGE.model,
+    "vision ok",
+  );
+function stubProviderStream(result = vi.fn(async () => completion())) {
+  const streamFn = vi.fn(() => ({ result }));
   registerProviderStreamForModelMock.mockReturnValue(streamFn);
   return streamFn;
 }
@@ -47,24 +42,19 @@ function capturedStreamOptions(streamFn: ReturnType<typeof stubProviderStream>, 
   if (!call) {
     throw new Error(`Expected provider stream call ${index}`);
   }
-  return call[2] as CapturedStreamOptions;
+  const options = call[2] as CapturedStreamOptions;
+  return { sessionId: options.sessionId, header: options.headers?.[SESSION_HEADER] };
 }
 
 function requestImage(
-  endpoint: { provider: string; model: string; baseUrl: string },
+  { provider, model, baseUrl }: typeof OPENCODE_GO_IMAGE,
   modelExtras: Record<string, unknown> = {},
 ) {
-  mockImageModel({
-    provider: endpoint.provider,
-    id: endpoint.model,
-    api: "openai-completions",
-    baseUrl: endpoint.baseUrl,
-    ...modelExtras,
-  });
+  mockImageModel({ provider, id: model, api: "openai-completions", baseUrl, ...modelExtras });
   return describeImageWithModelCore({
     ...imageRequestDefaults(),
-    provider: endpoint.provider,
-    model: endpoint.model,
+    provider,
+    model,
     prompt: "Describe the image.",
   });
 }
@@ -72,40 +62,25 @@ function requestImage(
 describe("describeImageWithModelCore OpenCode routing identity", () => {
   installImageRuntimeTestHooks({ apiKey: "test-api-key" });
 
-  it("sends the OpenCode session header without claiming a stream session", async () => {
-    const streamFn = stubProviderStream();
-
-    await requestImage(OPENCODE_GO_IMAGE);
-
-    const options = capturedStreamOptions(streamFn, 0);
-    expect(options.headers?.[SESSION_HEADER]).toMatch(UUID_PATTERN);
-    expect(options.sessionId).toBeUndefined();
-  });
-
   it("uses a fresh routing identity for each image request", async () => {
     const streamFn = stubProviderStream();
 
     await requestImage(OPENCODE_GO_IMAGE);
     await requestImage(OPENCODE_GO_IMAGE);
 
-    const first = capturedStreamOptions(streamFn, 0).headers?.[SESSION_HEADER];
-    const second = capturedStreamOptions(streamFn, 1).headers?.[SESSION_HEADER];
-    expect(first).toMatch(UUID_PATTERN);
-    expect(second).toMatch(UUID_PATTERN);
-    expect(first).not.toBe(second);
+    const first = capturedStreamOptions(streamFn, 0);
+    const second = capturedStreamOptions(streamFn, 1);
+    const expected = { sessionId: undefined, header: expect.stringMatching(UUID_PATTERN) };
+    expect([first, second]).toEqual([expected, expected]);
+    expect(first.header).not.toBe(second.header);
   });
 
   it("reuses one routing identity across the reasoning-only retry", async () => {
-    const streamResult = {
-      result: vi
+    const streamFn = stubProviderStream(
+      vi
         .fn()
         .mockResolvedValueOnce({
-          role: "assistant",
-          api: "openai-completions",
-          provider: OPENCODE_GO_IMAGE.provider,
-          model: OPENCODE_GO_IMAGE.model,
-          stopReason: "stop",
-          timestamp: Date.now(),
+          ...completion(),
           content: [
             {
               type: "thinking",
@@ -114,49 +89,31 @@ describe("describeImageWithModelCore OpenCode routing identity", () => {
             },
           ],
         })
-        .mockResolvedValueOnce(
-          imageCompletion(
-            "openai-completions",
-            OPENCODE_GO_IMAGE.provider,
-            OPENCODE_GO_IMAGE.model,
-            "vision ok",
-          ),
-        ),
-    };
-    const streamFn = vi.fn(() => streamResult);
-    registerProviderStreamForModelMock.mockReturnValue(streamFn);
+        .mockResolvedValueOnce(completion()),
+    );
 
     await requestImage(OPENCODE_GO_IMAGE);
 
     expect(streamFn).toHaveBeenCalledTimes(2);
-    const first = capturedStreamOptions(streamFn, 0).headers?.[SESSION_HEADER];
+    const first = capturedStreamOptions(streamFn, 0).header;
     expect(first).toMatch(UUID_PATTERN);
-    expect(capturedStreamOptions(streamFn, 1).headers?.[SESSION_HEADER]).toBe(first);
+    expect(capturedStreamOptions(streamFn, 1).header).toBe(first);
   });
 
-  it("leaves an unrelated provider's request options untouched", async () => {
+  it.each([
+    [
+      "unrelated provider",
+      { provider: "openai", model: "gpt-5-mini", baseUrl: "https://api.openai.com/v1" },
+      {},
+    ],
+    [
+      "model-level header",
+      OPENCODE_GO_IMAGE,
+      { headers: { "X-OpenCode-Session": "model-session" } },
+    ],
+  ] as const)("does not inject routing identity for %s", async (_name, endpoint, extras) => {
     const streamFn = stubProviderStream();
-
-    await requestImage({
-      provider: "openai",
-      model: "gpt-5-mini",
-      baseUrl: "https://api.openai.com/v1",
-    });
-
-    const options = capturedStreamOptions(streamFn, 0);
-    expect(options.sessionId).toBeUndefined();
-    expect(options.headers?.[SESSION_HEADER]).toBeUndefined();
-  });
-
-  it("keeps a model-level routing header instead of replacing it", async () => {
-    const streamFn = stubProviderStream();
-
-    await requestImage(OPENCODE_GO_IMAGE, {
-      headers: { "X-OpenCode-Session": "model-session" },
-    });
-
-    const options = capturedStreamOptions(streamFn, 0);
-    expect(options.headers?.[SESSION_HEADER]).toBeUndefined();
-    expect(options.sessionId).toBeUndefined();
+    await requestImage(endpoint, extras);
+    expect(capturedStreamOptions(streamFn, 0)).toEqual({ sessionId: undefined, header: undefined });
   });
 });

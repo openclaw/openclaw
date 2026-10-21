@@ -8,12 +8,14 @@ import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-ru
 import { FailoverError } from "../agents/failover-error.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
-import "../agents/model-fallback-runner.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
+import "../agents/model-fallback-runner.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as attachmentProcessor from "../media/attachment-processor.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
@@ -92,7 +94,9 @@ vi.mock("../agents/cli-runner/prepare.runtime.js", () => ({ prepareCliRunContext
 vi.mock("../agents/cli-runner/execute.runtime.js", () => ({ executePreparedCliRun }));
 vi.mock("../agents/model-auth-provider.js", () => ({ resolveApiKeyForProviderCore }));
 
-function createCompanion(cfg: OpenClawConfig = {}) {
+function createCompanion(
+  cfg: OpenClawConfig = { agents: { defaults: { utilityModel: "test/model-a" } } },
+) {
   const companion = createSessionCompanion({
     scheduler: createTestGatewayScheduler(),
     getConfig: () => cfg,
@@ -104,7 +108,6 @@ function createCompanion(cfg: OpenClawConfig = {}) {
       }),
     },
     sessionObserver: { getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }) },
-    resolveUtilityModelRef: () => "test/model-a",
   });
   onTestFinished(() => companion.dispose());
   return companion;
@@ -139,6 +142,7 @@ async function invokeAsk(
       sessionCompanion: companion,
       getRuntimeConfig: () => cfg,
       getCommittedRuntimeConfig,
+      loadGatewayModelCatalog: async () => [],
     },
     respond,
   } as never);
@@ -322,6 +326,57 @@ describe("session companion embedded invocation", () => {
     }
   });
 
+  it("answers with the question's chosen model, reasoning, and speed instead of the utility route", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "test/main",
+          models: { "test/main": {}, "test/model-a": {}, "test/model-c": {} },
+          utilityModel: { primary: "test/model-a", fallbacks: ["test/model-b"] },
+        },
+      },
+    };
+    resolveSelection.mockImplementation(({ modelRef }) => ({
+      provider: "test",
+      modelId: modelRef?.split("/")[1] ?? "model-a",
+    }));
+    const companion = createCompanion(cfg);
+    expect(companion.state(question).defaultModel).toBe("test/model-a");
+    const chosen = await invokeAsk(
+      companion,
+      { question: "Which file?", model: "test/model-c", thinkingLevel: "high", fastMode: true },
+      "chosen-model-connection",
+      cfg,
+    );
+    expect(chosen).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ answer: expect.any(String) }),
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
+      model: "model-c",
+      thinkLevel: "high",
+      fastMode: true,
+      modelFallbacksOverride: [],
+    });
+
+    const outside = await invokeAsk(
+      companion,
+      { question: "Which file?", model: "test/model-z" },
+      "outside-model-connection",
+      cfg,
+    );
+    expect(outside).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("model-z"),
+      }),
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+  });
+
   it("passes a selected-text comment to the model without persisting it as a file", async () => {
     const companion = createCompanion();
     const respond = await invokeAsk(
@@ -386,7 +441,7 @@ describe("session companion embedded invocation", () => {
   it.each(["preparation", "dispatch", "accepted"] as const)(
     "rechecks the original RPC image policy until model admission (%s)",
     async (phase) => {
-      const cfg: OpenClawConfig = {};
+      const cfg: OpenClawConfig = { agents: { defaults: { utilityModel: "test/model-a" } } };
       let committed: OpenClawConfig = cfg;
       const disable = () => {
         committed = { gateway: { uploads: { enabled: false } } };
@@ -528,6 +583,7 @@ describe("session companion embedded invocation", () => {
       agents: {
         defaults: {
           workspace: "/tmp/companion-test",
+          utilityModel: "test/model-a",
           models: { "test/model-a": { codeMode: true } },
         },
         entries: {
@@ -587,71 +643,101 @@ describe("session companion embedded invocation", () => {
         },
       },
     };
-    resolveSelection.mockReturnValueOnce({ provider: "anthropic", modelId: "claude-haiku-4-5" });
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
+    const metadata = createPluginMetadataSnapshotFixture({
+      plugins: [
         {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
+          id: "anthropic",
+          modelCatalog: {
+            providers: {
+              anthropic: {
+                defaultUtilityModel: "claude-haiku-4-5",
+                models: [{ id: "claude-haiku-4-5" }],
+              },
+            },
+          },
         },
       ],
     });
-    const companion = createCompanion(cfg);
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "companion-reader",
-      scopes: ["operator.read"],
-      assertCurrent: () => {},
-      modelPolicy: prepareOperatorModelPolicy({
-        cfg,
-        policy: { sourceAgent: "main", allow: ["anthropic/claude-haiku-4-5"] },
-        manifestPlugins: [],
-      }),
-    });
-    prepareCliRunContext.mockImplementationOnce(async (params) => ({
-      params: prepareCliRunModelAuthority(params),
-      preparedBackend: {},
-    }));
-    try {
-      await expect(companion.ask({ ...question, operatorAuthority })).resolves.toMatchObject({
-        answer: "The session is fixing a bug.",
-      });
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-      expect(appendMessage).not.toHaveBeenCalled();
-      expect(prepareCliRunContext).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "claude-cli",
-          model: "claude-haiku-4-5",
-          requesterModel: { provider: "anthropic", model: "claude-haiku-4-5" },
-          executionMode: "side-question",
-          disableTools: true,
-          sessionKey: preparedTarget.sessionKey,
-          prompt: expect.stringContaining("What is it doing?"),
-          extraSystemPrompt: expect.stringContaining("read-only Side chat assistant"),
-        }),
-      );
-      expect(executePreparedCliRun).toHaveBeenCalledOnce();
-      resolveApiKeyForProviderCore.mockResolvedValue({ apiKey: "synthetic-key", mode: "api-key" });
-      resolveSelection.mockReturnValueOnce({ provider: "anthropic", modelId: "claude-haiku-4-5" });
-      await expect(
-        companion.ask({
-          ...question,
-          attachments: [{ mimeType: "image/png", content: imageBase64 }],
-        }),
-      ).resolves.toMatchObject({ answer: "The session is reading a file." });
-      expect(runEmbeddedAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          images: [expect.objectContaining({ type: "image" })],
-          toolsAllow: ["read", "sessions_history", "sessions_search"],
-        }),
-      );
-      expect(removeSession).toHaveBeenCalledWith(preparedTarget, undefined);
-    } finally {
-      cliBackendsTesting.resetDepsForTest();
-      companion.dispose();
-    }
+    await withPluginMetadataSnapshotScope(
+      metadata,
+      async () => {
+        resolveSelection.mockReturnValueOnce({
+          provider: "anthropic",
+          modelId: "claude-haiku-4-5",
+        });
+        cliBackendsTesting.setDepsForTest({
+          resolvePluginSetupCliBackend: () => undefined,
+          resolveRuntimeCliBackends: () => [
+            {
+              id: "claude-cli",
+              modelProvider: "anthropic",
+              pluginId: "anthropic",
+              config: { command: "claude" },
+            },
+          ],
+        });
+        const companion = createCompanion(cfg);
+        const operatorAuthority = createAdmittedRunOperatorAuthority({
+          profileId: "companion-reader",
+          scopes: ["operator.read"],
+          assertCurrent: () => {},
+          modelPolicy: prepareOperatorModelPolicy({
+            cfg,
+            policy: { sourceAgent: "main", allow: ["anthropic/claude-haiku-4-5"] },
+            manifestPlugins: [],
+          }),
+        });
+        prepareCliRunContext.mockImplementationOnce(async (params) => ({
+          params: prepareCliRunModelAuthority(params),
+          preparedBackend: {},
+        }));
+        try {
+          await expect(companion.ask({ ...question, operatorAuthority })).resolves.toMatchObject({
+            answer: "The session is fixing a bug.",
+          });
+          expect(runEmbeddedAgent).not.toHaveBeenCalled();
+          expect(appendMessage).not.toHaveBeenCalled();
+          expect(prepareCliRunContext).toHaveBeenCalledWith(
+            expect.objectContaining({
+              provider: "claude-cli",
+              model: "claude-haiku-4-5",
+              requesterModel: { provider: "anthropic", model: "claude-haiku-4-5" },
+              executionMode: "side-question",
+              disableTools: true,
+              sessionKey: preparedTarget.sessionKey,
+              prompt: expect.stringContaining("What is it doing?"),
+              extraSystemPrompt: expect.stringContaining("read-only Side chat assistant"),
+            }),
+          );
+          expect(executePreparedCliRun).toHaveBeenCalledOnce();
+          resolveApiKeyForProviderCore.mockResolvedValue({
+            apiKey: "synthetic-key",
+            mode: "api-key",
+          });
+          resolveSelection.mockReturnValueOnce({
+            provider: "anthropic",
+            modelId: "claude-haiku-4-5",
+          });
+          await expect(
+            companion.ask({
+              ...question,
+              attachments: [{ mimeType: "image/png", content: imageBase64 }],
+            }),
+          ).resolves.toMatchObject({ answer: "The session is reading a file." });
+          expect(runEmbeddedAgent).toHaveBeenCalledWith(
+            expect.objectContaining({
+              images: [expect.objectContaining({ type: "image" })],
+              toolsAllow: ["read", "sessions_history", "sessions_search"],
+            }),
+          );
+          expect(removeSession).toHaveBeenCalledWith(preparedTarget, undefined);
+        } finally {
+          cliBackendsTesting.resetDepsForTest();
+          companion.dispose();
+        }
+      },
+      { config: cfg, compatibleConfigs: [cfg] },
+    );
   });
 
   it("waits for admitted history persistence before starting the companion run", async () => {

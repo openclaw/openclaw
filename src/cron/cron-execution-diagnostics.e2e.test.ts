@@ -67,7 +67,10 @@ function diagnostic(
 
 async function runCase(name: string, modelRef: ModelRef = defaultModel, localBaseUrl?: string) {
   const model = `${modelRef.provider}/${modelRef.model}`;
-  const cfg: OpenClawConfig = { agents: { defaults: { model } } };
+  const cfg: OpenClawConfig = {
+    agents: { defaults: { model } },
+    session: { store: "/tmp/store.json" },
+  };
   if (localBaseUrl) {
     cfg.models = {
       providers: { [modelRef.provider]: { api: "ollama", baseUrl: localBaseUrl, models: [] } },

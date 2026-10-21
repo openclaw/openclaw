@@ -3,6 +3,7 @@ import type { ModelCatalogResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
 
@@ -52,6 +53,7 @@ export class ModelProviderCoreLoader {
   catalogError: string | null = null;
   retryProvider: string | undefined;
   private request: AbortController | null = null;
+  private publicationPending = false;
 
   constructor(
     private readonly notify: () => void,
@@ -107,6 +109,7 @@ export class ModelProviderCoreLoader {
     } finally {
       if (this.catalogRequest === request) {
         this.catalogRequest = null;
+        this.refreshPendingPublication(client, agentId);
         this.notify();
       }
     }
@@ -119,9 +122,10 @@ export class ModelProviderCoreLoader {
     target?: { providerId?: string; data: ModelProvidersData },
   ): Promise<void> {
     if (reason === "publication" && (this.active || this.catalogLoading)) {
-      // Catalog changes during an existing read are best effort until the next refresh.
+      this.publicationPending = true;
       return;
     }
+    this.publicationPending = false;
     this.request?.abort();
     const request = new AbortController();
     this.request = request;
@@ -152,12 +156,22 @@ export class ModelProviderCoreLoader {
       if (this.request === request) {
         this.request = null;
         this.active = false;
+        this.refreshPendingPublication(client, agentId);
         this.notify();
       }
     }
   }
 
+  private refreshPendingPublication(client: GatewayBrowserClient, agentId: string): void {
+    if (this.publicationPending && !this.active && !this.catalogLoading) {
+      // A completed read may have republished facts captured before the notification.
+      invalidateModelCatalogCache(client, { agentId });
+      void this.refresh(client, agentId, "publication");
+    }
+  }
+
   invalidate(): void {
+    this.publicationPending = false;
     this.resetCatalog();
     this.retryProvider = undefined;
     this.active = false;

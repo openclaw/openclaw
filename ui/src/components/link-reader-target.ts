@@ -75,9 +75,10 @@ export function isPreviewAnchor(anchor: HTMLAnchorElement): boolean {
   ) {
     return false;
   }
+  // Preview opt-out is independent of click routing (unlike link-reader-external).
   if (
     anchor.matches(
-      "[download], [data-file-path], [data-session-href], .markdown-session-link, [data-link-reader-external]",
+      '[download], [data-file-path], [data-session-href], .markdown-session-link, [data-link-reader-external], [data-link-reader-preview="off"]',
     )
   ) {
     return false;

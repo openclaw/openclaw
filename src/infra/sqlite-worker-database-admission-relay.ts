@@ -8,7 +8,11 @@ import {
   type SqliteDatabaseAdmissions,
 } from "./sqlite-database-admission-record.js";
 import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
-import { readSqliteWorkerMonotonicNs, SqliteWorkerError } from "./sqlite-worker-contract.js";
+import {
+  readSqliteWorkerMonotonicNs,
+  SqliteWorkerError,
+  wrapSqliteWorkerError,
+} from "./sqlite-worker-contract.js";
 
 const REQUESTED = 0;
 const GRANTED = 1;
@@ -68,10 +72,11 @@ function assertAdmissionWaitActive(): void {
         scope.wait.assertActive?.();
       }
     }
-  } catch {
-    throw new SqliteWorkerError(
+  } catch (error) {
+    throw wrapSqliteWorkerError(
       "SQLite admission facts exchange cancelled by its caller",
       "unavailable",
+      error,
     );
   }
 }

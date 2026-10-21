@@ -3,21 +3,34 @@ import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
 } from "../infra/diagnostic-events.js";
-import {
-  isolatedAssistant,
-  isolatedCompletionMocks as mocks,
-  isolatedRequest,
-  registerIsolatedHarness,
-  resetIsolatedCompletionTestState,
-  runIsolatedCompletion,
-} from "./isolated-completion.test-support.js";
+import type { IsolatedCompletionPurpose } from "./isolated-completion-purpose.js";
+import * as fixtures from "./isolated-completion.test-support.js";
+const mocks = fixtures.isolatedCompletionMocks;
 
 beforeEach(() => {
-  resetIsolatedCompletionTestState();
+  fixtures.resetIsolatedCompletionTestState();
   resetDiagnosticEventsForTest();
 });
+const cliUsage = { input: 10, output: 462, cacheRead: 0, cacheWrite: 4111, total: 4583 };
+type UsageCase = "cli" | "diagnostic-cli" | "harness" | "empty-harness";
 
-async function collectUsageEvents(run: () => Promise<unknown>) {
+async function collectUsage(kind: UsageCase, purpose?: IsolatedCompletionPurpose) {
+  if (kind === "cli" || kind === "diagnostic-cli") {
+    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+    const usage = kind === "cli" ? cliUsage : { input: 1, output: 1 };
+    const agentMeta = {
+      usage,
+      ...(kind === "diagnostic-cli" ? { diagnosticUsage: cliUsage } : {}),
+    };
+    const payloads = [{ text: "done" }];
+    mocks.runCliAgent.mockResolvedValue({ payloads, meta: { agentMeta } });
+  } else {
+    const assistant = fixtures.isolatedAssistant([{ type: "text", text: "done" }]);
+    if (kind === "empty-harness") {
+      assistant.usage = { ...assistant.usage, input: 0, output: 0, totalTokens: 0 };
+    }
+    fixtures.registerIsolatedHarness({ runIsolatedCompletionV2: async () => ({ assistant }) });
+  }
   const events: unknown[] = [];
   const stop = onTrustedInternalDiagnosticEvent((event) => {
     if (event.type === "model.usage") {
@@ -25,77 +38,38 @@ async function collectUsageEvents(run: () => Promise<unknown>) {
     }
   });
   try {
-    await run();
+    await fixtures.runIsolatedCompletion({ ...fixtures.isolatedRequest(), purpose });
+    return events;
   } finally {
     stop();
   }
-  return events;
 }
 
-const cliUsage = { input: 10, output: 462, cacheRead: 0, cacheWrite: 4111, total: 4583 };
-
-function useCliRuntime(agentMeta: object = { usage: cliUsage }) {
-  mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
-  mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "done" }], meta: { agentMeta } });
-}
-
-it("emits one model.usage for a completed CLI completion", async () => {
-  useCliRuntime();
-  const events = await collectUsageEvents(() =>
-    runIsolatedCompletion({ ...isolatedRequest(), purpose: "session-activity-summary" }),
-  );
-  expect(events).toHaveLength(1);
-  expect(events[0]).toMatchObject({
-    agentId: "main",
-    provider: "openai",
-    model: "gpt-test",
-    purpose: "session-activity-summary",
-    runtimeKind: "cli",
-    usage: { input: 10, output: 462, cacheWrite: 4111, total: 4583 },
-  });
+it.each([
+  ["cli", "session-activity-summary", { input: 10, output: 462, cacheWrite: 4111, total: 4583 }],
+  ["harness", undefined, { input: 1, output: 1, total: 2 }],
+] as const)("reports completed %s usage", async (runtimeKind, purpose, usage) => {
+  expect(await collectUsage(runtimeKind, purpose)).toMatchObject([
+    {
+      agentId: "main",
+      provider: "openai",
+      model: "gpt-test",
+      purpose: purpose ?? "isolated-completion",
+      runtimeKind,
+      usage,
+    },
+  ]);
 });
 
-it("reports the terminal CLI turn usage when the backend provides it", async () => {
-  useCliRuntime({ usage: { input: 1, output: 1 }, diagnosticUsage: cliUsage });
-  const events = await collectUsageEvents(() => runIsolatedCompletion(isolatedRequest()));
-  expect(events).toMatchObject([{ usage: { output: 462, total: 4583 } }]);
+it("reports terminal CLI turn usage", async () => {
+  expect(await collectUsage("diagnostic-cli")).toMatchObject([
+    { usage: { output: 462, total: 4583 } },
+  ]);
 });
 
-it("emits one model.usage for a completed harness completion", async () => {
-  registerIsolatedHarness({
-    runIsolatedCompletionV2: async () => ({
-      assistant: isolatedAssistant([{ type: "text", text: "done" }]),
-    }),
-  });
-  const events = await collectUsageEvents(() => runIsolatedCompletion(isolatedRequest()));
-  expect(events).toHaveLength(1);
-  expect(events[0]).toMatchObject({
-    provider: "openai",
-    model: "gpt-test",
-    purpose: "isolated-completion",
-    runtimeKind: "harness",
-    usage: { input: 1, output: 1, total: 2 },
-  });
-});
-
-it("emits nothing for a harness completion that reports no usage", async () => {
-  const assistant = isolatedAssistant([{ type: "text", text: "done" }]);
-  registerIsolatedHarness({
-    runIsolatedCompletionV2: async () => ({
-      assistant: {
-        ...assistant,
-        usage: { ...assistant.usage, input: 0, output: 0, totalTokens: 0 },
-      },
-    }),
-  });
-  const events = await collectUsageEvents(() => runIsolatedCompletion(isolatedRequest()));
-  expect(events).toEqual([]);
-});
-
-it("leaves plugin completions to their own usage finalizer", async () => {
-  useCliRuntime();
-  const events = await collectUsageEvents(() =>
-    runIsolatedCompletion({ ...isolatedRequest(), purpose: "plugin-completion" }),
-  );
-  expect(events).toEqual([]);
+it.each([
+  ["empty-harness", undefined],
+  ["cli", "plugin-completion"],
+] as const)("emits no usage for %s / %s", async (kind, purpose) => {
+  expect(await collectUsage(kind, purpose)).toEqual([]);
 });

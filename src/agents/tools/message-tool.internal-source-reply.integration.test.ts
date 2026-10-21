@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
 import { mirrorDeliveredReplyToTranscript } from "../../auto-reply/reply/dispatch-from-config.transcript.js";
+import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -450,6 +451,84 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
+  it("publishes the final workspace HTML as a durable attachment without granting automatic publication", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "message-tool-source-html-" },
+      async (state) => {
+        const { stateDir, workspaceDir } = state;
+        const sessionKey = "agent:main:webchat:dm:html-report";
+        const sessionId = "html-report-session";
+        const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const scope = { agentId: "main", sessionKey, sessionId, storePath };
+        const config = {
+          agents: { entries: { main: { workspace: workspaceDir } } },
+          tools: { profile: "full" as const },
+        };
+        await fs.mkdir(workspaceDir, { recursive: true });
+        const report = path.join(workspaceDir, "implementation-plan.html");
+        await fs.writeFile(report, "<!doctype html><h1>Child draft</h1>");
+        const finalBytes = Buffer.from(
+          "<!doctype html><title>Plan</title><h1>Parent revision</h1>",
+        );
+        await fs.writeFile(report, finalBytes);
+        await replaceSessionEntry(scope, { sessionId, chatType: "direct", updatedAt: 1 });
+        setRuntimeConfigSnapshot(config);
+
+        const automatic = await createReplyMediaPathNormalizer({
+          cfg: config,
+          sessionKey,
+          workspaceDir,
+        })({ mediaUrl: report });
+        expect(automatic.mediaUrl).toBeUndefined();
+        expect(getReplyPayloadMetadata(automatic)?.assistantMediaFailures).toEqual([
+          expect.objectContaining({ code: "unsupported-format" }),
+        ]);
+
+        const tool = createCurrentSourceMessageTool({
+          config,
+          workspaceDir,
+          agentSessionKey: sessionKey,
+          runSessionKey: sessionKey,
+          sessionId,
+          agentId: "main",
+        });
+        await tool.execute("publish-html-report", {
+          action: "send",
+          message: "Implementation plan attached.",
+          media: report,
+        });
+        // Reload the persisted display record after the mutable source has disappeared.
+        await fs.rm(report);
+        const assistants = (await loadTranscriptEvents(scope))
+          .map(readTranscriptEventMessage)
+          .filter((message) => message?.role === "assistant");
+        expect(assistants).toHaveLength(1);
+        const display = readAssistantDisplayContent(assistants[0]);
+        const attachment = display.find((block) => block.type === "attachment");
+        expect(attachment).toMatchObject({
+          type: "attachment",
+          attachment: { label: "implementation-plan.html", mimeType: "text/html" },
+        });
+        expect(display.some((block) => block.type === "attachment_error")).toBe(false);
+        const artifactId = asOptionalRecord(attachment?.attachment)?.artifactId;
+        expect(artifactId).toEqual(expect.any(String));
+        await expect(
+          resolveManagedOutgoingMediaArtifactDownload({
+            sessionKey,
+            agentId: "main",
+            artifactId: String(artifactId),
+            stateDir,
+          }),
+        ).resolves.toMatchObject({ type: "file", title: "implementation-plan.html" });
+        const records = await listManagedImageRecordEntries({ stateDir, sessionKey });
+        expect(records).toHaveLength(1);
+        const original = records[0]!.record.original;
+        const originalPath = path.join(original.mediaRoot, original.mediaSubdir, original.mediaId);
+        await expect(fs.readFile(originalPath)).resolves.toEqual(finalBytes);
+      },
+    );
+  });
+
   it("reports a missing workspace file without exposing the draft", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "message-tool-source-error-" },
@@ -483,7 +562,8 @@ describe("WebChat message tool internal source reply", () => {
         await fs.mkdir(state.workspaceDir, { recursive: true });
         const remoteWorkspaceDir = state.path("remote-workspace");
         await fs.mkdir(remoteWorkspaceDir, { recursive: true });
-        await fs.writeFile(path.join(remoteWorkspaceDir, "proof.txt"), "remote proof");
+        const html = "<!doctype html><h1>Remote proof</h1>";
+        await fs.writeFile(path.join(remoteWorkspaceDir, "proof.html"), html);
         const sandbox = createSandboxTestContext({
           overrides: {
             backendId: "test",
@@ -511,13 +591,13 @@ describe("WebChat message tool internal source reply", () => {
         const toolResult = await tool.execute("message-remote-media-call", {
           action: "send",
           message: "Attached proof.",
-          media: "/sandbox/proof.txt",
+          media: "/sandbox/proof.html",
         });
 
         const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
         expect(sourceReply?.mediaUrls).toHaveLength(1);
         await expect(fs.readFile(sourceReply?.mediaUrls?.[0] as string, "utf8")).resolves.toBe(
-          "remote proof",
+          html,
         );
 
         bridgeReadFile.mockClear();
@@ -531,7 +611,7 @@ describe("WebChat message tool internal source reply", () => {
           deniedTool.execute("message-remote-media-denied", {
             action: "send",
             message: "Attached proof.",
-            media: "/sandbox/proof.txt",
+            media: "/sandbox/proof.html",
           }),
         ).rejects.toThrow(/could not be staged|outside workspace root/i);
         expect(bridgeReadFile).not.toHaveBeenCalled();
@@ -600,13 +680,20 @@ describe("WebChat message tool internal source reply", () => {
           }
         });
         const append = sessionTranscript.appendAssistantMessageToSessionTranscript;
-        let preCommitCleanup:
-          | Awaited<ReturnType<typeof cleanupManagedOutgoingMediaRecords>>
-          | undefined;
+        let preCommitEntries: Awaited<ReturnType<typeof listManagedImageRecordEntries>> = [];
         const appendSpy = vi
           .spyOn(sessionTranscript, "appendAssistantMessageToSessionTranscript")
           .mockImplementationOnce(async (params) => {
-            preCommitCleanup = await cleanupManagedOutgoingMediaRecords({ stateDir });
+            await cleanupManagedOutgoingMediaRecords({ stateDir });
+            preCommitEntries = await listManagedImageRecordEntries({ stateDir, sessionKey });
+            for (const { record } of preCommitEntries) {
+              const { mediaRoot, mediaSubdir, mediaId, contentType } = record.original;
+              expect(await fs.readFile(path.join(mediaRoot, mediaSubdir, mediaId))).toEqual(
+                contentType === "image/png"
+                  ? Buffer.from(TINY_PNG_BASE64, "base64")
+                  : Buffer.from('{"status":"ready"}\n'),
+              );
+            }
             return append(params);
           });
         const [toolResult, overlappingResult] = await Promise.all([
@@ -616,11 +703,7 @@ describe("WebChat message tool internal source reply", () => {
           unsubscribe();
           appendSpy.mockRestore();
         });
-        expect(preCommitCleanup).toEqual({
-          deletedRecordCount: 0,
-          deletedFileCount: 0,
-          retainedCount: 3,
-        });
+        expect(preCommitEntries).toHaveLength(3);
         const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
         expect(sourceReply).toMatchObject({ transcriptOwner: true });
         expect(overlappingResult.details).toMatchObject({

@@ -15,7 +15,6 @@ import {
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { testing } from "../agents/cli-backends.test-support.js";
 import * as cliLiveSessions from "../agents/cli-runner/cli-live-session-registry.js";
-import { executeDeps } from "../agents/cli-runner/execute-deps.js";
 import { cliBackendLog } from "../agents/cli-runner/log.js";
 import type {
   CliBackendExecute,
@@ -27,6 +26,37 @@ import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import * as agentJobs from "./agent-turn/agent-job.js";
 import * as watchdogFixture from "./server.cli-watchdog.test-support.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
+
+const watchdogClockForTest = vi.hoisted(
+  (): { current?: ReturnType<typeof watchdogFixture.createWatchdogClock> } => ({}),
+);
+
+vi.mock("../agents/cli-runner/execute-plugin-watchdog.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../agents/cli-runner/execute-plugin-watchdog.js")>();
+  return {
+    ...actual,
+    createCliPluginWatchdog(params: Parameters<typeof actual.createCliPluginWatchdog>[0]) {
+      const clock = watchdogClockForTest.current;
+      if (!clock) {
+        return actual.createCliPluginWatchdog(params);
+      }
+      const watchdog = clock.run(() =>
+        actual.createCliPluginWatchdog({
+          ...params,
+          onNoOutputTimeout: (error) => clock.native(() => params.onNoOutputTimeout(error)),
+          onOverallTimeout: () => clock.native(() => params.onOverallTimeout()),
+        }),
+      );
+      // Only synchronous watchdog work uses manual time; the live Gateway stays on native timers.
+      return {
+        reset: () => clock.run(watchdog.reset),
+        noteOutput: () => clock.run(watchdog.noteOutput),
+        dispose: () => clock.run(watchdog.dispose),
+      };
+    },
+  };
+});
 
 type WatchdogCase = [
   name: string,
@@ -85,7 +115,6 @@ async function runWatchdogCase(
   const readJson = async <T>(file: string): Promise<T> =>
     JSON.parse(await fs.readFile(file, "utf8"));
   const freezeReceipt = path.join(proof, "freeze-receipt.json");
-  const realClock = executeDeps.watchdogClock;
   let orderedOutputAt: number | undefined;
   let abortedAt: number | undefined;
   let thawedAt: number | undefined;
@@ -171,7 +200,7 @@ async function runWatchdogCase(
   }
   return await runQaGatewayFixture(
     async () => {
-      executeDeps.watchdogClock = clock;
+      watchdogClockForTest.current = clock;
       await Promise.all(
         [proof, nativeRoot].map((directory) => fs.mkdir(directory, { recursive: true })),
       );
@@ -420,7 +449,7 @@ async function runWatchdogCase(
     },
     () => receipts?.claim.release(),
     async () => {
-      executeDeps.watchdogClock = realClock;
+      watchdogClockForTest.current = undefined;
       testing.resetDepsForTest();
       for (const spy of [capability, log, waitForAgentJob]) {
         spy?.mockRestore();

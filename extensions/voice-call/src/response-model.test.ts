@@ -21,7 +21,6 @@ describe("resolveVoiceResponseModel", () => {
         agentRuntime,
       }),
     ).toEqual({
-      modelRef: "gpt-5.4-mini",
       provider: "together",
       model: "gpt-5.4-mini",
     });

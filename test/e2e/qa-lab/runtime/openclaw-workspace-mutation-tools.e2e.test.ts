@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { createOpenClawCodingTools } from "../../../../src/agents/agent-tools.js";
 import type { AnyAgentTool } from "../../../../src/agents/agent-tools.types.js";
-import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const ARTIFACT = "mutation-receipt.md";
@@ -23,6 +22,10 @@ function textOf(result: Awaited<ReturnType<AnyAgentTool["execute"]>>): string {
   return result.content.find((part) => part.type === "text")?.text ?? "";
 }
 
+function patch(...lines: string[]) {
+  return ["*** Begin Patch", ...lines, "*** End Patch"].join("\n");
+}
+
 test("OpenClaw applies and edits exact workspace bytes while rejecting escapes", async () => {
   const root = tempDirs.make("openclaw-workspace-mutation-");
   const workspace = path.join(root, "workspace");
@@ -30,17 +33,16 @@ test("OpenClaw applies and edits exact workspace bytes while rejecting escapes",
   await fs.mkdir(workspace);
   await fs.writeFile(sentinel, "OUTSIDE\n", "utf8");
 
-  const config: OpenClawConfig = {
-    tools: {
-      fs: { workspaceOnly: true },
-      exec: { applyPatch: { enabled: true, workspaceOnly: true } },
-    },
-  };
   const tools = createOpenClawCodingTools({
     workspaceDir: workspace,
     modelProvider: "openai",
     modelId: "gpt-5.4",
-    config,
+    config: {
+      tools: {
+        fs: { workspaceOnly: true },
+        exec: { applyPatch: { enabled: true, workspaceOnly: true } },
+      },
+    },
     toolConstructionPlan: {
       includeBaseCodingTools: true,
       includeShellTools: true,
@@ -53,14 +55,7 @@ test("OpenClaw applies and edits exact workspace bytes while rejecting escapes",
   const edit = requireTool(tools, "edit");
 
   const applied = await applyPatch.execute("apply-draft", {
-    input: [
-      "*** Begin Patch",
-      `*** Add File: ${ARTIFACT}`,
-      "+# Workspace mutation",
-      "+",
-      "+state: DRAFT",
-      "*** End Patch",
-    ].join("\n"),
+    input: patch(`*** Add File: ${ARTIFACT}`, "+# Workspace mutation", "+", "+state: DRAFT"),
   });
   expect(textOf(applied)).toBe(`Success. Updated the following files:\nA ${ARTIFACT}`);
   expect(applied.details).toEqual({
@@ -70,14 +65,7 @@ test("OpenClaw applies and edits exact workspace bytes while rejecting escapes",
 
   await expect(
     applyPatch.execute("reject-escape", {
-      input: [
-        "*** Begin Patch",
-        "*** Update File: ../outside-sentinel",
-        "@@",
-        "-OUTSIDE",
-        "+ESCAPED",
-        "*** End Patch",
-      ].join("\n"),
+      input: patch("*** Update File: ../outside-sentinel", "@@", "-OUTSIDE", "+ESCAPED"),
     }),
   ).rejects.toThrow(/Path escapes sandbox root/);
   await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("OUTSIDE\n");
@@ -91,20 +79,11 @@ test("OpenClaw applies and edits exact workspace bytes while rejecting escapes",
   expect(edited.details).toMatchObject({
     changed: true,
     firstChangedLine: 3,
+    diff: [" 1 # Workspace mutation", " 2 ", "-3 state: DRAFT", "+3 state: FINAL"].join("\n"),
   });
-  const details = edited.details as {
-    changed: true;
-    diff: string;
-    patch: string;
-    firstChangedLine?: number;
-  };
-  expect(details.diff).toBe(
-    [" 1 # Workspace mutation", " 2 ", "-3 state: DRAFT", "+3 state: FINAL"].join("\n"),
-  );
+  const details = edited.details as { patch: string };
   expect(details.patch).toContain(`--- ${artifactPath}`);
   expect(details.patch).toContain(`+++ ${artifactPath}`);
   expect(details.patch).toContain("-state: DRAFT\n+state: FINAL");
-  const finalBytes = await fs.readFile(path.join(workspace, ARTIFACT), "utf8");
-  expect(finalBytes).toBe(FINAL);
-  expect(finalBytes).not.toContain("DRAFT");
+  await expect(fs.readFile(artifactPath, "utf8")).resolves.toBe(FINAL);
 });

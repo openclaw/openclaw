@@ -1,7 +1,7 @@
-// Covers channel-configured checks from bootstrap and plugin metadata.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { isChannelConfigured } from "./channel-configured.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 const bundledPlugins = vi.hoisted(() => ({
   getBundledChannelPlugin: vi.fn<() => ChannelPlugin | undefined>(),
@@ -26,15 +26,17 @@ function configuredStatePlugin(
   };
 }
 
+function configured(channel: string, config: OpenClawConfig["channels"], env = {}) {
+  return isChannelConfigured({ channels: config }, channel, env);
+}
+
 describe("isChannelConfigured", () => {
   beforeEach(() => {
     bundledPlugins.getBundledChannelPlugin.mockReset();
     bundledPlugins.getBundledChannelSetupPlugin.mockReset();
   });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
+  afterEach(() => vi.unstubAllEnvs());
 
   it("detects Telegram env configuration through the package metadata seam", () => {
     expect(isChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(true);
@@ -65,33 +67,16 @@ describe("isChannelConfigured", () => {
   });
 
   it("requires both Mattermost URL and token env vars through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "mattermost", { MATTERMOST_BOT_TOKEN: "token" })).toBe(false);
-    expect(
-      isChannelConfigured({}, "mattermost", {
-        MATTERMOST_URL: "https://mattermost.example.test",
-      }),
-    ).toBe(false);
-    expect(
-      isChannelConfigured({}, "mattermost", {
-        MATTERMOST_BOT_TOKEN: "token",
-        MATTERMOST_URL: "https://mattermost.example.test",
-      }),
-    ).toBe(true);
+    const token = { MATTERMOST_BOT_TOKEN: "token" };
+    const url = { MATTERMOST_URL: "https://mattermost.example.test" };
+    expect(isChannelConfigured({}, "mattermost", token)).toBe(false);
+    expect(isChannelConfigured({}, "mattermost", url)).toBe(false);
+    expect(isChannelConfigured({}, "mattermost", { ...token, ...url })).toBe(true);
   });
 
   it("still falls back to generic config presence for channels without a custom hook", () => {
     expect(
-      isChannelConfigured(
-        {
-          channels: {
-            signal: {
-              transport: { kind: "managed-native", httpPort: 8080 },
-            },
-          },
-        },
-        "signal",
-        {},
-      ),
+      configured("signal", { signal: { transport: { kind: "managed-native", httpPort: 8080 } } }),
     ).toBe(true);
   });
 
@@ -112,19 +97,7 @@ describe("isChannelConfigured", () => {
   });
 
   it("does not treat disabled channel config as configured state", () => {
-    expect(
-      isChannelConfigured(
-        {
-          channels: {
-            "openclaw-weixin": {
-              enabled: false,
-            },
-          },
-        },
-        "openclaw-weixin",
-        {},
-      ),
-    ).toBe(false);
+    expect(configured("openclaw-weixin", { "openclaw-weixin": { enabled: false } })).toBe(false);
   });
 
   it("honors Matrix bootstrap metadata without consulting operational credential hooks", () => {
@@ -144,11 +117,7 @@ describe("isChannelConfigured", () => {
     ).toBe(false);
     expect(isChannelConfigured({}, "matrix", { MATRIX_ACCESS_TOKEN: "fixture-token" })).toBe(true);
     expect(
-      isChannelConfigured(
-        { channels: { matrix: { homeserver: "https://configured.matrix.example" } } },
-        "matrix",
-        {},
-      ),
+      configured("matrix", { matrix: { homeserver: "https://configured.matrix.example" } }),
     ).toBe(true);
     expect(hasConfiguredState).not.toHaveBeenCalled();
   });

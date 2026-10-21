@@ -54,8 +54,8 @@ vi.mock("./schtasks-control.js", async (original) => ({
 const xmlPayloadCaptures: Array<{ index: number; xml: string }> = [];
 
 // mock-isolation: Registration and mutation responses belong to the synthetic Task Scheduler.
-vi.mock("./schtasks-exec.js", () => ({
-  execSchtasks: async (argv: string[]) => {
+vi.mock("./schtasks-exec.js", () => {
+  const execute = async (argv: string[]) => {
     const index = schtasksCalls.length;
     schtasksCalls.push(argv);
     const xmlFlagPos = argv.indexOf("/XML");
@@ -102,8 +102,13 @@ vi.mock("./schtasks-exec.js", () => ({
             "<Task><Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>gateway.cmd</Command></Exec></Actions></Task>",
         }
       : response;
-  },
-}));
+  };
+  return {
+    execSchtasks: execute,
+    execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
+      execute(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+  };
+});
 
 beforeEach(() => {
   schtasksCalls.length = 0;

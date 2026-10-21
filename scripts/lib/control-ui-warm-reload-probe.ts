@@ -135,7 +135,9 @@ export function warmReloadProbe() {
   const Original = window.WebSocket;
   window.WebSocket = new Proxy(Original, {
     construct(target, args) {
+      mark("socketCreated");
       const socket: WebSocket = Reflect.construct(target, args);
+      socket.addEventListener("open", () => mark("socketOpen"), { once: true });
       const pending = new Map<string, string>();
       const send = socket.send.bind(socket);
       socket.send = (data) => {
@@ -143,6 +145,11 @@ export function warmReloadProbe() {
           const frame = JSON.parse(data);
           if (frame.type === "req") {
             pending.set(frame.id, frame.method);
+            if (frame.method === "connect") {
+              mark("connectSent");
+            } else if (milestones.hello !== undefined) {
+              mark("firstPostHelloRpc");
+            }
           }
         }
         send(data);
@@ -282,6 +289,7 @@ export function warmReloadProbe() {
       const perf = Reflect.get(window, "__perf");
       return {
         milestones,
+        measures: performance.getEntriesByType("measure").map((entry) => entry.toJSON()),
         transcriptPaints,
         largestPaints,
         reads,

@@ -31,6 +31,7 @@ import {
 } from "../commands/onboard-helpers.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isGatewayServiceInstalled } from "../daemon/service-load-state.js";
 import {
   describeGatewayServiceRestart,
   formatGatewayServiceStartRepairIssues,
@@ -234,8 +235,7 @@ export async function ensureGatewayServiceForOnboarding(params: {
     });
   }
 
-  const explicitInstallDaemon =
-    typeof opts.installDaemon === "boolean" ? opts.installDaemon : undefined;
+  const explicitInstallDaemon = opts.installDaemon;
   let installDaemon: boolean;
   if (explicitInstallDaemon !== undefined) {
     installDaemon = explicitInstallDaemon;
@@ -302,9 +302,8 @@ export async function ensureGatewayServiceForOnboarding(params: {
       };
     }
   }
-  const loaded = await service.isLoaded({ env: process.env });
-  let shouldInstall = !loaded;
-  if (loaded) {
+  let shouldInstall = !(await isGatewayServiceInstalled(service, { env: process.env }));
+  if (!shouldInstall) {
     const action =
       (params.loadedAction === "restart" ? params.loadedAction : undefined) ??
       (await prompter.select({

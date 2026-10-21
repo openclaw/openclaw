@@ -167,13 +167,11 @@ export function chatSubmitState(
     ? chatSendPendingReason({ client: state.client, connected: state.connected }, state.sessionKey)
     : null;
   const controlCommand = isChatControlCommand(state.chatMessage);
-  const routePending = state.isRouteSessionPending?.() === true;
   return {
-    ...(routePending || (connectionPendingReason && !controlCommand) ? { canSend: false } : {}),
+    ...(connectionPendingReason && !controlCommand ? { canSend: false } : {}),
     submitDisabledReason:
-      pendingReason ?? (routePending || unavailable ? (failure ?? t("chat.thread.loading")) : null),
-    submitPending:
-      routePending || pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
+      pendingReason ?? (unavailable ? (failure ?? t("chat.thread.loading")) : null),
+    submitPending: pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
     onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {
       state.handleChatDraftChange(...args);
     },
@@ -194,35 +192,4 @@ export function resolveChatPaneFollowUpMode(
       sessionMode: state.chatQueueModeOverride,
     }),
   );
-}
-
-// Catalog panes have no live run; stable empty inputs preserve their transcript cache.
-const emptyTranscriptItems: [] = [];
-
-export function projectChatPaneTranscript(
-  state: Pick<
-    ChatPageHost,
-    | "chatMessages"
-    | "chatToolMessages"
-    | "guardianNotices"
-    | "chatStreamSegments"
-    | "chatStream"
-    | "chatReasoning"
-    | "chatStreamStartedAt"
-    | "chatRunUsageById"
-  >,
-  catalogMessages: unknown[] | null,
-  runId: string | null,
-) {
-  return {
-    messages: catalogMessages ?? state.chatMessages,
-    toolMessages: catalogMessages ? emptyTranscriptItems : state.chatToolMessages,
-    guardianNotices: catalogMessages ? emptyTranscriptItems : state.guardianNotices,
-    streamSegments: catalogMessages ? emptyTranscriptItems : state.chatStreamSegments,
-    stream: catalogMessages ? null : state.chatStream,
-    reasoning: catalogMessages ? null : state.chatReasoning,
-    streamStartedAt: catalogMessages ? null : state.chatStreamStartedAt,
-    runId: catalogMessages ? null : runId,
-    runUsageById: catalogMessages ? undefined : state.chatRunUsageById,
-  };
 }

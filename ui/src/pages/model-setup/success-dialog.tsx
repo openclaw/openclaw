@@ -1,4 +1,3 @@
-import { createMemo } from "solid-js";
 import {
   hasProviderBrandIcon,
   providerIdFromModelRef,
@@ -19,10 +18,9 @@ export function ModelSetupSuccessDialog(
   props: ModelSetupViewProps & { activation: SuccessActivation },
 ) {
   let openChatButton!: HTMLButtonElement;
-  const providerId = createMemo(() => providerIdFromModelRef(props.activation.modelRef));
-  const providerIconId = createMemo(() =>
-    providerId() && hasProviderBrandIcon(providerId()!) ? providerId() : null,
-  );
+  const providerId = () => providerIdFromModelRef(props.activation.modelRef);
+  const providerIconId = () =>
+    providerId() && hasProviderBrandIcon(providerId()!) ? providerId() : null;
   const utility = () => props.activation.modelTarget === "utility";
   const title = () => t(utility() ? "modelSetup.utility.ready" : "modelSetup.success.title");
   const description = () =>

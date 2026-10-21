@@ -4,6 +4,7 @@ import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode, WorkerProvider } from "../../plugins/types.js";
+import { isGatewayWorkAdmissionClosed } from "../../process/gateway-work-admission.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
@@ -32,6 +33,7 @@ import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type { WorkerEnvironmentAbandonment } from "./provider-lifecycle.types.js";
+import { createWorkerReconcileCancellation } from "./provider-provisioning-cancellation.js";
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 import { requireWorkerProfile } from "./service-validation.js";
 import type {
@@ -85,6 +87,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   // losing recovery pass attach or sync after the winner advances the placement.
   const guardedReconcileInFlight = new Map<string, Promise<void>>();
   let stopping = false;
+  const isReconciliationPaused = () => stopping || isGatewayWorkAdmissionClosed();
   let maintenanceInFlight: Promise<void> | undefined;
 
   const trackOperation = <T>(operation: Promise<T>) => {
@@ -104,25 +107,26 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     signal?.throwIfAborted();
     // The process owns packaging; an attempt only owns its wait. Shutdown must still
     // drain the real producer after a canceled consumer releases its environment lock.
-    const preparation = trackOperation(
-      Promise.resolve().then(() => options.prepareInstallation(install)),
-    );
-    return racePromiseWithAbortSignal(preparation, signal);
+    const preparation = Promise.resolve().then(() => options.prepareInstallation(install));
+    return racePromiseWithAbortSignal(trackOperation(preparation), signal);
   };
 
   const callProvider = async <T>(
     environmentId: string,
     run: () => Promise<T>,
     timeoutMs?: number,
+    observationSignal?: AbortSignal,
   ): Promise<T> => {
     const { promise: started, resolve: signalStarted } = createDeferredCore();
     const operation = trackOperation(
       providerOperations.enqueue(environmentId, async () => {
         signalStarted();
-        return await run();
+        observationSignal?.throwIfAborted();
+        // Only read-only inspection may release its queue slot before a late reply.
+        return await racePromiseWithAbortSignal(run(), observationSignal);
       }),
     );
-    await started;
+    await racePromiseWithAbortSignal(started, observationSignal);
     // Timeout completion must not release provider ownership or permit replay/destroy overlap.
     return await withTimeout(
       operation,
@@ -137,7 +141,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   ): Promise<T> => {
     const controller = new AbortController();
     const signal = AbortSignal.any([scope.signal, controller.signal]);
-    const operation = Promise.resolve().then(() => run(signal));
+    const operation = reconcileStep("bootstrap", () => run(signal));
     try {
       return await withTimeout(
         operation,
@@ -267,10 +271,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     signal?: AbortSignal,
     retainProviderSettlement?: (settled: Promise<void>) => void,
   ) => {
-    if (stopping) {
+    if (isReconciliationPaused()) {
       return;
     }
     await withLock(environmentId, async () => {
+      if (isReconciliationPaused()) {
+        return;
+      }
       await store.ready();
       const current = store.get(environmentId);
       if (!current || ["destroyed", "failed", "orphaned"].includes(current.state)) {
@@ -288,22 +295,22 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const reconcileEnvironment = async (environmentId: string) => {
-    if (stopping) {
+    if (isReconciliationPaused() || reconcileEnvironmentGuardClosing) {
       return;
     }
     const guard = reconcileEnvironmentGuard;
-    if (!guard) {
-      return await reconcileEnvironmentCore(environmentId);
-    }
-    if (reconcileEnvironmentGuardClosing) {
-      return;
-    }
     const active = guardedReconcileInFlight.get(environmentId);
     if (active) {
       return await active;
     }
-    const reconcile = reconcileEnvironmentCore.bind(null, environmentId);
-    const operation = guard(environmentId, reconcile, scope.signal);
+    using cancellation = createWorkerReconcileCancellation(scope.signal);
+    const reconcile = (signal = cancellation.signal, retain?: (settled: Promise<void>) => void) =>
+      reconcileEnvironmentCore(
+        environmentId,
+        AbortSignal.any([cancellation.signal, signal]),
+        retain,
+      );
+    const operation = guard ? guard(environmentId, reconcile, cancellation.signal) : reconcile();
     guardedReconcileInFlight.set(environmentId, operation);
     try {
       await operation;
@@ -324,11 +331,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       throw new Error("Worker environment reconciliation guard is already installed");
     }
     reconcileEnvironmentGuard = guard;
-    reconcileEnvironmentGuardClosing = false;
     return closeReconcileEnvironmentGuard;
   };
 
-  const reconcileStep = (name: string, run: () => Promise<unknown>) =>
+  const reconcileStep = <T>(name: string, run: () => Promise<T>) =>
     measureGatewayRestartTrace(`worker-environments.reconcile.${name}`, run, undefined, true);
   const reconcilePass = async (environmentId?: string) => {
     try {
@@ -339,7 +345,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       throw error;
     }
-    if (stopping) {
+    if (isReconciliationPaused()) {
       return;
     }
     if (environmentId === undefined) {
@@ -357,7 +363,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           ),
     );
     await runTasksWithConcurrency({ tasks, limit: 8 });
-    if (stopping || environmentId !== undefined) {
+    if (isReconciliationPaused() || environmentId !== undefined) {
       return;
     }
     // The resident inventory includes terminal rows and receives every committed store write.
@@ -369,7 +375,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const reconcileOnce = (environmentId?: string) => {
-    if (stopping) {
+    if (isReconciliationPaused()) {
       return Promise.resolve();
     }
     if (environmentId !== undefined) {

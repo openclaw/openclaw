@@ -574,7 +574,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
     });
   const { ws } = await openClient({
     scopes: ["operator.admin"],
-    deviceIdentityPath: path.join(root, "roboclaw-device.json"),
+    deviceIdentityPath: path.join(root, "roboclaw-device", "client", "credentials.sqlite"),
   });
 
   try {

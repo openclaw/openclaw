@@ -10,6 +10,10 @@ import {
   WorkerToolSurfaceSchema,
 } from "./worker-gateway-tool.js";
 import {
+  WORKER_PROTOCOL_MAX_FEATURES,
+  WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
+} from "./worker-protocol-constants.js";
+import {
   LiveIntegerSchema,
   LiveSequenceSchema,
   LiveTextSchema,
@@ -83,8 +87,10 @@ export const WORKER_PROTOCOL_FEATURES = [
   "worker-inference-v1",
 ] as const;
 export const WORKER_PROTOCOL_MAX_METHOD_LENGTH = 64;
-export const WORKER_PROTOCOL_MAX_FEATURES = 64;
-export const WORKER_PROTOCOL_MAX_FEATURE_LENGTH = 128;
+export {
+  WORKER_PROTOCOL_MAX_FEATURES,
+  WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
+} from "./worker-protocol-constants.js";
 export const WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES = 64;
 
 const WorkerCredentialSchema = Type.String({ minLength: 16, maxLength: 256 });

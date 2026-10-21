@@ -27,6 +27,10 @@ import type {
 } from "./update-doctor-config.js";
 import { UpdateDoctorLintFindingSchema } from "./update-doctor-lint-schema.js";
 import { runWithUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
+import {
+  createUpdateDoctorHistoricalScanCapture,
+  UpdateDoctorHistoricalScansSchema,
+} from "./update-doctor-scan-receipts.js";
 import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
 
@@ -96,6 +100,7 @@ const doctorResultEvidence = {
       unchanged: z.boolean(),
       fromGenerations: z.record(z.string(), z.string().nullable()).optional(),
       generations: z.record(z.string(), z.string().nullable()),
+      historicalScans: UpdateDoctorHistoricalScansSchema.optional().catch(undefined),
     })
     .optional()
     .catch(undefined),
@@ -213,6 +218,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
   let fromGenerations: UpdateDatabaseGenerations | undefined;
   let unchanged = true;
   let receipt: UpdateDatabaseWriteReceipt | undefined;
+  const historicalScans = createUpdateDoctorHistoricalScanCapture(options);
   const read = async () => {
     if (!expectedGenerations) {
       return undefined;
@@ -251,7 +257,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
           accept(pathname, before, after) {
             options.assertCurrent?.();
             const expected = expectedGenerations;
-            if (!expected || expected[pathname] !== before) {
+            if (!expected || !Object.hasOwn(expected, pathname) || expected[pathname] !== before) {
               unchanged = false;
               return;
             }
@@ -264,13 +270,15 @@ export function createUpdateDoctorDatabaseWriteCapture(
             );
           },
         },
-        operation,
+        () => historicalScans.run(operation),
       );
     },
     async admit() {
       receipt = undefined;
+      historicalScans.observe(Object.keys(expectedGenerations ?? {}));
       const generations = await read();
       if (generations && expectedGenerations) {
+        historicalScans.admit(generations);
         fromGenerations ??= generations;
         // Earlier receipts or another process's writes must never become our baseline.
         unchanged &&= Object.entries(expectedGenerations).every(
@@ -279,14 +287,25 @@ export function createUpdateDoctorDatabaseWriteCapture(
       }
     },
     async settle() {
-      const generations = await read();
+      let generations: UpdateDatabaseGenerations | undefined;
+      let cleanScans: ReturnType<typeof historicalScans.settle>;
+      try {
+        generations = await read();
+      } finally {
+        cleanScans = historicalScans.settle(generations);
+      }
       if (generations && expectedGenerations) {
         // Only native migration publications advance the expected generation.
         // Unattributed writes, including independent SQLite writers, remain unknown.
         unchanged &&= Object.entries(expectedGenerations).every(
           ([pathname, generation]) => generations[pathname] === generation,
         );
-        receipt = { unchanged, fromGenerations, generations };
+        receipt = {
+          unchanged,
+          fromGenerations,
+          generations,
+          ...(cleanScans.length ? { historicalScans: cleanScans } : {}),
+        };
       }
     },
   };

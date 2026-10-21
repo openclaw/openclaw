@@ -15,6 +15,7 @@ import {
 import { createSandboxTestContext } from "../../agents/sandbox/test-fixtures.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
 const command = () => ({ command: "true", env: {}, usePty: false });
@@ -137,6 +138,7 @@ export async function proveStoppedSandboxAuthority(
         createdAt: new Date().toISOString(),
         configPath,
         role: "gateway",
+        processNamespace: readGatewayLockProcessNamespace(),
       },
     });
     try {

@@ -29,9 +29,11 @@ import {
   type AttachmentItem,
   type AssistantAttachmentItem,
   type ImageRenderOptions,
+  type MessageMediaAction,
 } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
+import { ChatPastedText } from "./chat-pasted-text.tsx";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import { SentCommentAttachments } from "./chat-sent-comments.tsx";
 import type { AttachmentSidebarState, SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -384,12 +386,12 @@ function AttachmentContent(
         />
       </Match>
       <Match when={model().pastedText}>
-        <openclaw-chat-pasted-text
-          prop:src={pastedTextSource()}
-          prop:sizeBytes={model().media?.sizeBytes ?? attachment().sizeBytes}
-          prop:scope={scope()}
-          prop:onOpen={model().openAttachmentSidebar}
-          prop:admission={props.admission}
+        <ChatPastedText
+          src={pastedTextSource()}
+          sizeBytes={model().media?.sizeBytes ?? attachment().sizeBytes}
+          scope={scope()}
+          onOpen={model().openAttachmentSidebar}
+          admission={props.admission}
         />
       </Match>
       <Match when={ready() && model().imageAttachment}>
@@ -498,4 +500,76 @@ function AttachmentContent(
       </Match>
     </Switch>
   );
+}
+
+/** Catalog rows retain the native admission, source, retry and sidebar policies. */
+export function MessageAttachmentAction(
+  props: AttachmentProps & {
+    item: AssistantAttachmentItem;
+    render: (action: () => MessageMediaAction) => SolidJSX.Element;
+  },
+): SolidJSX.Element {
+  return (
+    <Show
+      when={props.item.type === "attachment" && props.item}
+      fallback={props.render(() => ({
+        pending: false,
+        reason:
+          props.item.type === "attachment_error"
+            ? attachmentFailureReason(props.item.attachment.code)
+            : undefined,
+      }))}
+    >
+      {(item) => (
+        <ChatAttachmentAdmission
+          attachments={[item().attachment]}
+          options={props.options}
+          render={(admission) => (
+            <AttachmentActionContent
+              item={item()}
+              options={props.options}
+              onOpenSidebar={props.onOpenSidebar}
+              admission={admission}
+              render={props.render}
+            />
+          )}
+        />
+      )}
+    </Show>
+  );
+}
+
+function AttachmentActionContent(
+  props: AttachmentProps & {
+    item: AttachmentItem;
+    admission: AttachmentAdmission;
+    render: (action: () => MessageMediaAction) => SolidJSX.Element;
+  },
+): SolidJSX.Element {
+  const refreshAttachment = () => void refresh(model);
+  const model = createMemo(() => {
+    observeChatMediaResourceSubscriber(props.options.mediaOwner, refreshAttachment);
+    return prepareAttachment({
+      ...props,
+      presentation: "card",
+      options: { ...props.options, onMediaChange: refreshAttachment },
+    });
+  });
+  onCleanup(() => releaseChatMediaResourceOwner(refreshAttachment));
+  const action = createMemo<MessageMediaAction>(() => ({
+    pending: !model().resolved || model().resolved?.status === "checking",
+    reason:
+      model().resolved?.status === "unavailable"
+        ? (model().resolved?.reason ?? t("chat.attachments.unavailable"))
+        : undefined,
+    onOpen: model().resolved?.status === "unavailable" ? undefined : model().openAttachmentSidebar,
+    onRetry: model().resolved?.status === "unavailable" ? model().resolved?.onRetry : undefined,
+    onAllow:
+      model().imageAttachment && model().resolved?.status === "unavailable"
+        ? model().resolved?.onAllow
+        : undefined,
+    observeElement: props.admission.observeElement,
+    onFocus: model().resolved?.status === "unavailable" ? undefined : props.admission.onAdmit,
+  }));
+  return props.render(action);
 }

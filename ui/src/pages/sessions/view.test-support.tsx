@@ -104,11 +104,6 @@ export function renderSessionsView(initial: SessionsProps, container: HTMLElemen
   flush();
 }
 
-export function disposeSessionView(container: HTMLElement) {
-  sessionViews.get(container)?.dispose();
-  sessionViews.delete(container);
-}
-
 export function disposeSessionViews() {
   for (const view of sessionViews.values()) {
     view.dispose();

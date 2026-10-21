@@ -13,7 +13,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import {
@@ -26,7 +26,6 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
-import { resolveSqliteDatabaseFilePath } from "../../infra/sqlite-database-admission.js";
 import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import {
@@ -49,12 +48,14 @@ import { createUpdateProgress } from "./progress.js";
 import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-authority.test-support.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import {
   MIGRATED_FIXTURE_NO_SERVICE,
   migratedFinalizeFixtureEntrypoint,
 } from "./update-command-migrated-fixture-entrypoint.test-support.js";
 import {
   expectMigratedPackageFinalization,
+  observeMigratedStateOpens,
   type MigratedPackageFinalizationCase,
 } from "./update-command-migrated-package.test-support.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
@@ -248,16 +249,14 @@ it.for([
       ? readDaemonRuntimePin({ kind: "gateway", env }, { programArguments: [] })
       : undefined;
     // The migration owner publishes its committed schema to the already-running updater.
-    const migrated = nodeSqlite.openNodeSqliteDatabase(database.path);
-    try {
+    {
+      using migrated = nodeSqlite.openNodeSqliteDatabase(database.path);
       migrated.exec(`
       BEGIN IMMEDIATE;
       PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};
       UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1} WHERE meta_key = 'primary';
       COMMIT;
     `);
-    } finally {
-      migrated.close();
     }
     expect(() =>
       recordUpdateRunStep(created.runId, { step: "old writer", status: "completed" }, { env }),
@@ -355,14 +354,12 @@ it.for([
                 JSON.stringify({
                   readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly,
                   progressGate: progressGate?.endpoint,
-                  ...(replay
+                  replay: replay
                     ? {
-                        replay: {
-                          path: replayEvents,
-                          refuseStep: replay === "refused" ? "receiver-second" : undefined,
-                        },
+                        path: replayEvents,
+                        refuseStep: replay === "refused" ? "receiver-second" : undefined,
                       }
-                    : {}),
+                    : undefined,
                 }),
                 ...argv.slice(2),
               ],
@@ -373,19 +370,7 @@ it.for([
         }
         if (settlement) {
           terminalFromCandidate = inspectTerminal();
-          const open = nodeSqlite.openNodeSqliteDatabase;
-          const migratedStateLocation = nodeSqlite.resolveNodeSqliteLocation(database.path);
-          vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-            // SQLite encodes Windows filenames separately from file URLs. The
-            // observer must not turn the executor's lease writes into failed cleanup.
-            const openedPath = nodeSqlite.resolveNodeSqliteLocation(
-              resolveSqliteDatabaseFilePath(args[0]),
-            );
-            if (openedPath === migratedStateLocation) {
-              oldRuntimeOpens.push(args[0]);
-            }
-            return open(...args);
-          });
+          observeMigratedStateOpens(database.path, oldRuntimeOpens);
         }
         return child;
       },
@@ -426,11 +411,10 @@ it.for([
           registerRun?.(scopedRun);
         }
         const continued = await continueMigratedUpdateInFreshProcess(
-          {
-            mutationStarted: true,
-            ...(originalFingerprint && serviceRoot
-              ? {
-                  originalManagedServiceRuntime: {
+          finishParams({
+            originalManagedServiceRuntime:
+              originalFingerprint && serviceRoot
+                ? {
                     root: serviceRoot,
                     nodeRunner: process.execPath,
                     version: "2026.9.3",
@@ -450,38 +434,21 @@ it.for([
                       targetFingerprint: unverifiedLauncher,
                     },
                     nodeIdentity: "unverified-original-service-fixture",
-                  },
-                }
-              : {}),
-            result: {
+                  }
+                : undefined,
+            result: updateResult({
               status: "error",
               reason: "doctor-failed",
               rollbackOutcome,
-              mode: "npm",
               root,
-              steps: [],
               durationMs: 0,
-            },
+            }),
             root,
-            installKindChanged: false,
             configSnapshot: {
-              path: path.join(stateDir, "openclaw.json"),
+              ...createTestConfigSnapshot({}, {}, path.join(stateDir, "openclaw.json")),
               exists: false,
               raw: null,
-              parsed: {},
-              sourceConfig: asResolvedSourceConfig({}),
-              resolved: asResolvedSourceConfig({}),
-              valid: true,
-              runtimeConfig: asRuntimeConfig({}),
-              config: asRuntimeConfig({}),
-              issues: [],
-              warnings: [],
-              legacyIssues: [],
             },
-            requestedChannel: null,
-            storedChannel: "stable",
-            channel: "stable",
-            downgradeRisk: false,
             shouldRestart: false,
             opts: { json, run: scopedRun },
             packageTransaction: {
@@ -489,36 +456,25 @@ it.for([
               rollback,
               complete: async () => {
                 stdoutAtCleanup = stdout;
-                const inspected = new DatabaseSync(database.path, { readOnly: true });
-                try {
-                  terminalAtCleanup = inspected
-                    .prepare("SELECT status, reason FROM update_runs WHERE run_id = ?")
-                    .get(created.runId);
-                } finally {
-                  inspected.close();
-                }
+                const row = inspectTerminal();
+                terminalAtCleanup = row && { status: row.status, reason: row.reason };
                 if (settlement === "package") {
                   throw new UpdateCommandPendingRecoveryFailure(
-                    {
+                    updateResult({
                       status: "error",
-                      mode: "npm",
                       root,
                       runId: run.runId,
-                      steps: [],
                       durationMs: 0,
-                    },
+                    }),
                     "fixture migrated package completion refused",
                   );
                 }
               },
             },
-            controlPlaneUpdateSentinelMeta: null,
-            preUpdatePluginInstallRecords: {},
-            startedAt: Date.now(),
             packageUpdateNodeRunner: process.execPath,
             updateStepTimeoutMs: stepBudgetMs ?? 30_000,
             rollbackBlockedReason: "state-migrated-no-rollback",
-          },
+          }),
           [
             ...progress.pendingSteps,
             ...(replay
@@ -532,15 +488,11 @@ it.for([
         settledResult = continued;
         stdoutAtExecutorSettlement = stdout;
         if (settlement === "release") {
-          const leases = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
-          try {
-            // Refuse the real owner's final DELETE, after the delegated child has settled.
-            leases.exec(
-              "CREATE TRIGGER deny_migrated_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture migrated release refused'); END",
-            );
-          } finally {
-            leases.close();
-          }
+          using leases = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
+          // Refuse the real owner's final DELETE, after the delegated child has settled.
+          leases.exec(
+            "CREATE TRIGGER deny_migrated_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture migrated release refused'); END",
+          );
         }
         if (settlement === "uncertain-cleanup") {
           throw uncertainCleanup;
@@ -641,19 +593,11 @@ it.for([
         expect(events).not.toContainEqual({ event: "service" });
         expect(terminalAtCleanup).toBeUndefined();
         expect(rollback).not.toHaveBeenCalled();
-        const inspected = new DatabaseSync(database.path, { readOnly: true });
-        try {
-          const row = inspected
-            .prepare("SELECT steps_json FROM update_runs WHERE run_id = ?")
-            .get(created.runId);
-          const steps = JSON.parse(String(row?.steps_json));
-          expect(steps).toContainEqual(
-            expect.objectContaining({ step: "receiver-first", status: "completed" }),
-          );
-          expect(steps).not.toContainEqual(expect.objectContaining({ step: "receiver-second" }));
-        } finally {
-          inspected.close();
-        }
+        const steps = JSON.parse(String(inspectTerminal()?.steps_json));
+        expect(steps).toContainEqual(
+          expect.objectContaining({ step: "receiver-first", status: "completed" }),
+        );
+        expect(steps).not.toContainEqual(expect.objectContaining({ step: "receiver-second" }));
         return;
       }
       expect(outcome).toEqual({ error: expect.any(UpdateCommandFailure) });
@@ -712,29 +656,20 @@ it.for([
     } else {
       expect(stdout).toMatch(/update failed/iu);
     }
-    const inspected = new DatabaseSync(database.path, { readOnly: true });
-    try {
-      const row = inspected
-        .prepare(
-          "SELECT status, reason, origin_json, steps_json, verification_json FROM update_runs WHERE run_id = ?",
-        )
-        .get(created.runId);
-      expect(row).toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
-      expect(JSON.parse(String(row?.verification_json)).rollbackOutcome).toEqual(rollbackOutcome);
-      expect(JSON.parse(String(row?.steps_json))).toEqual(
-        expect.arrayContaining([progress.pendingSteps.at(-1)]),
-      );
-      const origin = JSON.parse(String(row?.origin_json));
-      const driver = origin.driver;
-      expect(driver).toMatchObject({
-        host: os.hostname(),
-        pid: expect.any(Number),
-        startIdentity: expect.any(String),
-      });
-      expect(driver.pid).not.toBe(process.pid);
-      expect(origin.previousDrivers).toEqual(parentOwns ? [parentDriver] : undefined);
-    } finally {
-      inspected.close();
-    }
+    const row = inspectTerminal();
+    expect(row).toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
+    expect(JSON.parse(String(row?.verification_json)).rollbackOutcome).toEqual(rollbackOutcome);
+    expect(JSON.parse(String(row?.steps_json))).toEqual(
+      expect.arrayContaining([progress.pendingSteps.at(-1)]),
+    );
+    const origin = JSON.parse(String(row?.origin_json));
+    const driver = origin.driver;
+    expect(driver).toMatchObject({
+      host: os.hostname(),
+      pid: expect.any(Number),
+      startIdentity: expect.any(String),
+    });
+    expect(driver.pid).not.toBe(process.pid);
+    expect(origin.previousDrivers).toEqual(parentOwns ? [parentDriver] : undefined);
   },
 );

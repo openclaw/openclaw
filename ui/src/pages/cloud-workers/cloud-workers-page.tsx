@@ -21,6 +21,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 import {
   buildCloudWorkerDeletePatch,
@@ -496,31 +497,20 @@ export function CloudWorkersPage() {
           placeholder: t("cloudWorkersPage.fields.binaryPlaceholder"),
         })}
         <SettingsSection title={t("cloudWorkersPage.advanced")}>
-          <SettingsRow
+          <SettingsSelectRow
             title={t("cloudWorkersPage.fields.warmImage")}
             description={t("cloudWorkersPage.fields.warmImageHelp")}
-            control={
-              <select
-                class="settings-select"
-                aria-label={t("cloudWorkersPage.fields.warmImage")}
-                value={view.draft.warmImage}
-                disabled={saveState().busy}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
-                  if (value === "auto" || value === "on" || value === "off") {
-                    patchDraft({ warmImage: value });
-                  }
-                }}
-              >
-                <For each={["auto", "on", "off"] as const}>
-                  {(value) => (
-                    <option value={value} selected={view.draft.warmImage === value}>
-                      {t(`cloudWorkersPage.warmImage.${value}`)}
-                    </option>
-                  )}
-                </For>
-              </select>
-            }
+            value={view.draft.warmImage}
+            disabled={saveState().busy}
+            onChange={(value) => {
+              if (value === "auto" || value === "on" || value === "off") {
+                patchDraft({ warmImage: value });
+              }
+            }}
+            options={(["auto", "on", "off"] as const).map((value) => ({
+              value,
+              label: t(`cloudWorkersPage.warmImage.${value}`),
+            }))}
           />
           <For each={["setupEnv", "readyWorkers", "suspendAfter"] as const}>
             {(field) =>

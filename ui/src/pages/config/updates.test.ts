@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRoot, createSignal, merge } from "solid-js";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { UpdateScheduleState } from "../../api/types.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { projectUpdateSentinel } from "../../app/update-overlay-helpers.ts";
@@ -87,6 +88,39 @@ function nativeSettings(snapshot: NativeDeviceSettingsCapability["snapshot"]) {
 }
 
 describe("renderUpdates", () => {
+  it.each(["Update now", "Retry update"])(
+    "dispatches %s to the latest handler without replacing the button",
+    (label) => {
+      const initial = vi.fn();
+      const replacement = vi.fn();
+      const [handler, setHandler] = createRoot((dispose) => {
+        onTestFinished(dispose);
+        return createSignal<() => void>(() => initial);
+      });
+      const update = label === "Retry update" ? { updateRun: failedRun() } : undefined;
+      mountUpdates(
+        merge(createProps({ update }), {
+          get onUpdateNow() {
+            return handler();
+          },
+        }),
+      );
+      const button = () =>
+        [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+          (candidate) => candidate.textContent?.trim() === label,
+        );
+      const retained = button()!;
+
+      setHandler(() => replacement);
+      flush();
+      expect(button()).toBe(retained);
+      retained.click();
+
+      expect(initial).not.toHaveBeenCalled();
+      expect(replacement).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([
     {
       name: "checking",

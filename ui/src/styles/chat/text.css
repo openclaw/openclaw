@@ -114,6 +114,24 @@
   outline-offset: 2px;
 }
 
+.markdown-hex-color {
+  white-space: nowrap;
+}
+
+.markdown-hex-color__swatch {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  margin-inline-start: 0.3em;
+  vertical-align: -0.05em;
+  border: 1px solid var(--muted);
+  border-radius: 3px;
+  background: repeating-conic-gradient(var(--bg-elevated) 0% 25%, var(--border) 0% 50%) 50% / 8px
+    8px;
+  pointer-events: none;
+  user-select: none;
+}
+
 .chat-text :where(p, ul, ol, pre, blockquote, table, details, .markdown-table) {
   margin: 0;
 }
@@ -1272,7 +1290,8 @@
 }
 
 .chat-text :where(pre code.markdown-block-art),
-.chat-group.user .chat-text :where(pre code.markdown-block-art) {
+.chat-group.user .chat-text :where(pre code.markdown-block-art),
+.chat-tool-card__block-content code.markdown-block-art {
   display: block;
   min-width: 100%;
   width: max-content;

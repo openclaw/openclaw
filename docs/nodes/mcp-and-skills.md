@@ -41,7 +41,9 @@ Gateway:
 The headless node host starts these servers, lists their tools, and publishes
 the descriptors after connecting. Tool calls return to that node through
 `mcp.tools.call.v1`; the Gateway does not need matching MCP config or a JS
-plugin. OAuth MCP servers are not supported by this node-hosted v1 path.
+plugin. OAuth and enterprise-managed MCP authorization are not supported by this
+node-hosted v1 path. Configure enterprise servers in `mcp.servers` on the Gateway
+and run `openclaw mcp login <server-name>` there.
 
 Current node hosts declare the built-in `mcp.tools.call.v1` command family during
 their initial pairing even when no MCP server is configured. A node paired on an

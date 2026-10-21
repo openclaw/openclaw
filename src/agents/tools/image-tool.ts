@@ -19,11 +19,14 @@ import type { ImageCompressionPolicy } from "../../media/web-media.js";
 import { resolvePluginCapabilityProvider } from "../../plugins/capability-provider-runtime.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
+import type { AgentToolResult } from "../runtime/index.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import { optionalFiniteNumberSchema, optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
+import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { readFiniteNumberParam, readPositiveIntegerParam, type AnyAgentTool } from "./common.js";
 import {
   coerceImageModelConfig,
@@ -37,7 +40,6 @@ import {
   resolveImageModelConfigForOverride,
   runImagePrompt,
 } from "./image-tool.model-execution.js";
-import { buildNativeImageToolResult, type LoadedImageForTool } from "./image-tool.result.js";
 import {
   buildMediaReferenceDetails,
   buildTextToolResult,
@@ -60,6 +62,13 @@ import { textResult } from "./tool-results.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
+
+type LoadedImageForTool = {
+  buffer: Buffer;
+  mimeType: string;
+  resolvedInput: string;
+  rewrittenFrom?: string;
+};
 
 function modelRefProvider(candidate: string | null | undefined): string | undefined {
   const trimmed = candidate?.trim();
@@ -220,12 +229,6 @@ function resolveImageModelConfigForTool(params: {
     isProviderConfigured: (provider) =>
       verifiedSubstituteProvider && provider === verifiedSubstituteProvider ? true : undefined,
   });
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageToolTestApi")] = {
-    resolveImageModelConfigForTool,
-  };
 }
 
 export function createImageTool(options?: {
@@ -483,7 +486,33 @@ export function createImageTool(options?: {
         }
 
         if (imageRoute.kind === "native") {
-          const result = await buildNativeImageToolResult(loadedImages, options?.config);
+          const content = await sanitizeContentBlocksImages(
+            loadedImages.map((image) => ({
+              type: "image" as const,
+              data: image.buffer.toString("base64"),
+              mimeType: image.mimeType,
+            })),
+            "image:native",
+            { ...resolveImageSanitizationLimits(options?.config), verifyDecodability: true },
+          );
+          // Sanitization replaces rejected image blocks with text at the same position.
+          const retainedImages = loadedImages.filter(
+            (_, index) => content[index]?.type === "image",
+          );
+          const result: AgentToolResult<unknown> = {
+            content: [
+              {
+                type: "text",
+                text: `Loaded ${retainedImages.length} image${retainedImages.length === 1 ? "" : "s"} into private model context for inspection; not displayed, attached, or sent to the user.`,
+              },
+              ...content,
+            ],
+            details: {
+              transport: "native",
+              ...buildMediaReferenceDetails(retainedImages, "image", { includeEmpty: true }),
+              media: { outbound: false },
+            },
+          };
           signal?.throwIfAborted();
           return result;
         }

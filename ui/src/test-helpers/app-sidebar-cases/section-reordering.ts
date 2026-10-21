@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import {
   catalogPage,
   createGatewayHarness,
@@ -124,6 +125,7 @@ describe("AppSidebar section reordering", () => {
     const { sidebar, harness, section } = await mountWithGroups(["Done"], [], {
       groupSessions: true,
     });
+    await activateSessionMenuValue(sidebar, "empty-groups:never");
     const source = sidebar.querySelector('[data-session-key="agent:main:group-0"]');
     const groupsSection = section("groups");
     expect(source).not.toBeNull();

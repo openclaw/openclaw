@@ -284,7 +284,13 @@ try {
           });
           await instance.startGateway();
           const nodeIdentity = loadOrCreateDeviceIdentity({
-            path: path.join(instance.homeDir, "proof-node-device.sqlite"),
+            path: path.join(
+              instance.homeDir,
+              "proof-clients",
+              "node",
+              "client",
+              "credentials.sqlite",
+            ),
           });
           const nodeId = nodeIdentity.deviceId;
           node = await connectProofClient(instance, {
@@ -326,7 +332,13 @@ try {
             role: "operator",
             scopes: ["operator.admin", "operator.read", "operator.write", "operator.pairing"],
             deviceIdentity: loadOrCreateDeviceIdentity({
-              path: path.join(instance.homeDir, "proof-operator-device.sqlite"),
+              path: path.join(
+                instance.homeDir,
+                "proof-clients",
+                "operator",
+                "client",
+                "credentials.sqlite",
+              ),
             }),
           });
           const pairing = await operator.request<{

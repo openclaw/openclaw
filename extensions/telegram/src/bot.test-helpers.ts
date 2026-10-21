@@ -21,9 +21,7 @@ export type TelegramTestMiddleware = (
   next: () => Promise<void>,
 ) => Promise<void> | void;
 
-type MiddlewareUseSpy = {
-  mock: { calls: unknown[][] };
-};
+type MiddlewareUseSpy = { mock: { calls: unknown[][] } };
 
 type ChannelInboundModule = typeof import("openclaw/plugin-sdk/channel-inbound");
 type ChannelInboundRunParams = Parameters<ChannelInboundModule["runChannelInboundEvent"]>[0];
@@ -149,11 +147,7 @@ export async function runTelegramTestMiddlewareChain(
     }
     index = nextIndex;
     const middleware = middlewares[nextIndex];
-    if (!middleware) {
-      await finalHandler(ctx);
-      return;
-    }
-    await middleware(ctx, async () => dispatch(nextIndex + 1));
+    await (middleware ? middleware(ctx, async () => dispatch(nextIndex + 1)) : finalHandler(ctx));
   };
   await dispatch(0);
 }

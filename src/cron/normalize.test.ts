@@ -238,6 +238,7 @@ it.each<[UnknownRecord, UnknownRecord]>([
     { ...STALE_SCHEDULE, kind: "on-exit" },
   ],
   [{ kind: "on-exit", command: " printf %s hello\\ ", cwd: "/repo" }, {}],
+  [{ kind: "on-exit", command: "make build", cwd: "/repo/job " }, {}],
 ])("canonicalizes %j schedules on create and patch", (expected, overrides) => {
   const input = { ...structuredClone(expected), ...overrides };
   const created = createMain({ schedule: input });
@@ -362,7 +363,7 @@ it("defaults command jobs while retaining argv bytes and normalizing execution o
   const payload = {
     kind: "command",
     argv: ["printf", "%s", "  padded value  "],
-    cwd: "/srv/example",
+    cwd: " /srv/example ",
     env: { FOO: "bar" },
     timeoutSeconds: 30,
     noOutputTimeoutSeconds: 5,

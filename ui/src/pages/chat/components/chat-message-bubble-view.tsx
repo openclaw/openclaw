@@ -20,6 +20,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
@@ -27,7 +28,7 @@ import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import "../../../components/solid/person-reference.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
-import { ChatPermissionCard } from "./chat-divider.tsx";
+import { ChatClawHubCard } from "./chat-clawhub-card.tsx";
 import { ActivityOperation } from "./chat-message-activity-operation.tsx";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
@@ -41,7 +42,6 @@ import {
 } from "./chat-message-bubble-presentation.ts";
 import { MessageWorkContext } from "./chat-message-context-view.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
-import "./chat-clawhub-card.ts";
 import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import type { MarkdownMedia, PositionedMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
@@ -52,6 +52,7 @@ import {
   releaseChatMediaResourceOwner,
 } from "./chat-message-media.ts";
 import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-view.tsx";
+import { ChatPermissionCard } from "./chat-permission-card.tsx";
 import { ReplyLineView } from "./chat-reply-attribution.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
@@ -115,12 +116,15 @@ export function GroupedMessage(props: GroupedMessageProps) {
         <Show when={!state().empty}>
           {(_visible) => {
             const entryRef = messageElements?.forKey(initialMessageKey);
-            onCleanup(() => entryRef?.(undefined));
+            const bindEntry = elementRef((element) => {
+              entryRef?.(element);
+              return () => entryRef?.(undefined);
+            });
             return (
               <>
                 <div
                   class={state().bubbleClasses}
-                  ref={(element) => entryRef?.(element)}
+                  ref={[bindEntry]}
                   data-message-id={props.messageKey}
                   data-file-session-key={props.options.fileLinkSessionKey}
                   data-entry-id={props.options.entryId || undefined}
@@ -198,13 +202,16 @@ export function GroupedMessage(props: GroupedMessageProps) {
     >
       {(conflict) => {
         const entryRef = messageElements?.forKey(initialMessageKey);
-        onCleanup(() => entryRef?.(undefined));
+        const bindEntry = elementRef((element) => {
+          entryRef?.(element);
+          return () => entryRef?.(undefined);
+        });
         return (
           <WorkspaceConflictTranscriptMessage
             conflict={conflict()}
             messageKey={props.messageKey}
             entryId={props.options.entryId}
-            ref={entryRef}
+            ref={bindEntry}
           />
         );
       }}
@@ -458,12 +465,7 @@ function BubbleContents(props: ContentProps) {
     <>
       <Show when={props.state().sourceRole === "assistant"}>
         <For each={props.state().clawHubCards} keyed={(card) => card.id}>
-          {(card) => (
-            <openclaw-chat-clawhub-card
-              prop:recommendation={card()}
-              prop:agentId={props.options.agentId}
-            />
-          )}
+          {(card) => <ChatClawHubCard recommendation={card()} agentId={props.options.agentId} />}
         </For>
       </Show>
       <PairingQrNotices count={props.state().expiredPairingQrCount} />

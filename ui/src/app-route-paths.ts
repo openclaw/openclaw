@@ -350,15 +350,23 @@ export function pluginCatalogIdFromPath(pathname: string, basePath = ""): string
 }
 
 export function pathForClawCatalogEntry(packageName: string, basePath = ""): string {
-  const match = /^@openclaw\/([a-z0-9][a-z0-9._-]*)$/u.exec(packageName);
-  if (!match) {
-    throw new Error("Only official Claws can be opened from a route path.");
+  if (!isClawCatalogPackageName(packageName)) {
+    throw new Error("Invalid Claw package name for a route path.");
   }
-  return `${pathForRoute("claws", basePath)}/${match[1]}`;
+  return `${pathForRoute("claws", basePath)}/packages/${encodeURIComponent(packageName)}`;
+}
+
+function isClawCatalogPackageName(value: string): boolean {
+  return /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(value);
 }
 
 export function clawCatalogPackageNameFromPath(pathname: string, basePath = ""): string | null {
   const slug = routePathSuffix(pathname, "claws", basePath);
+  if (slug?.startsWith("packages/")) {
+    const packageName = decodeRouteSegment(slug.slice("packages/".length));
+    return packageName && isClawCatalogPackageName(packageName) ? packageName : null;
+  }
+  // Preserve the original official-only detail links.
   return slug && /^[a-z0-9][a-z0-9._-]*$/u.test(slug) ? `@openclaw/${slug}` : null;
 }
 

@@ -243,7 +243,7 @@ export function createActivityPageState(context: ApplicationContext) {
       ? pageKind === "refresh"
         ? { ...previousState, refreshError: undefined }
         : { ...previousState, [pageStatus]: "loading" }
-      : { status: "loading", waitingForGateway: false };
+      : { status: "loading" };
     publish();
     const requestSelectorKey = inspectorRequestKey(routeData);
     const isCurrent = () =>
@@ -421,6 +421,7 @@ export function createActivityPageState(context: ApplicationContext) {
     agents: projectOwner(context.agents, (source) => source.state),
     read: projection.read,
     revision: projection.revision,
+    subscribe: projection.subscribe,
     setRouteLocation,
     syncSessionActivity,
     syncRunInspector,

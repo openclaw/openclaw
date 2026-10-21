@@ -1,6 +1,7 @@
 import { render, spread } from "@solidjs/web";
 import { createMemo, createSignal, For, onCleanup, runWithOwner, Show } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { presenceConnectionDescriptions } from "../lib/presence-connections.ts";
 import {
@@ -10,7 +11,7 @@ import {
   presenceUserLabel,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
-import { getLocale, i18nRevision, t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, getLocale, i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { createResizeObserver } from "../lib/reactive/observers.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
@@ -23,6 +24,7 @@ import {
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
+import { ElapsedTime } from "./elapsed-time.tsx";
 import type { PersonActivityData } from "./person-activity-data.ts";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
 import {
@@ -31,8 +33,9 @@ import {
   HovercardControlsContext,
 } from "./portaled-hovercard-focus.ts";
 import { Icon } from "./solid/icon.tsx";
-import "./elapsed-time.tsx";
 import "./viewer-facepile.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 type ScopedSession = { row: GatewaySessionRow; agentId: string };
 type PersonCardInput = {
@@ -90,10 +93,10 @@ function Elapsed(props: {
       title={localizedDate()}
       aria-label={props.display === "minute-compact" ? undefined : localizedDate()}
     >
-      <openclaw-elapsed-time
-        prop:startMs={props.timestamp}
-        prop:minimumUnit={props.display === "minute-compact" ? "minute" : "second"}
-        prop:singleUnit={props.display === "single-unit"}
+      <ElapsedTime
+        startMs={props.timestamp}
+        minimumUnit={props.display === "minute-compact" ? "minute" : "second"}
+        singleUnit={props.display === "single-unit"}
       />
     </time>
   );

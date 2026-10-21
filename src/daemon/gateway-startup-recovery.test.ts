@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { captureStalledGatewayStartup } from "../infra/gateway-startup-owner.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
@@ -21,27 +22,22 @@ let env: NodeJS.ProcessEnv;
 let startTime: number;
 let startupAt: number;
 
+async function spawnFixture() {
+  const child = spawn(
+    process.execPath,
+    ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.send('ready');"],
+    { stdio: ["ignore", "ignore", "ignore", "ipc"] },
+  );
+  const ready = once(child, "message");
+  children.push({ child, exited: once(child, "exit") });
+  await ready;
+  return child;
+}
+
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: directories.make("stalled-gateway-") };
-  for (let index = 0; index < 2; index += 1) {
-    const child = spawn(
-      process.execPath,
-      [
-        "-e",
-        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.send('ready');",
-      ],
-      { stdio: ["ignore", "ignore", "ignore", "ipc"] },
-    );
-    const ready = once(child, "message");
-    children.push({ child, exited: once(child, "exit") });
-    await ready;
-  }
-  const [held, other] = children;
-  if (!held || !other) {
-    throw new Error("Fixture children unavailable");
-  }
-  holder = held.child;
-  unrelated = other.child;
+  holder = await spawnFixture();
+  unrelated = await spawnFixture();
   const identity = processes.getFileLockProcessStartTime(holder.pid!);
   if (identity === null) {
     throw new Error("Fixture process start identity unavailable");
@@ -54,6 +50,7 @@ beforeAll(async () => {
       pid: holder.pid!,
       ownerId: "stalled-owner",
       startTime,
+      processNamespace: readGatewayLockProcessNamespace(),
       role: "gateway",
       createdAt: new Date(startupAt).toISOString(),
       configPath: path.join(env.OPENCLAW_STATE_DIR!, "openclaw.json"),

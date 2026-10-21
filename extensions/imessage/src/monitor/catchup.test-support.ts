@@ -168,15 +168,16 @@ describe("catchup", () => {
     const config = resolveCatchupConfig({ enabled: true });
     const now = 1_700_001_000_000;
 
+    beforeEach(() => {
+      vi.spyOn(Date, "now").mockReturnValue(now);
+    });
+
     function run(
-      options: Omit<
-        Parameters<typeof performIMessageCatchup>[0],
-        "accountId" | "now" | "config"
-      > & {
+      options: Omit<Parameters<typeof performIMessageCatchup>[0], "accountId" | "config"> & {
         config?: Parameters<typeof performIMessageCatchup>[0]["config"];
       },
     ) {
-      return performIMessageCatchup({ accountId: "primary", config, now, ...options });
+      return performIMessageCatchup({ accountId: "primary", config, ...options });
     }
 
     function row(overrides: Partial<IMessageCatchupRow>): IMessageCatchupRow {
@@ -207,7 +208,6 @@ describe("catchup", () => {
       const summary = await run({ fetch, dispatch });
 
       expect(summary).toMatchObject({ querySucceeded: true, replayed: 2, failed: 0 });
-      expect(summary.cursorAfter.lastSeenRowid).toBe(11);
       expect(dispatch).toHaveBeenCalledTimes(2);
 
       const cursor = await loadCursor();
@@ -225,7 +225,7 @@ describe("catchup", () => {
       const summary = await run({ fetch, dispatch, observeSkippedFromMe });
 
       expect(summary).toMatchObject({ skippedFromMe: 1, replayed: 1 });
-      expect(summary.cursorAfter.lastSeenRowid).toBe(11);
+      await expectCursor({ lastSeenRowid: 11 });
       expect(dispatch).toHaveBeenCalledTimes(1);
       expect(observeSkippedFromMe).toHaveBeenCalledWith(
         expect.objectContaining({ guid: "A", rowid: 10, isFromMe: true }),
@@ -242,8 +242,9 @@ describe("catchup", () => {
 
       const summary = await run({ config: tightConfig, fetch, dispatch });
 
-      expect(summary).toMatchObject({ skippedPreCursor: 1, replayed: 1 });
-      expect(summary.cursorAfter.lastSeenRowid).toBe(11);
+      expect(summary.replayed).toBe(1);
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ guid: "NEW" }));
+      await expectCursor({ lastSeenRowid: 11 });
     });
 
     it("crosses the maxFailureRetries ceiling, gives up, and advances past the wedged row", async () => {
@@ -253,16 +254,16 @@ describe("catchup", () => {
 
       // First failure holds the cursor below the row; the second reaches the ceiling.
       const first = await run({ config: tightConfig, fetch, dispatch });
-      expect(first).toMatchObject({ failed: 1, givenUp: 0, cursorAfter: { lastSeenRowid: 9 } });
+      expect(first).toMatchObject({ failed: 1, givenUp: 0 });
       await expectCursor({ lastSeenRowid: 9, failureRetries: { A: 1 } });
 
       const fetch2 = fetchOf([row({ guid: "A", rowid: 10 })]);
       const summary = await run({ config: tightConfig, fetch: fetch2, dispatch });
 
       expect(summary.givenUp).toBe(1);
-      expect(summary.cursorAfter.lastSeenRowid).toBe(10);
 
       const cursor = await loadCursor();
+      expect(cursor?.lastSeenRowid).toBe(10);
       expect(cursor?.failureRetries?.A).toBe(2);
     });
 
@@ -309,7 +310,6 @@ describe("catchup", () => {
       const summary = await run({ fetch, dispatch });
 
       expect(summary).toMatchObject({ failed: 1, replayed: 1, givenUp: 0 });
-      expect(summary.cursorAfter.lastSeenRowid).toBe(9);
       expect(dispatch).toHaveBeenCalledTimes(2);
 
       await expectCursor({ lastSeenRowid: 9, failureRetries: { A: 1 } });
@@ -325,7 +325,6 @@ describe("catchup", () => {
       const summary = await run({ fetch, dispatch });
 
       expect(summary.failed).toBe(1);
-      expect(summary.cursorAfter.lastSeenRowid).toBe(9);
 
       await expectCursor({ lastSeenRowid: 9, failureRetries: { A: 1 } });
     });
@@ -343,7 +342,6 @@ describe("catchup", () => {
       const summary = await run({ fetch, dispatch });
 
       expect(summary).toMatchObject({ querySucceeded: true, replayed: 0, fetchedCount: 0 });
-      expect(summary.cursorAfter.lastSeenRowid).toBe(42);
       expect(dispatch).not.toHaveBeenCalled();
 
       await expectCursor({ lastSeenRowid: 42, lastSeenMs: now - 5_000 });
@@ -361,7 +359,7 @@ describe("catchup", () => {
       const summary = await run({ fetch, dispatch });
 
       expect(summary.failed).toBe(1);
-      expect(summary.cursorAfter.lastSeenRowid).toBe(9);
+      await expectCursor({ lastSeenRowid: 9 });
     });
 
     it("returns querySucceeded=false and preserves the cursor on fetch failure", async () => {
@@ -385,6 +383,10 @@ describe("catchup", () => {
 
   describe("iMessage catchup cursor writes", () => {
     const now = 1_700_001_000_000;
+
+    beforeEach(() => {
+      vi.spyOn(Date, "now").mockReturnValue(now);
+    });
 
     function interceptCursorStore() {
       const state = getIMessageRuntime().state;
@@ -439,7 +441,7 @@ describe("catchup", () => {
       const dispatch = vi.fn<CatchupDispatchFn>(async () => ({ ok: true }));
 
       await expect(
-        performIMessageCatchup({ accountId: "primary", config: liveConfig, now, fetch, dispatch }),
+        performIMessageCatchup({ accountId: "primary", config: liveConfig, fetch, dispatch }),
       ).rejects.toBe(failure);
       expect(write).toHaveBeenCalledTimes(1);
       expect(fetch).toHaveBeenCalledTimes(1);

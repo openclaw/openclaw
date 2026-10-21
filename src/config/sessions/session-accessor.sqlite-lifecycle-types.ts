@@ -23,10 +23,12 @@ import type {
   SessionEntryLifecycleUpsert,
   SqliteSessionArtifactPreparationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
+import type { ConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import type {
   SessionEntryMaintenanceAgeChange,
   SessionEntryMaintenanceAgeFact,
+  SessionMaintenanceAgeContinuation,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import type {
   SessionEntryCommitContext,
@@ -200,6 +202,9 @@ export type SessionEntryMaintenanceInput = {
   forceMaintenance?: boolean;
   /** Automatic cap work yields between operations; inline cleanup remains exhaustive. */
   maxCapEntries?: number;
+  /** Automatic age scans resume after each settled page, before cap cleanup. */
+  maxAgeEntries?: number;
+  ageContinuation?: SessionMaintenanceAgeContinuation;
   maintenance: ResolvedSessionMaintenanceConfig;
   preservation: SessionMaintenancePreservationSnapshot;
   storePath: string;
@@ -299,7 +304,11 @@ export type SqliteArchiveReclamationPlan = Exclude<
   SessionMaintenanceMetadataCommand
 >;
 
-export type SqliteSessionReclamationResult =
+export type SqliteSessionReclamationResult = SqliteSessionReclamationValue & {
+  conversationPublication?: readonly ConversationPublication[];
+};
+
+type SqliteSessionReclamationValue =
   | { kind: "lifecycle-projection-plan"; value: ProjectedLifecycleMutation }
   | { kind: "lifecycle-projection-commit"; value: ProjectedLifecycleCommitResult }
   | { kind: "archive-publish-prepare"; value: TranscriptArchivePublishPlan[] }
@@ -351,6 +360,7 @@ type SessionEntryMaintenanceCounts = {
   capped: number;
 };
 export type SessionEntryMaintenancePlan = SessionEntryMaintenanceCounts & {
+  ageContinuation?: SessionMaintenanceAgeContinuation;
   /** An exhaustive over-cap scan found only durable protection, without runtime/recent guards. */
   durableNoCandidates?: true;
   /** Exact rows written by planning; parent publication must not rescan the store. */
