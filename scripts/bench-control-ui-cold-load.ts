@@ -1,6 +1,7 @@
 // Opt-in production-bundle benchmark; real delays model wire delivery, not test synchronization.
 // --cpu-profile: source-mapped reload/live/streaming tables and per-run/median cpu-profile.json.
 // --cpu-profile-compare <baseline cpu-profile.json>: profile and diff against that report.
+// --allocations --untraced --live-events: collected-object renderer bytes per event.
 // Sampling inflates timings: never compare profiled runs with unprofiled runs.
 // --session-event-duration-ms 135000 --session-event-ancestor-refs extends the native churn.
 // Pair built bundles with --fixture-now-ms and --live-start-at-ms (one run per process).
@@ -54,6 +55,10 @@ import {
 } from "./lib/control-ui-dashboard-probe.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
 import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
+import {
+  GATEWAY_HEAP_SAMPLE_INTERVAL,
+  readGatewayHeapProfile,
+} from "./lib/gateway-bench-profile.ts";
 
 function readRigProbeSnapshot() {
   const perf = Reflect.get(window, "__perf");
@@ -201,6 +206,7 @@ const { values } = parseArgs({
   options: {
     "cpu-profile": { type: "boolean", default: false },
     "cpu-profile-compare": { type: "string" },
+    allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
@@ -276,7 +282,16 @@ if (sidebarView !== "sessions" && sidebarView !== "online") {
   throw new Error("Expected sidebar-view sessions or online");
 }
 const cpuProfile = values["cpu-profile"] || Boolean(values["cpu-profile-compare"]);
+const allocations = values.allocations;
 const traced = !values.untraced && !values["filmstrip-only"];
+if (
+  allocations &&
+  (!values["live-events"] || !values.untraced || cpuProfile || values["filmstrip-only"])
+) {
+  throw new Error(
+    "allocations requires untraced live-events without CPU profiling or filmstrip capture",
+  );
+}
 const captureTrace = traced || values["filmstrip-only"];
 const colorScheme = values["color-scheme"];
 if (colorScheme !== undefined && colorScheme !== "light" && colorScheme !== "dark") {
@@ -642,7 +657,7 @@ try {
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, methodLatencyMs, connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, methodLatencyMs, connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !allocations && !values["session-event-churn"], sidebarCounters: !cpuProfile })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
   const url = values["full-uuid-route"]
     ? new URL(
@@ -1224,6 +1239,13 @@ try {
         });
       }
       const listOffset = sidebarLists?.stats().length ?? 0;
+      if (allocations) {
+        await cdp.send("HeapProfiler.startSampling", {
+          samplingInterval: GATEWAY_HEAP_SAMPLE_INTERVAL,
+          includeObjectsCollectedByMajorGC: true,
+          includeObjectsCollectedByMinorGC: true,
+        });
+      }
       await page.evaluate((captureProbes) => {
         if (captureProbes) {
           const read = Reflect.get(window, "__readColdLoadRigProbes");
@@ -1265,6 +1287,13 @@ try {
       }
       await page.evaluate(() => Reflect.get(window, "__coldLoad").finishLive());
       const cpuAfter = (await cdp.send("Performance.getMetrics")).metrics;
+      let allocationProfile;
+      if (allocations) {
+        const { profile: heapProfile } = await cdp.send("HeapProfiler.stopSampling");
+        const profilePath = path.join(artifactDir, `run-${run + 1}.live.heapprofile`);
+        await writeFile(profilePath, JSON.stringify(heapProfile));
+        allocationProfile = readGatewayHeapProfile(profilePath);
+      }
       if (traced || cpuProfile) {
         const liveProfile = await cdp.send("Profiler.stop");
         if (cpuProfile) {
@@ -1331,6 +1360,16 @@ try {
       const responseTasks = summarizeResponseTasks(liveTrace);
       live = {
         ...liveMetrics,
+        allocation: allocationProfile
+          ? {
+              ...allocationProfile,
+              eventCount: liveMetrics.sentEvents,
+              sampledAllocatedBytesPerEvent:
+                allocationProfile.sampledAllocatedBytes / liveMetrics.sentEvents,
+              measurement:
+                "Renderer main-isolate allocation sampling including collected objects and lightweight sidebar counters; excludes other isolates and native allocations",
+            }
+          : undefined,
         ancestorBaseline,
         milliseconds: Object.fromEntries(
           ["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"].map(

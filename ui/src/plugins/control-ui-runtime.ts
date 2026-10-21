@@ -71,6 +71,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private readonly preloads = new ControlUiPluginAssetPreloads();
   private readonly selected = new Map<ControlUiSurface, { key: string; signal: AbortSignal }>();
   private readonly listeners = new Set<() => void>();
+  private publicationRevision = 0;
   private readonly loadingOwners = new Set<Omit<ControlUiPluginOwner, "host">>();
   private loadingCatalog: "pending" | Set<string> | null = null;
   private catalogStatus: "pending" | "complete" | "failed" = "pending";
@@ -124,6 +125,10 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
 
   get hasPlugins(): boolean {
     return this.owners.size > 0 || this.loadingOwners.size > 0;
+  }
+
+  get revision(): number {
+    return this.publicationRevision;
   }
 
   get registryStatus(): "pending" | "complete" | "failed" {
@@ -585,6 +590,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   }
 
   private publish(): void {
+    this.publicationRevision += 1;
     for (const listener of this.listeners) {
       listener();
     }
