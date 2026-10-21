@@ -28,31 +28,11 @@ function expectNormalizedChunkJoin(chunks: string[], text: string) {
   expect(chunks.join(" ").replace(/\s+/g, " ").trim()).toBe(text.replace(/\s+/g, " ").trim());
 }
 
-type ChunkCase = [name: string, text: string, limit: number, expected: string[]];
+type ChunkCase = [text: string, limit: number, expected: string[]];
 
 function runChunkCases(chunker: (text: string, limit: number) => string[], cases: ChunkCase[]) {
-  it.each(cases)("%s", (_name, text, limit, expected) => {
+  it.each(cases)("chunks %j at %i", (text, limit, expected) => {
     expect(chunker(text, limit)).toEqual(expected);
-  });
-}
-
-function expectMarkdownFenceSplitCases(
-  cases: ReadonlyArray<
-    readonly [name: string, marker: string, language: string, body: string, limit: number]
-  >,
-) {
-  cases.forEach(([name, marker, language, body, limit]) => {
-    const expectedPrefix = `${marker}${language}\n`;
-    const expectedSuffix = marker;
-    const text = `${expectedPrefix}${body}\n${expectedSuffix}`;
-    const chunks = chunkMarkdownText(text, limit);
-    expect(chunks.length, name).toBeGreaterThan(1);
-    for (const chunk of chunks) {
-      expect(chunk.length, name).toBeLessThanOrEqual(limit);
-      expect(chunk.startsWith(expectedPrefix), name).toBe(true);
-      expect(chunk.trimEnd().endsWith(expectedSuffix), name).toBe(true);
-    }
-    expectFencesBalanced(chunks);
   });
 }
 
@@ -66,19 +46,9 @@ function expectNoEmptyFencedChunks(chunks: string[]) {
 }
 
 const parentheticalCases: ChunkCase[] = [
-  [
-    "keeps parenthetical phrases together",
-    "Heads up now (Though now I'm curious)ok",
-    35,
-    ["Heads up now", "(Though now I'm curious)ok"],
-  ],
-  [
-    "handles nested parentheses",
-    "Hello (outer (inner) end) world",
-    26,
-    ["Hello (outer (inner) end)", "world"],
-  ],
-  ["ignores unmatched closing parentheses", "Hello) world (ok)", 12, ["Hello)", "world (ok)"]],
+  ["Heads up now (Though now I'm curious)ok", 35, ["Heads up now", "(Though now I'm curious)ok"]],
+  ["Hello (outer (inner) end) world", 26, ["Hello (outer (inner) end)", "world"]],
+  ["Hello) world (ok)", 12, ["Hello)", "world (ok)"]],
 ];
 
 const newlineModeFence =
@@ -94,29 +64,18 @@ describe("chunkText", () => {
   });
   const multiline = "Line one\n\nLine two\n\nLine three";
   runChunkCases(chunkText, [
-    ["keeps under-limit multiline text", multiline, 1600, [multiline]],
+    [multiline, 1600, [multiline]],
     [
-      "prefers newline breaks",
       "paragraph one line\n\nparagraph two starts here and continues",
       40,
       ["paragraph one line", "paragraph two starts here and continues"],
     ],
-    ["trims final trailing whitespace", "alpha beta   ", 8, ["alpha", "beta"]],
-    [
-      "hard-breaks without whitespace",
-      "Supercalifragilisticexpialidocious",
-      10,
-      ["Supercalif", "ragilistic", "expialidoc", "ious"],
-    ],
+    ["alpha beta   ", 8, ["alpha", "beta"]],
+    ["Supercalifragilisticexpialidocious", 10, ["Supercalif", "ragilistic", "expialidoc", "ious"]],
     ...parentheticalCases,
-    ["uses later whitespace when the only newline is at index zero", "\na bcd", 5, ["\na", "bcd"]],
-    ["selects Unicode whitespace as a chunk boundary", "ab\u00a0cdef", 5, ["ab", "cdef"]],
-    [
-      "retains the whitespace base of a combining cluster after a cut",
-      "ab \u0301cd",
-      2,
-      ["ab", " \u0301", "cd"],
-    ],
+    ["\na bcd", 5, ["\na", "bcd"]],
+    ["ab\u00a0cdef", 5, ["ab", "cdef"]],
+    ["ab \u0301cd", 2, ["ab", " \u0301", "cd"]],
   ]);
 });
 
@@ -212,50 +171,35 @@ describe("chunkMarkdownText", () => {
     }
   });
 
-  it.each([
-    {
-      name: "keeps fenced blocks intact when a safe break exists",
-      run: () => {
-        const prefix = "p".repeat(60);
-        const fence = "```bash\nline1\nline2\n```";
-        const suffix = "s".repeat(60);
-        const text = `${prefix}\n\n${fence}\n\n${suffix}`;
+  it("keeps fenced blocks intact at a safe break", () => {
+    const fence = "```bash\nline1\nline2\n```";
+    const chunks = chunkMarkdownText(`${"p".repeat(60)}\n\n${fence}\n\n${"s".repeat(60)}`, 40);
+    expect(chunks.filter((chunk) => chunk.trimEnd() === fence).length).toBeGreaterThan(0);
+    expectFencesBalanced(chunks);
+  });
 
-        const chunks = chunkMarkdownText(text, 40);
-        const intactFenceChunks = chunks.filter((chunk) => chunk.trimEnd() === fence);
-        expect(intactFenceChunks.length).toBeGreaterThan(0);
-        expectFencesBalanced(chunks);
-      },
-    },
-    {
-      name: "handles multiple fence marker styles when splitting inside fences",
-      run: () =>
-        expectMarkdownFenceSplitCases([
-          ["backtick fence", "```", "txt", "a".repeat(500), 120],
-          ["tilde fence", "~~~", "sh", "x".repeat(600), 140],
-          ["long backtick fence", "````", "md", "y".repeat(600), 140],
-          ["indented fence", "  ```", "js", `  ${"z".repeat(600)}`, 160],
-        ]),
-    },
-  ] as const)("$name", ({ run }) => {
-    run();
+  it.each([
+    ["```", "txt", "a".repeat(500), 120],
+    ["~~~", "sh", "x".repeat(600), 140],
+    ["````", "md", "y".repeat(600), 140],
+    ["  ```", "js", `  ${"z".repeat(600)}`, 160],
+  ] as const)("splits %s fences", (marker, language, body, limit) => {
+    const prefix = `${marker}${language}\n`;
+    const chunks = chunkMarkdownText(`${prefix}${body}\n${marker}`, limit);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(limit);
+      expect(chunk.startsWith(prefix)).toBe(true);
+      expect(chunk.trimEnd().endsWith(marker)).toBe(true);
+    }
+    expectFencesBalanced(chunks);
   });
 
   runChunkCases(chunkMarkdownText, [
     ...parentheticalCases,
-    [
-      "preserves newline and whitespace boundaries after the first chunk",
-      "aa bb\ncc dd\nee ff gg hh",
-      6,
-      ["aa bb", "cc dd", "ee ff", "gg hh"],
-    ],
-    [
-      "retains whitespace with an attached combining mark at a prose cut",
-      "abc \u0301def",
-      4,
-      ["abc", " \u0301de", "f"],
-    ],
-    ["consumes only one ordinary prose space at a cut", "abc  def", 4, ["abc", " def"]],
+    ["aa bb\ncc dd\nee ff gg hh", 6, ["aa bb", "cc dd", "ee ff", "gg hh"]],
+    ["abc \u0301def", 4, ["abc", " \u0301de", "f"]],
+    ["abc  def", 4, ["abc", " def"]],
   ]);
 
   it("hard-breaks when a parenthetical exceeds the limit", () => {

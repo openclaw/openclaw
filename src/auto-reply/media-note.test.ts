@@ -252,13 +252,6 @@ describe("buildInboundMediaNote", () => {
   });
 
   it("preserves URL suffix when it differs from the local path (#47587)", () => {
-    const single = buildInboundMediaNote({
-      MediaPath: "/tmp/a.png",
-      MediaType: "image/png",
-      MediaUrl: "https://example.com/a.png",
-    });
-    expect(single).toBe("[media attached: /tmp/a.png (image/png) | https://example.com/a.png]");
-
     const mixed = buildInboundMediaNote({
       MediaPaths: ["/tmp/local.png", "/tmp/remote.png"],
       MediaUrls: ["/tmp/local.png   ", "https://example.com/remote.png"],

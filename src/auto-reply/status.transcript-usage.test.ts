@@ -34,6 +34,19 @@ const openrouterArgs = {
 function usage(input: number, output: number, cacheRead: number, totalTokens: number) {
   return { input, output, cacheRead, cacheWrite: 0, totalTokens };
 }
+const freshUsage = (totalTokens: number) => ({
+  totalTokens,
+  totalTokensFresh: true,
+  totalTokensVersion: 1 as const,
+});
+function transcriptScope(agentId: string, sessionId: string) {
+  return {
+    agentId,
+    sessionId,
+    sessionKey: `agent:${agentId}:main`,
+    storePath: resolveSessionStorePathCore(undefined, { agentId }),
+  };
+}
 beforeEach(() => configureCliBackend());
 afterEach(() => cliBackendsTesting.resetDepsForTest());
 
@@ -74,12 +87,7 @@ describe("status transcript usage and model context", () => {
     model?: string;
     usage?: ReturnType<typeof usage>;
   }) {
-    const scope = {
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: `agent:${params.agentId}:main`,
-      storePath: resolveSessionStorePathCore(undefined, { agentId: params.agentId }),
-    };
+    const scope = transcriptScope(params.agentId, params.sessionId);
     replaceSessionEntrySync(scope, { sessionId: params.sessionId, updatedAt: Date.now() });
     appendTranscriptMessageSync(scope, {
       message: {
@@ -118,15 +126,9 @@ describe("status transcript usage and model context", () => {
       });
 
       expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
-      appendTranscriptMessageSync(
-        {
-          agentId: "worker1",
-          sessionId,
-          sessionKey: "agent:worker1:main",
-          storePath: resolveSessionStorePathCore(undefined, { agentId: "worker1" }),
-        },
-        { message: { role: "assistant", usage: { input: 2_000, output: 20, totalTokens: 2_000 } } },
-      );
+      appendTranscriptMessageSync(transcriptScope("worker1", sessionId), {
+        message: { role: "assistant", usage: { input: 2_000, output: 20, totalTokens: 2_000 } },
+      });
       const updated = await buildTranscriptStatusText({
         sessionId,
         sessionKey: "agent:worker1:telegram:12345",
@@ -179,22 +181,14 @@ describe("status transcript usage and model context", () => {
     await withStatusHome(async () => {
       const sessionId = "sess-cache-delivery-mirror";
       writeTranscriptUsageLog({ agentId: "main", sessionId });
-      appendTranscriptMessageSync(
-        {
-          agentId: "main",
-          sessionId,
-          sessionKey: "agent:main:main",
-          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      appendTranscriptMessageSync(transcriptScope("main", sessionId), {
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          usage: usage(0, 0, 0, 0),
         },
-        {
-          message: {
-            role: "assistant",
-            provider: "openclaw",
-            model: "delivery-mirror",
-            usage: usage(0, 0, 0, 0),
-          },
-        },
-      );
+      });
 
       const text = await buildTranscriptStatusText({
         sessionId,
@@ -206,37 +200,50 @@ describe("status transcript usage and model context", () => {
     });
   });
 
-  it("keeps transcript-derived slash model ids in their admitted provider catalog", async () => {
-    await withStatusHome(async () => {
-      const sessionId = "sess-openrouter-google";
-      writeTranscriptUsageLog({
-        agentId: "main",
-        sessionId,
-        model: "google/gemini-2.5-pro",
-        usage: usage(2, 3, 1200, 1205),
-      });
-
-      const text = await buildTranscriptUsageStatusMessage({
-        ...openrouterArgs,
-        sessionEntry: {
+  it.each([
+    ["slash", "google/gemini-2.5-pro", openrouterArgs, "999k", "2.0m"],
+    [
+      "bare",
+      "gemini-2.5-pro",
+      {
+        ...modelArgs("google-gemini-cli", "gemini-2.5-pro"),
+        thinkingCatalog: [
+          { provider: "google-gemini-cli", id: "gemini-2.5-pro", contextWindow: 1_000_000 },
+          { provider: "google", id: "gemini-2.5-pro", contextWindow: 128_000 },
+        ],
+      },
+      "1.0m",
+      "128k",
+    ],
+  ] as const)(
+    "keeps transcript-derived %s model ids in their admitted provider catalog",
+    async (_kind, model, args, context, otherContext) => {
+      await withStatusHome(async () => {
+        const sessionId = "catalog-context";
+        writeTranscriptUsageLog({
+          agentId: "main",
           sessionId,
-          totalTokens: 5,
-        },
+          model,
+          usage: usage(2, 3, 1200, 1205),
+        });
+        const normalized = normalizeTestText(
+          await buildTranscriptUsageStatusMessage({
+            ...args,
+            thinkingCatalog: [...args.thinkingCatalog],
+            sessionEntry: { sessionId, totalTokens: 5 },
+          }),
+        );
+        expect(normalized).toContain(`Context: 1.2k/${context}`);
+        expect(normalized).not.toContain(`Context: 1.2k/${otherContext}`);
       });
-
-      const normalized = normalizeTestText(text);
-      expect(normalized).toContain("Context: 1.2k/999k");
-      expect(normalized).not.toContain("Context: 1.2k/2.0m");
-    });
-  });
+    },
+  );
 
   it("keeps runtime slash model ids in their admitted provider catalog when modelProvider is missing", () => {
     const text = buildStatusMessage({
       ...openrouterArgs,
       sessionEntry: {
-        totalTokens: 1205,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
+        ...freshUsage(1205),
         model: "google/gemini-2.5-pro",
       },
     });
@@ -261,9 +268,7 @@ describe("status transcript usage and model context", () => {
         ...route.sessionEntry,
         modelProvider: undefined,
         model: "fake-minimax/FakeMiniMax-M2.5",
-        totalTokens: 49_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
+        ...freshUsage(49_000),
       },
     });
 
@@ -279,41 +284,11 @@ describe("status transcript usage and model context", () => {
       config: providerModels(["openai", "gpt-4o", { contextWindow: 777_000 }]),
       sessionEntry: {
         model: "openai/gpt-4o",
-        totalTokens: 49_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
+        ...freshUsage(49_000),
       },
     });
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Context: 49k/777k");
-  });
-
-  it("keeps bare transcript model ids in their admitted provider catalog", async () => {
-    await withStatusHome(async () => {
-      const sessionId = "sess-google-bare-model";
-      writeTranscriptUsageLog({
-        agentId: "main",
-        sessionId,
-        model: "gemini-2.5-pro",
-        usage: usage(2, 3, 1200, 1205),
-      });
-
-      const text = await buildTranscriptUsageStatusMessage({
-        ...modelArgs("google-gemini-cli", "gemini-2.5-pro"),
-        thinkingCatalog: [
-          { provider: "google-gemini-cli", id: "gemini-2.5-pro", contextWindow: 1_000_000 },
-          { provider: "google", id: "gemini-2.5-pro", contextWindow: 128_000 },
-        ],
-        sessionEntry: {
-          sessionId,
-          totalTokens: 5,
-        },
-      });
-
-      const normalized = normalizeTestText(text);
-      expect(normalized).toContain("Context: 1.2k/1.0m");
-      expect(normalized).not.toContain("Context: 1.2k/128k");
-    });
   });
 });
