@@ -14,7 +14,6 @@ import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "./exec-defaults.js";
 import type { InstalledSkill } from "./installed-skill-catalog.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
-import type { ResolvedOpenClawToolSession } from "./openclaw-tools.plugin-context.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -25,6 +24,11 @@ import type {
   SessionsYieldRuntimeClaim,
 } from "./tools/sessions-yield-tool.js";
 import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factory.js";
+
+export type ResolvedOpenClawToolSession = {
+  sessionKey: string | undefined;
+  sessionAgentId: string;
+};
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {

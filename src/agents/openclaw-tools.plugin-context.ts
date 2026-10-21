@@ -8,7 +8,7 @@ import { classifySessionKeyShape, parseAgentSessionKey } from "../routing/sessio
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import { modelKey } from "./model-ref-shared.js";
-import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
+import type { OpenClawToolsOptions, ResolvedOpenClawToolSession } from "./openclaw-tools.types.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 export type OpenClawPluginToolOptions = Pick<
@@ -56,11 +56,6 @@ export type OpenClawPluginToolOptions = Pick<
   activeProjectKeys?: readonly string[];
   approvalReviewerDeviceId?: string;
   resolvedSession?: ResolvedOpenClawToolSession;
-};
-
-export type ResolvedOpenClawToolSession = {
-  sessionKey: string | undefined;
-  sessionAgentId: string;
 };
 
 function resolvePluginSessionKey(
