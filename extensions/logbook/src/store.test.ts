@@ -1,100 +1,73 @@
-import {
-  copyFileSync,
-  existsSync,
-  linkSync,
-  mkdirSync,
-  mkdtempSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import * as fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { dayKeyFor } from "./day.js";
-import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { LogbookStore } from "./store.js";
+import {
+  BASE,
+  DAY,
+  batchInput,
+  cardDraft,
+  execSql,
+  frameInput,
+  readRows,
+  useLogbookFixture,
+  withDatabase,
+  workerModuleUrl,
+} from "./test-fixtures.test-support.js";
 import type { LogbookCardDraft } from "./types.js";
 
-const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
-const DAY = "2026-07-03";
-
-function draft(overrides: Partial<LogbookCardDraft> = {}): LogbookCardDraft {
-  const base = new Date(`${DAY}T10:00:00`).getTime();
-  return {
-    day: DAY,
-    startMs: base,
-    endMs: base + 30 * 60_000,
-    title: "Card",
-    summary: "Summary",
-    detail: "",
-    category: "coding",
-    appPrimary: "github.com",
-    appSecondary: undefined,
-    distractions: [],
-    keyframeId: undefined,
-    ...overrides,
-  };
-}
+const fixture = useLogbookFixture("logbook-store-");
+const draft = (overrides: Partial<LogbookCardDraft> = {}) =>
+  cardDraft({ appPrimary: "github.com", ...overrides });
 
 describe("LogbookStore", () => {
   let dir: string;
   let store: LogbookStore;
 
   beforeEach(async () => {
-    dir = mkdtempSync(path.join(tmpdir(), "logbook-store-"));
-    store = await LogbookStore.open(dir, workerModuleUrl);
+    dir = fixture.makeDir();
+    store = await fixture.open(dir);
   });
 
-  afterEach(async () => {
-    await store.close();
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  const insertFrame = async (capturedAtMs: number, opts?: { idle?: boolean; hash?: string }) => {
+  const createBatch = (ids: number[], start: number, end = start + 1000, day = dayKeyFor(start)) =>
+    store.createBatch(batchInput(ids, start, end, day));
+  const replaceCards = (drafts: LogbookCardDraft[]) =>
+    store.replaceCardsInWindow(DAY, BASE, BASE + 60_000, drafts);
+  const cardTitles = async () => (await store.cardsForDay(DAY)).map(({ title }) => title);
+  const insertFrame = async (capturedAtMs: number) => {
     const day = dayKeyFor(capturedAtMs);
     const filePath = store.frameFilePath(day, capturedAtMs);
-    mkdirSync(path.dirname(filePath), { recursive: true });
-    writeFileSync(filePath, "jpeg-bytes");
-    return await store.insertFrame({
-      capturedAtMs,
-      day,
-      path: filePath,
-      screenIndex: 0,
-      byteSize: 9,
-      contentHash: opts?.hash ?? `hash-${capturedAtMs}`,
-      idle: opts?.idle ?? false,
-    });
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "jpeg-bytes");
+    return await store.insertFrame(
+      frameInput({
+        capturedAtMs,
+        day,
+        path: filePath,
+        byteSize: 9,
+        contentHash: `hash-${capturedAtMs}`,
+      }),
+    );
   };
 
   it("refuses a hardlinked database with another frame root before bootstrapping that root", async () => {
     const capturedAtMs = Date.now();
     const frameId = await insertFrame(capturedAtMs);
     const otherRoot = path.join(dir, "another-root");
-    mkdirSync(otherRoot);
-    linkSync(path.join(dir, "logbook.sqlite"), path.join(otherRoot, "logbook.sqlite"));
-    const [result] = await Promise.allSettled([LogbookStore.open(otherRoot, workerModuleUrl)]);
-    try {
-      expect(existsSync(path.join(otherRoot, "frames"))).toBe(false);
-      expect(result).toMatchObject({
-        status: "rejected",
-        reason: { message: "SQLite database already belongs to another worker backend" },
-      });
-      expect(await store.frameById(frameId)).toMatchObject({
-        id: frameId,
-        capturedAtMs,
-        path: store.frameFilePath(dayKeyFor(capturedAtMs), capturedAtMs),
-      });
-      expect(await store.countUnbatchedActiveFrames()).toBe(1);
-    } finally {
-      if (result.status === "fulfilled") {
-        await result.value.close();
-      }
-    }
+    fs.mkdirSync(otherRoot);
+    fs.linkSync(path.join(dir, "logbook.sqlite"), path.join(otherRoot, "logbook.sqlite"));
+    await expect(fixture.open(otherRoot)).rejects.toThrow(
+      "SQLite database already belongs to another worker backend",
+    );
+    expect(fs.existsSync(path.join(otherRoot, "frames"))).toBe(false);
+    expect(await store.frameById(frameId)).toMatchObject({
+      id: frameId,
+      capturedAtMs,
+      path: store.frameFilePath(dayKeyFor(capturedAtMs), capturedAtMs),
+    });
+    expect(await store.countUnbatchedActiveFrames()).toBe(1);
   });
 
   it("rolls back large frame claims with a late missing or duplicate frame", async () => {
@@ -105,25 +78,15 @@ describe("LogbookStore", () => {
     const firstFrameId = expectDefined(frameIds[0], "first frame");
 
     for (const invalidFrameId of [999_999, firstFrameId]) {
-      await expect(
-        store.createBatch({
-          day: dayKeyFor(t0),
-          startMs: t0,
-          endMs: t0 + 1000,
-          frameIds: [...frameIds, invalidFrameId],
-        }),
-      ).rejects.toThrow(`Logbook frame ${invalidFrameId} is missing or already batched`);
+      await expect(createBatch([...frameIds, invalidFrameId], t0)).rejects.toThrow(
+        `Logbook frame ${invalidFrameId} is missing or already batched`,
+      );
 
       expect(await store.latestBatch()).toBeNull();
       expect((await store.unbatchedActiveFrames(100)).map((frame) => frame.id)).toEqual(frameIds);
     }
 
-    const batchId = await store.createBatch({
-      day: dayKeyFor(t0),
-      startMs: t0,
-      endMs: t0 + 1000,
-      frameIds,
-    });
+    const batchId = await createBatch(frameIds, t0);
     expect(await store.latestBatch()).toMatchObject({ id: batchId, frameCount: 70 });
     expect(await store.countUnbatchedActiveFrames()).toBe(0);
   });
@@ -132,21 +95,11 @@ describe("LogbookStore", () => {
     const t0 = Date.now();
     const firstFrame = await insertFrame(t0);
     const secondFrame = await insertFrame(t0 + 1000);
-    const firstBatch = await store.createBatch({
-      day: dayKeyFor(t0),
-      startMs: t0,
-      endMs: t0 + 1000,
-      frameIds: [firstFrame],
-    });
+    const firstBatch = await createBatch([firstFrame], t0);
 
-    await expect(
-      store.createBatch({
-        day: dayKeyFor(t0),
-        startMs: t0,
-        endMs: t0 + 2000,
-        frameIds: [firstFrame, secondFrame],
-      }),
-    ).rejects.toThrow(`Logbook frame ${firstFrame} is missing or already batched`);
+    await expect(createBatch([firstFrame, secondFrame], t0, t0 + 2000)).rejects.toThrow(
+      `Logbook frame ${firstFrame} is missing or already batched`,
+    );
 
     expect((await store.latestBatch())?.id).toBe(firstBatch);
     expect((await store.batchImages(firstBatch)).map(({ frame }) => frame.id)).toEqual([
@@ -157,28 +110,23 @@ describe("LogbookStore", () => {
 
   it("rejects empty and duplicate frame claims without leaving a batch", async () => {
     const t0 = Date.now();
-    await expect(
-      store.createBatch({ day: DAY, startMs: t0, endMs: t0 + 1000, frameIds: [] }),
-    ).rejects.toThrow("Logbook batch requires at least one frame");
+    await expect(createBatch([], t0, t0 + 1000, DAY)).rejects.toThrow(
+      "Logbook batch requires at least one frame",
+    );
     const frameId = await insertFrame(t0);
-    await expect(
-      store.createBatch({
-        day: DAY,
-        startMs: t0,
-        endMs: t0 + 1000,
-        frameIds: [frameId, frameId],
-      }),
-    ).rejects.toThrow(`Logbook frame ${frameId} is missing or already batched`);
+    await expect(createBatch([frameId, frameId], t0, t0 + 1000, DAY)).rejects.toThrow(
+      `Logbook frame ${frameId} is missing or already batched`,
+    );
     expect(await store.latestBatch()).toBeNull();
     expect(await store.countUnbatchedActiveFrames()).toBe(1);
   });
 
   it("round-trips distractions and computes day stats", async () => {
-    const base = new Date(`${DAY}T10:00:00`).getTime();
-    await store.replaceCardsInWindow(DAY, base, base + 60 * 60_000, [
-      draft({
-        distractions: [{ startMs: base + 5 * 60_000, endMs: base + 10 * 60_000, title: "Twitter" }],
-      }),
+    const distractions = [
+      { startMs: BASE + 5 * 60_000, endMs: BASE + 10 * 60_000, title: "Twitter" },
+    ];
+    await store.replaceCardsInWindow(DAY, BASE, BASE + 60 * 60_000, [
+      draft({ distractions }),
       draft({ title: "Review", category: "review", appPrimary: undefined, appSecondary: "" }),
     ]);
     const cards = await store.cardsForDay(DAY);
@@ -189,9 +137,7 @@ describe("LogbookStore", () => {
       keyframeId: undefined,
       distractions: [],
     });
-    expect(expectDefined(cards[0], "stored logbook card").distractions).toEqual([
-      { startMs: base + 5 * 60_000, endMs: base + 10 * 60_000, title: "Twitter" },
-    ]);
+    expect(expectDefined(cards[0], "stored logbook card").distractions).toEqual(distractions);
     const stats = (await store.timelineForDay(DAY)).stats;
     expect(stats.trackedMs).toBe(60 * 60_000);
     expect(stats.distractionMs).toBe(5 * 60_000);
@@ -207,12 +153,9 @@ describe("LogbookStore", () => {
       cards: [],
       stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
     });
-    const database = new DatabaseSync(path.join(dir, "logbook.sqlite"));
-    try {
+    withDatabase(path.join(dir, "logbook.sqlite"), (database) => {
       database.prepare("UPDATE cards SET distractions = ? WHERE title = ?").run("{", "Review");
-    } finally {
-      database.close();
-    }
+    });
     await expect(store.cardsForDay(DAY)).rejects.toThrow(/JSON/);
     await expect(store.timelineForDay(DAY)).rejects.toThrow(/JSON/);
   });
@@ -222,14 +165,14 @@ describe("LogbookStore", () => {
     const firstId = await insertFrame(now - 21 * 24 * 60 * 60_000);
     const blockedId = await insertFrame(now - 20 * 24 * 60 * 60_000);
     const blockedPath = expectDefined(await store.frameById(blockedId), "blocked frame").path;
-    rmSync(blockedPath);
-    mkdirSync(blockedPath);
+    fs.rmSync(blockedPath);
+    fs.mkdirSync(blockedPath);
 
     await expect(store.pruneFrames(now - 14 * 24 * 60 * 60_000)).rejects.toThrow();
     expect(await store.frameById(firstId)).not.toBeNull();
     expect(await store.frameById(blockedId)).not.toBeNull();
 
-    rmSync(blockedPath, { recursive: true });
+    fs.rmSync(blockedPath, { recursive: true });
     expect(await store.pruneFrames(now - 14 * 24 * 60 * 60_000)).toBe(2);
     expect(await store.frameById(firstId)).toBeNull();
     expect(await store.frameById(blockedId)).toBeNull();
@@ -246,12 +189,7 @@ describe("LogbookStore", () => {
 
   it("replaces large observation sets in order and rolls back a late invalid timestamp", async () => {
     const frameId = await insertFrame(Date.now());
-    const batchId = await store.createBatch({
-      day: DAY,
-      startMs: 1,
-      endMs: 2,
-      frameIds: [frameId],
-    });
+    const batchId = await createBatch([frameId], 1, 2, DAY);
     const segments = Array.from({ length: 70 }, (_, index) => ({
       startMs: 1,
       endMs: 2,
@@ -259,13 +197,7 @@ describe("LogbookStore", () => {
     }));
     await store.replaceObservations(batchId, DAY, [{ startMs: 1, endMs: 2, text: "replaced" }]);
     await store.replaceObservations(batchId, DAY, segments);
-    expect(
-      (await store.observationsInRange(DAY, 0, 3)).map(({ startMs, endMs, text }) => ({
-        startMs,
-        endMs,
-        text,
-      })),
-    ).toEqual(segments);
+    expect(await store.observationsInRange(DAY, 0, 3)).toMatchObject(segments);
 
     await expect(
       store.replaceObservations(batchId, DAY, [
@@ -273,39 +205,30 @@ describe("LogbookStore", () => {
         { startMs: 1.5, endMs: 2, text: "invalid integer timestamp" },
       ]),
     ).rejects.toThrow();
-    expect((await store.observationsInRange(DAY, 0, 3)).map(({ text }) => text)).toEqual(
-      segments.map(({ text }) => text),
-    );
+    expect(await store.observationsInRange(DAY, 0, 3)).toMatchObject(segments);
 
     await store.replaceObservations(batchId, DAY, []);
     expect(await store.observationsInRange(DAY, 0, 3)).toEqual([]);
   });
 
   it("replaces large card sets in order and rolls back a late invalid timestamp", async () => {
-    const base = new Date(`${DAY}T10:00:00`).getTime();
     const drafts = Array.from({ length: 70 }, (_, index) => draft({ title: `Card ${index}` }));
-    await store.replaceCardsInWindow(DAY, base, base + 60_000, [draft({ title: "replaced" })]);
-    await store.replaceCardsInWindow(DAY, base, base + 60_000, drafts);
-    expect((await store.cardsForDay(DAY)).map(({ title }) => title)).toEqual(
-      drafts.map(({ title }) => title),
-    );
+    const titles = drafts.map(({ title }) => title);
+    await replaceCards([draft({ title: "replaced" })]);
+    await replaceCards(drafts);
+    expect(await cardTitles()).toEqual(titles);
 
     await expect(
-      store.replaceCardsInWindow(DAY, base, base + 60_000, [
-        ...drafts,
-        draft({ title: "invalid", startMs: base + 0.5 }),
-      ]),
+      replaceCards([...drafts, draft({ title: "invalid", startMs: BASE + 0.5 })]),
     ).rejects.toThrow(/INTEGER column cards\.start_ms/);
-    expect((await store.cardsForDay(DAY)).map(({ title }) => title)).toEqual(
-      drafts.map(({ title }) => title),
-    );
+    expect(await cardTitles()).toEqual(titles);
 
-    await store.replaceCardsInWindow(DAY, base, base + 60_000, []);
+    await replaceCards([]);
     expect(await store.cardsForDay(DAY)).toEqual([]);
   });
 
   it("keeps capture data owner-only on disk", () => {
-    const mode = (p: string) => statSync(p).mode & 0o777;
+    const mode = (p: string) => fs.statSync(p).mode & 0o777;
     expect(mode(dir)).toBe(0o700);
     expect(mode(store.framesDir)).toBe(0o700);
     expect(mode(path.join(dir, "logbook.sqlite"))).toBe(0o600);
@@ -314,64 +237,46 @@ describe("LogbookStore", () => {
   it("migrates legacy tables to STRICT without losing batch assignments", async () => {
     await store.close();
     const databasePath = path.join(dir, "logbook.sqlite");
-    rmSync(databasePath, { force: true });
-    const legacy = new DatabaseSync(databasePath);
-    legacy.exec(`
+    fs.rmSync(databasePath, { force: true });
+    execSql(
+      databasePath,
+      `
       CREATE TABLE batches (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        day TEXT NOT NULL,
-        start_ms INTEGER NOT NULL,
-        end_ms INTEGER NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending',
-        error TEXT,
-        frame_count INTEGER NOT NULL DEFAULT 0,
-        model TEXT,
-        created_ms INTEGER NOT NULL,
-        updated_ms INTEGER NOT NULL
+        id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL,
+        start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', error TEXT,
+        frame_count INTEGER NOT NULL DEFAULT 0, model TEXT,
+        created_ms INTEGER NOT NULL, updated_ms INTEGER NOT NULL
       );
       CREATE TABLE frames (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        captured_at_ms INTEGER NOT NULL,
-        day TEXT NOT NULL,
-        path TEXT NOT NULL,
-        screen_index INTEGER NOT NULL DEFAULT 0,
-        width INTEGER,
-        height INTEGER,
-        byte_size INTEGER NOT NULL DEFAULT 0,
-        content_hash TEXT NOT NULL,
-        idle INTEGER NOT NULL DEFAULT 0,
-        batch_id INTEGER
+        id INTEGER PRIMARY KEY AUTOINCREMENT, captured_at_ms INTEGER NOT NULL,
+        day TEXT NOT NULL, path TEXT NOT NULL, screen_index INTEGER NOT NULL DEFAULT 0,
+        width INTEGER, height INTEGER, byte_size INTEGER NOT NULL DEFAULT 0,
+        content_hash TEXT NOT NULL, idle INTEGER NOT NULL DEFAULT 0, batch_id INTEGER
       );
       INSERT INTO batches VALUES (7, '${DAY}', 10, 20, 'pending', NULL, 1, NULL, 10, 10);
       INSERT INTO frames VALUES (11, 10, '${DAY}', '/tmp/frame.jpg', 0, NULL, NULL, 1, 'hash', 0, 7);
-    `);
-    legacy.close();
+    `,
+    );
 
-    store = await LogbookStore.open(dir, workerModuleUrl);
+    store = await fixture.open(dir);
 
-    const migrated = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(migrated.prepare("SELECT id, batch_id FROM frames").all()).toEqual([
-        { id: 11, batch_id: 7 },
-      ]);
-      expect(
-        migrated
-          .prepare(
-            `SELECT name, strict FROM pragma_table_list
+    expect(readRows(databasePath, "SELECT id, batch_id FROM frames")).toEqual([
+      { id: 11, batch_id: 7 },
+    ]);
+    expect(
+      readRows(
+        databasePath,
+        `SELECT name, strict FROM pragma_table_list
              WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
              ORDER BY name`,
-          )
-          .all(),
-      ).toEqual([
-        { name: "batches", strict: 1 },
-        { name: "cards", strict: 1 },
-        { name: "frames", strict: 1 },
-        { name: "observations", strict: 1 },
-        { name: "standups", strict: 1 },
-      ]);
-    } finally {
-      migrated.close();
-    }
+      ),
+    ).toEqual(
+      ["batches", "cards", "frames", "observations", "standups"].map((name) => ({
+        name,
+        strict: 1,
+      })),
+    );
   });
 
   it("refuses a newer schema without changing its stored data", async () => {
@@ -379,53 +284,40 @@ describe("LogbookStore", () => {
     await store.close();
     const databasePath = path.join(dir, "logbook.sqlite");
     // The future-version file must reach its first managed admission here.
-    renameSync(databasePath, `${databasePath}.seed`);
-    copyFileSync(`${databasePath}.seed`, databasePath);
-    const future = new DatabaseSync(databasePath);
-    future.exec("PRAGMA user_version = 2");
-    future.close();
+    fs.renameSync(databasePath, `${databasePath}.seed`);
+    fs.copyFileSync(`${databasePath}.seed`, databasePath);
+    execSql(databasePath, "PRAGMA user_version = 2");
 
     await expect(LogbookStore.open(dir, workerModuleUrl)).rejects.toThrow(
       "Logbook database uses newer schema version 2; this build supports 1",
     );
-    const preserved = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 2 });
-      expect(preserved.prepare("SELECT day, text FROM standups").all()).toEqual([
-        { day: DAY, text: "Preserved future-version fixture" },
-      ]);
-    } finally {
-      preserved.close();
-    }
+    expect(readRows(databasePath, "PRAGMA user_version")).toEqual([{ user_version: 2 }]);
+    expect(readRows(databasePath, "SELECT day, text FROM standups")).toEqual([
+      { day: DAY, text: "Preserved future-version fixture" },
+    ]);
   });
 
   it("rolls back a legacy STRICT migration when stored data has the wrong type", async () => {
     const legacyDir = path.join(dir, "invalid-legacy");
-    mkdirSync(legacyDir);
+    fs.mkdirSync(legacyDir);
     const databasePath = path.join(legacyDir, "logbook.sqlite");
-    const legacy = new DatabaseSync(databasePath);
-    legacy.exec(`
+    execSql(
+      databasePath,
+      `
       CREATE TABLE standups (day TEXT PRIMARY KEY, text TEXT NOT NULL, updated_ms TEXT NOT NULL);
       INSERT INTO standups VALUES ('${DAY}', 'legacy', 'not-an-integer');
-    `);
-    legacy.close();
+    `,
+    );
 
     await expect(LogbookStore.open(legacyDir, workerModuleUrl)).rejects.toThrow(
       "Failed migrating SQLite table standups to STRICT",
     );
 
-    const preserved = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(
-        preserved.prepare("SELECT strict FROM pragma_table_list WHERE name = 'standups'").get(),
-      ).toEqual({ strict: 0 });
-      expect(preserved.prepare("SELECT * FROM standups").get()).toEqual({
-        day: DAY,
-        text: "legacy",
-        updated_ms: "not-an-integer",
-      });
-    } finally {
-      preserved.close();
-    }
+    expect(
+      readRows(databasePath, "SELECT strict FROM pragma_table_list WHERE name = 'standups'"),
+    ).toEqual([{ strict: 0 }]);
+    expect(readRows(databasePath, "SELECT * FROM standups")).toEqual([
+      { day: DAY, text: "legacy", updated_ms: "not-an-integer" },
+    ]);
   });
 });

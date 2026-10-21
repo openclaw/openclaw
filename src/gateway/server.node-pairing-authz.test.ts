@@ -31,6 +31,7 @@ import {
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import {
   connectOk,
+  connectReq,
   installGatewayTestHooks,
   rpcReq,
   startServerWithClient,
@@ -629,6 +630,58 @@ describe("gateway node pairing authorization", () => {
         expect(await pendingDevice(pairedNode.identity.deviceId)).toBeUndefined();
       } finally {
         await nodeClient.stopAndWait();
+      }
+    });
+
+    test("keeps shared macOS app and CLI reconnects on the approved identity", async () => {
+      const scopes = ["operator.read", "operator.write"];
+      const platform = "macOS 26.5.2";
+      const paired = await pairDeviceIdentity({
+        name: "macos-shared-cli",
+        role: "operator",
+        scopes,
+        clientId: GATEWAY_CLIENT_NAMES.MACOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.UI,
+        platform,
+        deviceFamily: "Mac",
+      });
+      const before = await getPairedDevice(paired.identity.deviceId);
+      const token = before?.tokens?.operator?.token;
+      expect(token).toBeTruthy();
+
+      for (const [id, mode, claimedPlatform] of [
+        [GATEWAY_CLIENT_NAMES.MACOS_APP, GATEWAY_CLIENT_MODES.UI, platform],
+        [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.CLI, "macos"],
+        [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.PROBE, "darwin"],
+        [GATEWAY_CLIENT_NAMES.MACOS_APP, GATEWAY_CLIENT_MODES.UI, platform],
+        [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.CLI, "darwin"],
+        [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.PROBE, "macos"],
+      ] as const) {
+        const ws = await openTrackedWs(getStarted().port);
+        try {
+          const response = await connectReq(ws, {
+            client: { id, mode, platform: claimedPlatform, deviceFamily: "Mac", version: "1.0.0" },
+            deviceIdentityPath: paired.identityPath,
+            deviceToken: token,
+            skipDefaultAuth: true,
+            prePairDevice: false,
+            scopes: ["operator.read"],
+          });
+          expect(response.ok, `${id}/${mode}: ${JSON.stringify(response.error)}`).toBe(true);
+          expect(response.payload?.type).toBe("hello-ok");
+          expect((await rpcReq(ws, "health")).ok).toBe(true);
+          expect(await pendingDevice(paired.identity.deviceId)).toBeUndefined();
+          const after = await getPairedDevice(paired.identity.deviceId);
+          expect(after).toMatchObject({
+            publicKey: paired.publicKey,
+            platform,
+            deviceFamily: "Mac",
+            approvedScopes: scopes,
+            tokens: { operator: { token, scopes } },
+          });
+        } finally {
+          ws.close();
+        }
       }
     });
 

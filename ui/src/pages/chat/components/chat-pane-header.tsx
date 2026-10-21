@@ -233,7 +233,8 @@ function ChatPaneHeaderChrome(
               </button>
             </openclaw-tooltip>
           </Show>
-          <Show when={!props.agent}>
+          {/* Roster mode has no session crumbs beside the agent pill; rename still edits inline. */}
+          <Show when={!props.agent || props.editing}>
             <IdentityCrumbs {...props} />
           </Show>
           <Show when={!props.mergedChrome}>

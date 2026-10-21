@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createQaBusState } from "../../bus-state.js";
 import { createQaStateBackedTransportAdapter } from "../../qa-transport.js";
 import { readQaScenarioById } from "../../scenario-catalog.js";
-import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "../../suite-runtime-flow.js";
+import { runQaSuiteScenarioDefinition } from "../../suite-runtime-flow.js";
 import { createDriver, runtimeEnv } from "./runtime.test-support.js";
 import { createWhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
 
@@ -145,7 +145,6 @@ it.each([
         cfg: {},
       },
       scenario: readQaScenarioById(scenarioId),
-      runScenario: runQaSuiteScenarioSteps,
       constants: {
         imageUnderstandingPngBase64: "",
         imageUnderstandingLargePngBase64: "",

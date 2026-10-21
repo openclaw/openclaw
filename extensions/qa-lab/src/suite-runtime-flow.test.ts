@@ -110,12 +110,10 @@ function mockStepFlow(name: string, steps: QaSuiteStep[] | ((api: FlowApi) => Qa
 function runDefinition(
   env: ReturnType<typeof createQaSuiteRuntimeFlowTestEnv>,
   scenario = makeQaSuiteTestScenario("test-flow", { config: {} }),
-  runScenario = runQaSuiteScenarioSteps,
 ) {
   return runQaSuiteScenarioDefinition({
     env,
     scenario,
-    runScenario,
     constants: qaSuiteRuntimeFlowTestConstants,
   });
 }
@@ -141,7 +139,7 @@ async function captureQaGatewayLogDeps(
   const scenario = makeQaSuiteTestScenario("gateway-log-deps", { config: {} });
   createQaScenarioRuntimeApi.mockReturnValueOnce({ api: "ok" });
 
-  await runDefinition(env, scenario, vi.fn());
+  await runDefinition(env, scenario);
 
   const call = createQaScenarioRuntimeApi.mock.calls.at(-1)?.[0] as
     | { deps: QaGatewayLogDeps }
@@ -203,10 +201,9 @@ describe("qa suite runtime flow", () => {
     const scenario = makeQaSuiteTestScenario("session-memory-ranking", {
       config: { expected: "value" },
     });
-    const runScenario = vi.fn();
     createQaScenarioRuntimeApi.mockReturnValue({ api: "ok" });
 
-    const result = await runDefinition(env, scenario, runScenario);
+    const result = await runDefinition(env, scenario);
 
     expect(result).toMatchObject({ api: "ok", signal: expect.any(AbortSignal) });
     expect(createQaScenarioRuntimeApi).toHaveBeenCalledTimes(1);

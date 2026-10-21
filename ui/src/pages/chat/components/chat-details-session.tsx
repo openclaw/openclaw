@@ -18,6 +18,7 @@ import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsContext, ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import { ChatDetailsPeople, ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
+import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
 import type {
   ChatDetailsDesktopSectionId,
@@ -50,7 +51,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           () => ({
             sessionKey: host.props?.sessionKey ?? "",
             agentId: host.props?.currentAgentId ?? "main",
-            presented: host.presented && !host.desktop && Boolean(host.props?.onOpenProcesses),
+            presented: host.presented && Boolean(host.props?.onOpenProcesses),
           }),
           ProcessesPanelData,
           () => undefined,
@@ -130,7 +131,10 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           const sectionExpanded = (section: ChatDetailsDesktopSectionId) =>
             props.props?.desktopDisclosures?.expanded[section] ??
             sectionChoices()[section] ??
-            (section === "environment" || section === "subagents" || section === "automations");
+            (section === "environment" ||
+              section === "subagents" ||
+              section === "automations" ||
+              section === "processes");
           const changeSection = (section: ChatDetailsDesktopSectionId, expanded: boolean) => {
             if (!host.isConnected || !props.presented || sectionExpanded(section) === expanded) {
               return;
@@ -582,6 +586,13 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     presented={active()}
                     desktopSubagents={desktopSubagentsPresentation()}
                     showProcesses={false}
+                  />
+                  <ChatDetailsProcesses
+                    processes={processes}
+                    presented={active()}
+                    expanded={sectionExpanded("processes")}
+                    onExpandedChange={(expanded) => changeSection("processes", expanded)}
+                    onOpen={props.props?.onOpenProcesses}
                   />
                 </Show>
                 <Show when={desktopPresentation() && outputs()}>

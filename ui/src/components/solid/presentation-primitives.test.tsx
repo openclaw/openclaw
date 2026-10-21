@@ -1,7 +1,13 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentStartupState, LazyViewError, PanelErrorState } from "./lazy-view-error.tsx";
+import {
+  AgentStartupState,
+  LazyElementModal,
+  LazyViewError,
+  PanelErrorState,
+  type LazyElementState,
+} from "./lazy-view-error.tsx";
 import { LoadingState } from "./loading-state.tsx";
 import { PanelEmptyState } from "./panel-empty-state.tsx";
 import { PanelIconButton } from "./panel-icon-button.tsx";
@@ -137,6 +143,33 @@ describe("Solid presentation primitives", () => {
     expect(view.container.querySelector("details")).toBeNull();
     expect(view.queryByRole("button")).toBeNull();
   });
+
+  it.each(["button", "modal-cancel"])(
+    "closes a retained loading modal through the current callback (%s)",
+    (source) => {
+      const original = vi.fn();
+      const close = vi.fn();
+      const retry = vi.fn();
+      const state: LazyElementState = { status: "loading", element: { label: "Workspace panel" } };
+      const [updated, setUpdated] = createSignal(false);
+      const view = render(() => (
+        <LazyElementModal state={state} onRetry={retry} onClose={updated() ? close : original} />
+      ));
+      const modal = view.container.querySelector("openclaw-modal-dialog")!;
+      const button = view.getByRole("button", { name: "Close" });
+      setUpdated(true);
+      flush();
+      expect(view.container.querySelector("openclaw-modal-dialog")).toBe(modal);
+      expect(view.getByRole("button", { name: "Close" })).toBe(button);
+      if (source === "button") {
+        fireEvent.click(button);
+      } else {
+        fireEvent(modal, new Event("modal-cancel", { bubbles: true }));
+      }
+      expect(close).toHaveBeenCalledOnce();
+      expect(original).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps icon-button semantics synchronized with disabled and busy props", () => {
     const click = vi.fn();
