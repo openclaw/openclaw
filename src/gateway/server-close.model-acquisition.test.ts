@@ -47,10 +47,6 @@ it("joins managed reload acquisition during Gateway close", async () => {
     });
   });
   const restorers: Array<() => void> = [];
-  const postReadyMaintenance = vi
-    .spyOn(await import("./server-runtime-services.js"), "scheduleGatewayPostReadyMaintenance")
-    .mockImplementation(() => {});
-  restorers.push(() => postReadyMaintenance.mockRestore());
   const bridgeKey = `__managed_model_close_${path.basename(fixture.state.root)}`;
   Object.defineProperty(globalThis, bridgeKey, {
     configurable: true,
@@ -92,6 +88,10 @@ it("joins managed reload acquisition during Gateway close", async () => {
     };`,
   );
   try {
+    const postReadyMaintenance = vi
+      .spyOn(await import("./server-runtime-services.js"), "scheduleGatewayPostReadyMaintenance")
+      .mockImplementation(() => {});
+    restorers.push(() => postReadyMaintenance.mockRestore());
     const port = await fixture.reservePort();
     const server = await fixture.start(port);
     const kernel = fixture.kernels.get(port)!;
