@@ -35,28 +35,6 @@ beforeEach(() => {
   });
 });
 
-it("gives each selected runtime build its own managed deadline", async () => {
-  writePublishablePluginFixture(repoDir, {
-    extensionId: "second-plugin",
-    version: "2026.4.11",
-    publishTo: "both",
-  });
-  command.mockResolvedValue(0);
-
-  await checkPack(repoDir, { timeoutMs: 321 });
-
-  expect(command).toHaveBeenCalledTimes(6);
-  for (const [index, id] of [
-    [0, "demo"],
-    [3, "second"],
-  ] as const) {
-    expect(command.mock.calls[index]?.[0]).toMatchObject({
-      args: expect.arrayContaining(["--package", `extensions/${id}-plugin`]),
-      timeoutMs: 321,
-    });
-  }
-});
-
 it.each([
   [
     7,

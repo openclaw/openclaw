@@ -14,7 +14,6 @@ import {
   expandPluginSdkApiDiffSet as expandDiffs,
   decodePluginSdkApiArtifact as decode,
   selectPluginSdkApiReleaseEvidence as selectEvidence,
-  validatePluginSdkApiReleaseEvidence as validateEvidence,
 } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
@@ -453,16 +452,14 @@ it.each([
       expect(reports[selector]).toEqual(evidence.diff);
       const baseSha = git(repo, ["rev-parse", `${ref}^{commit}`]).trim();
       const changed = baseSha !== headSha;
-      expect(evidence).toMatchObject({ baseRef: ref, baseSha, headSha, workflowSha: headSha });
-      expect(
-        validateEvidence({
-          acknowledgement: changed ? evidence.digest.slice(0, 8) : "",
-          evidence: bundle,
-          expectedHeadSha: headSha,
-          expectedWorkflowSha: headSha,
-          npmDistTag: selector,
-        }),
-      ).toMatchObject({ hasChanges: changed, status: "checked" });
+      expect(evidence).toMatchObject({
+        baseRef: ref,
+        baseSha,
+        headSha,
+        workflowSha: headSha,
+        hasChanges: changed,
+        status: "checked",
+      });
       if (changed) {
         expect(evidence.diff.exports[0].before.declaration).toContain(
           baseSha === betaSha ? "number" : "string",

@@ -23,18 +23,12 @@ import {
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { withinTest } from "../helpers/promise.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
 import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 const fixtureLifetime = createFixtureLifetime();
-const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) => {
-  afterEach(async () => {
-    // Vitest's timeout settles before the body finally; join that body before removing its inputs.
-    await fixtureLifetime.cleanup();
-    cleanupDirs();
-  });
-});
+// Join timed-out bodies before releasing their inputs.
+afterEach(() => fixtureLifetime.cleanup());
 const posixIt = process.platform === "win32" ? it.skip : it;
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
@@ -74,7 +68,7 @@ const readPid = (file: string): number =>
   existsSync(file) ? Number(readFileSync(file, "utf8")) : 0;
 
 function createProofRepo(leaderExits = false) {
-  const repoDir = tempDirs.make("openclaw-plugin-pretag-proof-");
+  const repoDir = fixtureLifetime.createTempDir("openclaw-plugin-pretag-proof-");
   const scriptsDir = join(repoDir, "scripts");
   const directPidFile = join(repoDir, "runtime-build.pid");
   const descendantPidFile = join(repoDir, "runtime-build-descendant.pid");
