@@ -293,6 +293,20 @@ const DIAGNOSTIC_FILE = "release-postpublish-diagnostics.json";
 const PUBLISH_PATH = ".github/workflows/openclaw-release-publish.yml";
 const FRV_PATH = ".github/workflows/full-release-validation.yml";
 
+function publicationStep(name: string, conclusion = "success", number = 1) {
+  return { number, name, status: "completed", conclusion };
+}
+
+function publicationJob(
+  name: string,
+  id: number,
+  conclusion = "success",
+  steps: ReturnType<typeof publicationStep>[] = [],
+  runId = 88,
+) {
+  return { ...job(name, conclusion), id, run_id: runId, run_attempt: 1, steps };
+}
+
 function publicationFixture() {
   const executionPlan = executionPlanArtifact();
   const publisher = {
@@ -414,20 +428,9 @@ function publicationFixture() {
     stepOutcomes: { coreStart: "success", completion: "failure" },
   };
   const publisherJobs = [
-    {
-      ...job("Publish plugins, then OpenClaw", "failure"),
-      id: 8801,
-      run_id: 88,
-      run_attempt: 1,
-      steps: [
-        {
-          number: 1,
-          name: "Upload postpublish diagnostics",
-          status: "completed",
-          conclusion: "success",
-        },
-      ],
-    },
+    publicationJob("Publish plugins, then OpenClaw", 8801, "failure", [
+      publicationStep("Upload postpublish diagnostics"),
+    ]),
   ];
   return { executionPlan, manifest, diagnostic, publisher, root, publisherJobs };
 }
@@ -725,13 +728,7 @@ describe("publication status real CLI", () => {
       fixture.diagnostic.stages.binding.state = "failure";
       fixture.diagnostic.stages.assets.state = "failure";
       fixture.publisher.conclusion = "success";
-      fixture.publisherJobs.push({
-        ...job("Finalize GitHub release", "skipped"),
-        id: 8802,
-        run_id: 88,
-        run_attempt: 1,
-        steps: [],
-      });
+      fixture.publisherJobs.push(publicationJob("Finalize GitHub release", 8802, "skipped"));
     } else if (kind === "unattempted verification") {
       fixture.diagnostic.verification = "unattempted";
       fixture.diagnostic.stages.coreNpm.state = "unattempted";
@@ -749,15 +746,14 @@ describe("publication status real CLI", () => {
     expect(result.status, result.stderr + result.stdout).toBe(
       kind === "truncated packages" ? 1 : 0,
     );
-    expect(publication.relationship).toMatchObject({
-      status: "verified",
-      originalPlanAttempt: 1,
-      validationAttempt: 2,
-    });
-    expect(publication.publisher).toMatchObject({
-      runId: "88",
-      runAttempt: 1,
-      conclusion: kind === "successful verification" ? "success" : "failure",
+    expect(publication).toMatchObject({
+      relationship: { status: "verified", originalPlanAttempt: 1, validationAttempt: 2 },
+      publisher: {
+        runId: "88",
+        runAttempt: 1,
+        conclusion: kind === "successful verification" ? "success" : "failure",
+      },
+      surfaces: { activation: { operation: { state: "unknown" } } },
     });
     expect(publication.release).toEqual({
       version: "2026.9.9",
@@ -765,7 +761,6 @@ describe("publication status real CLI", () => {
       distTag: "latest",
       sourceSha: TARGET_SHA,
     });
-    expect(publication.surfaces.activation.operation.state).toBe("unknown");
     expect(value.children).toHaveLength(4);
     expect(result.calls.length).toBeGreaterThan(0);
     if (kind === "truncated packages") {
@@ -830,107 +825,37 @@ describe("publication status real CLI", () => {
   });
 
   it.each([
-    [
-      "foreign repository",
-      (fixture: ReturnType<typeof publicationFixture>) => {
-        fixture.publisher.repository.full_name = "other/repository";
-      },
-    ],
-    [
-      "foreign event",
-      (fixture) => {
-        fixture.publisher.event = "push";
-      },
-    ],
-    [
-      "foreign path",
-      (fixture) => {
-        fixture.publisher.path = ".github/workflows/other.yml";
-      },
-    ],
-    [
-      "foreign path suffix",
-      (fixture) => {
-        fixture.publisher.path = `${PUBLISH_PATH}@main`;
-      },
-    ],
-    [
-      "wrong producer run",
-      (fixture) => {
-        fixture.diagnostic.context.parentRunId = "89";
-      },
-    ],
-    [
-      "wrong producer attempt",
-      (fixture) => {
-        fixture.diagnostic.context.parentRunAttempt = "2";
-      },
-    ],
-    [
-      "wrong tooling",
-      (fixture) => {
-        fixture.diagnostic.context.toolingSha = SHA;
-      },
-    ],
-    [
-      "wrong full ref",
-      (fixture) => {
-        fixture.diagnostic.context.suppliedToolingRef = "refs/heads/main";
-      },
-    ],
-    [
-      "wrong validation root",
-      (fixture) => {
-        fixture.diagnostic.context.validationEvidence.runId = "78";
-      },
-    ],
-    [
-      "future validation attempt",
-      (fixture) => {
-        fixture.diagnostic.context.validationEvidence.runAttempt = "3";
-      },
-    ],
-    [
-      "wrong candidate",
-      (fixture) => {
-        fixture.diagnostic.context.requestedSourceSha = PUBLISH_SHA;
-      },
-    ],
-    [
-      "wrong source attempt",
-      (fixture) => {
-        fixture.manifest.sourceParentRunAttempt = 2;
-      },
-    ],
-    [
-      "wrong plan checksum",
-      (fixture) => {
-        fixture.manifest.executionPlanSha256 = "0".repeat(64);
-      },
-    ],
-    [
-      "wrong manifest tooling",
-      (fixture) => {
-        fixture.manifest.workflowSha = PUBLISH_SHA;
-      },
-    ],
-    [
-      "unsuccessful upload",
-      (fixture) => {
-        fixture.publisherJobs[0]!.steps[0]!.conclusion = "failure";
-      },
-    ],
-  ] satisfies [string, (fixture: ReturnType<typeof publicationFixture>) => void][])(
-    "refuses %s",
-    async (_name, mutate) => {
-      const fixture = publicationFixture();
-      mutate(fixture);
-      const result = await runPublicationCli(fixture);
-      expect(result.status, result.stdout).toBe(1);
-      expect(JSON.parse(result.stdout).publication.collection.complete).toBe(false);
-      expect(result.calls.every((call) => call[0] === "api" && call.includes("GET"))).toBe(true);
-    },
-  );
+    ["foreign repository", "repository", { full_name: "other/repository" }],
+    ["foreign event", "publisher", { event: "push" }],
+    ["foreign path", "publisher", { path: ".github/workflows/other.yml" }],
+    ["foreign path suffix", "publisher", { path: `${PUBLISH_PATH}@main` }],
+    ["wrong producer run", "context", { parentRunId: "89" }],
+    ["wrong producer attempt", "context", { parentRunAttempt: "2" }],
+    ["wrong tooling", "context", { toolingSha: SHA }],
+    ["wrong full ref", "context", { suppliedToolingRef: "refs/heads/main" }],
+    ["wrong validation root", "evidence", { runId: "78" }],
+    ["future validation attempt", "evidence", { runAttempt: "3" }],
+    ["wrong candidate", "context", { requestedSourceSha: PUBLISH_SHA }],
+    ["wrong source attempt", "manifest", { sourceParentRunAttempt: 2 }],
+    ["wrong plan checksum", "manifest", { executionPlanSha256: "0".repeat(64) }],
+    ["wrong manifest tooling", "manifest", { workflowSha: PUBLISH_SHA }],
+    ["unsuccessful upload", "upload", { conclusion: "failure" }],
+  ] as const)("refuses %s", async (_name, target, fields) => {
+    const fixture = publicationFixture();
+    const targets = {
+      publisher: fixture.publisher,
+      repository: fixture.publisher.repository,
+      context: fixture.diagnostic.context,
+      evidence: fixture.diagnostic.context.validationEvidence,
+      manifest: fixture.manifest,
+      upload: fixture.publisherJobs[0]!.steps[0]!,
+    };
+    Object.assign(targets[target], fields);
+    const result = await runPublicationCli(fixture);
+    expect(result.status, result.stdout).toBe(1);
+    expect(JSON.parse(result.stdout).publication.collection.complete).toBe(false);
+    expect(result.calls.every((call) => call[0] === "api" && call.includes("GET"))).toBe(true);
+  });
 
   it.each([
     "workflow-id",
@@ -1031,46 +956,18 @@ describe("publication status real CLI", () => {
   it("keeps Docker-only readback and advisory VCR API step conclusions separate from writer receipts", async () => {
     const fixture = publicationFixture();
     fixture.publisherJobs.push(
-      {
-        ...job("Verify already-published core npm package"),
-        id: 8802,
-        run_id: 88,
-        run_attempt: 1,
-        steps: [],
-      },
-      {
-        ...job("Publish Docker images / publish"),
-        id: 8803,
-        run_id: 88,
-        run_attempt: 1,
-        steps: [],
-      },
-      {
-        ...job("Mirror Docker images to Vercel Container Registry / mirror", "failure"),
-        id: 8804,
-        run_id: 88,
-        run_attempt: 1,
-        steps: [
-          {
-            number: 1,
-            name: "Copy and verify immutable release images",
-            status: "completed",
-            conclusion: "success",
-          },
-          {
-            number: 2,
-            name: "Run custom-image Sandbox smoke",
-            status: "completed",
-            conclusion: "failure",
-          },
-          {
-            number: 3,
-            name: "Promote and verify channel aliases",
-            status: "completed",
-            conclusion: "skipped",
-          },
+      publicationJob("Verify already-published core npm package", 8802),
+      publicationJob("Publish Docker images / publish", 8803),
+      publicationJob(
+        "Mirror Docker images to Vercel Container Registry / mirror",
+        8804,
+        "failure",
+        [
+          publicationStep("Copy and verify immutable release images"),
+          publicationStep("Run custom-image Sandbox smoke", "failure", 2),
+          publicationStep("Promote and verify channel aliases", "skipped", 3),
         ],
-      },
+      ),
     );
     const result = await runPublicationCli(fixture);
     expect(result.status).toBe(0);
@@ -1309,20 +1206,11 @@ describe("publication status real CLI", () => {
     "observes detached Windows %s without equating acknowledgement and promotion",
     async (state) => {
       const fixture = publicationFixture();
-      fixture.publisherJobs.push({
-        ...job("Dispatch Windows assets after publication"),
-        id: 8802,
-        run_id: 88,
-        run_attempt: 1,
-        steps: [
-          {
-            number: 1,
-            name: "Upload Windows dispatch evidence",
-            status: "completed",
-            conclusion: "success",
-          },
-        ],
-      });
+      fixture.publisherJobs.push(
+        publicationJob("Dispatch Windows assets after publication", 8802, "success", [
+          publicationStep("Upload Windows dispatch evidence"),
+        ]),
+      );
       const native = {
         ...fixture.publisher,
         id: 909,
@@ -1362,20 +1250,13 @@ describe("publication status real CLI", () => {
           responses[`repos/${REPOSITORY}/actions/runs/909/attempts/1/jobs?per_page=100&page=1`] = {
             total_count: 1,
             jobs: [
-              {
-                ...job("Promote signed Windows installers", "failure"),
-                id: 9091,
-                run_id: 909,
-                run_attempt: 1,
-                steps: [
-                  {
-                    number: 1,
-                    name: "Upload Windows promotion evidence",
-                    status: "completed",
-                    conclusion: "success",
-                  },
-                ],
-              },
+              publicationJob(
+                "Promote signed Windows installers",
+                9091,
+                "failure",
+                [publicationStep("Upload Windows promotion evidence")],
+                909,
+              ),
             ],
           };
         }
@@ -1411,23 +1292,14 @@ describe("publication status real CLI", () => {
     ["legacy-attempt", "request-attempt-unknown"],
   ])("correlates the Linux builder through its owner admission (%s)", async (kind, operation) => {
     const fixture = publicationFixture();
-    fixture.publisherJobs.push({
-      ...job(
+    fixture.publisherJobs.push(
+      publicationJob(
         "Request Linux assets after publication",
+        8810,
         kind === "unconfirmed" ? "failure" : "success",
+        [publicationStep("Retain Linux request evidence")],
       ),
-      id: 8810,
-      run_id: 88,
-      run_attempt: 1,
-      steps: [
-        {
-          number: 1,
-          name: "Retain Linux request evidence",
-          status: "completed",
-          conclusion: "success",
-        },
-      ],
-    });
+    );
     const request = {
       ...fixture.publisher,
       id: 909,
@@ -1504,20 +1376,13 @@ describe("publication status real CLI", () => {
       responses[`repos/${REPOSITORY}/actions/runs/910/attempts/1/jobs?per_page=100&page=1`] = {
         total_count: 1,
         jobs: [
-          {
-            ...job("Validate release tag", builder.conclusion),
-            id: 9101,
-            run_id: 910,
-            run_attempt: 1,
-            steps: [
-              {
-                number: 1,
-                name: "Retain Linux builder admission",
-                status: "completed",
-                conclusion: "success",
-              },
-            ],
-          },
+          publicationJob(
+            "Validate release tag",
+            9101,
+            builder.conclusion,
+            [publicationStep("Retain Linux builder admission")],
+            910,
+          ),
         ],
       };
     });
@@ -1657,18 +1522,16 @@ describe("publication status real CLI", () => {
         ...(json ? ["--json"] : []),
       ];
       const result = await runPublicationCli(fixture, args, (responses) => {
-        const jobs = Array.from({ length: 999 }, (_, i) => ({
-          ...job("Mirror Docker images to Vercel Container Registry / mirror"),
-          id: 10000 + i,
-          run_id: 88,
-          run_attempt: 1,
-          steps: Array.from({ length: steps }, (_step, index) => ({
-            number: index + 1,
-            name: "Copy and verify immutable release images",
-            status: "completed",
-            conclusion: "success",
-          })),
-        }));
+        const jobs = Array.from({ length: 999 }, (_, i) =>
+          publicationJob(
+            "Mirror Docker images to Vercel Container Registry / mirror",
+            10000 + i,
+            "success",
+            Array.from({ length: steps }, (_step, index) =>
+              publicationStep("Copy and verify immutable release images", "success", index + 1),
+            ),
+          ),
+        );
         jobs.unshift(publicationFixture().publisherJobs[0]!);
         for (let page = 1; page <= 10; page++) {
           responses[
@@ -1907,7 +1770,7 @@ describe("publication status real CLI", () => {
     const unsafe = "synthetic-secret /private/fixture/key \u001b[31m";
     Reflect.set(fixture.diagnostic, "rawError", unsafe);
     fixture.publisher.display_title = unsafe;
-    fixture.publisherJobs.push({ ...job(unsafe), id: 8899, run_id: 88, run_attempt: 1, steps: [] });
+    fixture.publisherJobs.push(publicationJob(unsafe, 8899));
     const result = await runPublicationCli(fixture);
     expect(result.status).toBe(0);
     expect(
