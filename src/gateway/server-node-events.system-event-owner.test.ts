@@ -20,7 +20,8 @@ it.each([
   { name: "explicit notification", event: "notifications.changed", explicit: true },
   { name: "system-agent notification", event: "notifications.changed", explicit: false },
   { name: "authorized exec completion", event: "exec.finished", explicit: true },
-])("preserves the loaded global owner for $name", async ({ name, event, explicit }) => {
+  { name: "unmatched exec completion", event: "exec.finished", explicit: true, denied: true },
+])("preserves the loaded global owner for $name", async ({ name, event, explicit, denied }) => {
   requestHeartbeat.mockClear();
   resetSystemEventsForTest();
   await withOpenClawTestState({ label: "node-owner", layout: "state-only" }, async (state) => {
@@ -42,7 +43,7 @@ it.each([
         { sessionId: `${agentId}-session`, updatedAt: 1 },
       );
     }
-    const authorizeNodeSystemRunEvent = vi.fn(() => true);
+    const authorizeNodeSystemRunEvent = vi.fn(() => !denied);
     const ctx: NodeEventContext = {
       deps: {},
       broadcast: () => {},
@@ -73,7 +74,6 @@ it.each([
           change: "posted",
           key: "notification-owner",
           title: "Owned notification",
-          text: "Owned body",
           runId,
           exitCode: 0,
           output: "owned exec result",
@@ -92,10 +92,15 @@ it.each([
         event: "exec.finished",
       });
     }
-    expect(result).toBeUndefined();
-    const text =
-      event === "exec.finished" ? "owned exec result" : "Owned notification - Owned body";
-    expect(peekSystemEvents("agent:research:global")).toEqual([expect.stringContaining(text)]);
+    expect(result).toEqual(
+      denied
+        ? expect.objectContaining({ handled: false, reason: "unmatched_exec_event" })
+        : undefined,
+    );
+    const text = event === "exec.finished" ? "owned exec result" : "Owned notification";
+    expect(peekSystemEvents("agent:research:global")).toEqual(
+      denied ? [] : [expect.stringContaining(text)],
+    );
     const source = event === "exec.finished" ? "exec-event" : "notifications-event";
     const wake = {
       source,
@@ -104,6 +109,6 @@ it.each([
       agentId: "research",
       ...(event === "exec.finished" ? { coalesceMs: 0 } : { sessionKey: "global" }),
     };
-    expect(requestHeartbeat.mock.calls).toEqual([[wake]]);
+    expect(requestHeartbeat.mock.calls).toEqual(denied ? [] : [[wake]]);
   });
 });

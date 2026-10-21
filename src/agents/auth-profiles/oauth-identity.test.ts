@@ -225,7 +225,7 @@ it.each(["runtime", "authoritative", "persisted"] as const)(
     const store: RuntimeAuthProfileStore = {
       version: 1,
       profiles: {
-        [id]: persisted ? oauth : createApiKeyCredential("openai", "sk-test"),
+        [id]: persisted ? { ...oauth } : createApiKeyCredential("openai", "sk-test"),
         [priorId]: credential({ provider: "minimax-portal" }),
       },
       order: { openai: [id] },

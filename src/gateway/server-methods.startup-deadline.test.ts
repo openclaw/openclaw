@@ -141,42 +141,57 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-it("retires a refused startup write at the client's default deadline", async () => {
-  const fixture = createFixture("sessions.create");
+const scenarios = [
+  ...["timeout", "abort"].flatMap((ending) => methods.map((method) => ({ method, ending }))),
+  ...(["sessions.create", "agent"] as const).map((method) => ({ method, ending: "ready" })),
+];
+it.each(scenarios)("startup $method: $ending", async ({ method, ending }) => {
+  const fixture = createFixture(method);
+  const controller = new AbortController();
+  const options =
+    ending === "timeout"
+      ? undefined
+      : {
+          timeoutMs: 60_000,
+          ...(ending === "abort" ? { signal: controller.signal } : {}),
+        };
   const outcome = fixture.client
-    .request("sessions.create", fixture.params)
+    .request(method, fixture.params, options)
     .catch((error: unknown) => error);
+  const settled = vi.fn();
+  void outcome.then(settled);
   await fixture.reachedAdmission;
-  await vi.advanceTimersByTimeAsync(30_000);
-  expect(await outcome).toBeInstanceOf(GatewayClientRequestTimeoutError);
-  await vi.advanceTimersByTimeAsync(15_000);
-  fixture.ready();
-  await fixture.drain();
-  await vi.advanceTimersByTimeAsync(1_000);
-  expect(fixture.writes).toHaveLength(0);
-});
-
-it.each(methods)(
-  "retries startup %s with the same bytes and writes once after readiness",
-  async (method) => {
-    const fixture = createFixture(method);
-    const outcome = fixture.client
-      .request(method, fixture.params, { timeoutMs: 60_000 })
-      .catch((error: unknown) => error);
-    const settled = vi.fn();
-    void outcome.then(settled);
-    await fixture.reachedAdmission;
-    await vi.advanceTimersByTimeAsync(45_000);
-    expect(settled).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(
+    ending === "timeout" ? 30_000 : ending === "abort" ? 35_000 : 45_000,
+  );
+  if (ending === "abort") {
+    controller.abort();
+    expect(await outcome).toMatchObject({ message: `gateway request aborted for ${method}` });
+  } else {
+    if (ending === "timeout") {
+      expect(await outcome).toBeInstanceOf(GatewayClientRequestTimeoutError);
+    } else {
+      expect(settled).not.toHaveBeenCalled();
+    }
     expect(fixture.writes).toHaveLength(0);
-    fixture.ready();
+    if (ending === "timeout") {
+      await vi.advanceTimersByTimeAsync(15_000);
+    }
+  }
+  fixture.ready();
+  if (ending === "ready") {
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(outcome).resolves.toEqual({ status: "written" });
-    await fixture.drain();
+  }
+  await fixture.drain();
+  if (ending === "ready") {
     expect(fixture.writes).toMatchObject([{ params: { idempotencyKey: "startup-write" } }]);
     expect(fixture.sent.length).toBeGreaterThan(1);
     expect(new Set(fixture.sent).size).toBe(1);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(fixture.writes).toHaveLength(1);
-  },
-);
+  } else {
+    await vi.advanceTimersByTimeAsync(ending === "abort" ? 30_000 : 1_000);
+    expect(fixture.writes).toHaveLength(0);
+  }
+});

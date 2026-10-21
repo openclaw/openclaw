@@ -287,6 +287,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-execution-phase.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-native-provider-authority.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-native-video-transcript.test.ts",
+  "src/agents/embedded-agent-runner/run/lane-controller.lifecycle.test.ts",
   "src/agents/embedded-agent-runner/run/lane-controller.writer-claim.test.ts",
   "src/agents/embedded-agent-runner/run/run-settlement.test.ts",
   "src/system-agent/audit.test.ts",

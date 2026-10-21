@@ -73,7 +73,11 @@ function afterSessionStateMaterialization(after: () => void | Promise<void>) {
   );
 }
 
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const {
+  createSessionStoreDir,
+  createConfiguredGlobalAgentSessionStore,
+  resetConfiguredGlobalAgentSessionStore,
+} = setupGatewaySessionsHandlerTestHarness();
 const companions = new Set<SessionCompanionService>();
 const cleanups: Array<() => void | Promise<void>> = [];
 
@@ -90,32 +94,6 @@ async function createStoredSession(
 async function deleteSession(sessionKey: string, options?: Parameters<typeof directSessionReq>[2]) {
   const response = await directSessionReq("sessions.delete", { key: sessionKey }, options);
   expect(response).toMatchObject({ ok: true, payload: { deleted: true } });
-}
-
-async function createRepositorySession(
-  sessionKey: string,
-  sessionId: string,
-  options: { runSetupScript?: boolean } = {},
-) {
-  const { storePath } = await createSessionStoreDir();
-  const repositories = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
-  const repository = await repositories.create({
-    agentId: "main",
-    sessionKey,
-    url: "https://github.com/openclaw/fixture.git",
-    assertCurrent: () => {},
-    ...options,
-  });
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry(sessionId, { repositoryWorkspaceId: repository.workspaceId }),
-    },
-  });
-  const artifactRoot = repositories.artifactPath(repository.workspaceId);
-  const artifact = path.join(artifactRoot, "retained-checkpoint");
-  await fs.mkdir(artifactRoot, { recursive: true });
-  await fs.writeFile(artifact, "accepted checkpoint");
-  return { storePath, repositories, repository, artifactRoot, artifact };
 }
 
 afterEach(async () => {
@@ -179,11 +157,26 @@ test.each(["sessions.reset", "sessions.delete"] as const)(
 );
 
 test("repository ownership survives reset and archive, then permanent deletion releases it", async () => {
+  const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:repository-lifecycle";
-  const { storePath, repositories, repository, artifactRoot, artifact } =
-    await createRepositorySession(sessionKey, "repository-lifecycle-session", {
-      runSetupScript: false,
-    });
+  const repositories = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
+  const repository = await repositories.create({
+    agentId: "main",
+    sessionKey,
+    url: "https://github.com/openclaw/fixture.git",
+    runSetupScript: false,
+    assertCurrent: () => {},
+  });
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry("repository-lifecycle-session", {
+        repositoryWorkspaceId: repository.workspaceId,
+      }),
+    },
+  });
+  const artifactRoot = repositories.artifactPath(repository.workspaceId);
+  await fs.mkdir(artifactRoot, { recursive: true });
+  await fs.writeFile(path.join(artifactRoot, "retained-checkpoint"), "accepted checkpoint");
 
   for (const [method, params] of [
     ["sessions.reset", { key: sessionKey }],
@@ -209,7 +202,9 @@ test("repository ownership survives reset and archive, then permanent deletion r
   });
   expect(denied.ok).toBe(false);
   expect(await repositories.get(repository.workspaceId)).toEqual(repository);
-  expect(await fs.readFile(artifact, "utf8")).toBe("accepted checkpoint");
+  expect(await fs.readFile(path.join(artifactRoot, "retained-checkpoint"), "utf8")).toBe(
+    "accepted checkpoint",
+  );
   const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
   expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
   expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
@@ -220,9 +215,23 @@ test("repository ownership survives reset and archive, then permanent deletion r
 test.each(["owner grant", "retained placeholder", "folded sibling", "malformed row"] as const)(
   "repository cleanup preserves full logical absence checks for %s",
   async (boundary) => {
+    const { storePath } = await createSessionStoreDir();
     const sessionKey = "agent:main:matrix:channel:!Mixed:example.org";
-    const { storePath, repositories, repository, artifactRoot, artifact } =
-      await createRepositorySession(sessionKey, "repository-cleanup-original");
+    const repositories = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
+    const repository = await repositories.create({
+      agentId: "main",
+      sessionKey,
+      url: "https://github.com/openclaw/fixture.git",
+      assertCurrent: () => {},
+    });
+    const original = sessionStoreEntry("repository-cleanup-original", {
+      repositoryWorkspaceId: repository.workspaceId,
+    });
+    await writeSessionStore({ entries: { [sessionKey]: original } });
+    const artifactRoot = repositories.artifactPath(repository.workspaceId);
+    await fs.mkdir(artifactRoot, { recursive: true });
+    const artifact = path.join(artifactRoot, "retained-checkpoint");
+    await fs.writeFile(artifact, "accepted checkpoint");
     const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
       agentId: "main",
     }).path;
@@ -559,6 +568,25 @@ async function readState(service: SessionCompanionService, sessionKey: string, a
   }
   return response.payload;
 }
+
+test("sessions.delete isolates Side chat for the same global key and session ID in another agent", async () => {
+  const stores = await createConfiguredGlobalAgentSessionStore();
+  await writeSessionStore({
+    agentId: "work",
+    entries: { global: sessionStoreEntry("sess-main-global") },
+    storePath: stores.workStorePath,
+  });
+  const { service } = await createCompanion();
+  cleanups.push(() => resetConfiguredGlobalAgentSessionStore(stores));
+  await ask(service, "global", "Main agent question?", "main");
+  await ask(service, "global", "Work agent question?", "work");
+  const mainBefore = await readState(service, "global", "main");
+
+  const deleted = await directSessionReq("sessions.delete", { key: "global", agentId: "work" });
+  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+  expect(await readState(service, "global", "main")).toEqual(mainBefore);
+  expect((await readState(service, "global", "work")).exchanges).toEqual([]);
+});
 
 test("a delayed deletion event cannot erase Side chat for a newer generation", async () => {
   const { sessionKey } = await createStoredSession("old-generation");

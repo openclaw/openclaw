@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { readRuntimePromptImageFactIndexes } from "../../../media/runtime-prompt-image-provenance.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
@@ -31,16 +32,6 @@ async function preparePluginHarnessPromptImages(
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
-function recorder<T, U = T>(initial: T, resolved?: U) {
-  const message = <F>(facts: F) => ({ role: "user", content: "inspect", __openclaw: facts });
-  const initialMessage = message(initial);
-  return {
-    message: initialMessage,
-    async resolveMessage() {
-      return resolved === undefined ? initialMessage : message(resolved);
-    },
-  };
-}
 describe("plugin harness prompt media", () => {
   let stateDir: string;
   let workspaceDir: string;
@@ -65,7 +56,12 @@ describe("plugin harness prompt media", () => {
     const result = await preparePluginHarnessPromptImages(
       {
         media,
-        userTurnTranscriptRecorder: recorder({ media }),
+        userTurnTranscriptRecorder: {
+          message: { role: "user", content: "inspect", __openclaw: { media } },
+          async resolveMessage() {
+            return this.message;
+          },
+        },
       } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0],
       workspaceDir,
     );
@@ -85,13 +81,23 @@ describe("plugin harness prompt media", () => {
     const input = {
       imageOrder: ["offloaded"],
       media: [documentFact, { url: `media://inbound/${mediaId}`, contentType: "image/png" }],
-      userTurnTranscriptRecorder: recorder(
-        { media: [documentFact] },
-        {
-          media: [{ path: imagePath, contentType: "image/png" }, documentFact],
-          mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
+      userTurnTranscriptRecorder: {
+        message: {
+          role: "user",
+          content: "stale initial facts",
+          __openclaw: { media: [documentFact] },
         },
-      ),
+        async resolveMessage() {
+          return {
+            role: "user",
+            content: "inspect",
+            __openclaw: {
+              media: [{ path: imagePath, contentType: "image/png" }, documentFact],
+              mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
+            },
+          };
+        },
+      },
     } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0];
     const result = await preparePluginHarnessPromptImages(input, workspaceDir);
 
@@ -159,6 +165,41 @@ describe("plugin harness prompt media", () => {
     ).rejects.toThrow("failed to hydrate 1 structured image attachment");
   });
 
+  it("surfaces inline sanitization failure when a preceding plugin image fact is suppressed", async () => {
+    await expect(
+      preparePluginHarnessPromptImages({
+        images: [{ type: "image", data: "%%%", mimeType: "image/png" }],
+        imageOrder: ["inline"],
+        media: [
+          {
+            path: "/tmp/described-missing.png",
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+          { path: "/tmp/inline.png", contentType: "image/png" },
+        ],
+      }),
+    ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+  });
+
+  it("retains an intentionally non-hydrating remote-only image as a type-only fact", async () => {
+    const media = buildInboundMediaNoteProjection({
+      media: [{ url: "https://example.com/described.png", contentType: "image/png" }],
+      MediaUnderstanding: [
+        {
+          kind: "image.description",
+          attachmentIndex: 0,
+          text: "already described",
+          provider: "test",
+        },
+      ],
+    }).media;
+    const result = await preparePluginHarnessPromptImages({ media });
+
+    expect(result.images).toEqual([]);
+    expect(result.media).toBeUndefined();
+  });
+
   it("retains layout-derived suppression after plugin host materialization", async () => {
     const inlineImage = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
     const media = [
@@ -169,13 +210,22 @@ describe("plugin harness prompt media", () => {
       images: [inlineImage],
       imageOrder: ["inline"],
       media,
-      userTurnTranscriptRecorder: recorder({
-        media,
-        mediaImageLayout: {
-          slots: [{ kind: "inline", factIndex: 1 }],
-          suppressedFactIndexes: [0],
+      userTurnTranscriptRecorder: {
+        async resolveMessage() {
+          return this.message;
         },
-      }),
+        message: {
+          role: "user",
+          content: "compare",
+          __openclaw: {
+            media,
+            mediaImageLayout: {
+              slots: [{ kind: "inline", factIndex: 1 }],
+              suppressedFactIndexes: [0],
+            },
+          },
+        },
+      },
     } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
 
     expect(result.images).toEqual([inlineImage]);

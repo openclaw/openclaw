@@ -158,7 +158,6 @@ it("settles accepted incognito outbox work after the close prelude and before ac
       role: "user" as const,
     };
     const outbox = openContextEngineTurnOutboxWorkerStore({
-      agentId: memoryOwner.agentId,
       path: memoryOwner.path,
       ...target,
       sessionActor: { actor, authority, agentId: memoryOwner.agentId, path: memoryOwner.path },

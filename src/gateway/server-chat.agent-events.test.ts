@@ -2,6 +2,7 @@
 // session lifecycle persistence, and subscriber registry behavior.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ChatEventSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -144,29 +145,12 @@ describe("agent event handler", () => {
 
   function createHarness(params?: AgentEventTestHarnessOptions) {
     const projection = lineageProjection;
-    const h = createAgentEventTestHarness({
+    return createAgentEventTestHarness({
       ...params,
       loadGatewaySessionLifecycleSnapshotForEvent: loadGatewaySessionLifecycleSnapshotMock,
       persistGatewaySessionLifecycleEventForEvent: persistGatewaySessionLifecycleEventMock,
       getSessionRowProjection: () => projection,
     });
-    return Object.assign(h, {
-      async [Symbol.asyncDispose]() {
-        await h.handler.dispose();
-        h.chatRunState.clear();
-      },
-    });
-  }
-
-  function createNamedHarness(name: string, params?: AgentEventTestHarnessOptions) {
-    const h = createHarness(params);
-    h.registerNamed(name);
-    return {
-      ...h,
-      send: h.emit.bind(undefined, `run-${name}`),
-      sendMany: h.emitMany.bind(undefined, `run-${name}`),
-      finish: h.end.bind(undefined, `run-${name}`),
-    };
   }
 
   function mockSessionEntry(
@@ -174,10 +158,14 @@ describe("agent event handler", () => {
     canonicalKey = "session-1",
   ) {
     vi.mocked(loadSessionEntryAsync).mockResolvedValue({
-      ...emptySessionLookup(),
+      cfg: {},
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
+      store: {},
       entry,
       canonicalKey,
       storeKeys: [canonicalKey],
+      legacyKey: undefined,
     });
   }
 
@@ -256,9 +244,10 @@ describe("agent event handler", () => {
   registerBoundedWidgetSnapshotsTest({ createHarness, widgetResult, logWarnMock });
 
   it("does not revive widgets from a hidden heartbeat turn", async () => {
-    const h = createNamedHarness("widgets");
+    const h = createHarness();
+    h.registerNamed("widgets");
     registerAgentRunContext("run-widgets", { sessionKey: "session-widgets", isHeartbeat: true });
-    await h.sendMany([
+    await h.emitMany("run-widgets", [
       ["tool", { phase: "result", name: "show_widget", result: widgetResult("hidden") }],
       ["assistant", { text: "" }],
       ["lifecycle", { phase: "end", terminalReply: { disposition: "empty" } }],
@@ -269,8 +258,9 @@ describe("agent event handler", () => {
 
   it("drops failed-attempt widgets before a runtime retry succeeds", async () => {
     vi.useFakeTimers();
-    const h = createNamedHarness("widgets", { lifecycleErrorRetryGraceMs: 100 });
-    await h.sendMany([
+    const h = createHarness({ lifecycleErrorRetryGraceMs: 100 });
+    h.registerNamed("widgets");
+    await h.emitMany("run-widgets", [
       ["tool", { phase: "result", name: "show_widget", result: widgetResult("failed-attempt") }],
       ["lifecycle", { phase: "error", error: "retryable failure" }],
       ["tool", { phase: "result", name: "show_widget", result: widgetResult("retried") }],
@@ -285,7 +275,7 @@ describe("agent event handler", () => {
   });
 
   it("retires tool-only widgets when a new owner reuses the run before assistant text", async () => {
-    await using h = createHarness();
+    const h = createHarness();
     const runId = "widget-owner-reuse";
     const claim = () =>
       claimOwnedRun(runId, { sessionKey: "session-widgets", isControlUiVisible: false });
@@ -318,6 +308,8 @@ describe("agent event handler", () => {
       await stop();
       releaseAgentRunContext(runId, firstClaim);
       releaseAgentRunContext(runId, currentClaim);
+      await h.handler.dispose();
+      h.chatRunState.clear();
     }
   });
 
@@ -501,18 +493,46 @@ describe("agent event handler", () => {
     });
   });
 
+  const requireRecord = createRequireRecord("object", "label-not-object");
+
+  function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+    for (const [key, value] of Object.entries(fields)) {
+      expect(record[key]).toEqual(value);
+    }
+  }
+
   function expectPayloadFields(value: unknown, fields: Record<string, unknown>) {
-    expect(value).toEqual(expect.objectContaining(fields));
+    expectRecordFields(requireRecord(value, "event payload"), fields);
   }
 
   function expectPayloadDataFields(value: unknown, fields: Record<string, unknown>) {
-    expectPayloadFields(value, { data: expect.objectContaining(fields) });
+    const payload = requireRecord(value, "event payload");
+    expectRecordFields(requireRecord(payload.data, "event payload data"), fields);
+  }
+
+  function requireMockArg(
+    mock: ReturnType<typeof vi.fn>,
+    index: number,
+    argIndex: number,
+    label: string,
+  ) {
+    return expectDefined(mock.mock.calls[index], `${label} call ${index + 1}`)[argIndex];
+  }
+
+  function requireMockPayload(
+    mock: ReturnType<typeof vi.fn>,
+    index: number,
+    payloadIndex: number,
+    label: string,
+  ) {
+    return requireRecord(requireMockArg(mock, index, payloadIndex, label), label);
   }
 
   it("sanitizes only broadcasted assistant buffers while preserving cross-frame tags", async () => {
     let now = 10_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const h = createNamedHarness("lazy-sanitize");
+    const h = createHarness();
+    h.registerNamed("lazy-sanitize");
 
     const deltas = [
       "Visible",
@@ -525,11 +545,11 @@ describe("agent event handler", () => {
     ];
     for (const [index, delta] of deltas.entries()) {
       now = 10_000 + index;
-      await h.send("assistant", { delta }, { seq: index + 1 });
+      await h.emit("run-lazy-sanitize", "assistant", { delta }, { seq: index + 1 });
     }
 
     expect(h.chat()).toHaveLength(1);
-    await h.finish(deltas.length + 1);
+    await h.end("run-lazy-sanitize", deltas.length + 1);
 
     const payloads = h.chat().map(([, payload]) => payload) as Array<{
       state?: string;
@@ -548,9 +568,11 @@ describe("agent event handler", () => {
     "keeps %s retries transient through long backoff and subsequent assistant output",
     async (reason) => {
       vi.useFakeTimers();
-      const h = createNamedHarness("retry");
+      const h = createHarness();
+      h.registerNamed("retry");
       for (let attempt = 2; attempt <= 5; attempt++) {
-        await h.send(
+        await h.emit(
+          "run-retry",
           "lifecycle",
           {
             phase: "finishing",
@@ -558,7 +580,8 @@ describe("agent event handler", () => {
           },
           { seq: attempt * 2 },
         );
-        await h.send(
+        await h.emit(
+          "run-retry",
           "run_status",
           {
             phase: "retrying",
@@ -588,10 +611,10 @@ describe("agent event handler", () => {
       );
       expect(h.clearAgentRunContext).not.toHaveBeenCalled();
       expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
-      await h.send("assistant", { text: "I", delta: "I" }, { seq: 12 });
+      await h.emit("run-retry", "assistant", { text: "I", delta: "I" }, { seq: 12 });
       vi.advanceTimersByTime(500);
-      await h.send("assistant", { text: "I agree", delta: " agree" }, { seq: 13 });
-      await h.finish(14);
+      await h.emit("run-retry", "assistant", { text: "I agree", delta: " agree" }, { seq: 13 });
+      await h.end("run-retry", 14);
       expect(h.chat().map(([, payload]) => payload.state)).toEqual([
         "status",
         "status",
@@ -763,56 +786,62 @@ describe("agent event handler", () => {
   ] as const)("flushes candidate and assistant progress before %s", async (_name, stream, data) => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
-    await using h = createNamedHarness("candidate-boundary");
+    const h = createHarness();
+    h.registerNamed("candidate-boundary");
     h.toolEventRecipients.add("run-candidate-boundary", "conn-tools");
 
-    await h.sendMany([
-      ["item", answerCandidate("answer-1", "Hel")],
-      ["assistant", { text: "Hel", delta: "Hel" }],
-      ["item", answerCandidate("answer-1", "Hello")],
-      ["assistant", { text: "Hello", delta: "lo" }],
-    ]);
-    expect(h.agent().length).toBeLessThanOrEqual(2);
+    try {
+      await h.emitMany("run-candidate-boundary", [
+        ["item", answerCandidate("answer-1", "Hel")],
+        ["assistant", { text: "Hel", delta: "Hel" }],
+        ["item", answerCandidate("answer-1", "Hello")],
+        ["assistant", { text: "Hello", delta: "lo" }],
+      ]);
+      expect(h.agent().length).toBeLessThanOrEqual(2);
 
-    await h.send(stream, data, { seq: 5 });
-    const delivered = [h.broadcast, h.broadcastToConnIds]
-      .flatMap((sink) =>
-        sink.mock.calls.flatMap(([event, payload], index) =>
-          event === "agent"
-            ? [
-                {
-                  order: expectDefined(sink.mock.invocationCallOrder[index], "agent call order"),
-                  payload: payload as AgentEventPayload,
-                },
-              ]
-            : [],
-        ),
-      )
-      .toSorted((a, b) => a.order - b.order)
-      .map(({ payload }) => payload);
-    expect(delivered.filter((payload) => payload.seq >= 3)).toMatchObject([
-      { seq: 3, stream: "item", data: answerCandidate("answer-1", "Hello") },
-      { seq: 4, stream: "assistant", data: { text: "Hello" } },
-      { seq: 5, stream, data },
-    ]);
-    expect(
-      delivered
-        .filter((payload) => payload.seq < 5 && payload.stream === "assistant")
-        .map((payload) => payload.data.delta)
-        .join(""),
-    ).toBe("Hello");
+      await h.emit("run-candidate-boundary", stream, data, { seq: 5 });
+      const delivered = [h.broadcast, h.broadcastToConnIds]
+        .flatMap((sink) =>
+          sink.mock.calls.flatMap(([event, payload], index) =>
+            event === "agent"
+              ? [
+                  {
+                    order: expectDefined(sink.mock.invocationCallOrder[index], "agent call order"),
+                    payload: payload as AgentEventPayload,
+                  },
+                ]
+              : [],
+          ),
+        )
+        .toSorted((a, b) => a.order - b.order)
+        .map(({ payload }) => payload);
+      expect(delivered.filter((payload) => payload.seq >= 3)).toMatchObject([
+        { seq: 3, stream: "item", data: answerCandidate("answer-1", "Hello") },
+        { seq: 4, stream: "assistant", data: { text: "Hello" } },
+        { seq: 5, stream, data },
+      ]);
+      expect(
+        delivered
+          .filter((payload) => payload.seq < 5 && payload.stream === "assistant")
+          .map((payload) => payload.data.delta)
+          .join(""),
+      ).toBe("Hello");
 
-    await h.finish(6);
-    const completedCalls = h.broadcast.mock.calls.length;
-    vi.advanceTimersByTime(1_000);
-    expect(h.broadcast).toHaveBeenCalledTimes(completedCalls);
-    expect(vi.getTimerCount()).toBe(0);
+      await h.end("run-candidate-boundary", 6);
+      const completedCalls = h.broadcast.mock.calls.length;
+      vi.advanceTimersByTime(1_000);
+      expect(h.broadcast).toHaveBeenCalledTimes(completedCalls);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await h.handler.dispose();
+      h.chatRunState.clear();
+    }
   });
 
   it("isolates candidate batches across runs and releases an aborted run before session reuse", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
-    await using h = createHarness();
+    const h = createHarness();
     h.registerNamed("candidate-abort");
     h.registerNamed("candidate-sibling");
     const deliveredFor = (runId: string) =>
@@ -821,100 +850,112 @@ describe("agent event handler", () => {
         .map(([, payload]) => payload as AgentEventPayload)
         .filter((payload) => payload.runId === runId);
 
-    for (const [runId, prefix] of [
-      ["run-candidate-abort", "Alpha"],
-      ["run-candidate-sibling", "Beta"],
-    ] as const) {
-      await h.emitMany(runId, [
-        ["item", answerCandidate("shared-item-id", prefix)],
-        ["assistant", { text: prefix, delta: prefix }],
-        ["item", answerCandidate("shared-item-id", `${prefix} tail`)],
-        ["assistant", { text: `${prefix} tail`, delta: " tail" }],
-      ]);
-    }
-    expect(h.agent().length).toBeLessThanOrEqual(4);
-    const siblingBeforeAbort = deliveredFor("client-candidate-sibling");
-    await h.emit(
-      "run-candidate-abort",
-      "item",
-      answerCandidate("shared-item-id", "Alpha tail", "superseded"),
-      {
-        seq: 5,
-      },
-    );
-    await h.emit(
-      "run-candidate-abort",
-      "lifecycle",
-      { phase: "error", aborted: true, stopReason: "rpc" },
-      { seq: 6 },
-    );
-    expect(deliveredFor("client-candidate-sibling")).toEqual(siblingBeforeAbort);
-    expect(h.chat().at(-1)?.[1]).toMatchObject({
-      runId: "client-candidate-abort",
-      state: "aborted",
-      message: { content: [{ type: "text", text: "Alpha tail" }] },
-    });
+    try {
+      for (const [runId, prefix] of [
+        ["run-candidate-abort", "Alpha"],
+        ["run-candidate-sibling", "Beta"],
+      ] as const) {
+        await h.emitMany(runId, [
+          ["item", answerCandidate("shared-item-id", prefix)],
+          ["assistant", { text: prefix, delta: prefix }],
+          ["item", answerCandidate("shared-item-id", `${prefix} tail`)],
+          ["assistant", { text: `${prefix} tail`, delta: " tail" }],
+        ]);
+      }
+      expect(h.agent().length).toBeLessThanOrEqual(4);
+      const siblingBeforeAbort = deliveredFor("client-candidate-sibling");
+      await h.emit(
+        "run-candidate-abort",
+        "item",
+        answerCandidate("shared-item-id", "Alpha tail", "superseded"),
+        {
+          seq: 5,
+        },
+      );
+      await h.emit(
+        "run-candidate-abort",
+        "lifecycle",
+        { phase: "error", aborted: true, stopReason: "rpc" },
+        { seq: 6 },
+      );
+      expect(deliveredFor("client-candidate-sibling")).toEqual(siblingBeforeAbort);
+      expect(h.chat().at(-1)?.[1]).toMatchObject({
+        runId: "client-candidate-abort",
+        state: "aborted",
+        message: { content: [{ type: "text", text: "Alpha tail" }] },
+      });
 
-    h.register("run-reuse", "session-candidate-abort", "client-reuse");
-    await h.emitMany("run-reuse", [
-      ["item", answerCandidate("shared-item-id", "Fresh")],
-      ["assistant", { text: "Fresh", delta: "Fresh" }],
-      ["item", answerCandidate("shared-item-id", "Fresh", "selected")],
-      ["lifecycle", { phase: "end" }],
-    ]);
-    const abortedDeliveries = deliveredFor("client-candidate-abort");
-    vi.advanceTimersByTime(75);
-    expect(deliveredFor("client-candidate-abort")).toEqual(abortedDeliveries);
-    const sibling = deliveredFor("client-candidate-sibling");
-    expect(sibling.findLast((payload) => payload.stream === "item")?.data).toEqual(
-      answerCandidate("shared-item-id", "Beta tail"),
-    );
-    expect(
-      sibling
-        .filter((payload) => payload.stream === "assistant")
-        .map((payload) => payload.data.delta)
-        .join(""),
-    ).toBe("Beta tail");
-    await h.emit(
-      "run-candidate-sibling",
-      "item",
-      answerCandidate("shared-item-id", "Beta tail", "selected"),
-      { seq: 5 },
-    );
-    await h.end("run-candidate-sibling", 6);
-    expect(
-      h
-        .chat()
-        .map(([, payload]) => payload)
-        .filter((payload) => payload.state === "final")
-        .map((payload) => [payload.runId, payload.message.content[0].text]),
-    ).toEqual([
-      ["client-reuse", "Fresh"],
-      ["client-candidate-sibling", "Beta tail"],
-    ]);
-    const completedCalls = h.broadcast.mock.calls.length;
-    vi.advanceTimersByTime(1_000);
-    expect(h.broadcast).toHaveBeenCalledTimes(completedCalls);
-    expect(vi.getTimerCount()).toBe(0);
+      h.register("run-reuse", "session-candidate-abort", "client-reuse");
+      await h.emitMany("run-reuse", [
+        ["item", answerCandidate("shared-item-id", "Fresh")],
+        ["assistant", { text: "Fresh", delta: "Fresh" }],
+        ["item", answerCandidate("shared-item-id", "Fresh", "selected")],
+        ["lifecycle", { phase: "end" }],
+      ]);
+      const abortedDeliveries = deliveredFor("client-candidate-abort");
+      vi.advanceTimersByTime(75);
+      expect(deliveredFor("client-candidate-abort")).toEqual(abortedDeliveries);
+      const sibling = deliveredFor("client-candidate-sibling");
+      expect(sibling.findLast((payload) => payload.stream === "item")?.data).toEqual(
+        answerCandidate("shared-item-id", "Beta tail"),
+      );
+      expect(
+        sibling
+          .filter((payload) => payload.stream === "assistant")
+          .map((payload) => payload.data.delta)
+          .join(""),
+      ).toBe("Beta tail");
+      await h.emit(
+        "run-candidate-sibling",
+        "item",
+        answerCandidate("shared-item-id", "Beta tail", "selected"),
+        { seq: 5 },
+      );
+      await h.end("run-candidate-sibling", 6);
+      expect(
+        h
+          .chat()
+          .map(([, payload]) => payload)
+          .filter((payload) => payload.state === "final")
+          .map((payload) => [payload.runId, payload.message.content[0].text]),
+      ).toEqual([
+        ["client-reuse", "Fresh"],
+        ["client-candidate-sibling", "Beta tail"],
+      ]);
+      const completedCalls = h.broadcast.mock.calls.length;
+      vi.advanceTimersByTime(1_000);
+      expect(h.broadcast).toHaveBeenCalledTimes(completedCalls);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await h.handler.dispose();
+      h.chatRunState.clear();
+    }
   });
 
   it.each(["thinking", "lifecycle"] as const)(
     "delivers assistant text immediately after %s",
     async (stream) => {
-      const h = createNamedHarness("cross-stream", { now: 23_000 });
-      await h.send(
+      const h = createHarness({ now: 23_000 });
+      h.registerNamed("cross-stream");
+      await h.emit(
+        "run-cross-stream",
         stream,
         stream === "thinking" ? { text: "Think", delta: "Think" } : { phase: "start" },
       );
       h.nowSpy?.mockReturnValue(23_050);
       if (stream === "thinking") {
-        await h.send(stream, { text: "Thinking", delta: "ing" }, { seq: 2 });
+        await h.emit("run-cross-stream", stream, { text: "Thinking", delta: "ing" }, { seq: 2 });
         expect(h.agent()).toHaveLength(1);
         expect(h.nodeAgent()).toHaveLength(1);
         h.nowSpy?.mockReturnValue(23_080);
       }
       const text = stream === "thinking" ? "Answer" : "Hello";
-      await h.send("assistant", { text, delta: text }, { seq: stream === "thinking" ? 3 : 2 });
+      await h.emit(
+        "run-cross-stream",
+        "assistant",
+        { text, delta: text },
+        { seq: stream === "thinking" ? 3 : 2 },
+      );
       const expectedStreams =
         stream === "thinking" ? ["thinking", "thinking", "assistant"] : ["lifecycle", "assistant"];
       const calls = h.agent();
@@ -943,9 +984,11 @@ describe("agent event handler", () => {
       split: true,
     },
   ])("withholds managed media from $name", async ({ chunks, split }) => {
-    const h = createNamedHarness("managed-media", { now: 1_000 });
+    const h = createHarness({ now: 1_000 });
+    h.registerNamed("managed-media");
     for (const [index, chunk] of chunks.entries()) {
-      await h.send(
+      await h.emit(
+        "run-managed-media",
         "assistant",
         {
           ...(split ? { delta: chunk } : { text: chunk }),
@@ -959,7 +1002,7 @@ describe("agent event handler", () => {
     if (!split) {
       expect(h.chat()).toHaveLength(0);
     }
-    await h.finish(chunks.length + 1);
+    await h.end("run-managed-media", chunks.length + 1);
     const payloads = h.chat().map(([, payload]) => payload) as Array<{
       state?: string;
       message?: { content?: Array<{ text?: string }> };
@@ -984,36 +1027,86 @@ describe("agent event handler", () => {
     { text: "The selected size is\nM" },
     { text: "No" },
   ])("preserves ordinary control-like text at completion: $text", async (data) => {
-    const h = createNamedHarness("ordinary-media", { now: 1_000 });
-    await h.send("assistant", data);
-    await h.finish(2);
+    const h = createHarness({ now: 1_000 });
+    h.registerNamed("ordinary-media");
+    await h.emit("run-ordinary-media", "assistant", data);
+    await h.end("run-ordinary-media", 2);
     expect(h.chat().at(-1)?.[1]).toMatchObject({
       state: "final",
       message: { content: [{ text: data.text }] },
     });
-    if (data.text === "No") {
-      expect(h.chat()).toHaveLength(2);
-      expect(h.nodeChat()).toHaveLength(2);
-    }
+    h.nowSpy?.mockRestore();
+  });
+
+  it("retracts a visible item with a producer-prepared empty replacement", async () => {
+    const flushMs = 0;
+
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const h = createHarness();
+    h.registerNamed("control-replacement");
+    await h.emit("run-control-replacement", "assistant", {
+      itemId: "answer-1",
+      text: "Provisional answer",
+    });
+    expect(h.deltas()).toEqual(["Provisional answer"]);
+    await h.emit(
+      "run-control-replacement",
+      "assistant",
+      {
+        itemId: "answer-1",
+        text: "",
+      },
+      { seq: 2 },
+    );
+    vi.advanceTimersByTime(flushMs);
+    await h.end("run-control-replacement", 3);
+
+    const payloads = h.chat().map(([, payload]) => payload);
+    expect(payloads).toMatchObject([
+      { state: "delta", message: { content: [{ text: "Provisional answer" }] } },
+      { state: "delta", replace: true, deltaText: "", message: { content: [{ text: "" }] } },
+      { state: "final" },
+    ]);
+    expect(payloads.at(-1)?.message).toBeUndefined();
+    expect(h.nodeChat()).toHaveLength(payloads.length);
+    await h.handler.dispose();
+    h.chatRunState.clear();
+  });
+
+  it("forwards a prepared short reply immediately", async () => {
+    const h = createHarness({ now: 2_200 });
+    h.registerNamed("4");
+    await h.emit("run-4", "assistant", { text: "No" });
+    await h.end("run-4");
+    expect(h.chat()).toHaveLength(2);
+    expect(h.chat().at(-1)?.[1]).toMatchObject({
+      state: "final",
+      message: { content: [{ text: "No" }] },
+    });
+    expect(h.nodeChat()).toHaveLength(2);
     h.nowSpy?.mockRestore();
   });
 
   it("preserves a glued leading NO_REPLY literal in cumulative chat snapshots", async () => {
-    const h = createNamedHarness("4b", {
+    const h = createHarness({
       now: 2_250,
     });
+    h.registerNamed("4b");
 
-    await h.sendMany([
+    await h.emitMany("run-4b", [
       ["assistant", { text: "NO_REPLYThe user" }],
       ["assistant", { text: "NO_REPLYThe user is saying hello" }],
     ]);
-    await h.finish();
+    await h.end("run-4b");
 
     const chatCalls = h.chat();
-    expect(chatCalls.at(-1)?.[1]).toMatchObject({
-      state: "final",
-      message: { content: [{ text: "NO_REPLYThe user is saying hello" }] },
-    });
+    const finalPayload = chatCalls.at(-1)?.[1] as {
+      message?: { content?: Array<{ text?: string }> };
+      state?: string;
+    };
+    expect(finalPayload.state).toBe("final");
+    expect(finalPayload.message?.content?.[0]?.text).toBe("NO_REPLYThe user is saying hello");
     expect(chatCalls[0]?.[1]).toMatchObject({
       message: { content: [{ text: "NO_REPLYThe user" }] },
     });
@@ -1043,18 +1136,16 @@ describe("agent event handler", () => {
       final: { state: "final" },
     },
   ])("flushes $name before final", async ({ first, next, delta, final }) => {
-    const h = createNamedHarness("final-flush", { now: 10_800 });
-    await h.send("assistant", first);
+    const h = createHarness({ now: 10_800 });
+    h.registerNamed("final-flush");
+    await h.emit("run-final-flush", "assistant", first);
     h.nowSpy?.mockReturnValue(10_860);
-    await h.send("assistant", next, { seq: 2 });
-    await h.finish(3);
+    await h.emit("run-final-flush", "assistant", next, { seq: 2 });
+    await h.end("run-final-flush", 3);
     const calls = h.chat();
     expect(calls).toHaveLength(3);
     expect(calls[1]?.[1]).toMatchObject({ state: "delta", ...delta });
     expect(calls[2]?.[1]).toMatchObject(final);
-    if (next.text === "") {
-      expect(calls[2]?.[1].message).toBeUndefined();
-    }
     expect(h.nodeChat()).toHaveLength(3);
     h.nowSpy?.mockRestore();
   });
@@ -1063,14 +1154,20 @@ describe("agent event handler", () => {
     vi.useFakeTimers();
     let now = 14_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const h = createNamedHarness("shutdown-trailing");
+    const h = createHarness();
+    h.registerNamed("shutdown-trailing");
 
-    await h.send("assistant", {
+    await h.emit("run-shutdown-trailing", "assistant", {
       text: "Hello",
       delta: "Hello",
     });
     now = 14_020;
-    await h.send("assistant", { text: "Hello world", delta: " world" }, { seq: 2 });
+    await h.emit(
+      "run-shutdown-trailing",
+      "assistant",
+      { text: "Hello world", delta: " world" },
+      { seq: 2 },
+    );
     expect(vi.getTimerCount()).toBe(2);
 
     h.chatRunState.clear();
@@ -1107,30 +1204,40 @@ describe("agent event handler", () => {
   it("flushes buffered chat delta before tool start events", async () => {
     let now = 12_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const h = createNamedHarness("tool-flush", {
+    const h = createHarness({
       resolveSessionKeyForRun: () => "session-tool-flush",
     });
+
+    h.registerNamed("tool-flush");
     registerAgentRunContext("run-tool-flush", {
       sessionKey: "session-tool-flush",
       verboseLevel: "off",
     });
     h.toolEventRecipients.add("run-tool-flush", "conn-1");
 
-    await h.send("assistant", { text: "Before tool" });
+    await h.emit("run-tool-flush", "assistant", { text: "Before tool" });
 
     // Keep the second update inside the live-text pacing window.
     now = 12_050;
-    await h.send("assistant", { text: "Before tool expanded" }, { seq: 2 });
+    await h.emit("run-tool-flush", "assistant", { text: "Before tool expanded" }, { seq: 2 });
 
-    await h.send("tool", { phase: "start", name: "read", toolCallId: "tool-flush-1" }, { seq: 3 });
+    await h.emit(
+      "run-tool-flush",
+      "tool",
+      { phase: "start", name: "read", toolCallId: "tool-flush-1" },
+      { seq: 3 },
+    );
 
     const chatCalls = h.chat();
     expect(chatCalls).toHaveLength(2);
-    expect(chatCalls[1]?.[1]).toMatchObject({
-      state: "delta",
-      deltaText: " expanded",
-      message: { content: [{ text: "Before tool expanded" }] },
-    });
+    const flushedPayload = chatCalls[1]?.[1] as {
+      state?: string;
+      deltaText?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(flushedPayload.state).toBe("delta");
+    expect(flushedPayload.deltaText).toBe(" expanded");
+    expect(flushedPayload.message?.content?.[0]?.text).toBe("Before tool expanded");
     expect(h.nodeChat()).toHaveLength(2);
 
     expect(h.broadcastToConnIds).toHaveBeenCalledTimes(1);
@@ -1236,9 +1343,11 @@ describe("agent event handler", () => {
 
     const nodeToolCalls = h.nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
     expect(nodeToolCalls).toHaveLength(1);
-    expectPayloadFields(nodeToolCalls[0]?.[2], {
-      stream: "tool",
-      data: expect.objectContaining({ phase: "start", name: "read" }),
+    const payload = requireRecord(nodeToolCalls[0]?.[2], "node tool payload");
+    expect(payload.stream).toBe("tool");
+    expectRecordFields(requireRecord(payload.data, "node tool payload data"), {
+      phase: "start",
+      name: "read",
     });
   });
 
@@ -1432,14 +1541,17 @@ describe("agent event handler", () => {
       requestedKey: sessionKey,
       canonicalKey: sessionKey,
     });
-    const persistParams = persistGatewaySessionLifecycleEventMock.mock.calls.find(
-      ([params]) => params.event.data.phase === "end",
-    )?.[0];
-    expect(persistParams).toMatchObject({
-      sessionKey,
-      clientRunId,
-      event: { runId, data: { phase: "end" } },
-    });
+    const persistParams = requireRecord(
+      persistGatewaySessionLifecycleEventMock.mock.calls.find(
+        ([params]) => params.event.data.phase === "end",
+      )?.[0],
+      "terminal persistence",
+    );
+    expect(persistParams.sessionKey).toBe(sessionKey);
+    expect(persistParams.clientRunId).toBe(clientRunId);
+    const event = requireRecord(persistParams.event, "persisted event");
+    expectRecordFields(event, { runId });
+    expect(requireRecord(event.data, "lifecycle data").phase).toBe("end");
     expect(h.clearTrackedActiveRun).toHaveBeenCalledWith({ runId, clientRunId, sessionKey });
     const terminalCallIndex = h.broadcastToConnIds.mock.calls.indexOf(
       expectDefined(changes[1], "terminal session publication"),
@@ -1597,7 +1709,7 @@ describe("agent event handler", () => {
     currentRow = { ...currentRow, updatedAt: 2_101 };
     runA.resolve();
     await waitForFast(() => expect(h.changes()).toHaveLength(1));
-    expectPayloadFields(h.broadcastToConnIds.mock.calls[0]?.[1], {
+    expectPayloadFields(requireMockArg(h.broadcastToConnIds, 0, 1, "run-a session snapshot"), {
       status: "running",
       abortedLastRun: true,
       endedAt: null,
@@ -1612,7 +1724,7 @@ describe("agent event handler", () => {
     };
     runB.resolve();
     await waitForFast(() => expect(h.changes()).toHaveLength(2));
-    expectPayloadFields(h.broadcastToConnIds.mock.calls[1]?.[1], {
+    expectPayloadFields(requireMockArg(h.broadcastToConnIds, 1, 1, "run-b session snapshot"), {
       status: "done",
       abortedLastRun: false,
     });
@@ -1686,7 +1798,7 @@ describe("agent event handler", () => {
     );
 
     await waitForFast(() => expect(h.changes()).toHaveLength(1));
-    expectPayloadFields(h.broadcastToConnIds.mock.calls[0]?.[1], {
+    expectPayloadFields(requireMockArg(h.broadcastToConnIds, 0, 1, "fallback session snapshot"), {
       status: "done",
       updatedAt: 2_100,
       abortedLastRun: false,
@@ -1765,53 +1877,62 @@ describe("agent event handler", () => {
     expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
   });
 
-  const validationError = "edit tool validation failed: edits: must be an array";
-  const terminalProjectionCases: Array<
-    [
-      name: string,
-      sessionKey: string,
-      data: AgentEventPayload["data"],
-      expected: Record<string, unknown>,
-      options?: { text?: string; absent?: string },
-    ]
-  > = [
-    [
-      "safe validation diagnostic",
-      "session-validation-loop",
-      { aborted: true, toolErrorSummary: validationError },
-      { state: "aborted", stopReason: "aborted", errorMessage: validationError },
-    ],
-    [
-      "unsafe abort diagnostic",
-      "session-unsafe-abort",
-      { aborted: true, stopReason: "aborted", toolErrorSummary: "browser failed\nsecret output" },
-      { state: "aborted" },
-      { absent: "errorMessage" },
-    ],
-    [
-      "timeout without error text",
-      "session-idle",
-      { aborted: true, stopReason: "timeout", timeoutPhase: "idle" },
-      { state: "error", stopReason: "timeout", errorKind: "timeout" },
-    ],
-    [
-      "yielded parent turn",
-      "agent:main:main",
-      { yielded: true, livenessState: "paused", stopReason: "end_turn" },
-      { state: "final", stopReason: "end_turn", yielded: true },
-      { text: "Waiting for registered continuation work." },
-    ],
-    [
-      "abort overriding stale yield metadata",
-      "agent:main:main",
-      { aborted: true, yielded: true, livenessState: "paused", stopReason: "end_turn" },
-      { state: "error", stopReason: "end_turn" },
-      { absent: "yielded" },
-    ],
+  const terminalProjectionCases: {
+    name: string;
+    sessionKey: string;
+    data: AgentEventPayload["data"];
+    text?: string;
+    expected: Record<string, unknown>;
+    absent?: string;
+  }[] = [
+    {
+      name: "safe validation diagnostic",
+      sessionKey: "session-validation-loop",
+      data: {
+        aborted: true,
+        toolErrorSummary: "edit tool validation failed: edits: must be an array",
+      },
+      expected: {
+        state: "aborted",
+        stopReason: "aborted",
+        errorMessage: "edit tool validation failed: edits: must be an array",
+      },
+    },
+    {
+      name: "unsafe abort diagnostic",
+      sessionKey: "session-unsafe-abort",
+      data: {
+        aborted: true,
+        stopReason: "aborted",
+        toolErrorSummary: "browser failed\nsecret output",
+      },
+      expected: { state: "aborted" },
+      absent: "errorMessage",
+    },
+    {
+      name: "timeout without error text",
+      sessionKey: "session-idle",
+      data: { aborted: true, stopReason: "timeout", timeoutPhase: "idle" },
+      expected: { state: "error", stopReason: "timeout", errorKind: "timeout" },
+    },
+    {
+      name: "yielded parent turn",
+      sessionKey: "agent:main:main",
+      text: "Waiting for registered continuation work.",
+      data: { yielded: true, livenessState: "paused", stopReason: "end_turn" },
+      expected: { state: "final", stopReason: "end_turn", yielded: true },
+    },
+    {
+      name: "abort overriding stale yield metadata",
+      sessionKey: "agent:main:main",
+      data: { aborted: true, yielded: true, livenessState: "paused", stopReason: "end_turn" },
+      expected: { state: "error", stopReason: "end_turn" },
+      absent: "yielded",
+    },
   ];
   it.each(terminalProjectionCases)(
-    "projects %s on lifecycle end",
-    async (_name, sessionKey, data, expected, { text, absent } = {}) => {
+    "projects $name on lifecycle end",
+    async ({ sessionKey, data, text, expected, absent }) => {
       const h = createHarness({ resolveSessionKeyForRun: () => sessionKey });
       h.register("provider-terminal", sessionKey, "client-terminal");
       if (text) {
@@ -1871,10 +1992,13 @@ describe("agent event handler", () => {
     });
 
     expect(h.broadcastToConnIds).toHaveBeenCalledTimes(1);
-    const payload = h.broadcastToConnIds.mock.calls[0]?.[1];
-    expect(payload.data.result).toEqual(result);
-    expect(payload.data.partialResult).toEqual(partialResult);
-    const nodeData = h.nodeSendToSession.mock.calls[0]?.[2].data;
+    const payload = requireMockArg(h.broadcastToConnIds, 0, 1, "tool output payload") as {
+      data?: Record<string, unknown>;
+    };
+    expect(payload.data?.result).toEqual(result);
+    expect(payload.data?.partialResult).toEqual(partialResult);
+    const nodePayload = requireMockPayload(h.nodeSendToSession, 0, 2, "node tool output payload");
+    const nodeData = requireRecord(nodePayload.data, "node tool output data");
     expect(nodeData.result).toEqual(verboseLevel === "full" ? result : undefined);
     expect(nodeData.partialResult).toBeUndefined();
   });
@@ -1988,11 +2112,14 @@ describe("agent event handler", () => {
 
     await vi.advanceTimersByTimeAsync(100);
 
-    expect(h.chat().at(-1)?.[1]).toMatchObject({
-      state: "error",
-      runId: "run-terminal-late-lifecycle",
-      errorMessage: expect.stringContaining("request timed out"),
-    });
+    const finalPayload = h.chat().at(-1)?.[1] as {
+      state?: string;
+      runId?: string;
+      errorMessage?: string;
+    };
+    expect(finalPayload.state).toBe("error");
+    expect(finalPayload.runId).toBe("run-terminal-late-lifecycle");
+    expect(finalPayload.errorMessage).toContain("request timed out");
     expect(h.clearAgentRunContext).toHaveBeenCalledWith("run-terminal-late-lifecycle");
     expect(h.agentRunSeq.has("run-terminal-late-lifecycle")).toBe(false);
   });
@@ -2467,7 +2594,7 @@ describe("agent event handler", () => {
     async ({ stream, controlUiVisible }) => {
       vi.useFakeTimers();
       vi.setSystemTime(10_000);
-      await using h = createHarness();
+      const h = createHarness();
       const delivery = controlUiVisible ? h.broadcast : h.broadcastToConnIds;
       const claim = (runId: string) =>
         claimOwnedRun(runId, {
@@ -2545,6 +2672,8 @@ describe("agent event handler", () => {
         await stop();
         releaseAgentRunContext(retiredRunId, retiredClaim);
         releaseAgentRunContext(activeRunId, activeClaim);
+        await h.handler.dispose();
+        h.chatRunState.clear();
       }
     },
   );
@@ -2552,7 +2681,7 @@ describe("agent event handler", () => {
   it("starts fresh chat text when a new owner reuses a source run id with a queued tail", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
-    await using h = createHarness();
+    const h = createHarness();
     const runId = "run-owner-reuse";
     const claim = () =>
       claimOwnedRun(runId, { sessionKey: "session-reuse", isControlUiVisible: false });
@@ -2600,6 +2729,8 @@ describe("agent event handler", () => {
       await stop();
       releaseAgentRunContext(runId, firstClaim);
       releaseAgentRunContext(runId, currentClaim);
+      await h.handler.dispose();
+      h.chatRunState.clear();
     }
   });
 
@@ -2608,7 +2739,7 @@ describe("agent event handler", () => {
     async (change) => {
       vi.useFakeTimers();
       vi.setSystemTime(10_000);
-      await using h = createHarness();
+      const h = createHarness();
       const runId = "run-hidden-audience";
       const claimId = claimOwnedRun(runId, { sessionKey: "session-A", isControlUiVisible: false });
       h.sessionMessageSubscribers.subscribe("conn-A", "session-A");
@@ -2667,6 +2798,8 @@ describe("agent event handler", () => {
       } finally {
         await stop();
         releaseAgentRunContext(runId, claimId);
+        await h.handler.dispose();
+        h.chatRunState.clear();
       }
     },
   );
@@ -2755,7 +2888,11 @@ describe("agent event handler", () => {
     expect(
       h.broadcastToConnIds.mock.calls
         .slice(streamCallStart)
-        .map(([event, payload, recipients]) => [event, payload.stream, recipients]),
+        .map(([event, payload, recipients]) => [
+          event,
+          requireRecord(payload, "event").stream,
+          recipients,
+        ]),
     ).toEqual(streams.map((stream) => ["agent", stream, new Set(["conn-selected"])]));
 
     h.broadcastToConnIds.mockClear();

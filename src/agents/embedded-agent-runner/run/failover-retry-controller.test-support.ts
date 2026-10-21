@@ -17,6 +17,7 @@ export function createRetryController({
   const params: RetryRunParams = {
     runId: "run:retry-test",
     sessionId: "session:failover-retry-controller-test",
+    sessionFile: "/tmp/openclaw-failover-retry-controller-test/session.jsonl",
     workspaceDir: "/tmp/workspace",
     prompt: "synthetic auth failure",
     timeoutMs: 60_000,

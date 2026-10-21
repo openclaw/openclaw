@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import net from "node:net";
@@ -18,8 +18,7 @@ import { TSGO_CORE_TEST_SHARDS } from "../../scripts/lib/tsgo-core-test-shards.m
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { waitForDead } from "../helpers/process-wait.js";
-import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { installDistArtifactScripts as installScripts } from "./dist-artifact-fixture.js";
 import {
   materializeNativeCompiler,
@@ -78,6 +77,35 @@ function expectOwnership(root: string, owner: boolean, unjoined: boolean) {
 
 function expectFile(root: string, name: string, expected: string | boolean) {
   expect(typeof expected === "string" ? read(root, name) : exists(root, name), name).toBe(expected);
+}
+
+function waitForForeignProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  // Crash cases deliberately remove the compiler's owner. Its checkpoint socket
+  // closes before death, so only a PID observation can certify the orphan's exit.
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const abort = () => finish(new Error(`process still alive: ${pid}`, { cause: signal.reason }));
+    const check = () => {
+      if (!isProcessAlive(pid)) {
+        finish();
+      } else if (signal.aborted) {
+        abort();
+      } else {
+        timer = setTimeout(check, 5);
+      }
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    check();
+  });
 }
 
 function write(root: string, relative: string, content: string) {
@@ -164,14 +192,9 @@ async function runWithProcesses(
   signal: AbortSignal,
 ) {
   const sockets = new Set<net.Socket>();
-  const events = new Map<string, ReturnType<typeof createDeferred<net.Socket>>>();
-  const event = (name: string) => {
-    if (!events.has(name)) {
-      events.set(name, createDeferred<net.Socket>());
-    }
-    return events.get(name)!;
-  };
+  const events = new Map<string, net.Socket>();
   const checkpointPids = new Set<number>();
+  const listeners = new Map<string, (socket: net.Socket) => void>();
   let cleaning = false;
   const server = net.createServer((socket) => {
     sockets.add(socket);
@@ -179,9 +202,10 @@ async function runWithProcesses(
       socket.end("continue");
     }
     socket.once("data", (data) => {
-      const { name, pid } = JSON.parse(data.toString());
+      const { name: event, pid } = JSON.parse(data.toString());
       checkpointPids.add(pid);
-      event(name).resolve(socket);
+      events.set(event, socket);
+      listeners.get(event)?.(socket);
     });
   });
   server.listen(0, "127.0.0.1");
@@ -209,7 +233,7 @@ async function runWithProcesses(
       // Crash cases deliberately orphan a compiler; its barrier closes before
       // process exit. Join that process too before deleting the fixture.
       const orphans = await Promise.allSettled(
-        [...checkpointPids].map((pid) => waitForDead(pid, signal)),
+        [...checkpointPids].map((pid) => waitForForeignProcessExit(pid, signal)),
       );
       for (const socket of sockets) {
         socket.destroy();
@@ -231,7 +255,21 @@ async function runWithProcesses(
   if (signal.aborted) {
     abort();
   }
-  const waitEvent = (name: string) => withinTest(event(name).promise, signal);
+  const waitEvent = (name: string) =>
+    new Promise<net.Socket>((resolve, reject) => {
+      signal.throwIfAborted();
+      signal.addEventListener(
+        "abort",
+        () => reject(new Error("Fixture canceled", { cause: signal.reason })),
+        { once: true },
+      );
+      const socket = events.get(name);
+      if (socket) {
+        resolve(socket);
+      } else {
+        listeners.set(name, resolve);
+      }
+    });
   try {
     const checkpoint = (name: string) => `
         const socket = require('node:net').connect(${address.port}, '127.0.0.1', () => socket.write(JSON.stringify({ name: ${JSON.stringify(name)}, pid: process.pid })));
@@ -256,14 +294,17 @@ async function runWithProcesses(
       children.push(child);
       let output = "";
       diagnostics.push(() => `[fixture ${root}] ${commandArgs.join(" ")}\n${output}`);
-      const waiting = createDeferred();
+      let announceWait!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        announceWait = resolve;
+      });
       child.stdout?.on("data", (data) => {
         output += data;
       });
       child.stderr?.on("data", (data) => {
         output += data;
         if (output.includes("waiting for")) {
-          waiting.resolve();
+          announceWait();
         }
       });
       child.once("error", (error) => {
@@ -274,10 +315,15 @@ async function runWithProcesses(
       });
       completions.push(done);
       return {
-        waiting: waiting.promise,
+        waiting,
         done,
         event: (name) =>
-          awaitGateBeforeSettlement(waitEvent(name), done, `Command exited before ${name}`),
+          Promise.race([
+            waitEvent(name),
+            done.then((result) => {
+              throw new Error(`Command exited before ${name}: ${JSON.stringify(result)}`);
+            }),
+          ]),
       };
     };
     await run({
@@ -453,11 +499,12 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         const writer = start(root, writerScript);
         await Promise.race([writer.waiting, writer.event("smoke-contender-ready")]);
         process.kill(pid, signalName);
-        const acknowledgment = await awaitGateBeforeSettlement(
+        const acknowledgment = await Promise.race([
           waitEvent("smoke-signal-received"),
-          smoke.done,
-          "Smoke exited before signal acknowledgment",
-        );
+          smoke.done.then((result) => {
+            throw new Error(`Smoke exited before signal acknowledgment: ${JSON.stringify(result)}`);
+          }),
+        ]);
         acknowledgment.write("continue");
         expectFile(root, "import-joined", false);
         expectFile(root, "writer-started", false);
@@ -543,6 +590,16 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     }, signal);
   });
 
+  it("releases ownership after a native execFileSync ENOENT error", async () => {
+    const root = createCheckout();
+    const error = await withDistArtifactOwnership(root, async () =>
+      execFileSync(path.join(root, "absent-command"), [], { stdio: "pipe" }),
+    ).catch((cause: unknown) => cause);
+    expect(error).toHaveProperty("code", "ENOENT");
+    expect((error as { error?: unknown }).error ?? error).toBe(error);
+    expectOwnership(root, false, false);
+  });
+
   it.for([false, true])(
     "retains ownership when recording uncertainty fails (nested=%s)",
     async (nested, { signal }) => {
@@ -610,6 +667,39 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         expect(recovered.code, recovered.output).toBe(0);
         expectFile(root, "dist/retained-artifact.txt", "next generation");
         expectFile(directory, "owner.json", false);
+      }, signal);
+    },
+  );
+
+  it.for(["cause", "error", "cyclic aggregate", "bundler errors"])(
+    "retains ownership for unjoined work nested in %s",
+    async (kind, { signal }) => {
+      // Retention deliberately keeps lock handles open; a joined child owns
+      // their disposal rather than leaking them into the shared Vitest worker.
+      await withProcesses(async ({ start }) => {
+        const root = createCheckout();
+        const probe = write(
+          root,
+          "retained-error.mts",
+          `
+          import assert from 'node:assert/strict';
+          import { withDistArtifactOwnership } from ${JSON.stringify(sourceScript("lib/dist-artifact-ownership.mts"))};
+          const kind = ${JSON.stringify(kind)};
+          const uncertainty = { processTreeState: 'indeterminate' };
+          const aggregate = new AggregateError([], 'sibling cleanup');
+          aggregate.errors.push(aggregate, new Error('command failed', { cause: uncertainty }));
+          const error = kind === 'cyclic aggregate' ? aggregate
+            : kind === 'bundler errors' ? Object.assign(new Error('Build failed'), { errors: [aggregate] })
+            : new Error('command failed', { cause: kind === 'cause' ? uncertainty : { error: uncertainty } });
+          const outcome = await withDistArtifactOwnership(process.cwd(), async () => {
+            throw error;
+          }).catch(cause => cause);
+          assert.equal(outcome, error);
+        `,
+        );
+        const result = await start(root, probe).done;
+        expectOwnership(root, true, true);
+        expect(result.code, result.output).toBe(0);
       }, signal);
     },
   );
@@ -925,7 +1015,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
         } finally {
           compilerGate.write("continue");
-          await waitForDead(compiler.pid, signal);
+          await waitForForeignProcessExit(compiler.pid, signal);
         }
       }, signal);
     },
