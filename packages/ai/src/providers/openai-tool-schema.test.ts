@@ -1,4 +1,3 @@
-// Verifies OpenAI strict tool schema normalization and cache behavior.
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import { projectOpenAITools } from "./openai-tool-projection.js";
@@ -10,24 +9,29 @@ import {
   resolveOpenAIProjectedToolsStrictToolFlag,
 } from "./openai-tool-schema.js";
 
-describe("OpenAI strict tool schema normalization", () => {
-  it.each(["dependencies"])(
-    "preserves literal names when repairing the %s schema map",
-    (mapKey) => {
-      const schema = {
-        type: "object",
-        [mapKey]: { ["__proto__"]: { type: "string", description: null } },
-      };
+const emptyObject = {
+  type: "object",
+  properties: {},
+  required: [],
+  additionalProperties: false,
+};
+const valueObject = { type: "object", properties: { value: { type: "string" } } };
 
-      const normalized = normalizeOpenAIStrictCompatSchema(schema);
-      expect(Object.getOwnPropertyDescriptor(normalized, mapKey)?.value).toStrictEqual({
-        ["__proto__"]: { type: "string" },
-      });
-      expect(schema[mapKey]).toStrictEqual({
-        ["__proto__"]: { type: "string", description: null },
-      });
-    },
-  );
+describe("OpenAI strict tool schema normalization", () => {
+  it("preserves literal names when repairing dependencies", () => {
+    const schema = {
+      type: "object",
+      dependencies: { ["__proto__"]: { type: "string", description: null } },
+    };
+
+    const normalized = normalizeOpenAIStrictCompatSchema(schema);
+    expect(Object.getOwnPropertyDescriptor(normalized, "dependencies")?.value).toStrictEqual({
+      ["__proto__"]: { type: "string" },
+    });
+    expect(schema.dependencies).toStrictEqual({
+      ["__proto__"]: { type: "string", description: null },
+    });
+  });
 
   it("infers the root type from schema fields instead of a literal prototype key", () => {
     const schema = {
@@ -72,8 +76,7 @@ describe("OpenAI strict tool schema normalization", () => {
 
   it("preserves literal metadata when removing OpenAPI annotations", () => {
     const schema = {
-      type: "object",
-      properties: { value: { type: "string" } },
+      ...valueObject,
       required: ["value"],
       additionalProperties: false,
       ["__proto__"]: { type: "array" },
@@ -92,25 +95,15 @@ describe("OpenAI strict tool schema normalization", () => {
     ];
 
     for (const schema of schemas) {
-      expect(normalizeStrictOpenAIJsonSchema(schema)).toEqual({
-        type: "object",
-        properties: {},
-        required: [],
-        additionalProperties: false,
-      });
+      expect(normalizeStrictOpenAIJsonSchema(schema)).toEqual(emptyObject);
       expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
     }
   });
 
   it("walks named schema maps without treating definition names as keywords", () => {
     const schema = {
-      type: "object",
-      properties: {},
-      required: [],
-      additionalProperties: false,
-      $defs: {
-        anyOf: { type: "string" },
-      },
+      ...emptyObject,
+      $defs: { anyOf: { type: "string" } },
       examples: [{ anyOf: [{ type: "string" }] }],
     };
 
@@ -126,21 +119,11 @@ describe("OpenAI strict tool schema normalization", () => {
   });
 
   it("walks legacy and content schema applicators", () => {
-    const nestedObject = {
-      type: "object",
-      properties: { value: { type: "string" } },
-    };
     const schema = {
-      type: "object",
-      properties: {},
-      required: [],
-      additionalProperties: false,
-      dependencies: {
-        mode: ["payload"],
-        payload: nestedObject,
-      },
-      additionalItems: nestedObject,
-      contentSchema: nestedObject,
+      ...emptyObject,
+      dependencies: { mode: ["payload"], payload: valueObject },
+      additionalItems: valueObject,
+      contentSchema: valueObject,
     };
 
     expect(

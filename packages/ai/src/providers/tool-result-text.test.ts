@@ -14,22 +14,18 @@ describe("formatToolResultText", () => {
     ).toBe("(see attached image)");
   });
 
-  it("keeps the error prefix on unmodified output", () => {
-    expect(formatToolResultText({ text: "  failed  ", isError: true })).toBe(
-      "[tool error]   failed  ",
-    );
-  });
-
-  it("appends the omitted-media suffix after unmodified output", () => {
-    const text = "line with trailing spaces   ";
-    expect(
-      formatToolResultText({
-        text,
-        omittedMediaPlaceholder: "[tool image omitted]",
-        isError: false,
-      }),
-    ).toBe(`${text}\n[tool image omitted]`);
-  });
+  it.each([
+    [{ text: "  failed  ", isError: true }, "[tool error]   failed  "],
+    [
+      { text: "line   ", omittedMediaPlaceholder: "[tool image omitted]", isError: false },
+      "line   \n[tool image omitted]",
+    ],
+  ] satisfies [Parameters<typeof formatToolResultText>[0], string][])(
+    "preserves output whitespace with prefixes and suffixes: %j",
+    (input, expected) => {
+      expect(formatToolResultText(input)).toBe(expected);
+    },
+  );
 });
 
 describe("extractToolResultText", () => {
@@ -44,8 +40,8 @@ describe("extractToolResultText", () => {
     ).toBe(`head\n${expected}`);
   });
 
-  it.each([8_000])("preserves explicit continuation text beyond %i UTF-16 units", (length) => {
-    const text = `${"x".repeat(length)}😀\n[More content follows. Use offset=225 to continue.]\n`;
+  it("preserves explicit continuation text beyond 8000 UTF-16 units", () => {
+    const text = `${"x".repeat(8_000)}😀\n[More content follows. Use offset=225 to continue.]\n`;
     const blocks = [{ type: "text", text }];
     expect(extractToolResultText(blocks, { includeStructured: true })).toBe(text);
     expect(extractToolResultText(blocks)).toBe(text);
@@ -95,44 +91,25 @@ describe("extractToolResultText", () => {
   });
 
   it("truncates structured fallback text before provider replay", () => {
-    const tail = "tail-marker";
     const text = extractToolResultText([
-      {
-        type: "json",
-        data: {
-          payload: `${"x".repeat(8_200)}${tail}`,
-        },
-      },
+      { type: "json", data: { payload: `${"x".repeat(8_200)}tail-marker` } },
     ]);
 
     expect(text.length).toBeLessThan(8_100);
     expect(text).toContain("…(truncated)…");
-    expect(text).not.toContain(tail);
+    expect(text).not.toContain("tail-marker");
   });
 });
 
 describe("describeToolResultMediaPlaceholder", () => {
-  it("describes image-only tool result media", () => {
-    expect(
-      describeToolResultMediaPlaceholder([{ type: "image", mimeType: "image/png", data: "img" }]),
-    ).toBe("(see attached image)");
-  });
-
-  it("describes audio-only tool result media", () => {
-    expect(
-      describeToolResultMediaPlaceholder([
-        { type: "audio", mimeType: "audio/mpeg", data: "audio" },
-      ]),
-    ).toBe("(see attached audio)");
-  });
-
-  it("describes mixed image and audio tool result media", () => {
-    expect(
-      describeToolResultMediaPlaceholder([
-        { type: "image", mimeType: "image/png", data: "img" },
-        { type: "audio", mimeType: "audio/mpeg", data: "audio" },
-      ]),
-    ).toBe("(see attached media)");
+  const image = { type: "image", mimeType: "image/png", data: "img" };
+  const audio = { type: "audio", mimeType: "audio/mpeg", data: "audio" };
+  it.each([
+    [[image], "image"],
+    [[audio], "audio"],
+    [[image, audio], "media"],
+  ] as const)("describes %j as %s", (blocks, label) => {
+    expect(describeToolResultMediaPlaceholder(blocks)).toBe(`(see attached ${label})`);
   });
 
   it("does not advertise payload-less media husks", () => {
