@@ -1103,7 +1103,7 @@ src/agents/cli-runner/execute-node-claude.ts	4
 src/agents/cli-runner/execute.ts	2
 src/agents/cli-runner/prepare.ts	1
 src/agents/cli-runner/session-history.ts	1
-src/agents/code-mode-runtime.ts	2
+src/agents/code-mode-runtime.ts	1
 src/agents/code-mode-script-syntax.ts	1
 src/agents/code-mode.ts	2
 src/agents/codex-mcp-config.ts	1
