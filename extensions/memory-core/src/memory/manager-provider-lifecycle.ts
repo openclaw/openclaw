@@ -112,9 +112,22 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract indexIdentityState: MemoryIndexIdentityState;
   protected abstract syncAdmitted(
     params?: MemorySyncParams,
-    options?: { allowEmbeddingBootstrapFallback?: boolean; queuedSessionOwner?: boolean },
+    options?: {
+      allowEmbeddingBootstrapFallback?: boolean;
+      queuedSessionOwner?: boolean;
+      background?: boolean;
+    },
   ): Promise<void>;
   protected abstract syncPublishedIndexInBackground(params: { reason: string }): Promise<void>;
+
+  protected async syncBackground(params: MemorySyncParams): Promise<void> {
+    if (this.closing || this.closed) {
+      return;
+    }
+    return await this.withManagerOperation(() =>
+      this.syncAdmitted(params, { background: true, queuedSessionOwner: true }),
+    );
+  }
 
   protected markEmbeddingBootstrapFailure(
     err: unknown,

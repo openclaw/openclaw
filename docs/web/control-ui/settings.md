@@ -66,15 +66,17 @@ The choice is saved to your authenticated profile on the connected Gateway and h
 
 ## Community invitation
 
-The **Community** icon at the bottom of the left navigation rail opens Discord, Reddit, and X links on demand without taking space from the session list. On phones, the links appear in a bottom sheet; larger screens use a centered dialog. The sheet does not open automatically, and closing it returns focus to **Community** without hiding the entry. Links open in a new tab.
+The **Community** card at the bottom of the expanded sidebar links to Discord, Reddit, and X in new tabs. On phones, a compact card sits at the bottom of the navigation drawer without covering the session list.
 
-This replaces the promotional invitation card. Existing browser-local card dismissals are left untouched; they do not hide the compact entry. To hide Community for everyone using a Control UI deployment, run this on the Gateway serving that UI:
+Select **Dismiss and don't show again** to hide the card in that browser. Existing saved dismissals continue to apply across navigation, reloads, and interface updates. Dismissal is browser-local and does not sync to other browsers. If a dismissal cannot be saved, the card stays hidden for the current page and a message explains that the preference could not be saved.
+
+To hide Community for everyone using a Control UI deployment, run this on the Gateway serving that UI:
 
 ```bash
 openclaw config set gateway.controlUi.communityInvite false
 ```
 
-After the Gateway applies the change, reload the browser page or reconnect to pick it up. The setting belongs to the Gateway serving the UI, including when that UI connects to a different remote Gateway. Re-enabling it with `true` restores the compact entry.
+After the Gateway applies the change, reload the browser page or reconnect to pick it up. The setting belongs to the Gateway serving the UI, including when that UI connects to a different remote Gateway. Re-enabling it with `true` shows the card only in browsers that have not dismissed it.
 
 ## Personal identity
 
