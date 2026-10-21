@@ -1410,7 +1410,8 @@ describe("CI changed Node test plan", () => {
         expect(childEnv).toEqual(ownerChildEnv);
         expect(childEnv.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
         expect(job.runner).toBe(ownerJob.runner);
-        expect(job.planConcurrency).toBe(ownerJob.planConcurrency);
+        const serialProjection = isSerialNodeTestProjection(job.groups, ownerJob);
+        expect(job.planConcurrency).toBe(serialProjection ? 1 : ownerJob.planConcurrency);
       }
     }
     const cheapFiles = vi
