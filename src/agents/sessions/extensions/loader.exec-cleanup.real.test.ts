@@ -2,7 +2,7 @@ import "../../../test-utils/prepare-compiled-subprocesses.js";
 import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
 import { isChildProcessTreeAlive } from "../../../process/child-process-tree.js";
 import { hasCommandProcessCleanupError } from "../../../process/exec-result.js";
@@ -16,11 +16,6 @@ import { createExtensionRuntime, loadExtensionFromFactory } from "./loader.js";
 
 const spawnCommand = commands.spawnCommand;
 const nativeKill = process.kill.bind(process);
-
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-});
 
 test.skipIf(process.platform !== "linux").for([false, true])(
   "extension exec preserves real cleanup classification with denied forced stop=%s",
@@ -53,19 +48,17 @@ test.skipIf(process.platform !== "linux").for([false, true])(
       "setInterval(() => {}, 1000);",
     ].join("\n");
     const controller = new AbortController();
-    const loading = loadExtensionFromFactory(
+    const outcome = loadExtensionFromFactory(
       async (api) => {
         apiResult = await api.exec(process.execPath, ["-e", source], { signal: controller.signal });
       },
       process.cwd(),
       createEventBus(),
       createExtensionRuntime(),
-    );
-    const outcome = loading.then(
+    ).then(
       () => apiResult,
       (error: unknown) => error,
     );
-    let observed: Awaited<typeof outcome> | undefined;
     try {
       const identity = await withinTest(ready.promise, signal);
       const command = expectDefined(child, "real command child");
@@ -76,9 +69,7 @@ test.skipIf(process.platform !== "linux").for([false, true])(
           forcedStop.resolve();
           if (denyStop) {
             denied++;
-            throw Object.assign(new Error("fixture denies exact owned-group forced stop"), {
-              code: "EPERM",
-            });
+            throw Object.assign(new Error("fixture denies forced stop"), { code: "EPERM" });
           }
         }
         return nativeKill(pid, requestedSignal);
@@ -90,12 +81,22 @@ test.skipIf(process.platform !== "linux").for([false, true])(
       vi.setSystemTime(Date.now() + 5_000);
       await withinTest(forcedStop.promise, signal);
       vi.setSystemTime(Date.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
-      observed = await withinTest(outcome, signal);
+      const observed = await withinTest(outcome, signal);
       expect(denied).toBe(denyStop ? 1 : 0);
       if (denyStop) {
         expect(nativeKill(identity.descendantPid, 0)).toBe(true);
       }
       expect(isChildProcessTreeAlive(command)).toBe(denyStop);
+      const result = {
+        stdout: expect.stringContaining("NATIVE_EXEC_READY:"),
+        stderr: "",
+        code: 0,
+        killed: true,
+      };
+      expect(observed).toMatchObject(
+        denyStop ? { code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN", cause: result } : result,
+      );
+      expect(hasCommandProcessCleanupError(observed)).toBe(denyStop);
     } finally {
       vi.restoreAllMocks();
       vi.useRealTimers();
@@ -114,15 +115,5 @@ test.skipIf(process.platform !== "linux").for([false, true])(
       }
       await withinTest(outcome, signal);
     }
-    const result = {
-      stdout: expect.stringContaining("NATIVE_EXEC_READY:"),
-      stderr: "",
-      code: 0,
-      killed: true,
-    };
-    expect(observed).toMatchObject(
-      denyStop ? { code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN", cause: result } : result,
-    );
-    expect(hasCommandProcessCleanupError(observed)).toBe(denyStop);
   },
 );
