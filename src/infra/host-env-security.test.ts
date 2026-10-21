@@ -5,7 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { describe, expect, it } from "vitest";
-import { HOST_ENV_SECURITY_POLICY as canonicalPolicy } from "./host-env-security-policy.js";
+import { loadHostEnvSecurityPolicy } from "./host-env-security-policy.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostInheritedEnvVarName,
@@ -427,6 +427,10 @@ function readRepoFile(repoRoot: string, relativePath: string): string {
 
 it("keeps generated macOS host env policy in sync with shared JSON policy", () => {
   const repoRoot = process.cwd();
+  const policyPath = path.join(repoRoot, "src/infra/host-env-security-policy.json");
+
+  const rawPolicy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+  const policy = loadHostEnvSecurityPolicy(rawPolicy);
   const generatedSource = readRepoFile(
     repoRoot,
     "apps/macos/Sources/OpenClaw/HostEnvSecurityPolicy.generated.swift",
@@ -445,9 +449,7 @@ it("keeps generated macOS host env policy in sync with shared JSON policy", () =
     "blockedPrefixes",
   ] as const;
   for (const field of fields) {
-    expect(parseSwiftStringArray(generatedSource, `static let ${field}`)).toEqual(
-      canonicalPolicy[field],
-    );
+    expect(parseSwiftStringArray(generatedSource, `static let ${field}`)).toEqual(policy[field]);
   }
 
   // The sanitizer may consume the generated policy directly or through local aliases.

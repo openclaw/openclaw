@@ -1313,7 +1313,7 @@ src/agents/tool-search-transcript.ts	1
 src/agents/tools-effective-inventory-build.ts	2
 src/agents/tools-effective-inventory.ts	4
 src/agents/tools/agents-wait-tool.ts	1
-src/agents/tools/ask-user-tool.ts	3
+src/agents/tools/ask-user-tool.ts	2
 src/agents/tools/chat-history-text.ts	1
 src/agents/tools/common.ts	2
 src/agents/tools/computer-tool-node.ts	1

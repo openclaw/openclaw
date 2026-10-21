@@ -78,6 +78,7 @@ export interface SessionCatalogDataOwner {
   sessionCatalogGatewayClient(): GatewayBrowserClient | null;
   synchronizeSessionScope(): void;
   requestSessionDataUpdate(): void;
+  refreshSessionCatalogs(): Promise<void>;
   sessionCatalogIdsWithoutVisibleRows(): readonly string[];
 }
 
@@ -153,7 +154,7 @@ function refreshSessionCatalogsInBackground(owner: SessionCatalogDataOwner): Pro
         owner.sessionCatalogLive.refreshScope === scope &&
         owner.isSessionDataHostConnected
       ) {
-        await refreshSessionCatalogs(owner);
+        await owner.refreshSessionCatalogs();
       }
     },
     { background: true },

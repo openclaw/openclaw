@@ -9,34 +9,53 @@ function sortUniqueUppercase(values) {
   );
 }
 
-const blockedEverywhereKeys = HOST_ENV_SECURITY_POLICY_JSON.blockedEverywhereKeys ?? [];
-const blockedOverrideOnlyKeys = HOST_ENV_SECURITY_POLICY_JSON.blockedOverrideOnlyKeys ?? [];
-const allowedInheritedOverrideOnlyKeys =
-  HOST_ENV_SECURITY_POLICY_JSON.allowedInheritedOverrideOnlyKeys ?? [];
-const allowedInheritedOverrideOnlyUpper = new Set(
-  allowedInheritedOverrideOnlyKeys.map((value) => value.toUpperCase()),
-);
-const blockedPrefixes = HOST_ENV_SECURITY_POLICY_JSON.blockedPrefixes ?? [];
-const blockedOverridePrefixes = HOST_ENV_SECURITY_POLICY_JSON.blockedOverridePrefixes ?? [];
-const blockedInheritedPrefixes =
-  HOST_ENV_SECURITY_POLICY_JSON.blockedInheritedPrefixes ?? blockedPrefixes;
+function derivePolicyArrays(policy) {
+  const blockedEverywhereKeys = policy.blockedEverywhereKeys ?? [];
+  const blockedOverrideOnlyKeys = policy.blockedOverrideOnlyKeys ?? [];
+  const allowedInheritedOverrideOnlyKeys = policy.allowedInheritedOverrideOnlyKeys ?? [];
+  const allowedInheritedOverrideOnlyUpper = new Set(
+    allowedInheritedOverrideOnlyKeys.map((value) => value.toUpperCase()),
+  );
+  const blockedPrefixes = policy.blockedPrefixes ?? [];
+  const blockedOverridePrefixes = policy.blockedOverridePrefixes ?? [];
+  const blockedInheritedPrefixes = policy.blockedInheritedPrefixes ?? blockedPrefixes;
+
+  return {
+    blockedInheritedKeys: sortUniqueUppercase([
+      ...blockedEverywhereKeys,
+      ...blockedOverrideOnlyKeys.filter(
+        (value) => !allowedInheritedOverrideOnlyUpper.has(value.toUpperCase()),
+      ),
+    ]),
+    blockedInheritedPrefixes: sortUniqueUppercase(blockedInheritedPrefixes),
+    blockedKeys: sortUniqueUppercase(blockedEverywhereKeys),
+    blockedOverrideKeys: sortUniqueUppercase(blockedOverrideOnlyKeys),
+    blockedPrefixes: sortUniqueUppercase(blockedPrefixes),
+    blockedOverridePrefixes: sortUniqueUppercase(blockedOverridePrefixes),
+  };
+}
+
+/**
+ * Normalizes raw host environment policy JSON into immutable lookup arrays.
+ */
+export function loadHostEnvSecurityPolicy(rawPolicy = HOST_ENV_SECURITY_POLICY_JSON) {
+  const derived = derivePolicyArrays(rawPolicy);
+  return Object.freeze({
+    blockedEverywhereKeys: Object.freeze(rawPolicy.blockedEverywhereKeys ?? []),
+    blockedOverrideOnlyKeys: Object.freeze(rawPolicy.blockedOverrideOnlyKeys ?? []),
+    allowedInheritedOverrideOnlyKeys: Object.freeze(
+      rawPolicy.allowedInheritedOverrideOnlyKeys ?? [],
+    ),
+    blockedInheritedKeys: derived.blockedInheritedKeys,
+    blockedInheritedPrefixes: derived.blockedInheritedPrefixes,
+    blockedPrefixes: derived.blockedPrefixes,
+    blockedOverridePrefixes: derived.blockedOverridePrefixes,
+    blockedKeys: derived.blockedKeys,
+    blockedOverrideKeys: derived.blockedOverrideKeys,
+  });
+}
 
 /**
  * Process-wide host environment security policy derived from generated JSON.
  */
-export const HOST_ENV_SECURITY_POLICY = Object.freeze({
-  blockedEverywhereKeys: Object.freeze(blockedEverywhereKeys),
-  blockedOverrideOnlyKeys: Object.freeze(blockedOverrideOnlyKeys),
-  allowedInheritedOverrideOnlyKeys: Object.freeze(allowedInheritedOverrideOnlyKeys),
-  blockedInheritedKeys: sortUniqueUppercase([
-    ...blockedEverywhereKeys,
-    ...blockedOverrideOnlyKeys.filter(
-      (value) => !allowedInheritedOverrideOnlyUpper.has(value.toUpperCase()),
-    ),
-  ]),
-  blockedInheritedPrefixes: sortUniqueUppercase(blockedInheritedPrefixes),
-  blockedPrefixes: sortUniqueUppercase(blockedPrefixes),
-  blockedOverridePrefixes: sortUniqueUppercase(blockedOverridePrefixes),
-  blockedKeys: sortUniqueUppercase(blockedEverywhereKeys),
-  blockedOverrideKeys: sortUniqueUppercase(blockedOverrideOnlyKeys),
-});
+export const HOST_ENV_SECURITY_POLICY = loadHostEnvSecurityPolicy();

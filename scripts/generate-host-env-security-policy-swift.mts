@@ -2,7 +2,7 @@
 // Generates Swift constants for the host environment security policy.
 import fs from "node:fs";
 import path from "node:path";
-import { HOST_ENV_SECURITY_POLICY as policy } from "../src/infra/host-env-security-policy.js";
+import { loadHostEnvSecurityPolicy } from "../src/infra/host-env-security-policy.js";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const args = new Set(process.argv.slice(2));
@@ -15,6 +15,7 @@ if (checkOnly && args.has("--write")) {
 }
 
 const repoRoot = resolveRepoRoot(import.meta.url);
+const policyPath = path.join(repoRoot, "src", "infra", "host-env-security-policy.json");
 const outputPath = path.join(
   repoRoot,
   "apps",
@@ -23,6 +24,9 @@ const outputPath = path.join(
   "OpenClaw",
   "HostEnvSecurityPolicy.generated.swift",
 );
+
+const rawPolicy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+const policy = loadHostEnvSecurityPolicy(rawPolicy);
 
 const renderSwiftStringArray = (items: readonly string[]) =>
   items.map((item) => `        "${item}",`).join("\n");

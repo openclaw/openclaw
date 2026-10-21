@@ -142,7 +142,8 @@ export class WorkerTaskPoolCore<Input, Output> {
         options.onRotationComplete?.();
       },
       serviceDeadlines: this.expireTasks,
-      host,
+      markWorkerRetirement: (worker, reason) => host.workerRetiring(worker, reason),
+      serviceHost: host,
     });
     host.pools.register(this);
   }

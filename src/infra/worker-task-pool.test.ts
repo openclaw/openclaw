@@ -401,9 +401,14 @@ it("closes a generation before a rejected result can dispatch its successor", as
   expect(workers.map((worker) => worker.threadId)).toEqual([-1]);
 });
 
-it("retires an idle worker after its native-clock deadline", async () => {
+it("arms idle retirement on the clock the pool was created under", async () => {
   const pool = createPool({ idleTimeoutMs: 20 });
   await pool.run({ label: "warm" }, {});
+  // Replies can arrive inside an unrelated test's fake-clock window.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  await pool.run({ label: "under a fake clock" }, {});
+  expect(vi.getTimerCount()).toBe(0);
+  vi.useRealTimers();
   await expect.poll(() => workers.at(-1)!.threadId).toBe(-1);
 });
 
