@@ -125,6 +125,9 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   eventRouting?: EventSessionRoutingPolicy;
   messageProvider?: string;
   currentChannelId?: string;
+  /** Where the conversation replies. Differs from `currentChannelId` (the channel the message
+   *  arrived in) when the channel auto-threaded it, e.g. a Discord `autoThread` channel. */
+  currentMessagingTarget?: string;
   currentThreadTs?: string;
   /** Channel-owned sender/chat metadata. Exec subprocesses receive only sender/chat IDs. */
   channelContext?: PluginHookChannelContext;
