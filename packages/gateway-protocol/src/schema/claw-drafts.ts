@@ -68,7 +68,7 @@ export type ClawDraftReviewItem = {
   included: boolean;
 };
 export type ClawsDraftsReadResult = { content: string; revision: string };
-export type ClawsDraftsCreateResult = { draftId: string; path: string; prompt: string };
+export type ClawsDraftsCreateResult = { draftId: string; prompt: string };
 export type ClawsDraftsReviewResult = {
   revision: string;
   reviewToken: string;

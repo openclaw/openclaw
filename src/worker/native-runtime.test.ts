@@ -369,15 +369,11 @@ describe("native runtime startup authority", () => {
     await runtime.withTurn(turn, async ({ workspacePath }) => {
       expect(workspacePath).toBe(await realpath(first));
     });
-    await expect(
-      runtime.withTurn(turn, async (resolved) => {
-        await unlink(link);
-        await symlink(second, link, "dir");
-        await expect(resolved.streamFn(resolved.model, context)).rejects.toThrow(
-          "workspace changed",
-        );
-      }),
-    ).rejects.toThrow("workspace changed");
+    await runtime.withTurn(turn, async (resolved) => {
+      await unlink(link);
+      await symlink(second, link, "dir");
+      await expect(resolved.streamFn(resolved.model, context)).rejects.toThrow("workspace changed");
+    });
     await expect(runtime.withTurn(turn, async () => {})).rejects.toThrow("workspace changed");
   });
 

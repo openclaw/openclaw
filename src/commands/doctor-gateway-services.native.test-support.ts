@@ -6,18 +6,13 @@ import {
 } from "./doctor-service-audit.test-helpers.js";
 
 // Native boundary mocks are shared; each test file registers its own reset/cleanup hooks.
-const fsMocks = vi.hoisted(() => ({
-  realpath: vi.fn(),
-}));
+const fsMocks = vi.hoisted(() => ({ realpath: vi.fn() }));
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   return {
     ...actual,
-    default: {
-      ...actual,
-      realpath: fsMocks.realpath,
-    },
+    default: { ...actual, realpath: fsMocks.realpath },
     realpath: fsMocks.realpath,
   };
 });
@@ -28,9 +23,7 @@ const mocks = vi.hoisted(() => ({
   stage: vi.fn(),
   install: vi.fn(),
   restart: vi.fn(),
-  writeConfig: vi.fn<(nextConfig: OpenClawConfig) => Promise<OpenClawConfig>>(
-    async (nextConfig) => nextConfig,
-  ),
+  writeConfig: vi.fn(async (nextConfig: OpenClawConfig) => nextConfig),
   auditGatewayServiceConfig: vi.fn(),
   buildGatewayInstallPlan: vi.fn(),
   resolveGatewayAuthTokenForService: vi.fn(),
@@ -130,7 +123,8 @@ vi.mock("../daemon/launchd-exec.js", async (importOriginal) => ({
   execLaunchctl: mocks.execLaunchctl,
 }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
   note: mocks.note,
 }));
 
@@ -146,22 +140,20 @@ vi.mock("./doctor-gateway-auth-token.js", () => ({
 export { fsMocks, mocks };
 
 export function mockProcessPlatform(platform: NodeJS.Platform) {
-  Object.defineProperty(process, "platform", {
-    value: platform,
-    configurable: true,
-  });
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+}
+
+function noteMessages(title: string) {
+  return mocks.note.mock.calls
+    .filter(([, callTitle]) => callTitle === title)
+    .map(([message]) => String(message))
+    .join("\n");
 }
 
 export function expectNoteContaining(messagePart: string, title: string) {
-  const messages = mocks.note.mock.calls
-    .filter(([, callTitle]) => callTitle === title)
-    .map(([message]) => String(message));
-  expect(messages.join("\n")).toContain(messagePart);
+  expect(noteMessages(title)).toContain(messagePart);
 }
 
 export function expectNoNoteContaining(messagePart: string, title: string) {
-  const messages = mocks.note.mock.calls
-    .filter(([, callTitle]) => callTitle === title)
-    .map(([message]) => String(message));
-  expect(messages.join("\n")).not.toContain(messagePart);
+  expect(noteMessages(title)).not.toContain(messagePart);
 }

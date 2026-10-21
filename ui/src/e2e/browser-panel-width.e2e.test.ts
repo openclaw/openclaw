@@ -36,6 +36,14 @@ suite.define(() => {
         const initialChatWidth = (await composer.boundingBox())!.width;
         await openChatSidePanelType(page, "Browser");
         await browser.waitFor();
+        await region.evaluate(async (element) => {
+          await Promise.all(
+            element
+              .getAnimations({ subtree: true })
+              .filter((animation) => animation.effect?.getTiming().iterations !== Infinity)
+              .map((animation) => animation.finished.catch(() => {})),
+          );
+        });
         const paneWidth = (await region.boundingBox())!.width;
         const browserWidth = () =>
           browser.evaluate((element) => element.getBoundingClientRect().width);

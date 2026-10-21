@@ -596,7 +596,6 @@ suite.define(() => {
       await setThemeMode(page, "dark");
       const applePlatform = process.platform === "darwin";
       const commandPaletteShortcut = applePlatform ? "⌘K" : "Ctrl+K";
-      const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
       const newSessionShortcut = applePlatform ? "⌘⇧O" : "Ctrl+Shift+O";
       await expectHoverTooltip(
         page.locator(".sidebar-rail .sidebar-new-session"),
@@ -610,7 +609,7 @@ suite.define(() => {
       );
       await expectHoverTooltip(
         page.locator('[data-navigation-view][aria-pressed="true"]'),
-        `Sessions · Collapse sidebar ${sidebarShortcut}`,
+        "Sessions",
         "right",
       );
       await page.evaluate(() => {

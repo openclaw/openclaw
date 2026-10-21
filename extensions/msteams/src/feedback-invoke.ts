@@ -1,5 +1,4 @@
 import { recordChannelFeedbackEvent } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { formatUnknownError } from "./errors.js";
@@ -7,6 +6,7 @@ import { runFeedbackReflection } from "./feedback-reflection.js";
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import { isMSTeamsInvokeAuthorized } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import { resolveMSTeamsRouteSessionKey } from "./monitor-handler/thread-session.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
@@ -81,17 +81,12 @@ export async function runMSTeamsFeedbackInvokeHandler(
     },
   });
 
-  const feedbackThreadId = isChannel
-    ? (extractMSTeamsConversationMessageId(rawConversationId) ?? activity.replyToId)
-    : undefined;
-  if (feedbackThreadId) {
-    const threadKeys = resolveThreadSessionKeys({
-      baseSessionKey: route.sessionKey,
-      threadId: feedbackThreadId,
-      parentSessionKey: route.sessionKey,
-    });
-    route.sessionKey = threadKeys.sessionKey;
-  }
+  route.sessionKey = resolveMSTeamsRouteSessionKey({
+    baseSessionKey: route.sessionKey,
+    isChannel,
+    conversationMessageId: extractMSTeamsConversationMessageId(rawConversationId),
+    replyToId: activity.replyToId,
+  });
 
   const feedbackEvent = {
     type: "custom",

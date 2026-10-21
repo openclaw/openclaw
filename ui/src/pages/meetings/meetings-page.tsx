@@ -8,7 +8,6 @@ import type {
 import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
@@ -563,60 +562,58 @@ export function MeetingsPage(props: { routeSearch?: string }) {
   const activeReaderTask = () => (readerTab() === "summary" ? summaryTask : readerTask);
   return (
     <openclaw-meetings-page>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <TranscriptsView
-          onFocusTarget={(kind, element) => {
-            focusTargets[kind] = element;
-            focusCurrentTarget();
-            return () => {
-              if (focusTargets[kind] === element) {
-                delete focusTargets[kind];
-              }
-            };
-          }}
-          basePath={context.basePath}
-          now={now()}
-          search={routeSearch()}
-          drafts={drafts()}
-          onDraft={(key, value) => setDrafts((current) => ({ ...current, [key]: value }))}
-          connected={projection.read().snapshot.phase === "connected"}
-          allowed={hasOperatorReadAccess(projection.read().snapshot.hello?.auth ?? null)}
-          list={requestClient() ? list() : null}
-          listLoading={!listDenial() && listTask.pending}
-          listError={listDenial() ?? listTask.error}
-          reader={{
-            summary: summary(),
-            pages: readerPages(),
-            loading: activeReaderTask().pending,
-            error: readerDenial() ?? activeReaderTask().error,
-          }}
-          readerTab={readerTab()}
-          summaryGeneration={summaryGeneration()}
-          onSummaryRetry={() => void generateMissingSummary(true)}
-          exportState={exportState()}
-          onNavigate={navigate}
-          onOpenCaptureSettings={() => {
-            const target = SETTINGS_SEARCH_TARGETS.meetingCapture;
-            context.navigate(target.routeId, { search: target.search, hash: target.hash });
-          }}
-          onRefresh={refresh}
-          onReaderRetry={() => {
-            if (!readerPages().length) {
-              resetReader();
+      <TranscriptsView
+        onFocusTarget={(kind, element) => {
+          focusTargets[kind] = element;
+          focusCurrentTarget();
+          return () => {
+            if (focusTargets[kind] === element) {
+              delete focusTargets[kind];
             }
-            if (readerTab() === "summary") {
-              void summaryTask.run();
-              return;
-            }
-            if (!summary()) {
-              void summaryTask.run();
-            }
-            void readerTask.run();
-          }}
-          onReaderTab={(tab) => navigate({ tab: tab === "text" ? "transcript" : "summary" })}
-          onDownload={(format) => void download(format)}
-        />
-      </ShellLayoutBoundary>
+          };
+        }}
+        basePath={context.basePath}
+        now={now()}
+        search={routeSearch()}
+        drafts={drafts()}
+        onDraft={(key, value) => setDrafts((current) => ({ ...current, [key]: value }))}
+        connected={projection.read().snapshot.phase === "connected"}
+        allowed={hasOperatorReadAccess(projection.read().snapshot.hello?.auth ?? null)}
+        list={requestClient() ? list() : null}
+        listLoading={!listDenial() && listTask.pending}
+        listError={listDenial() ?? listTask.error}
+        reader={{
+          summary: summary(),
+          pages: readerPages(),
+          loading: activeReaderTask().pending,
+          error: readerDenial() ?? activeReaderTask().error,
+        }}
+        readerTab={readerTab()}
+        summaryGeneration={summaryGeneration()}
+        onSummaryRetry={() => void generateMissingSummary(true)}
+        exportState={exportState()}
+        onNavigate={navigate}
+        onOpenCaptureSettings={() => {
+          const target = SETTINGS_SEARCH_TARGETS.meetingCapture;
+          context.navigate(target.routeId, { search: target.search, hash: target.hash });
+        }}
+        onRefresh={refresh}
+        onReaderRetry={() => {
+          if (!readerPages().length) {
+            resetReader();
+          }
+          if (readerTab() === "summary") {
+            void summaryTask.run();
+            return;
+          }
+          if (!summary()) {
+            void summaryTask.run();
+          }
+          void readerTask.run();
+        }}
+        onReaderTab={(tab) => navigate({ tab: tab === "text" ? "transcript" : "summary" })}
+        onDownload={(format) => void download(format)}
+      />
     </openclaw-meetings-page>
   );
 }

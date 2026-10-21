@@ -1,4 +1,5 @@
-import { createComponent, createSignal, Show } from "solid-js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { createComponent, createSignal, merge, Show } from "solid-js";
 import { vi } from "vitest";
 import type { ApplicationUpdateOverlaySnapshot } from "../../app/overlays-types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -72,7 +73,7 @@ export function createUpdatesViewDom() {
   const [current, publish] = createSignal<UpdatesViewProps | undefined>(undefined, {
     equals: false,
   });
-  const { container } = mountSolid(() =>
+  const view = mountSolid(() =>
     createComponent(Show, {
       get when() {
         return current() !== undefined;
@@ -80,38 +81,33 @@ export function createUpdatesViewDom() {
       children: (_present: unknown) =>
         createComponent(
           Updates,
-          new Proxy(current()!, {
-            get: (_, key) => Reflect.get(current()!, key),
-          }),
+          merge(() => current()!),
         ),
     }),
   );
-  function row(title: string): HTMLElement {
-    const match = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
-      (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
+  const row = (title: string) =>
+    expectDefined(
+      view
+        .queryAllByText(title, { selector: ".settings-row__title" })[0]
+        ?.closest<HTMLElement>(".settings-row"),
+      `Missing settings row: ${title}`,
     );
-    if (!match) {
-      throw new Error(`Missing settings row: ${title}`);
-    }
-    return match;
-  }
-
-  function automaticUpdatesControl(): {
-    row: HTMLElement;
-    toggle: HTMLInputElement;
-  } {
-    const automaticRow = row("Automatic updates");
-    const toggle = automaticRow.querySelector<HTMLInputElement>('input[role="switch"]');
-    if (!toggle) {
-      throw new Error("Missing automatic updates control");
-    }
-    return { row: automaticRow, toggle };
-  }
-
-  function mountUpdates(props: UpdatesViewProps) {
-    publish(props);
-    flush();
-  }
-
-  return { container, row, automaticUpdatesControl, mountUpdates };
+  return {
+    container: view.container,
+    row,
+    automaticUpdatesControl: () => {
+      const automaticRow = row("Automatic updates");
+      return {
+        row: automaticRow,
+        toggle: expectDefined(
+          automaticRow.querySelector<HTMLInputElement>('input[role="switch"]'),
+          "Missing automatic updates control",
+        ),
+      };
+    },
+    mountUpdates: (props: UpdatesViewProps) => {
+      publish(props);
+      flush();
+    },
+  };
 }

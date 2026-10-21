@@ -1,4 +1,13 @@
-import { Show, createMemo, createUniqueId, mapArray, onCleanup } from "solid-js";
+import {
+  For,
+  Show,
+  createMemo,
+  createUniqueId,
+  createSignal,
+  onSettled,
+  mapArray,
+  onCleanup,
+} from "solid-js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { readPanelHostedTabs, type PanelHostedTab } from "../../../components/panel-hosted-tabs.ts";
 import {
@@ -15,24 +24,50 @@ import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.t
 import { KeyboardShortcut } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import "../../../components/tooltip.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { TabFocus } from "../../../lib/tabs.ts";
+import { showToast } from "../../../lib/toast.ts";
 import { readLinkFavicon } from "../link-favicon-cache.ts";
 import {
   sidebarActivePanel,
   sidebarSidePanels,
+  sidebarSideTabIds,
+  isSidebarNewTabActive,
   type SidebarPanel,
   type SidebarSlotId,
 } from "../sidebar-layout.ts";
+import { ChatPanelHeaderActions } from "./chat-header-panel-actions.tsx";
+import { DesktopFrameControls } from "./chat-sidebar-desktop-frame-controls.tsx";
 import type {
   SidebarPanelDefinition,
   RegionProps,
   RegionElement,
 } from "./chat-sidebar-region-types.ts";
 
+/** Complete a single close without interfering with Close all's retained launcher. */
+export function closeEmptyMobileHost(
+  props: Pick<RegionProps, "mobileHost" | "layout">,
+  scopeKey: string | undefined,
+): boolean {
+  if (
+    !props.mobileHost ||
+    props.mobileHost.scopeKey !== scopeKey ||
+    props.mobileHost.destination.area !== "panels" ||
+    props.mobileHost.destination.page ||
+    sidebarSidePanels(props.layout).length ||
+    props.layout.newTab
+  ) {
+    return false;
+  }
+  props.mobileHost.close();
+  return true;
+}
+
 type SidebarRegionHeaderProps = RegionProps & {
   host: RegionElement;
+  onOpenMobileLauncher?: () => void;
   hostedRevision: () => number;
   refreshHostedTabs: () => void;
   headerRef: (element: HTMLElement | null) => void;
@@ -71,6 +106,83 @@ export function PanelTypeOption(props: { type: SidebarPanelDefinition }) {
         )}
       </Show>
     </>
+  );
+}
+
+/** Catalog projection only: native availability and open operations remain with the pane. */
+export function SidebarPanelLauncher(props: {
+  definitions: SidebarPanelDefinition[];
+  onOpen: (slot: SidebarSlotId) => void;
+}) {
+  const quickSlots: SidebarSlotId[] = ["companion", "workspace", "browser"];
+  const exploreSlots: SidebarSlotId[] = [
+    "detail",
+    "link-reader",
+    "dashboard",
+    "subagents",
+    "processes",
+    "terminal",
+    "desktop",
+    "portal",
+  ];
+  const available = () =>
+    props.definitions.filter((type) => type.available && type.slot !== "conversation");
+  const quick = () =>
+    quickSlots.flatMap((slot) =>
+      props.definitions.filter(
+        (type) => type.slot === slot && (type.available || slot === "browser"),
+      ),
+    );
+  const explore = () => [
+    ...exploreSlots.flatMap((slot) => available().filter((type) => type.slot === slot)),
+    ...available().filter(
+      (type) => !quickSlots.includes(type.slot) && !exploreSlots.includes(type.slot),
+    ),
+  ];
+  return (
+    <div class="side-panel-launcher">
+      <div class="side-panel-launcher__content">
+        <Show when={quick().length > 0}>
+          <div class="side-panel-launcher__heading">{t("chat.sidePanel.quickAccess")}</div>
+          <div class="side-panel-launcher__quick">
+            <For each={quick()} keyed={(type) => type.slot}>
+              {(type) => (
+                <openclaw-tooltip prop:content={type().unavailableReason}>
+                  <button
+                    type="button"
+                    class="side-panel-launcher__card"
+                    aria-disabled={!type().available ? "true" : undefined}
+                    onClick={() => {
+                      if (type().available) {
+                        props.onOpen(type().slot);
+                      }
+                    }}
+                  >
+                    <PanelTypeOption type={type()} />
+                  </button>
+                </openclaw-tooltip>
+              )}
+            </For>
+          </div>
+        </Show>
+        <Show when={explore().length > 0}>
+          <div class="side-panel-launcher__heading">{t("chat.sidePanel.explorePanels")}</div>
+          <div class="side-panel-launcher__explore">
+            <For each={explore()} keyed={(type) => type.slot}>
+              {(type) => (
+                <button
+                  type="button"
+                  class="side-panel-launcher__item"
+                  onClick={() => props.onOpen(type().slot)}
+                >
+                  <PanelTypeOption type={type()} />
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
+      </div>
+    </div>
   );
 }
 
@@ -165,12 +277,21 @@ function HostedIcon(props: SidebarRegionHeaderProps & { tab: PanelHostedTab }) {
     </Show>
   );
 }
+
 export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
   onCleanup(() => props.headerRef(null));
+  const desktop = () => props.presentation === "desktop";
+  const [closing, setClosing] = createSignal(false);
   const state = createMemo(() => {
     props.hostedRevision();
     const column = props.layout.columns[0];
-    const panels = sidebarSidePanels(props.layout);
+    const sidePanels = sidebarSidePanels(props.layout);
+    const panels = desktop()
+      ? [
+          ...sidePanels.filter((panel) => panel.slot === "conversation"),
+          ...sidePanels.filter((panel) => panel.slot !== "conversation"),
+        ]
+      : sidePanels;
     const hostedPanels = panels.flatMap((panel) => {
       const element = readRegionHostedTabs(props.host, panel);
       return element ? [{ panel, element, tabs: element.hostedTabs }] : [];
@@ -187,9 +308,29 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
       }
       return null;
     };
-    const tabs = panels.flatMap((panel): RegionTab[] => {
+    const order = sidebarSideTabIds(props.layout);
+    const chat = panels.find((panel) => panel.slot === "conversation");
+    const tabIds = desktop() && chat ? [chat.id, ...order.filter((id) => id !== chat.id)] : order;
+    const tabs = tabIds.flatMap((id): RegionTab[] => {
+      if (id === props.layout.newTab?.id) {
+        return [
+          {
+            id,
+            domId: `${props.panelIdPrefix}-tab-new`,
+            contentId: `${props.panelIdPrefix}-new-tab`,
+            label: t("browser.newTab"),
+            closeLabel: t("chat.sidePanel.closeNewTab"),
+            iconName: "plus",
+          },
+        ];
+      }
+      const panel = panels.find((entry) => entry.id === id);
+      if (!panel) {
+        return [];
+      }
       const contentId = `${props.panelIdPrefix}-${encodeURIComponent(panel.slot)}`;
       const canRestore =
+        !desktop() &&
         props.layout.expanded &&
         props.layout.expandedSide &&
         !props.sideFocusLocked &&
@@ -224,53 +365,197 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
           ? props.conversationTab
           : undefined;
       const tab = conversation ?? type;
+      const activatesExpansion = !desktop() && (panel.slot === "dashboard" || canRestore);
       return [
         {
           id: panel.id,
           domId: `${props.panelIdPrefix}-tab-${encodeURIComponent(panel.id)}`,
           contentId,
           label: tab.label,
-          labelTooltip:
-            panel.slot === "dashboard" || canRestore
-              ? t(
-                  props.layout.expanded &&
-                    props.layout.expandedSide &&
-                    column?.activePanelId === panel.id
-                    ? "chat.sidePanel.restore"
-                    : "chat.sidePanel.expandPanel",
-                  { panel: type.label },
-                )
-              : tab.label,
-          onActivate:
-            panel.slot === "dashboard" || canRestore
-              ? () => props.callbacks?.togglePanelExpanded(panel.id)
-              : undefined,
+          labelTooltip: activatesExpansion
+            ? t(
+                props.layout.expanded &&
+                  props.layout.expandedSide &&
+                  column?.activePanelId === panel.id
+                  ? "chat.sidePanel.restore"
+                  : "chat.sidePanel.expandPanel",
+                { panel: type.label },
+              )
+            : tab.label,
+          onActivate: activatesExpansion
+            ? () => props.callbacks?.togglePanelExpanded(panel.id)
+            : undefined,
           conversationAvatar: conversation?.avatar,
           iconName: conversation ? undefined : type.icon,
           closeLabel: t("chat.sidebarColumns.close", { panel: type.label }),
+          closable: !(desktop() && panel.slot === "conversation"),
+          draggable: !(desktop() && panel.slot === "conversation"),
         },
       ];
     });
     const active = sidebarActivePanel(props.layout);
     const activeHosted = hostedPanels.find((entry) => entry.panel.id === active?.id);
-    const activeId = activeHosted?.tabs.some(
-      (tab) => tab.id === activeHosted.element.activeHostedTabId,
-    )
-      ? `hosted:${activeHosted.panel.id}:${activeHosted.element.activeHostedTabId}`
-      : (active?.id ?? null);
+    const activeId = isSidebarNewTabActive(props.layout)
+      ? props.layout.newTab!.id
+      : activeHosted?.tabs.some((tab) => tab.id === activeHosted.element.activeHostedTabId)
+        ? `hosted:${activeHosted.panel.id}:${activeHosted.element.activeHostedTabId}`
+        : (active?.id ?? null);
     return { tabs, activeId, active, activeHosted, resolveHostedTab, column };
   });
-  const hostedActions = () => state().activeHosted?.element.hostedActions;
+  const settle = async () => {
+    await new Promise<void>((resolve) => {
+      onSettled(resolve);
+    });
+    await props.host.updateComplete;
+    props.refreshHostedTabs();
+    await new Promise<void>((resolve) => {
+      onSettled(resolve);
+    });
+  };
+  const hasPanel = (id: string) => props.layout.columns[0]?.panels.some((panel) => panel.id === id);
+  async function closeTab(id: string): Promise<boolean> {
+    const scope = props.panelIdPrefix;
+    const mobileScope = props.mobileHost?.scopeKey;
+    const current = () =>
+      props.host.isConnected &&
+      props.panelIdPrefix === scope &&
+      props.mobileHost?.scopeKey === mobileScope;
+    if (!current()) {
+      return false;
+    }
+    if (id === props.layout.newTab?.id) {
+      props.callbacks?.newTab?.close();
+      await settle();
+      return current() && props.layout.newTab?.id !== id;
+    }
+    const hosted = state().resolveHostedTab(id);
+    if (hosted) {
+      await hosted.element.closeHostedTab(hosted.tabId);
+      if (!current()) {
+        return false;
+      }
+      await settle();
+      if (
+        !current() ||
+        (hasPanel(hosted.panel.id) &&
+          readRegionHostedTabs(props.host, hosted.panel) !== hosted.element)
+      ) {
+        return false;
+      }
+      if (
+        hasPanel(hosted.panel.id) &&
+        hosted.element.hostedTabs.some((tab) => tab.id === hosted.tabId)
+      ) {
+        return false;
+      }
+      if (
+        (desktop() || props.mobileHost) &&
+        hasPanel(hosted.panel.id) &&
+        hosted.element.hostedTabs.length === 0
+      ) {
+        props.callbacks?.closeSlot(hosted.panel.slot);
+        await settle();
+      }
+      return true;
+    }
+    const panel = props.layout.columns[0]?.panels.find((entry) => entry.id === id);
+    if (!panel) {
+      return true;
+    }
+    if (desktop() && panel.slot === "conversation") {
+      return false;
+    }
+    if (desktop() && panel.slot === "companion") {
+      const clear = props.panelDefinitions.find((definition) => definition.slot === "companion")
+        ?.view?.onClearCompanion;
+      if (!clear || !(await clear()) || !current() || !hasPanel(panel.id)) {
+        return false;
+      }
+    }
+    props.callbacks?.closeSlot(panel.slot);
+    await settle();
+    return !hasPanel(panel.id);
+  }
+  async function closeAll() {
+    if (closing() || !props.callbacks?.newTab) {
+      return;
+    }
+    setClosing(true);
+    const scope = props.panelIdPrefix;
+    const mobileScope = props.mobileHost?.scopeKey;
+    const current = () =>
+      props.host.isConnected &&
+      props.panelIdPrefix === scope &&
+      props.mobileHost?.scopeKey === mobileScope;
+    try {
+      const panels = sidebarSidePanels(props.layout).filter(
+        (panel) => panel.slot !== "conversation",
+      );
+      for (const panel of panels) {
+        if (!current()) {
+          return;
+        }
+        if (!hasPanel(panel.id)) {
+          continue;
+        }
+        const hosted = readRegionHostedTabs(props.host, panel);
+        for (const tab of hosted?.hostedTabs ?? []) {
+          if (!(await closeTab(`hosted:${panel.id}:${tab.id}`))) {
+            return;
+          }
+        }
+        if (hasPanel(panel.id)) {
+          // A resource created while another close was being confirmed was not in this request.
+          if (readRegionHostedTabs(props.host, panel)?.hostedTabs.length) {
+            return;
+          }
+          if (!(await closeTab(panel.id))) {
+            return;
+          }
+        }
+      }
+      // The owner refuses completion if another resource appeared during confirmation.
+      if (!current()) {
+        return;
+      }
+      props.callbacks?.newTab?.finishCloseAll();
+    } catch (error) {
+      showToast({ message: formatUiError(error) });
+    } finally {
+      setClosing(false);
+    }
+  }
+  const hostedActions = () =>
+    ((desktop() || props.mobileHost) && state().active?.slot === "workspace") ||
+    (props.mobileHost && state().active?.slot === "terminal")
+      ? undefined
+      : state().activeHosted?.element.hostedActions;
+  const activeDefinition = createMemo(() => {
+    if (
+      !desktop() ||
+      !props.layout.open ||
+      (props.layout.expanded && !props.layout.expandedSide) ||
+      isSidebarNewTabActive(props.layout)
+    ) {
+      return undefined;
+    }
+    const slot = state().active?.slot;
+    return props.panelDefinitions.find((definition) => definition.slot === slot);
+  });
   return (
     <header
       ref={props.headerRef}
-      class="rail-header side-panel__header"
+      class={[
+        "rail-header side-panel__header",
+        { "side-panel__header--occupied": state().tabs.length > 0 },
+      ]}
       data-region-header="side"
       onMouseDown={beginNativeWindowDrag}
     >
       <div class="side-panel__header-tabs">
         <PanelTabStrip
           focusOwner={props.tabFocus}
+          presentation={props.presentation}
           renderIcon={(tab) => (
             <Show
               when={tab().hostedTab}
@@ -300,29 +585,89 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
               props.callbacks?.activatePanel(id);
             }
           }}
-          onClose={(id) => {
-            const hosted = state().resolveHostedTab(id);
-            if (hosted) {
-              return hosted.element.closeHostedTab(hosted.tabId);
+          onClose={async (id) => {
+            const scopeKey = props.mobileHost?.scopeKey;
+            if (closing() || !(await closeTab(id))) {
+              return;
             }
-            const panel = state().column?.panels.find((entry) => entry.id === id);
-            if (panel) {
-              props.callbacks?.closeSlot(panel.slot);
-            }
-            return undefined;
+            closeEmptyMobileHost(props, scopeKey);
           }}
           onNew={() => undefined}
           newLabel={t("chat.sidePanel.addTab")}
           newControl={null}
           separateTabs
-          onReorder={(source, target, placement) =>
-            props.callbacks?.reorderPanel(source, target, placement)
-          }
+          onReorder={(source, target, placement) => {
+            const chatId = state().column?.panels.find(
+              (panel) => panel.slot === "conversation",
+            )?.id;
+            if (desktop() && (source === chatId || (target === chatId && placement === "before"))) {
+              return;
+            }
+            props.callbacks?.reorderPanel(source, target, placement);
+          }}
         />
-        <TypeMenu {...props} />
+        <Show when={!desktop() && hostedActions()}>
+          <div class="rail-header__actions side-panel__actions">{hostedActions()}</div>
+        </Show>
+        <Show
+          when={!desktop()}
+          fallback={
+            <Show when={state().tabs.length > 0 && props.callbacks?.newTab}>
+              <button
+                type="button"
+                class="rail-header__action tabstrip-new"
+                title={t("browser.newTab")}
+                aria-label={t("browser.newTab")}
+                disabled={closing()}
+                onClick={() => props.callbacks?.newTab?.open()}
+              >
+                <Icon name="plus" />
+              </button>
+            </Show>
+          }
+        >
+          <Show
+            when={
+              !props.mobileHost || (state().tabs.length > 0 && !isSidebarNewTabActive(props.layout))
+            }
+          >
+            <Show when={props.onOpenMobileLauncher} fallback={<TypeMenu {...props} />}>
+              <button
+                type="button"
+                class="rail-header__action tabstrip-new"
+                title={t("browser.newTab")}
+                aria-label={t("browser.newTab")}
+                onClick={() => props.onOpenMobileLauncher?.()}
+              >
+                <Icon name="plus" />
+              </button>
+            </Show>
+          </Show>
+        </Show>
       </div>
-      <Show when={hostedActions()}>
-        <div class="rail-header__actions side-panel__actions">{hostedActions()}</div>
+      <Show when={desktop()}>
+        <div class="rail-header__actions side-panel__actions">
+          {hostedActions()}
+          <Show when={desktop()}>
+            <Show when={activeDefinition()}>
+              {(definition) => (
+                <ChatPanelHeaderActions
+                  headerActionView={definition().headerActionView}
+                  headerLink={definition().headerLink}
+                />
+              )}
+            </Show>
+            <DesktopFrameControls
+              {...props}
+              onCloseAll={closeAll}
+              closing={closing()}
+              closable={state().tabs.some((tab) => tab.closable !== false)}
+              hasConversation={sidebarSidePanels(props.layout).some(
+                (panel) => panel.slot === "conversation",
+              )}
+            />
+          </Show>
+        </div>
       </Show>
     </header>
   );

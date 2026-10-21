@@ -85,7 +85,7 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
           "claws.drafts.publish": {
             name: reviewed.name,
             version: reviewed.version,
-            url: "https://clawhub.ai/packages/%40maker%2Frelease-brief",
+            url: "https://clawhub.ai/maker/claws/release-brief",
             publicationStatus: "pending",
           },
         },
@@ -122,6 +122,14 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
         await gateway.deferNext("claws.drafts.publish");
         await dialog.getByRole("button", { name: "Publish to ClawHub" }).click();
         await gateway.waitForRequest("claws.drafts.publish");
+        await dialog.getByRole("button", { name: "Refresh review" }).waitFor({
+          state: "detached",
+        });
+        await expect
+          .poll(() => dialog.locator("button.btn.primary").getAttribute("aria-busy"))
+          .toBe("true");
+        expect(await dialog.locator("openclaw-modal-actions button").count()).toBe(2);
+        await dialog.locator(".btn__spinner").waitFor({ state: "visible" });
         await gateway.rejectDeferred("claws.drafts.publish", {
           code: "UNAVAILABLE",
           message: "The package upload was interrupted.",
@@ -159,7 +167,13 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
         });
         await page
           .getByText("Submitted to ClawHub. Publication pending security review.")
-          .waitFor();
+          .waitFor({ state: "visible" });
+        await page.getByRole("button", { name: "View on ClawHub" }).waitFor({ state: "visible" });
+        expect(await page.locator(".claw-creator__notice").count()).toBe(0);
+        await page.mouse.move(0, 0);
+        await page
+          .getByText("Submitted to ClawHub. Publication pending security review.")
+          .waitFor({ state: "hidden", timeout: 8000 });
         expect(await dialog.count()).toBe(0);
       } finally {
         await context.close();
@@ -194,7 +208,7 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
       try {
         await page.goto(`${server.baseUrl}settings/agents/main`);
         await gateway.deferNext("claws.drafts.create");
-        await page.getByRole("button", { name: "Create a Claw" }).click();
+        await page.getByRole("button", { name: "Create Claw" }).click();
         await gateway.waitForRequest("claws.drafts.create");
         await gateway.rejectDeferred("claws.drafts.create", {
           code: "UNAVAILABLE",
@@ -205,12 +219,64 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
 
         await gateway.setMethodResponse("claws.drafts.create", {
           draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
-          prompt: "/skill create-claw Turn this agent into a shareable Claw.",
+          prompt: "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
         });
         await gateway.setMethodResponse("chat.send", { status: "started" });
         await page.getByRole("button", { name: "Retry" }).click();
         await gateway.waitForRequest("chat.send");
         await page.waitForURL(/\/chat\/main/u);
+      } finally {
+        await context.close();
+      }
+    });
+
+    it("starts from the main chat header and sends the bundled skill prompt in the main session", async () => {
+      const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+      const page = await context.newPage();
+      const config = { gateway: { controlUi: { experimental: { claws: true } } } };
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["claws.drafts.create", "chat.send"],
+        methodResponses: {
+          "config.get": {
+            config,
+            sourceConfig: config,
+            resolved: config,
+            raw: JSON.stringify(config),
+            hash: "claws-create-header-config",
+            path: "/tmp/openclaw-claws-create-header.json",
+            valid: true,
+            issues: [],
+          },
+          "agents.list": {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "main", name: "Main" }],
+          },
+          "claws.drafts.create": {
+            draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
+            prompt: "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
+          },
+          "chat.send": { status: "started" },
+        },
+      });
+      try {
+        await page.goto(`${server.baseUrl}chat/main`);
+        await page.getByRole("button", { name: "Create Claw" }).click();
+        await gateway.waitForRequest("claws.drafts.create");
+        await gateway.waitForRequest("chat.send");
+        const sent = (await gateway.getRequests("chat.send"))[0]?.params;
+        expect(sent).toMatchObject({
+          sessionKey: "agent:main:main",
+          message: "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
+          workContext: {
+            page: "claw-create",
+            detail: { draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087" },
+          },
+        });
+        expect((sent as { message: string } | undefined)?.message).not.toContain(
+          "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
+        );
       } finally {
         await context.close();
       }

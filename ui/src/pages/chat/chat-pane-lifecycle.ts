@@ -98,6 +98,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       },
       pending: this.pendingPanelToggles,
       updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
+      onOpenPanel: (slot) => this.navigateMobileHost({ area: "panels", slot }),
     });
 
     const syncLaunch = createChatPaneMcpApps({
@@ -249,6 +250,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           ? closeSlot(state.sidebarLayout, slot)
           : openPreferredSidebarPanel(state, state.sidebarLayout, slot),
       );
+      if (!visible) {
+        this.navigateMobileHost({ area: "panels", slot });
+      }
       return;
     }
 

@@ -26,7 +26,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { runCronCommandJob } from "../cron/command-runner.js";
-import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
@@ -99,6 +98,8 @@ import {
   fireOnExitJob,
   fireStreamJob,
   formatOnExitRunSummary,
+  resolveGatewayCronOriginDeliveryContext,
+  runGatewayCronSessionEvent,
 } from "./server-cron-event-dispatch.js";
 import { describeCronInferenceMigration } from "./server-cron-inference.js";
 import {
@@ -513,17 +514,9 @@ export function buildGatewayCronService(params: {
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => enqueueCronSystemEvent(text, opts, resolveCronTarget(opts)),
-    resolveOriginDeliveryContext: (opts) => {
-      // Global scope removes the key's agent prefix; retain the selected store owner.
-      const { runtimeConfig, agentId, sessionKey } = resolveCronTarget({
-        ...opts,
-        preserveUntargeted: true,
-      });
-      if (!sessionKey) {
-        return undefined;
-      }
-      return resolveCronStoredDeliveryContext({ cfg: runtimeConfig, agentId, sessionKey });
-    },
+    runSessionEvent: (request) => runGatewayCronSessionEvent(request, resolveCronTarget),
+    resolveOriginDeliveryContext: (opts) =>
+      resolveGatewayCronOriginDeliveryContext(opts, resolveCronTarget),
     runSchedulerOwned,
     requestHeartbeat: (opts) => requestHeartbeat(resolveCronHeartbeatWake(opts)),
     requestHeartbeatAndWait: (opts, lifecycle) =>
@@ -544,7 +537,7 @@ export function buildGatewayCronService(params: {
     runIsolatedAgentJob: async (request) => {
       const { job } = request;
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
-      const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
+      const sessionKey = `cron:${job.id}`;
       return await runCronIsolatedAgentTurn({
         ...request,
         cfg: runtimeConfig,

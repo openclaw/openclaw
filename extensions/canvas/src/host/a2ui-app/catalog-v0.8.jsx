@@ -375,7 +375,6 @@ function CatalogElement(props) {
         </Match>
         <Match when={type() === "TextField"}>
           <InputField
-            id={props.node.id}
             label={value("label")}
             value={value("text")}
             pattern={data().validationRegexp}
@@ -403,7 +402,6 @@ function CatalogElement(props) {
         </Match>
         <Match when={type() === "DateTimeInput"}>
           <InputField
-            id={props.node.id}
             label={dateType() === "date" ? "Date" : dateType() === "time" ? "Time" : "Date & Time"}
             type={dateType()}
             value={localDate(value("value"), dateType())}

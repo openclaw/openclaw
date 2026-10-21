@@ -238,7 +238,7 @@ it("settles a dead original's cancelled family with its retained service root", 
   expect(settled).toEqual(
     expect.arrayContaining(
       [keys.slot, keys.service].flatMap((key) => {
-        const shortened = `~/${path.basename(key)}`;
+        const shortened = `~${path.sep}${path.basename(key)}`;
         return [shortened, `${shortened}${keys.lineage}`];
       }),
     ),

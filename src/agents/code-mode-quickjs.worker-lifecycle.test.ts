@@ -2,7 +2,7 @@ import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import * as workerUrls from "openclaw/plugin-sdk/process-runtime";
+import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { observeWorkerActivity } from "../../test/helpers/worker-activity.js";
@@ -25,6 +25,11 @@ assert(executorArtifact, "QuickJS executor public artifact is unavailable");
 const { codeModeExecutor } = await vi.importActual<{ codeModeExecutor: CodeModeExecutor }>(
   executorArtifact.modulePath,
 );
+const productionWorkerUrl = resolveRuntimeWorkerUrl({
+  currentModuleUrl: pathToFileURL(executorArtifact.modulePath).href,
+  sourceWorkerName: "src/code-mode.worker",
+  distWorkerPath: "extensions/code-mode-quickjs/src/code-mode.worker.js",
+});
 
 afterEach(disposeAllCodeModeRuns);
 
@@ -35,7 +40,7 @@ it.each(["exec", "resume"] as const)(
     const dir = useAutoCleanupTempDirTracker(onTestFinished).make("code-mode-catalog-cpu-");
     const channelName = `catalog-cpu-${phase}-${crypto.randomUUID()}`;
     const executing = observeWorkerActivity(channelName);
-    // Keep the real executor in Vitest's graph so the worker URL spy observes it.
+    // Keep the real executor in Vitest's graph so the fixture pool receives its work.
     const resolveExecutor = vi
       .spyOn(executorPlugins, "resolvePluginCodeModeExecutor")
       .mockReturnValue(codeModeExecutor);
@@ -48,16 +53,11 @@ it.each(["exec", "resume"] as const)(
       expect(parked.status).toBe("waiting");
     }
     const workerUrl = pathToFileURL(path.join(dir, "observed-worker.mts"));
-    const originalResolveWorker = workerUrls.resolveRuntimeWorkerUrl;
-    const resolveWorker = vi
-      .spyOn(workerUrls, "resolveRuntimeWorkerUrl")
-      .mockImplementation((params) => {
-        const productionWorkerUrl = originalResolveWorker(params);
-        const quickJsPath = createRequire(productionWorkerUrl).resolve("quickjs-wasi");
-        // Observe the real QuickJS interrupt callback, not merely thread startup.
-        writeFileSync(
-          workerUrl,
-          `
+    const quickJsPath = createRequire(productionWorkerUrl).resolve("quickjs-wasi");
+    // Observe the real QuickJS interrupt callback, not merely thread startup.
+    writeFileSync(
+      workerUrl,
+      `
         import { BroadcastChannel, threadId } from "node:worker_threads";
         const channel = new BroadcastChannel(${JSON.stringify(channelName)});
         const { QuickJS } = await import(${JSON.stringify(pathToFileURL(quickJsPath).href)});
@@ -77,10 +77,19 @@ it.each(["exec", "resume"] as const)(
         }
         await import(${JSON.stringify(productionWorkerUrl.href)});
       `,
-        );
-        return workerUrl;
-      });
-    onTestFinished(() => resolveWorker.mockRestore());
+    );
+    // The executor's pool keeps a process-lifetime URL; temporary workers need their own pool.
+    const fixturePool = new WorkerTaskPool({
+      workerUrl,
+      workerClass: "compute",
+      sharedCompute: true,
+    });
+    const fixtureRun = fixturePool.run.bind(fixturePool);
+    const run = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(fixtureRun);
+    onTestFinished(async () => {
+      run.mockRestore();
+      await fixturePool.close();
+    });
     const execution =
       phase === "exec" ? h.run("while (true) {}", "cpu") : h.resume(parked, "resume-cpu");
     onTestFinished(async () => {

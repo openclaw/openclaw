@@ -424,7 +424,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     liveTerminalErrorMessages.set(runId, displayMessage);
     chatLog.addSystem(displayMessage);
     runCoordinator.noteFinalizedRun(runId, { displayedFinal: true });
-    terminateRun({ runId, wasActiveRun, status: "error" });
+    settleRunActivity({ runId, wasActiveRun, status: "error" }, false);
     maybeRefreshHistoryForRun(runId, { hasDisplayableFinal: true });
     return true;
   };

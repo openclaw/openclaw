@@ -3,6 +3,7 @@ import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetailsPeople } from "./chat-details.test-support.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -353,14 +354,11 @@ suite.define(() => {
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
 
-      const ownerLink = page.locator(
-        ".chat-pane__header a.person-activity-avatar-link:has(openclaw-session-owner-chip)",
-      );
+      const people = await openChatDetailsPeople(page);
+      const ownerLink = people.getByRole("link", { name: "Ada King Owner", exact: true });
       await ownerLink.waitFor({ state: "visible" });
       expect(await ownerLink.getAttribute("href")).toBe("/activity/profile-ada");
-      const participantLink = page.locator(
-        ".chat-pane__participants a.person-activity-avatar-link",
-      );
+      const participantLink = people.getByRole("link", { name: "Mira", exact: true });
       expect(await participantLink.getAttribute("href")).toBe("/activity/profile-mira");
 
       const authorGroup = page.locator(".chat-group.user", { hasText: "Handing this over." });

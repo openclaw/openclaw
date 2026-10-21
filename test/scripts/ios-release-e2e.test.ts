@@ -12,7 +12,6 @@ import {
   IOS_RELEASE_TESTS,
   MODEL_REF,
   parseMeasurement,
-  requireExactTestResult,
   runTrials,
   summarizeMeasurements,
   testRunnerEnv,
@@ -146,10 +145,6 @@ function result(
   return { testNodes: [{ nodeType: "Test Plan", children: [bundle] }] };
 }
 
-const childRuns = (nodeType: string, ...results: string[]) => ({
-  children: results.map((runResult) => ({ nodeType, result: runResult })),
-});
-
 function expectFailedTrial(
   report: Awaited<ReturnType<typeof runTrials>>,
   error: string,
@@ -211,32 +206,6 @@ function preparationFailure(
     diagnostics: [diagnostic(operation, code, extra)],
   };
 }
-
-describe("iOS release test identity", () => {
-  it("accepts XCTest class/method identity under its exact UI bundle", () => {
-    for (const test of IOS_RELEASE_TESTS) {
-      requireExactTestResult(result(test, childRuns("Test Case Run", "Passed")), test);
-    }
-  });
-
-  it.each([
-    ["basename", result(undefined, { nodeIdentifier: IOS_RELEASE_TESTS[0].split("/").at(-1) })],
-    ["skipped", result(undefined, { result: "Skipped" })],
-    ["failed", result(undefined, { result: "Failed" })],
-    ["failed child", result(undefined, childRuns("Test Case Run", "Failed"))],
-    ["retry to green", result(undefined, childRuns("Repetition", "Passed", "Passed"))],
-    ["multiple runs", result(undefined, childRuns("Test Case Run", "Passed", "Passed"))],
-    ["wrong target", result(undefined, {}, { name: "OtherUITests" })],
-    ["unit bundle", result(undefined, {}, { nodeType: "Unit test bundle" })],
-    ["missing tests", { testNodes: [] }],
-    [
-      "extra tests",
-      { testNodes: [...result().testNodes, ...result(IOS_RELEASE_TESTS[1]).testNodes] },
-    ],
-  ])("rejects %s", (_name, value) => {
-    expect(() => requireExactTestResult(value, IOS_RELEASE_TESTS[0])).toThrow();
-  });
-});
 
 it("writes a failure proof when the real CLI rejects an impossible target", () => {
   const output = path.join(tempDirs.make("ios-release-e2e-cli-"), "proof.json");

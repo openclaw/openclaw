@@ -210,6 +210,9 @@ export function renderSessionSection(params: {
           `sidebar-recent-sessions__group--section-drop-${host().sessionOrganizer.sidebarSectionDropTarget?.position}`,
         {
           "sidebar-recent-sessions__group--headless": !section().renderHeader,
+          // Only a single selected owner's Person section renders without a header.
+          "sidebar-recent-sessions__group--inline-owner":
+            !section().renderHeader && section().id.startsWith("person:"),
           "sidebar-recent-sessions__group--collapsed": collapsed(),
           "sidebar-recent-sessions__group--dragging":
             host().sessionOrganizer.draggingSidebarSection === section().id,

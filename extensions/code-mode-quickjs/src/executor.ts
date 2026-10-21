@@ -48,7 +48,7 @@ const getQuickJsModules = createLazyRuntimeModule(async () => {
 
 type QuickJsWorkerPool = WorkerTaskPool<QuickJsWorkerPayload, CodeModeWorkerThreadResult<Snapshot>>;
 
-let sharedPool: { url: string; pool: QuickJsWorkerPool } | undefined;
+let sharedPool: QuickJsWorkerPool | undefined;
 
 function codeModeWorkerUrl(): URL {
   return resolveRuntimeWorkerUrl({
@@ -60,19 +60,14 @@ function codeModeWorkerUrl(): URL {
 }
 
 function getCodeModePool(): QuickJsWorkerPool {
-  const workerUrl = codeModeWorkerUrl();
-  if (sharedPool?.url !== workerUrl.href) {
-    void sharedPool?.pool.close();
-    sharedPool = {
-      url: workerUrl.href,
-      pool: new WorkerTaskPool<QuickJsWorkerPayload, CodeModeWorkerThreadResult<Snapshot>>({
-        workerUrl,
-        workerClass: "compute",
-        sharedCompute: true,
-      }),
-    };
-  }
-  return sharedPool.pool;
+  return (sharedPool ??= new WorkerTaskPool<
+    QuickJsWorkerPayload,
+    CodeModeWorkerThreadResult<Snapshot>
+  >({
+    workerUrl: codeModeWorkerUrl(),
+    workerClass: "compute",
+    sharedCompute: true,
+  }));
 }
 
 function failedResult(

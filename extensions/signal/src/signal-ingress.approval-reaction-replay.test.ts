@@ -12,11 +12,27 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearSignalApprovalReactionTargetsForTest,
-  registerSignalApprovalReactionTarget,
-} from "./approval-reactions.js";
+import { registerSignalApprovalReactionTarget } from "./approval-reactions.js";
 import { startSignalIngressMonitor } from "./signal-ingress.js";
+
+const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
+
+vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
+  return {
+    ...actual,
+    createApprovalReactionTargetStore: <TTarget>(
+      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
+    ) => {
+      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
+      if (params.namespace === "signal.approval-reactions.v2") {
+        reactionStores.add(store);
+      }
+      return store;
+    },
+  };
+});
 
 const resolverMocks = vi.hoisted(() => ({
   resolveSignalApproval: vi.fn(),
@@ -46,7 +62,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  clearSignalApprovalReactionTargetsForTest();
+  reactionStores.forEach((store) => store.clearForTest());
   resolverMocks.resolveSignalApproval.mockReset();
   resolverMocks.isApprovalNotFoundError.mockReset();
   resolverMocks.isApprovalNotFoundError.mockReturnValue(false);

@@ -948,7 +948,11 @@ describe("spawnSubagentDirect seam flow", () => {
           expect(result.status).toBe("accepted");
           const child = persistedStore?.[result.childSessionKey as string];
           expect(child).toMatchObject({ createdVia: "spawn", parentSessionKey });
-          expect(child?.createdActor).toEqual(required ? actor : { type: "agent", id: "main" });
+          expect(child?.createdActor).toEqual(
+            required
+              ? { ...actor, delegatedBy: { type: "agent", id: "main" } }
+              : { type: "agent", id: "main" },
+          );
           expect(child?.sandbox).toBe(required ? "required" : undefined);
           expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
         } finally {

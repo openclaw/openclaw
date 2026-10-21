@@ -225,6 +225,11 @@ async function createBoundParent(
     parentSessionKey,
     parentRunId,
     operatorAuthority,
+    // These guest scenarios start with an authenticated human request, not just
+    // an execution grant. Keep its causal facts separate from selected authority.
+    requesterOrigin: guestProfileId
+      ? { sessionKey: parentSessionKey, operatorProfileId: guestProfileId }
+      : undefined,
   });
 }
 

@@ -215,6 +215,35 @@ it("closes the requested tab from its labeled close button", async () => {
   expect(onClose).toHaveBeenCalledWith(TAB.id);
 });
 
+it("keeps a fixed tab selectable without a close action", async () => {
+  const onClose = vi.fn();
+  const onSelect = vi.fn();
+  const container = await renderStrip({
+    tabs: [
+      { ...TAB, closable: false },
+      { ...TAB, id: "tab-2", domId: "test-tab-2", label: "Second tab" },
+    ],
+    activeId: "tab-2",
+    onClose,
+    onSelect,
+  });
+  const tab = renderedTabs(container)[0]!;
+  expect(tab.getAttribute("aria-selected")).toBe("false");
+  expect(container.querySelector(`#${TAB.domId}-close`)).toBeNull();
+  expect(container.querySelector('[role="group"]')?.getAttribute("aria-owns")).not.toContain(
+    `${TAB.domId}-close`,
+  );
+  tab.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+  expect(onClose).not.toHaveBeenCalled();
+  tab.click();
+  expect(onSelect).toHaveBeenCalledWith(TAB.id);
+
+  await renderStrip({ tabs: [TAB], container, onClose });
+  expect(container.querySelector(".tabstrip-tab__close")).not.toBeNull();
+  tab.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+  expect(onClose).toHaveBeenCalledExactlyOnceWith(TAB.id);
+});
+
 it.each([false, true])(
   "preserves close focus across replacement (outside focus: %s)",
   async (outsideFocus) => {

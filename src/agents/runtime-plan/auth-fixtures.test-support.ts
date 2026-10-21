@@ -1,5 +1,6 @@
 import { expect } from "vitest";
 import type { Model } from "../../llm/types.js";
+import { createNativeOpenAIResponsesModel } from "../../plugin-sdk/test-helpers/agents/schema-normalization-runtime-contract.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
 import {
   createApiKeyCredential,
@@ -25,14 +26,10 @@ export const subscriptionRoute = {
   authRequirement: "subscription",
 } as const;
 export const platformModel: Model = {
+  ...createNativeOpenAIResponsesModel(),
   id: "gpt-5.5",
   name: "gpt-5.5",
-  provider: "openai",
-  api: platformRoute.api,
-  baseUrl: platformRoute.baseUrl,
   input: ["text"],
-  reasoning: true,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128_000,
   maxTokens: 8_000,
 };

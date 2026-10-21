@@ -96,17 +96,8 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
       <div class="sidebar-rail__views">
         <For each={views}>
           {(view) => {
-            const toggleHint = () => host.navigationView === view && view !== "online";
             return (
-              <openclaw-tooltip prop:content={toggleHint() ? undefined : viewLabel(view)}>
-                <Show when={toggleHint()}>
-                  <span slot="content">
-                    <ShortcutHint
-                      label={`${viewLabel(view)} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")}`}
-                      combo={KEYBOARD_SHORTCUT_COMBOS.toggleSidebar}
-                    />
-                  </span>
-                </Show>
+              <openclaw-tooltip prop:content={viewLabel(view)}>
                 <button
                   ref={[
                     elementRef((element: HTMLButtonElement) => {

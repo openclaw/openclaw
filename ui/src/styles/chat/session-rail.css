@@ -68,9 +68,6 @@ openclaw-chat-session-rail {
   overscroll-behavior-y: contain;
 }
 
-/* Openers stack against the composer they feed, so the eye travels chips ->
-   input without crossing the thread. Left-aligned: they are actions, not
-   content, and centring them would read as a second empty state. */
 .chat-session-rail__exchange {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

@@ -73,6 +73,35 @@ function snapshots(socket = fixture.socket): ControlUiSessionPullRequestSnapshot
     .filter((frame) => frame.event === "controlUi.sessionPullRequests.changed")
     .map((frame) => frame.payload.sessions[sessionKey]);
 }
+const latest = () => snapshots().at(-1);
+const taskNumbers = () => latest()?.taskPullRequests?.map((pr) => pr.number);
+function closedPull(number: number) {
+  return pullListItem({
+    number,
+    state: "closed",
+    html_url: "https://github.com/example/repository/pull/" + number,
+    base: { repo: { name: "repository", owner: { login: "example" } } },
+  });
+}
+function stubGitHub(branchPull = closedPull(40)) {
+  const fetcher = vi.fn<typeof fetch>(async (input) => {
+    const url = requestUrl(input);
+    return githubJson(
+      url.includes("?head=")
+        ? [branchPull]
+        : closedPull(Number(new URL(url).pathname.split("/").at(-1)) || 40),
+    );
+  });
+  vi.stubGlobal("fetch", fetcher);
+  return fetcher;
+}
+function stubOffline(message = "offline") {
+  const fetcher = vi.fn<typeof fetch>(async () => {
+    throw new Error(message);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  return fetcher;
+}
 
 it("projects three descendant receipts without mixing the parent's current branch", async () => {
   await fixture.seedRepository();
@@ -82,33 +111,14 @@ it("projects three descendant receipts without mixing the parent's current branc
     receipt(key, number);
   }
   receipt("agent:main:child-1", 1, "duplicate");
-  const fetcher = vi.fn<typeof fetch>(async (input) => {
-    const url = requestUrl(input);
-    const number = Number(new URL(url).pathname.split("/").at(-1)) || 40;
-    return githubJson(
-      url.includes("?head=")
-        ? [pullListItem({ number: 40, state: "closed" })]
-        : pullListItem({
-            number,
-            state: "closed",
-            html_url: "https://github.com/example/repository/pull/" + number,
-            base: { repo: { name: "repository", owner: { login: "example" } } },
-          }),
-    );
-  });
-  vi.stubGlobal("fetch", fetcher);
+  const fetcher = stubGitHub(pullListItem({ number: 40, state: "closed" }));
   await fixture.subscribe();
   await fixture.subscriptions.pollNow();
-  expect(snapshots().at(-1)).toMatchObject({
+  expect(latest()).toMatchObject({
     pullRequests: [{ number: 40 }],
     taskPullRequestCount: 3,
   });
-  expect(
-    snapshots()
-      .at(-1)
-      ?.taskPullRequests?.map((pr) => pr.number)
-      .toSorted((a, b) => a - b),
-  ).toEqual([1, 2, 3]);
+  expect(taskNumbers()?.toSorted((a, b) => a - b)).toEqual([1, 2, 3]);
   const sharedTarget = await prepareControlUiSessionPrServiceTarget(
     () => getSessionRowProjection(fixture.context),
     { sessionKey, agentId: "main" },
@@ -128,15 +138,11 @@ it("projects three descendant receipts without mixing the parent's current branc
     throw new Error("offline");
   });
   await fixture.subscriptions.pollNow();
-  expect(snapshots().at(-1)).toMatchObject({
+  expect(latest()).toMatchObject({
     status: "unavailable",
     taskPullRequestCount: 3,
   });
-  expect(
-    snapshots()
-      .at(-1)
-      ?.taskPullRequests?.every((pr) => pr.pullRequest?.state === "closed"),
-  ).toBe(true);
+  expect(latest()?.taskPullRequests?.every((pr) => pr.pullRequest?.state === "closed")).toBe(true);
 });
 
 it("counts branch PRs against the complete receipt set, not only the bounded preview", async () => {
@@ -144,36 +150,19 @@ it("counts branch PRs against the complete receipt set, not only the bounded pre
   for (let number = 1; number <= 25; number++) {
     receipt(sessionKey, number);
   }
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof fetch>(async (input) => {
-      const url = requestUrl(input);
-      const number = Number(new URL(url).pathname.split("/").at(-1)) || 40;
-      const item = pullListItem({
-        number,
-        state: "closed",
-        html_url: "https://github.com/example/repository/pull/" + number,
-        base: { repo: { name: "repository", owner: { login: "example" } } },
-      });
-      return githubJson(url.includes("?head=") ? [item] : item);
-    }),
-  );
+  stubGitHub();
   await fixture.subscribe();
   await fixture.subscriptions.pollNow();
-  expect(snapshots().at(-1)).toMatchObject({ taskPullRequestCount: 25, pullRequestCount: 26 });
-  expect(snapshots().at(-1)?.taskPullRequests).toHaveLength(20);
+  expect(latest()).toMatchObject({ taskPullRequestCount: 25, pullRequestCount: 26 });
+  expect(latest()?.taskPullRequests).toHaveLength(20);
   receipt(sessionKey, 40, "older-branch-receipt", { updated_at_ms: 1 });
   await vi.waitFor(() =>
-    expect(snapshots().at(-1)).toMatchObject({
+    expect(latest()).toMatchObject({
       taskPullRequestCount: 26,
       pullRequestCount: 26,
     }),
   );
-  expect(
-    snapshots()
-      .at(-1)
-      ?.taskPullRequests?.some((pr) => pr.number === 40),
-  ).toBe(false);
+  expect(taskNumbers()?.includes(40)).toBe(false);
 });
 
 async function passive(client = fixture.client) {
@@ -201,23 +190,16 @@ it("reads own and nested receipts without a checkout, refreshes on commit, and n
   await fixture.seed(grandchild, fixture.profile.id, { parentSessionKey: child });
   receipt(sessionKey, 1);
   receipt(grandchild, 2);
-  const fetcher = vi.fn<typeof fetch>(async () => {
-    throw new Error("No GitHub allowed for passive rows");
-  });
-  vi.stubGlobal("fetch", fetcher);
+  const fetcher = stubOffline("No GitHub allowed for passive rows");
   const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   await passive();
-  expect(snapshots().at(-1)).toMatchObject({
+  expect(latest()).toMatchObject({
     branchRead: false,
     pullRequests: [],
     taskPullRequestCount: 2,
   });
-  expect(snapshots().at(-1)?.pullRequestCount).toBeUndefined();
-  expect(
-    snapshots()
-      .at(-1)
-      ?.taskPullRequests?.every((pr) => !pr.pullRequest),
-  ).toBe(true);
+  expect(latest()?.pullRequestCount).toBeUndefined();
+  expect(latest()?.taskPullRequests?.every((pr) => !pr.pullRequest)).toBe(true);
   const work = reads.mock.calls.filter(
     ([, command]) => command.type === "githubPublications.taskReceipts",
   ).length;
@@ -227,7 +209,7 @@ it("reads own and nested receipts without a checkout, refreshes on commit, and n
     reads.mock.calls.filter(([, command]) => command.type === "githubPublications.taskReceipts"),
   ).toHaveLength(work);
   receipt(child, 3);
-  await vi.waitFor(() => expect(snapshots().at(-1)?.taskPullRequestCount).toBe(3));
+  await vi.waitFor(() => expect(latest()?.taskPullRequestCount).toBe(3));
   expect(fetcher).not.toHaveBeenCalled();
 });
 
@@ -236,21 +218,10 @@ it("retains an external branch PR when active watching becomes passive without p
   for (let number = 1; number <= 25; number++) {
     receipt(sessionKey, number);
   }
-  const fetcher = vi.fn<typeof fetch>(async (input) => {
-    const url = requestUrl(input);
-    const number = Number(new URL(url).pathname.split("/").at(-1)) || 40;
-    const item = pullListItem({
-      number,
-      state: "closed",
-      html_url: "https://github.com/example/repository/pull/" + number,
-      base: { repo: { name: "repository", owner: { login: "example" } } },
-    });
-    return githubJson(url.includes("?head=") ? [item] : item);
-  });
-  vi.stubGlobal("fetch", fetcher);
+  const fetcher = stubGitHub();
   await fixture.subscribe();
   await fixture.subscriptions.pollNow();
-  const active = snapshots().at(-1);
+  const active = latest();
   expect(active).toMatchObject({
     pullRequests: [{ number: 40 }],
     taskPullRequestCount: 25,
@@ -261,7 +232,7 @@ it("retains an external branch PR when active watching becomes passive without p
   // Another browser may already retain this profile's passive audience cell.
   await passive(fixture.addReader("passive-peer").client);
   await passive();
-  expect(snapshots().at(-1)).toMatchObject({
+  expect(latest()).toMatchObject({
     branchRead: false,
     pullRequests: active?.pullRequests,
     repository: active?.repository,
@@ -271,17 +242,13 @@ it("retains an external branch PR when active watching becomes passive without p
   // This overlap is outside the preview: counting only visible URLs is incorrect.
   receipt(sessionKey, 40, "passive-overlap", { updated_at_ms: 1 });
   await vi.waitFor(() =>
-    expect(snapshots().at(-1)).toMatchObject({
+    expect(latest()).toMatchObject({
       branchRead: false,
       taskPullRequestCount: 26,
       pullRequestCount: 26,
     }),
   );
-  expect(
-    snapshots()
-      .at(-1)
-      ?.taskPullRequests?.some((pr) => pr.number === 40),
-  ).toBe(false);
+  expect(taskNumbers()?.includes(40)).toBe(false);
   await fixture.subscriptions.pollNow();
   expect(git).not.toHaveBeenCalled();
   expect(fetcher).toHaveBeenCalledTimes(networkCalls);
@@ -299,14 +266,9 @@ it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants
     identity_source: "personal",
     connection_generation: "personal-generation",
   });
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof fetch>(async () => {
-      throw new Error("offline");
-    }),
-  );
+  stubOffline();
   await passive();
-  expect(snapshots().at(-1)?.taskPullRequestCount).toBe(2);
+  expect(latest()?.taskPullRequestCount).toBe(2);
   const other = fixture.addReader("other-viewer");
   other.client.authenticatedUserProfile = {
     ...other.client.authenticatedUserProfile!,
@@ -321,7 +283,7 @@ it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants
     updatedAt: 2,
   });
   await fixture.subscriptions.pollNow();
-  await vi.waitFor(() => expect(snapshots().at(-1)?.taskPullRequestCount).toBe(1));
+  await vi.waitFor(() => expect(latest()?.taskPullRequestCount).toBe(1));
   await fixture.changeReader("grant");
   const delivered = snapshots().length;
   receipt(sessionKey, 3);
@@ -331,25 +293,20 @@ it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants
 
 it("keeps a known cold URL when GitHub metadata fails, and ignores a replaced session lifecycle", async () => {
   receipt(sessionKey, 1);
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof fetch>(async () => {
-      throw new Error("offline");
-    }),
-  );
+  stubOffline();
   await fixture.subscribe();
   await fixture.subscriptions.pollNow();
-  expect(snapshots().at(-1)).toMatchObject({
+  expect(latest()).toMatchObject({
     status: "unavailable",
     taskPullRequestCount: 1,
     taskPullRequests: [{ url: "https://github.com/example/repository/pull/1" }],
   });
-  expect(snapshots().at(-1)?.taskPullRequests?.[0]?.pullRequest).toBeUndefined();
+  expect(latest()?.taskPullRequests?.[0]?.pullRequest).toBeUndefined();
   await fixture.seed(sessionKey, fixture.profile.id, {
     sessionId: "replacement",
     lifecycleRevision: "replacement-revision",
     updatedAt: 2,
   });
   await fixture.subscriptions.pollNow();
-  await vi.waitFor(() => expect(snapshots().at(-1)?.taskPullRequestCount).toBe(0));
+  await vi.waitFor(() => expect(latest()?.taskPullRequestCount).toBe(0));
 });

@@ -276,3 +276,131 @@ it("keeps untracked scroll state until the next layout observation", () => {
   vi.advanceTimersToNextFrame();
   expect(element.dataset.atEnd).toBe("true");
 });
+
+it("resamples loaded font metrics only for the current presented element", async () => {
+  let fontsReady!: () => void;
+  const fonts = new EventTarget();
+  Object.defineProperty(fonts, "ready", {
+    value: new Promise<void>((resolve) => {
+      fontsReady = resolve;
+    }),
+  });
+  const originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
+  Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
+  cleanup.push(() => {
+    if (originalFonts) {
+      Object.defineProperty(document, "fonts", originalFonts);
+    }
+  });
+  const first = document.body.appendChild(document.createElement("div"));
+  const second = document.body.appendChild(document.createElement("div"));
+  cleanup.push(
+    () => first.remove(),
+    () => second.remove(),
+  );
+  const firstGeometry = geometry(first, true);
+  const secondGeometry = geometry(second, true);
+  const [presented, setPresented] = createSignal(true);
+  const publish = vi.fn(reflect);
+  const binding = createRoot((dispose) => ({
+    dispose,
+    ref: createScrollStateRef(publish, { horizontal: true, trackScroll: false, presented }),
+  }));
+  cleanup.push(binding.dispose);
+  binding.ref(first);
+  flush();
+  vi.advanceTimersToNextFrame();
+  expect(first.dataset.scrollable).toBe("true");
+
+  binding.ref(second);
+  flush();
+  vi.advanceTimersToNextFrame();
+  firstGeometry.extent = 50;
+  secondGeometry.extent = 50;
+  fontsReady();
+  await Promise.resolve();
+  vi.advanceTimersToNextFrame();
+  expect(first.dataset.scrollable).toBe("true");
+  expect(second.dataset.scrollable).toBe("false");
+
+  setPresented(false);
+  flush();
+  secondGeometry.extent = 300;
+  fonts.dispatchEvent(new Event("loadingdone"));
+  vi.advanceTimersToNextFrame();
+  expect(second.dataset.scrollable).toBe("false");
+
+  setPresented(true);
+  flush();
+  await Promise.resolve();
+  vi.advanceTimersToNextFrame();
+  expect(second.dataset.scrollable).toBe("true");
+  secondGeometry.extent = 50;
+  fonts.dispatchEvent(new Event("loadingdone"));
+  fonts.dispatchEvent(new Event("loadingdone"));
+  publish.mockClear();
+  vi.advanceTimersToNextFrame();
+  expect(second.dataset.scrollable).toBe("false");
+  expect(publish).toHaveBeenCalledTimes(1);
+
+  binding.dispose();
+  publish.mockClear();
+  secondGeometry.extent = 300;
+  fonts.dispatchEvent(new Event("loadingdone"));
+  vi.advanceTimersToNextFrame();
+  expect(publish).not.toHaveBeenCalled();
+});
+
+it("restores a destination after readiness without overwriting subsequent reader scroll", () => {
+  const outer = document.body.appendChild(document.createElement("div"));
+  const element = outer.appendChild(document.createElement("div"));
+  cleanup.push(() => outer.remove());
+  Object.defineProperty(element, "scrollWidth", { value: 700 });
+  outer.scrollTop = 400;
+  const [target, setTarget] = createSignal<HTMLElement>();
+  const [ready, setReady] = createSignal(false);
+  const [destination, setDestination] = createSignal("root");
+  const [savedTop, setSavedTop] = createSignal(37);
+  const stop = createRoot((dispose) => {
+    createScrollPosition(() => {
+      const currentTarget = target();
+      return {
+        restore: ready()
+          ? {
+              identity: [destination(), currentTarget],
+              target: currentTarget,
+              top: savedTop(),
+              left: "end",
+            }
+          : undefined,
+      };
+    });
+    return dispose;
+  });
+  cleanup.push(stop);
+  setReady(true);
+  flush();
+  setTarget(element);
+  flush();
+  expect(element.scrollTop).toBe(37);
+  expect(element.scrollLeft).toBe(700);
+
+  element.scrollTop = 91;
+  setSavedTop(91);
+  flush();
+  expect(element.scrollTop).toBe(91);
+  setSavedTop(37);
+  flush();
+  expect(element.scrollTop).toBe(91);
+
+  setReady(false);
+  flush();
+  setDestination("folder");
+  setSavedTop(12);
+  flush();
+  expect(element.scrollTop).toBe(91);
+  setReady(true);
+  flush();
+  expect(element.scrollTop).toBe(12);
+  expect(outer.scrollTop).toBe(400);
+});

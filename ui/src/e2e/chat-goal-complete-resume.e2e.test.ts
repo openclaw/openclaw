@@ -1,11 +1,11 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { assert, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { expectCount, textMessage } from "./chat-flow-fixtures.test-support.ts";
+import { exactButton, requireRecord } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { captureFrame } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI completed goal resume" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -32,61 +32,35 @@ suite.define(() => {
           continuationTurns: 2,
         };
         const method = "sessions.goal.update";
+        const row = createControlUiSessionRow("agent:main:main", "Deployment checklist", now, {
+          sessionId: "goal-checklist-session",
+          goal,
+        });
         const gateway = await installMockGateway(page, {
           sessionKey: "agent:main:main",
           heldMethods: [method],
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "The deployment checklist is verified." }],
-            },
-          ],
-          methodResponses: {
-            "sessions.list": {
-              ts: now,
-              path: "",
-              count: 1,
-              defaults: { model: "test-model", modelProvider: "test", contextTokens: 128_000 },
-              sessions: [
-                {
-                  key: "agent:main:main",
-                  sessionId: "goal-checklist-session",
-                  kind: "direct",
-                  displayName: "Deployment checklist",
-                  updatedAt: now,
-                  goal,
-                },
-              ],
-            },
-          },
+          historyMessages: [textMessage("assistant", "The deployment checklist is verified.")],
+          sessions: [row],
         });
         await page.goto(`${suite.server.baseUrl}chat/main`);
         const card = page.locator(".agent-chat__goal");
         await card.getByText("Goal achieved", { exact: true }).waitFor();
         await page.getByText("The deployment checklist is verified.", { exact: true }).waitFor();
-        const resume = card.getByRole("button", { name: "Resume goal", exact: true });
-        await expect
-          .poll(() => card.getByRole("button", { name: "Clear goal", exact: true }).count())
-          .toBe(1);
+        const resume = exactButton(card, "Resume goal");
+        await expectCount(exactButton(card, "Clear goal"), 1);
         expect(await gateway.getRequests(method)).toHaveLength(0);
         const capture = async (name: string) => {
-          if (!artifacts) {
-            return;
+          if (artifacts) {
+            await captureFrame(artifacts, name, card, [
+              card.locator(".agent-chat__goal-label"),
+              card.locator(".agent-chat__goal-objective"),
+            ]);
           }
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            card,
-            [card.locator(".agent-chat__goal-label"), card.locator(".agent-chat__goal-objective")],
-            { animations: "disabled", elements: [card] },
-          );
-          await writeFile(path.join(artifacts, name), frame.png);
         };
         await capture("achieved-goal.png");
-        expect(await resume.count()).toBe(1);
         await resume.click();
-        const request = await gateway.waitForRequest(method);
-        assert(isRecord(request.params), "Expected Goal resume request parameters");
-        expect(request.params).toMatchObject({
+        const params = requireRecord((await gateway.waitForRequest(method)).params);
+        expect(params).toMatchObject({
           sessionKey: "agent:main:main",
           sessionId: "goal-checklist-session",
           goalId: goal.id,
@@ -100,7 +74,7 @@ suite.define(() => {
           sessions: [{ ...(await gateway.getSessionRow("agent:main:main")), goal: resumed }],
         });
         await gateway.resolveDeferred(method, {
-          operationId: request.params.operationId,
+          operationId: params.operationId,
           action: "resume",
           status: "started",
           sessionId: "goal-checklist-session",

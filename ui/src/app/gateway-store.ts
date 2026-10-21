@@ -10,7 +10,6 @@ import type { EventLogEntry } from "../api/event-log.ts";
 import {
   GatewayBrowserClient,
   resolveGatewayErrorDetailCode,
-  type GatewayBrowserClientOptions,
   type GatewayEventListener,
   type GatewayHelloOk,
 } from "../api/gateway.ts";
@@ -66,7 +65,6 @@ export function createApplicationGateway(
   initialSettings: ReturnType<typeof loadSettings>,
   initialPassword = "",
   initialBootstrapToken = "",
-  createClient = (opts: GatewayBrowserClientOptions) => new GatewayBrowserClient(opts),
   options: ApplicationGatewayOptions = {},
 ): ApplicationGateway {
   let settings = initialSettings;
@@ -406,7 +404,7 @@ export function createApplicationGateway(
         ),
       });
     };
-    const nextClient = createClient({
+    const nextClient = new GatewayBrowserClient({
       ...credentials.prepare(nextConnection, credentialsChanged, client),
       clientName: options.clientOptions?.clientName ?? "openclaw-control-ui",
       clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",

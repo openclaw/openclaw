@@ -133,10 +133,11 @@ export async function publishClawDraft(
       `ClawHub did not confirm the reviewed artifact for ${snapshot.name}@${snapshot.version}. Check that version before trying again.`,
     );
   }
+  const slug = snapshot.name.split("/").at(-1) ?? snapshot.name;
   return {
     name: snapshot.name,
     version: snapshot.version,
-    url: `${connection.baseUrl}/packages/${encodeURIComponent(snapshot.name)}`,
+    url: `${connection.baseUrl}/${encodeURIComponent(publisher)}/claws/${encodeURIComponent(slug)}`,
     // Missing scan status is not evidence of public discoverability.
     publicationStatus: result.publicationStatus === "published" ? "published" : "pending",
   };

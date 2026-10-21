@@ -361,11 +361,10 @@ facts; unknown write coverage invalidates conservatively. The shared mechanism i
 
 Memory publication retains index facts under its own write scope, so session
 activity and embedding-cache writes do not trigger another facts query. The
-publication worker also retains the embedding-cache size, updates it only after
-committed inserts/deletes, and reloads after unscoped writes or schema changes.
-Pruning uses that count and one bounded oldest-row delete. Unbounded replacement
-writes may overestimate this disposable cache and evict entries early; bounded
-writes still reserve space before insertion.
+publication worker also retains the embedding-cache size and its precision,
+updates it only after committed writes, and reloads after unscoped writes or
+schema changes. Pruning reuses an exact count or refreshes an upper bound before
+bounded oldest-row deletion. Bounded writes still reserve space before insertion.
 
 Memory managers receive schema, table-presence, and index facts from worker
 admission without opening a host reader. Bundled status callers await the same
@@ -2079,6 +2078,9 @@ entry, header, and first event commit together. Cancellation after commit report
 the committed-error contract, and an unknown outcome fences fallback instead of
 repeating the append. Attempt teardown releases the actor only after accepted
 and nested writes actually drain, including when the consumer's bounded wait ends.
+Worker loss before actor admission fails that command without fencing the actor;
+later commands use the replacement worker. Loss after admission still requires
+confirmed settlement or reconciliation before another command can proceed.
 Released synchronous SDK methods and explicit compaction maintenance keep their
 named compatibility adapters and publish through the existing receipt owners.
 
@@ -3090,6 +3092,12 @@ consuming history. Activity summaries consume the patch transaction's acknowledg
 watermark while retaining dirty notifications and fresh subsequent reads.
 Cold metadata joins initialization and turn preparation; restoration stays with
 the cold-storage owner, outside the writer FIFO and before message hooks run.
+
+Cache-TTL prefix reads sort marker identities before loading their payloads.
+The same read snapshot supplies each consumed marker by its exact sequence,
+stopping at the newest applicable checkpoint or reset. Obsolete checkpoint
+payloads are not decompressed into the sorter, so their total size does not
+determine the bounded history read's working set.
 
 Ordinary reply initialization reuses its writer-locked snapshot when accepted
 activity is already recorded and neither the entry nor conversation routing
@@ -4441,19 +4449,24 @@ dimensions invalidate the generation
 before the operation returns, even when clearing fails or loses its reply;
 the error still propagates without replay. Worker-owned staging preserves cache
 binary values and is discarded after settlement or owner closure. Source-file inspection remains on the
-host. Cache pruning uses that same worker for its live count and oldest-row deletion,
-with a transaction recheck before each batch of at most 100 rows. The host releases
-admission and yields between batches; only definite pre-entry lock failures retry.
+host. Cache pruning uses the same publication worker and retained cache size.
+Capacity reservations and bounded prune batches preserve an exact count from
+their affected-row results; ordinary replacements retain an upper bound, which is
+counted once when needed. Existing write receipts invalidate the retained size
+after another writer changes the cache. The host releases admission and yields
+between batches of at most 100 rows. Publications retain the connection owner's
+busy timeout and return native failures without a separate host retry loop.
 Published source hashes, chunks, embedding-cache rows, session tombstones, and
 index/source snapshots use the existing retrieval worker's read-only connection.
 They retain their physical source and caller lifetime without reserving the agent
 writer FIFO. Private shadow databases keep their publication worker and private
-queue for read-your-writes. Both adapters use the same read kernels. Shadow session publication prepares
-its current tombstone predicate in the original published worker while retaining
-the workspace lock through commit. Ordinary publication checks that predicate only
-inside its committing transaction. The shadow's empty tombstone table never grants
-publication authority. Cold opening remains separate work. Schemas, cache retention,
-and stored formats are unchanged.
+queue for read-your-writes. Both adapters use the same read kernels. Full rebuilds
+capture the published revision before fresh session discovery, which excludes
+existing tombstones. A newly recorded forget advances that revision, and final
+live publication rejects a shadow built before it. Direct source and generated-cache
+writes retain their tombstone checks inside the committing transaction. The shadow's
+empty tombstone table never grants publication authority. Cold opening remains
+separate work. Schemas, cache retention, and stored formats are unchanged.
 
 Session-only lexical searches return hits and recall metadata in one retrieval
 request. An in-process reader/writer queue orders retrieval and publication, and
