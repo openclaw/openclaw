@@ -77,24 +77,42 @@ const harness = createScriptTestHarness();
 const powershell = process.platform === "win32" ? "powershell" : "pwsh";
 const probe = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-Command", "exit 0"]);
 const runWithPowerShell = probe.status === 0 ? it : it.skip;
-runWithPowerShell.each([0, 2, 42])(
-  "preserves installer completion exit %s and offers support only on failure",
-  (code) => {
+runWithPowerShell.each(["file", "streamed"] as const)(
+  "preserves handled failure and caller lifetime through the %s installer entrypoint",
+  (mode) => {
+    const nodePrefix = join(harness.createTempDir("openclaw-install-failure-"), "private-node");
+    const scriptPath = join(process.cwd(), SCRIPT_PATH).replaceAll("'", "''");
     const result = spawnSync(
       powershell,
       [
         "-NoLogo",
         "-NoProfile",
         "-NonInteractive",
-        "-Command",
-        `function Complete-Install {\n${body("Complete-Install")}\n}\n$script:InstallExitCode=${code}\n$PSCommandPath='fixture.ps1'\nComplete-Install\nWrite-Output 'completed'`,
+        "-ExecutionPolicy",
+        "Bypass",
+        ...(mode === "file"
+          ? ["-File", SCRIPT_PATH, "-NodePrefix", nodePrefix, "-DryRun"]
+          : [
+              "-Command",
+              `try {
+  & ([scriptblock]::Create((Get-Content -LiteralPath '${scriptPath}' -Raw))) -NodePrefix '${nodePrefix.replaceAll("'", "''")}' -DryRun
+} catch {
+  if ($_.Exception.Message -ne 'OpenClaw installation failed with exit code 2.') { throw }
+  Write-Output 'caught canonical failure'
+}
+Write-Output 'installer caller survived'`,
+            ]),
       ],
       { encoding: "utf8" },
     );
-    expect(result.status, result.stdout + result.stderr).toBe(code);
-    expect(result.stdout.replace(/\r\n/g, "\n")).toBe(
-      code === 0 ? "completed\n" : "Support: https://community.openclaw.ai/\n",
-    );
+    const output = result.stdout.replace(/\r\n/g, "\n");
+    expect(result.status, result.stdout + result.stderr).toBe(mode === "file" ? 2 : 0);
+    expect(result.stderr).toBe("");
+    expect(output).toContain("Error: -NodePrefix and -NodeVersion require -NodeOnly.");
+    expect(output.match(/Support: https:\/\/community\.openclaw\.ai\//g)).toHaveLength(1);
+    if (mode === "streamed") {
+      expect(output).toContain("caught canonical failure\ninstaller caller survived\n");
+    }
   },
 );
 runWithPowerShell(
