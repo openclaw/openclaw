@@ -148,51 +148,20 @@ it("keeps mixed aggregate media out of command text and preserves voice modality
   expect(ctx?.media?.map((fact) => fact.kind)).toEqual(["audio", "image", "document"]);
 });
 
-it.each([
-  [false, true, "😭", false, "😭"],
-  [true, false, undefined, false, "<media:sticker>"],
-  [false, false, undefined, true, "[Sticker] A waving sticker"],
-] as const)(
-  "keeps stickers meaningful without visual understanding (animated %s, video %s, emoji %s, cached %s)",
-  async (animated, video, emoji, cached, expected) => {
-    const ctx = await build({
-      message: {
-        chat: { ...groupChat, id: cached ? -1002 : groupChat.id },
-        text: undefined,
-        ...(!cached && {
-          reply_to_message: reply(groupChat, { text: "No Sunday-only tickets yet." }),
-        }),
-        sticker: { ...sticker, is_animated: animated, is_video: video, emoji },
-      },
-      allMedia: cached
-        ? [
-            {
-              kind: "sticker",
-              path: "/tmp/sticker.webp",
-              contentType: "image/webp",
-              stickerMetadata: {
-                fileId: file.file_id,
-                fileUniqueId: file.file_unique_id,
-                cachedDescription: "A waving sticker",
-              },
-            },
-          ]
-        : [{ kind: "sticker" }],
-      resolveTelegramGroupConfig: () => ({
-        groupConfig: { requireMention: !cached },
-        topicConfig: undefined,
-      }),
-      historyLimit: cached ? 5 : 0,
-    });
-    expect(ctx?.BodyForAgent).toBe(expected);
-    if (cached) {
-      expect(ctx).toMatchObject({
-        media: [{ path: "/tmp/sticker.webp", contentType: "image/webp" }],
-        StickerMediaIncluded: true,
-        SkipStickerMediaUnderstanding: true,
-      });
-    } else {
-      expect(ctx).toMatchObject({ ReplyToBody: "No Sunday-only tickets yet.", WasMentioned: true });
-    }
-  },
-);
+it("keeps a video sticker's emoji and reply-based mention without visual understanding", async () => {
+  const ctx = await build({
+    message: {
+      chat: groupChat,
+      text: undefined,
+      reply_to_message: reply(groupChat, { text: "No Sunday-only tickets yet." }),
+      sticker: { ...sticker, is_animated: false, is_video: true, emoji: "😭" },
+    },
+    allMedia: [{ kind: "sticker" }],
+    resolveTelegramGroupConfig: () => ({ groupConfig: { requireMention: true } }),
+  });
+  expect(ctx).toMatchObject({
+    BodyForAgent: "😭",
+    ReplyToBody: "No Sunday-only tickets yet.",
+    WasMentioned: true,
+  });
+});

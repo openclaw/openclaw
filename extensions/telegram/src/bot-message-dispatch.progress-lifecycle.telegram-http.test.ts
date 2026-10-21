@@ -1,4 +1,5 @@
 import path from "node:path";
+import { buildChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
 import type { PluginHookReplyPayloadSendingEvent } from "openclaw/plugin-sdk/core";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
@@ -15,7 +16,88 @@ import {
 } from "./bot-message-dispatch.telegram-http.test-support.js";
 import { apiThrottler } from "./bot.runtime.js";
 import { deliverReplies, deliverStructuredReplies } from "./bot/delivery.replies.js";
+import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import { resolveTelegramTestUpload } from "./send.telegram-http.test-support.js";
+
+function expectText(text: string | undefined, included: string[], excluded: string[] = []) {
+  for (const value of included) {
+    expect(text).toContain(value);
+  }
+  for (const value of excluded) {
+    expect(text).not.toContain(value);
+  }
+}
+
+const repairPlan = [
+  { step: "Inspect", status: "completed" as const },
+  { step: "Repair", status: "in_progress" as const },
+  { step: "Verify", status: "pending" as const },
+];
+
+describe("Telegram progress rendering", () => {
+  it("keeps a full plan and recent activity after failed named tool items", () => {
+    const commandLines = Array.from({ length: 8 }, (_, index) =>
+      buildChannelProgressDraftLine(
+        {
+          event: "item",
+          itemKind: "command",
+          itemId: `command-${index}`,
+          name: "exec",
+          status: "failed",
+          meta: `command ${index}`,
+        },
+        { commandText: "raw" },
+      ),
+    ).filter((line) => line !== undefined);
+    const preview = renderTelegramProgressDraftPreview(
+      {
+        lines: [
+          ...["automations", "read", "browser", "custom_command_runner"].map((name) =>
+            buildChannelProgressDraftLine({
+              event: "item",
+              itemKind: "tool",
+              itemId: `failed-${name}`,
+              name,
+              status: "failed",
+            })!,
+          ),
+          ...commandLines,
+        ],
+        plan: repairPlan,
+      },
+      { richMessages: true, toolProgress: true, maxLines: 5, maxLineChars: 300 },
+    );
+    expectText(
+      preview.text,
+      ["Inspect", "Repair", "Verify", "command 7"],
+      ["command 0", "Automations", "Browser", "Custom Command Runner"],
+    );
+  });
+
+  it("shows a fresh named failure before newer activity replaces it", () => {
+    const failed = buildChannelProgressDraftLine({
+      event: "item",
+      itemKind: "tool",
+      name: "read",
+      status: "failed",
+    })!;
+    const options = { richMessages: false, toolProgress: true, maxLines: 3, maxLineChars: 300 };
+    const initial = renderTelegramProgressDraftPreview(
+      { lines: [failed], plan: repairPlan },
+      options,
+    );
+    expectText(initial.text, ["Read", "Repair"]);
+
+    const after = renderTelegramProgressDraftPreview(
+      {
+        lines: [failed, buildChannelProgressDraftLine({ event: "tool", name: "browser" })!],
+        plan: repairPlan,
+      },
+      options,
+    );
+    expectText(after.text, ["Browser", "Repair"], ["Read"]);
+  });
+});
 
 const DELIVERY_WARNING = "I couldn't deliver my reply. Please ask again.";
 type ProgressDraft = Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressDraft"]>>[0];
@@ -103,6 +185,238 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       progressMessageId,
     };
   }
+
+  it.each(["dispatcher", "message-tool"] as const)(
+    "keeps plan, tool, final, and queued progress transitions with %s delivery",
+    async (finalDelivery) => {
+      await dispatch(async () => undefined, {
+        cfg: { agents: { defaults: { reasoningDefault: "stream" } } },
+        producer: async ({ dispatcher, replyOptions: options }) => {
+          const updatePlan = async (
+            update: Parameters<NonNullable<NonNullable<typeof options>["onPlanUpdate"]>>[0],
+          ) => {
+            await options?.onAssistantMessageStart?.();
+            await options?.onPlanUpdate?.(update);
+          };
+          const card = () => http.texts().find((text) => text.includes("Exec"));
+          await updatePlan({ phase: "update", steps: [] });
+          await vi.advanceTimersByTimeAsync(1_500);
+          expect(http.callsFor("sendMessage")).toEqual([]);
+          await updatePlan({ phase: "update", explanation: "Working", steps: [] });
+          await eventually(http.texts).toEqual(["<b>Working</b>"]);
+          expect(http.callsFor("sendMessage")).toHaveLength(1);
+          await updatePlan({
+            phase: "update",
+            explanation: "1/2 complete",
+            steps: [
+              { step: "Inspect", status: "completed" },
+              { step: "Repair", status: "in_progress" },
+            ],
+          });
+          await eventually(() => http.texts()[0]).toContain("[x] Inspect");
+          expect(http.texts()[0]).not.toContain("Working");
+          expect(http.callsFor("sendMessage")).toHaveLength(1);
+          await updatePlan({ phase: "update", steps: [] });
+          await vi.advanceTimersByTimeAsync(4_000);
+          await eventually(http.texts).toEqual([]);
+          await updatePlan({
+            phase: "update",
+            explanation: "Resumed",
+            steps: [{ step: "Resume work", status: "in_progress" }],
+          });
+          await eventually(() => http.texts()[0]).toContain("Resume work (in progress)");
+          expect(http.texts()[0]).toContain("<b>Resumed</b>");
+          expect(http.callsFor("sendMessage")).toHaveLength(2);
+          await options?.onAssistantMessageStart?.();
+          await options?.onItemEvent?.({
+            kind: "tool",
+            name: "progress_card",
+            itemId: "blocked-card",
+            status: "blocked",
+          });
+          await eventually(() => http.texts()[0]).toContain("Progress Card");
+          expect(http.texts()[0]).toContain("Resume work (in progress)");
+          expect(http.texts()[0]).toContain("blocked");
+          const block = { text: "Checking the result" };
+          await options?.onBlockReplyQueued?.(block);
+          dispatcher.sendBlockReply(block);
+          await dispatcher.waitForIdle();
+          await options?.onAssistantMessageStart?.();
+          await emitToolStart(options, {
+            phase: "start",
+            name: "exec",
+            toolCallId: "exec-proof",
+            args: { command: "printf proof" },
+          });
+          await options?.onReasoningEnd?.();
+          await eventually(card).toContain("Exec");
+          expect(card()).toContain("Resume work (in progress)");
+          expect(card()).toContain("blocked");
+          await updatePlan({ phase: "update", steps: [] });
+          await eventually(card).not.toContain("Resumed");
+          expect(card()).not.toContain("Resume work");
+          await options?.onAssistantMessageStart?.();
+          if (finalDelivery === "message-tool") {
+            await http.bot.api.sendMessage(123, "Done");
+            await options?.onObservedReplyDelivery?.();
+            await vi.advanceTimersByTimeAsync(4_000);
+            await eventually(http.texts).toEqual(["Done"]);
+          } else {
+            dispatcher.sendFinalReply({ text: "Done" });
+            await dispatcher.waitForIdle();
+            await vi.advanceTimersByTimeAsync(4_000);
+            await eventually(http.texts).toEqual(["Done"]);
+          }
+          expect(http.texts()).toContain("Done");
+          const finalMessages = [...visibleMessages];
+          const sendsAfterFinal = http.callsFor("sendMessage").length;
+          const editsAfterFinal = http.callsFor("editMessageText").length;
+          await updatePlan({ phase: "update", explanation: "Late card", steps: [] });
+          await options?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "late-raw" });
+          await options?.onItemEvent?.({
+            itemId: "tool:late-prepared",
+            toolCallId: "late-prepared",
+            kind: "tool",
+            name: "exec",
+            title: "Late prepared tool",
+            phase: "start",
+            status: "running",
+          });
+          await vi.advanceTimersByTimeAsync(1_500);
+          expect(http.callsFor("sendMessage")).toHaveLength(sendsAfterFinal);
+          expect(http.callsFor("editMessageText")).toHaveLength(editsAfterFinal);
+          expect([...visibleMessages]).toEqual(finalMessages);
+          if (finalDelivery === "dispatcher") {
+            const finalMessageId = [...visibleMessages.keys()][0];
+            await options?.onQueuedFollowupAdmitted?.();
+            await tool(options, "followup");
+            await eventually(() =>
+              [...visibleMessages].filter(([id]) => id !== finalMessageId),
+            ).toEqual([[expect.any(Number), expect.stringContaining("Exec")]]);
+            expect(visibleMessages.get(finalMessageId!)).toBe("Done");
+            await options?.onQueuedFollowupSettled?.();
+            await vi.advanceTimersByTimeAsync(4_000);
+            await eventually(() => [...visibleMessages]).toEqual([[finalMessageId, "Done"]]);
+          }
+          return {
+            queuedFinal: finalDelivery === "dispatcher",
+            counts: dispatcher.getQueuedCounts(),
+          };
+        },
+      });
+      expect(http.texts()).toEqual(["Done"]);
+    },
+  );
+
+  it("uses per-agent reasoning defaults and accepts forum replacements before retiring old snapshots", async () => {
+    const context = http.createContext();
+    const chat = { id: -100123, type: "supergroup" as const, title: "Fixture", is_forum: true };
+    const sessionKey = "agent:ops:telegram:group:-100123:topic:88";
+    Object.assign(context, {
+      chatId: chat.id,
+      isGroup: true,
+      isForum: true,
+      replyThreadId: 88,
+      threadSpec: { id: 88, scope: "forum" },
+    });
+    context.msg = { ...context.msg, chat, message_thread_id: 88 };
+    context.primaryCtx.message.chat = chat;
+    context.route = { ...context.route, agentId: "ops", sessionKey };
+    Object.assign(context.ctxPayload, {
+      SessionKey: sessionKey,
+      ChatType: "group",
+      From: "telegram:-100123:topic:88",
+      To: "telegram:-100123:topic:88",
+    });
+    const held = {
+      predicate: (call: (typeof calls)[number]) =>
+        call.method === "sendMessage" && String(call.fields.text).includes("Second thought"),
+      ...heldCall(),
+    };
+    http.holdNextCall = held;
+    let firstId: number | undefined;
+    let replacementId: number | undefined;
+    try {
+      await dispatch(async () => undefined, {
+        context,
+        mode: "partial",
+        toolProgress: false,
+        cfg: {
+          agents: {
+            defaults: { reasoningDefault: "off" },
+            entries: { Ops: { reasoningDefault: "stream" } },
+          },
+          messages: { groupChat: { visibleReplies: "automatic" } },
+        },
+        producer: async ({ dispatcher, replyOptions: options }) => {
+          await options?.onReasoningStream?.({
+            text: "<think>Checking the evidence before replying.</think>",
+            isReasoningSnapshot: true,
+          });
+          await http.waitForContaining("Checking the evidence before replying.");
+          expect(http.texts()).toEqual([
+            expect.stringContaining("Checking the evidence before replying."),
+          ]);
+          firstId = [...visibleMessages.keys()][0];
+          await options?.onReasoningStream?.({
+            text: "<think>Reading the logs.\n\nChecking the evidence before replying.</think>",
+            isReasoningSnapshot: true,
+          });
+          await http.waitForContaining("Reading the logs.");
+          expect([...visibleMessages.keys()]).toEqual([firstId]);
+          const snapshot = visibleMessages.get(firstId!);
+          expect(snapshot?.match(/Checking the evidence before replying/g)).toHaveLength(1);
+          expect(snapshot?.indexOf("Reading the logs.")).toBeLessThan(
+            snapshot?.indexOf("Checking the evidence") ?? -1,
+          );
+          await options?.onReasoningEnd?.();
+          const replacing = options?.onReasoningStream?.({
+            text: "<think>Second thought after checking the logs.</think>",
+          });
+          await held.arrived.promise;
+          expect(visibleMessages.get(firstId!)).toContain("Reading the logs.");
+          held.release.resolve();
+          await replacing;
+          await http.waitForContaining("Second thought");
+          replacementId = [...visibleMessages].find(([, text]) =>
+            text.includes("Second thought"),
+          )?.[0];
+          expect(visibleMessages.get(replacementId!)).toContain(
+            "Second thought after checking the logs.",
+          );
+          await vi.advanceTimersByTimeAsync(4_000);
+          await eventually(() => visibleMessages.has(firstId!)).toBe(false);
+          const replacementAt = acceptedCalls.findIndex((call) =>
+            String(call.fields.text).includes("Second thought"),
+          );
+          const retiredAt = acceptedCalls.findIndex(
+            (call) => call.method === "deleteMessage" && Number(call.fields.message_id) === firstId,
+          );
+          expect(replacementAt).toBeGreaterThanOrEqual(0);
+          expect(retiredAt).toBeGreaterThan(replacementAt);
+          dispatcher.sendFinalReply({ text: "Answer in this topic." });
+          await dispatcher.waitForIdle();
+          expect([...visibleMessages]).toEqual([
+            [replacementId, expect.stringContaining("Second thought after checking the logs.")],
+            [expect.any(Number), "Answer in this topic."],
+          ]);
+          return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
+        },
+      });
+      expect(http.texts()).toEqual(["Answer in this topic."]);
+      expect(
+        http
+          .acceptedFor("sendMessage")
+          .map(({ fields }) => [Number(fields.chat_id), Number(fields.message_thread_id)]),
+      ).toEqual([
+        [-100123, 88],
+        [-100123, 88],
+        [-100123, 88],
+      ]);
+    } finally {
+      held.release.resolve();
+    }
+  });
 
   it("reports an owner rejection silently without claiming a network failure", async () => {
     await dispatch(async () => {}, {

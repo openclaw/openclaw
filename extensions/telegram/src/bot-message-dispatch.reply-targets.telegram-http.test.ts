@@ -6,6 +6,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { createStatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import { resolveGroupThreadMentionFacts } from "openclaw/plugin-sdk/channel-inbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
@@ -21,6 +22,7 @@ import {
   createTelegramDispatchHttpFixture,
   telegramReplyId,
 } from "./bot-message-dispatch.telegram-http.test-support.js";
+import * as deliveryHooks from "./bot/delivery.hooks.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import { createTelegramMessageCache } from "./message-cache.js";
@@ -114,6 +116,109 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     observers.draftStream.mockReset();
     observers.recordOutbound.mockReset().mockResolvedValue(undefined);
   });
+
+  it.each([
+    { streamMode: "progress", controls: "buttonless", rejectControls: false },
+    { streamMode: "partial", controls: "buttons", rejectControls: true },
+  ] as const)(
+    "keeps the accepted $controls question on the $streamMode stream (controls rejected: $rejectControls)",
+    async ({ streamMode, controls, rejectControls }) => {
+      const question = {
+        text: "Should this harmless check continue?",
+        channelData: { askUser: { questionId: "ask_0123456789abcdef0123456789abcdef" } },
+      };
+      const buttons = [[{ text: "Continue", callback_data: "ask:continue" }]];
+      const settled = "The question has settled.";
+      const register = vi
+        .spyOn(questionGatewayRuntime, "registerChannelDelivery")
+        .mockImplementation(() => {});
+      const sent = vi.spyOn(deliveryHooks, "emitTelegramMessageSentHooks");
+      const status = createStatusReactionController({
+        enabled: false,
+        initialEmoji: "👀",
+        adapter: { setReaction: async () => {} },
+      });
+      const errorStatus = vi.spyOn(status, "setError");
+      let draft: TelegramDraftStream | undefined;
+      observers.draftStream.mockImplementation((stream) => {
+        draft ??= stream;
+      });
+      let rejectedControlEdits = 0;
+      http.respondToCall = (call) => {
+        if (call.method === "editMessageText" && call.fields.reply_markup && rejectControls) {
+          rejectedControlEdits += 1;
+          return { error_code: 400, description: "Bad Request: BUTTON_DATA_INVALID" };
+        }
+        return undefined;
+      };
+      let questionMessageId: number | undefined;
+      const context = createContext();
+      context.statusReactionController = status;
+      try {
+        await dispatchProgressTurn(async () => {}, {
+          context,
+          mode: streamMode,
+          toolProgress: true,
+          allowErrors: rejectControls,
+          producer: async ({ dispatcher, replyOptions: options }) => {
+            await emitToolStart(options, { name: "exec", toolCallId: "check", phase: "start" });
+            await vi.advanceTimersByTimeAsync(1500);
+            await draft?.flush();
+            expect(http.texts().some((text) => text.includes("Exec"))).toBe(true);
+            dispatcher.sendToolResult({
+              ...question,
+              channelData: {
+                ...question.channelData,
+                ...(controls === "buttons" ? { telegram: { buttons } } : {}),
+              },
+            });
+            await dispatcher.waitForIdle();
+            questionMessageId = draft?.messageId();
+            expect(visibleMessages.get(questionMessageId ?? -1)).toBe(question.text);
+            await emitToolStart(options, { name: "wait", toolCallId: "wait", phase: "start" });
+            await vi.advanceTimersByTimeAsync(1500);
+            await draft?.flush();
+            expect(visibleMessages.get(questionMessageId ?? -1)).toBe(question.text);
+            if (controls === "buttons") {
+              expect(http.visibleMarkup.get(questionMessageId ?? -1)).toEqual({
+                inline_keyboard: buttons,
+              });
+            }
+            const queuedFinal = dispatcher.sendFinalReply({ text: settled });
+            return { queuedFinal, counts: dispatcher.getQueuedCounts() };
+          },
+        });
+        if (rejectControls) {
+          expect(rejectedControlEdits).toBe(1);
+          expect(register).not.toHaveBeenCalled();
+          expect(http.texts()).toEqual([question.text]);
+          expect([...http.visibleMarkup.values()]).toEqual([]);
+          expect(errorStatus).toHaveBeenCalledOnce();
+          expect(sent).toHaveBeenCalledWith(
+            expect.objectContaining({ success: false, messageId: [...visibleMessages.keys()][0] }),
+          );
+        } else {
+          expect(http.texts()).toEqual([question.text, settled]);
+          expect(register).toHaveBeenCalledOnce();
+          const registration = register.mock.calls[0]?.[0];
+          expect(registration).toMatchObject({
+            questionId: question.channelData.askUser.questionId,
+            deliveryId: `telegram:default:123:${questionMessageId}`,
+          });
+          await registration?.finalize("Answered: continue");
+          expect(visibleMessages.get(questionMessageId ?? -1)).toContain("Answered: continue");
+          expect(http.visibleMarkup.get(questionMessageId ?? -1)).toEqual({ inline_keyboard: [] });
+          expect(http.texts()).toContain(settled);
+        }
+      } finally {
+        await draft?.discard();
+        await status.clear();
+        register.mockRestore();
+        sent.mockRestore();
+        errorStatus.mockRestore();
+      }
+    },
+  );
 
   it.each(["off", "first", "all"] as const)(
     "keeps untagged private-topic finals on the inbound target with replies %s",
@@ -556,60 +661,83 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     });
   });
 
-  it("keeps accepted quoted delivery visible when history finalization fails", async () => {
-    await withOpenClawTestState({ prefix: "telegram-history-failure-" }, async (state) => {
-      const context = createContext();
-      const scope = {
-        agentId: "default",
-        sessionKey: context.route.sessionKey,
-        sessionId: "history-failure",
-        storePath: path.join(state.stateDir, "sessions.json"),
-      };
-      const entry = { sessionId: scope.sessionId, updatedAt: Date.now() };
-      await patchSessionEntry({ ...scope, fallbackEntry: entry, update: () => entry });
-      Object.assign(context.ctxPayload, {
-        ReplyToId: "9001",
-        ReplyToBody: "quoted slice",
-        ReplyToQuoteText: "quoted slice",
-        ReplyToIsQuote: true,
-      });
-      let failed = false;
-      observers.recordOutbound.mockImplementation(async (params) => {
-        if (params.promptContextProjection?.finalPart) {
-          failed = true;
-          throw new Error("history finalization unavailable");
-        }
-      });
-      await dispatchQuietTurn(
-        async () => {
-          SessionManager.open(scope, state.stateDir).appendMessage(
-            makeAgentAssistantMessage({
-              content: [{ type: "text", text: "Accepted quoted answer" }],
-              timestamp: Date.now(),
-            }),
-          );
-        },
-        {
-          context,
-          replyToMode: "all",
-          cfg: { session: { store: scope.storePath } },
-          finalReply: { text: "Accepted quoted answer", replyToId: "9001" },
-          allowErrors: true,
-        },
-      );
-      expect(failed).toBe(true);
-      expect(http.acceptedFor("sendMessage")).toEqual([
-        {
-          method: "sendMessage",
-          fields: expect.objectContaining({
+  it.each(["off", "partial"] as const)(
+    "keeps accepted quoted delivery visible when history finalization fails (%s)",
+    async (mode) => {
+      await withOpenClawTestState({ prefix: "telegram-history-failure-" }, async (state) => {
+        const context = createContext();
+        const scope = {
+          agentId: "default",
+          sessionKey: context.route.sessionKey,
+          sessionId: "history-failure",
+          storePath: path.join(state.stateDir, "sessions.json"),
+        };
+        const entry = { sessionId: scope.sessionId, updatedAt: Date.now() };
+        await patchSessionEntry({ ...scope, fallbackEntry: entry, update: () => entry });
+        Object.assign(context.ctxPayload, {
+          ReplyToId: "9001",
+          ReplyToBody: "quoted slice",
+          ReplyToQuoteText: "quoted slice",
+          ReplyToIsQuote: true,
+        });
+        let failed = false;
+        observers.recordOutbound.mockImplementation(async (params) => {
+          if (params.promptContextProjection?.finalPart) {
+            failed = true;
+            throw new Error("history finalization unavailable");
+          }
+        });
+        await dispatchProgressTurn(
+          async (options) => {
+            SessionManager.open(scope, state.stateDir).appendMessage(
+              makeAgentAssistantMessage({
+                content: [{ type: "text", text: "Accepted quoted answer" }],
+                timestamp: Date.now(),
+              }),
+            );
+            if (mode === "partial") {
+              await options?.onPartialReply?.({ text: "Accepted quoted preview" });
+              await http.waitForText("Accepted quoted preview", "sendMessage");
+            }
+          },
+          {
+            mode,
+            toolProgress: false,
+            context,
+            replyToMode: "all",
+            cfg: { session: { store: scope.storePath } },
+            finalReply: { text: "Accepted quoted answer", replyToId: "9001" },
+            allowErrors: true,
+          },
+        );
+        expect(failed).toBe(true);
+        expect(observers.recordOutbound).toHaveBeenCalledWith(
+          expect.objectContaining({
             text: "Accepted quoted answer",
-            reply_parameters: expect.objectContaining({ message_id: 9001, quote: "quoted slice" }),
+            messageId: [...visibleMessages.keys()][0],
           }),
-        },
-      ]);
-      expect(http.texts()).toEqual(["Accepted quoted answer"]);
-    });
-  });
+        );
+        expect(http.acceptedFor("sendMessage")).toEqual([
+          {
+            method: "sendMessage",
+            fields: expect.objectContaining({
+              text: mode === "partial" ? "Accepted quoted preview" : "Accepted quoted answer",
+              reply_parameters: expect.objectContaining({
+                message_id: 9001,
+                quote: "quoted slice",
+              }),
+            }),
+          },
+        ]);
+        if (mode === "partial") {
+          expect(http.acceptedFor("editMessageText").at(-1)?.fields.text).toBe(
+            "Accepted quoted answer",
+          );
+        }
+        expect(http.texts()).toEqual(["Accepted quoted answer"]);
+      });
+    },
+  );
 
   it.each(["success", "superseded"] as const)(
     "restores real status reactions after %s without late stall work",

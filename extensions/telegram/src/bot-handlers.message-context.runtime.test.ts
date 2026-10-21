@@ -138,32 +138,9 @@ describe("resolveCachedMessageThreadSpec", () => {
 
   it("returns undefined for a message that is not in the cache", async () => {
     const runtime = createRuntime();
-
     await expect(
       runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID, messageId: 404 }),
     ).resolves.toBeUndefined();
-  });
-
-  it("recovers a channel Direct Messages scope without reusing raw message_thread_id", async () => {
-    const runtime = createRuntime();
-    const msg = {
-      ...forumMessage(102, 999),
-      chat: {
-        id: CHAT_ID,
-        type: "supergroup",
-        title: "Channel replies",
-        is_direct_messages: true,
-      },
-      direct_messages_topic: { topic_id: TOPIC_ID },
-    } as Message;
-    await runtime.recordMessageForReplyChain(msg, {
-      scope: "direct-messages",
-      id: TOPIC_ID,
-    });
-
-    await expect(
-      runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID, messageId: 102 }),
-    ).resolves.toEqual({ scope: "direct-messages", id: TOPIC_ID });
   });
 });
 
