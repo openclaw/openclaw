@@ -5,7 +5,6 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
@@ -40,12 +39,15 @@ export const ERROR: WorkerInferenceTerminalOutcome = {
 };
 export const DONE: WorkerInferenceTerminalOutcome = {
   type: "done",
-  message: makeAgentAssistantMessage({
+  message: {
+    role: "assistant",
+    api: "openai-responses",
     content: [{ type: "text", text: "done" }],
     ...modelRef,
     usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
+    stopReason: "stop",
     timestamp: 1,
-  }),
+  },
 };
 export const CANCEL = { runEpoch, sessionId: session, runId: run, turnId };
 

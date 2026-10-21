@@ -16,7 +16,11 @@ const request = {
   timeoutMs: 5000,
 } as const;
 
-function mockResponse(body: string | Buffer, contentType = "application/json", status = 200) {
+function mockResponse(
+  body: string | Buffer<ArrayBuffer>,
+  contentType = "application/json",
+  status = 200,
+) {
   performMatrixRequestMock.mockResolvedValue({
     response: new Response(body, { status, headers: { "content-type": contentType } }),
     text: body.toString(),

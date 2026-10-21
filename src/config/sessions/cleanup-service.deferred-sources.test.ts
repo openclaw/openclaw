@@ -21,6 +21,7 @@ it("preserves receipt and manifest sources without canonical entries during enfo
     setRuntimeConfigSnapshot(cfg);
     const sessionPath = (name: string) => path.join(state.sessionsDir("main"), name);
     const storePath = sessionPath("sessions.json");
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
     const target = { agentId: "main", storePath };
     const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, target).path;
     openOpenClawAgentDatabase({ agentId: target.agentId, path: sqlitePath });

@@ -41,7 +41,8 @@ function fixture() {
       grant_definition_revision: grantRevision(grant),
     };
   };
-  const before = [
+  type Row = ReturnType<typeof row>;
+  const before: [Row, Row, Row, Row] = [
     row(heartbeat, 0, 1000),
     row(dreaming, 10, 9_000_000_000_000),
     { ...row({ ...heartbeat, id: "authored" }, 34, 1000), runtime_updated_at_ms: 1010 },
