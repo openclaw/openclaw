@@ -5,6 +5,7 @@ import type { BedrockOptions } from "./bedrock-options.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
 
 type BedrockModel = Model<"bedrock-converse-stream">;
+type ClientSpy = ReturnType<typeof vi.spyOn>;
 export const bedrockModel = (overrides: Partial<BedrockModel> = {}): BedrockModel => ({
   api: "bedrock-converse-stream",
   provider: "amazon-bedrock",
@@ -43,10 +44,7 @@ export function mockResponse(
     stream,
   } as never);
 }
-export function expectDestroyedClient(
-  send: ReturnType<typeof vi.spyOn>,
-  destroy: ReturnType<typeof vi.spyOn>,
-) {
+export function expectDestroyedClient(send: ClientSpy, destroy: ClientSpy) {
   expect(send).toHaveBeenCalledOnce();
   expect(destroy).toHaveBeenCalledOnce();
   expect(destroy.mock.contexts[0]).toBe(send.mock.contexts[0]);
@@ -82,10 +80,8 @@ export async function capturePayload(
     });
   }
   const result = await streamBedrockForTest(model, context, options).result();
-  if (validate && result.stopReason !== "stop") {
-    throw new Error(
-      `Bedrock request fixture rejected replay: ${result.errorMessage ?? result.stopReason}`,
-    );
+  if (validate) {
+    expect(result.stopReason, result.errorMessage).toBe("stop");
   }
   return commandInput(send.mock.calls.at(-1)?.[0]);
 }
