@@ -448,53 +448,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.send interrupt ignores subordinate session-effect interruption hooks", async () => {
-    await withMainSessionStore(async () => {
-      const storePath = testState.sessionStorePath;
-      if (!storePath) {
-        throw new Error("session store path was not initialized");
-      }
-      const onInterrupt = vi.fn(() => {
-        throw new Error("session interruption failed");
-      });
-      const activeAdmission = await beginSessionEffect({
-        scope: storePath,
-        identities: ["agent:main:main", "sess-main"],
-        assertAllowed: () => {},
-        onInterrupt,
-      });
-
-      try {
-        const res = await sendChat(
-          "idem-chat-interrupt-non-reply-throw",
-          "replace non-reply session work",
-          {
-            queueMode: "interrupt",
-          },
-        );
-
-        expect(res).toMatchObject({
-          ok: true,
-          payload: {
-            runId: "idem-chat-interrupt-non-reply-throw",
-            status: "started",
-          },
-        });
-        expect(res.payload).not.toHaveProperty("interruptedActiveRun");
-        expect(onInterrupt).not.toHaveBeenCalled();
-        await gatewaySuite.requestExecution.waitForCompletion(
-          "idem-chat-interrupt-non-reply-throw",
-        );
-      } finally {
-        activeAdmission.release();
-      }
-      await waitForFast(() => expect(getSessionControllerWorkCount()).toBe(0));
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-
-      await request("sessions.reset", { key: "main", reason: "new" });
-    });
-  });
-
   test("chat.send interrupt leaves a subordinate session effect with its owner", async () => {
     await withMainSessionStore(async () => {
       const storePath = testState.sessionStorePath;
