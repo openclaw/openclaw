@@ -168,29 +168,7 @@ export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
                   {(entry) => (
                     <span class="chat-details-subagents__count" data-status={entry().status}>
                       <span>{entry().count}</span>{" "}
-                      <Show
-                        when={
-                          props.mobile &&
-                          (entry().status === "running" || entry().status === "done")
-                        }
-                      >
-                        <Show
-                          when={entry().status === "running"}
-                          fallback={<Icon name="check" class="chat-details-subagents__check" />}
-                        >
-                          <span class="chat-details-subagents__spinner" aria-hidden="true" />
-                        </Show>
-                      </Show>
-                      <span
-                        class={[
-                          "chat-details-subagents__count-label",
-                          {
-                            "sr-only":
-                              props.mobile &&
-                              (entry().status === "running" || entry().status === "done"),
-                          },
-                        ]}
-                      >
+                      <span class="chat-details-subagents__count-label">
                         {countLabel(entry().status)}
                       </span>
                     </span>
