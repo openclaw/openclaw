@@ -1,14 +1,21 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import {
+  captureControlUiE2eFailureDiagnostics,
   installMockGateway,
   type MockGatewayControls,
   waitForConfirmModal,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
-import { createUpdateE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createUpdateE2eSuite("Control UI coalesced update E2E");
+const suite = createControlUiE2eSuite({
+  name: "Control UI coalesced update E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
 const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 const updateCard = (page: Page) =>
@@ -212,12 +219,21 @@ suite.define(() => {
       await gateway.setGatewayBootId(`managed-handoff-${artifactName}`);
       await gateway.setOnline(true);
 
-      const dialog = updateDialog(page);
-      await text(dialog.locator(".update-run-view__details"), expectedText).waitFor();
-      expect(await dialog.locator('[data-oracle="version"]').getAttribute("data-state")).toBe(
-        "fail",
-      );
-      expect(await dialog.locator("[data-run-id]").getAttribute("data-run-id")).toBe(run.runId);
+      try {
+        const dialog = updateDialog(page);
+        await text(dialog.locator(".update-run-view__details"), expectedText).waitFor();
+        expect(await dialog.locator('[data-oracle="version"]').getAttribute("data-state")).toBe(
+          "fail",
+        );
+        expect(await dialog.locator("[data-run-id]").getAttribute("data-run-id")).toBe(run.runId);
+      } catch (error) {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: error instanceof Error ? error : new Error(String(error)),
+          label: `managed-handoff-${artifactName}`,
+          pageErrors,
+        });
+        throw error;
+      }
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
       expect(pageErrors).toEqual([]);
     });
@@ -226,40 +242,42 @@ suite.define(() => {
   it.each(["available", "failed", "skipped"] as const)(
     "routes the %s sidebar update through live Mac app ownership",
     async (outcome) => {
-      await suite.withPage(pageOptions(), async ({ page }) => {
-        await page.addInitScript(() => {
-          const messages: unknown[] = [];
-          Object.assign(window, {
-            openClawUpdateMessages: messages,
-            webkit: {
-              messageHandlers: {
-                openclawUpdate: { postMessage: (message: unknown) => messages.push(message) },
-              },
+      const context = await suite.browser.newContext(pageOptions());
+      await context.addInitScript(() => {
+        const messages: unknown[] = [];
+        Object.assign(window, {
+          openClawUpdateMessages: messages,
+          webkit: {
+            messageHandlers: {
+              openclawUpdate: { postMessage: (message: unknown) => messages.push(message) },
             },
-          });
-        });
-        const pageErrors = watchPageErrors(page);
-        const run =
-          outcome === "available"
-            ? null
-            : createUpdateRunFixture({
-                phase: "finished",
-                status: outcome,
-                reason: outcome === "skipped" ? "no-upstream" : "build-failed",
-                finishedAtMs: Date.now(),
-              });
-        const gateway = await installMockGateway(page, {
-          featureMethods: ["openclaw.chat", "update.run"],
-          methodResponses: {
-            ...runResponses(run, {
-              ok: true,
-              restart: null,
-              result: { after: { version: "2.0.0" }, status: "ok" },
-            }),
-            "update.status": { activeRun: null, lastRun: run },
           },
         });
+      });
+      const page = await context.newPage();
+      const pageErrors = watchPageErrors(page);
+      const run =
+        outcome === "available"
+          ? null
+          : createUpdateRunFixture({
+              phase: "finished",
+              status: outcome,
+              reason: outcome === "skipped" ? "no-upstream" : "build-failed",
+              finishedAtMs: Date.now(),
+            });
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["openclaw.chat", "update.run"],
+        methodResponses: {
+          ...runResponses(run, {
+            ok: true,
+            restart: null,
+            result: { after: { version: "2.0.0" }, status: "ok" },
+          }),
+          "update.status": { activeRun: null, lastRun: run },
+        },
+      });
 
+      try {
         await announceUpdate(page, gateway);
 
         await openUpdateConfirmation(page);
@@ -288,7 +306,37 @@ suite.define(() => {
         );
         await expect.poll(async () => (await gateway.getRequests("update.run")).length).toBe(1);
         expect(pageErrors).toEqual([]);
-      });
+      } catch (error) {
+        await withTimeout(
+          page.evaluate(() => {
+            const modal = document.querySelector("openclaw-modal-dialog");
+            const buttons = [...(modal?.querySelectorAll("button") ?? [])];
+            const confirm = buttons.find(
+              (element) => element.textContent?.trim() === "Update Mac app and restart",
+            );
+            const retry = buttons.find((element) => element.textContent?.trim() === "Retry update");
+            return {
+              nativeUpdateDialogPresent: Boolean(modal),
+              nativeUpdateDialogOpen: modal?.querySelector("dialog")?.open ?? false,
+              nativeUpdateConfirmPresent: Boolean(confirm),
+              nativeUpdateConfirmDisabled: confirm?.disabled ?? null,
+              nativeUpdateRetryPresent: Boolean(retry),
+              nativeUpdateRetryDisabled: retry?.disabled ?? null,
+            };
+          }),
+          1_000,
+        )
+          .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+          .catch(() => undefined);
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: error instanceof Error ? error : new Error(String(error)),
+          label: `native-update-${outcome}`,
+          pageErrors,
+        });
+        throw error;
+      } finally {
+        await context.close();
+      }
     },
   );
 });

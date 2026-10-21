@@ -1,7 +1,10 @@
 import { once } from "node:events";
+import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import path from "node:path";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -108,6 +111,7 @@ suite.define(() => {
     await suite.withPage(
       {
         locale: "en-US",
+        recordVideo: { dir: suite.artifactDir, size: { height: 720, width: 1280 } },
         serviceWorkers: "block",
         viewport: { height: 720, width: 1280 },
       },
@@ -181,6 +185,13 @@ suite.define(() => {
           publicAssetPaths.has(requestPath),
         );
         expect(unprefixedPublicAssetRequests).toEqual([]);
+
+        await writeFile(
+          path.join(suite.artifactDir, "connected-shell.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".chat-main"),
+          ]),
+        );
       },
     );
   });

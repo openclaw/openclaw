@@ -2,7 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { pathForRoute } from "../app-route-paths.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite, e2eButton } from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI shared Settings agent selector" });
 
@@ -118,7 +118,7 @@ suite.define(() => {
     await withSettingsPage(1440, "model-providers", async (page, gateway) => {
       await page.getByRole("heading", { name: "Defaults for all agents", exact: true }).waitFor();
       const primaryModel = page.locator(".model-providers__defaults .model-picker").first();
-      await e2eButton(primaryModel, "Model: GPT-4.1").waitFor();
+      await primaryModel.getByRole("button", { name: "Model: GPT-4.1", exact: true }).waitFor();
 
       const picker = page.locator("openclaw-agent-select");
       await picker.locator(".agent-select__trigger").press("Enter");
@@ -130,7 +130,7 @@ suite.define(() => {
       await page.keyboard.press("Enter");
       await expectSelectedAgent(page, "Research");
       await gateway.waitForRequest("models.authStatus", { match: { agentId: "research" } });
-      await e2eButton(primaryModel, "Model: GPT-4.1").waitFor();
+      await primaryModel.getByRole("button", { name: "Model: GPT-4.1", exact: true }).waitFor();
 
       for (const routeId of ["memory", "skill-settings", "agents"] as const) {
         await page.locator(`.settings-sidebar__item[href="${pathForRoute(routeId)}"]`).click();
@@ -145,12 +145,16 @@ suite.define(() => {
       await gateway.waitForRequest("models.list", {
         match: { agentId: "research", view: "configured" },
       });
-      await expect.poll(() => e2eButton(page, "Set Default").isEnabled()).toBe(true);
+      await expect
+        .poll(() => page.getByRole("button", { name: "Set Default", exact: true }).isEnabled())
+        .toBe(true);
       await expectSidebarPickerOnly(page);
 
       await chooseAgent(page, /^Clawd(?:,|$)/);
       await expectAgentRoute(page, "main");
-      await expect.poll(() => e2eButton(page, "Default").isDisabled()).toBe(true);
+      await expect
+        .poll(() => page.getByRole("button", { name: "Default", exact: true }).isDisabled())
+        .toBe(true);
       await chooseAgent(page, "Research");
       await expectAgentRoute(page, "research");
       await page.goBack();
@@ -164,7 +168,7 @@ suite.define(() => {
         await expectSelectedAgent(page, "Research");
         await expectSidebarPickerOnly(page);
       }
-      await e2eButton(primaryModel, "Model: GPT-4.1").waitFor();
+      await primaryModel.getByRole("button", { name: "Model: GPT-4.1", exact: true }).waitFor();
       await page.locator(".settings-sidebar__back").click();
       await waitForControlUiRoute(page, { routeId: "chat" });
       const startup = await gateway.waitForRequest("chat.startup");

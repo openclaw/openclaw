@@ -1,17 +1,5 @@
 import { createUpdateRunFixture as createRun } from "../test-helpers/update-run.ts";
 
-export function updateE2eConfig(hash: string, enabled = false) {
-  const config = { update: { auto: { enabled }, channel: "stable" } };
-  return {
-    config,
-    hash,
-    issues: [],
-    raw: JSON.stringify(config),
-    runtimeConfig: config,
-    valid: true,
-  };
-}
-
 export function createUpdateRunFixture() {
   const now = Date.now();
   return createRun({

@@ -1,20 +1,24 @@
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { UpdateRunPhase, UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import {
-  createControlUiE2eContextOptions as updateE2ePageOptions,
-  createControlUiE2eSuite,
-  e2eButton as button,
-  e2eText as text,
-} from "./control-ui-e2e-suite.test-support.ts";
-import { createUpdateRunFixture, updateE2eConfig } from "./update-run.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createUpdateRunFixture } from "./update-run.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI update run E2E" });
+
+function text(root: Page | Locator, value: string, exact = true) {
+  return root.getByText(value, { exact });
+}
 
 suite.define(() => {
   it("resumes the same update after restart and keeps its successful report visible", async () => {
     await suite.withPage(
-      updateE2ePageOptions({ viewport: { height: 1100, width: 1440 } }),
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 1100, width: 1440 },
+      },
       async ({ context, page }) => {
         let run = createUpdateRunFixture();
         run.steps.push(
@@ -29,14 +33,19 @@ suite.define(() => {
             detail: "Recovery backup needs 18 GiB; 32 GiB is available.",
           },
         );
-        const configResponse = updateE2eConfig("update-run-config");
-        const modelOptions = {
+        const config = { update: { auto: { enabled: false }, channel: "stable" } };
+        const configResponse = {
+          config,
+          hash: "update-run-config",
+          issues: [],
+          raw: JSON.stringify(config),
+          runtimeConfig: config,
+          valid: true,
+        };
+        const gateway = await installMockGateway(page, {
           communityInvite: false,
           agentModel: "openai/gpt-5.6-luna",
           models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
-        };
-        const gateway = await installMockGateway(page, {
-          ...modelOptions,
           updateAvailable: { channel: "stable", currentVersion: "1.0.0", latestVersion: "2.0.0" },
           methodResponses: {
             "config.get": configResponse,
@@ -47,12 +56,12 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}settings/updates`);
         await gateway.waitForRequest("config.get");
-        await button(page, "Update now").click();
+        await page.getByRole("button", { name: "Update now", exact: true }).click();
         const dialog = page.locator("openclaw-modal-dialog");
-        await button(dialog, "Update and restart").waitFor();
+        await dialog.getByRole("button", { name: "Update and restart", exact: true }).waitFor();
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
 
-        await button(dialog, "Update and restart").click();
+        await dialog.getByRole("button", { name: "Update and restart", exact: true }).click();
         await gateway.waitForRequest("update.run");
         expect((await gateway.waitForRequest("update.runs.get")).params).toEqual({
           runId: run.runId,
@@ -207,7 +216,7 @@ suite.define(() => {
         );
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
 
-        await button(dialog, "Close").click();
+        await dialog.getByRole("button", { name: "Close", exact: true }).click();
         await dialog.waitFor({ state: "detached" });
         await text(page.locator("openclaw-update-run-view"), headline).first().waitFor();
         await page.locator(".update-run-view__report").scrollIntoViewIfNeeded();
@@ -215,7 +224,9 @@ suite.define(() => {
         // A fresh page has no in-memory run ID and must discover the last run from status.
         const freshPage = await context.newPage();
         const freshGateway = await installMockGateway(freshPage, {
-          ...modelOptions,
+          communityInvite: false,
+          agentModel: "openai/gpt-5.6-luna",
+          models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
           methodResponses: {
             "update.status": { activeRun: null, lastRun: run },
             "update.runs.get": { run },

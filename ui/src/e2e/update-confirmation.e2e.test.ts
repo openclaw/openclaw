@@ -1,15 +1,15 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
-import {
-  createControlUiE2eContextOptions as updateE2ePageOptions,
-  createUpdateE2eSuite,
-  e2eButton as button,
-} from "./control-ui-e2e-suite.test-support.ts";
-import { createUpdateRunFixture, updateE2eConfig } from "./update-run.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createUpdateRunFixture } from "./update-run.test-support.ts";
 
-const suite = createUpdateE2eSuite("Control UI update confirmation E2E");
+const suite = createControlUiE2eSuite({
+  name: "Control UI update confirmation E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
 const UPDATE_AVAILABLE = {
   channel: "stable",
@@ -26,6 +26,10 @@ const UPDATE_RUN_RESPONSE = {
 /** The dialog element lives in a shadow root; its visible copy is slotted light DOM. */
 function confirmationCopy(page: Page) {
   return page.locator("openclaw-modal-dialog");
+}
+
+function button(root: Page | Locator, name: string) {
+  return root.getByRole("button", { name, exact: true });
 }
 
 function confirmationDialog(page: Page) {
@@ -91,28 +95,6 @@ function createFailedRun() {
   };
 }
 
-async function openSidebarUpdate(
-  page: Page,
-  gateway: Awaited<ReturnType<typeof installMockGateway>>,
-) {
-  expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
-  await gateway.waitForRequest("chat.startup");
-  await page.locator(".sidebar-issues-button:visible").click();
-  const card = updateCard(page);
-  await card.locator("summary").click();
-  await card.locator(".sidebar-update-card__action").click();
-}
-
-async function expectNativePost(
-  page: Page,
-  gateway: Awaited<ReturnType<typeof installMockGateway>>,
-  requests: number,
-) {
-  await button(page, "Update Mac app and restart").click();
-  expect(await page.locator("html").getAttribute("data-native-update-posted")).toBe("yes");
-  expect(await gateway.getRequests("update.run")).toHaveLength(requests);
-}
-
 async function openUpdateCard(page: Page, baseUrl: string) {
   const gateway = await installMockGateway(page, {
     methodResponses: {
@@ -135,8 +117,9 @@ async function openUpdateCard(page: Page, baseUrl: string) {
 }
 
 function withPage(run: (page: Page) => Promise<void>, height = 900) {
-  return suite.withPage(updateE2ePageOptions({ viewport: { height, width: 1280 } }), ({ page }) =>
-    run(page),
+  return suite.withPage(
+    { locale: "en-US", serviceWorkers: "block", viewport: { height, width: 1280 } },
+    ({ page }) => run(page),
   );
 }
 
@@ -157,7 +140,12 @@ suite.define(() => {
           updateSchedule: stale.schedule,
           methodResponses: { "update.status": stale, "update.run": UPDATE_RUN_RESPONSE },
         });
-        await openSidebarUpdate(page, gateway);
+        expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
+        await gateway.waitForRequest("chat.startup");
+        await page.locator(".sidebar-issues-button:visible").click();
+        const card = updateCard(page);
+        await card.locator("summary").click();
+        await card.locator(".sidebar-update-card__action").click();
         await page.evaluate(() => Reflect.deleteProperty(window, "webkit"));
         await gateway.deferNext("update.status", { refreshCheckout: true });
         await button(page, "Update Mac app and restart").click();
@@ -181,7 +169,9 @@ suite.define(() => {
           await restoreNative(page);
           await button(page, "Update and restart").click();
           expect(await gateway.getRequests("update.run")).toHaveLength(0);
-          await expectNativePost(page, gateway, 0);
+          await button(page, "Update Mac app and restart").click();
+          expect(await page.locator("html").getAttribute("data-native-update-posted")).toBe("yes");
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
           return;
         }
         const failedRun = createFailedRun();
@@ -196,7 +186,9 @@ suite.define(() => {
           expect(await confirmationCopy(page).getAttribute("label")).toBe(
             "Update Mac app + Gateway",
           );
-          await expectNativePost(page, gateway, 1);
+          await button(page, "Update Mac app and restart").click();
+          expect(await page.locator("html").getAttribute("data-native-update-posted")).toBe("yes");
+          expect(await gateway.getRequests("update.run")).toHaveLength(1);
           return;
         }
 
@@ -238,7 +230,12 @@ suite.define(() => {
           updateSchedule: stale.schedule,
           methodResponses: { "update.status": stale, "update.runs.get": { run } },
         });
-        await openSidebarUpdate(page, gateway);
+        expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
+        await gateway.waitForRequest("chat.startup");
+        await page.locator(".sidebar-issues-button:visible").click();
+        const card = updateCard(page);
+        await card.locator("summary").click();
+        await card.locator(".sidebar-update-card__action").click();
         await waitForConfirmModal(page);
 
         if (owner === "native") {
@@ -249,7 +246,9 @@ suite.define(() => {
           expect(
             await gateway.getRequests("update.status", { refreshCheckout: true }),
           ).toHaveLength(0);
-          await expectNativePost(page, gateway, 0);
+          await button(page, "Update Mac app and restart").click();
+          expect(await page.locator("html").getAttribute("data-native-update-posted")).toBe("yes");
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
           return;
         }
 
@@ -538,10 +537,18 @@ suite.define(() => {
 
   it("applies the same confirmation to the Settings update row", async () => {
     await withPage(async (page) => {
+      const config = { update: { auto: { enabled: false }, channel: "stable" } };
       const gateway = await installMockGateway(page, {
         featureMethods: ["config.get", "config.set", "update.run"],
         methodResponses: {
-          "config.get": updateE2eConfig("update-confirmation-1"),
+          "config.get": {
+            config,
+            hash: "update-confirmation-1",
+            issues: [],
+            raw: JSON.stringify(config),
+            runtimeConfig: config,
+            valid: true,
+          },
           "update.run": UPDATE_RUN_RESPONSE,
           "update.runs.get": { run: createUpdateRunFixture() },
         },

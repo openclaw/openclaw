@@ -1,7 +1,9 @@
+import path from "node:path";
 import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -14,6 +16,13 @@ const suite = createControlUiE2eSuite({
   trackBrowserContexts: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}.`,
+});
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let proofDir: string | undefined;
+beforeEach(() => {
+  proofDir = artifactRoot
+    ? createControlUiE2eArtifactDir("device-token-reconnect", artifactRoot)
+    : undefined;
 });
 
 const OPERATOR_SCOPES = [
@@ -39,9 +48,6 @@ function readConnectAuth(request: { params?: unknown }): Record<string, unknown>
 function requireConnectAuth(request: { params?: unknown }): Record<string, unknown> {
   return requireRecord(readConnectAuth(request));
 }
-
-const expectAuth = (request: { params?: unknown }, auth: Record<string, unknown>) =>
-  expect(requireConnectAuth(request)).toEqual(auth);
 
 function browserPageGatewayUrl(appBaseUrl: string): string {
   const parsed = new URL(appBaseUrl);
@@ -129,6 +135,13 @@ async function createContext(): Promise<BrowserContext> {
   return suite.newBrowserContext(createControlUiE2eContextOptions());
 }
 
+async function captureProof(page: Page, name: string): Promise<void> {
+  if (!proofDir) {
+    return;
+  }
+  await page.screenshot({ fullPage: true, path: path.join(proofDir, name) });
+}
+
 suite.define(() => {
   it("isolates device tokens across gateways, origins, and revocation", async () => {
     const context = await createContext();
@@ -136,21 +149,32 @@ suite.define(() => {
     const rositaSource = await open(ROSITA_GATEWAY_URL, ROSITA_DEVICE_TOKEN, {
       sharedToken: "shared-rosita",
     });
-    expectAuth(rositaSource.connect, { password: "shared-rosita", token: "shared-rosita" });
+    expect(requireConnectAuth(rositaSource.connect)).toEqual({
+      password: "shared-rosita",
+      token: "shared-rosita",
+    });
 
     const wilfredSource = await open(WILFRED_GATEWAY_URL, WILFRED_DEVICE_TOKEN, {
       sharedToken: "shared-wilfred",
     });
-    expectAuth(wilfredSource.connect, { password: "shared-wilfred", token: "shared-wilfred" });
+    expect(requireConnectAuth(wilfredSource.connect)).toEqual({
+      password: "shared-wilfred",
+      token: "shared-wilfred",
+    });
 
     const rositaReconnect = await open(ROSITA_GATEWAY_URL, ROSITA_DEVICE_TOKEN, {
       route: "sessions",
     });
-    expectAuth(rositaReconnect.connect, { deviceToken: ROSITA_DEVICE_TOKEN });
+    expect(requireConnectAuth(rositaReconnect.connect)).toEqual({
+      deviceToken: ROSITA_DEVICE_TOKEN,
+    });
     expect(await rositaReconnect.page.locator("openclaw-login-gate").count()).toBe(0);
+    await captureProof(rositaReconnect.page, "rosita-reconnected.png");
 
     const wilfredReconnect = await open(WILFRED_GATEWAY_URL, WILFRED_DEVICE_TOKEN);
-    expectAuth(wilfredReconnect.connect, { deviceToken: WILFRED_DEVICE_TOKEN });
+    expect(requireConnectAuth(wilfredReconnect.connect)).toEqual({
+      deviceToken: WILFRED_DEVICE_TOKEN,
+    });
     expect(await wilfredReconnect.page.locator("openclaw-login-gate").count()).toBe(0);
 
     const identity = await wilfredSource.page.evaluate(() => {
@@ -177,7 +201,13 @@ suite.define(() => {
               displayName: "This browser",
               roles: ["operator"],
               scopes: OPERATOR_SCOPES,
-              tokens: [{ createdAtMs: Date.now(), role: "operator", scopes: OPERATOR_SCOPES }],
+              tokens: [
+                {
+                  createdAtMs: Date.now(),
+                  role: "operator",
+                  scopes: OPERATOR_SCOPES,
+                },
+              ],
             },
           ],
           pending: [],
@@ -196,7 +226,9 @@ suite.define(() => {
       // Exercise the legacy /nodes alias while asserting the renamed Devices surface.
       route: "nodes",
     });
-    expectAuth(wilfredDevices.connect, { deviceToken: WILFRED_DEVICE_TOKEN });
+    expect(requireConnectAuth(wilfredDevices.connect)).toEqual({
+      deviceToken: WILFRED_DEVICE_TOKEN,
+    });
     await wilfredDevices.gateway.waitForRequest("device.pair.list");
     const deviceEntry = wilfredDevices.page.locator(".device-entry").filter({
       has: wilfredDevices.page.getByText("This browser", { exact: true }),
@@ -206,6 +238,7 @@ suite.define(() => {
     const revokeButton = deviceEntry.getByRole("button", { name: "Revoke", exact: true });
     await revokeButton.waitFor({ state: "visible" });
     await revokeButton.scrollIntoViewIfNeeded();
+    await captureProof(wilfredDevices.page, "wilfred-before-revoke.png");
     await revokeButton.click();
     // Webviews without a native dialog bridge still need in-page confirmation.
     const revokeConfirm = wilfredDevices.page.locator("openclaw-modal-dialog");
@@ -217,7 +250,9 @@ suite.define(() => {
     await expect.poll(() => storedToken(wilfredDevices.page, WILFRED_GATEWAY_URL)).toBeUndefined();
 
     const rositaAfterRevoke = await open(ROSITA_GATEWAY_URL, ROSITA_DEVICE_TOKEN);
-    expectAuth(rositaAfterRevoke.connect, { deviceToken: ROSITA_DEVICE_TOKEN });
+    expect(requireConnectAuth(rositaAfterRevoke.connect)).toEqual({
+      deviceToken: ROSITA_DEVICE_TOKEN,
+    });
 
     const wilfredAfterRevoke = await open(WILFRED_GATEWAY_URL, WILFRED_DEVICE_TOKEN);
     expect(readConnectAuth(wilfredAfterRevoke.connect)).toBeUndefined();
@@ -227,6 +262,7 @@ suite.define(() => {
     const rotateReveal = wilfredDevices.page.locator("openclaw-modal-dialog");
     await rotateReveal.getByText("New operator token").waitFor();
     await rotateReveal.getByText(WILFRED_ROTATED_TOKEN).waitFor();
+    await captureProof(wilfredDevices.page, "wilfred-rotated-token.png");
     await wilfredDevices.page.keyboard.press("Escape");
     await rotateReveal
       .getByText("This dialog stays open until you confirm the token is saved.")
@@ -237,11 +273,23 @@ suite.define(() => {
   });
 
   it.each([
-    ["stored device", ROSITA_GATEWAY_URL, ROSITA_DEVICE_TOKEN, "shared-rosita", false],
-    ["tab-shared", WILFRED_GATEWAY_URL, WILFRED_DEVICE_TOKEN, "shared-wilfred", true],
-  ] as const)(
-    "forgets the %s credential from Gateway settings",
-    async (_mode, gatewayUrl, deviceToken, sharedToken, sameTab) => {
+    {
+      mode: "stored device",
+      gatewayUrl: ROSITA_GATEWAY_URL,
+      deviceToken: ROSITA_DEVICE_TOKEN,
+      sharedToken: "shared-rosita",
+      sameTab: false,
+    },
+    {
+      mode: "tab-shared",
+      gatewayUrl: WILFRED_GATEWAY_URL,
+      deviceToken: WILFRED_DEVICE_TOKEN,
+      sharedToken: "shared-wilfred",
+      sameTab: true,
+    },
+  ])(
+    "forgets the $mode credential from Gateway settings",
+    async ({ gatewayUrl, deviceToken, sharedToken, sameTab }) => {
       const context = await createContext();
       const open = gatewayPages(context);
       let current = await open(gatewayUrl, deviceToken, { sharedToken });
@@ -261,15 +309,28 @@ suite.define(() => {
       );
       expect(identityBefore).not.toBeNull();
       const forgetRow = await openForgetDialog(page);
+      if (!sameTab) {
+        await captureProof(page, "gateway-settings-browser-sign-in.png");
+      }
       await forgetRow.click();
       const confirmButton = page.getByRole("button", { name: "Forget", exact: true });
       await confirmButton.waitFor({ state: "visible" });
+      if (!sameTab) {
+        await page
+          .locator("openclaw-modal-dialog")
+          .evaluate((dialog) =>
+            Promise.all(dialog.getAnimations({ subtree: true }).map((entry) => entry.finished)),
+          );
+        await captureProof(page, "forget-device-confirm-dialog.png");
+      }
       await confirmButton.click();
       await expectForgotten(gateway);
       expect(await page.evaluate(() => localStorage.getItem("openclaw-device-identity-v1"))).toBe(
         identityBefore,
       );
-      if (sameTab) {
+      if (!sameTab) {
+        await captureProof(page, "after-forget-reconnect.png");
+      } else {
         expect(
           await page.evaluate(() => {
             for (let i = 0; i < sessionStorage.length; i += 1) {

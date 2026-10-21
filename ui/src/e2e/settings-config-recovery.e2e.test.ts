@@ -2,7 +2,7 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { objectSchema, pageRunner } from "./config-composer-fixtures.test-support.ts";
-import { createControlUiE2eSuite, e2eButton } from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Settings config publication recovery" });
 const withPage = pageRunner(suite, { viewport: { width: 1280, height: 900 } });
@@ -74,7 +74,9 @@ suite.define(() => {
         await expect
           .poll(() => indicator.textContent())
           .toContain(restored ? "Save failed" : "Your draft is kept");
-        expect(await e2eButton(indicator, "Reload").count()).toBe(0);
+        expect(await indicator.getByRole("button", { name: "Reload", exact: true }).count()).toBe(
+          0,
+        );
         if (!restored) {
           const secondPage = await context.newPage();
           const secondGateway = await installMockGateway(secondPage, {

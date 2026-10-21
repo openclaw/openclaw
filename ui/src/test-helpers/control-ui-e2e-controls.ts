@@ -12,9 +12,11 @@ import { controlUiE2eWaitTimeoutMs } from "./control-ui-e2e-readiness.ts";
 
 let mockRequestBindingSequence = 0;
 
-type GatewayMethod = {
-  [K in keyof ControlUiMockGateway]: ControlUiMockGateway[K] extends (...args: never[]) => unknown
-    ? K
+type GatewayMutation = {
+  [K in keyof ControlUiMockGateway]: ControlUiMockGateway[K] extends (...args: never[]) => infer R
+    ? R extends void
+      ? K
+      : never
     : never;
 }[keyof ControlUiMockGateway];
 
@@ -46,24 +48,21 @@ export function createMockGatewayControls(
   diagnosticEvents: ControlUiE2eDiagnosticEvent[],
   methodResponses: Record<string, unknown>,
 ): MockGatewayControls {
-  const invoke = <K extends GatewayMethod>(
+  const mutate = async <K extends GatewayMutation>(
     method: K,
     ...args: Parameters<ControlUiMockGateway[K]>
-  ): Promise<ReturnType<ControlUiMockGateway[K]>> => {
-    const operation: { method: GatewayMethod; args: unknown[] } = { method, args };
-    return page.evaluate<ReturnType<ControlUiMockGateway[K]>, typeof operation>(
-      ({ method: targetMethod, args: values }) => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        return Reflect.apply(gateway[targetMethod], gateway, values);
-      },
-      operation,
-    );
+  ): Promise<void> => {
+    const operation: { method: GatewayMutation; args: unknown[] } = { method, args };
+    await page.evaluate(({ method: targetMethod, args: values }) => {
+      const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("Mock Gateway is not installed");
+      }
+      Reflect.apply(gateway[targetMethod], gateway, values);
+    }, operation);
   };
   const emitGatewayEvent: MockGatewayControls["emitGatewayEvent"] = (...args) =>
-    invoke("emit", ...args);
+    mutate("emit", ...args);
 
   const getRequests = async (
     method?: string,
@@ -79,9 +78,20 @@ export function createMockGatewayControls(
     );
 
   return {
-    closeLatest: (...args) => invoke("closeLatest", ...args),
-    deliverLatest: (...args) => invoke("deliverLatest", ...args),
-    deferNext: (...args) => invoke("deferNext", ...args),
+    closeLatest: (...args) => mutate("closeLatest", ...args),
+    deliverLatest: (...args) => mutate("deliverLatest", ...args),
+    async deferNext(method, match, options) {
+      return await page.evaluate(
+        ({ targetMethod, requestMatch, requestOptions }) => {
+          const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+          if (!gateway) {
+            throw new Error("Mock Gateway is not installed");
+          }
+          return gateway.deferNext(targetMethod, requestMatch, requestOptions);
+        },
+        { targetMethod: method, requestMatch: match, requestOptions: options },
+      );
+    },
     async emitChatFinal(params) {
       await emitGatewayEvent("chat", {
         message: {
@@ -96,7 +106,15 @@ export function createMockGatewayControls(
     },
     emitGatewayEvent,
     getRequests,
-    getSessionRow: (...args) => invoke("getSessionRow", ...args),
+    async getSessionRow(key) {
+      return page.evaluate((sessionKey) => {
+        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        return gateway.getSessionRow(sessionKey);
+      }, key);
+    },
     getSocketCount: () =>
       page.evaluate(
         () => (window as MockGatewayWindow).openclawControlUiE2eGateway?.socketCount() ?? 0,
@@ -105,20 +123,20 @@ export function createMockGatewayControls(
       page.evaluate(
         () => (window as MockGatewayWindow).openclawControlUiE2eGateway?.socketUrls() ?? [],
       ),
-    rejectDeferred: (...args) => invoke("rejectDeferred", ...args),
-    resolveDeferred: (...args) => invoke("resolveDeferred", ...args),
-    suspendLatest: () => invoke("suspendLatest"),
-    setOnline: (...args) => invoke("setOnline", ...args),
-    setGatewayBootId: (...args) => invoke("setGatewayBootId", ...args),
-    setServerBuildId: (...args) => invoke("setServerBuildId", ...args),
-    setOperatorScopes: (...args) => invoke("setOperatorScopes", ...args),
-    setHistoryMessages: (...args) => invoke("setHistoryMessages", ...args),
+    rejectDeferred: (...args) => mutate("rejectDeferred", ...args),
+    resolveDeferred: (...args) => mutate("resolveDeferred", ...args),
+    suspendLatest: () => mutate("suspendLatest"),
+    setOnline: (...args) => mutate("setOnline", ...args),
+    setGatewayBootId: (...args) => mutate("setGatewayBootId", ...args),
+    setServerBuildId: (...args) => mutate("setServerBuildId", ...args),
+    setOperatorScopes: (...args) => mutate("setOperatorScopes", ...args),
+    setHistoryMessages: (...args) => mutate("setHistoryMessages", ...args),
     async setMethodResponse(method, payload) {
       methodResponses[method] = payload;
-      await invoke("setMethodResponse", method, payload);
+      await mutate("setMethodResponse", method, payload);
     },
-    setSessionsListResponse: (...args) => invoke("setSessionsListResponse", ...args),
-    setSessionSharingPolicy: (...args) => invoke("setSessionSharingPolicy", ...args),
+    setSessionsListResponse: (...args) => mutate("setSessionsListResponse", ...args),
+    setSessionSharingPolicy: (...args) => mutate("setSessionSharingPolicy", ...args),
     async waitForRequest(method, options) {
       const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
       const { after, match, exactParams } = options ?? {};

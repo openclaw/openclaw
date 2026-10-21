@@ -1,23 +1,25 @@
 import { expect, it } from "vitest";
 import type { UpdateScheduleState } from "../api/types.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
-import {
-  createControlUiE2eContextOptions as updateE2ePageOptions,
-  createUpdateE2eSuite,
-  e2eButton as button,
-} from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createUpdateE2eSuite("Control UI Git update revisions");
+const suite = createControlUiE2eSuite({
+  name: "Control UI Git update revisions",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
 suite.define(() => {
   it.each([1280, 420])(
     "shows the Git revision range before updating at width %s",
     async (width) => {
       await suite.withPage(
-        updateE2ePageOptions({
+        {
           colorScheme: "dark",
+          locale: "en-US",
+          serviceWorkers: "block",
           viewport: { width, height: 900 },
-        }),
+        },
         async ({ page }) => {
           const updateAvailable = {
             channel: "dev",
@@ -67,7 +69,7 @@ suite.define(() => {
           const statusLink = page.locator(".updates-status-control .update-git-revisions a");
           const compareUrl = `https://github.com/example/openclaw/compare/${refreshedGit.currentSha}...${refreshedGit.upstreamSha}`;
           await expect.poll(() => statusLink.getAttribute("href")).toBe(compareUrl);
-          await button(page, "Update now").click();
+          await page.getByRole("button", { name: "Update now", exact: true }).click();
           await page.getByRole("dialog", { name: "Update Gateway", exact: true }).waitFor();
           const modal = page.locator("openclaw-modal-dialog");
           const summary = modal.locator(".exec-approval-command > div").first();
@@ -88,7 +90,7 @@ suite.define(() => {
           expect(await link.getAttribute("href")).toBe(compareUrl);
           expect(await link.getAttribute("target")).toBe("_blank");
           expect(await gateway.getRequests("update.run")).toHaveLength(0);
-          await button(page, "Cancel").click();
+          await page.getByRole("button", { name: "Cancel", exact: true }).click();
           await modal.waitFor({ state: "detached" });
           expect(await page.locator(".settings-status").textContent()).toContain(
             "5 commits behind",

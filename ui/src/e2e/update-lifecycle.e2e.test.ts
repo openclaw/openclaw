@@ -2,14 +2,13 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
-import {
-  createControlUiE2eContextOptions as updateE2ePageOptions,
-  createUpdateE2eSuite,
-  e2eButton as button,
-  e2eText as text,
-} from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createUpdateE2eSuite("Control UI update lifecycle E2E");
+const suite = createControlUiE2eSuite({
+  name: "Control UI update lifecycle E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
 const DEV_UPDATE_AVAILABLE = {
   channel: "dev",
@@ -47,7 +46,7 @@ function createDevRun() {
 async function openUpdateConfirmation(page: Page): Promise<void> {
   await page.locator(".sidebar-identity-card").click();
   await page.locator('.sidebar-identity-menu [data-value="command:updates"]').click();
-  await button(page, "Update now").click();
+  await page.getByRole("button", { name: "Update now", exact: true }).click();
 }
 
 async function withDevUpdate(
@@ -59,10 +58,12 @@ async function withDevUpdate(
   ) => Promise<void>,
 ) {
   await suite.withPage(
-    updateE2ePageOptions({
+    {
       colorScheme,
+      locale: "en-US",
+      serviceWorkers: "block",
       viewport: { height: 720, width: 1280 },
-    }),
+    },
     async ({ page }) => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(String(error)));
@@ -100,17 +101,17 @@ suite.define(() => {
       await withDevUpdate(colorScheme, async (page, gateway, initialRun) => {
         let run = initialRun;
         const dialog = page.locator("openclaw-modal-dialog");
-        const confirm = button(dialog, "Update and restart");
+        const confirm = dialog.getByRole("button", { name: "Update and restart", exact: true });
         await confirm.waitFor();
         await confirm.click();
 
-        const updating = button(dialog, "Updating…");
+        const updating = dialog.getByRole("button", { name: "Updating…", exact: true });
         await updating.waitFor();
         expect(await updating.isEnabled()).toBe(false);
-        await text(
-          dialog.locator(".update-run-view__details"),
-          "Installing the update on the Gateway.",
-        ).waitFor();
+        await page
+          .locator("openclaw-modal-dialog .update-run-view__details")
+          .getByText("Installing the update on the Gateway.", { exact: true })
+          .waitFor();
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
 
         run = {
@@ -129,9 +130,11 @@ suite.define(() => {
           status: run.status,
           updatedAtMs: run.updatedAtMs,
         });
-        await text(dialog, "⬆️ OpenClaw update in progress: restarting.").waitFor();
+        await dialog
+          .getByText("⬆️ OpenClaw update in progress: restarting.", { exact: true })
+          .waitFor();
         await gateway.setOnline(false);
-        await text(dialog, "Gateway restarting…").waitFor();
+        await dialog.getByText("Gateway restarting…", { exact: true }).waitFor();
         expect(await dialog.count()).toBe(1);
 
         // Git installs can keep their package version while changing revision.
@@ -157,11 +160,14 @@ suite.define(() => {
         expect((await gateway.waitForRequest("update.runs.get", { after: reads })).params).toEqual({
           runId: run.runId,
         });
-        await text(dialog, "✅ OpenClaw updated to 2026.8.1 (9f3c21a0) (from 2026.8.1 (11111111)).")
+        await dialog
+          .getByText("✅ OpenClaw updated to 2026.8.1 (9f3c21a0) (from 2026.8.1 (11111111)).", {
+            exact: true,
+          })
           .first()
           .waitFor();
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
-        await button(dialog, "Close").click();
+        await dialog.getByRole("button", { name: "Close", exact: true }).click();
         await dialog.waitFor({ state: "detached" });
       });
     },
@@ -173,8 +179,8 @@ suite.define(() => {
       await withDevUpdate(colorScheme, async (page, gateway, initialRun) => {
         let run = initialRun;
         const dialog = page.locator("openclaw-modal-dialog");
-        await button(dialog, "Update and restart").click();
-        await button(dialog, "Updating…").waitFor();
+        await dialog.getByRole("button", { name: "Update and restart", exact: true }).click();
+        await dialog.getByRole("button", { name: "Updating…", exact: true }).waitFor();
         await gateway.waitForRequest("update.runs.get");
         await gateway.setOnline(false);
         run = {
@@ -198,7 +204,10 @@ suite.define(() => {
         await gateway.setGatewayBootId("failed-dev-update-restarted");
         await gateway.setOnline(true);
 
-        await text(dialog, "⚠️ OpenClaw update failed: deps-install-failed.").first().waitFor();
+        await dialog
+          .getByText("⚠️ OpenClaw update failed: deps-install-failed.", { exact: true })
+          .first()
+          .waitFor();
         const failureText = await dialog.textContent();
         expect(failureText).toContain("Failed: install — ENOSPC: no space left on device, write");
         expect(failureText).toContain(

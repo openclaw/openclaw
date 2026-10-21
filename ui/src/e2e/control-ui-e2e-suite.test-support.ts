@@ -246,31 +246,12 @@ async function settleControlUiCleanup(promises: Promise<unknown>[]): Promise<voi
   );
 }
 
-export function createControlUiE2eContextOptions(
-  overrides: BrowserContextOptions = {},
-): BrowserContextOptions {
+export function createControlUiE2eContextOptions(): BrowserContextOptions {
   return {
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 900, width: 1280 },
-    ...overrides,
   };
-}
-
-export function e2eButton(root: Page | Locator, name: string) {
-  return root.getByRole("button", { name, exact: true });
-}
-
-export function e2eText(root: Page | Locator, value: string, exact = true) {
-  return root.getByText(value, { exact });
-}
-
-export function createUpdateE2eSuite(name: string) {
-  return createControlUiE2eSuite({
-    name,
-    startServerBeforeBrowser: true,
-    unavailableMessage: (path) => `Playwright Chromium is unavailable at ${path}`,
-  });
 }
 
 export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): ControlUiE2eSuite {

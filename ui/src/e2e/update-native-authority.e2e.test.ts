@@ -2,13 +2,13 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
-import {
-  createControlUiE2eContextOptions as updateE2ePageOptions,
-  createUpdateE2eSuite,
-  e2eButton as button,
-} from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createUpdateE2eSuite("Inbox native update authority E2E");
+const suite = createControlUiE2eSuite({
+  name: "Inbox native update authority E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 const updateAvailable = {
   channel: "stable" as const,
   currentVersion: "1.0.0",
@@ -20,16 +20,19 @@ const withPage = (
   run: (page: Page, gateway: MockGatewayControls) => Promise<void>,
   scenario: Parameters<typeof installMockGateway>[1] = {},
 ) =>
-  suite.withPage(updateE2ePageOptions(), async ({ page }) => {
-    const gateway = await installMockGateway(page, {
-      updateAvailable,
-      ...scenario,
-      methodResponses: { "update.status": { updateAvailable }, ...scenario.methodResponses },
-    });
-    expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
-    await gateway.waitForRequest("chat.startup");
-    await run(page, gateway);
-  });
+  suite.withPage(
+    { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+    async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        updateAvailable,
+        ...scenario,
+        methodResponses: { "update.status": { updateAvailable }, ...scenario.methodResponses },
+      });
+      expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
+      await gateway.waitForRequest("chat.startup");
+      await run(page, gateway);
+    },
+  );
 const nativePosts = (page: Page) => page.locator("html").getAttribute("data-native-update-posts");
 const updateCard = (page: Page) =>
   page.locator('openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]');
@@ -137,10 +140,10 @@ suite.define(() => {
               await card.locator("summary").click();
             }
             await action.click();
-            await button(
-              page.locator("openclaw-modal-dialog"),
-              "Update Mac app and restart",
-            ).click();
+            await page
+              .locator("openclaw-modal-dialog")
+              .getByRole("button", { name: "Update Mac app and restart", exact: true })
+              .click();
             await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
           };
           await waitForProfile(originalProfile);
