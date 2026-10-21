@@ -12,6 +12,7 @@ import {
 } from "../plugins/plugin-metadata.test-support.js";
 import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import { modelDefinition as configuredModel } from "./model-auth.fixtures.test-support.js";
+import { row } from "./model-catalog-fixtures.test-support.js";
 import {
   buildPreparedModelCatalogSnapshot,
   type BuildPreparedModelCatalogParams,
@@ -60,14 +61,15 @@ function providerConfig(provider: string, entry: ModelProviderConfig): OpenClawC
   return { plugins: { enabled: false }, models: { providers: { [provider]: entry } } };
 }
 
+const fableWindows = () => [
+  { id: "200k", label: "200K", contextWindow: 200_000 },
+  { id: "1m", label: "1M", contextWindow: 1_000_000 },
+];
 function fableManifest(extra: Partial<ModelCatalogModel> = {}) {
   const model: ModelCatalogModel = {
     id: "claude-fable-5",
     contextWindow: 1_000_000,
-    contextWindows: [
-      { id: "200k", label: "200K", contextWindow: 200_000 },
-      { id: "1m", label: "1M", contextWindow: 1_000_000 },
-    ],
+    contextWindows: fableWindows(),
     contextWindowDefault: "1m",
     ...extra,
   };
@@ -113,7 +115,7 @@ beforeEach(() => {
 
 it("keeps replace publication closed to a warm refreshable inventory", async () => {
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
-    { provider: "manifest-provider", id: "augmented-only", name: "Augmented" },
+    row("manifest-provider", "augmented-only", { name: "Augmented" }),
   ]);
   const config: OpenClawConfig = { models: { catalogRefresh: { enabled: false } } };
   const manifest = providerManifestSnapshot("manifest-provider", "refreshable", ["manifest-only"]);
@@ -140,7 +142,7 @@ it("keeps replace publication closed to a warm refreshable inventory", async () 
 it("preserves ready provider membership without replenishing it from metadata", async () => {
   const entries: ModelCatalogEntry[] = [];
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([
-    { provider: "demo", id: "augmentation", name: "Augmentation" },
+    row("demo", "augmentation", { name: "Augmentation" }),
   ]);
   const snapshot = await build({
     metadataSnapshot: providerManifestSnapshot("demo", "refreshable", ["manifest-only"]),
@@ -163,7 +165,7 @@ it.each(["unowned", "disabled"] as const)(
     const snapshot = await build({
       config: { plugins: { entries: { "alias-owner": { enabled: kind !== "disabled" } } } },
       metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [plugin] }),
-      entries: [{ provider: "source", id: "model", name: "Model" }],
+      entries: [row("source", "model", { name: "Model" })],
     });
     expect(snapshot.entries).toMatchObject([{ provider: "source", id: "model" }]);
   },
@@ -178,10 +180,7 @@ it("carries manifest capability metadata into the prepared catalog", async () =>
 
   const entries = loadManifestModelCatalog({ config: {}, metadataSnapshot: snapshot });
   expect(entries.find((entry) => entry.id === "claude-fable-5")).toMatchObject({
-    contextWindows: [
-      { id: "200k", label: "200K", contextWindow: 200_000 },
-      { id: "1m", label: "1M", contextWindow: 1_000_000 },
-    ],
+    contextWindows: fableWindows(),
     contextWindowDefault: "1m",
     thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
     input: ["text", "image"],
@@ -211,10 +210,7 @@ it.each([false, true])(
       entries: [
         {
           ...fableEntry,
-          contextWindows: [
-            { id: "200k", label: "200K", contextWindow: 200_000 },
-            { id: "1m", label: "1M", contextWindow: 1_000_000 },
-          ],
+          contextWindows: fableWindows(),
           contextWindowDefault: "1m",
         },
       ],
@@ -238,8 +234,8 @@ it.each([false, true])(
 it("canonicalizes manifest-owned provider aliases in registry rows", async () => {
   const snapshot = await build({
     entries: [
-      { id: "kimi-k3", name: "Kimi K3", provider: "moonshotai" },
-      { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", provider: "moonshot-ai" },
+      row("moonshotai", "kimi-k3", { name: "Kimi K3" }),
+      row("moonshot-ai", "kimi-k2.7-code", { name: "Kimi K2.7 Code" }),
     ],
     metadataSnapshot: providerManifestSnapshot(
       "moonshot",
@@ -257,12 +253,9 @@ it("canonicalizes manifest-owned provider aliases in registry rows", async () =>
 
 it("uses an explicitly ready live catalog order across entries and route variants", async () => {
   const manifestSnapshot = providerManifestSnapshot("demo", "runtime", ["first", "second"]);
-  const entries: ModelCatalogEntry[] = ["second", "first", "new"].map((id) => ({
-    provider: "demo",
-    id,
-    name: id,
-    api: "openai-responses",
-  }));
+  const entries = ["second", "first", "new"].map((id) =>
+    row("demo", id, { api: "openai-responses" }),
+  );
   const modelOrder = ["second", "new", "first", "absent"];
   const snapshot = await build({
     entries,
@@ -281,8 +274,8 @@ it("uses an explicitly ready live catalog order across entries and route variant
 
 it("keeps manifest rank for configured runtime models absent from the registry", async () => {
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
-    { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
-    { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+    row("openai", "gpt-5.4", { name: "GPT-5.4" }),
+    row("openai", "gpt-5.6-sol", { name: "GPT-5.6 Sol" }),
   ]);
 
   const snapshot = await build({
@@ -291,7 +284,7 @@ it("keeps manifest rank for configured runtime models absent from the registry",
       baseUrl: "https://api.openai.com/v1",
       models: [configuredModel("gpt-5.6-sol")],
     }),
-    entries: [{ id: "gpt-5.4", name: "GPT-5.4", provider: "openai" }],
+    entries: [row("openai", "gpt-5.4", { name: "GPT-5.4" })],
     metadataSnapshot: providerManifestSnapshot("openai", "runtime", ["gpt-5.6-sol", "gpt-5.4"]),
     readOnly: false,
   });
@@ -316,12 +309,9 @@ it("overlays exact configured metadata when discovery and config have opposite m
       api: "openai-completions",
       models: models.toReversed(),
     }),
-    entries: models.map(({ id }) => ({
-      id,
-      name: `Discovered ${id}`,
-      provider: "custom",
-      input: ["text"],
-    })),
+    entries: models.map(({ id }) =>
+      row("custom", id, { name: `Discovered ${id}`, input: ["text"] }),
+    ),
   });
 
   expect(snapshot.entries).toHaveLength(models.length);

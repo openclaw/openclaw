@@ -264,6 +264,11 @@ function processActions(scopeKey: string, sessionId: string) {
     extra: Omit<Params, "action"> = {},
     signal?: AbortSignal,
   ) => tool.execute(`process-${action}`, { action, sessionId, ...extra }, signal);
+  const checkRunning = async (action: Params["action"], extra: Omit<Params, "action"> = {}) => {
+    const result = await call(action, extra);
+    expect(result.details).toMatchObject({ status: "running", sessionId });
+    return textContent(result);
+  };
   const waitFor = (action: "poll" | "log", expected: string) =>
     expect
       .poll(
@@ -276,7 +281,7 @@ function processActions(scopeKey: string, sessionId: string) {
         { timeout: 5_000, interval: 25 },
       )
       .toContain(expected);
-  return { tool, call, waitFor };
+  return { tool, call, waitFor, checkRunning };
 }
 
 function backgroundSessionId(details: ExecToolDetails): string {
@@ -382,14 +387,11 @@ test.skipIf(process.platform === "win32").for([false, true])(
       },
       scopeKey,
     });
-    const { tool: processTool } = processActions(scopeKey, run.session.id);
+    const { tool: processTool, call } = processActions(scopeKey, run.session.id);
     try {
       await withinTest(ready.promise, signal);
       markBackgrounded(run.session);
-      const requested = await processTool.execute("requested-stop", {
-        action: "kill",
-        sessionId: run.session.id,
-      });
+      const requested = await call("kill");
       await withinTest(finalizerEntered.promise, signal);
       expect(requested.details).toMatchObject({
         status: "completed",
@@ -399,10 +401,7 @@ test.skipIf(process.platform === "win32").for([false, true])(
         followUp: { action: "poll", sessionId: run.session.id },
       });
       expect(Value.Check(processTool.outputSchema!, requested.details)).toBe(true);
-      const pending = await processTool.execute("stop-pending-cleanup", {
-        action: "poll",
-        sessionId: run.session.id,
-      });
+      const pending = await call("poll");
       expect(pending.details).toMatchObject({ status: "running", sessionId: run.session.id });
       expect(textContent(pending)).toContain("STOP_PROOF_READY");
       releaseFinalizer.resolve();
@@ -413,31 +412,21 @@ test.skipIf(process.platform === "win32").for([false, true])(
         expect(completions.has(scopeKey)).toBe(false);
         expect(model).not.toHaveBeenCalled();
       }
+      const terminal = {
+        status: finalizerFails ? "failed" : "completed",
+        exitReason: "manual-cancel",
+        exitSignal: "SIGTERM",
+        ...(finalizerFails ? { finalizationFailed: true } : {}),
+      };
       const listed = await processTool.execute("requested-stop-list", { action: "list" });
       expect.soft(listed.details).toMatchObject({
-        sessions: [
-          {
-            sessionId: run.session.id,
-            status: finalizerFails ? "failed" : "completed",
-            exitReason: "manual-cancel",
-            exitSignal: "SIGTERM",
-            ...(finalizerFails ? { finalizationFailed: true } : {}),
-          },
-        ],
+        sessions: [{ sessionId: run.session.id, ...terminal }],
       });
       expect(Value.Check(processTool.outputSchema!, listed.details)).toBe(true);
       expect.soft(textContent(listed).includes("[stopped by request]")).toBe(!finalizerFails);
       for (const action of ["kill", "poll", "log"] as const) {
-        const observed = await processTool.execute(`requested-stop-${action}`, {
-          action,
-          sessionId: run.session.id,
-        });
-        expect(observed.details).toMatchObject({
-          status: finalizerFails ? "failed" : "completed",
-          exitReason: "manual-cancel",
-          exitSignal: "SIGTERM",
-          ...(finalizerFails ? { finalizationFailed: true } : {}),
-        });
+        const observed = await call(action);
+        expect(observed.details).toMatchObject(terminal);
         expect(isToolResultError(observed)).toBe(finalizerFails);
         expect(Value.Check(processTool.outputSchema!, observed.details)).toBe(true);
         if (action === "kill") {
@@ -681,7 +670,7 @@ test.skipIf(process.platform === "win32")(
     try {
       const started = await startBackground(scopeKey, source, { notifyOnExit: false, pty: true });
       sessionId = started.sessionId;
-      const { tool: processTool, call, waitFor } = started;
+      const { tool: processTool, call, waitFor, checkRunning } = started;
 
       const listed = await call("list");
       expect(listed.details).toMatchObject({
@@ -704,30 +693,14 @@ test.skipIf(process.platform === "win32")(
         aggregated: expect.stringContaining("READY"),
       });
 
-      const write = await call("write", { data: "alpha" });
-      expect(write.details).toMatchObject({ status: "running", sessionId });
-      expect(textContent(write)).toContain("Wrote 5 bytes");
-
-      const beforeSubmit = await call("log");
-      expect(textContent(beforeSubmit)).not.toContain("LINE:alpha");
-
-      const submit = await call("submit");
-      expect(submit.details).toMatchObject({ status: "running", sessionId });
-      expect(textContent(submit)).toContain("Submitted");
-
+      expect(await checkRunning("write", { data: "alpha" })).toContain("Wrote 5 bytes");
+      expect(textContent(await call("log"))).not.toContain("LINE:alpha");
+      expect(await checkRunning("submit")).toContain("Submitted");
       await waitFor("poll", "LINE:alpha");
-
-      const literal = await call("send-keys", { literal: "beta" });
-      expect(literal.details).toMatchObject({ status: "running", sessionId });
-      expect(textContent(literal)).toContain("Sent 4 bytes");
-
-      const enter = await call("send-keys", { keys: ["Enter"] });
-      expect(enter.details).toMatchObject({ status: "running", sessionId });
-
+      expect(await checkRunning("send-keys", { literal: "beta" })).toContain("Sent 4 bytes");
+      await checkRunning("send-keys", { keys: ["Enter"] });
       await waitFor("poll", "LINE:beta");
-
-      const interrupt = await call("send-keys", { keys: ["C-c"] });
-      expect(interrupt.details).toMatchObject({ status: "running", sessionId });
+      await checkRunning("send-keys", { keys: ["C-c"] });
       await waitFor("log", "CONTROL:CTRL-C:2");
 
       const killed = await call("kill");

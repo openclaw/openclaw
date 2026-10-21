@@ -3,7 +3,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createOAuthRefreshCredential,
+} from "./auth-profiles/credential-fixtures.test-support.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import {
   authStore,
@@ -14,16 +17,11 @@ import {
   mockRouteResolverFactory,
   subscriptionRoute,
 } from "./model-auth-availability.test-support.js";
+import { providerConfig } from "./model-auth.fixtures.test-support.js";
 import type { createOpenAIModelRoutesResolver } from "./openai-model-routes.js";
 
 function openAiOAuthProfile() {
-  return {
-    type: "oauth" as const,
-    provider: "openai",
-    access: "oauth-access",
-    refresh: "oauth-refresh",
-    expires: Date.now() + 60_000,
-  };
+  return createOAuthRefreshCredential({ access: "oauth-access", refresh: "oauth-refresh" });
 }
 
 describe("createModelAuthAvailabilityResolver", () => {
@@ -96,17 +94,10 @@ describe("createModelAuthAvailabilityResolver", () => {
 
   it("keeps configured local providers independent from native-auth probe completion", () => {
     const resolver = createModelAuthAvailabilityResolver({
-      cfg: {
-        models: {
-          providers: {
-            "local-openai": {
-              api: "openai-completions",
-              baseUrl: "http://127.0.0.1:8080/v1",
-              models: [],
-            },
-          },
-        },
-      },
+      cfg: providerConfig("local-openai", {
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:8080/v1",
+      }),
       authStore: authStore(),
       env: {},
       preparedSyntheticAuthComplete: true,
@@ -175,18 +166,11 @@ describe("createModelAuthAvailabilityResolver", () => {
       ).not.toBe(true);
       expect(
         evaluate({
-          cfg: {
-            models: {
-              providers: {
-                openai: {
-                  auth: "api-key",
-                  apiKey: "configured-platform-key",
-                  baseUrl: "https://api.openai.com/v1",
-                  models: [],
-                },
-              },
-            },
-          },
+          cfg: providerConfig("openai", {
+            auth: "api-key",
+            apiKey: "configured-platform-key",
+            baseUrl: "https://api.openai.com/v1",
+          }),
           store,
           ref: { modelId },
           preparedRuntimeAuthMaterializations: [materialization],
@@ -346,9 +330,7 @@ describe("createModelAuthAvailabilityResolver", () => {
     "does not pair a $profile.type profile with configured $auth auth",
     ({ auth, profile, route }) => {
       const result = evaluate({
-        cfg: {
-          models: { providers: { openai: { auth, baseUrl: "", models: [] } } },
-        } as OpenClawConfig,
+        cfg: providerConfig("openai", { auth }),
         store: authStore({ "openai:wrong-route": profile }),
       });
 
@@ -373,18 +355,10 @@ describe("createModelAuthAvailabilityResolver", () => {
               "openai:bound": { provider, mode },
             },
           },
-          models: {
-            providers: {
-              openai: { apiKey: "openai:bound", baseUrl: "", models: [] },
-            },
-          },
+          ...providerConfig("openai", { apiKey: "openai:bound" }),
         } as OpenClawConfig,
         store: authStore({
-          "openai:bound": {
-            type: "api_key",
-            provider: "openai",
-            key: "bound-platform-key",
-          },
+          "openai:bound": createApiKeyCredential("openai", "bound-platform-key"),
         }),
       }),
     ).toMatchObject({
@@ -431,7 +405,7 @@ describe("createModelAuthAvailabilityResolver", () => {
   it("treats automatic preferences and user pins as distinct source-order facts", () => {
     const store = authStore(
       {
-        "openai:platform": { type: "api_key", provider: "openai", key: "platform-key" },
+        "openai:platform": createApiKeyCredential("openai", "platform-key"),
         "openai:chatgpt": openAiOAuthProfile(),
       },
       { openai: ["openai:platform", "openai:chatgpt"] },
@@ -458,13 +432,7 @@ describe("createModelAuthAvailabilityResolver", () => {
   it("keeps ambient environment auth ahead of non-explicit provider material", () => {
     expect(
       evaluate({
-        cfg: {
-          models: {
-            providers: {
-              openai: { apiKey: "configured-platform-key", baseUrl: "", models: [] },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: providerConfig("openai", { apiKey: "configured-platform-key" }),
         env: { OPENAI_API_KEY: "environment-key" },
       }),
     ).toMatchObject({
@@ -484,9 +452,7 @@ describe("createModelAuthAvailabilityResolver", () => {
     },
     {
       label: "OAuth environment after unavailable Platform auth",
-      cfg: {
-        models: { providers: { openai: { auth: "oauth", baseUrl: "", models: [] } } },
-      } as OpenClawConfig,
+      cfg: providerConfig("openai", { auth: "oauth" }),
       env: { OPENAI_API_KEY: "environment-token" },
       profileId: "openai:platform-missing",
       profile: { type: "api_key" as const, provider: "openai", key: "" },
@@ -658,18 +624,11 @@ describe("createModelAuthAvailabilityResolver", () => {
   it.each([
     {
       label: "explicit",
-      cfg: {
-        models: {
-          providers: {
-            "amazon-bedrock": {
-              api: "bedrock-converse-stream",
-              auth: "aws-sdk",
-              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: providerConfig("amazon-bedrock", {
+        api: "bedrock-converse-stream",
+        auth: "aws-sdk",
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      }),
     },
     { label: "implicit", cfg: {} },
   ])("keeps an $label Bedrock AWS SDK route ready", ({ cfg }) => {
@@ -710,16 +669,11 @@ describe("createModelAuthAvailabilityResolver", () => {
     ({ apiKey, secrets }) => {
       const result = createModelAuthAvailabilityResolver({
         cfg: {
-          models: {
-            providers: {
-              anthropic: {
-                api: "anthropic-messages",
-                apiKey,
-                baseUrl: "https://api.anthropic.com",
-                models: [],
-              },
-            },
-          },
+          ...providerConfig("anthropic", {
+            api: "anthropic-messages",
+            apiKey,
+            baseUrl: "https://api.anthropic.com",
+          }),
           secrets,
         },
         authStore: authStore(),
@@ -744,7 +698,7 @@ describe("createModelAuthAvailabilityResolver", () => {
     const resolver = createModelAuthAvailabilityResolver({
       cfg: { auth: { order: { openai: ["openai:chatgpt", "openai:platform"] } } },
       authStore: authStore({
-        "openai:platform": { type: "api_key", provider: "openai", key: "platform-key" },
+        "openai:platform": createApiKeyCredential("openai", "platform-key"),
         "openai:chatgpt": openAiOAuthProfile(),
       }),
       env: {},
