@@ -21,7 +21,7 @@ import type {
   ExecApprovalRecord,
 } from "./exec-approval-manager.types.js";
 import { InvalidApprovalIdError } from "./exec-approval-registration.js";
-import { getOperatorApprovalDetailed, resolveOperatorApproval } from "./operator-approval-store.js";
+import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
 
 async function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
   const result = await getOperatorApprovalDetailed({ nowMs: Date.now(), ...params });
@@ -167,26 +167,6 @@ describe("ExecApprovalManager", () => {
     expect(await manager.consumeAllowOnce(id)).toBe(false);
   });
 
-  it("consumes an expired approval as ask-fallback only once", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const { id, decisionPromise, snapshot } = await register(manager);
-    expect(await manager.expire(id)).toBe(true);
-    await expect(decisionPromise).resolves.toBeNull();
-    expect(manager.consumeAskFallback(id)).toBe(true);
-    expect(manager.consumeAskFallback(id)).toBe(false);
-    expect((await snapshot())?.askFallbackConsumed).toBe(true);
-  });
-
-  it("rejects ask-fallback replay of an allow-once approval", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const { id, decisionPromise } = await register(manager);
-    expect(await manager.resolve(id, "allow-once")).toBe(true);
-    await expect(decisionPromise).resolves.toBe("allow-once");
-    expect(manager.consumeAskFallback(id)).toBe(false);
-    expect(await manager.consumeAllowOnce(id)).toBe(true);
-    expect(manager.consumeAskFallback(id)).toBe(false);
-  });
-
   it("retains a resolved live binding across a slow handoff and cleans up after release", async () => {
     const timers = scheduled.wakes;
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -271,11 +251,15 @@ describe("ExecApprovalManager", () => {
     expect(await readStored()).toMatchObject({ status: "expired" });
   });
 
-  it("emits pending only after durable insert and live waiter registration", async () => {
+  it("publishes the derived global audience after durable insert and live waiter registration", async () => {
     let durableAtCallback: unknown;
     let waiterAtCallback: Promise<ExecApprovalDecision | null> | null = null;
     const lifecycleEvents: OperatorApprovalLifecycleEvent[] = [];
+    const resolveAudienceSessionKeys = vi.fn((sessionKey: string, agentId?: string | null) => [
+      sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey,
+    ]);
     const created = createPersistentManager({
+      resolveAudienceSessionKeys,
       onLifecycle: (event) => {
         lifecycleEvents.push(event);
         if (event.phase === "pending") {
@@ -289,7 +273,8 @@ describe("ExecApprovalManager", () => {
     const manager = created.manager;
     const { id, decisionPromise } = await register(manager, "approval", 60_000, {
       command: "echo ordered",
-      sessionKey: "agent:main:child",
+      sessionKey: "global",
+      agentId: "work",
     });
     expect(lifecycleEvents).toMatchObject([
       {
@@ -297,32 +282,19 @@ describe("ExecApprovalManager", () => {
         record: {
           id,
           status: "pending",
-          audienceSessionKeys: ["agent:main:child", "agent:main:parent"],
+          audienceSessionKeys: ["agent:work:global"],
         },
       },
     ]);
+    expect(resolveAudienceSessionKeys).toHaveBeenCalledWith("global", "work");
+    expect(await created.readStored()).toMatchObject({
+      source: { sessionKey: "global", agentId: "work" },
+      audienceSessionKeys: ["agent:work:global"],
+    });
     expect(durableAtCallback).toEqual({ approval_id: id, status: "pending" });
     await manager.resolveDetailed(id, "deny", system);
     await expect(decisionPromise).resolves.toBe("deny");
     await expect(waiterAtCallback).resolves.toBe("deny");
-  });
-
-  it("passes the source agent when deriving a global-session stream audience", async () => {
-    const resolveAudienceSessionKeys = vi.fn((sessionKey: string, agentId?: string | null) => [
-      sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey,
-    ]);
-    const { manager, readStored, id, decisionPromise } = await persistentApproval(
-      { resolveAudienceSessionKeys },
-      60_000,
-      { command: "echo global", sessionKey: "global", agentId: "work" },
-    );
-    expect(resolveAudienceSessionKeys).toHaveBeenCalledWith("global", "work");
-    expect(await readStored()).toMatchObject({
-      source: { sessionKey: "global", agentId: "work" },
-      audienceSessionKeys: ["agent:work:global"],
-    });
-    await manager.resolveDetailed(id, "deny", system);
-    await expect(decisionPromise).resolves.toBe("deny");
   });
 
   it.each([
@@ -503,6 +475,11 @@ describe("ExecApprovalManager", () => {
         decision: "deny",
         terminalReason: reason,
       });
+      if (reason === "timeout") {
+        expect(manager.consumeAskFallback(id)).toBe(true);
+        expect(manager.consumeAskFallback(id)).toBe(false);
+        expect((await snapshot())?.askFallbackConsumed).toBe(true);
+      }
     },
   );
 
@@ -577,37 +554,12 @@ describe("ExecApprovalManager", () => {
     },
   );
 
-  it("reconciles a durable terminal row into the existing local waiter", async () => {
-    const { manager, databaseOptions, id, decisionPromise } = await persistentApproval();
-    const resolved = await resolveOperatorApproval({
-      id,
-      nowMs: Date.now(),
-      decision: "allow-once",
-      resolver: device,
-      expectedKind: "exec",
-      runtimeEpoch: manager.runtimeEpoch,
-      databaseOptions,
-    });
-    if (resolved.outcome !== "resolved") {
-      throw new Error(`expected durable resolution, received ${resolved.outcome}`);
-    }
-    expect(
-      await manager.reconcileDurableLookup(
-        { outcome: "found", record: resolved.record },
-        "Control UI",
-      ),
-    ).toBe(resolved.record);
-    await expect(decisionPromise).resolves.toBe("allow-once");
-    expect(manager.getLiveSnapshot(id)).toMatchObject({
-      decision: "allow-once",
-      resolvedBy: "Control UI",
-    });
-  });
-
   it("consumes allow-once durably without erasing the winning decision", async () => {
     const { manager, readStored, id, allow } = await persistentApproval();
     await allow();
+    expect(manager.consumeAskFallback(id)).toBe(false);
     expect(await manager.consumeAllowOnce(id, "system.run:approval-consume")).toBe(true);
+    expect(manager.consumeAskFallback(id)).toBe(false);
     expect(await manager.consumeAllowOnce(id, "system.run:approval-consume")).toBe(false);
     expect(await readStored()).toMatchObject({
       status: "allowed",

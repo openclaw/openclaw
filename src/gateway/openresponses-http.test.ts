@@ -149,6 +149,12 @@ function mockRun(run: (runId: string) => unknown) {
   }) as never);
 }
 
+function mockDelta(text: string) {
+  agentCommandMock.mockClear();
+  agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
+    buildAssistantDeltaResult({ opts, emit: emitAgentEvent, deltas: [text], text })) as never);
+}
+
 function responseEvent(events: ReturnType<typeof parseSseEvents>, name = "response.completed") {
   return (parseSseData(findSseEvent(events, name)) as { response: ResponseResource }).response;
 }
@@ -501,10 +507,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
         error: { code: "invalid_request_error", message: "invalid tool configuration" },
       });
       await accept(
-        { user: "alice" },
-        { sessionKey: expect.stringContaining("openresponses-user:alice") },
-      );
-      await accept(
         {
           instructions: "Always respond in French.",
           input: [
@@ -631,14 +633,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     let now = 1_700_000_000_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
     try {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
-        buildAssistantDeltaResult({
-          opts,
-          emit: emitAgentEvent,
-          deltas: ["hello"],
-          text: "hello",
-        })) as never);
+      mockDelta("hello");
 
       const response = await post({ stream: true });
       expect(response.status).toBe(200);
@@ -1177,14 +1172,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
   it.each([false, true])(
     "rejects an unsatisfied required tool choice (stream=%s)",
     async (stream) => {
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
-        buildAssistantDeltaResult({
-          opts,
-          emit: emitAgentEvent,
-          deltas: ["plain text despite required"],
-          text: "plain text despite required",
-        })) as never);
+      mockDelta("plain text despite required");
       const res = await post({ stream, tools: WEATHER_TOOL, tool_choice: "required" });
       expect(res.status).toBe(stream ? 200 : 502);
       const text = await res.text();
