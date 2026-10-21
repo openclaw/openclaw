@@ -3,27 +3,20 @@ import { vi, type Mock } from "vitest";
 import { Client } from "./client.js";
 import type { DiscordCommand } from "./commands.js";
 import type { RawInteraction } from "./interactions.js";
-import type { RequestData } from "./rest-body.js";
 import type { RequestClient } from "./rest.js";
 
-type ClientOptions = ConstructorParameters<typeof Client>[0];
-type RequestQuery = Parameters<RequestClient["get"]>[1];
-
 type RestMock = Partial<Record<"get" | "post" | "patch" | "put" | "delete", Mock>>;
-type RestMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 type RawInteractionOverrides = Omit<Partial<RawInteraction>, "data" | "type"> &
   Pick<RawInteraction, "id" | "token"> & {
     data?: Record<string, unknown>;
   };
 
 type FakeRestCall = {
-  method: RestMethod;
+  method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   path: string;
-  data?: RequestData;
-  query?: RequestQuery;
+  data?: Parameters<RequestClient["post"]>[1];
+  query?: Parameters<RequestClient["get"]>[1];
 };
-
-type FakeRestClient = RequestClient & { calls: FakeRestCall[] };
 
 export function createJsonResponse(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), { status: 200, ...init });
@@ -31,17 +24,16 @@ export function createJsonResponse(body: unknown, init?: ResponseInit): Response
 
 export function createAbortableFetchMock() {
   let receivedSignal: AbortSignal | undefined;
-  const fetch = vi.fn(
-    (_input: string | URL | Request, init?: RequestInit) =>
-      new Promise<Response>((_resolve, reject) => {
-        receivedSignal = init?.signal ?? undefined;
-        init?.signal?.addEventListener("abort", () => {
-          reject(new DOMException("The operation was aborted.", "AbortError"));
-        });
-      }),
-  );
   return {
-    fetch,
+    fetch: vi.fn(
+      (_input: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          receivedSignal = init?.signal ?? undefined;
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          });
+        }),
+    ),
     get receivedSignal() {
       return receivedSignal;
     },
@@ -50,7 +42,7 @@ export function createAbortableFetchMock() {
 
 export function createInternalTestClient(
   commands: DiscordCommand[] = [],
-  options?: Partial<ClientOptions>,
+  options?: Partial<ConstructorParameters<typeof Client>[0]>,
 ): Client {
   return new Client({ clientId: "app1", token: "token", ...options }, { commands });
 }
@@ -68,7 +60,7 @@ export function attachRestMock(client: Client, rest: RestMock) {
   return mock;
 }
 
-export function createFakeRestClient(responses: unknown[] = []): FakeRestClient {
+export function createFakeRestClient(responses: unknown[] = []) {
   const calls: FakeRestCall[] = [];
   const queued = [...responses];
   const request = async (call: FakeRestCall) => {
@@ -82,7 +74,7 @@ export function createFakeRestClient(responses: unknown[] = []): FakeRestClient 
     patch: async (path, data, query) => await request({ method: "PATCH", path, data, query }),
     put: async (path, data, query) => await request({ method: "PUT", path, data, query }),
     delete: async (path, data, query) => await request({ method: "DELETE", path, data, query }),
-  } as FakeRestClient;
+  } as RequestClient & { calls: FakeRestCall[] };
 }
 
 export function createInternalInteractionPayload(
@@ -97,35 +89,26 @@ export function createInternalInteractionPayload(
   } as unknown as RawInteraction;
 }
 
-export function createInternalComponentInteractionPayload(
-  overrides: RawInteractionOverrides,
-): RawInteraction {
-  return createInteractivePayload(InteractionType.MessageComponent, overrides, {
-    component_type: ComponentType.Button,
-    custom_id: "component1",
-  });
-}
+export const createInternalComponentInteractionPayload = interactivePayload(
+  InteractionType.MessageComponent,
+);
 
-export function createInternalModalInteractionPayload(
-  overrides: RawInteractionOverrides,
-): RawInteraction {
-  return createInteractivePayload(InteractionType.ModalSubmit, overrides, {
-    custom_id: "modal1",
-    components: [],
-  });
-}
+export const createInternalModalInteractionPayload = interactivePayload(
+  InteractionType.ModalSubmit,
+);
 
-function createInteractivePayload(
-  type: InteractionType.MessageComponent | InteractionType.ModalSubmit,
-  overrides: RawInteractionOverrides,
-  defaults: Record<string, unknown>,
-): RawInteraction {
-  const { data, ...rest } = overrides;
-  return {
-    application_id: "app1",
-    version: 1,
-    data: { ...defaults, ...data },
-    ...rest,
-    type,
-  } as unknown as RawInteraction;
+function interactivePayload(type: InteractionType.MessageComponent | InteractionType.ModalSubmit) {
+  return ({ data, ...rest }: RawInteractionOverrides): RawInteraction =>
+    ({
+      application_id: "app1",
+      version: 1,
+      data: {
+        ...(type === InteractionType.MessageComponent
+          ? { component_type: ComponentType.Button, custom_id: "component1" }
+          : { custom_id: "modal1", components: [] }),
+        ...data,
+      },
+      ...rest,
+      type,
+    }) as unknown as RawInteraction;
 }
