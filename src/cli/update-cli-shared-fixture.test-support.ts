@@ -71,25 +71,18 @@ export function createUpdateFixtureAssertions({
   updateNpmInstalledPlugins: Mock;
   defaultRuntime: typeof import("../runtime.js").defaultRuntime;
 }) {
-  const syncPluginCall = (index = 0) => {
-    const calls = syncPluginsForUpdateChannel.mock.calls as unknown as Array<
-      [Record<string, unknown> & { channel?: string; config?: OpenClawConfig }]
-    >;
-    return calls[index]?.[0];
-  };
-
-  const npmPluginUpdateCall = (index = 0) => {
-    const calls = updateNpmInstalledPlugins.mock.calls as unknown as Array<
-      [Record<string, unknown> & { config?: OpenClawConfig; timeoutMs?: number }]
-    >;
-    return calls[index]?.[0];
-  };
-  const lastNpmPluginUpdateCall = () =>
-    npmPluginUpdateCall(updateNpmInstalledPlugins.mock.calls.length - 1);
-
-  const replaceConfigCall = (index = 0) => vi.mocked(replaceConfigFile).mock.calls[index]?.[0];
-  const lastReplaceConfigCall = () =>
-    replaceConfigCall(vi.mocked(replaceConfigFile).mock.calls.length - 1);
+  const syncPluginCall = (index = 0) =>
+    (
+      syncPluginsForUpdateChannel.mock.calls as unknown as Array<
+        [Record<string, unknown> & { channel?: string; config?: OpenClawConfig }]
+      >
+    )[index]?.[0];
+  const npmPluginUpdateCall = (index = 0) =>
+    (
+      updateNpmInstalledPlugins.mock.calls as unknown as Array<
+        [Record<string, unknown> & { config?: OpenClawConfig; timeoutMs?: number }]
+      >
+    )[index]?.[0];
   const setupConfigMutationWithRetryMock = (
     onCommitted?: (snapshot: ConfigFileSnapshot, nextConfig: OpenClawConfig) => void,
   ) => {
@@ -120,20 +113,16 @@ export function createUpdateFixtureAssertions({
     });
   };
 
-  const writeJsonCall = (index = 0) => vi.mocked(defaultRuntime.writeJson).mock.calls[index]?.[0];
-  const lastWriteJsonCall = () =>
-    writeJsonCall(vi.mocked(defaultRuntime.writeJson).mock.calls.length - 1);
-  const getLogOutput = () => getMockCallOutput(vi.mocked(defaultRuntime.log));
-  const getErrorOutput = () => getMockCallOutput(vi.mocked(defaultRuntime.error));
   return {
     syncPluginCall,
     npmPluginUpdateCall,
-    lastNpmPluginUpdateCall,
-    replaceConfigCall,
-    lastReplaceConfigCall,
+    lastNpmPluginUpdateCall: () =>
+      npmPluginUpdateCall(updateNpmInstalledPlugins.mock.calls.length - 1),
+    replaceConfigCall: (index = 0) => vi.mocked(replaceConfigFile).mock.calls[index]?.[0],
+    lastReplaceConfigCall: () => vi.mocked(replaceConfigFile).mock.calls.at(-1)?.[0],
     setupConfigMutationWithRetryMock,
-    lastWriteJsonCall,
-    getLogOutput,
-    getErrorOutput,
+    lastWriteJsonCall: () => vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0],
+    getLogOutput: () => getMockCallOutput(vi.mocked(defaultRuntime.log)),
+    getErrorOutput: () => getMockCallOutput(vi.mocked(defaultRuntime.error)),
   };
 }

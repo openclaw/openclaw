@@ -13,13 +13,11 @@ import {
 import { useLocalStateOwnerFixture } from "./local-state-owner.fixture.test-support.js";
 const fixture = useLocalStateOwnerFixture();
 const { invoke, transport: ownerTransport } = fixture;
-const runtimeSource = resolveBundledPluginPublicModulePath({
-  pluginId: "workboard",
-  artifactBasename: "index.js",
-});
+const facade = { pluginId: "workboard", artifactBasename: "index.js" };
+const runtimeSource = resolveBundledPluginPublicModulePath(facade);
 const { default: workboard } = await loadBundledPluginFacade<{
   default: { register(api: OpenClawPluginApi): void };
-}>({ pluginId: "workboard", artifactBasename: "index.js" });
+}>(facade);
 const { registerWorkboardGatewayMethods } = await loadBundledPluginFacade<{
   registerWorkboardGatewayMethods: (params: { api: OpenClawPluginApi }) => void;
 }>({ pluginId: "workboard", artifactBasename: "runtime-api.js" });
@@ -42,8 +40,12 @@ async function program() {
       logger: api.logger,
     });
   }
-  return result;
+  return (...args: string[]) => result.parseAsync(["workboard", ...args], { from: "user" });
 }
+const listCards = async () =>
+  (await invoke("workboard.cards.list", {})) as {
+    cards: Array<{ id: string; status: string; title: string }>;
+  };
 async function startOwner(runtime?: OpenClawPluginApi["runtime"]) {
   await fixture.startOwner();
   registerWorkboardGatewayMethods({
@@ -66,15 +68,13 @@ describe("Workboard CLI owner routing", () => {
     await startOwner();
     await invoke("workboard.cards.list", {});
     const cli = await program();
-    await cli.parseAsync(["workboard", "create", "Routed card"], { from: "user" });
-    const listed = (await invoke("workboard.cards.list", {})) as {
-      cards: Array<{ id: string; status: string; title: string }>;
-    };
+    await cli("create", "Routed card");
+    const listed = await listCards();
     expect(listed.cards).toEqual([
       expect.objectContaining({ title: "Routed card", status: "todo" }),
     ]);
     const id = listed.cards[0]!.id;
-    await cli.parseAsync(["workboard", "move", id, "--status", "review"], { from: "user" });
+    await cli("move", id, "--status", "review");
     expect(await invoke("workboard.cards.list", {})).toMatchObject({
       cards: [{ id, status: "review" }],
     });
@@ -89,17 +89,13 @@ describe("Workboard CLI owner routing", () => {
     await startOwner();
     const cli = await program();
     ownerTransport.failReply = true;
-    await expect(
-      cli.parseAsync(["workboard", "create", "Accepted once"], { from: "user" }),
-    ).rejects.toThrow("No local fallback");
+    await expect(cli("create", "Accepted once")).rejects.toThrow("No local fallback");
     ownerTransport.failReply = false;
     expect(await invoke("workboard.cards.list", {})).toMatchObject({
       cards: [{ title: "Accepted once" }],
     });
     ownerTransport.revokeBeforeMutation = true;
-    await expect(
-      cli.parseAsync(["workboard", "create", "Must not exist"], { from: "user" }),
-    ).rejects.toThrow("No local fallback");
+    await expect(cli("create", "Must not exist")).rejects.toThrow("No local fallback");
     ownerTransport.current = true;
     expect(await invoke("workboard.cards.list", {})).toMatchObject({
       cards: [{ title: "Accepted once" }],
@@ -119,15 +115,11 @@ describe("Workboard CLI owner routing", () => {
       });
       await startOwner(createPluginRuntimeMock({ subagent: { run } }));
       const cli = await program();
-      await cli.parseAsync(["workboard", "create", "First", "--status", "ready"], { from: "user" });
-      await cli.parseAsync(["workboard", "create", "Later", "--status", "ready"], { from: "user" });
-      await cli.parseAsync(["workboard", "dispatch", "--admin", "--timeout", "12345"], {
-        from: "user",
-      });
+      await cli("create", "First", "--status", "ready");
+      await cli("create", "Later", "--status", "ready");
+      await cli("dispatch", "--admin", "--timeout", "12345");
       ownerTransport.current = true;
-      const listed = (await invoke("workboard.cards.list", {})) as {
-        cards: Array<{ title: string }>;
-      };
+      const listed = await listCards();
       expect(listed.cards.find((card) => card.title === "First")).toMatchObject({
         status: outcome === "accepted" ? "running" : "blocked",
         metadata: {
@@ -147,16 +139,14 @@ describe("Workboard CLI owner routing", () => {
     const cli = await program();
     const database = path.join(
       process.env.OPENCLAW_STATE_DIR!,
-      "plugins",
-      "workboard",
-      "workboard.sqlite",
+      "plugins/workboard/workboard.sqlite",
     );
     await expect(fs.stat(database)).rejects.toMatchObject({ code: "ENOENT" });
-    await cli.parseAsync(["workboard", "create", "Offline card"], { from: "user" });
-    await cli.parseAsync(["workboard", "list", "--json"], { from: "user" });
+    await cli("create", "Offline card");
+    await cli("list", "--json");
     expect(fixture.output).toContain("Offline card");
     const outputStart = fixture.output.length;
-    await cli.parseAsync(["workboard", "dispatch", "--json"], { from: "user" });
+    await cli("dispatch", "--json");
     expect(JSON.parse(fixture.output.slice(outputStart))).toMatchObject({
       gatewayUnavailable: true,
       started: [],

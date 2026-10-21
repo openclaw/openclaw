@@ -15,27 +15,22 @@ function createProgram(response: unknown) {
   callGatewayFromCli.mockResolvedValue(response);
   const program = new Command().exitOverride();
   registerUsersCli(program);
-  return { output, program };
+  return {
+    output,
+    run: (...args: string[]) => program.parseAsync(["users", ...args], { from: "user" }),
+  };
 }
 
 describe("registerUsersCli", () => {
   it("reports the authoritative linked profile and uses the admin gateway method", async () => {
-    const { output, program } = createProgram({
+    const { output, run } = createProgram({
       profile: {
         id: "p-1\nshadow",
         displayName: "Ada\tadmin\u001b[2J",
         emails: ["ada@example.com\nnext@example.com"],
       },
     });
-    await program.parseAsync([
-      "node",
-      "openclaw",
-      "users",
-      "link-email",
-      "Ada@example.com",
-      "--to",
-      "p-1",
-    ]);
+    await run("link-email", "Ada@example.com", "--to", "p-1");
 
     expect(callGatewayFromCli).toHaveBeenCalledWith(
       "users.linkEmail",
@@ -49,9 +44,8 @@ describe("registerUsersCli", () => {
   });
 
   it("reports an empty user profile list", async () => {
-    const { output, program } = createProgram({ profiles: [] });
-
-    await program.parseAsync(["node", "openclaw", "users", "list"]);
+    const { output, run } = createProgram({ profiles: [] });
+    await run("list");
 
     expect(callGatewayFromCli).toHaveBeenCalledWith(
       "users.list",
@@ -63,37 +57,18 @@ describe("registerUsersCli", () => {
   });
 
   it("prints the link result as JSON when requested", async () => {
-    const { output, program } = createProgram({ profile: { id: "p-1" } });
-
-    await program.parseAsync([
-      "node",
-      "openclaw",
-      "users",
-      "link-email",
-      "Ada@example.com",
-      "--to",
-      "p-1",
-      "--json",
-    ]);
+    const { output, run } = createProgram({ profile: { id: "p-1" } });
+    await run("link-email", "Ada@example.com", "--to", "p-1", "--json");
 
     expect(output).toHaveBeenCalledWith('{\n  "profile": {\n    "id": "p-1"\n  }\n}\n');
   });
 
   it("merges profiles through the admin RPC and explains the surviving identity", async () => {
-    const { output, program } = createProgram({
+    const { output, run } = createProgram({
       profile: { id: "p-survivor", displayName: "Ada" },
       movedAliasKinds: ["channel", "provider"],
     });
-
-    await program.parseAsync([
-      "node",
-      "openclaw",
-      "users",
-      "merge",
-      "p-retired\nforged",
-      "--into",
-      "p-survivor",
-    ]);
+    await run("merge", "p-retired\nforged", "--into", "p-survivor");
 
     expect(callGatewayFromCli).toHaveBeenCalledWith(
       "users.merge",
@@ -114,18 +89,8 @@ describe("registerUsersCli", () => {
       profile: { id: "p-survivor", emails: [] },
       movedAliasKinds: ["channel"],
     };
-    const { output, program } = createProgram(result);
-
-    await program.parseAsync([
-      "node",
-      "openclaw",
-      "users",
-      "merge",
-      "p-retired",
-      "--into",
-      "p-survivor",
-      "--json",
-    ]);
+    const { output, run } = createProgram(result);
+    await run("merge", "p-retired", "--into", "p-survivor", "--json");
 
     expect(output).toHaveBeenCalledTimes(1);
     expect(JSON.parse(String(output.mock.calls[0]?.[0]))).toEqual(result);
