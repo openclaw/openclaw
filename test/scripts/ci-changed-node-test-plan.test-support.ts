@@ -6,7 +6,10 @@ import {
   createChangedNodeTestShards as createChangedNodeTestShardsWithSmoke,
   resolveChangedNodeTestTargets,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { createSelectedNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
+import {
+  createSelectedNodeTestShardBundles,
+  type CompactNodeTestShard,
+} from "../../scripts/lib/ci-node-test-plan.mts";
 import { PR_PROTECTED_RUNTIME_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
 
 type Shards = ReturnType<typeof createChangedNodeTestShards>;
@@ -49,6 +52,22 @@ export function selectedFiles(shards: Shards) {
       shard.includePatterns ?? [],
       shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? [],
     ),
+  );
+}
+
+export function isSerialNodeTestProjection(
+  groups: readonly { shard_name: string }[] | undefined,
+  owner: Pick<CompactNodeTestShard, "planConcurrency" | "groups">,
+): boolean {
+  if (owner.planConcurrency !== 2 || !groups) {
+    return false;
+  }
+  // Singleton projections may then share a serial row with another canonical owner.
+  return (
+    groups.length === 1 ||
+    groups.some(
+      (candidate) => !owner.groups.some((group) => group.shard_name === candidate.shard_name),
+    )
   );
 }
 

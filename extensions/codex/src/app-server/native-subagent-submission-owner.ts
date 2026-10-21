@@ -26,7 +26,10 @@ import {
   type NativeSubmissionCallDependencies,
   type NativeSubagentSubmissionCall as SubmissionCall,
 } from "./native-subagent-submission-call.js";
-import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
+import type {
+  CodexNativeSubagentSubmission,
+  CodexNativeSubagentSubmissionAcknowledgement,
+} from "./native-subagent-submission.js";
 import { isJsonObject, type JsonObject, type CodexServerNotification } from "./protocol.js";
 
 type SubmissionCustody = {
@@ -111,6 +114,32 @@ export class CodexNativeSubagentSubmissionOwner {
       return false;
     }
     return true;
+  }
+
+  observeHookAcknowledgement(
+    state: ParentState,
+    receipt: CodexNativeSubagentSubmissionAcknowledgement,
+    owner: ParentOwner,
+  ): void {
+    this.modelInputs.observeCall(state, receipt.parentTurnId, {
+      id: receipt.callId,
+      receiverThreadIds: [receipt.childThreadId],
+    });
+    const call = this.calls.get(state)?.get(`${receipt.parentTurnId}\0${receipt.callId}`);
+    if (!call || call.closed) {
+      return;
+    }
+    if (
+      (call.owner && call.owner !== owner) ||
+      (!call.targets.some((target) => target.childThreadId === receipt.childThreadId) &&
+        call.modelInput?.threadId !== receipt.childThreadId)
+    ) {
+      throw new Error("Codex native submission receipt does not match its admitted call");
+    }
+    // Before turn binding, only this registration may later accept the receipt.
+    call.owner ??= owner;
+    call.submissionId = receipt.submissionId;
+    this.modelInputs.acceptNativeSubmission(state, call);
   }
 
   observeOutput(state: ParentState, turnId: string | undefined, item: JsonObject): void {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { parseSageBatchResponse, parseSageResponse, validateSageImage } from "./sage-validation.js";
 import type { SageBatchRequest, SageContent, SageQuestion } from "./sage-wire.js";
 
@@ -23,10 +23,7 @@ const tags: SageQuestion = {
 };
 const list: SageContent = {
   kind: "list",
-  value: [
-    { id: "a", content: "A" },
-    { id: "b", content: "B" },
-  ],
+  value: ["a", "b"].map((id) => ({ id, content: id.toUpperCase() })),
 };
 // Synthetic one-pixel PNG; the normal media probe is supplied separately, never downloaded.
 const image = {
@@ -41,209 +38,135 @@ const meta = {
   vendor_extension: { request_class: "synthetic" },
 };
 const response = (q: SageQuestion, result: unknown) => ({ id: q.id, kind: q.kind, result, meta });
+const choiceResult = (chosen: string | null, probability: number | null, a = 0.7, b = 0.3) => ({
+  chosen,
+  probability,
+  probabilities: [a, b].map((estimate, i) => ({ option: ["a", "b"][i], probability: estimate })),
+});
+const tag = (id: string, probability: number, applies?: boolean | null) => ({
+  id,
+  probability,
+  ...(applies === undefined ? {} : { applies }),
+});
 const scaleResult = {
   expectation: 2.89,
   confidence: 0.66,
-  probabilities: [
-    { level: 0, probability: 0 },
-    { level: 1, probability: 0.01 },
-    { level: 2, probability: 0.12 },
-    { level: 3, probability: 0.84 },
-    { level: 4, probability: 0.03 },
-  ],
+  probabilities: [0, 0.01, 0.12, 0.84, 0.03].map((probability, level) => ({ level, probability })),
 };
 
-describe("Sage native protocol", () => {
-  it.each(["yes", "no", null])(
-    "preserves %s and P(yes), not confidence in the chosen answer",
-    (answer) => {
-      const value = response(yesno, { answer, probability: 0.03 });
-      expect(parseSageResponse(value, yesno, "doc")).toBe(value);
+it.each([
+  ...["yes", "no", null].map((answer) => [yesno, "doc", { answer, probability: 0.03 }] as const),
+  [choice, "doc", choiceResult("a", 0.7)],
+  [choice, "doc", choiceResult(null, null, 0.49, 0.51)],
+  [choice, "doc", choiceResult("a", null)],
+  [scale, "doc", scaleResult],
+  [sort, list, { sorted: ["b", "a"], confidence: null }],
+  [tags, "doc", { tags: [tag("b", 0.8, true), tag("a", 0.49, null)] }],
+] as const)("preserves native estimates and abstention %#", (q, content, result) => {
+  const value = response(q, result);
+  expect(parseSageResponse(value, q, content)).toBe(value);
+});
+it.each([
+  [yesno, { answer: true, probability: 0.8 }],
+  [yesno, { answer: null, probability: Number.NaN }],
+  [yesno, { answer: "yes", probability: 1.1 }],
+  [choice, { chosen: "unknown", probability: 0.8, probabilities: [] }],
+  [choice, choiceResult(null, 0, 0.5, 0.5)],
+  [
+    choice,
+    {
+      ...choiceResult(null, null, 0.5, 0.5),
+      probabilities: choiceResult(null, null, 0.5, 0.5).probabilities.toReversed(),
     },
+  ],
+  [scale, { ...scaleResult, expectation: 4.01 }],
+  [scale, { ...scaleResult, confidence: "0.5" }],
+  [scale, { ...scaleResult, probabilities: undefined }],
+  [scale, { ...scaleResult, probabilities: scaleResult.probabilities.slice(1) }],
+  [scale, { ...scaleResult, probabilities: scaleResult.probabilities.toReversed() }],
+  [
+    scale,
+    {
+      ...scaleResult,
+      probabilities: [{ level: 0, probability: 1.1 }, ...scaleResult.probabilities.slice(1)],
+    },
+  ],
+  [sort, { sorted: ["a", "a"] }],
+  [sort, { sorted: ["a", "other"] }],
+  [tags, { tags: [tag("a", 0.5), tag("b", 0.5, false)] }],
+  [tags, { tags: [tag("a", 0.5, true), tag("a", 0.5, false)] }],
+] as const)("rejects malformed native result %#", (q, r) => {
+  expect(() => parseSageResponse(response(q, r), q, q.kind === "sort" ? list : "doc")).toThrow(
+    "Invalid Sage",
   );
-  it("preserves categorical option estimates and native abstention", () => {
-    const value = response(choice, {
-      chosen: "a",
-      probability: 0.7,
-      probabilities: [
-        { option: "a", probability: 0.7 },
-        { option: "b", probability: 0.3 },
-      ],
-    });
-    expect(parseSageResponse(value, choice, "doc")).toBe(value);
-    const abstention = response(choice, {
-      chosen: null,
-      probability: null,
-      probabilities: [
-        { option: "a", probability: 0.49 },
-        { option: "b", probability: 0.51 },
-      ],
-    });
-    expect(parseSageResponse(abstention, choice, "doc")).toBe(abstention);
-    const nullableSelected = response(choice, {
-      chosen: "a",
-      probability: null,
-      probabilities: [
-        { option: "a", probability: 0.7 },
-        { option: "b", probability: 0.3 },
-      ],
-    });
-    expect(parseSageResponse(nullableSelected, choice, "doc")).toBe(nullableSelected);
-  });
-  it("preserves fractional scale, native sort confidence and text tag abstention", () => {
-    for (const [q, c, r] of [
-      [scale, "doc", scaleResult],
-      [sort, list, { sorted: ["b", "a"], confidence: null }],
-      [
-        tags,
-        "doc",
-        {
-          tags: [
-            { id: "b", probability: 0.8, applies: true },
-            { id: "a", probability: 0.49, applies: null },
-          ],
-        },
-      ],
-    ] as const) {
-      const v = response(q, r);
-      expect(parseSageResponse(v, q, c)).toBe(v);
-    }
-  });
-  it.each([
-    [yesno, { answer: true, probability: 0.8 }],
-    [yesno, { answer: null, probability: Number.NaN }],
-    [yesno, { answer: "yes", probability: 1.1 }],
-    [choice, { chosen: "unknown", probability: 0.8, probabilities: [] }],
-    [
-      choice,
+});
+it("rejects wrong IDs, kinds and malformed metadata", () => {
+  const v = response(yesno, { answer: null, probability: 0.5 });
+  for (const patch of [
+    { id: "other" },
+    { kind: "choice" },
+    { meta: [] },
+    { meta: { usage: { input_tokens: -1, output_tokens: 1 } } },
+    { meta: { usage: { input_tokens: 1, output_tokens: -1 } } },
+    { meta: { usage: { input_tokens: 1 } } },
+    { meta: { reasoning: { ran: "yes" } } },
+    { meta: { reasoning: { ran: true, forced: "yes" } } },
+  ]) {
+    expect(() => parseSageResponse({ ...v, ...patch }, yesno, "doc")).toThrow("Invalid Sage");
+  }
+});
+it("retains serializable grouped partial errors and call-level usage", () => {
+  const request: SageBatchRequest = {
+    reasoning: "off",
+    requests: [
+      { content: "A", questions: [yesno, choice] },
+      { content: "B", questions: [yesno] },
+    ],
+  };
+  const value = {
+    results: [
       {
-        chosen: null,
-        probability: 0,
-        probabilities: [
-          { option: "a", probability: 0.5 },
-          { option: "b", probability: 0.5 },
+        answers: [
+          { ok: true, result: response(yesno, { answer: null, probability: 0.51 }) },
+          { ok: false, error: "Service unavailable", result: null },
         ],
       },
+      { answers: [{ ok: true, result: response(yesno, { answer: "no", probability: 0.1 }) }] },
     ],
-    [
-      choice,
-      {
-        chosen: null,
-        probability: null,
-        probabilities: [
-          { option: "b", probability: 0.5 },
-          { option: "a", probability: 0.5 },
-        ],
-      },
-    ],
-    [scale, { ...scaleResult, expectation: 4.01 }],
-    [scale, { ...scaleResult, confidence: "0.5" }],
-    [scale, { ...scaleResult, probabilities: undefined }],
-    [scale, { ...scaleResult, probabilities: scaleResult.probabilities.slice(1) }],
-    [scale, { ...scaleResult, probabilities: scaleResult.probabilities.toReversed() }],
-    [
-      scale,
-      {
-        ...scaleResult,
-        probabilities: [{ level: 0, probability: 1.1 }, ...scaleResult.probabilities.slice(1)],
-      },
-    ],
-    [sort, { sorted: ["a", "a"] }],
-    [sort, { sorted: ["a", "other"] }],
-    [
-      tags,
-      {
-        tags: [
-          { id: "a", probability: 0.5 },
-          { id: "b", probability: 0.5, applies: false },
-        ],
-      },
-    ],
-    [
-      tags,
-      {
-        tags: [
-          { id: "a", probability: 0.5, applies: true },
-          { id: "a", probability: 0.5, applies: false },
-        ],
-      },
-    ],
-  ] as const)("rejects malformed native result %#", (q, r) => {
-    expect(() => parseSageResponse(response(q, r), q, q.kind === "sort" ? list : "doc")).toThrow(
-      "Invalid Sage",
-    );
+    meta: { ...meta, request_count: 2, question_count: 3 },
+  };
+  const encoded = JSON.stringify(parseSageBatchResponse(value, request));
+  expect(JSON.parse(encoded)).toEqual(value);
+  expect(() =>
+    parseSageBatchResponse({ ...value, results: value.results.slice(1) }, request),
+  ).toThrow();
+  expect(() =>
+    parseSageBatchResponse({ ...value, meta: { ...value.meta, question_count: 2 } }, request),
+  ).toThrow();
+  value.results[0]!.answers[0] = { ok: true, result: response(choice, {}) };
+  expect(() => parseSageBatchResponse(value, request)).toThrow("correlation");
+});
+it("validates the admitted image signature and native dimension limits", async () => {
+  const probe = vi.fn(async () => ({ width: 1, height: 1 }));
+  await validateSageImage(image.media, probe);
+  expect(probe).toHaveBeenCalledOnce();
+  for (const dimensions of [
+    { width: 8193, height: 1 },
+    { width: 8192, height: 4096 },
+    { width: 0, height: 1 },
+  ]) {
+    await expect(validateSageImage(image.media, async () => dimensions)).rejects.toThrow("image");
+  }
+  for (const media of [
+    "data:image/png;base64,AA==",
+    image.media.replace("image/png", "image/jpeg"),
+  ]) {
+    await expect(validateSageImage(media, probe)).rejects.toThrow("image");
+  }
+});
+it("requires explicit applicability in native image tag results", () => {
+  const v = response(tags, {
+    tags: [tag("a", 0.5, null), tag("b", 0.8, true)],
   });
-  it("rejects wrong IDs, kinds and malformed metadata", () => {
-    const v = response(yesno, { answer: null, probability: 0.5 });
-    for (const patch of [
-      { id: "other" },
-      { kind: "choice" },
-      { meta: [] },
-      { meta: { usage: { input_tokens: -1, output_tokens: 1 } } },
-      { meta: { usage: { input_tokens: 1, output_tokens: -1 } } },
-      { meta: { usage: { input_tokens: 1 } } },
-      { meta: { reasoning: { ran: "yes" } } },
-      { meta: { reasoning: { ran: true, forced: "yes" } } },
-    ]) {
-      expect(() => parseSageResponse({ ...v, ...patch }, yesno, "doc")).toThrow("Invalid Sage");
-    }
-  });
-  it("retains serializable grouped partial errors and call-level usage", () => {
-    const request: SageBatchRequest = {
-      reasoning: "off",
-      requests: [
-        { content: "A", questions: [yesno, choice] },
-        { content: "B", questions: [yesno] },
-      ],
-    };
-    const value = {
-      results: [
-        {
-          answers: [
-            { ok: true, result: response(yesno, { answer: null, probability: 0.51 }) },
-            { ok: false, error: "Service unavailable", result: null },
-          ],
-        },
-        { answers: [{ ok: true, result: response(yesno, { answer: "no", probability: 0.1 }) }] },
-      ],
-      meta: { ...meta, request_count: 2, question_count: 3 },
-    };
-    const encoded = JSON.stringify(parseSageBatchResponse(value, request));
-    expect(JSON.parse(encoded)).toEqual(value);
-    expect(() =>
-      parseSageBatchResponse({ ...value, results: value.results.slice(1) }, request),
-    ).toThrow();
-    expect(() =>
-      parseSageBatchResponse({ ...value, meta: { ...value.meta, question_count: 2 } }, request),
-    ).toThrow();
-    value.results[0]!.answers[0] = { ok: true, result: response(choice, {}) };
-    expect(() => parseSageBatchResponse(value, request)).toThrow("correlation");
-  });
-  it("validates the admitted image signature and native dimension limits", async () => {
-    const probe = vi.fn(async () => ({ width: 1, height: 1 }));
-    await validateSageImage(image.media, probe);
-    expect(probe).toHaveBeenCalledOnce();
-    for (const dimensions of [
-      { width: 8193, height: 1 },
-      { width: 8192, height: 4096 },
-      { width: 0, height: 1 },
-    ]) {
-      await expect(validateSageImage(image.media, async () => dimensions)).rejects.toThrow("image");
-    }
-    for (const media of [
-      "data:image/png;base64,AA==",
-      image.media.replace("image/png", "image/jpeg"),
-    ]) {
-      await expect(validateSageImage(media, probe)).rejects.toThrow("image");
-    }
-  });
-  it("requires explicit applicability in native image tag results", () => {
-    const v = response(tags, {
-      tags: [
-        { id: "a", probability: 0.5, applies: null },
-        { id: "b", probability: 0.8, applies: true },
-      ],
-    });
-    expect(() => parseSageResponse(v, tags, image)).toThrow("tag applies");
-  });
+  expect(() => parseSageResponse(v, tags, image)).toThrow("tag applies");
 });

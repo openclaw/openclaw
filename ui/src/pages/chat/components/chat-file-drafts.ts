@@ -3,7 +3,7 @@ import { t } from "../../../i18n/index.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { showToast } from "../../../lib/toast.ts";
 import type { FileSidebarContent } from "./chat-sidebar-content-types.ts";
-import { reviewFileDrafts } from "./file-draft-recovery-dialog.ts";
+import { reviewFileDrafts } from "./file-draft-recovery-dialog-view.tsx";
 
 registerFilePreviewEnglish();
 

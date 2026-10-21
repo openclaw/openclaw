@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { t } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   findComposerButton as button,
   findPrimaryButton as primaryButton,
@@ -272,7 +273,7 @@ describe("renderChatComposer controls", () => {
     expect(button(view.container, t("chat.composer.startVoiceInput")).disabled).toBe(true);
   });
 
-  it("offers Steer only for eligible queued messages during an active run", () => {
+  it("offers Steer only for eligible queued messages during an active run", async () => {
     const onQueueSteer = vi.fn();
     const { container } = renderComposer({
       ...activeRun(),
@@ -284,8 +285,11 @@ describe("renderChatComposer controls", () => {
         queued("waiting-idle-1", { createdAt: 4, sendState: "waiting-idle" }),
       ],
     });
-    const steer = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__action")];
-    expect(steer).toHaveLength(2);
+    const steer = await waitForSolid(() => {
+      const buttons = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__action")];
+      expect(buttons).toHaveLength(2);
+      return buttons;
+    });
     steer[0]?.click();
     steer[1]?.click();
     expect(onQueueSteer.mock.calls).toEqual([["queued-1"], ["waiting-idle-1"]]);
@@ -311,7 +315,7 @@ describe("renderChatComposer controls", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("does not steer from Enter while admission is held", () => {
+  it("does not steer from Enter while admission is held", async () => {
     const onQueueSteer = vi.fn();
     const { container } = renderComposer({
       ...activeRun(),
@@ -323,6 +327,7 @@ describe("renderChatComposer controls", () => {
 
     pressComposerEnter(container);
     expect(onQueueSteer).not.toHaveBeenCalled();
+    await waitForSolid(() => expect(container.querySelector(".chat-queue__item")).not.toBeNull());
     expect(container.querySelector(".chat-queue__action")).toBeNull();
   });
 
@@ -467,7 +472,7 @@ describe("renderChatComposer controls", () => {
     });
   });
 
-  it("renders reconnect waits as compact badges without the raw transport error", () => {
+  it("renders reconnect waits as compact badges without the raw transport error", async () => {
     const { container } = renderComposer({
       connected: false,
       queue: [
@@ -477,6 +482,7 @@ describe("renderChatComposer controls", () => {
         }),
       ],
     });
+    await waitForSolid(() => expect(container.querySelector(".chat-queue__item")).not.toBeNull());
     const item = container.querySelector(".chat-queue__item");
     expect(item?.classList.contains("chat-queue__item--reconnect")).toBe(true);
     expect(
@@ -488,7 +494,7 @@ describe("renderChatComposer controls", () => {
     expect(state?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
   });
 
-  it("renders failed sends as retryable and running commands as inert", () => {
+  it("renders failed sends as retryable and running commands as inert", async () => {
     const onQueueRetry = vi.fn();
     let view = renderComposer({
       onQueueRetry,
@@ -500,7 +506,9 @@ describe("renderChatComposer controls", () => {
         }),
       ],
     });
-    expect(query(view.container, ".chat-queue__badge")?.textContent?.trim()).toBe("Failed");
+    await waitForSolid(() =>
+      expect(query(view.container, ".chat-queue__badge")?.textContent?.trim()).toBe("Failed"),
+    );
     expect(query(view.container, ".chat-queue__error")?.textContent).toContain(
       "send blocked by session policy",
     );
@@ -516,8 +524,10 @@ describe("renderChatComposer controls", () => {
         }),
       ],
     });
-    expect(query(view.container, ".chat-queue__state")?.textContent?.trim()).toBe(
-      "Running command",
+    await waitForSolid(() =>
+      expect(query(view.container, ".chat-queue__state")?.textContent?.trim()).toBe(
+        "Running command",
+      ),
     );
     expect(query(view.container, ".chat-queue__retry")).toBeNull();
     expect(query(view.container, ".chat-queue__remove")).toBeNull();

@@ -2728,6 +2728,13 @@ contracts between processes. Version facts stay within their unchanged
 snapshot. Each request rereads stored facts. Schemas, stored bytes, and update
 behavior are unchanged.
 
+PostgreSQL startup starts its isolated agent-schema reader while shared-state
+inspection runs, then transfers that reader to the first agent-inspection slot.
+Only process loading overlaps: database inspection still follows shared-state
+discovery and retains its fresh read, admission boundary, and full request timeout.
+Cancellation and early returns close an unused reader; SQLite keeps its existing
+clean-close fast path without starting a child.
+
 `pnpm db:postgres:gen` also generates the SQLite catalogs for declared shared-state
 and agent schema fragments, including supported historical migration definitions.
 `pnpm db:postgres:check` verifies these artifacts alongside the PostgreSQL schema.

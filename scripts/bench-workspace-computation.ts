@@ -6,6 +6,8 @@ import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import type { HeapProfiler } from "node:inspector";
+import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
@@ -26,11 +28,13 @@ import { stopChild } from "./lib/gateway-bench-child.ts";
 
 const exec = promisify(execFile);
 const diagnostics = channel("openclaw.worker.task");
-const scenarios = ["inventory", "manifest", "delta", "unchanged", "compare"] as const;
+const gitDiagnostics = channel("openclaw.git.operation");
+const scenarios = ["inventory", "manifest", "delta", "unchanged", "compare", "reconcile"] as const;
 type Scenario = (typeof scenarios)[number];
 type Options = {
   baseline?: string;
   candidate: string;
+  sourceCommit?: string;
   scenarios: Scenario[];
   sizes: number[];
   concurrency: number[];
@@ -39,6 +43,10 @@ type Options = {
   fileBytes: number;
   changedFiles: number;
   timeoutMs: number;
+  startAt?: number;
+  samplingInterval: number;
+  prepareRoot?: string;
+  reuseRoot?: string;
   output?: string;
   json: boolean;
   help: boolean;
@@ -56,6 +64,8 @@ type Measurement = {
   memoryAfter: NodeJS.MemoryUsage;
   processMaxRssBytes: number;
   workerTasks: Array<Record<string, unknown>>;
+  operations: Record<string, number>;
+  allocation?: ReturnType<typeof summarizeAllocation>;
 };
 type Summary = ReturnType<typeof summarize>;
 type Sample = Measurement & {
@@ -101,6 +111,7 @@ function parseOptions(argv: string[]): Options {
       fileBytes: 1_024,
       changedFiles: 1,
       timeoutMs: 300_000,
+      samplingInterval: 0,
       json: false,
       help: false,
     },
@@ -110,6 +121,10 @@ function parseOptions(argv: string[]): Options {
       },
       "--candidate": (options, value) => {
         options.candidate = path.resolve(value);
+      },
+      "--source-commit": (options, value) => {
+        assert(/^[a-f0-9]{40}$/u.test(value), "--source-commit requires a full commit SHA");
+        options.sourceCommit = value;
       },
       "--scenarios": (options, value) => {
         const names = value.split(",");
@@ -141,6 +156,23 @@ function parseOptions(argv: string[]): Options {
       "--timeout-ms": (options, value) => {
         options.timeoutMs = parseBenchmarkInteger(value, "--timeout-ms", 1_000, 3_600_000);
       },
+      "--start-at": (options, value) => {
+        options.startAt = parseBenchmarkInteger(value, "--start-at", 1, Number.MAX_SAFE_INTEGER);
+      },
+      "--sampling-interval": (options, value) => {
+        options.samplingInterval = parseBenchmarkInteger(
+          value,
+          "--sampling-interval",
+          0,
+          1_048_576,
+        );
+      },
+      "--prepare-root": (options, value) => {
+        options.prepareRoot = path.resolve(value);
+      },
+      "--reuse-root": (options, value) => {
+        options.reuseRoot = path.resolve(value);
+      },
       "--output": (options, value) => {
         options.output = path.resolve(value);
       },
@@ -157,6 +189,7 @@ async function createFixture(params: {
   options: Options;
 }) {
   const { root, source, scenario, size, concurrency, options } = params;
+  const reconciliation = scenario === "reconcile";
   assert(
     size * options.fileBytes <= 4 * 1024 ** 3,
     "fixture exceeds the production 4 GiB inventory limit",
@@ -172,7 +205,8 @@ async function createFixture(params: {
     size: content.length,
     sha256,
   }));
-  const changedFiles = scenario === "delta" || scenario === "compare" ? options.changedFiles : 0;
+  const changedFiles =
+    scenario === "delta" || scenario === "compare" || reconciliation ? options.changedFiles : 0;
   assert(changedFiles <= size, "--changed-files exceeds the fixture entry count");
   const changedEntries = Array.from(
     { length: changedFiles },
@@ -202,12 +236,25 @@ async function createFixture(params: {
   for (let lane = 0; lane < concurrency; lane++) {
     const workspace = path.join(root, `workspace-${lane}`);
     await fs.mkdir(workspace);
-    if (scenario === "inventory" || scenario === "delta" || scenario === "unchanged") {
+    if (
+      scenario === "inventory" ||
+      scenario === "delta" ||
+      scenario === "unchanged" ||
+      reconciliation
+    ) {
       await exec("git", ["-c", `core.hooksPath=${os.devNull}`, "init", "--quiet", workspace], {
         env: isolatedEnv(root),
       });
     }
-    if (scenario === "inventory" || scenario === "manifest") {
+    if (reconciliation) {
+      assert(size * options.fileBytes <= 128 * 1024 ** 2, "reconciliation fixture exceeds 128 MiB");
+      for (let index = 0; index < size; index++) {
+        await fs.writeFile(path.join(workspace, nameAt(index)), content, { mode: 0o644 });
+        if (index % 256 === 0) {
+          await checkDirtyPages();
+        }
+      }
+    } else if (scenario === "inventory" || scenario === "manifest") {
       let next = 0;
       await Promise.all(
         Array.from({ length: 32 }, async () => {
@@ -216,7 +263,8 @@ async function createFixture(params: {
           }
         }),
       );
-    } else if (scenario !== "compare") {
+    }
+    if (scenario === "delta" || scenario === "unchanged" || reconciliation) {
       const payload = path.join(root, `payload-${lane}`);
       await fs.mkdir(payload);
       for (const entry of changedEntries) {
@@ -234,7 +282,55 @@ async function createFixture(params: {
     baseRef: `sha256:${digest(baseRaw)}`,
     currentRef: `sha256:${digest(currentRaw)}`,
     changedEntries,
+    fileBytes: options.fileBytes,
+    samplingInterval: options.samplingInterval,
+    startAt: options.startAt,
+    startSample: options.warmup + 1,
     inventorySha256: digest(entries.map((entry) => `${entry.path}\0`).join("")),
+  };
+}
+
+async function checkDirtyPages() {
+  if (process.platform === "linux") {
+    const memory = await fs.readFile("/proc/meminfo", "utf8");
+    const dirtyKiB = Number(/^Dirty:\s+(\d+)\s+kB$/m.exec(memory)?.[1]);
+    assert(
+      Number.isFinite(dirtyKiB) && dirtyKiB < 2 * 1024 ** 2,
+      "host dirty pages reached 2 GiB; stop fixture writes",
+    );
+  }
+}
+
+function summarizeAllocation(profile: HeapProfiler.SamplingHeapProfile) {
+  let totalBytes = 0;
+  let workspaceBytes = 0;
+  const sites: Array<{ functionName: string; url: string; bytes: number }> = [];
+  const visit = (node: HeapProfiler.SamplingHeapProfileNode, underWorkspace: boolean) => {
+    const owned =
+      underWorkspace ||
+      /\/(?:workspace-(?:manifest|reconcile|actual|hash)|local-workspace-|owned-directory-observation)/u.test(
+        node.callFrame.url,
+      );
+    totalBytes += node.selfSize;
+    if (owned) {
+      workspaceBytes += node.selfSize;
+    }
+    if (node.selfSize > 0) {
+      sites.push({
+        functionName: node.callFrame.functionName,
+        url: node.callFrame.url,
+        bytes: node.selfSize,
+      });
+    }
+    for (const child of node.children) {
+      visit(child, owned);
+    }
+  };
+  visit(profile.head, false);
+  return {
+    totalBytes,
+    workspaceBytes,
+    topSites: sites.toSorted((a, b) => b.bytes - a.bytes).slice(0, 40),
   };
 }
 
@@ -262,6 +358,7 @@ async function importOwner<T>(root: string, relative: string): Promise<T> {
 
 async function childMain(fixturePath: string): Promise<void> {
   const fixture = JSON.parse(await fs.readFile(fixturePath, "utf8")) as Fixture;
+  const reconciliation = fixture.scenario === "reconcile";
   const loadedAt = performance.now();
   const inventory =
     fixture.scenario === "inventory"
@@ -293,12 +390,22 @@ async function childMain(fixturePath: string): Promise<void> {
     fixture.source,
     "src/shared/global-singleton.ts",
   );
-  const baseRaw = staging ? await fs.readFile(path.join(fixture.root, "base.json"), "utf8") : "";
-  const currentRaw = staging
-    ? await fs.readFile(path.join(fixture.root, "current.json"), "utf8")
-    : "";
+  const reconcile = reconciliation
+    ? await importOwner<typeof import("../src/gateway/worker-environments/workspace-reconcile.js")>(
+        fixture.source,
+        "src/gateway/worker-environments/workspace-reconcile.ts",
+      )
+    : undefined;
+  const baseRaw =
+    staging || reconciliation
+      ? await fs.readFile(path.join(fixture.root, "base.json"), "utf8")
+      : "";
+  const currentRaw =
+    staging || reconciliation
+      ? await fs.readFile(path.join(fixture.root, "current.json"), "utf8")
+      : "";
   const parser =
-    fixture.scenario === "compare"
+    fixture.scenario === "compare" || reconciliation
       ? await importOwner<
           typeof import("../src/gateway/worker-environments/workspace-manifest.js")
         >(fixture.source, "src/gateway/worker-environments/workspace-manifest.ts")
@@ -313,27 +420,74 @@ async function childMain(fixturePath: string): Promise<void> {
     : undefined;
   const moduleLoadMs = performance.now() - loadedAt;
   const server = createServer((_request, response) => response.writeHead(200).end("ready\n"));
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  assert(address && typeof address !== "string");
+  let address;
+  for (let attempt = 0; attempt < 32; attempt++) {
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    address = server.address();
+    assert(address && typeof address !== "string");
+    if (address.port >= 40_000) {
+      break;
+    }
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+  assert(
+    address && typeof address !== "string" && address.port >= 40_000,
+    "no ephemeral loopback port >= 40000 available",
+  );
   process.send?.({ type: "ready", port: address.port, moduleLoadMs });
   let sequence = 0;
   const taskEvents: Array<Record<string, unknown>> = [];
+  let operations: Record<string, number> = {};
+  const observeOperation = (event: unknown) => {
+    if (
+      event &&
+      typeof event === "object" &&
+      "operation" in event &&
+      typeof event.operation === "string"
+    ) {
+      operations[event.operation] = (operations[event.operation] ?? 0) + 1;
+    }
+  };
   const observe = (event: unknown) => {
     taskEvents.push(event as Record<string, unknown>);
   };
   diagnostics.subscribe(observe);
+  gitDiagnostics.subscribe(observeOperation);
+  const inspector = fixture.samplingInterval > 0 ? new Session() : undefined;
+  inspector?.connect();
   let stopIntervalDelay: (() => number[]) | undefined;
   try {
     while ((await nextCommand()) === "run") {
       const sample = sequence++;
+      if (reconcile && fixture.scenario === "reconcile") {
+        const content = Buffer.alloc(fixture.fileBytes, 65);
+        for (let lane = 0; lane < fixture.concurrency; lane++) {
+          for (const entry of fixture.changedEntries) {
+            await fs.writeFile(path.join(fixture.root, `workspace-${lane}`, entry.path), content);
+          }
+        }
+      }
+      if (sample === fixture.startSample && fixture.startAt !== undefined) {
+        assert(Date.now() < fixture.startAt, "missed coordinated start; choose a later --start-at");
+        await delay(fixture.startAt - Date.now());
+      }
       taskEvents.length = 0;
+      operations = {};
       const histogram = monitorEventLoopDelay({ resolution: 10 });
       histogram.enable();
       await delay(20);
       histogram.reset();
       stopIntervalDelay = startBenchmarkIntervalDelay();
+      if (inspector) {
+        await inspector.post("HeapProfiler.startSampling", {
+          samplingInterval: fixture.samplingInterval,
+          includeObjectsCollectedByMajorGC: true,
+          includeObjectsCollectedByMinorGC: true,
+        });
+      }
       const memoryBefore = process.memoryUsage();
       const cpu = process.cpuUsage();
       const utilization = performance.eventLoopUtilization();
@@ -376,6 +530,46 @@ async function childMain(fixturePath: string): Promise<void> {
               return result.manifestRef;
             };
           }
+          if (reconcile) {
+            const { current, base } = comparisons![lane]!;
+            let committedRef: string | undefined;
+            let began = false;
+            const result = await reconcile.applyStagedWorkerWorkspace({
+              root,
+              stagingRoot: path.join(fixture.root, `payload-${lane}`),
+              baseManifestRef: fixture.baseRef,
+              currentManifestRef: fixture.currentRef,
+              base,
+              current,
+              acceptance: { kind: "reconcile" },
+              journal: {
+                load: async () => undefined,
+                begin: async () => {
+                  began = true;
+                },
+                commit: async (ref) => {
+                  committedRef = ref;
+                },
+                abort: async () => {
+                  throw new Error("unexpected reconciliation rollback");
+                },
+              },
+            });
+            return async () => {
+              assert(began, "reconciliation did not apply changed files");
+              assert.equal(committedRef, fixture.currentRef);
+              assert.equal(result.manifestRef, fixture.currentRef);
+              assert.deepEqual(result.conflictPaths, []);
+              assert.deepEqual(result.manifest.entries, current.entries);
+              for (const entry of fixture.changedEntries) {
+                assert.equal(
+                  await fs.readFile(path.join(root, entry.path), "utf8"),
+                  "worker change\n",
+                );
+              }
+              return result.manifestRef;
+            };
+          }
           assert(staging && git);
           if (comparisons) {
             const { current, base } = comparisons[lane]!;
@@ -414,6 +608,9 @@ async function childMain(fixturePath: string): Promise<void> {
       const usedCpu = process.cpuUsage(cpu);
       const eventLoopUtilization = performance.eventLoopUtilization(utilization).utilization;
       const memoryAfter = process.memoryUsage();
+      const allocation = inspector
+        ? summarizeAllocation((await inspector.post("HeapProfiler.stopSampling")).profile)
+        : undefined;
       // Give the histogram's already-due sample a turn before reading it.
       await delay(15);
       histogram.disable();
@@ -431,6 +628,8 @@ async function childMain(fixturePath: string): Promise<void> {
         memoryAfter,
         processMaxRssBytes: process.resourceUsage().maxRSS * 1_024,
         workerTasks: [...taskEvents],
+        operations: { ...operations },
+        allocation,
       };
       process.send?.({ type: "measured", value });
       // Keep validation outside both the timed operation and the external probes.
@@ -441,6 +640,8 @@ async function childMain(fixturePath: string): Promise<void> {
   } finally {
     stopIntervalDelay?.();
     diagnostics.unsubscribe(observe);
+    gitDiagnostics.unsubscribe(observeOperation);
+    inspector?.disconnect();
     await lifecycle.drainGlobalSingletonLifecycleState();
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
@@ -610,14 +811,19 @@ async function main(): Promise<void> {
 node --import ./scripts/tsx.mjs scripts/bench-workspace-computation.ts [options]
   --baseline <root>    Optional frozen baseline checkout with ready dependencies
   --candidate <root>   Candidate checkout (default: current directory)
-  --scenarios <list>   inventory,manifest,delta,unchanged,compare (default: all)
+  --source-commit <sha> Archive revision supplied by operator; single candidate only, not independently verified
+  --scenarios <list>   inventory,manifest,delta,unchanged,compare,reconcile (default: all)
   --sizes <list>       Entries per workspace (default: 1000; max: 100000)
   --concurrency <list> Independent workspaces (default: 1; max: 4)
   --runs <n>           Warm measured samples (default: 3)
   --warmup <n>         Extra warmup samples after separately reported cold sample (default: 1)
   --file-bytes <n>     Bytes per file (default: 1024; inventory capped at 4 GiB)
-  --changed-files <n>  Changed files in delta/compare scenarios (default: 1; max: 5000)
+  --changed-files <n>  Changed files in delta/compare/reconcile (default: 1; max: 5000)
   --timeout-ms <n>     Per-operation/probe deadline (default: 300000)
+  --prepare-root <dir> Seed fixtures only into a new persistent directory
+  --reuse-root <dir>   Measure prepared fixtures (same scenario/size/concurrency/source)
+  --start-at <ms>      Coordinated epoch time for first warm measurement (one case only)
+  --sampling-interval <bytes> Main-isolate allocation sampling; 0 disables (default: 0)
   --output <path>      Write JSON report
   --json              Print JSON report
   --help              Show usage
@@ -633,18 +839,52 @@ The HTTP probe measures the owner process, not a full Gateway RPC workload.`);
     ...(options.baseline ? [{ label: "baseline", root: options.baseline }] : []),
     { label: "candidate", root: options.candidate },
   ];
+  assert(!(options.prepareRoot && options.reuseRoot), "choose prepare-root or reuse-root");
+  assert(
+    !(options.sourceCommit && options.baseline),
+    "--source-commit requires a single candidate",
+  );
+  if (options.startAt !== undefined) {
+    assert.equal(
+      variants.length *
+        options.scenarios.length *
+        options.sizes.length *
+        options.concurrency.length,
+      1,
+      "--start-at requires one source/scenario/size/concurrency",
+    );
+  }
   const sources = await Promise.all(
     variants.map(async (variant) => ({
       ...variant,
-      commit: (await exec("git", ["-C", variant.root, "rev-parse", "HEAD"])).stdout.trim(),
-      dirty: Boolean(
-        (
-          await exec("git", ["-C", variant.root, "status", "--porcelain", "--untracked-files=no"])
-        ).stdout.trim(),
-      ),
+      commit:
+        options.sourceCommit ??
+        (await exec("git", ["-C", variant.root, "rev-parse", "HEAD"])).stdout.trim(),
+      dirty: options.sourceCommit
+        ? null
+        : Boolean(
+            (
+              await exec("git", [
+                "-C",
+                variant.root,
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+              ])
+            ).stdout.trim(),
+          ),
+      provenance: options.sourceCommit
+        ? "operator-supplied archive revision; not independently verified"
+        : "checkout Git metadata",
     })),
   );
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-benchmark-"));
+  if (options.prepareRoot) {
+    await fs.mkdir(options.prepareRoot);
+  }
+  const temporary =
+    options.prepareRoot ??
+    options.reuseRoot ??
+    (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-benchmark-")));
   const results: Array<{
     scenario: Scenario;
     size: number;
@@ -666,14 +906,37 @@ The HTTP probe measures the owner process, not a full Gateway RPC workload.`);
               temporary,
               `${scenario}-${size}-${concurrency}-${variant.label}`,
             );
-            const fixture = await createFixture({
-              root,
-              source: variant.root,
-              scenario,
-              size,
-              concurrency,
-              options,
-            });
+            const fixtureFile = path.join(root, "fixture.json");
+            const fixture: Fixture = options.reuseRoot
+              ? JSON.parse(await fs.readFile(fixtureFile, "utf8"))
+              : await createFixture({
+                  root,
+                  source: variant.root,
+                  scenario,
+                  size,
+                  concurrency,
+                  options,
+                });
+            if (options.reuseRoot) {
+              assert.equal(fixture.source, variant.root, "prepared fixture source differs");
+              assert.equal(
+                fixture.fileBytes,
+                options.fileBytes,
+                "prepared fixture file size differs",
+              );
+              assert.equal(
+                fixture.changedEntries.length,
+                ["delta", "compare", "reconcile"].includes(scenario) ? options.changedFiles : 0,
+                "prepared fixture changed count differs",
+              );
+              fixture.startAt = options.startAt;
+              fixture.startSample = options.warmup + 1;
+              fixture.samplingInterval = options.samplingInterval;
+            }
+            if (options.prepareRoot) {
+              await fs.writeFile(fixtureFile, JSON.stringify(fixture));
+              continue;
+            }
             const result = await runSource(fixture, options);
             for (const sample of result.samples) {
               expected ??= sample.evidence;
@@ -684,7 +947,9 @@ The HTTP probe measures the owner process, not a full Gateway RPC workload.`);
               );
             }
             results.push({ scenario, size, concurrency, variant: variant.label, ...result });
-            await fs.rm(root, { recursive: true, force: true });
+            if (!options.reuseRoot) {
+              await fs.rm(root, { recursive: true, force: true });
+            }
           }
         }
       }
@@ -703,6 +968,10 @@ The HTTP probe measures the owner process, not a full Gateway RPC workload.`);
           requests: "External HTTP probes against the owner process, not full Gateway RPCs",
           memory:
             "Owner process including worker threads; excludes fixture generator and Git processes",
+          allocation:
+            "Main-isolate V8 sampled allocated bytes including collected objects; excludes workers and Git; compare separate equally instrumented runs",
+          reconciliation:
+            "Real staged apply per invocation, after a sparse staged-write burst; no file-watch callback or Gateway is simulated. Journal adapter is in memory.",
         },
         sources,
         options,
@@ -716,7 +985,9 @@ The HTTP probe measures the owner process, not a full Gateway RPC workload.`);
         }),
     );
   } finally {
-    await fs.rm(temporary, { recursive: true, force: true });
+    if (!options.prepareRoot && !options.reuseRoot) {
+      await fs.rm(temporary, { recursive: true, force: true });
+    }
   }
 }
 

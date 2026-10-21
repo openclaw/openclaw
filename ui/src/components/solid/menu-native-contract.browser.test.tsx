@@ -304,6 +304,64 @@ it("updates root placement and RTL submenu geometry", async () => {
   );
 });
 
+it.each([
+  { dir: "ltr", placement: "right-end", left: "60px", side: "right" },
+  { dir: "ltr", placement: "right-end", left: "1060px", side: "left" },
+  { dir: "rtl", placement: "left-end", left: "1060px", side: "left" },
+] as const)("keeps end-aligned submenu actions reachable ($dir, $side)", async (position) => {
+  await page.viewport(1280, 800);
+  const selected = vi.fn();
+  mountMenu({
+    dir: position.dir,
+    placement: position.placement,
+    items: [
+      {
+        id: "gateways",
+        label: "Gateways",
+        children: [
+          ...Array.from({ length: 9 }, (_, index) => ({
+            id: `gateway-${index}`,
+            label: `Gateway ${index + 1}`,
+          })),
+          { id: "settings", label: "Gateway settings" },
+        ],
+      },
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `action-${index}`,
+        label: `Action ${index + 1}`,
+      })),
+    ],
+    onSelect: selected,
+  });
+  Object.assign(trigger().style, { position: "fixed", left: position.left, bottom: "12px" });
+  await openMenu();
+  await openMenu("people-gateways");
+  const child = surface("people-gateways");
+  await expect.poll(() => getComputedStyle(child).scale).toBe("1");
+  const branch = trigger("people-gateways").getBoundingClientRect();
+  const bounds = child.getBoundingClientRect();
+  expect(child.scrollHeight).toBeLessThanOrEqual(child.clientHeight);
+  expect(bounds.bottom).toBeLessThanOrEqual(branch.bottom + 1);
+  if (position.side === "right") {
+    expect(bounds.left).toBeGreaterThanOrEqual(branch.right);
+  } else {
+    expect(bounds.right).toBeLessThanOrEqual(branch.left);
+  }
+  const settings = item("Gateway settings", "people-gateways");
+  const row = settings.getBoundingClientRect();
+  expect(row.top).toBeGreaterThanOrEqual(bounds.top);
+  expect(row.bottom).toBeLessThanOrEqual(bounds.bottom);
+  expect(
+    settings.contains(document.elementFromPoint(row.x + row.width / 2, row.y + row.height / 2)),
+  ).toBe(true);
+  await userEvent.click(settings);
+  expect(selected).toHaveBeenCalledWith(
+    expect.objectContaining({ id: "settings" }),
+    expect.any(CustomEvent),
+  );
+  await phase(surface(), "hidden");
+});
+
 it("paints the actual menu above the shell sidebar resizer", async () => {
   await page.viewport(1280, 800);
   const shell = document.createElement("div");

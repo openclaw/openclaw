@@ -5,31 +5,25 @@ import type { ConfigSnapshot } from "../../api/types.ts";
 import type { ConfigAutoSaveStatus, RuntimeConfigState } from "./config-state-model.ts";
 import { createConfigCapabilityHarness, createConfigServerMock } from "./config-test-harness.ts";
 
-type ConfigHarness = ReturnType<typeof createConfigCapabilityHarness>;
 type ConfigRequest = Parameters<typeof createConfigCapabilityHarness>[0];
-const capabilities = new Map<ConfigHarness["runtimeConfig"], boolean>();
-const transports = new Set<GatewayProtocolClient<Record<string, never>>>();
+type Config = Record<string, unknown>;
+const capabilityCleanups: Array<() => void> = [];
+const transportCleanups: Array<() => void> = [];
 afterEach(() => {
-  for (const [capability, suspend] of capabilities) {
-    if (suspend) {
-      capability.setWritesSuspended(true);
-    }
-    capability.dispose();
+  for (const cleanup of [...capabilityCleanups.splice(0), ...transportCleanups.splice(0)]) {
+    cleanup();
   }
-  capabilities.clear();
-  for (const transport of transports) {
-    transport.stop();
-  }
-  transports.clear();
 });
 
-function managedConfig(harness: ConfigHarness, suspend = false) {
-  capabilities.set(harness.runtimeConfig, suspend);
-  return { ...harness, state: harness.runtimeConfig.state };
-}
-
 export function configHarness(request: ConfigRequest, suspend = false) {
-  return managedConfig(createConfigCapabilityHarness(request), suspend);
+  const harness = createConfigCapabilityHarness(request);
+  capabilityCleanups.push(() => {
+    if (suspend) {
+      harness.runtimeConfig.setWritesSuspended(true);
+    }
+    harness.runtimeConfig.dispose();
+  });
+  return harness;
 }
 
 export function expectFeedback(
@@ -52,8 +46,8 @@ export function createPatchServer() {
   const store = createConfigServerMock();
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "config.patch" || method === "config.set") {
-      const submission = params as { raw: string; baseHash: string };
-      if (submission.baseHash !== store.currentHash()) {
+      const { raw, baseHash } = params as { raw: string; baseHash: string };
+      if (baseHash !== store.currentHash()) {
         throw new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "config changed since last load; re-run config.get and retry",
@@ -61,19 +55,12 @@ export function createPatchServer() {
       }
       if (method === "config.patch") {
         const snapshot = (await store.request("config.get")) as ConfigSnapshot;
-        // These scenarios patch separate top-level values; the existing store
-        // still owns persisted bytes, revision hashes, and applied revisions.
-        const config = {
-          ...snapshot.config,
-          ...(JSON.parse(submission.raw) as Record<string, unknown>),
-        };
+        // Shallow patches only; the store owns persistence and revisions.
+        const config = { ...snapshot.config, ...(JSON.parse(raw) as Config) };
         if (JSON.stringify(config) === JSON.stringify(snapshot.config)) {
           return { noop: true, config };
         }
-        await store.request("config.set", {
-          raw: JSON.stringify(config),
-          baseHash: submission.baseHash,
-        });
+        await store.request("config.set", { raw: JSON.stringify(config), baseHash });
         return { config, hash: store.currentHash() };
       }
     }
@@ -82,17 +69,13 @@ export function createPatchServer() {
   return { store, request };
 }
 
-export function configSnapshot(
-  config: Record<string, unknown>,
-  hash = "hash-1",
-  raw = JSON.stringify(config),
-) {
+export function configSnapshot(config: Config, hash = "hash-1", raw = JSON.stringify(config)) {
   return { config, raw, hash, valid: true, issues: [] };
 }
 
 export async function expectStoredConfig(
   server: { request: (method: string) => Promise<unknown> },
-  config: Record<string, unknown>,
+  config: Config,
 ) {
   await expect(server.request("config.get")).resolves.toMatchObject({ config });
 }
@@ -128,7 +111,7 @@ export function configServerTransport(
     handshake: { mode: "require-challenge", timeoutMs: 100 },
     reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
   });
-  transports.add(transport);
+  transportCleanups.push(() => transport.stop());
   return transport;
 }
 

@@ -1148,10 +1148,6 @@ openclaw-chat-sidebar-region,
   grid-area: divider;
 }
 
-.sidebar-region--desktop .sidebar-column__divider {
-  --resize-handle-rest-color: var(--border);
-}
-
 .sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
   grid-template-rows: auto minmax(0, 1fr) auto auto minmax(0, 1fr);
 }
@@ -1229,6 +1225,8 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-region--desktop .chat-thread:not(.chat-thread--route-loading) {
+  --chat-table-reserved-space: var(--chat-details-space, 0px);
+
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--chat-details-space, 0px);
   align-content: start;

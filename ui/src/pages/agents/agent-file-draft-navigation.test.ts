@@ -170,6 +170,7 @@ it.each([
             agentId: "main",
             name: "AGENTS.md",
             content: draft,
+            expectedWorkspace: "/tmp/main",
             expectedHash: "a".repeat(64),
           }),
         );
@@ -222,6 +223,7 @@ it.each([
         agentId: "main",
         name: "AGENTS.md",
         content: draft,
+        expectedWorkspace: "/tmp/main",
         ...(transition === "missing file"
           ? { expectedMissing: true }
           : { expectedHash: "a".repeat(64) }),
@@ -246,6 +248,7 @@ it.each([
         agentId: "main",
         name: "AGENTS.md",
         content: "next edit",
+        expectedWorkspace: "/tmp/main",
         expectedHash: "b".repeat(64),
       });
     }

@@ -4,12 +4,15 @@ import { personActivityLink } from "../../../components/person-activity-link.ts"
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuControls, MenuEntry } from "../../../components/solid/menu.tsx";
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   type ChatSessionSharingProps,
   VISIBILITY_LABEL_KEYS,
   ChatSessionSharingModeIcon,
 } from "./chat-session-sharing-shared.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export function useChatSessionSharingMenu(
   props: ChatSessionSharingProps,

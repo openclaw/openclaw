@@ -358,7 +358,6 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
         defaults: {
           workspace: state.workspaceDir,
           skipBootstrap: true,
-          heartbeat: { every: "0m" },
           model: { primary: provider.modelRef },
           models: {
             [provider.modelRef]: {

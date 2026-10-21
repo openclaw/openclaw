@@ -466,3 +466,61 @@ it("keeps the list readable but locked without admin access", async () => {
   );
   expect(runtimeConfig.patch).not.toHaveBeenCalled();
 });
+
+it("releases the initial provider gate after inventory failure and recovers on retry", async () => {
+  const initial = deferred<unknown>();
+  let reads = 0;
+  const { context, request } = createAgentsHarness(async () =>
+    ++reads === 1 ? initial.promise : inventory(),
+  );
+  const page = appendPage(context);
+  await waitForSolid(() => expect(requestCount(request, "acpx.agents.list")).toBe(1));
+  expect(agentRow(page, "opencode")).toBeNull();
+  expect(page.querySelector(".model-providers__search")).toBeNull();
+  initial.reject(new Error("Inventory unavailable"));
+  await waitForProviders(page);
+  await waitForSolid(() => expect(page.querySelector(".model-providers__search")).not.toBeNull());
+  const section = page.querySelector(".model-providers__installed-agents")!;
+  await waitForSolid(() =>
+    expect(section.querySelector('[role="alert"]')?.textContent).toBe("Inventory unavailable"),
+  );
+  [...section.querySelectorAll("button")]
+    .find((button) => button.textContent?.trim() === "Retry")!
+    .click();
+  await waitForSolid(() => expect(agentRow(page, "opencode")).not.toBeNull());
+  expect(section.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("retains inventory and its refresh control through a failed refresh and retry", async () => {
+  const refreshing = deferred<unknown>();
+  let reads = 0;
+  const retry = deferred<unknown>();
+  const { context } = createAgentsHarness(async () => {
+    reads += 1;
+    return reads === 2 ? refreshing.promise : reads === 3 ? retry.promise : inventory();
+  });
+  const page = await mountAgents(context);
+  const section = page.querySelector(".model-providers__installed-agents")!;
+  const row = agentRow(page, "opencode");
+  const refresh = refreshButton(page, ".model-providers__installed-agents");
+  refresh.focus();
+  refresh.click();
+  await waitForSolid(() => expect(refresh.disabled).toBe(true));
+  expect(agentRow(page, "opencode")).toBe(row);
+  refreshing.reject(new Error("Inventory refresh failed"));
+  await waitForSolid(() =>
+    expect(section.querySelector('[role="alert"]')?.textContent).toBe("Inventory refresh failed"),
+  );
+  expect(refreshButton(page, ".model-providers__installed-agents")).toBe(refresh);
+  expect(agentRow(page, "opencode")).toBe(row);
+  [...section.querySelectorAll("button")]
+    .find((button) => button.textContent?.trim() === "Retry")!
+    .click();
+  await waitForSolid(() => expect(refresh.disabled).toBe(true));
+  expect(section.querySelector('[role="alert"]')).toBeNull();
+  expect(agentRow(page, "opencode")).toBe(row);
+  retry.resolve(inventory());
+  await waitForSolid(() => expect(refresh.disabled).toBe(false));
+  expect(section.querySelector('[role="alert"]')).toBeNull();
+  expect(agentRow(page, "opencode")).toBe(row);
+});

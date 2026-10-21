@@ -31,6 +31,7 @@ function createHost(waitForRender = false, deferReady = false) {
   const options = {
     frame,
     widget: widget(),
+    documentActive: true,
     sandboxOrigin: "https://sandbox.example",
     sandboxUrl: SANDBOX_URL,
     sourceOrigin: "https://gateway.example",

@@ -212,13 +212,12 @@ function resolveElevenLabsOutputPlan(req: SpeechSynthesisRequest): {
 }
 
 function definedSettings<T extends Record<string, unknown>>(settings: T): Partial<T> {
-  const defined = { ...settings };
-  for (const key in defined) {
-    if (defined[key] === undefined) {
-      delete defined[key];
+  for (const key in settings) {
+    if (settings[key] === undefined) {
+      delete settings[key];
     }
   }
-  return defined;
+  return settings;
 }
 
 function normalizeVoiceSettings(

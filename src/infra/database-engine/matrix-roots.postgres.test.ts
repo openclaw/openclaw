@@ -34,6 +34,13 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { preparePostgresBackupDiscovery } from "../backup-database-discovery.js";
 import { createBackupSqliteSnapshotPlan } from "../backup-sqlite-snapshot.js";
+import { resolveClientCredentialStorePath } from "../client-credential-paths.js";
+import { readClientCredentialReceipt } from "../client-credential-readiness.js";
+import { readClientCredentialFileIdentity } from "../client-credential-receipt.js";
+import {
+  openClientCredentialCustody,
+  runClientCredentialOperation,
+} from "../client-credential-store.js";
 import * as recovery from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import * as snapshots from "../sqlite-snapshot.js";
@@ -89,7 +96,12 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
   });
 
   async function withRoots(
-    run: (state: OpenClawTestState, files: string[], config: OpenClawConfig) => Promise<void>,
+    run: (
+      state: OpenClawTestState,
+      files: string[],
+      config: OpenClawConfig,
+      expectCredentials: () => void,
+    ) => Promise<void>,
   ) {
     await withOpenClawTestState({ scenario: "minimal", prefix: "matrix-port-" }, async (state) => {
       const config: OpenClawConfig = {
@@ -117,12 +129,73 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       );
       try {
         for (const [index, file] of files.entries()) {
-          const { db } = openOpenClawStateDatabase({ path: file });
+          const { db } = openOpenClawStateDatabase({
+            path: file,
+            env: { ...state.env, OPENCLAW_STATE_DIR: path.dirname(path.dirname(file)) },
+          });
           db.prepare(
             "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at) VALUES ('matrix', 'idb-snapshot', ?, ?, 1)",
           ).run(`chunk-${index}`, cryptoValue);
         }
         await closeOpenClawStateDatabaseAsync();
+        const credentialEnv = (file: string) => ({
+          ...state.env,
+          OPENCLAW_STATE_DIR: path.dirname(path.dirname(file)),
+        });
+        const tokenKey = { device_id: "synthetic-matrix-client", role: "operator" };
+        for (const [index, file] of files.entries()) {
+          runClientCredentialOperation(credentialEnv(file), {
+            kind: "token.replace",
+            key: tokenKey,
+            token: {
+              ...tokenKey,
+              token: `synthetic-account-token-${index}`,
+              scopes_json: '["operator.read"]',
+              updated_at_ms: 1,
+            },
+          });
+        }
+        const localSnapshot = (file: string) => {
+          using owner = openClientCredentialCustody(credentialEnv(file));
+          assert(owner);
+          const stored = readClientCredentialReceipt(owner.database);
+          assert(stored);
+          return {
+            local: readClientCredentialFileIdentity(owner.path),
+            stored,
+            token: owner.run({ kind: "token.read", key: tokenKey }),
+          };
+        };
+        const localCredentials = files.map(localSnapshot);
+        const expectCredentials = () => {
+          for (const [index, file] of files.entries()) {
+            const original = localCredentials[index]!;
+            const physical = readBackupEngine(file);
+            expect(localSnapshot(file)).toEqual({
+              ...original,
+              stored: {
+                ...original.stored,
+                receipt: {
+                  ...original.stored.receipt,
+                  sharedFile: readClientCredentialFileIdentity(file),
+                  source: original.stored.receipt.source
+                    ? {
+                        ...original.stored.receipt.source,
+                        engine: physical.engine,
+                        identity:
+                          physical.engine === "postgres"
+                            ? physical.storeId
+                            : original.stored.receipt.source.identity,
+                      }
+                    : null,
+                },
+              },
+            });
+            expect(readBackupEngine(resolveClientCredentialStorePath(credentialEnv(file)))).toEqual(
+              { engine: "sqlite" },
+            );
+          }
+        };
         const preflight = () => port({ family: "state", to: "postgres", dryRun: true });
         await expect(preflight()).resolves.toMatchObject({ phase: "preflight" });
         const retainedEntries = files.map(sqliteEntries);
@@ -163,7 +236,8 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         await closeOpenClawStateDatabaseAsync();
         expect(files.map(sqliteEntries)).toEqual(retainedEntries);
         await state.writeConfig(config);
-        await run(state, files, config);
+        await run(state, files, config, expectCredentials);
+        expectCredentials();
       } finally {
         vi.restoreAllMocks();
         await closeOpenClawStateDatabaseAsync();
@@ -221,10 +295,11 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
 
   // Green CI runs 39068774273/39071119824 measured p95 at 310s across the real root round trip.
   it("ports every retained token/account root with the state family and restores fresh namespaces", async () => {
-    await withRoots(async (state, files, config) => {
+    await withRoots(async (state, files, config, expectCredentials) => {
       const expected = files.map(sqliteEntries);
       const forward = await port({ family: "state", to: "postgres" });
       expect(forward).toMatchObject({ engine: "postgres" });
+      expectCredentials();
       const physical = await postgresRoots(files);
       expect(physical.map((root) => root.entries)).toEqual(expected);
       expect(new Set(physical.map((root) => root.anchor.namespace)).size).toBe(files.length);
@@ -335,6 +410,15 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         sqliteRows(capturedGlobal!.sourcePath, "SELECT agent_id, path FROM agent_databases"),
       ).toEqual([{ agent_id: "retained", path: agentPath }]);
       for (const [index, file] of files.entries()) {
+        const local = resolveClientCredentialStorePath({
+          ...state.env,
+          OPENCLAW_STATE_DIR: path.dirname(path.dirname(file)),
+        });
+        const capturedLocal = backup.snapshots.find((entry) => entry.archiveSourcePath === local);
+        expect(capturedLocal).toBeDefined();
+        expect(
+          sqliteRows(capturedLocal!.sourcePath, "SELECT token FROM device_auth_tokens"),
+        ).toEqual([{ token: `synthetic-account-token-${index}` }]);
         const directory = state.path(`restored-${index}`, path.basename(`${file}.postgres`));
         await fs.mkdir(directory, { recursive: true });
         const capsule = backup.snapshots.filter((entry) =>
@@ -377,7 +461,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
   it.each(["resume", "rollback"] as const)(
     "%s recovers a partially published multi-root port and blocks ordinary startup meanwhile",
     async (action) => {
-      await withRoots(async (state, files) => {
+      await withRoots(async (state, files, _config, expectCredentials) => {
         const expected = files.map(sqliteEntries);
         const prepare = snapshots.prepareVerifiedSqliteFile;
         let published = 0;
@@ -412,6 +496,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
           }),
         ).toEqual(saved);
         await port({ [action]: manifestPath });
+        expectCredentials();
         expect(() => recovery.assertDatabasePortStartupAllowed(state.stateDir)).not.toThrow();
         if (action === "resume") {
           expect((await postgresRoots(files)).map((root) => root.entries)).toEqual(expected);

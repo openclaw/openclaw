@@ -8,7 +8,7 @@ exception that justifies keeping it. Measure the touched production files before
 and after, and report the counts in the PR. Prefer fewer production lines;
 explain growth needed for the idiom or correctness.
 
-The installed `solid-js/CHEATSHEET.md` (rc.14) is the API contract. Its
+The installed `solid-js/CHEATSHEET.md` (rc.16) is the API contract. Its
 "What changed from 1.x" list is required reading before the first edit: Solid 2
 is neither React nor Solid 1, and both priors produce plausible-looking bugs.
 
@@ -65,7 +65,37 @@ prod 'runWithOwner\(|getOwner\(' | wc -l
 | Loading flags in local signals around an async read                                                          | An async `createMemo`/`createProjection` under `<Loading>`; `isPending(() => x())` for in-flight changes                                                                 | The flag is an owner's mutation state (saving/admitted/uncertain), which stays at the owner.                                                                                                                                         |
 | Hand-rolled keyed merge of server lists into local state                                                     | `createProjection(async () => owner.list(), [], { key: "id" })`, or `reconcile(rows, "id")` inside a store draft                                                         | The list is an owner snapshot; consume it through a projection instead.                                                                                                                                                              |
 
+On rc.16, a return-form object derivation can omit its seed; a provided seed
+must be a complete value, and array derivations still need `[]`. Refresh a
+derived store at its root, then read the nested value after settlement. A
+`Loading` reset uses a value (`on={id()}`), not an accessor. Teardown writes are
+now supported by Solid, but disposal still should not republish an owner's
+state merely to reset a view that is gone. See the [rc.16 notes](lessons.md#rc16-upgrade).
+
 ## Order of work
+
+For the Solid 2 pass, use the [async and action recipes](async-and-actions.md)
+and report these counts in the touched production files before and after.
+Count the old pattern and its replacement separately; name justified survivors.
+
+| Item             | Audit                                                                                                                        |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Native handlers  | Conditional/prop handler expressions bound once versus stable callbacks that read current state.                             |
+| Lifecycle        | Component-level `onCleanup` versus paired `onSettled` setup/teardown; retain computation cleanup.                            |
+| Async reads      | Presentation loading/error/data flags versus owner-backed async reads under `Loading`/`Errored`; keep owner admission facts. |
+| Mutations        | Manual saving/rollback state versus `action`, optimistic values, affected facts, and reconciliation; retain owner authority. |
+| Code splitting   | Manual component import/signal loaders versus `lazy`; preserve original import timing.                                       |
+| Structured state | Immutable array/object signal updates versus store drafts or keyed projections; no writable owner mirror.                    |
+| JSX              | Hand-written `createComponent` in `.ts` versus JSX in `.tsx`.                                                                |
+| Context          | Wrappers that only rethrow missing providers versus default-less context.                                                    |
+| Sibling loading  | Independent asynchronous siblings versus an intentional `Reveal` group.                                                      |
+| Owner APIs       | `createRoot`/`runWithOwner`/`getOwner` outside foreign-DOM mounts and reactive primitives.                                   |
+
+An API appearing in the after column is not evidence by itself. Verify that
+async reads do not duplicate owner requests, errors are visible, optimistic
+proxies cannot become write authority, and `refresh` targets the actual
+derivation. A rejected action promise needs an explicit error consumer;
+`Errored` does not catch an ignored event-handler promise.
 
 1. Read the module, its owner, its callers, and its tests. Name the contract each
    piece serves before deleting anything.

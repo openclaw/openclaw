@@ -472,6 +472,48 @@ describe("browser tab card", () => {
     expect(gateway.request).toHaveBeenCalledTimes(2);
   });
 
+  it("retains failed images through screenshot refreshes and unavailable targets until a new target", async () => {
+    const gateway = gatewayContext(["browser.request"], ["operator.admin"], true);
+    const image = "data:image/png;base64,dGh1bWJuYWls";
+    gateway.request.mockImplementation(async (method: string) =>
+      method === "controlUi.linkPreview"
+        ? { imageDataUrl: image, faviconDataUrl: "data:image/png;base64,aWNvbg==" }
+        : { path: "/tmp/tab.png" },
+    );
+    const element = await card(gateway.context);
+    await waitForSolid(() => {
+      expect(element.querySelector(".shot img")?.getAttribute("src")).toBe(image);
+      expect(element.querySelector(".shot.social")).toBeNull();
+      expect(element.querySelector(".icon img")).not.toBeNull();
+    });
+    for (const img of element.querySelectorAll("img")) {
+      img.dispatchEvent(new Event("error"));
+    }
+    flush();
+    expect(element.querySelector("img")).toBeNull();
+
+    updateCard(element, { revision: "two" });
+    flush();
+    await waitForSolid(() => expect(gateway.fetchMock).toHaveBeenCalledTimes(2));
+    expect(element.querySelector("img")).toBeNull();
+
+    gateway.context.config.current.automaticallyFetchFavicons = false;
+    gateway.notify();
+    flush();
+    expect(element.querySelector("img")).toBeNull();
+    updatePreview(element, { url: "https://example.com/new" });
+    flush();
+    expect(element.querySelector("img")).toBeNull();
+
+    gateway.context.config.current.automaticallyFetchFavicons = true;
+    gateway.notify();
+    flush();
+    await waitForSolid(() => {
+      expect(element.querySelector(".shot img")?.getAttribute("src")).toBe(image);
+      expect(element.querySelector(".icon img")).not.toBeNull();
+    });
+  });
+
   it("keeps the live screenshot ahead of the social image while using the favicon", async () => {
     const gateway = gatewayContext(["browser.request"], ["operator.admin"], true);
     const screenshot = createDeferred<{ path: string }>();

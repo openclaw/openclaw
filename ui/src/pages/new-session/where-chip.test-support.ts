@@ -12,7 +12,7 @@ type PickerPresentation = {
   gatewayName?: string;
   environmentQuery?: string;
   suggestedProfile?: NewSessionPlaceControlsOptions["gateway"]["suggestedProfile"];
-  catalogLoading?: boolean;
+  catalogRead?: Promise<void>;
   onEnvironmentQueryInput?: (query: string) => void;
   onSelectDevice?: (id: string) => void;
   onSelectCloudProfile?: (id: string) => void;
@@ -101,7 +101,7 @@ export function pickerParams(
   Object.defineProperties(gateway, {
     gatewayName: { value: presentation.gatewayName ?? "" },
     suggestedProfile: { value: presentation.suggestedProfile },
-    cloudProfilesPending: { value: presentation.catalogLoading ?? false },
+    cloudProfilesRead: { value: presentation.catalogRead },
   });
   if (presentation.cloudProfileDisabledReason) {
     const original = hosted.environmentCloudDisabledReason;

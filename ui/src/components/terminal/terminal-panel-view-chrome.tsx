@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, Loading, Show } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { Icon } from "../solid/icon.tsx";
@@ -113,8 +113,8 @@ export function SessionMenu(props: {
             </div>
           </Show>
         </div>
-        <Show
-          when={!props.state.loading()}
+        <Loading
+          on={props.state.requestKey()}
           fallback={
             <PanelLoadingSkeleton
               variant="terminal"
@@ -176,7 +176,7 @@ export function SessionMenu(props: {
               </Show>
             </div>
           </Show>
-        </Show>
+        </Loading>
       </div>
     </Show>
   );

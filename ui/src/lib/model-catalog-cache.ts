@@ -15,6 +15,7 @@ export type ModelCatalogReadScope = Pick<
 >;
 type ModelCatalogInvalidationScope = ModelCatalogReadScope & {
   sessionsOnly?: boolean;
+  pendingOnly?: boolean;
   sessionModelRevision?: string;
 };
 export type ModelCatalogCacheUpdate = {
@@ -23,7 +24,7 @@ export type ModelCatalogCacheUpdate = {
 };
 
 export type ModelCatalogClient = Pick<GatewayBrowserClient, "request">;
-export type ModelCatalogInvalidation = "clear" | "refresh";
+export type ModelCatalogInvalidation = "clear" | "refresh" | "pending";
 
 export function modelCatalogEventInvalidation(
   event: Pick<GatewayEventFrame, "event" | "payload">,
@@ -34,14 +35,21 @@ export function modelCatalogEventInvalidation(
   }
   if (event.event === "chat.metadata.changed") {
     const payload = asNullableRecord(event.payload);
-    return payload?.modelSelectionChanged === true
-      ? "clear"
-      : payload?.modelCatalogChanged === false ||
-          (scope?.agentId !== undefined &&
-            typeof payload?.agentId === "string" &&
-            scope.agentId.trim() !== payload.agentId.trim())
-        ? undefined
-        : "refresh";
+    if (payload?.modelSelectionChanged === true) {
+      return "clear";
+    }
+    if (
+      scope?.agentId !== undefined &&
+      typeof payload?.agentId === "string" &&
+      scope.agentId.trim() !== payload.agentId.trim()
+    ) {
+      return undefined;
+    }
+    return payload?.modelCatalogChanged === false
+      ? payload.modelCatalogStatusChanged === true
+        ? "pending"
+        : undefined
+      : "refresh";
   }
   return undefined;
 }
@@ -319,9 +327,13 @@ export function invalidateModelCatalogCache(
     return () => true;
   }
   const unchanged = new Set(
-    scope?.sessionModelRevision
+    scope?.sessionModelRevision || scope?.pendingOnly
       ? Array.from(cache.entries)
-          .filter(([, entry]) => entry.result?.sessionModelRevision === scope.sessionModelRevision)
+          .filter(([, entry]) =>
+            scope.pendingOnly
+              ? entry.result !== undefined && !entry.result.pendingProviders?.length
+              : entry.result?.sessionModelRevision === scope.sessionModelRevision,
+          )
           .map(([key]) => key)
       : [],
   );

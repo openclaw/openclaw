@@ -30,6 +30,7 @@ const catalog = {
       readingMode: "Reading mode",
       syntaxHighlighting: "Syntax highlighting",
       wrapLines: "Wrap lines",
+      attachToSession: "Attach to session",
       fileActions: "File actions",
       moreFileActions: "More file actions",
       openInEditor: "Open in editor",

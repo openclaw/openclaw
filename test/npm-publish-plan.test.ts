@@ -1,4 +1,3 @@
-// npm publish plan tests validate package publish planning rules.
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -47,6 +46,10 @@ function fetchPackument(
     ...options,
   });
 }
+
+const noRetry = async () => {
+  throw new Error("unexpected retry");
+};
 
 describe("fetchNpmRegistryPackumentWithRetry", () => {
   it("bounds decoded packument bytes and cancels an oversized stream without retrying", async () => {
@@ -160,9 +163,7 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
     await expect(
       fetchPackument({
         fetchImpl,
-        sleep: async () => {
-          throw new Error("invalid content must not retry");
-        },
+        sleep: noRetry,
       }),
     ).rejects.toThrow("returned invalid JSON");
     expect(fetchImpl).toHaveBeenCalledOnce();
@@ -176,9 +177,7 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
     await expect(
       fetchPackument({
         fetchImpl,
-        sleep: async () => {
-          throw new Error("permanent failure must not retry");
-        },
+        sleep: noRetry,
       }),
     ).rejects.toBe(error);
     expect(fetchImpl).toHaveBeenCalledOnce();
@@ -189,9 +188,7 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
     const fetchImpl = vi.fn(async () => registryResponse({ status: 404, cancel }));
     const result = await fetchPackument({
       fetchImpl,
-      sleep: async () => {
-        throw new Error("stable 404 must not sleep");
-      },
+      sleep: noRetry,
       createSignal: () => new AbortController().signal,
     });
 
@@ -205,6 +202,18 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
   const packageName = "@openclaw/fixture";
   const packageUrl = "https://registry.npmjs.org/@openclaw/fixture/-/fixture.tgz";
   const bytes = Buffer.from("qualified package bytes");
+  const fetchTarball = (
+    options: Omit<
+      Parameters<typeof fetchNpmRegistryTarballWithRetry>[0],
+      "packageName" | "packageUrl" | "maxBytes"
+    > & { packageUrl?: string },
+  ) =>
+    fetchNpmRegistryTarballWithRetry({
+      packageName,
+      packageUrl,
+      maxBytes: bytes.length,
+      ...options,
+    });
 
   it.each([429, "connection"] as const)(
     "recovers %s using only the original tarball URL",
@@ -212,10 +221,7 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
       const requests: string[] = [];
       const waits: number[] = [];
       let canceled = 0;
-      const result = await fetchNpmRegistryTarballWithRetry({
-        packageName,
-        packageUrl,
-        maxBytes: bytes.length,
+      const result = await fetchTarball({
         fetchImpl: async (url) => {
           requests.push(url);
           if (requests.length !== 1) {
@@ -255,10 +261,7 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
       let requests = 0;
       let canceled = 0;
       await expect(
-        fetchNpmRegistryTarballWithRetry({
-          packageName,
-          packageUrl,
-          maxBytes: bytes.length,
+        fetchTarball({
           fetchImpl: async () => {
             requests += 1;
             return new Response(
@@ -273,9 +276,7 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
               },
             );
           },
-          sleep: async () => {
-            throw new Error("permanent responses must not retry");
-          },
+          sleep: noRetry,
         }),
       ).rejects.toThrow(`HTTP ${status}`);
       expect(requests).toBe(1);
@@ -286,19 +287,14 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
   it.each(["header", "stream"])("rejects oversized %s bytes without retry", async (kind) => {
     let requests = 0;
     await expect(
-      fetchNpmRegistryTarballWithRetry({
-        packageName,
-        packageUrl,
-        maxBytes: bytes.length,
+      fetchTarball({
         fetchImpl: async () => {
           requests += 1;
           return new Response(Buffer.concat([bytes, Buffer.from("extra")]), {
             headers: kind === "header" ? { "content-length": String(bytes.length + 5) } : {},
           });
         },
-        sleep: async () => {
-          throw new Error("oversized bytes must not retry");
-        },
+        sleep: noRetry,
       }),
     ).rejects.toMatchObject({ code: "ETOOBIG" });
     expect(requests).toBe(1);
@@ -310,10 +306,7 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
       const retryAfter = kind === "seconds" ? "60" : new Date(Date.now() + 60_000).toUTCString();
       let requests = 0;
       await expect(
-        fetchNpmRegistryTarballWithRetry({
-          packageName,
-          packageUrl,
-          maxBytes: bytes.length,
+        fetchTarball({
           deadlineMs: Date.now() + 1000,
           fetchImpl: async () => {
             requests += 1;
@@ -322,9 +315,7 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
               headers: { "retry-after": retryAfter },
             });
           },
-          sleep: async () => {
-            throw new Error("deadline must fail before sleeping");
-          },
+          sleep: noRetry,
         }),
       ).rejects.toThrow("deadline would be exceeded before the permitted retry");
       expect(requests).toBe(1);
@@ -353,10 +344,8 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
       if (!address || typeof address === "string") {
         throw new Error("Expected a TCP listener");
       }
-      const result = await fetchNpmRegistryTarballWithRetry({
-        packageName,
+      const result = await fetchTarball({
         packageUrl: `http://127.0.0.1:${address.port}/fixture.tgz`,
-        maxBytes: bytes.length,
         timeoutMs: 1000,
         sleep: async () => {},
       });
@@ -490,16 +479,15 @@ describe("shouldRequireNpmDistTagMirrorAuth", () => {
 
 describe("extended-stable npm publish override", () => {
   it("publishes final patch 33 and later to extended-stable without mirrors", () => {
-    expect(resolveNpmPublishPlan("2026.7.33", undefined, "extended-stable")).toEqual({
+    const expected = {
       channel: "stable",
       publishTag: "extended-stable",
       mirrorDistTags: [],
-    });
-    expect(resolveNpmPublishPlan("2026.7.34", "2026.8.1-beta.1", "extended-stable")).toEqual({
-      channel: "stable",
-      publishTag: "extended-stable",
-      mirrorDistTags: [],
-    });
+    };
+    expect(resolveNpmPublishPlan("2026.7.33", undefined, "extended-stable")).toEqual(expected);
+    expect(resolveNpmPublishPlan("2026.7.34", "2026.8.1-beta.1", "extended-stable")).toEqual(
+      expected,
+    );
   });
 
   it.each([

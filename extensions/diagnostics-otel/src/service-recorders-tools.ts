@@ -323,12 +323,13 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
         spanAttrs[`openclaw.phase.detail.${key}`] =
           typeof value === "boolean" ? String(value) : value;
       }
+      const endTimeMs = evt.endedAt ?? evt.ts;
       const span = runtime.spanWithDuration(
         "openclaw.diagnostic.phase",
         spanAttrs,
         evt.durationMs,
         {
-          endTimeMs: evt.ts,
+          endTimeMs,
           ...(metadata.trusted
             ? {
                 parentContext:
@@ -337,7 +338,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
             : {}),
         },
       );
-      span.end(evt.ts);
+      span.end(endTimeMs);
     },
     recordTelemetryExporter(
       evt: TelemetryExporterDiagnosticEvent,

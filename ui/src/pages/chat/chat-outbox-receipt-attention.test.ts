@@ -2,7 +2,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStoredChatOutboxReader } from "../../lib/chat/outbox-store-projection.ts";
-import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
+import { makeChatHost, requestCalls, expectRequestCounts } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { admitHostQueueItems, row } from "./chat-outbox-recovery.test-support.ts";
 import { updateQueuedMessage } from "./chat-queue.ts";
@@ -67,8 +67,7 @@ describe("outbox receipt attention", () => {
         },
       });
       expect(listStoredChatOutboxes(host)).toEqual([]);
-      expect(requestCalls(host.request, "chat.history")).toHaveLength(1);
-      expect(requestCalls(host.request, "chat.send")).toEqual([]);
+      expectRequestCounts(host.request, { "chat.history": 1, "chat.send": 0 });
     },
   );
 

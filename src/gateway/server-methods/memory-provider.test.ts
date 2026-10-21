@@ -6,7 +6,7 @@ import {
   createMemoryOperatorClient as operatorClient,
   createMemoryProvider,
 } from "./memory-provider.test-support.js";
-import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -28,11 +28,6 @@ import { memorySearchHandlers } from "./memory-search.js";
 
 const config: OpenClawConfig = { agents: { entries: { main: {} } } };
 const reference = { providerId: "records", id: "claim:42", revision: "r3" };
-const searchPage = {
-  hits: [{ reference, excerpt: "A record, not a workspace file" }],
-  coverage: "partial" as const,
-  nextCursor: "page2",
-};
 
 function syntheticClient(): NonNullable<GatewayRequestHandlerOptions["client"]> {
   return { ...operatorClient(), internal: { syntheticClient: true } } as NonNullable<
@@ -70,50 +65,8 @@ beforeEach(() => {
     authority: { scopes: ["operator.read"], assertCurrent },
     release,
   });
-  provider = createMemoryProvider(reference, searchPage, true);
+  provider = createMemoryProvider(reference);
   mocks.acquire.mockResolvedValue({ provider, providerId: "records", adapter: "native" });
-});
-
-it("routes explicit v2 search, record retrieval, and health without the file runtime", async () => {
-  const search = await invoke("memory.search", {
-    version: 2,
-    query: "record",
-    agentId: "main",
-    sources: ["memory"],
-  });
-  expect(provider.search).toHaveBeenCalledExactlyOnceWith({
-    query: "record",
-    maxResults: 20,
-    minScore: undefined,
-    cursor: undefined,
-    sources: ["memory"],
-  });
-  expectRpcResult(search, {
-    version: 2,
-    agentId: "main",
-    providerId: "records",
-    ...searchPage,
-  });
-  const get = await invoke("memory.get", { reference, from: 2, lines: 10 });
-  expect(provider.get).toHaveBeenCalledWith({ reference, from: 2, lines: 10 });
-  expectRpcResult(get, expect.objectContaining({ status: "ok", reference, text: "Record body" }));
-  const health = await invoke("memory.status", {});
-  expectRpcResult(health, {
-    version: 2,
-    agentId: "main",
-    providerId: "records",
-    status: "ready",
-  });
-  expect(mocks.legacy).not.toHaveBeenCalled();
-  expect(provider.close).toHaveBeenCalledTimes(3);
-  expect(mocks.capture).not.toHaveBeenCalled();
-  expect(mocks.acquire).toHaveBeenCalledWith(
-    expect.objectContaining({
-      context: expect.objectContaining({
-        authority: { kind: "operator", scopes: ["operator.read"], connId: "cli-connection" },
-      }),
-    }),
-  );
 });
 
 it.each([

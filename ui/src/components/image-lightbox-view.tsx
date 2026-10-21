@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createSignal, onCleanup } from "solid-js";
+import { Show, createSignal, onSettled } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { showToast } from "../lib/toast.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
@@ -126,7 +126,7 @@ function LightboxImageDownload(props: {
 }) {
   const [downloading, setDownloading] = createSignal(false, { ownedWrite: true });
   let active = true;
-  onCleanup(() => {
+  onSettled(() => () => {
     active = false;
   });
   const download = async () => {

@@ -274,7 +274,6 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             defaults: {
               model: "openai/gpt-4.1",
               skipBootstrap: true,
-              heartbeat: { every: "0m" },
             },
             entries: { keeper: { workspace: state.workspaceDir } },
           },

@@ -1,9 +1,20 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, onSettled, Show, untrack, useContext } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  Errored,
+  lazy,
+  Loading,
+  onSettled,
+  Show,
+  untrack,
+  useContext,
+} from "solid-js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
 import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerMcpAppEnglish } from "../../../i18n/locales/en-mcp-app.ts";
 import {
   canvasWidgetNameForDocument,
@@ -24,7 +35,7 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
@@ -39,7 +50,13 @@ import {
 } from "./widget-card-menu.tsx";
 import { exportWidget } from "./widget-export.ts";
 
+registerEnglishCatalog(registerChatSessionEnglish);
+
 registerMcpAppEnglish();
+
+const YouTubeVideoCard = lazy(() => import("./youtube-video-card.tsx"), {
+  export: "YouTubeVideoCard",
+});
 
 type WidgetCardOptions = {
   rawText?: string | null;
@@ -671,30 +688,20 @@ export function ToolPreview(props: ToolPreviewProps) {
                 }
               >
                 {(item) => {
-                  const [player, setPlayer] =
-                    createSignal<typeof import("./youtube-video-card.tsx").YouTubeVideoCard>();
-                  void import("./youtube-video-card.tsx").then(
-                    ({ YouTubeVideoCard }) => setPlayer(() => YouTubeVideoCard),
-                    (error: unknown) =>
-                      console.error("[openclaw] failed to load YouTube player", error),
+                  const Fallback = () => (
+                    <openclaw-youtube-video>
+                      <a href={item().watchUrl} target="_blank" rel="noopener noreferrer">
+                        {preview().title?.trim() || t("chat.youtube.video")}
+                        <Icon name="externalLink" />
+                      </a>
+                    </openclaw-youtube-video>
                   );
                   return (
                     <Show when={`${props.options?.sessionKey ?? ""}\0${item().watchUrl}`} keyed>
                       {(_key) => (
-                        <Show
-                          when={player()}
-                          keyed
-                          fallback={
-                            <openclaw-youtube-video>
-                              <a href={item().watchUrl} target="_blank" rel="noopener noreferrer">
-                                {preview().title?.trim() || t("chat.youtube.video")}
-                                <Icon name="externalLink" />
-                              </a>
-                            </openclaw-youtube-video>
-                          }
-                        >
-                          {(Player) => (
-                            <Player
+                        <Errored fallback={<Fallback />}>
+                          <Loading fallback={<Fallback />}>
+                            <YouTubeVideoCard
                               video={item()}
                               videoTitle={preview().title ?? ""}
                               enabled={
@@ -702,8 +709,8 @@ export function ToolPreview(props: ToolPreviewProps) {
                                 preview().sandbox !== "strict"
                               }
                             />
-                          )}
-                        </Show>
+                          </Loading>
+                        </Errored>
                       )}
                     </Show>
                   );

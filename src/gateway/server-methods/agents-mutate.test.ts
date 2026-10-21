@@ -3,11 +3,15 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { WORKSPACE_BOOTSTRAP_FILENAMES } from "../../agents/workspace.js";
-import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
+import {
+  getRuntimeConfigWriteApplication,
+  type RuntimeConfigWriteApplicationStatus,
+} from "../../config/runtime-write-application.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { FsSafeError, root, type ReadResult } from "../../infra/fs-safe.js";
 import { resumeAgentDeletions } from "../server-agent-deletion-recovery.js";
 import * as lifecycleState from "../session-lifecycle-state.js";
+import { registerAgentCreateTests } from "./agents-create.test-support.js";
 import { registerAgentDeletionAuthorityTests } from "./agents-delete-authority.test-support.js";
 import { registerAgentDeleteFilesystemTests } from "./agents-delete-filesystem.test-support.js";
 import {
@@ -70,6 +74,7 @@ const mocks = vi.hoisted(() => ({
     removedBindings: 0,
   })),
   writeConfigFile: vi.fn(async (_nextConfig?: unknown, _writeOptions?: unknown) => {}),
+  configApplicationStatus: vi.fn<() => RuntimeConfigWriteApplicationStatus>(() => "applied"),
   omitConfigMutationResult: false,
   ensureAgentWorkspace: vi.fn(
     async (params?: { dir?: string }): Promise<{ dir: string; identityPathCreated: boolean }> => ({
@@ -98,6 +103,10 @@ const mocks = vi.hoisted(() => ({
   captureDeletedAgentDatabaseFences: vi.fn<() => [string, string][]>(() => []),
   reviveAgentDatabases: vi.fn(async (_agentIds: readonly string[]) => {}),
   logGatewayWarn: vi.fn(),
+  prepareAgentOnboarding: vi.fn(),
+  completeAgentOnboarding: vi.fn(),
+  startAgentOnboardingConversation: vi.fn(),
+  captureGatewayOperatorRunAuthority: vi.fn(),
   runAgentDatabaseCleanup: vi.fn(
     async (_target: unknown, run: () => Promise<unknown>) => await run(),
   ),
@@ -184,8 +193,9 @@ vi.mock("../../config/config.js", async (importOriginal) => {
       });
       await mocks.writeConfigFile(draft, params.writeOptions);
       mocks.loadConfigReturn = draft;
-      if (params.writeOptions) {
-        getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
+      const applicationStatus = mocks.configApplicationStatus();
+      if (params.writeOptions && applicationStatus !== "unclaimed") {
+        getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle(applicationStatus);
       }
       return { nextConfig: draft, result: mocks.omitConfigMutationResult ? undefined : result };
     },
@@ -203,8 +213,9 @@ vi.mock("../../config/config.js", async (importOriginal) => {
       });
       await mocks.writeConfigFile(transformed.nextConfig);
       mocks.loadConfigReturn = transformed.nextConfig;
-      if (params.writeOptions) {
-        getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
+      const applicationStatus = mocks.configApplicationStatus();
+      if (params.writeOptions && applicationStatus !== "unclaimed") {
+        getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle(applicationStatus);
       }
       return {
         path: "/tmp/openclaw/config.json",
@@ -223,6 +234,11 @@ vi.mock("../../commands/agents.config.js", () => ({
   findAgentEntryIndex: mocks.findAgentEntryIndex,
   listAgentEntries: mocks.listAgentEntries,
   pruneAgentConfig: mocks.pruneAgentConfig,
+}));
+
+vi.mock("../operator-run-authority.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../operator-run-authority.js")>()),
+  captureGatewayOperatorRunAuthority: mocks.captureGatewayOperatorRunAuthority,
 }));
 
 vi.mock("../../agents/auth-profiles/path-resolve.js", async (importOriginal) => ({
@@ -461,6 +477,13 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...patched, default: patched };
 });
 
+// mock-isolation: exercise creation ordering without model calls or a second transcript writer.
+vi.mock(import("./agents-onboarding.js"), () => ({
+  prepareAgentOnboarding: mocks.prepareAgentOnboarding,
+  completeAgentOnboarding: mocks.completeAgentOnboarding,
+  startAgentOnboardingConversation: mocks.startAgentOnboardingConversation,
+}));
+
 const { agentsHandlers } = await import("./agents.js");
 let restoreLifecyclePersistence: (() => void) | undefined;
 
@@ -477,6 +500,7 @@ beforeEach(() => {
   restoreLifecyclePersistence = () => lifecyclePersistence.mockRestore();
   vi.mocked(root).mockReset();
   mocks.writeConfigFile.mockReset().mockResolvedValue(undefined);
+  mocks.configApplicationStatus.mockReset().mockReturnValue("applied");
   mocks.omitConfigMutationResult = false;
   mocks.sharedAuthStoreOwnership = { location: "legacy-main" };
   mocks.migrateLegacyMainSessionKeys.mockReset().mockResolvedValue({
@@ -561,7 +585,7 @@ function createContext() {
     getRuntimeConfig: () => mocks.loadConfigReturn,
     dedupe: new Map(),
     cron: { removeAgentJobsTransactional: mocks.cronRemoveAgentJobsTransactional },
-    logGateway: { warn: mocks.logGatewayWarn },
+    logGateway: { warn: mocks.logGatewayWarn, isEnabled: () => false },
   };
 }
 
@@ -691,78 +715,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("agents.create", () => {
-  beforeEach(() => {
-    mocks.captureDeletedAgentDatabaseFences.mockReturnValue([]);
-    mocks.reviveAgentDatabases.mockReset().mockResolvedValue(undefined);
-    mocks.loadConfigReturn = agentConfig({ main: {} });
-  });
-
-  const create = (params: Record<string, unknown>) => call("agents.create", params);
-  it.each([
-    { name: "Test Agent", workspace: "/home/user/agents/test", fancy: false },
-    { name: "Test Agent", workspace: undefined, fancy: false },
-    { name: "Fancy Agent", workspace: "/tmp/ws", fancy: true },
-  ])("creates $name (workspace=$workspace)", async ({ name, workspace, fancy }) => {
-    const respond = await create({
-      name,
-      ...(workspace ? { workspace } : {}),
-      ...(fancy
-        ? { model: "sonnet-4.6", emoji: "🤖", avatar: "https://example.com/avatar.png" }
-        : {}),
-    });
-    expectRespondOk(respond, {
-      ok: true,
-      agentId: fancy ? "fancy-agent" : "test-agent",
-      name,
-      ...(fancy ? { model: "sonnet-4.6" } : {}),
-    });
-    expect(mocks.ensureAgentWorkspace).toHaveBeenCalled();
-    expect(mocks.writeConfigFile).toHaveBeenCalled();
-    expect(mocks.reviveAgentDatabases).not.toHaveBeenCalled();
-    if (!workspace) {
-      expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(expect.any(Object), "test-agent");
-      expectRespondOk(respond, { workspace: "/resolved/workspace/test-agent" });
-    }
-    if (fancy) {
-      expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {
-        model: "sonnet-4.6",
-        identity: expect.objectContaining({
-          name: "Fancy Agent",
-          emoji: "🤖",
-          avatar: "https://example.com/avatar.png",
-        }),
-      });
-      expectRecordFields(mockCallArg(mocks.rootWrite), {
-        rootDir: "/resolved/tmp/ws",
-        relativePath: "IDENTITY.md",
-        data: "# IDENTITY.md - Agent Identity\n\n- Name: Fancy Agent\n- Emoji: 🤖\n- Avatar: https://example.com/avatar.png\n",
-      });
-    }
-  });
-  it("reports committed creation when deleted database reader revival fails", async () => {
-    mocks.captureDeletedAgentDatabaseFences.mockReturnValue([
-      ["/agents/test-agent/openclaw-agent.sqlite", "test-agent"],
-    ]);
-    mocks.reviveAgentDatabases.mockRejectedValueOnce(new Error("worker acknowledgement failed"));
-    const respond = await create({ name: "Test Agent" });
-
-    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
-    expect(mocks.loadConfigReturn).toMatchObject({
-      agents: { entries: { "test-agent": { name: "Test Agent" } } },
-    });
-    expect(mocks.writeConfigFile).toHaveBeenCalledExactlyOnceWith(mocks.loadConfigReturn);
-    expect(mocks.reviveAgentDatabases).toHaveBeenCalledExactlyOnceWith(["test-agent"]);
-    expect(mocks.logGatewayWarn).toHaveBeenCalledExactlyOnceWith(
-      "agent config committed; worker reader revival will reconcile at next task: worker acknowledgement failed",
-    );
-  });
-
-  it("rejects invalid params (missing name)", async () => {
-    const respond = await create({ workspace: "/tmp/ws" });
-    expectRespondErrorContaining(respond, "invalid");
-  });
-});
+registerAgentCreateTests({ mocks, call, createContext, agentsHandlers });
 
 describe("agents.update", () => {
   beforeEach(() => {

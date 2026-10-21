@@ -1,7 +1,8 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, onSettled, refresh, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { MessageAttachmentAction } from "./chat-message-attachments-solid.tsx";
 import { MessageImageAction } from "./chat-message-images-solid.tsx";
@@ -17,6 +18,8 @@ import type {
   TranscriptAttachments,
 } from "./chat-sidebar-content-types.ts";
 import { transcriptAttachmentMatches } from "./chat-transcript-attachments.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type WorkspaceTranscriptAttachmentsProps = {
   source: TranscriptAttachments;

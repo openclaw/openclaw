@@ -9,7 +9,11 @@ import type { CronJob, CronRunResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { toNumber } from "../format.ts";
 import { parseCronDurationMs } from "./decimal.ts";
-import { hasUnchangedCronSchedule, buildCronSchedule } from "./form-schedule.ts";
+import {
+  hasUnchangedCronSchedule,
+  buildCronSchedule,
+  parseCronScheduleAt,
+} from "./form-schedule.ts";
 import { isReadOnlyCronPayload, jobToForm, normalizeCronFormState } from "./form.ts";
 import { loadCronJobsPage } from "./jobs-full.ts";
 import { retireCronJobsRequest } from "./jobs.ts";
@@ -53,8 +57,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.eventArguments = "cron.events.eventArgumentsInvalid";
     }
   } else if (form.scheduleKind === "at") {
-    const ms = Date.parse(form.scheduleAt);
-    if (!Number.isFinite(ms)) {
+    if (!parseCronScheduleAt(form.scheduleAt)) {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
@@ -106,6 +109,22 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
   if (!form.deliveryMode) {
     errors.deliveryMode = "cron.errors.deliveryModeRequired";
   }
+  if (form.activeHoursEnabled) {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(form.activeHoursStart)) {
+      errors.activeHoursStart = "cron.errors.activeHoursTime";
+    }
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(form.activeHoursEnd) && form.activeHoursEnd !== "24:00") {
+      errors.activeHoursEnd = "cron.errors.activeHoursTime";
+    }
+    const timezone = form.activeHoursTimezone.trim();
+    if (timezone && timezone !== "local" && timezone !== "user") {
+      try {
+        new Intl.DateTimeFormat("en", { timeZone: timezone }).format();
+      } catch {
+        errors.activeHoursTimezone = "cron.errors.activeHoursTimezone";
+      }
+    }
+  }
   if (form.deliveryMode === "webhook") {
     const error = resolveCronWebhookDeliveryError(form.deliveryTo);
     if (error) {
@@ -142,10 +161,10 @@ async function withCronBusy(
     reportFeedback: (message: string) => void,
     isCurrent: () => boolean,
   ) => Promise<void>,
-) {
+): Promise<string | null | void> {
   const client = state.client;
   if (!client || !state.connected || state.cronBusy) {
-    return;
+    return undefined;
   }
   const target = job ? { id: job.id, name: job.displayName ?? job.name } : null;
   const operation = {};
@@ -165,6 +184,7 @@ async function withCronBusy(
     await run(client, reportFeedback, isCurrent);
   } catch (err) {
     reportFeedback(formatUiError(err));
+    return isCurrent() ? state.cronError : null;
   } finally {
     if (isCurrent()) {
       activeCronMutations.delete(state);
@@ -172,6 +192,7 @@ async function withCronBusy(
       state.cronBusy = false;
     }
   }
+  return undefined;
 }
 
 function requireCronConfigRevision(revision: string | null | undefined): string {
@@ -308,9 +329,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
           : sourceJob.schedule
         : buildCronSchedule(form, editingJob?.schedule);
     const preserveLockedPayload = Boolean(
-      editingJob &&
-      form.payloadLocked &&
-      isReadOnlyCronPayload(sourcePayload, sourceJob?.declarationKey),
+      editingJob && form.payloadLocked && isReadOnlyCronPayload(sourcePayload),
     );
     const payload = preserveLockedPayload
       ? undefined
@@ -323,29 +342,53 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       selectedDeliveryMode === "announce"
         ? normalizedDeliveryAccountId || (editingJob?.delivery?.accountId ? null : undefined)
         : undefined;
+    const ownerTarget = selectedDeliveryMode === "announce" && form.deliveryTarget === "owner";
+    const previousDelivery =
+      editingJob?.delivery?.mode === "webhook" ? undefined : editingJob?.delivery;
+    // Owner lookup may be account-scoped, but must never inherit a conversation or thread target.
+    const ownerChannel =
+      form.deliveryChannel !== "last" ? form.deliveryChannel.trim() || undefined : undefined;
     const delivery = selectedDeliveryMode
       ? {
           mode: selectedDeliveryMode,
           ...(selectedDeliveryMode === "none"
-            ? form.deliveryBestEffort
-              ? { bestEffort: true }
-              : {}
+            ? {
+                ...(form.deliveryBestEffort ? { bestEffort: true } : {}),
+                ...(form.deliveryTarget === "owner"
+                  ? {
+                      target: "owner",
+                      channel: ownerChannel,
+                      accountId: normalizedDeliveryAccountId || undefined,
+                    }
+                  : {}),
+                ...(form.deliveryDirectPolicy ? { directPolicy: form.deliveryDirectPolicy } : {}),
+              }
             : {
-                channel:
-                  selectedDeliveryMode === "announce"
+                channel: ownerTarget
+                  ? (ownerChannel ??
+                    (editingJob?.delivery?.channel !== undefined ? null : undefined))
+                  : selectedDeliveryMode === "announce"
                     ? normalizePersistedDeliveryChannel(form.deliveryChannel, {
                         preserveLast: Boolean(editingJob?.delivery?.channel),
                       })
                     : undefined,
                 to:
-                  form.deliveryTo.trim() ||
+                  (ownerTarget ? "" : form.deliveryTo.trim()) ||
                   (selectedDeliveryMode === "announce" && editingJob?.delivery?.to
                     ? null
                     : undefined),
+                target: ownerTarget ? "owner" : previousDelivery?.target ? null : undefined,
+                directPolicy:
+                  selectedDeliveryMode === "announce"
+                    ? form.deliveryDirectPolicy ||
+                      (previousDelivery?.directPolicy ? null : undefined)
+                    : undefined,
                 accountId: deliveryAccountId,
                 bestEffort: form.deliveryBestEffort,
               }),
-          ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
+          threadId:
+            (!ownerTarget ? form.deliveryThreadId : undefined) ??
+            (editingJob?.delivery?.threadId !== undefined ? null : undefined),
           ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
             ? { completionDestination: form.deliveryCompletionDestination }
             : {}),
@@ -379,6 +422,18 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       sessionTarget: form.sessionTarget,
       wakeMode: form.wakeMode,
       trigger,
+      activeHours: form.activeHoursEnabled
+        ? {
+            start: form.activeHoursStart,
+            end: form.activeHoursEnd,
+            ...(form.activeHoursTimezone.trim()
+              ? { timezone: form.activeHoursTimezone.trim() }
+              : {}),
+          }
+        : editingJob?.activeHours
+          ? null
+          : undefined,
+      idleOnly: form.idleOnly || editingJob?.idleOnly !== undefined ? form.idleOnly : undefined,
       delivery,
       failureAlert,
     };
@@ -523,7 +578,7 @@ export async function runCronJob(state: CronState, jobId: string, mode: "force" 
     state.cronEditingJob?.id === jobId
       ? state.cronEditingJob
       : (state.cronJobs.find((candidate) => candidate.id === jobId) ?? { id: jobId, name: jobId });
-  await withCronBusy(state, job, async (client, reportFeedback, isCurrent) => {
+  return withCronBusy(state, job, async (client, reportFeedback, isCurrent) => {
     const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode });
     if (!isCurrent()) {
       return;

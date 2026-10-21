@@ -2,9 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 
-const { migrateLegacyConfigMock, stripUnknownConfigKeysMock } = vi.hoisted(() => ({
+const { migrateLegacyConfigMock, stripUnknownConfigKeysMock, noteMock } = vi.hoisted(() => ({
   migrateLegacyConfigMock: vi.fn(),
   stripUnknownConfigKeysMock: vi.fn(),
+  noteMock: vi.fn(),
 }));
 
 // mock-isolation: Exercise flow decisions with a fixed migration result, not plugin discovery.
@@ -14,7 +15,13 @@ vi.mock("../../doctor-config-analysis.js", () => ({
   stripUnknownConfigKeys: stripUnknownConfigKeysMock,
 }));
 
-import { applyLegacyCompatibilityStep, applyUnknownConfigKeyStep } from "./config-flow-steps.js";
+// mock-isolation: Capture the public flow's terminal diagnostics without rendering them.
+vi.mock("../../../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../packages/terminal-core/src/note.js")>()),
+  note: noteMock,
+}));
+
+import { applyLegacyCompatibilityStep, applyRetiredConfigStep } from "./config-flow-steps.js";
 
 function createLegacyStepResult(
   snapshot: Pick<ConfigFileSnapshot, "parsed" | "legacyIssues"> & Partial<ConfigFileSnapshot>,
@@ -44,7 +51,7 @@ function mutationState(candidate: OpenClawConfig = {}) {
   return { cfg: {}, candidate, pendingChanges: false, fixHints: [] };
 }
 
-function repairAfterAuthKeyCleanup(
+async function repairAfterAuthKeyCleanup(
   profileId: string,
   metadata: Record<string, unknown>,
   model: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"],
@@ -64,11 +71,15 @@ function repairAfterAuthKeyCleanup(
     config,
     removed: [`auth.profiles.${profileId}.key`],
   });
-  return applyUnknownConfigKeyStep({
+  const changes: string[] = [];
+  const state = await applyRetiredConfigStep({
     state: mutationState(candidate),
     shouldRepair: true,
     doctorFixCommand: "openclaw doctor --fix",
+    sourceConfig: candidate,
+    emitChanges: (lines) => changes.push(...lines),
   });
+  return { state, changes };
 }
 
 describe("doctor config flow steps", () => {
@@ -78,6 +89,7 @@ describe("doctor config flow steps", () => {
       changes: [],
     }));
     stripUnknownConfigKeysMock.mockReset();
+    noteMock.mockClear();
   });
 
   it("blocks grpc migration when include ownership is ambiguous and names every source", () => {
@@ -182,20 +194,21 @@ describe("doctor config flow steps", () => {
     expect(result.state.pendingChanges).toBe(true);
   });
 
-  it("removes unknown keys and adds preview hint", () => {
+  it("removes unknown keys and adds preview hint", async () => {
     stripUnknownConfigKeysMock.mockReturnValueOnce({ config: {}, removed: ["bogus"] });
 
-    const result = applyUnknownConfigKeyStep({
-      state: mutationState({ bogus: true } as unknown as OpenClawConfig),
+    const candidate = { bogus: true } as unknown as OpenClawConfig;
+    const state = await applyRetiredConfigStep({
+      state: mutationState(candidate),
       shouldRepair: false,
       doctorFixCommand: "openclaw doctor --fix",
+      sourceConfig: candidate,
+      emitChanges: vi.fn(),
     });
 
-    expect(result.removed).toEqual(["bogus"]);
-    expect(result.state.candidate).toStrictEqual({});
-    expect(result.state.fixHints).toStrictEqual([
-      'Run "openclaw doctor --fix" to remove these keys.',
-    ]);
+    expect(noteMock).toHaveBeenCalledWith("- bogus", "Unknown config keys");
+    expect(state.candidate).toStrictEqual({});
+    expect(state.fixHints).toStrictEqual(['Run "openclaw doctor --fix" to remove these keys.']);
   });
 
   it.each([
@@ -211,16 +224,26 @@ describe("doctor config flow steps", () => {
       { fallbacks: ["openai/gpt-5.5"] },
       [],
     ],
-    ["work", { key: "sk-test" }, { primary: "openai/gpt-5.5@work" }, undefined],
+    [
+      "work",
+      { key: "sk-test" },
+      { primary: "openai/gpt-5.5@work" },
+      ["Repaired auth.profiles.work metadata for active openai auth."],
+    ],
   ])(
     "normalizes %s metadata %j after unknown-key cleanup",
-    (profileId, metadata, model, repairs) => {
-      const result = repairAfterAuthKeyCleanup(profileId, metadata, model, profileId !== "work");
-      if (repairs) {
-        expect(result.repairs).toStrictEqual(repairs);
-      } else {
-        expect(result.warnings).toStrictEqual([]);
-      }
+    async (profileId, metadata, model, repairs) => {
+      const result = await repairAfterAuthKeyCleanup(
+        profileId,
+        metadata,
+        model,
+        profileId !== "work",
+      );
+      expect(result.changes).toStrictEqual([
+        `- auth.profiles.${profileId}.key`,
+        ...repairs.map((repair) => `- ${repair}`),
+      ]);
+      expect(noteMock).not.toHaveBeenCalled();
       expect(result.state.cfg.auth?.profiles?.[profileId]).toEqual({
         provider: "openai",
         mode: "api_key",

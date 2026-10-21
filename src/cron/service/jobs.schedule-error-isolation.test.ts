@@ -74,7 +74,7 @@ describe("cron schedule error isolation", () => {
 
     const deferredNotifications: DeferredCronNotifications = [];
     recompute(state, deferredNotifications);
-    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
     await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
 
     expect(badJob).toMatchObject({
@@ -95,11 +95,11 @@ describe("cron schedule error isolation", () => {
       },
       "cron: auto-disabled job after repeated schedule errors",
     );
-    expect(state.deps.enqueueSystemEvent).toHaveBeenCalledWith(
+    expect(state.deps.enqueueSessionEvent).toHaveBeenCalledWith(
       expect.stringContaining("openclaw automations enable bad-job"),
       expect.objectContaining({ contextKey: "cron:bad-job:auto-disabled" }),
     );
-    const notification = vi.mocked(state.deps.enqueueSystemEvent).mock.calls[0]?.[0];
+    const notification = vi.mocked(state.deps.enqueueSessionEvent!).mock.calls[0]?.[0];
     expect(notification).toContain("Check automation history for details.");
     expect(notification).not.toContain("invalid configuration format");
   });

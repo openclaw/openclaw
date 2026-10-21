@@ -11,6 +11,7 @@ import { personActivityRouting } from "../../components/person-activity-link.ts"
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   projectPresenceViewers,
@@ -50,8 +51,8 @@ import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { projectSubagentStatus } from "./chat-subagent-wait.ts";
 import { isChatRunWorking } from "./components/chat-composer.tsx";
 import type { ChatDetails, ChatDetailsViewProps } from "./components/chat-details.tsx";
-import type { HeaderPanelAction } from "./components/chat-header-panel-actions.tsx";
 import "./components/chat-header-session-menu.ts";
+import type { HeaderPanelAction } from "./components/chat-header-panel-actions.tsx";
 import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
@@ -74,6 +75,8 @@ import {
   type SidebarLayout,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
+
+registerChatSessionEnglish();
 
 type PaneControls = Pick<
   ReturnType<typeof createChatPaneRails>,
@@ -226,7 +229,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         })
       : null;
     const renameDisabledReason = !renameAccess
-      ? t("sessionsView.actionRequiresConnection")
+      ? sharingSnapshot.phase !== "connected"
+        ? t("sessionsView.actionRequiresConnection")
+        : undefined
       : renameAccess.allowed
         ? undefined
         : renameAccess.reason;

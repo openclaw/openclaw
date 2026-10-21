@@ -68,10 +68,10 @@ describe("server-runtime-services", () => {
   it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
     "keeps channel health recovery disabled when %s suppresses startup",
     (envKey) => {
+      vi.stubEnv(envKey, "1");
       const monitor = startGatewayChannelHealthMonitor({
         scheduler: createTestGatewayScheduler(),
         channelManager: {} as never,
-        env: { [envKey]: "1" },
       });
 
       expect(monitor).toBeNull();

@@ -5,11 +5,17 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
+export type SessionRowView = {
+  facts: readonly unknown[];
+  row: Readonly<GatewaySessionRow>;
+  modelRows?: Readonly<GatewaySessionRow>[];
+};
+
 type PublicationRows = WeakMap<
   records.MaterializedRow["materialized"],
   {
     facts: readonly unknown[];
-    views: Map<string, Readonly<GatewaySessionRow>>;
+    views: Map<string, SessionRowView[]>;
     target: SessionSharingTarget;
   }
 >;
