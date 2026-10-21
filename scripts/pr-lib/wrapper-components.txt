@@ -264,6 +264,7 @@ src/agents/agent-scope-config.ts
 src/agents/agent-scope.ts
 src/agents/auth-profiles/authorization-contract.ts
 src/agents/auth-profiles/persisted-rows-receipt.ts
+src/agents/auth-profiles/personal-store-error.ts
 src/agents/auth-profiles/sqlite-json.ts
 src/agents/auth-profiles/store-unreadable-error.ts
 src/agents/auth-profiles/store-update-commit.ts
