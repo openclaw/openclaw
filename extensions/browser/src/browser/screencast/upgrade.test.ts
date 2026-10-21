@@ -19,7 +19,9 @@ describe("browser screencast WebSocket upgrade", () => {
   beforeEach(async () => {
     mocks.attach.mockReset();
     clients = [];
-    server = createServer().on("upgrade", handleBrowserScreencastUpgrade);
+    server = createServer().on("upgrade", (req, socket, head) => {
+      void handleBrowserScreencastUpgrade(req, socket, head);
+    });
     await once(server.listen(0, "127.0.0.1"), "listening");
     url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/browser/screencast`;
   });

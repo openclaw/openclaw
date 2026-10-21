@@ -20,10 +20,10 @@ async function createFixture() {
       progressCardStore.put(sessionKey, input),
     readEntry: () =>
       binding.actor.storage!.read({ type: "session.entry.read", input: {} }, authority),
-    async commit(command: SessionActorStorageCommand) {
+    commit: async (command: SessionActorStorageCommand) => {
       expect((await binding.actor.storage!.mutate(command, authority)).kind).toBe("committed");
     },
-    async reacquire() {
+    reacquire: async () => {
       binding.actor = await acquire();
     },
   };
