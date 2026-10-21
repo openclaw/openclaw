@@ -60,6 +60,15 @@ suite.define(() => {
         expect(await status.getByRole("button").count()).toBe(0);
         expect(await status.locator(".session-run-spinner").count()).toBe(1);
         const stateBounds = await status.locator(".gateway-status__state").boundingBox();
+        expect(
+          await status
+            .locator(".session-run-spinner")
+            .evaluate((element) => getComputedStyle(element).borderTopColor),
+        ).toBe(
+          await status
+            .locator(".gateway-status__label")
+            .evaluate((element) => getComputedStyle(element).color),
+        );
         await capture("reconnecting-backoff");
         const spinner = await status.locator(".session-run-spinner").elementHandle();
         expect(await spinner!.evaluate((element) => getComputedStyle(element).animationName)).toBe(
@@ -89,20 +98,52 @@ suite.define(() => {
         await aligned();
         await capture("reconnecting-attempt");
 
-        await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
+        await animation.evaluate((current) => current.play());
+        await page.clock.resume();
+        const moving = async () => {
+          const movement = await status
+            .locator(".session-run-spinner")
+            .evaluate(async (element) => {
+              const current = element.getAnimations()[0]!;
+              const before = Number(current.currentTime);
+              const transform = getComputedStyle(element).transform;
+              await new Promise<void>((resolve) => {
+                element.addEventListener("animationiteration", () => resolve(), { once: true });
+              });
+              return {
+                advanced: Number(current.currentTime) > before,
+                running: current.playState === "running",
+                changed: getComputedStyle(element).transform !== transform,
+              };
+            });
+          expect(movement).toEqual({ advanced: true, running: true, changed: true });
+        };
+        await moving();
+        await page.emulateMedia({ colorScheme: "light" });
+        await aligned();
         expect(
           await status
             .locator(".session-run-spinner")
-            .evaluate((element) => getComputedStyle(element).animationName),
-        ).toBe("none");
-        await aligned();
+            .evaluate((element) => getComputedStyle(element).borderTopColor),
+        ).toBe(
+          await status
+            .locator(".gateway-status__label")
+            .evaluate((element) => getComputedStyle(element).color),
+        );
         await capture("reconnecting-light");
+        await moving();
         await page.setViewportSize({ width: 390, height: 844 });
         await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
         await status.waitFor({ state: "visible" });
         await aligned();
         await capture("reconnecting-mobile");
         expect(await status.getByRole("button").count()).toBe(0);
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        expect(
+          await status
+            .locator(".session-run-spinner")
+            .evaluate((element) => getComputedStyle(element).animationName),
+        ).toBe("none");
         await gateway.setOnline(true);
         await page.clock.resume();
         await waitForControlUiGatewayReady(page);

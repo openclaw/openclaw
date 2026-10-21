@@ -3593,6 +3593,10 @@ openclaw-tooltip.sidebar-hover-tooltip {
   height: 100%;
 }
 
+.gateway-status__icon > .session-run-spinner {
+  --accent: currentColor;
+}
+
 .gateway-status__retry:focus-visible {
   border-radius: var(--radius-sm);
   box-shadow: var(--focus-ring);
