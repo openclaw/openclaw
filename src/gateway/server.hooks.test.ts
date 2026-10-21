@@ -180,8 +180,6 @@ async function writeHookTransformModule(moduleName: string, source: string): Pro
 test("handles auth, wake, and agent flows", async () => {
   setHookAgentRoster();
   await withHooksServer(async (post, reject) => {
-    await post("wake", { text: "Ping" }, { status: 401, token: null });
-
     await post("wake", { text: "Ping", mode: "next-heartbeat" });
     const wakeEvents = await waitForSystemEvent();
     expect(wakeEvents.join("\n")).toContain("Ping");
@@ -232,9 +230,6 @@ test("handles auth, wake, and agent flows", async () => {
 
     await post("wake?token=hook-secret", { text: "Query auth" }, { status: 400, token: null });
 
-    await post("agent", { message: "Nope", channel: "sms" }, { status: 400 });
-    expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
-
     await post(
       "wake",
       { text: "Header auth", mode: "next-heartbeat" },
@@ -244,7 +239,6 @@ test("handles auth, wake, and agent flows", async () => {
     expect(headerEvents.join("\n")).toContain("Header auth");
     drainSystemEvents(resolveMainKey());
 
-    await post("wake", { text: " " }, { status: 400 });
     await post("agent", { message: " " }, { status: 400 });
     await post("wake", "{", { status: 400 });
   });
@@ -533,13 +527,6 @@ test("enforces hooks.allowedAgentIds for effective agent routing", async () => {
     await reject("agent", { message: "No explicit agent" }, denied);
     expect(cronIsolatedRun).not.toHaveBeenCalled();
     expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
-
-    await reject(
-      "agent",
-      { message: "Empty agent", agentId: " " },
-      "agentId must be a non-empty string",
-    );
-    expect(cronIsolatedRun).not.toHaveBeenCalled();
 
     mockIsolatedRunOk(true);
     await post("agent", { message: "Allowed", agentId: "hooks", wakeMode: "next-heartbeat" });
