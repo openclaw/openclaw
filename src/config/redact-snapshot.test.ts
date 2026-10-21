@@ -108,6 +108,30 @@ describe("redactConfigSnapshot", () => {
     });
   });
 
+  it("redacts and restores inline env vars regardless of their names", () => {
+    const hints = buildConfigSchemaCore().uiHints;
+    const config = {
+      env: {
+        vars: {
+          AZURE_OPENAI_KEY: "synthetic-azure-key",
+          DATABASE_URL: "postgres://bot:synthetic@db/prod",
+          FROM_ENV: "${HOST_DATABASE_URL}",
+        },
+      },
+    };
+    const result = redactConfigSnapshot(makeSnapshot(config), hints);
+    expectProjections(result, {
+      env: {
+        vars: {
+          AZURE_OPENAI_KEY: REDACTED_SENTINEL,
+          DATABASE_URL: REDACTED_SENTINEL,
+          FROM_ENV: "${HOST_DATABASE_URL}",
+        },
+      },
+    });
+    expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
+  });
+
   it("keeps raw text when runtime materialization adds undefined safe-bin fields", () => {
     const sourceConfig = { tools: { exec: { mode: "full" } } } satisfies OpenClawConfig;
     const raw = JSON.stringify(sourceConfig);
