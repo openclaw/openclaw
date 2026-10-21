@@ -17,7 +17,7 @@ import {
 } from "./chat-message-attachment-admission-model.ts";
 import { ChatAttachmentAdmission } from "./chat-message-attachment-admission-solid.tsx";
 import { isManagedOutgoingMediaSource } from "./chat-message-attachment-availability.ts";
-import { resolveAttachmentSource } from "./chat-message-attachment-source.ts";
+import { resolveAttachmentSource, readAttachmentSource } from "./chat-message-attachment-source.ts";
 import { AssistantAttachmentStatusCard } from "./chat-message-attachment-status-solid.tsx";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
@@ -272,6 +272,13 @@ function prepareAttachment(
             mimeType: attachment.mimeType,
             ...(pastedText ? { plainText: true } : {}),
             sourceIdentity: attachment.url,
+            readForAttachment: (runtime, signal, maxBytes) =>
+              readAttachmentSource(
+                attachment,
+                { ...options, ...runtime, messageId: options.messageId },
+                signal,
+                maxBytes,
+              ),
             playback: media?.playback,
             authToken: media?.authToken,
             sizeBytes: media?.sizeBytes,

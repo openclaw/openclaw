@@ -322,6 +322,13 @@ workspaces. Provider-backed node workspaces whose bridge only supports whole-fil
 reads do not yet support downloads. Authorization errors appear in the UI; transfer
 progress and failures appear in your browser's download manager.
 
+To add an open file to your next message, choose **Attach to session** from the
+file toolbar's **⋯** menu. The file appears in the existing message draft; it is
+sent only when you send that message. Clean files use their original bytes.
+Text files with unsaved editor changes attach the current edited text without
+saving the file. Existing upload permissions and attachment size limits apply.
+Switching the file or session cancels a pending read.
+
 ## Take a photo in chat
 
 Choose **Add attachment → Take photo** in chat or New Session to open a camera
