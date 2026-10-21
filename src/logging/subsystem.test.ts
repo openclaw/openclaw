@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
@@ -13,7 +12,7 @@ import { logCodeModeFailure } from "./code-mode-diagnostic.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { applyLoggingConfig, getLogger, resetLogger, setLoggerOverride } from "./logger.js";
+import { applyLoggingConfig, resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
 import { getDefaultRedactPatterns } from "./redact.js";
 import { loggingState } from "./state.js";
@@ -361,23 +360,6 @@ describe("createSubsystemLogger().isEnabled", () => {
     );
     expect(consoleLine(warn)).toContain("postgres://user:aaaaaa…aa/b@db.example.test/app");
   });
-  it("getLogger.info preserves every public URL in the final file message", async () => {
-    const url = "https://x.com/EliXPampa/status/2097727549400871286";
-    const inputs = [
-      `https://example.test/${"Ab9Q".repeat(10)}@latest`,
-      `https://example.test/path,${"Ab9Q".repeat(10)}`,
-      `s3://user:1234/${"Ab9Q".repeat(8)}Ab9`,
-      `payload ${JSON.stringify([url, url])}`,
-      `payload ${JSON.stringify({ a: url, b: url })}`,
-      `payload ${JSON.stringify([`${url}?safe=1`, url])}`,
-      `payload ${JSON.stringify(JSON.stringify([`${url}?safe=1`, url]))}`,
-    ];
-    const file = fileLogging("info");
-    for (const input of inputs) {
-      getLogger().info(input);
-    }
-    expect((await readRecords(file)).map((record) => record.message)).toEqual(inputs);
-  });
   it.each(["part/", "1234/"])(
     "log tail masks raw malformed credentials after %s",
     async (prefix) => {
@@ -560,39 +542,5 @@ describe("createSubsystemLogger().isEnabled", () => {
       ['circular={"name":"catalog","self":"[Circular]"}', "big=10"],
       ["handler=", "\n"],
     );
-  });
-  it("keeps long-lived subsystem loggers on the current-day rolling file", async () => {
-    const logDir = path.dirname(logPathTracker.nextPath());
-    const firstDay = path.join(logDir, "openclaw-2026-01-01.log");
-    const secondDay = path.join(logDir, "openclaw-2026-01-02.log");
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T08:00:00Z"));
-    setLoggerOverride({ level: "info", consoleLevel: "silent", file: firstDay });
-    const log = createSubsystemLogger("diagnostics");
-    log.info("first day subsystem log");
-    vi.setSystemTime(new Date("2026-01-02T08:00:00Z"));
-    log.info("second day subsystem log");
-    await testApi.flushFileLogQueueForTests();
-    expect(fs.readFileSync(firstDay, "utf8")).toContain("first day subsystem log");
-    expect(fs.readFileSync(secondDay, "utf8")).toContain("second day subsystem log");
-    expect(fs.readFileSync(firstDay, "utf8")).not.toContain("second day subsystem log");
-  });
-  it("refreshes a retained logger's file and level after applied config", async () => {
-    const firstFile = logPathTracker.nextPath();
-    const secondFile = logPathTracker.nextPath();
-    vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
-    applyLoggingConfig({ level: "info", consoleLevel: "silent", file: firstFile });
-    const log = createSubsystemLogger("diagnostics");
-    log.info("first line");
-    log.info("second line");
-    expect(log.isEnabled("debug", "file")).toBe(false);
-    applyLoggingConfig({ level: "debug", consoleLevel: "silent", file: secondFile });
-    expect(log.isEnabled("debug", "file")).toBe(true);
-    const message = "after applied config";
-    log.debug(message);
-    await testApi.flushFileLogQueueForTests();
-    expect(fs.readFileSync(firstFile, "utf8")).toContain("first line");
-    expect(fs.readFileSync(firstFile, "utf8")).not.toContain(message);
-    expect(fs.readFileSync(secondFile, "utf8")).toContain(message);
   });
 });

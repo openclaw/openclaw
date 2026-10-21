@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
+import {
+  enqueueFollowupRun,
+  type FollowupRun,
+  type QueueSettings,
+} from "../auto-reply/reply/queue.js";
+import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
+import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
+import {
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+} from "../infra/diagnostic-events.js";
 import {
   emitCoreModelRequestEndedDiagnosticEvent,
   emitCoreModelRequestStartedDiagnosticEvent,
@@ -10,7 +20,6 @@ import { createReplyOperation } from "../sessions/session-controller.operation.j
 import { getSessionControllerOperation } from "../sessions/session-controller.state.js";
 import { testing } from "../sessions/session-controller.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resetDiagnosticRecoveryState } from "./diagnostic-recovery.test-support.js";
 import {
   beginDiagnosticBackendActivity,
   beginDiagnosticRetryWait,
@@ -21,6 +30,7 @@ import {
   markDiagnosticOwnedToolActivity,
 } from "./diagnostic-run-activity.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
+import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 const ref = {
   sessionKey: "agent:main:watchdog-integration",
@@ -45,7 +55,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   testing.resetSessionControllerForTest();
-  resetDiagnosticRecoveryState();
+  clearSessionQueues(["agent:main:watchdog-followup"]);
+  resetDiagnosticStateForTest();
+  resetDiagnosticEventsForTest();
   vi.useRealTimers();
 });
 
@@ -182,45 +194,120 @@ describe("controller recovery through actual progress producers", () => {
     await recoverStuckDiagnosticSession({ ...ref, operation, ageMs: abortMs });
     expect(cancel).toHaveBeenCalledOnce();
   });
+});
 
-  it("a failed cleanup cannot admit a queued successor until the writer really settles", async () => {
-    const { operation } = begin();
-    const cancel = vi.fn(() => {
-      throw new Error("write owner did not retire");
+describe("controller watchdog and actual followup delivery custody", () => {
+  const key = "agent:main:watchdog-followup";
+  const sessionId = "watchdog-followup-session";
+  function source(prompt: string) {
+    const run = createQueueTestRun({ prompt });
+    run.run.sessionKey = key;
+    return run;
+  }
+  function beginFollowup() {
+    const operation = createReplyOperation({ sessionKey: key, sessionId, resetTriggered: false });
+    operation.setPhase("running");
+    return operation;
+  }
+  function trackedSource(prompt: string) {
+    const settled = createDeferredCore();
+    const onSettled = vi.fn(() => settled.resolve());
+    const run = source(prompt);
+    run.turnAdoptionLifecycle = { onAdopted: () => {}, onSettled };
+    return { run, onSettled, settled: settled.promise };
+  }
+
+  it.each(["followup", "collect"] as const)(
+    "keeps pending %s sources behind write-capable cleanup, then dispatches once",
+    async (mode) => {
+      const operation = beginFollowup();
+      const cancelled = createDeferredCore();
+      const cancel = vi.fn(() => cancelled.resolve());
+      operation.attachBackend({ kind: "embedded", cancel });
+      const settings: QueueSettings = { mode, debounceMs: 0, cap: 50 };
+      const delivered = createDeferredCore();
+      const dispatch = vi.fn(async (_run: FollowupRun) => {
+        delivered.resolve();
+      });
+      const { run, onSettled, settled } = trackedSource("pending");
+      enqueueFollowupRun(key, run, settings, "none", dispatch);
+      vi.setSystemTime(6 * 60_000);
+      const recovery = recoverStuckDiagnosticSession({
+        operation,
+        sessionKey: key,
+        sessionId,
+        ageMs: Date.now(),
+      });
+      // Cold placement recovery must reach Stop before advancing its cleanup clock.
+      await cancelled.promise;
+      await vi.advanceTimersByTimeAsync(60_000 - 1);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(operation.watchdog.decide().action).toBe("blocked");
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(onSettled).not.toHaveBeenCalled();
+      expect(getSessionControllerOperation(key)).toBe(operation);
+      operation.complete();
+      await delivered.promise;
+      await settled;
+      await recovery;
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(dispatch.mock.calls[0]?.[0].prompt).toContain("pending");
+      expect(onSettled).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not retire a fresh source that became active before an old recovery resumes", async () => {
+    const operation = beginFollowup();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const { run, onSettled, settled } = trackedSource("fresh");
+    const dispatch = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
     });
-    operation.attachBackend({ kind: "embedded", cancel });
-    const delivered = createDeferredCore();
-    const dispatch = vi.fn(() => delivered.resolve());
-    const queued = withSessionTurn(ref, async () => {
-      dispatch();
-    });
-    vi.setSystemTime(abortMs);
-    await operation.watchdog.tick();
-    vi.setSystemTime(abortMs + 60_000);
-    await operation.watchdog.tick();
-    expect(operation.watchdog.decide().action).toBe("blocked");
-    expect(getSessionControllerOperation(ref.sessionKey)).toBe(operation);
-    expect(dispatch).not.toHaveBeenCalled();
+    enqueueFollowupRun(key, run, { mode: "followup", debounceMs: 0 }, "none", dispatch);
+    const request = { operation, sessionKey: key, sessionId, ageMs: 1_000_000 };
     operation.complete();
-    await delivered.promise;
-    await queued;
+    await entered.promise;
+    await recoverStuckDiagnosticSession(request);
+    expect(onSettled).not.toHaveBeenCalled();
     expect(dispatch).toHaveBeenCalledOnce();
+    release.resolve();
+    await settled;
+    expect(onSettled).toHaveBeenCalledOnce();
   });
 
-  it("retired backend callbacks cannot refresh a replacement or reuse a same-ID owner", () => {
-    const { operation, owner } = begin();
-    const backend = beginDiagnosticBackendActivity({
-      owner,
-      noOutputTimeoutMs: 150_000,
-      assertCurrent() {},
-    });
-    backend.close();
-    vi.setSystemTime(100_000);
-    expect(backend.observeOutput(true)).toBe(false);
-    expect(operation.watchdog.snapshot().semanticProgressAtMs).toBe(0);
-    operation.complete();
-    const next = begin();
-    expect(backend.observeOutput(true)).toBe(false);
-    expect(getSessionControllerOperation(ref.sessionKey)).toBe(next.operation);
+  it("cannot free a selected source merely because no native backend is registered", async () => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const { run: first, settled } = trackedSource("selected");
+    const calls: string[] = [];
+    const secondEntered = createDeferredCore();
+    const dispatch = async (run: FollowupRun) => {
+      calls.push(run.prompt);
+      if (calls.length === 1) {
+        entered.resolve();
+        await release.promise;
+      } else {
+        secondEntered.resolve();
+      }
+    };
+    enqueueFollowupRun(key, first, { mode: "followup", debounceMs: 0 }, "none", dispatch);
+    await entered.promise;
+    enqueueFollowupRun(
+      key,
+      source("pending"),
+      { mode: "followup", debounceMs: 0 },
+      "none",
+      dispatch,
+    );
+    await expect(
+      recoverStuckDiagnosticSession({ sessionKey: key, sessionId, ageMs: 1_000_000 }),
+    ).resolves.toMatchObject({ status: "skipped", reason: "missing_session_ref" });
+    expect(calls).toEqual(["selected"]);
+    release.resolve();
+    await settled;
+    await secondEntered.promise;
+    expect(calls).toEqual(["selected", "pending"]);
   });
 });
