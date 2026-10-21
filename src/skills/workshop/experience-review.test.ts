@@ -345,14 +345,14 @@ it.each([
 ])(
   "settles review usage without foreground attribution: %j",
   async ({ enabled, hasUsage, failed, unpriced }) => {
-    const candidate = await createExperienceReviewCandidate(
+    const usageCandidate = await createExperienceReviewCandidate(
       "usage-review",
       [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
       { workspaceDir: state.workspaceDir, modelId: "usage-fixture" },
     );
-    candidate.config.diagnostics = { enabled };
+    usageCandidate.config.diagnostics = { enabled };
     const provider = expectDefined(
-      candidate.config.models?.providers?.openai,
+      usageCandidate.config.models?.providers?.openai,
       "fixture provider",
     );
     provider.models = unpriced
@@ -397,7 +397,7 @@ it.each([
       }),
     );
     try {
-      const pending = runSkillExperienceReview(candidate);
+      const pending = runSkillExperienceReview(usageCandidate);
       if (failed) {
         await expect(pending).rejects.toThrow("synthetic review failed");
       } else {
