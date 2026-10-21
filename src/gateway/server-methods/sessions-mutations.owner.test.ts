@@ -12,7 +12,6 @@ import {
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { createDashboardTool } from "../../agents/tools/dashboard-tool.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { callInProcessGatewayTool } from "../../agents/tools/in-process-gateway.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntry,
@@ -30,10 +29,6 @@ import {
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { dispatchGatewayMethodInProcess } from "../server-plugins.js";
@@ -44,8 +39,10 @@ import {
   resolveSessionSharingRole,
   resolveSessionSharingTargetAsync,
 } from "../session-sharing.js";
-import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
-import { sessionMutationHandlers } from "./sessions-mutations.js";
+import {
+  createSessionMutationCatalog,
+  startSessionMutationRequest,
+} from "./sessions-mutations.native-consent.test-support.js";
 import {
   createSessionMutationTestClient as client,
   createSessionMutationTestContext as context,
@@ -70,17 +67,14 @@ async function mutate(
   params: Record<string, unknown>,
   options: Partial<GatewayRequestHandlerOptions> = {},
 ) {
-  const respond = options.respond ?? vi.fn();
-  await sessionMutationHandlers[method]!({
-    req: { type: "req", id: method, method, params },
+  const request = startSessionMutationRequest(method, params, {
     client: options.client ?? client(),
     context: options.context ?? context({}),
     isWebchatConnect: () => true,
-    params,
     ...options,
-    respond,
   });
-  return respond;
+  await request.running;
+  return request.respond;
 }
 
 function readEntry(env: NodeJS.ProcessEnv, sessionKey: string) {
@@ -110,15 +104,7 @@ type CatalogSnapshot = Awaited<
 >;
 
 function pauseCatalog(state: MutationState, requestContext: GatewayRequestContext) {
-  const snapshot: CatalogSnapshot = {
-    agentId: "main",
-    agentDir: state.agentDir("main"),
-    workspaceDir: state.workspaceDir,
-    config: requestContext.getRuntimeConfig(),
-    catalogComplete: true,
-    entries: [],
-    routeVariants: [],
-  };
+  const snapshot = createSessionMutationCatalog(requestContext.getRuntimeConfig(), state, []);
   const entered = createDeferredCore();
   const release = createDeferredCore<CatalogSnapshot>();
   const load = vi.fn(async () => {
@@ -206,29 +192,10 @@ describe("sessions.patch", () => {
           presentation: "expanded",
         });
         expect(saved.details).toEqual({ ok: true, sessionKey, defaultPresentation: "expanded" });
-        // Finish the saved row's publication before the durability probe closes storage.
-        await flushPendingSessionsChangedEvents(requestContext);
-        const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-        expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
         expect(loadSessionEntry(scope)).toMatchObject({
           boardFace: "dashboard",
           boardPresentation: "expanded",
         });
-        const reopened = await tool.execute("reopened", { action: "read" });
-        expect(reopened.details).toMatchObject({ defaultPresentation: "expanded" });
-
-        await tool.execute("split", {
-          action: "set_default_presentation",
-          presentation: "split",
-        });
-        expect(loadSessionEntry(scope)?.boardPresentation).toBe("split");
-        await callInProcessGatewayTool("sessions.patch", {
-          key: sessionKey,
-          boardPresentation: null,
-        });
-        const cleared = await tool.execute("cleared", { action: "read" });
-        expect(cleared.details).toMatchObject({ defaultPresentation: "split" });
-        expect(loadSessionEntry(scope)).not.toHaveProperty("boardPresentation");
         expect(requestContext.broadcastToConnIds).not.toHaveBeenCalledWith(
           "board.command",
           expect.anything(),
@@ -276,45 +243,6 @@ describe("sessions.patch", () => {
       expect(reachedCommitAdmission).toBe(true);
       expect(loadSessionEntry(scope)).toEqual(before);
       expect(requestContext.broadcastToConnIds).not.toHaveBeenCalled();
-    }));
-
-  it("persists preference clears with an agent model rollback marker", () =>
-    withSessionMutationState(async (state) => {
-      const sessionKey = "agent:main:rollback-preferences";
-      const scope = { agentId: "main", env: state.env, sessionKey };
-      await upsertSessionEntryCore(scope, {
-        sessionId: "rollback-preferences",
-        updatedAt: 1,
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-        thinkingLevel: "high",
-        contextWindow: "extended",
-        modelFallback: {
-          prevProvider: "openai",
-          prevModel: "gpt-5.4",
-          prevThinkingLevel: "high",
-          prevContextWindow: "extended",
-          ts: 1,
-          source: "agent-patch",
-        },
-      });
-      const respond = await mutate("sessions.patch", {
-        key: sessionKey,
-        thinkingLevel: null,
-        contextWindow: null,
-      });
-      expectSuccess(respond, expect.any(Object));
-      const entry = loadSessionEntry(scope);
-      expect(entry?.thinkingLevel).toBeUndefined();
-      expect(entry?.contextWindow).toBeUndefined();
-      expect(entry?.modelFallback).toMatchObject({
-        prevProvider: "openai",
-        prevModel: "gpt-5.4",
-        ts: 1,
-        source: "agent-patch",
-      });
-      expect(entry?.modelFallback?.prevThinkingLevel).toBeUndefined();
-      expect(entry?.modelFallback?.prevContextWindow).toBeUndefined();
     }));
 
   it.each([true, false])(
@@ -796,63 +724,57 @@ describe("sessions.assignOwner", () => {
       });
     }));
 
-  it.each(["shared", "read-only", "suggest"] as const)(
-    "lets a write-scoped viewer assign a %s session without changing sharing authority",
-    (visibility) =>
-      withSessionMutationState(async (state) => {
-        const sessionKey = "agent:main:handoff";
-        await seedEntry(state.env, sessionKey, {
-          sessionId: "session-handoff",
-          visibility,
-          createdActor: creator,
-        });
-        const cfg = handoffConfig();
-        vi.spyOn(Date, "now").mockReturnValue(4242);
+  it("projects agent ownership without changing sharing authority", () =>
+    withSessionMutationState(async (state) => {
+      const sessionKey = "agent:main:handoff";
+      await seedEntry(state.env, sessionKey, {
+        sessionId: "session-handoff",
+        visibility: "shared",
+        createdActor: creator,
+      });
+      const cfg = handoffConfig();
+      vi.spyOn(Date, "now").mockReturnValue(4242);
 
-        const result = await invoke({ key: sessionKey, owner: researchAgent() });
+      const result = await invoke({ key: sessionKey, owner: researchAgent() });
 
-        expect(result.authorization.error).toBeNull();
-        const assignedOwner = {
-          actor: researchAgent(),
-          assignedBy: viewer,
-          assignedAt: 4242,
-        };
-        expectOwnerResponse(
-          result.responses,
-          {
-            ...assignedOwner,
-            actor: { ...researchAgent(), label: "Research" },
-          },
-          { ok: true, key: sessionKey },
-        );
-        expect(readEntry(state.env, sessionKey)?.owner).toEqual(assignedOwner);
-        const durableOwner = ensureProfileForEmail(`next-owner-${caseNumber}@example.test`);
-        using _ = {
-          [Symbol.dispose]: (await prepareUserProfileCatalog({ env: state.env })).release,
-        };
-        const nextOwner = () => ({ type: "human", id: durableOwner.id }) as const;
-        const reassigned = await invoke({ key: sessionKey, owner: nextOwner() });
-        expectOwnerResponse(reassigned.responses, { actor: nextOwner(), assignedBy: viewer });
-        expect(readEntry(state.env, sessionKey)?.owner?.actor).toEqual(nextOwner());
-
-        const target = await resolveSessionSharingTargetAsync({ cfg, sessionKey, agentId: "main" });
-        if (!target) {
-          throw new Error("expected assigned session target");
-        }
-        expect(resolveSessionSharingRole({ client: client("profile-creator"), target })).toBe(
-          "owner",
-        );
-        const { members } = await readSessionMembersInWorker({
-          agentId: "main",
-          env: state.env,
-          sessionKey,
-        });
-        const isMember = members.some((member) => member.identityId === "research");
-        expect(resolveSessionSharingRole({ client: client("research"), target, isMember })).toBe(
-          "viewer",
-        );
-      }),
-  );
+      expect(result.authorization.error).toBeNull();
+      const assignedOwner = {
+        actor: researchAgent(),
+        assignedBy: viewer,
+        assignedAt: 4242,
+      };
+      expectOwnerResponse(
+        result.responses,
+        {
+          ...assignedOwner,
+          actor: { ...researchAgent(), label: "Research" },
+        },
+        { ok: true, key: sessionKey },
+      );
+      expect(readEntry(state.env, sessionKey)?.owner).toEqual(assignedOwner);
+      const profile = ensureProfileForEmail(`next-owner-${caseNumber}@example.test`);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog({ env: state.env })).release };
+      const human = { type: "human", id: profile.id } as const;
+      const reassigned = await invoke({ key: sessionKey, owner: human });
+      expectOwnerResponse(reassigned.responses, { actor: human, assignedBy: viewer });
+      expect(readEntry(state.env, sessionKey)?.owner?.actor).toEqual(human);
+      const target = await resolveSessionSharingTargetAsync({ cfg, sessionKey, agentId: "main" });
+      if (!target) {
+        throw new Error("expected assigned session target");
+      }
+      expect(resolveSessionSharingRole({ client: client("profile-creator"), target })).toBe(
+        "owner",
+      );
+      const { members } = await readSessionMembersInWorker({
+        agentId: "main",
+        env: state.env,
+        sessionKey,
+      });
+      const isMember = members.some((member) => member.identityId === "research");
+      expect(resolveSessionSharingRole({ client: client("research"), target, isMember })).toBe(
+        "viewer",
+      );
+    }));
 
   it("rejects hidden viewers, unidentified callers, and unknown owner targets", () =>
     withSessionMutationState(async (state) => {

@@ -10,8 +10,16 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewaySession } from "../session-create-service.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import { sessionCreateHandlers } from "./sessions-create.js";
+import { sessionMutationHandlers } from "./sessions-mutations.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  RespondFn,
+} from "./types.js";
 
 const nativeModel: ModelCatalogEntry = {
   provider: "anthropic",
@@ -336,4 +344,66 @@ export function registerSessionNativeRuntimeConsentTests(support: {
       clearFollowupQueue(sessionKey);
     }
   });
+}
+
+export function startSessionMutationRequest(
+  method: string,
+  params: Record<string, unknown>,
+  options: Pick<GatewayRequestHandlerOptions, "client" | "context"> &
+    Partial<GatewayRequestHandlerOptions>,
+) {
+  const respond = vi.fn<RespondFn>(options.respond);
+  const handler = (method === "sessions.create" ? sessionCreateHandlers : sessionMutationHandlers)[
+    method
+  ]!;
+  const running = Promise.resolve(
+    handler({
+      req: { type: "req", id: method, method, params },
+      isWebchatConnect: () => true,
+      ...options,
+      params,
+      respond,
+    }),
+  );
+  return { respond, responses: respond.mock.calls, running };
+}
+
+export function createSessionMutationCatalog(
+  config: OpenClawConfig,
+  state: Pick<OpenClawTestState, "agentDir" | "workspaceDir">,
+  entries: ModelCatalogEntry[],
+  routeVariants = entries,
+) {
+  return {
+    config,
+    entries,
+    routeVariants,
+    agentId: "main",
+    agentDir: state.agentDir("main"),
+    workspaceDir: state.workspaceDir,
+    catalogComplete: true,
+  };
+}
+
+export function createSessionMutationContext(
+  config: OpenClawConfig = {},
+  loadCatalog?: GatewayRequestContext["loadGatewayModelCatalog"],
+  cron?: Pick<
+    GatewayRequestContext["cron"],
+    "list" | "updateWithPrecondition" | "getDefaultAgentId"
+  >,
+): GatewayRequestContext {
+  return {
+    getRuntimeConfig: () => config,
+    loadGatewayModelCatalogSnapshot: vi.fn(
+      async (params: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0]) => {
+        const entries = loadCatalog ? await loadCatalog(params) : [];
+        return { entries, routeVariants: entries };
+      },
+    ),
+    broadcastToConnIds: vi.fn(),
+    getSessionEventSubscriberConnIds: () => new Set(),
+    dedupe: new Map(),
+    ...(cron ? { cron } : {}),
+  } as unknown as GatewayRequestContext;
 }

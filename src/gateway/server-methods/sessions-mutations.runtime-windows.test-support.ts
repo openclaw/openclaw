@@ -10,6 +10,7 @@ import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js"
 import { createGatewaySession } from "../session-create-service.js";
 import { projectSessionPatchResult } from "../session-utils-model.js";
 import { buildGatewaySessionRow } from "../session-utils-row.js";
+import { createSessionMutationCatalog } from "./sessions-mutations.native-consent.test-support.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 export function registerSessionRuntimeWindowTests(harness: {
@@ -40,15 +41,7 @@ export function registerSessionRuntimeWindowTests(harness: {
       contextWindows: [{ id: "64k", label: "64K", contextWindow: 64_000 }],
       contextWindowDefault: "64k",
     };
-    const snapshot = {
-      entries: [base],
-      routeVariants: [base, native],
-      agentId: "main",
-      agentDir: openClawTestState.agentDir("main"),
-      workspaceDir: openClawTestState.workspaceDir,
-      config: cfg,
-      catalogComplete: true,
-    };
+    const snapshot = createSessionMutationCatalog(cfg, openClawTestState, [base], [base, native]);
     const requestContext = {
       loadGatewayModelCatalogSnapshot: vi.fn(async () => snapshot),
     };

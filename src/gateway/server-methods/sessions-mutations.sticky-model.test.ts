@@ -68,8 +68,11 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { createGatewaySession } from "../session-create-service.js";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
-import { sessionMutationHandlers } from "./sessions-mutations.js";
-import { registerSessionNativeRuntimeConsentTests } from "./sessions-mutations.native-consent.test-support.js";
+import {
+  createSessionMutationCatalog,
+  registerSessionNativeRuntimeConsentTests,
+  startSessionMutationRequest,
+} from "./sessions-mutations.native-consent.test-support.js";
 import { registerSessionOperatorPreparationTests } from "./sessions-mutations.operator-preparation.test-support.js";
 import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
@@ -114,15 +117,7 @@ const personalPin = () => ({
 });
 
 function catalogSnapshot(entries = modelCatalog) {
-  return {
-    entries,
-    routeVariants: entries,
-    agentId: "main",
-    agentDir: openClawTestState.agentDir("main"),
-    workspaceDir: openClawTestState.workspaceDir,
-    config: cfg,
-    catalogComplete: true,
-  };
+  return createSessionMutationCatalog(cfg, openClawTestState, entries);
 }
 
 function context(clients = new Set<TestClient>()) {
@@ -165,15 +160,11 @@ async function patchSession(
   requestContext: GatewayRequestContext = context(),
   requestClient: GatewayClient = client(scopes),
 ) {
-  const responses: Parameters<RespondFn>[] = [];
-  await sessionMutationHandlers["sessions.patch"]?.({
-    req: { type: "req", id: "sticky-model-patch", method: "sessions.patch", params },
-    params,
+  const { responses, running } = startSessionMutationRequest("sessions.patch", params, {
     client: requestClient,
     context: requestContext,
-    isWebchatConnect: () => true,
-    respond: (...response: Parameters<RespondFn>) => responses.push(response),
   });
+  await running;
   expect(responses).toHaveLength(1);
   return responses[0]!;
 }

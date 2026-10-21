@@ -879,7 +879,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/gateway/server-methods/sessions-list-archived.test.ts",
     "src/gateway/server-methods/sessions-mutations.perf.test.ts",
     "src/gateway/server-methods/sessions-read-active.test.ts",
-    "src/gateway/server-methods/sessions-read-async.test.ts",
     "src/gateway/server-methods/sessions-read-diagnostics.test.ts",
     "src/gateway/server-methods/sessions-read-visibility.test.ts",
     "src/gateway/server-methods/sessions-read.test.ts",
@@ -894,16 +893,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/state/openclaw-state-read.worker.ts",
     ],
   })),
-  {
-    testFile: "src/gateway/server-methods/sessions-read-catalog-scope.test.ts",
-    watchGlobs: [
-      "extensions/openai/openclaw.plugin.json",
-      "extensions/openai/provider-policy-api.ts",
-      "src/config/sessions/session-transcript.worker.ts",
-      "src/state/openclaw-agent-execution.worker.ts",
-      "src/state/openclaw-state-read.worker.ts",
-    ],
-  },
   {
     testFile: "src/gateway/server-methods/system-agent-approval.test.ts",
     watchGlobs: [

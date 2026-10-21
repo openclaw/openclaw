@@ -37,10 +37,9 @@ import { initializeRepository } from "../server.sessions.create.projects.test-su
 import { createGatewaySession } from "../session-create-service.js";
 import * as creationTarget from "../session-create-target.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
-import { sessionCreateHandlers } from "./sessions-create.js";
-import { sessionMutationHandlers } from "./sessions-mutations.js";
+import { startSessionMutationRequest } from "./sessions-mutations.native-consent.test-support.js";
 import * as patchDiscovery from "./sessions-patch-discovery.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 export function registerSessionOperatorPreparationTests(fixture: {
   context: () => GatewayRequestContext;
@@ -99,27 +98,15 @@ export function registerSessionOperatorPreparationTests(fixture: {
     if (authorization) {
       expect(authorization.error).toBeNull();
     }
-    const responses: Parameters<RespondFn>[] = [];
-    const handler = (
-      method === "sessions.create" ? sessionCreateHandlers : sessionMutationHandlers
-    )[method]!;
-    const running = Promise.resolve(
-      handler({
-        req: { type: "req", id: requestId, method, params },
-        params,
-        client: caller,
-        context,
-        isWebchatConnect: () => true,
-        ...(authorization && {
-          hasCurrentClientAuthority: () => !caller.invalidated,
-          sessionMutationAuthorization: authorization.authorization,
-        }),
-        respond: (...response) => {
-          responses.push(response);
-        },
+    return startSessionMutationRequest(method, params, {
+      req: { type: "req", id: requestId, method, params },
+      client: caller,
+      context,
+      ...(authorization && {
+        hasCurrentClientAuthority: () => !caller.invalidated,
+        sessionMutationAuthorization: authorization.authorization,
       }),
-    );
-    return { responses, running };
+    });
   };
   const cases = (["sessions.patch", "sessions.patchMany", "sessions.create"] as const).flatMap(
     (method) => (["params", "caller", "target"] as const).map((change) => ({ method, change })),
