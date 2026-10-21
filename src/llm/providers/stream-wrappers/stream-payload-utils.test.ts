@@ -31,10 +31,13 @@ describe("streamWithPayloadPatch", () => {
         onPayload: () => {
           if (kind === "in-place") {
             payload.extra = true;
-            return;
           }
           const replacement = { ...SENSITIVE_PAYLOAD, extra: true };
-          return kind === "replacement" ? replacement : Promise.resolve(replacement);
+          return kind === "in-place"
+            ? undefined
+            : kind === "replacement"
+              ? replacement
+              : Promise.resolve(replacement);
         },
       },
     );

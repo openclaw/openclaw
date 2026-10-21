@@ -8,7 +8,9 @@ import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
 import { loadUsageBarTemplate } from "./template.js";
 import { clearUsageBarTemplateCacheForTest } from "./template.test-support.js";
 const warnSpy = vi.hoisted(() => vi.fn());
-vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => ({ warn: warnSpy }) }));
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ warn: warnSpy }),
+}));
 vi.mock("@openclaw/fs-safe/watch", async () => {
   const { createRequire } = await import("node:module");
   return { ...createRequire(import.meta.url)("@openclaw/fs-safe/watch") };

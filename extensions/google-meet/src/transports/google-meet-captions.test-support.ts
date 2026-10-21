@@ -73,10 +73,11 @@ export function createCaptionPage(initialRows: CaptionNode[]) {
     clearTimeout: (id: number) => timers.delete(id),
     window: windowState,
   });
-  const run = <T>(script: string) => (new Script(`(${script})`).runInContext(context) as () => T)();
+  const run = (script: string) =>
+    (new Script(`(${script})`).runInContext(context) as () => unknown)();
   return {
     async poll(sessionId = "session-1") {
-      await run<Promise<string>>(
+      await run(
         meetStatusScript({
           allowMicrophone: false,
           autoJoin: false,
@@ -88,7 +89,9 @@ export function createCaptionPage(initialRows: CaptionNode[]) {
       );
     },
     read: (finalize = false, sessionId = "session-1") =>
-      JSON.parse(run<string>(meetTranscriptScript(MEETING_URL, sessionId, finalize))) as Transcript,
+      JSON.parse(
+        run(meetTranscriptScript(MEETING_URL, sessionId, finalize)) as string,
+      ) as Transcript,
     show(nextRows: CaptionNode[]) {
       rows = nextRows;
       observers.forEach((_options, notify) => notify());

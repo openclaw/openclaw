@@ -70,6 +70,10 @@ it.each(["assistant", "toolResult"] as const)(
       if (!codec) {
         throw new Error("Writer preparation proof requires native zstd support");
       }
+      const compress = codec.compress;
+      const redact = transcriptRedact.sanitizeTranscriptMessage;
+      const stringify = JSON.stringify;
+      const parse = JSON.parse;
       function track<Args extends unknown[], Result>(
         fn: (...args: Args) => Result,
         held: boolean[],
@@ -84,16 +88,14 @@ it.each(["assistant", "toolResult"] as const)(
           return result;
         };
       }
-      vi.spyOn(codec, "compress").mockImplementation(track(codec.compress, compressionHeld));
+      vi.spyOn(codec, "compress").mockImplementation(track(compress, compressionHeld));
       vi.spyOn(transcriptRedact, "sanitizeTranscriptMessage").mockImplementation(
-        track(transcriptRedact.sanitizeTranscriptMessage, redactionHeld),
+        track(redact, redactionHeld),
       );
       vi.spyOn(JSON, "stringify").mockImplementation(
-        track(JSON.stringify, largeJsonHeld, (result) => result),
+        track(stringify, largeJsonHeld, (result) => result),
       );
-      vi.spyOn(JSON, "parse").mockImplementation(
-        track(JSON.parse, largeJsonHeld, (_, json) => json),
-      );
+      vi.spyOn(JSON, "parse").mockImplementation(track(parse, largeJsonHeld, (_, json) => json));
       let entryId: string;
       try {
         entryId = manager.appendMessage(message);
