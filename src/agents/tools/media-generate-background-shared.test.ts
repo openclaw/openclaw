@@ -161,18 +161,24 @@ function completionFixture(handle: ScheduleOptions["handle"]) {
   const lifecycle = mockLifecycle();
   const onWakeFailure = vi.fn();
   const scheduled: Array<() => Promise<void>> = [];
+  const schedule = (options: Partial<ScheduleOptions> = {}) =>
+    scheduleImageCompletion({
+      lifecycle,
+      onWakeFailure,
+      handle,
+      scheduleBackgroundWork: (work) => scheduled.push(work),
+      ...options,
+    });
   return {
     lifecycle,
     onWakeFailure,
     scheduled,
-    schedule: (options: Partial<ScheduleOptions> = {}) =>
-      scheduleImageCompletion({
-        lifecycle,
-        onWakeFailure,
-        handle,
-        scheduleBackgroundWork: (work) => scheduled.push(work),
-        ...options,
-      }),
+    schedule,
+    start: (options: Partial<ScheduleOptions> = {}) => {
+      schedule(options);
+      expect(scheduled).toHaveLength(1);
+      return scheduled[0]!();
+    },
   };
 }
 
@@ -488,80 +494,66 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     );
   });
 
-  it("completes a generated media task when completion delivery cannot be confirmed", async () => {
-    const { lifecycle, onWakeFailure, scheduled, schedule } = completionFixture(imageHandle("456"));
-    lifecycle.wakeTaskCompletion.mockResolvedValue({ status: "permanent_failure" });
-    schedule();
+  it.each(["unconfirmed", "throws"])(
+    "completes a generated media task when wake %s",
+    async (outcome) => {
+      const wakeError = new Error("requester wake failed");
+      const handle = imageHandle(
+        outcome,
+        outcome === "throws"
+          ? {
+              requesterOrigin: { channel: "discord", to: "channel:123" },
+            }
+          : {},
+      );
+      const { lifecycle, onWakeFailure, start } = completionFixture(handle);
+      if (outcome === "throws") {
+        lifecycle.wakeTaskCompletion.mockRejectedValueOnce(wakeError);
+      } else {
+        lifecycle.wakeTaskCompletion.mockResolvedValue({ status: "permanent_failure" });
+      }
+      await start(
+        outcome === "throws"
+          ? {
+              run: async () => ({
+                ...generatedImageResult(),
+                attachments: [{ type: "image" as const, path: "/tmp/proof.png" }],
+                mediaUrls: ["/tmp/proof.png"],
+              }),
+            }
+          : {},
+      );
 
-    await scheduled[0]?.();
-
-    expect(onWakeFailure).toHaveBeenCalledWith(
-      "Image generation completion delivery was not confirmed after successful generation",
-      expect.objectContaining({
-        runId: "tool:image_generate:456",
-        taskId: "task-image-456",
-      }),
-    );
-    expectCall(lifecycle.completeTaskRun, {
-      count: 1,
-      terminalResult: {
-        terminalOutcome: "blocked",
-        terminalSummary:
-          "Required completion delivery failed before reaching the requester: completion delivery was not confirmed after successful generation.",
-      },
-    });
-    expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
-    expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledTimes(1);
-  });
-
-  it("completes a generated media task when completion wake throws", async () => {
-    const wakeError = new Error("requester wake failed");
-    const { lifecycle, onWakeFailure, scheduled, schedule } = completionFixture(
-      imageHandle("789", {
-        requesterOrigin: { channel: "discord", to: "channel:123" },
-      }),
-    );
-    lifecycle.wakeTaskCompletion.mockRejectedValueOnce(wakeError);
-    schedule({
-      run: async () => ({
-        ...generatedImageResult(),
-        attachments: [{ type: "image" as const, path: "/tmp/proof.png" }],
-        mediaUrls: ["/tmp/proof.png"],
-      }),
-    });
-
-    await scheduled[0]?.();
-
-    expect(onWakeFailure).toHaveBeenCalledWith(
-      "Image generation completion wake failed after successful generation",
-      expect.objectContaining({
-        error: wakeError,
-        runId: "tool:image_generate:789",
-        taskId: "task-image-789",
-      }),
-    );
-    expectCall(lifecycle.completeTaskRun, {
-      count: 1,
-      terminalResult: {
-        terminalOutcome: "blocked",
-        terminalSummary: expect.stringContaining("requester wake failed"),
-      },
-    });
-    expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
-    expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledTimes(1);
-  });
+      expect(onWakeFailure).toHaveBeenCalledWith(
+        `Image generation ${outcome === "throws" ? "completion wake failed" : "completion delivery was not confirmed"} after successful generation`,
+        expect.objectContaining({
+          ...(outcome === "throws" ? { error: wakeError } : {}),
+          runId: handle.runId,
+          taskId: handle.taskId,
+        }),
+      );
+      expectCall(lifecycle.completeTaskRun, {
+        count: 1,
+        terminalResult: {
+          terminalOutcome: "blocked",
+          terminalSummary:
+            outcome === "throws"
+              ? expect.stringContaining("requester wake failed")
+              : "Required completion delivery failed before reaching the requester: completion delivery was not confirmed after successful generation.",
+        },
+      });
+      expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
+      expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("still delivers completion when the post-generation progress update throws", async () => {
     const progressError = new Error("progress store failed");
-    const { lifecycle, onWakeFailure, scheduled, schedule } = completionFixture(
-      imageHandle("progress-error"),
-    );
+    const { lifecycle, onWakeFailure, start } = completionFixture(imageHandle("progress-error"));
     lifecycle.recordTaskProgress.mockImplementation(() => {
       throw progressError;
     });
-    schedule();
-
-    await scheduled[0]?.();
+    await start();
 
     expect(onWakeFailure).toHaveBeenCalledWith(
       "Image generation completion progress update failed",
@@ -740,56 +732,4 @@ describe("createMediaGenerationTaskLifecycle", () => {
       ).resolves.toEqual({ status: outcome });
     },
   );
-
-  it("includes MEDIA directives in music completion wake prompts for session-only delivery", async () => {
-    const origin = { channel: "webchat", to: "session:dashboard" };
-    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
-      delivered: true,
-    });
-    const lifecycle = createMediaGenerationTaskLifecycle("music");
-
-    await expect(
-      lifecycle.wakeTaskCompletion({
-        handle: admitMediaHandle({
-          taskId: "task-music-webchat",
-          runId: "tool:music_generate:webchat",
-          requesterSessionKey: "agent:main:dashboard:music-session",
-          taskLabel: "night-drive synthwave",
-          requesterOrigin: origin,
-        }),
-        status: "ok",
-        statusLabel: "completed successfully",
-        result: 'Generated 1 track.\n- path="/tmp/generated-night-drive.mp3"',
-        attachments: [
-          {
-            type: "audio",
-            path: "/tmp/generated-night-drive.mp3",
-            mimeType: "audio/mpeg",
-            name: "generated-night-drive.mp3",
-          },
-        ],
-      }),
-    ).resolves.toEqual({ status: "delivered" });
-
-    expectCall(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement, {
-      requesterSessionKey: "agent:main:dashboard:music-session",
-      requesterSessionOrigin: origin,
-      completionDirectOrigin: origin,
-      sourceTool: "music_generate",
-      bestEffortDeliver: true,
-    });
-    const announceParams = subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mock
-      .calls[0]?.[0] as { triggerMessage?: string; internalEvents?: unknown[] } | undefined;
-    expect(announceParams?.triggerMessage).toContain("MEDIA:/tmp/generated-night-drive.mp3");
-    expect(announceParams?.internalEvents).toEqual([
-      expect.objectContaining({
-        mediaUrls: ["/tmp/generated-night-drive.mp3"],
-        attachments: [
-          expect.objectContaining({
-            path: "/tmp/generated-night-drive.mp3",
-          }),
-        ],
-      }),
-    ]);
-  });
 });

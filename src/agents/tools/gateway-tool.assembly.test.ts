@@ -59,18 +59,11 @@ describe("assembled Gateway update capability", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it.each(["coding"] as const)(
-    "makes the existing update action available in the %s profile without config reads",
-    (profile) => {
-      const tools = createTools({ tools: { profile } });
-
-      expect(gatewayActions(tools)).toEqual(["update.run"]);
-      expect(Object.keys(gatewayParameters(tools).properties).toSorted()).toEqual([
-        "action",
-        "note",
-      ]);
-    },
-  );
+  it("exposes only update inputs in the coding profile", () => {
+    const tools = createTools({ tools: { profile: "coding" } });
+    expect(gatewayActions(tools)).toEqual(["update.run"]);
+    expect(Object.keys(gatewayParameters(tools).properties).toSorted()).toEqual(["action", "note"]);
+  });
 
   it.each([undefined, "full"] as const)(
     "retains existing config read authority with profile %s",
@@ -92,14 +85,15 @@ describe("assembled Gateway update capability", () => {
     },
   );
 
-  it.each([{ alsoAllow: ["session_status"] }])(
-    "does not widen config reads from alsoAllow $alsoAllow",
-    ({ alsoAllow }) => {
-      expect(gatewayActions(createTools({ tools: { profile: "coding", alsoAllow } }))).toEqual([
-        "update.run",
-      ]);
-    },
-  );
+  it("does not widen config reads from unrelated grants", () => {
+    expect(
+      gatewayActions(
+        createTools({
+          tools: { profile: "coding", alsoAllow: ["session_status"] },
+        }),
+      ),
+    ).toEqual(["update.run"]);
+  });
 
   it.each([
     { mainGrant: true, providerGrant: false, configRead: false },
@@ -128,34 +122,31 @@ describe("assembled Gateway update capability", () => {
     },
   );
 
-  it.each(["coding"] as const)(
-    "uses the %s policy agent's authority rather than the execution agent's",
-    (policyProfile) => {
-      const actions = gatewayActions(
-        createTools(
-          {
-            session: { scope: "global" },
-            agents: {
-              ownership: "explicit",
-              entries: {
-                main: { tools: { profile: policyProfile } },
-                execution: { tools: { profile: "full" } },
-              },
+  it("uses policy-agent rather than execution-agent authority", () => {
+    const actions = gatewayActions(
+      createTools(
+        {
+          session: { scope: "global" },
+          agents: {
+            ownership: "explicit",
+            entries: {
+              main: { tools: { profile: "coding" } },
+              execution: { tools: { profile: "full" } },
             },
           },
-          {
-            agentId: "execution",
-            policyAgentId: "main",
-            sessionKey: "global",
-            runSessionKey: "agent:execution:main",
-          },
-        ),
-      );
+        },
+        {
+          agentId: "execution",
+          policyAgentId: "main",
+          sessionKey: "global",
+          runSessionKey: "agent:execution:main",
+        },
+      ),
+    );
 
-      expect(actions).toContain("update.run");
-      expect(actions).not.toContain("config.get");
-    },
-  );
+    expect(actions).toContain("update.run");
+    expect(actions).not.toContain("config.get");
+  });
 
   it.each([
     { name: "explicit deny", tools: { deny: ["gateway"] } },

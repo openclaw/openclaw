@@ -11,6 +11,7 @@ import {
   EFFECTIVE_REF_WIDTH,
   listNodesMock,
   macComputerNode,
+  mockComputerAct,
   readFrameId,
   readLastComputerActParams,
   resetComputerToolMocks,
@@ -41,9 +42,7 @@ function computerActBodies(): ComputerActBody[] {
         return body;
       }
       const { executionId: _executionId, ...params } = body.params;
-      const sanitizedBody = Object.assign({}, body);
-      sanitizedBody.params = params;
-      return sanitizedBody;
+      return Object.assign({}, body, { params });
     });
 }
 
@@ -112,26 +111,17 @@ async function rejectsClick(
 }
 
 function mockComputerActError(error: Error, action?: string) {
-  callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
-    const request = body as ComputerActBody;
-    if (
-      request.command === COMPUTER_ACT_COMMAND &&
-      (!action || request.params?.action === action)
-    ) {
+  mockComputerAct((params) => {
+    if (!action || params?.action === action) {
       throw error;
     }
-    return request.command === COMPUTER_ACT_COMMAND
-      ? { payload: { ok: true } }
-      : screenshotPayload();
+    return { payload: { ok: true } };
   });
 }
 
 function mockFirstScreenshotThenFailure(screenIndex = 0) {
   let screenshotCalls = 0;
-  callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
-    if ((body as ComputerActBody).command === COMPUTER_ACT_COMMAND) {
-      return { payload: { ok: true } };
-    }
+  mockComputerAct(undefined, () => {
     if ((screenshotCalls += 1) === 1) {
       return screenshotPayload(screenIndex);
     }
@@ -228,10 +218,7 @@ describe("createComputerTool v1 execution", () => {
 
   it("omits an unchanged screenshot while retaining its frame and refreshing node coordinates", async () => {
     let screenshotCalls = 0;
-    callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
-      if ((body as ComputerActBody).command === COMPUTER_ACT_COMMAND) {
-        return { payload: { ok: true } };
-      }
+    mockComputerAct(undefined, () => {
       const result = screenshotPayload();
       result.payload.displayFrameId = `display-frame-${++screenshotCalls}`;
       return result;
@@ -451,11 +438,7 @@ describe("createComputerTool v1 execution", () => {
   });
 
   it("rejects a coordinate action that retargets a different display", async () => {
-    callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
-      (body as ComputerActBody).command === COMPUTER_ACT_COMMAND
-        ? { payload: { ok: true } }
-        : screenshotPayload(1),
-    );
+    mockComputerAct(undefined, () => screenshotPayload(1));
     const { tool, frameId } = await createToolWithFrame({}, { screenIndex: 1 }, "call");
     await rejectsClick(
       tool,
@@ -573,18 +556,14 @@ describe("createComputerTool v1 execution", () => {
   it("treats mouse up as idempotent after lifecycle cleanup released the button", async () => {
     listNodesMock.mockResolvedValue(twoMacComputerNodes());
     let actCalls = 0;
-    callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
-      if ((body as { command?: string }).command === COMPUTER_ACT_COMMAND) {
-        actCalls += 1;
-        if (actCalls === 2) {
-          throw Object.assign(
-            new Error("INVALID_REQUEST: left button is not held by computer control"),
-            { name: "GatewayClientRequestError" },
-          );
-        }
-        return { payload: { ok: true } };
+    mockComputerAct(() => {
+      if (++actCalls === 2) {
+        throw Object.assign(
+          new Error("INVALID_REQUEST: left button is not held by computer control"),
+          { name: "GatewayClientRequestError" },
+        );
       }
-      return screenshotPayload();
+      return { payload: { ok: true } };
     });
     const { tool, frameId } = await createToolWithFrame({}, { node: "mac-a" });
     await executeMouseDown(tool, frameId);
