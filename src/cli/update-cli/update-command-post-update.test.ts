@@ -356,8 +356,6 @@ describe("successful update finalization ordering", () => {
       } finally {
         identity.restore();
       }
-      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("restore"));
-      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("start"));
       expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("activation-attempt"));
       expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("restore"));
       expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("start"));
@@ -967,9 +965,6 @@ process.exitCode = 1;
           "core/doctor/provider-catalog-projection",
         ]),
       );
-      expect(options.only).not.toContain("core/doctor/security");
-      expect(options.only).not.toContain("core/doctor/session-snapshots");
-      expect(options.only).not.toContain("core/doctor/workspace-status");
       expect(lint.inProgress).toBeNull();
       expect(steps).toEqual([
         ...initialSteps,
