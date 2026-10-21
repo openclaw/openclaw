@@ -78,6 +78,19 @@ function fleetConfig(agentIds: string[]): OpenClawConfig {
   };
 }
 
+function fleetFixture(agentIds: string[]) {
+  const stateDir = fs.realpathSync.native(tempDirs.make("session-startup-"));
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  for (const agentId of agentIds) {
+    openOpenClawAgentDatabase({ agentId, env });
+  }
+  return { stateDir, env, cfg: fleetConfig(agentIds) };
+}
+
+function needsReconcile(options: OpenClawAgentDatabaseOptions, sessionId: string) {
+  return sessionTranscriptIndexNeedsReconcile(openOpenClawAgentDatabase(options).db, sessionId);
+}
+
 async function seedHistory(
   scope: Parameters<typeof upsertSessionEntryCore>[0] & { sessionId: string },
   eventId: string,
@@ -92,13 +105,8 @@ async function seedHistory(
 
 describe("runStartupSessionMaintenanceForTest", () => {
   it("admits the first session after certifying two cold empty agent databases once", async () => {
-    const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-small-startup-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const agentIds = ["main", "secondary"];
-    const cfg = fleetConfig(agentIds);
-    for (const agentId of agentIds) {
-      openOpenClawAgentDatabase({ agentId, env });
-    }
+    const { stateDir, env, cfg } = fleetFixture(agentIds);
     const started = vi.spyOn(canonicalWorker, "startCanonicalValidationTask");
     for (let boot = 0; boot < 2; boot++) {
       await closeOpenClawAgentDatabasesAsync();
@@ -135,13 +143,7 @@ describe("runStartupSessionMaintenanceForTest", () => {
   it.each([false, true])(
     "keeps certified empty fleet maintenance read-only on both boots (Gateway owner=%s)",
     async (gatewayActive) => {
-      const stateDir = tempDirs.make("openclaw-empty-fleet-startup-");
-      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const agentIds = ["fleet-a", "fleet-b", "fleet-c", "fleet-d"];
-      const cfg = fleetConfig(agentIds);
-      for (const agentId of agentIds) {
-        openOpenClawAgentDatabase({ agentId, env });
-      }
+      const { env, cfg } = fleetFixture(["fleet-a", "fleet-b", "fleet-c", "fleet-d"]);
       await closeAgentDatabases();
       await runStartupSessionMaintenanceForTest({ cfg, env, log: makeLog() });
       const started = vi.spyOn(canonicalWorker, "startCanonicalValidationTask");
@@ -269,9 +271,7 @@ describe("runStartupSessionMaintenanceForTest", () => {
         const env = { ...process.env };
         const agentId = "qa";
         const storePath =
-          layout === "default" || layout === "scoped"
-            ? undefined
-            : path.join(root, "custom", layout === "shared" ? "shared.sqlite" : "sessions.json");
+          layout === "shared" ? path.join(root, "custom", "shared.sqlite") : undefined;
         const cfg: OpenClawConfig = {
           agents: {
             ownership: "explicit",
@@ -321,12 +321,7 @@ describe("runStartupSessionMaintenanceForTest", () => {
           log,
           ...(layout === "scoped" ? { agentIds: new Set([agentId]) } : {}),
         });
-        expect(
-          sessionTranscriptIndexNeedsReconcile(
-            openOpenClawAgentDatabase(options).db,
-            scope.sessionId,
-          ),
-        ).toBe(true);
+        expect(needsReconcile(options, scope.sessionId)).toBe(true);
         expect(loadExactSessionEntry(scope)?.entry.sessionId).toBe(scope.sessionId);
         await runGatewaySessionStartupMaintenance({ databases, log });
 
@@ -349,12 +344,7 @@ describe("runStartupSessionMaintenanceForTest", () => {
           expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId, env }))).toBe(false);
         }
         if (layout === "scoped") {
-          expect(
-            sessionTranscriptIndexNeedsReconcile(
-              openOpenClawAgentDatabase(peerOptions).db,
-              peerScope.sessionId,
-            ),
-          ).toBe(true);
+          expect(needsReconcile(peerOptions, peerScope.sessionId)).toBe(true);
         }
         expect(fs.existsSync(path.join(stateDir, "session-sqlite-migration-runs"))).toBe(false);
       });

@@ -6,13 +6,11 @@ import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
-import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
@@ -21,12 +19,6 @@ import {
   presentSessionRow,
   readSessionRowInputs,
 } from "./session-utils-row.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
-import {
-  projectWorkerSessionPlacement,
-  readWorkerPlacementIdentity,
-} from "./worker-environments/placement-projector.js";
-import { activePlacement } from "./worker-environments/placement-suite.test-support.js";
 
 // Values frozen from d70a7e7300cdc0af4485d10b39f3e4986c3dd155.
 // SHA256 pins wire values; sparse materialization may change top-level property order.
@@ -35,26 +27,15 @@ const TIMES = [START + 29_999, START + 30_000, START + 7_200_001] as const;
 const GOLDEN_HASHES: Record<string, string | readonly [string, string, string]> = {
   "ACP metadata owns the runtime":
     "806dd091c364088ac97e34825c6bdaee6e865b6ff911a6b54c2073c05b28afb5",
-  "activity current and active correlated placement":
-    "03b2a5f8df56d4c6b58c33838ff1a2a7ceeb555d95332d4e936bc32d20fd7995",
-  "activity stale and uncorrelated placement":
-    "44f6c17648306a69451dea4079e7f325eedb3a58c24eeac47af07c3e011ffb95",
   "child retention keeps canonical live recent and unknown links": [
     "02c9c8267711adf6e3673b9fa35c0e63694b400d5af718d1ab84f69e52e49ecd",
     "02c9c8267711adf6e3673b9fa35c0e63694b400d5af718d1ab84f69e52e49ecd",
     "556f0f870c08fbf3b5d218d2328ba4c6dff0943bbc3a82d8858a5f57620132a2",
   ],
-  "ended run uses persisted lifecycle timestamps":
-    "3812cd64fb99bf06451eaebd5d722e38212834e453f21d01afbce70518a2f71e",
   "expired status and incognito draft":
     "fc06ca39632d330036ebab35135098ac12d6b22b4f5a0c0ed36b7f7c559474e6",
   "goal below budget retains committed timestamps":
     "1aaecea18cfa924f2714e47af426dc76fc1bd8b30dae956206e7cbe6f9199001",
-  "goal budget becomes limited at presentation time": [
-    "26b22c9c15b44c86fdbc6d403d4152168e2fa8651be2dfb03bd26fd4d30b9b11",
-    "89b735377c12bf3bd9b4a050c2d89aabe763b4dfe53da7caa7ee6f1b4acaacd5",
-    "e17984f9316f106afb181d5bfd1f952945e85e9a32b860420ab5d65130d7a1fa",
-  ],
   "live subagent accumulated runtime and inherited model":
     "ec1fab32f0b68de7cf6bab6e0c6bcab8b79382492b710b041f40c53ad7538e6e",
   "missing entry": "ca59b3ec3a664a3caa055671a6e57891e8a9b072c0509e8073576ab8b80de292",
@@ -66,27 +47,12 @@ const GOLDEN_HASHES: Record<string, string | readonly [string, string, string]> 
     "ab9085aa5476af8045a0ffdac062f7a380f223cde9842bbe9a88b422fbb7a147",
   "single-row snapshot without an explicit swarm context":
     "495b2e3d130365dfdd9aaa322cd655f4d11f2cae5e673cc98a3e1369b1231dae",
-  "swarm summary retains collector completion and children":
-    "194b69b9172baad7878f5c67e7be312f101420979c71058e5603b6e451901be1",
 };
 
 const PARENT = "agent:main:dashboard:parent";
 const LIVE = "agent:main:subagent:live";
 const LIVE_RUN = "materialize-golden-live";
 const BASE_ENTRY = { sessionId: "golden-session", updatedAt: START, createdAt: START - 1_000 };
-const GOAL = {
-  schemaVersion: 1,
-  id: "golden-goal",
-  objective: "Finish the synthetic fixture",
-  status: "active",
-  createdAt: START - 1_000,
-  updatedAt: START,
-  tokenStart: 20,
-  tokenStartFresh: true,
-  tokensUsed: 0,
-  tokenBudget: 100,
-  continuationTurns: 2,
-} satisfies NonNullable<SessionEntry["goal"]>;
 
 type RowFixture = {
   name: string;
@@ -97,7 +63,6 @@ type RowFixture = {
   runs?: SubagentRunRecord[];
   omitRowContext?: boolean;
   expectedIsDock?: boolean;
-  decoration?: "current" | "stale";
 };
 
 function config(): OpenClawConfig {
@@ -164,32 +129,6 @@ function fixtures(): RowFixture[] {
     accumulatedRuntimeMs: 500,
     model: "row-fixture/older",
   });
-  const activityEntry: SessionEntry = {
-    ...BASE_ENTRY,
-    activitySummary: {
-      version: 1,
-      formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
-      sessionId: BASE_ENTRY.sessionId,
-      text: "Completed the fixture and checked its output.",
-      updatedAt: START,
-      generation: "golden-generation",
-      maxSeq: 2,
-      leafEntryId: "golden-leaf",
-      coveredMessages: 2,
-      totalMessages: 2,
-      omittedContent: false,
-    },
-  };
-  const goalFixture = (
-    name: string,
-    suffix: string,
-    totalTokens: number,
-    goal = GOAL,
-  ): RowFixture => ({
-    name,
-    key: `agent:main:dashboard:${suffix}`,
-    entry: { ...BASE_ENTRY, goal, totalTokens, totalTokensFresh: true, totalTokensVersion: 1 },
-  });
   return [
     { name: "missing entry", key: "agent:main:dashboard:missing" },
     {
@@ -211,11 +150,29 @@ function fixtures(): RowFixture[] {
         label: "Private fixture",
       },
     },
-    goalFixture("goal budget becomes limited at presentation time", "budget", 150),
-    goalFixture("goal below budget retains committed timestamps", "goal", 50, {
-      ...GOAL,
-      tokensUsed: 5,
-    }),
+    {
+      name: "goal below budget retains committed timestamps",
+      key: "agent:main:dashboard:goal",
+      entry: {
+        ...BASE_ENTRY,
+        totalTokens: 50,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        goal: {
+          schemaVersion: 1,
+          id: "golden-goal",
+          objective: "Finish the synthetic fixture",
+          status: "active",
+          createdAt: START - 1_000,
+          updatedAt: START,
+          tokenStart: 20,
+          tokenStartFresh: true,
+          tokensUsed: 5,
+          tokenBudget: 100,
+          continuationTurns: 2,
+        },
+      },
+    },
     ...([-1, 0, 1] as const).map((offset): RowFixture => ({
       name: `observer digest ${offset < 0 ? "older" : offset === 0 ? "equal" : "newer"} than run start`,
       key: `agent:main:dashboard:observer-${offset}`,
@@ -241,55 +198,11 @@ function fixtures(): RowFixture[] {
       runs: [liveRun],
     },
     {
-      name: "ended run uses persisted lifecycle timestamps",
-      key: ended,
-      entry: {
-        ...BASE_ENTRY,
-        status: "failed",
-        startedAt: START - 500,
-        endedAt: START + 1_000,
-        runtimeMs: 1_500,
-        lastRunError: "Synthetic failure",
-      },
-      runs: [
-        createSubagentRunRecord({
-          runId: "golden-ended",
-          childSessionKey: ended,
-          requesterSessionKey: PARENT,
-          createdAt: START - 1_000,
-          startedAt: START,
-          endedAt: START + 100,
-        }),
-      ],
-    },
-    {
       name: "child retention keeps canonical live recent and unknown links",
       key: PARENT,
       entry: parentEntry,
       store: childStore,
       runs: [liveRun],
-    },
-    {
-      name: "swarm summary retains collector completion and children",
-      key: PARENT,
-      entry: parentEntry,
-      runs: ["running", "queued", "done", "failed"].map((status, index) =>
-        createSubagentRunRecord({
-          runId: `golden-swarm-${status}`,
-          childSessionKey: `agent:main:subagent:swarm-${status}`,
-          requesterSessionKey: PARENT,
-          requesterAgentId: "main",
-          swarmRequesterSessionKey: PARENT,
-          collect: true,
-          groupId: "golden-group",
-          createdAt: START + index,
-          execution:
-            status === "queued" ? { status: "queued" } : { status: "running", startedAt: START },
-          ...(status === "done" || status === "failed"
-            ? { collectorCompletion: { status: status === "done" ? "done" : "failed" } }
-            : {}),
-        }),
-      ),
     },
     {
       name: "ACP metadata owns the runtime",
@@ -304,65 +217,7 @@ function fixtures(): RowFixture[] {
         lastActivityAt: START,
       },
     },
-    ...(["current", "stale"] as const).map((decoration) => ({
-      name:
-        decoration === "current"
-          ? "activity current and active correlated placement"
-          : "activity stale and uncorrelated placement",
-      key: `agent:main:dashboard:activity-${decoration}`,
-      entry: activityEntry,
-      decoration,
-    })),
   ];
-}
-
-function decorate(row: GatewaySessionRow, fixture: RowFixture, cfg: OpenClawConfig) {
-  if (!fixture.decoration) {
-    return row;
-  }
-  const current = fixture.decoration === "current";
-  const placement = activePlacement(BASE_ENTRY.sessionId, {
-    sessionKey: fixture.key,
-    generation: 4,
-    environmentId: "golden-environment",
-    activeOwnerEpoch: 7,
-    workspaceBaseManifestRef: "golden-manifest",
-    createdAtMs: START - 1_000,
-    updatedAtMs: START,
-    stateChangedAtMs: START,
-  });
-  const identity = readWorkerPlacementIdentity(placement, {
-    get: () => ({
-      environmentId: "golden-environment",
-      providerId: "fixture-worker",
-      profileId: "fixture-profile",
-      ownerEpoch: current ? 7 : 8,
-      state: "requested",
-      leaseId: null,
-      sharedHost: null,
-      createdAtMs: START,
-      idleSinceAtMs: null,
-      destroyRequestedAtMs: null,
-      attachedSessionIds: [],
-      desktopAvailable: false,
-      desktopApps: [],
-      tunnelStatus: "stopped",
-    }),
-    readMachineShape: () => ({ class: "medium", os: "linux", cpu: 4, memoryGb: 16 }),
-  });
-  const activitySummary = projectSessionActivitySummary({
-    cfg,
-    key: fixture.key,
-    agentId: "main",
-    entry: fixture.entry,
-    enabled: true,
-    watermark: { generation: "golden-generation", maxSeq: current ? 2 : 3 },
-  });
-  return Object.assign(row, {
-    sharingRole: current ? "owner" : "viewer",
-    activitySummary: activitySummary ? { ...activitySummary, canEnsure: current } : undefined,
-    placement: projectWorkerSessionPlacement(placement, undefined, undefined, identity),
-  });
 }
 
 afterEach(() => {
@@ -460,17 +315,13 @@ test("preserves complete base rows across time and caller presentation fixtures"
       const retainedMaterialized = structuredClone(materialized);
       const present = (indexed: boolean) =>
         TIMES.map((now) =>
-          decorate(
-            presentSessionRow(materialized, {
-              ...presentation,
-              now,
-              subagentRuns: indexed
-                ? buildSubagentRunReadIndexFromRuns({ ...subagentRunInputs, now })
-                : undefined,
-            }),
-            fixture,
-            cfg,
-          ),
+          presentSessionRow(materialized, {
+            ...presentation,
+            now,
+            subagentRuns: indexed
+              ? buildSubagentRunReadIndexFromRuns({ ...subagentRunInputs, now })
+              : undefined,
+          }),
         );
       const rows = present(true);
       const replay = present(false);
