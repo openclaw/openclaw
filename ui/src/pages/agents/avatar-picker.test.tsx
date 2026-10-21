@@ -4,14 +4,18 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import * as avatarImage from "./avatar-image.ts";
-import { AvatarPicker, type GeneratedAvatar } from "./avatar-picker.tsx";
+import { AvatarPicker, type AvatarPickerProps, type GeneratedAvatar } from "./avatar-picker.tsx";
 
 const avatar = "data:image/webp;base64,YXZhdGFy";
 const generated = { name: "Garden keeper", description: "A tiny gardener.", svg: "<svg/>" };
 
 afterEach(() => vi.restoreAllMocks());
 
-function mount(prompt: string | null = "Explorer", error?: Error) {
+function mount(
+  prompt: string | null = "Explorer",
+  error?: Error,
+  generate?: AvatarPickerProps["onGenerate"],
+) {
   vi.spyOn(avatarImage, "svgToAvatarDataUrl").mockResolvedValue({ ok: true, dataUrl: avatar });
   const pending = createDeferred<GeneratedAvatar>();
   const props = {
@@ -20,7 +24,7 @@ function mount(prompt: string | null = "Explorer", error?: Error) {
     disabled: false,
     onSelect: vi.fn(),
     onUpload: vi.fn(),
-    onGenerate: vi.fn(() => (error ? Promise.reject(error) : pending.promise)),
+    onGenerate: vi.fn(generate ?? (() => (error ? Promise.reject(error) : pending.promise))),
   };
   const view = mountSolid(AvatarPicker, props);
   const text = () => view.container.textContent;
@@ -32,12 +36,15 @@ function mount(prompt: string | null = "Explorer", error?: Error) {
     button.click();
     flush();
   };
-  if (prompt !== null) {
+  const describe = (value: string) => {
     click("Generate");
     const input = view.container.querySelector("textarea")!;
-    input.value = prompt;
+    input.value = value;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
+  };
+  if (prompt !== null) {
+    describe(prompt);
     click("Generate");
   }
   const finish = async () => {
@@ -46,7 +53,7 @@ function mount(prompt: string | null = "Explorer", error?: Error) {
     await Promise.resolve();
     flush();
   };
-  return { ...view, props, click, text, query, finish };
+  return { ...view, props, click, text, query, finish, describe };
 }
 
 it("offers bundled character presets without a Lobsterdex collection", () => {
@@ -102,7 +109,7 @@ it.each(["success", "failure"] as const)(
     const retired = createDeferred<GeneratedAvatar>();
     const replacement = { ...generated, name: "New garden keeper" };
     const generate = vi.fn().mockReturnValueOnce(retired.promise).mockResolvedValue(replacement);
-    const view = mount(generate);
+    const view = mount(null, undefined, generate);
     view.describe("Old explorer");
     view.click("Generate");
     view.click("Blobster");
@@ -133,7 +140,7 @@ it("prepares a confirmed preset without publishing a retired preparation", async
     .mockReturnValueOnce(prepared.promise)
     .mockReturnValueOnce(retired.promise);
   vi.spyOn(avatarImage, "imageToAvatarDataUrl").mockReturnValue({ ok: true, dataUrl: avatar });
-  const view = mount();
+  const view = mount(null);
   const selectPreset = () => {
     view.container.querySelector<HTMLButtonElement>(".avatar-picker__preset")!.click();
     flush();
@@ -146,6 +153,7 @@ it("prepares a confirmed preset without publishing a retired preparation", async
   selectPreset();
   view.describe("A gardener");
   view.click("Generate");
+  await view.finish();
   await waitForFast(() => expect(view.container.textContent).toContain("Use avatar"));
   retired.resolve(document.createElement("img"));
   await retired.promise;
@@ -161,7 +169,7 @@ it("clears a failed preparation while a retry is pending and keeps its controls"
     .fn()
     .mockRejectedValueOnce(new Error("Synthetic failure."))
     .mockReturnValue(retry.promise);
-  const view = mount(generate);
+  const view = mount(null, undefined, generate);
   view.describe("A gardener");
   view.click("Generate");
   await waitForFast(() =>
