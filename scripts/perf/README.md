@@ -1314,6 +1314,15 @@ The upstream elapsed times include the injected wait and fetch header resolution
 they are not additive handler self-time. Use Gateway diagnostics for handler time
 and the existing RPC byte counts for serialization volume.
 
+`--list-profile-reference <reference>` applies the person-reference filter to
+concurrent list polling. Use a missing hexadecimal prefix such as `ffffffff` to
+exercise resolution across the full visible retained roster; that workload
+accepts an empty page and measures reference resolution rather than row rendering.
+The ordinary list-polling workload still requires nonempty pages. Add
+`--capture-responses` to a memory soak to capture the seeded roster after the
+measured window; person-filtered polling also adds four person-reference
+requests to that capture.
+
 Each allocation profile includes collected objects and reports decimal
 `allocatedMbPerTurn`. Allocation soaks keep one continuous sampling window and
 report it as `wholeSoakAllocation` with `allocation-soak.heapprofile`. These long
@@ -2077,6 +2086,24 @@ and warm top-200 sorting over 5,000 rows, plus the selected keys for all three s
 Use `--count-work` in a separate process for exact comparator, pin, activity, and
 key-normalization call counts. That pass enables coverage before loading the owner
 and excludes performance measurements. Run the same script on both revisions.
+
+For profile-reference filtering over 5,000 prepared sessions, run:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-profile-reference-measure.ts \
+  --iterations 108 --output sample.json --golden responses.json
+```
+
+Each process reports one warm main-thread CPU and sampled-allocation observation
+per `filterSessionEntries` operation, including objects collected by minor and
+major GC. The 27 requests cover three viewer scopes, canonical and merged aliases,
+retained profiles, prefix and missing references, archives, and empty time windows.
+Every session has three participants; the 50 profile identities include ten aliases
+and ten retained identities without durable rows. Preparation uses an isolated
+empty catalog and asserts that no SQLite file is created. Compare `responses.json`
+byte-for-byte between revisions; it contains complete 25-row filter results and
+full-roster facets. Run at least five alternating baseline/candidate processes on
+the benchmark host. This is an owner probe, not Gateway or transport evidence.
 
 For long RPC allocation windows, use `--warmup-operations` to warm fewer requests
 than the measured `--operations` count. For example, `--scenario sessions.list

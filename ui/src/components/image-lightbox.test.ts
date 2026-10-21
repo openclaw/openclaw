@@ -300,9 +300,9 @@ it("retires detached work and reconnects without downloading", async () => {
   expect(fetchImage).not.toHaveBeenCalled();
 });
 
-it.each([false, true])(
-  "reports failed downloads only while mounted (removed: %s)",
-  async (removed) => {
+it.each(["open", "closed", "reopened"] as const)(
+  "reports failed downloads only in their mounted view: %s",
+  async (state) => {
     const toast = container.appendChild(document.createElement("openclaw-toast-host"));
     toast.toast = null;
     toast.active = false;
@@ -314,23 +314,35 @@ it.each([false, true])(
       toast.remove();
       vi.useRealTimers();
     });
-    button(modal, ".download-image").click();
+    const download = button(modal, ".download-image");
+    download.click();
     expect(readOriginalBlob).toHaveBeenCalledOnce();
-    if (removed) {
-      modal.remove();
+    if (state !== "open") {
+      modal.addEventListener("image-lightbox-close", () => modal.remove());
+      button(modal, ".close").click();
+      expect(modal.isConnected).toBe(false);
       await Promise.resolve();
+      if (state === "reopened") {
+        container.append(modal);
+        await modal.updateComplete;
+        const replacement = button(modal, ".download-image");
+        expect(replacement).not.toBe(download);
+        expect(replacement.disabled).toBe(false);
+      }
     }
     original.reject(new Error("Image unavailable"));
     await vi.advanceTimersByTimeAsync(0);
     flush();
-    expect(toast.active).toBe(!removed);
+    expect(toast.active).toBe(state === "open");
     expect(toast.toast).toEqual(
-      removed
-        ? null
-        : expect.objectContaining({
-            message: "Could not download this image. Try again.",
-          }),
+      state === "open"
+        ? expect.objectContaining({ message: "Could not download this image. Try again." })
+        : null,
     );
+    if (state === "open") {
+      expect(download.disabled).toBe(false);
+      expect(download.hasAttribute("aria-busy")).toBe(false);
+    }
   },
 );
 

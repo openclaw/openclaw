@@ -50,7 +50,8 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
     draftRevision();
     return model().drafts.get(question()?.questionId ?? "");
   };
-  const disabled = () => pendingKind() !== null || model().disabled || model().submitting;
+  const disabled = () =>
+    pendingKind() !== null || model().disabled || (model().submitting ?? false);
   const answerValues = (value: QuestionPanelViewModel, item: QuestionPanelQuestion) =>
     questionDraftValues(value.drafts.get(item.questionId), item);
   const canAdvance = () => {
@@ -267,7 +268,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
         </button>
       </div>
     );
-  const Action = (action: {
+  const Action = (buttonProps: {
     name: "back" | "skip" | "advance";
     label: string;
     onClick: () => void;
@@ -276,14 +277,14 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
     <button
       class={[
         "btn btn--sm",
-        `chat-question-panel__${action.name}`,
-        { primary: action.name === "advance" },
+        `chat-question-panel__${buttonProps.name}`,
+        { primary: buttonProps.name === "advance" },
       ]}
       type="button"
-      disabled={disabled() || action.unavailable}
-      onClick={() => action.onClick()}
+      disabled={disabled() || buttonProps.unavailable}
+      onClick={() => buttonProps.onClick()}
     >
-      {action.label}
+      {buttonProps.label}
     </button>
   );
   const progress = () => `${currentQuestionIndex() + 1}/${model().questions.length}`;

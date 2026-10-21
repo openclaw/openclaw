@@ -51,7 +51,7 @@ it.each<[string, string[], string, string[], number, boolean?]>([
         agentId: "main",
         sessionId: `${label}-instance`,
         modelProvider: index === 1 ? "anthropic" : "openai",
-        updatedAt: 3 - index,
+        updatedAt: Date.parse("2026-08-07T12:00:00Z") + 3 - index,
         hasContextWeight: true,
         usage: {
           ...totals,
