@@ -10,7 +10,7 @@ import {
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { readMcpOAuthStore } from "./mcp-oauth-store.js";
 import { clearMcpOAuthCredentials, resolveMcpOAuthAccessToken } from "./mcp-oauth.js";
-import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
+import { withMcpOAuthProviderForTest, withMcpOAuthTestLease } from "./mcp-oauth.test-support.js";
 
 const authMock = vi.hoisted(() => vi.fn());
 const FRESH_ACCESS = "test-token-placeholder";
@@ -88,6 +88,39 @@ describe("MCP OAuth provider", () => {
           OPENCLAW_CONFIG_PATH: undefined,
           OPENCLAW_STATE_DIR: undefined,
         },
+      },
+    );
+  });
+
+  it("reads a fresh stored access token while another flow holds the store lease", async () => {
+    await withTempHome(
+      async () => {
+        await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
+          await provider.saveTokens({
+            access_token: FRESH_ACCESS,
+            refresh_token: "test-auth-token",
+            token_type: "Bearer",
+            expires_in: 3600,
+          });
+        });
+
+        await withMcpOAuthTestLease(IDENTITY.storeKey, async () => {
+          // A leased read would wait for this holder and abort instead of resolving.
+          await expect(
+            resolveMcpOAuthAccessToken({
+              identity: IDENTITY,
+              acceptUnknownExpiry: true,
+              allowMissingToken: true,
+              signal: AbortSignal.timeout(2_000),
+            }),
+          ).resolves.toBe(FRESH_ACCESS);
+        });
+        expect(authMock).not.toHaveBeenCalled();
+      },
+      {
+        prefix: "openclaw-mcp-oauth-fresh-token-held-lease-",
+        skipSessionCleanup: true,
+        env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
       },
     );
   });
