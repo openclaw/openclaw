@@ -20,7 +20,6 @@ const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const fixtureEntry = resolveRuntimeWorkerUrl(nativeWorkerTestEntrypoint);
 export type WorkerProcessTestExit = { code: number | null; stdout: string; stderr: string };
 
-/** Real worker commands own process-local state and event registries, apart from their Gateway. */
 export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => string) {
   const children: Array<(signal: AbortSignal) => Promise<void>> = [];
   const launch = async (options: {
@@ -62,7 +61,6 @@ export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => 
         cwd: repoRoot,
         // Deliberately do not inherit provider keys, proxy settings, NODE_OPTIONS, or live state.
         env: {
-          // Compiled fixture keeps synchronous exec helpers out of the TS loader.
           PATH: process.env.PATH,
           SystemRoot: process.env.SystemRoot,
           WINDIR: process.env.WINDIR,
@@ -89,32 +87,24 @@ export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => 
       throw new Error("Native worker fixture requires all three control/output pipes");
     }
     const output = { stdout: "", stderr: "" };
-    for (const [name, stream] of [
-      ["stdout", childOutput],
-      ["stderr", childError],
-    ] as const) {
-      stream.on("data", (chunk: Buffer) => {
-        output[name] += chunk.toString();
-      });
-    }
+    const capture = (name: keyof typeof output) => (chunk: Buffer) => {
+      output[name] += chunk.toString();
+    };
+    childOutput.on("data", capture("stdout"));
+    childError.on("data", capture("stderr"));
     const exited = new Promise<WorkerProcessTestExit>((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (code) => resolve({ code, ...output }));
     });
     // A spawn failure must remain observed even when a provider-readiness assertion fails first.
     void exited.catch(() => undefined);
-    const close = async (cleanupSignal: AbortSignal) => {
+    children.push(async (cleanupSignal) => {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGTERM");
-        try {
-          await withinTest(exited, cleanupSignal);
-        } catch {
-          child.kill("SIGKILL");
-        }
+        await withinTest(exited, cleanupSignal).catch(() => child.kill("SIGKILL"));
       }
       await exited;
-    };
-    children.push(close);
+    });
     await secretDelivery?.deliverTo(child);
     const send = (message: WorkerProcessInput) => stdin.write(serializeWorkerProcessInput(message));
     const turnId = descriptor.assignment.turnId;
@@ -122,15 +112,12 @@ export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => 
     return {
       child,
       cancel: () => send({ type: "cancel", turnId }),
-      finish: async () => {
-        try {
-          return await withinTest(exited, signal);
-        } catch (error) {
+      finish: async () =>
+        withinTest(exited, signal).catch((error: unknown) => {
           throw new Error(JSON.stringify({ error: String(error), ...output, ...diagnostics?.() }), {
             cause: error,
           });
-        }
-      },
+        }),
     };
   };
   return {

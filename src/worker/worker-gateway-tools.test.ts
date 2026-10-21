@@ -127,7 +127,6 @@ it("rejects non-object arguments and surfaces Gateway failures", async () => {
     error: {
       code: "INVALID_REQUEST",
       message: "Worker tool authority is no longer current.",
-      details: { reason: "method-not-allowed" },
     },
   });
   await expect(tool!.execute("stale", {})).rejects.toThrow("no longer current");

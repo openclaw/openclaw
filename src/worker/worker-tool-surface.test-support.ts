@@ -62,17 +62,17 @@ export function createWorkerToolSurfaceForTest(params: WorkerToolFixture): Worke
   const { policy, tools } = prepareWorkerPlacementForTest(params);
   type SurfaceTool = WorkerToolSurface["tools"][number];
   const entries = new Map<string, SurfaceTool>();
-  const add = (
-    definition: SurfaceTool["definition"],
-    execution: SurfaceTool["execution"] = "placement",
-    replay?: true,
-  ) =>
-    entries.set(definition.name, {
-      id: definition.name,
+  const add = (definition: SurfaceTool["definition"], gateway = false) => {
+    const { name } = definition;
+    entries.set(name, {
+      id: name,
       definition,
-      execution,
-      ...(replay ? { replay } : {}),
+      execution: gateway ? "gateway" : "placement",
+      ...(gateway && (name === "sessions_spawn" || name === "sessions_send")
+        ? { replay: true as const }
+        : {}),
     });
+  };
   tools.forEach((tool) => add(projectAgentToolDefinition(tool)));
   if (assignment.browser) {
     add({
@@ -105,11 +105,7 @@ export function createWorkerToolSurfaceForTest(params: WorkerToolFixture): Worke
   ] as const;
   for (const [name, parameters, description] of gatewayDefinitions) {
     const definition = { name, label: name, description, parameters, executionMode: undefined };
-    add(
-      definition,
-      "gateway",
-      name === "sessions_spawn" || name === "sessions_send" ? true : undefined,
-    );
+    add(definition, true);
   }
   const surface = {
     generation: "runtime-surface",
