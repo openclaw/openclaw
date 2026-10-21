@@ -2,6 +2,7 @@ import { For, Show, createMemo } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ProcessesPanelData } from "../processes-panel-data.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
@@ -25,6 +26,7 @@ function ProcessRow(props: {
   onOpen: () => void;
   onStop: (row: SessionProcessSummary) => void;
 }) {
+  const nameOverflow = useScrollState(true, false, { revision: () => props.row.name });
   const status = () =>
     t(
       props.stopping
@@ -38,6 +40,7 @@ function ProcessRow(props: {
       role="listitem"
       data-process-id={props.row.processId}
       data-status={props.row.status}
+      data-stoppable={props.row.status === "running" && props.row.canStop ? "" : undefined}
       data-stopping={props.stopping ? "" : undefined}
     >
       <button
@@ -69,7 +72,9 @@ function ProcessRow(props: {
             </Show>
           </span>
         </span>
-        <span class="chat-details-processes__name">{props.row.name}</span>
+        <span class="chat-details-processes__name" ref={nameOverflow}>
+          {props.row.name}
+        </span>
       </button>
       <Show when={props.row.status === "running" && props.row.canStop}>
         <button
@@ -82,7 +87,7 @@ function ProcessRow(props: {
           disabled={!props.presented || props.stopping}
           onClick={() => props.onStop(props.row)}
         >
-          <Show when={props.stopping} fallback={<Icon name="square" />}>
+          <Show when={props.stopping} fallback={<Icon name="stop" />}>
             <span class="chat-details-processes__spinner" />
           </Show>
         </button>

@@ -1,7 +1,7 @@
 .chat-details-processes {
   min-width: 0;
   color: var(--text);
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--details-row-font-size, var(--control-ui-text-sm));
 }
 
 .chat-details-processes__list {
@@ -27,7 +27,7 @@
   width: 100%;
   min-width: 0;
   min-height: var(--details-row-height, 28px);
-  padding: var(--details-row-padding-block, 4px) 30px var(--details-row-padding-block, 4px) 0;
+  padding: var(--details-row-padding-block, 4px) var(--details-row-padding, 4px);
   border: 0;
   border-radius: inherit;
   background: none;
@@ -99,10 +99,19 @@
 }
 
 .chat-details-processes__name {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-details-processes__name[data-scrollable="true"] {
+  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+}
+
+.chat-details-processes__row[data-stoppable]:is(:hover, :focus-within, [data-stopping])
+  .chat-details-processes__name {
+  mask-image: linear-gradient(to right, black calc(100% - 42px), transparent calc(100% - 26px));
 }
 
 .chat-details-processes__stop {
@@ -114,10 +123,10 @@
   width: 22px;
   height: 22px;
   padding: 0;
-  border: 1px solid var(--border-strong);
+  border: 0;
   border-radius: 50%;
   corner-shape: round;
-  background: var(--details-surface, var(--card));
+  background: color-mix(in srgb, var(--text) 6%, var(--details-surface, var(--card)));
   color: var(--muted);
   opacity: 0;
   pointer-events: none;
@@ -125,8 +134,10 @@
 }
 
 .chat-details-processes__stop > svg {
-  width: 10px;
-  height: 10px;
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+  stroke: none;
 }
 
 .chat-details-processes__row:is(:hover, :focus-within, [data-stopping])
@@ -137,7 +148,7 @@
 
 .chat-details-processes__stop:hover {
   color: var(--text);
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--text) 10%, var(--details-surface, var(--card)));
 }
 
 .chat-details-processes__error {

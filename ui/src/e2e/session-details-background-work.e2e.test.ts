@@ -307,6 +307,21 @@ suite.define(() => {
               expect(
                 await longName.evaluate((element) => element.scrollWidth > element.clientWidth),
               ).toBe(true);
+              expect(await longName.textContent()).toBe(processes[1]!.name);
+              await expect
+                .poll(() => longName.evaluate((element) => getComputedStyle(element).maskImage))
+                .not.toBe("none");
+              const restBounds = (await longName.boundingBox())!;
+              const rowBounds = (await longName.locator("..").boundingBox())!;
+              expect(restBounds.x + restBounds.width).toBe(rowBounds.x + rowBounds.width - 4);
+              const restFade = await longName.evaluate(
+                (element) => getComputedStyle(element).maskImage,
+              );
+              await longName.hover();
+              expect(await longName.boundingBox()).toEqual(restBounds);
+              expect(
+                await longName.evaluate((element) => getComputedStyle(element).maskImage),
+              ).not.toBe(restFade);
               expect(await longName.locator("..").getAttribute("aria-label")).toContain(
                 processes[1]!.name,
               );
