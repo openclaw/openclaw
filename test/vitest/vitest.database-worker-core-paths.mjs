@@ -902,7 +902,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/install-persistence.test.ts",
   "src/plugins/install-runtime-batch.test.ts",
   "src/plugins/management-service.install-compensation.test.ts",
-  "src/plugins/management-service.registry-refresh.test.ts",
   "src/plugins/management-service.test.ts",
   "src/plugins/management-service.uninstall-ownership.test.ts",
   "src/plugins/plugin-cache.test.ts",

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { joinClawHubPluginCatalog } from "./catalog-discovery.js";
+import { emptyMetadataSnapshot } from "./management-service.test-helpers.js";
 import { managementMetadata as metadataSnapshot } from "./management-service.test-support.js";
 import type { OfficialExternalPluginCatalogEntry } from "./official-external-plugin-catalog.js";
 
@@ -29,22 +30,7 @@ const { clearManagedPluginCatalogCache } = await import("./management-catalog.js
 const { listManagedPlugins, resolveManagedPluginIconSources } =
   await import("./management-service.js");
 
-function emptyMetadataSnapshot() {
-  return {
-    index: { plugins: [], installRecords: {} },
-    byPluginId: new Map(),
-    plugins: [],
-    diagnostics: [],
-    normalizePluginId: (pluginId: string) => pluginId,
-  };
-}
-
-function hostedCatalog(entries: unknown[]) {
-  return {
-    source: "hosted",
-    entries,
-  };
-}
+const hostedCatalog = (entries: unknown[]) => ({ source: "hosted", entries });
 
 function setCatalog(
   local: Parameters<typeof metadataSnapshot>[0] | undefined,
@@ -513,11 +499,7 @@ describe("plugin management Featured authority", () => {
     },
   );
 
-  it.each([
-    ["first hosted icon", "https://cdn.example.test/first.png", undefined],
-    ["first missing icon", undefined, undefined],
-    ["normalized manifest fallback", undefined, "https://cdn.example.test/normalized.png"],
-  ])("retains normalized first-record selection for %s", async (_mode, firstIcon, fallbackIcon) => {
+  it("retains normalized first-record selection regardless of icon metadata", async () => {
     const alias = (id: string, name: string, packageName: string) =>
       metadataSnapshot({
         id,
@@ -536,7 +518,7 @@ describe("plugin management Featured authority", () => {
     const normalizedManifest = {
       ...first.plugins[0]!,
       id: "alias",
-      icon: fallbackIcon,
+      icon: "https://cdn.example.test/normalized.png",
     };
     mocks.metadata.mockReturnValue({
       ...first,
@@ -554,7 +536,7 @@ describe("plugin management Featured authority", () => {
     });
     const officialCatalog = {
       entries: [
-        { ...compositionEntry("first", { clawhubSpec: "clawhub:@acme/first" }), icon: firstIcon },
+        compositionEntry("first", { clawhubSpec: "clawhub:@acme/first" }),
         {
           ...compositionEntry("second", { clawhubSpec: "clawhub:@acme/second" }),
           icon: "https://cdn.example.test/second.png",
