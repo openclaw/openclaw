@@ -288,17 +288,14 @@ export async function resolveWorkerPlacementSessionTarget(params: {
   const assertRoutingCurrent = captureSessionMutationRouting(params.config, targetChangedError, [
     { ...params, preserveQualifiedAddress: true },
   ]);
-  let active = true;
+  const lifetime = new DisposableStack();
   let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   let unregister = () => {};
-  const release = () => {
-    if (!active) {
-      return;
-    }
-    active = false;
+  lifetime.defer(() => {
     retained?.release();
     unregister();
-  };
+  });
+  const release = () => lifetime.dispose();
   const retainTarget = (
     target: Awaited<ReturnType<typeof resolveGatewaySessionStoreTargetInWorker>>,
   ) => {
@@ -394,7 +391,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
       : undefined;
     const resolveBinding = (config = params.config) => {
       assertRoutingCurrent(config);
-      if (!active || retained?.isCurrent() === false) {
+      if (lifetime.disposed || retained?.isCurrent() === false) {
         throw targetChangedError();
       }
       const target = memory ? initialTarget : (params.readTarget?.(config) ?? initialTarget);

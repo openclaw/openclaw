@@ -1,11 +1,13 @@
 import { WebAPIRateLimitedError } from "@slack/web-api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as heartbeatRuntime from "openclaw/plugin-sdk/heartbeat-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createTestPluginServiceScheduler,
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
+import * as systemEventRuntime from "openclaw/plugin-sdk/system-event-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
 import {
@@ -18,6 +20,7 @@ const presenceFixtures = new Set<ReturnType<typeof createSlackPresenceMonitor>>(
 afterEach(async () => {
   await Promise.all(Array.from(presenceFixtures, (monitor) => monitor.stop()));
   presenceFixtures.clear();
+  vi.restoreAllMocks();
 });
 
 function createPresenceFixture(
@@ -32,15 +35,13 @@ function createPresenceFixture(
     ...options
   } = params;
   const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
-  const enqueue = vi.fn((..._args: unknown[]) => true);
-  const wake = vi.fn();
+  const enqueue = vi.spyOn(systemEventRuntime, "enqueueRoutedSystemEvent").mockReturnValue(true);
+  const wake = vi.spyOn(heartbeatRuntime, "requestHeartbeat").mockImplementation(() => {});
   const cooldownStore = createCooldownStore();
   const monitor = createSlackPresenceMonitor({
     accountId: "default",
     accountConfig: { mode: "auto" },
     cooldownStore,
-    enqueue,
-    wake,
     resolveClient: () => ({ getPresence }),
     ...options,
     scheduler,
@@ -134,15 +135,14 @@ describe("Slack presence monitor", () => {
     const scheduler = createTestPluginServiceScheduler();
     const response = createDeferred<{ presence: string }>();
     const getPresence = vi.fn().mockReturnValue(response.promise);
-    const enqueue = vi.fn(() => true);
+    const enqueue = vi.spyOn(systemEventRuntime, "enqueueRoutedSystemEvent").mockReturnValue(true);
+    vi.spyOn(heartbeatRuntime, "requestHeartbeat").mockImplementation(() => {});
     const monitor = createSlackPresenceMonitor({
       scheduler,
       accountId: "default",
       accountConfig: { mode: "auto" },
       resolveClient: () => ({ getPresence }),
       cooldownStore: createCooldownStore(),
-      enqueue,
-      wake: vi.fn(),
     });
     try {
       monitor.observe(createPrepared({ userId: "U123" }));
@@ -457,14 +457,10 @@ describe("Slack presence monitor", () => {
         await cleanup.promise;
         return await deleteIfEqual(key, expected);
       };
-      const enqueue = vi.fn(() => outcome !== "replaced");
       const clock = createGatewaySchedulerClock(1_000);
-      const monitor = createPresenceFixture({
-        clock,
-        cooldownStore,
-        enqueue,
-      });
-      const { wake } = monitor;
+      const monitor = createPresenceFixture({ clock, cooldownStore });
+      const { enqueue, wake } = monitor;
+      enqueue.mockReturnValue(outcome !== "replaced");
       monitor.observe(createPrepared({ userId: "U123" }));
       await monitor.advancePoll();
       const polling = monitor.advancePoll();

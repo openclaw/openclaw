@@ -211,6 +211,10 @@ class MockRes extends EventEmitter {
   }
 
   flushHeaders() {}
+
+  [Symbol.dispose]() {
+    this.end();
+  }
 }
 
 function readBarrier() {
@@ -223,6 +227,7 @@ function readBarrier() {
       entered.resolve();
       await release.promise;
     },
+    [Symbol.dispose]: () => release.resolve(),
   };
 }
 
@@ -247,7 +252,7 @@ async function openStream(params: { closeOnRetry?: boolean; expectSubscribed?: b
     await initial;
     expect(fixture.onUpdate).toBeTypeOf("function");
   }
-  return { req, res };
+  return Object.assign(res, { req });
 }
 
 function waitForFrame(res: MockRes, text: string): Promise<void> {
@@ -365,7 +370,7 @@ it("returns not found when a verified role cannot view the requested session", a
   fixture.profile = guestProfile;
   fixture.visible = false;
 
-  const { res } = await openStream({ expectSubscribed: false });
+  using res = await openStream({ expectSubscribed: false });
 
   expect(res.statusCode).toBe(404);
   expect(res.writes.join("")).toContain("Session not found");
@@ -379,11 +384,12 @@ it.each([
   ["application/json", "ingress policy"],
 ] as const)("withholds initial %s history after %s during its read", async (accept, change) => {
   fixture.profile = guestProfile;
-  const { entered, release, wait } = readBarrier();
+  using barrier = readBarrier();
+  const { entered, release, wait } = barrier;
   fixture.beforeRead = wait;
   const req = new MockReq();
   req.headers.accept = accept;
-  const res = new MockRes();
+  using res = new MockRes();
   const pending = handle(req, res);
   try {
     await Promise.race([entered.promise, pending]);
@@ -396,70 +402,53 @@ it.each([
     release.resolve();
     await pending;
   }
-  try {
-    expect(res.statusCode).toBe(404);
-    expect(res.writes.join("")).not.toMatch(/event: history|"messages"/);
-    expect(fixture.onUpdate).toBeUndefined();
-  } finally {
-    res.end();
-  }
+  expect(res.statusCode).toBe(404);
+  expect(res.writes.join("")).not.toMatch(/event: history|"messages"/);
+  expect(fixture.onUpdate).toBeUndefined();
 });
 
 it("withholds an SSE refresh after profile revocation while its read is pending", async () => {
   fixture.profile = guestProfile;
-  const { res } = await openStream();
-  const barrier = readBarrier();
+  using res = await openStream();
+  using barrier = readBarrier();
   fixture.beforeRefresh = barrier.wait;
   fixture.onUpdate?.({ sessionFile: SESSION_FILE });
-  try {
-    await barrier.entered.promise;
-    fixture.visible = false;
-  } finally {
-    barrier.release.resolve();
-  }
-  try {
-    await expectStreamClosedWithoutMessage(res, "private refreshed history");
-    expect(res.writes.filter((frame) => frame.includes("event: history"))).toHaveLength(1);
-    expect(fixture.onUpdate).toBeUndefined();
-  } finally {
-    res.end();
-  }
+  await barrier.entered.promise;
+  fixture.visible = false;
+  barrier.release.resolve();
+  await expectStreamClosedWithoutMessage(res, "private refreshed history");
+  expect(res.writes.filter((frame) => frame.includes("event: history"))).toHaveLength(1);
+  expect(fixture.onUpdate).toBeUndefined();
 });
 
 it("keeps inline delivery between coalesced refreshes while authorization is pending", async () => {
-  const { res } = await openStream();
-  const { entered, release, wait } = readBarrier();
+  using res = await openStream();
+  using barrier = readBarrier();
   let refreshCount = 0;
-  fixture.beforeAuth = wait;
+  fixture.beforeAuth = barrier.wait;
   fixture.beforeRefresh = async () => {
     refreshCount++;
   };
-  try {
-    fixture.onUpdate?.({ sessionFile: SESSION_FILE });
-    await entered.promise;
-    fixture.onUpdate?.({ sessionFile: SESSION_FILE });
-    emitTranscriptTextUpdate("inline between refreshes");
-    fixture.onUpdate?.({ sessionFile: SESSION_FILE });
-    fixture.onUpdate?.({ sessionFile: SESSION_FILE });
-    release.resolve();
-    await vi.waitFor(() =>
-      expect(res.writes.filter((frame) => frame.includes("event: history"))).toHaveLength(3),
-    );
-    expect(refreshCount).toBe(2);
-    expect(frameNames(res)).toEqual(["history", "history", "message", "history"]);
-    expect(res.writes.join("")).toContain("inline between refreshes");
-  } finally {
-    release.resolve();
-    res.end();
-  }
+  fixture.onUpdate?.({ sessionFile: SESSION_FILE });
+  await barrier.entered.promise;
+  fixture.onUpdate?.({ sessionFile: SESSION_FILE });
+  emitTranscriptTextUpdate("inline between refreshes");
+  fixture.onUpdate?.({ sessionFile: SESSION_FILE });
+  fixture.onUpdate?.({ sessionFile: SESSION_FILE });
+  barrier.release.resolve();
+  await vi.waitFor(() =>
+    expect(frameNames(res)).toEqual(["history", "history", "message", "history"]),
+  );
+  expect(refreshCount).toBe(2);
+  expect(res.writes.join("")).toContain("inline between refreshes");
 });
 
 it.each(["sharing", "replacement", "reset", "close", "failure"] as const)(
   "withholds a delayed inline message after %s",
   async (change) => {
     fixture.profile = guestProfile;
-    const { res } = await openStream();
-    const barrier = readBarrier();
+    using res = await openStream();
+    using barrier = readBarrier();
     fixture.beforeInline = async () => {
       await barrier.wait();
       if (change === "failure") {
@@ -481,25 +470,20 @@ it.each(["sharing", "replacement", "reset", "close", "failure"] as const)(
 );
 
 it("serializes appends and trailing refreshes behind pending inline visibility", async () => {
-  const { res } = await openStream();
-  const barrier = readBarrier();
+  using res = await openStream();
+  using barrier = readBarrier();
   fixture.beforeInline = barrier.wait;
   const refreshed = waitForFrame(res, "private refreshed history");
-  try {
-    emitTranscriptTextUpdate("first queued append");
-    await barrier.entered.promise;
-    emitTranscriptTextUpdate("second queued append");
-    fixture.onUpdate?.({ sessionFile: SESSION_FILE });
-    expect(frames(res)).toHaveLength(1);
-    barrier.release.resolve();
-    await refreshed;
-    expect(frameNames(res)).toEqual(["history", "message", "message", "history"]);
-    expect(frames(res)[1]).toContain("first queued append");
-    expect(frames(res)[2]).toContain("second queued append");
-  } finally {
-    barrier.release.resolve();
-    res.end();
-  }
+  emitTranscriptTextUpdate("first queued append");
+  await barrier.entered.promise;
+  emitTranscriptTextUpdate("second queued append");
+  fixture.onUpdate?.({ sessionFile: SESSION_FILE });
+  expect(frames(res)).toHaveLength(1);
+  barrier.release.resolve();
+  await refreshed;
+  expect(frameNames(res)).toEqual(["history", "message", "message", "history"]);
+  expect(frames(res)[1]).toContain("first queued append");
+  expect(frames(res)[2]).toContain("second queued append");
 });
 
 it.each([
@@ -515,18 +499,18 @@ it.each([
   },
 ])("returns retryable HTTP unavailable during $name", async ({ error, message }) => {
   fixture.readError = error;
-  const { req, res } = await openStream({ expectSubscribed: false });
+  using res = await openStream({ expectSubscribed: false });
   expect(res.statusCode).toBe(503);
   expect(res.headers.get("retry-after")).toBe("1");
   expect(JSON.parse(res.writes.join(""))).toEqual({
     ok: false,
     error: { type: "unavailable", message, retryable: true },
   });
-  expect(req.listenerCount("error")).toBe(0);
+  expect(res.req.listenerCount("error")).toBe(0);
 });
 
 it("rechecks SSE auth against live proxy config instead of startup fallbacks", async () => {
-  const { res } = await openStream();
+  using res = await openStream();
 
   fixture.gatewayConfig = {};
   setRuntimeConfigSnapshot({ gateway: fixture.gatewayConfig });
@@ -537,7 +521,7 @@ it("rechecks SSE auth against live proxy config instead of startup fallbacks", a
 });
 
 it("skips SSE reauth for transcript updates outside this stream", async () => {
-  const { res } = await openStream();
+  using res = await openStream();
 
   fixture.authChecks = 0;
   fixture.gatewayConfig = {};
@@ -582,7 +566,8 @@ it.each(["request", "response"] as const)(
 );
 
 it("handles a request abort after the response closes until the request closes", async () => {
-  const { req, res } = await openStream();
+  using res = await openStream();
+  const { req } = res;
   res.emit("close");
   expect(fixture.onUpdate).toBeUndefined();
   await expect(emitErrorOnNextTick(req, new Error("aborted"))).resolves.toBeUndefined();
@@ -592,7 +577,8 @@ it("handles a request abort after the response closes until the request closes",
 });
 
 it("cleans up SSE resources when the initial retry frame closes the stream", async () => {
-  const { req, res } = await openStream({ closeOnRetry: true, expectSubscribed: false });
+  using res = await openStream({ closeOnRetry: true, expectSubscribed: false });
+  const { req } = res;
   expect(res.writes.join("")).toContain("retry: 1000\n\n");
   expect(fixture.onUpdate).toBeUndefined();
   req.emit("close");

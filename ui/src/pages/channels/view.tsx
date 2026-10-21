@@ -75,7 +75,11 @@ function ChannelStatusNotices(props: { channels: ChannelsState; error: string | 
           {partialWarnings()}
         </div>
       ) : undefined}
-      {props.error ? <div class="callout danger">{props.error}</div> : undefined}
+      {props.error ? (
+        <div class="callout danger" role="alert">
+          {props.error}
+        </div>
+      ) : undefined}
     </>
   );
 }
