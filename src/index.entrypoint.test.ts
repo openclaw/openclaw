@@ -47,7 +47,8 @@ vi.mock("./entry.version-fast-path.js", () => ({
 }));
 // mock-isolation: Import this entrypoint as the main module in the fixture.
 vi.mock("./infra/is-main.js", () => ({ isMainModule: vi.fn(() => true) }));
-vi.mock("./infra/package-lifecycle.js", () => ({
+vi.mock("./infra/package-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./infra/package-lifecycle.js")>()),
   completePendingPackageLifecycle: vi.fn(async () => {}),
 }));
 vi.mock("./library.js", () => ({
