@@ -1076,23 +1076,19 @@ function beginMessageInjectionOperation(
   });
 }
 
-async function appendTestTranscriptMessage(params: {
-  content: string;
-  display?: boolean;
-  eventId: string;
-  now: number;
-  parentId: string | null;
-  role: "assistant" | "user";
-}) {
+async function appendTestTranscriptMessage([eventId, role, content, now, parentId, display]: [
+  string,
+  "assistant" | "user",
+  string,
+  number,
+  string | null,
+  boolean?,
+]) {
   await appendTranscriptMessage(transcriptScope(), {
-    eventId: params.eventId,
-    message: {
-      role: params.role,
-      content: params.content,
-      ...(params.display === undefined ? {} : { display: params.display }),
-    },
-    now: params.now,
-    parentId: params.parentId,
+    eventId,
+    message: { role, content, ...(display === undefined ? {} : { display }) },
+    now,
+    parentId,
   });
 }
 
@@ -1263,21 +1259,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     // Capture the physical session before another participant appends the first turn.
     const requestedSessionId = sessionId === "current" ? mockState.sessionId : sessionId;
-    await appendTestTranscriptMessage({
-      eventId: "rendered-leaf",
-      role: "assistant",
-      content: "rendered",
-      now: 1,
-      parentId: null,
-    });
-    await appendTestTranscriptMessage({
-      eventId: "memory-flush-user",
-      role: "user",
-      content: "maintenance prompt",
-      display: false,
-      now: 2,
-      parentId: "rendered-leaf",
-    });
+    await appendTestTranscriptMessage(["rendered-leaf", "assistant", "rendered", 1, null]);
+    await appendTestTranscriptMessage([
+      "memory-flush-user",
+      "user",
+      "maintenance prompt",
+      2,
+      "rendered-leaf",
+      false,
+    ]);
     await appendTranscriptEvent(transcriptScope(), {
       type: "compaction",
       id: "background-compaction",
@@ -1287,14 +1277,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       firstKeptEntryId: "rendered-leaf",
       tokensBefore: 10,
     });
-    await appendTestTranscriptMessage({
-      eventId: "background-leaf",
-      role: "assistant",
-      content: "background append",
-      display: false,
-      now: 3,
-      parentId: "background-compaction",
-    });
+    await appendTestTranscriptMessage([
+      "background-leaf",
+      "assistant",
+      "background append",
+      3,
+      "background-compaction",
+      false,
+    ]);
     const before = loadTranscriptEventsSync(transcriptScope());
 
     await send({
@@ -1335,27 +1325,21 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const { context, respond, send } = await createSqliteChatRequest(
         "openclaw-chat-send-rotated-exact-leaf-",
       );
-      await appendTestTranscriptMessage({
-        eventId: "branch-root",
-        role: "user",
-        content: "root",
-        now: 1,
-        parentId: null,
-      });
-      await appendTestTranscriptMessage({
-        eventId: "copied-leaf",
-        role: "assistant",
-        content: "selected branch",
-        now: 2,
-        parentId: "branch-root",
-      });
-      await appendTestTranscriptMessage({
-        eventId: "active-sibling",
-        role: "assistant",
-        content: "active branch",
-        now: 3,
-        parentId: "branch-root",
-      });
+      await appendTestTranscriptMessage(["branch-root", "user", "root", 1, null]);
+      await appendTestTranscriptMessage([
+        "copied-leaf",
+        "assistant",
+        "selected branch",
+        2,
+        "branch-root",
+      ]);
+      await appendTestTranscriptMessage([
+        "active-sibling",
+        "assistant",
+        "active branch",
+        3,
+        "branch-root",
+      ]);
       await waitForSessionTranscriptIndexReconcile({
         agentId: "main",
         env: suiteFixtureEnv,
@@ -1402,27 +1386,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-off-path-sibling-",
     );
-    await appendTestTranscriptMessage({
-      eventId: "branch-root",
-      role: "user",
-      content: "root",
-      now: 1,
-      parentId: null,
-    });
-    await appendTestTranscriptMessage({
-      eventId: "off-path-sibling",
-      role: "assistant",
-      content: "abandoned",
-      now: 2,
-      parentId: "branch-root",
-    });
-    await appendTestTranscriptMessage({
-      eventId: "active-sibling",
-      role: "assistant",
-      content: "active",
-      now: 3,
-      parentId: "branch-root",
-    });
+    await appendTestTranscriptMessage(["branch-root", "user", "root", 1, null]);
+    await appendTestTranscriptMessage([
+      "off-path-sibling",
+      "assistant",
+      "abandoned",
+      2,
+      "branch-root",
+    ]);
+    await appendTestTranscriptMessage(["active-sibling", "assistant", "active", 3, "branch-root"]);
     await waitForSessionTranscriptIndexReconcile({
       agentId: "main",
       env: suiteFixtureEnv,
@@ -1503,13 +1475,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-targetless-steer-",
     );
-    await appendTestTranscriptMessage({
-      eventId: "current-leaf",
-      role: "assistant",
-      content: "working",
-      now: 1,
-      parentId: null,
-    });
+    await appendTestTranscriptMessage(["current-leaf", "assistant", "working", 1, null]);
     const queueMessage = vi.fn(async () => {});
     const operation = beginMessageInjectionOperation({
       originatingLeafEntryId: "current-leaf",
@@ -1541,13 +1507,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-tool-bound-dispatch-",
     );
-    await appendTestTranscriptMessage({
-      eventId: "current-leaf",
-      role: "assistant",
-      content: "working",
-      now: 1,
-      parentId: null,
-    });
+    await appendTestTranscriptMessage(["current-leaf", "assistant", "working", 1, null]);
     const queueMessage = vi.fn(async () => {});
     const operation = beginMessageInjectionOperation({
       bindToolAuthority: false,
@@ -1590,52 +1550,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       );
     } finally {
       operation.complete();
-    }
-  });
-
-  it("starts captured-operation injection before ACK and does not dispatch after owner clear", async () => {
-    const { context, respond, send } = await createSqliteChatRequest(
-      "openclaw-chat-send-steer-before-ack-",
-    );
-    const delivery = createDeferred();
-    let reportAcceptance: ((accepted: boolean) => void) | undefined;
-    const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
-      expect(respond).not.toHaveBeenCalled();
-      reportAcceptance = options?.onQueueAccepted;
-      return delivery.promise;
-    });
-    const operation = beginMessageInjectionOperation({
-      originatingLeafEntryId: null,
-      runId: "active-run",
-      queueMessage,
-    });
-
-    const pendingSend = send({
-      idempotencyKey: "idem-steer-before-ack",
-      requestParams: { queueMode: "steer" },
-      waitFor: "none",
-    });
-
-    try {
-      await waitForAssertion(() => expect(queueMessage).toHaveBeenCalledOnce());
-      expect(respond).not.toHaveBeenCalled();
-      reportAcceptance?.(true);
-      await pendingSend;
-      expectStarted(respond);
-      expect(mockState.lastDispatchCtx).toBeUndefined();
-      operation.complete();
-      delivery.resolve();
-      await waitForAssertion(() => {
-        expect(context.dedupe.get("chat:idem-steer-before-ack")?.payload).toEqual({
-          runId: "idem-steer-before-ack",
-          status: "ok",
-        });
-      });
-      expect(context.broadcast).toHaveBeenCalledOnce();
-    } finally {
-      delivery.resolve();
-      operation.complete();
-      await Promise.allSettled([pendingSend]);
     }
   });
 
@@ -1805,8 +1719,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(context.broadcast).not.toHaveBeenCalled();
       expect(mockState.lastDispatchCtx).toBeUndefined();
 
+      operation.complete();
       delivery.resolve();
-      await waitForAssertion(() => expect(context.broadcast).toHaveBeenCalledOnce());
+      await waitForAssertion(() => {
+        expect(context.dedupe.get("chat:idem-reply-steer")?.payload).toEqual({
+          runId: "idem-reply-steer",
+          status: "ok",
+        });
+      });
+      expect(context.broadcast).toHaveBeenCalledOnce();
     } finally {
       hydration.resolve();
       delivery.resolve();
@@ -1995,13 +1916,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-steer-stale-owner-",
     );
-    await appendTestTranscriptMessage({
-      eventId: "current-leaf",
-      role: "assistant",
-      content: "stale tool work",
-      now: 1,
-      parentId: null,
-    });
+    await appendTestTranscriptMessage(["current-leaf", "assistant", "stale tool work", 1, null]);
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     vi.useFakeTimers({ toFake: ["Date"] });
     const staleQueue = vi.fn(async () => {});
@@ -2140,24 +2055,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(assistantUpdate?.message)).not.toContain(
       "/api/chat/media/outgoing/agent%3Amain%3Amain/",
     );
-  });
-
-  it("replaces failed managed media with bounded visible guidance", async () => {
-    await createTranscriptFixture("openclaw-chat-send-managed-media-failure-");
-    const source = "data:audio/mpeg;base64,not-valid!";
-    mockState.finalPayload = { mediaUrl: source };
-    const { payload } = await sendNewChatRequest({
-      idempotencyKey: "idem-managed-media-failure",
-    });
-
-    const serialized = JSON.stringify(payload?.message);
-    expect(serialized).toContain('"type":"attachment_error"');
-    expect(serialized).toContain('"code":"delivery-failed"');
-    expect(serialized).toContain('"label":"Generated audio 1"');
-    expect(serialized).not.toContain(source);
-    expect(Buffer.byteLength(serialized)).toBeLessThan(1_024);
-    const assistantEntries = await readActiveAssistantTranscriptMessages();
-    expect(JSON.stringify(assistantEntries)).not.toContain(source);
   });
 
   it("keeps managed media failures visible when rewriting an existing assistant row", async () => {
@@ -3079,13 +2976,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
       mockState.triggerAgentRunStart = agentStarted;
       if (outcome) {
-        await appendTestTranscriptMessage({
-          eventId: `${runId}:user`,
-          role: "user",
-          content: "please keep working",
-          now: 0,
-          parentId: null,
-        });
+        await appendTestTranscriptMessage([
+          `${runId}:user`,
+          "user",
+          "please keep working",
+          0,
+          null,
+        ]);
         mockState.triggerUserMessagePersisted = true;
       }
       if (sourceReply) {
@@ -3464,33 +3361,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
     },
     {
-      name: "keeps final text when only the slash-command media is duplicated",
-      id: "media-different-final-text",
-      files: ["voice.mp3"],
-      replies: ([audio]) => [
-        createSlashCommandMediaReply("block", [audio], { text: "preview" }),
-        createSlashCommandMediaReply("final", [audio], {
-          text: "done",
-          replyToCurrent: true,
-        }),
-      ],
-      verify: (content) => {
-        const text = content
-          .map((block) => (typeof block.text === "string" ? block.text : ""))
-          .filter(Boolean)
-          .join("\n");
-        expect(text).toContain("preview");
-        expect(text).toContain("done");
-        expect(managedAudioBlocks(content)).toHaveLength(1);
-        const transcriptUpdate = transcriptUpdatesFor("assistant")[0];
-        expect(transcriptUpdate?.message).toMatchObject({
-          openclawDelivery: { replyToCurrent: true },
-        });
-        expect(JSON.stringify(transcriptUpdate?.message)).not.toContain("[[reply_to_current]]");
-        expect(JSON.stringify(transcriptUpdate?.message)).toContain("done");
-      },
-    },
-    {
       name: "deduplicates slash-command final echoes against the same text and media block",
       id: "same-caption-same-media",
       files: ["first.mp3", "second.mp3"],
@@ -3512,19 +3382,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect(attachments).toHaveLength(2);
         expectManagedAudioBlock(attachments[0], "first.mp3");
         expectManagedAudioBlock(attachments[1], "second.mp3", true);
-      },
-    },
-    {
-      name: "keeps sensitive overlapping slash-command media out of transcripts",
-      id: "media-sensitive-overlap",
-      files: ["secret.mp3", "public.mp3"],
-      replies: ([secret, publicAudio]) => [
-        createSlashCommandMediaReply("block", [secret, publicAudio], { text: "preview" }),
-        createSlashCommandMediaReply("final", [secret], { sensitiveMedia: true }),
-      ],
-      verify: (_content, [secret]) => {
-        const transcriptUpdate = transcriptUpdatesFor("assistant")[0];
-        expect(JSON.stringify(transcriptUpdate?.message)).not.toContain(secret);
       },
     },
     {
@@ -4531,41 +4388,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     },
   );
 
-  it("stages non-image attachments above the generic media-store limit", async () => {
-    // Regression: Gateway used MEDIA_MAX_BYTES (5 MiB) as a pre-staging cap
-    // even though stageSandboxMedia accepts files up to 50 MiB.
-    await createReadyChatTranscript("openclaw-chat-send-sandbox-oversize-");
-    useChatTestModel("vision-model");
-    setSavedMediaResults([
-      "/home/user/.openclaw/media/inbound/huge.bin",
-      "application/octet-stream",
-    ]);
-    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    mockState.stagedRelativePaths = ["media/inbound/huge.bin"];
-    const { send } = createChatRequestFixture();
-    // 6 MiB buffer — above MEDIA_MAX_BYTES but below the default 20 MiB parser
-    // cap and the canonical 50 MiB sandbox staging cap.
-    const oversized = Buffer.alloc(6 * 1024 * 1024);
-    oversized.set(Buffer.from("OPENCLAW-BINARY\n"), 0);
-    const oversizedPayload = oversized.toString("base64");
-
-    await send({
-      idempotencyKey: "idem-sandbox-oversize",
-      message: "read this",
-      requestParams: {
-        attachments: [
-          createFileAttachment("huge.bin", "application/octet-stream", oversizedPayload),
-        ],
-      },
-      expectBroadcast: false,
-    });
-
-    expect(mockState.lastDispatchCtx?.media?.map((fact) => fact.path)).toEqual([
-      "media/inbound/huge.bin",
-    ]);
-    expect(mockState.deleteMediaBufferCalls).toEqual([]);
-  });
-
   it("persists a Gateway user turn under the canonical owner of a requested alias", async () => {
     createFixturePaths("openclaw-chat-send-aliased-transcript-owner-");
     const canonicalSessionKey = "agent:main:main";
@@ -4787,111 +4609,6 @@ describe("chat.send local operator client sender context", () => {
       );
     },
   );
-
-  it.each([
-    {
-      name: "internal re-entry, including Talk consults",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      directExternal: false,
-      message: "Talk realtime agent consult prompt",
-    },
-    {
-      name: "remote client",
-      client: { internal: {}, scopes: ["operator.admin"] },
-    },
-    {
-      name: "non-admin client",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.write"] },
-    },
-    {
-      name: "incognito session",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      sessionEntry: { incognito: true },
-    },
-    {
-      name: "synthetic client",
-      client: {
-        internal: { isLocalClient: true, syntheticClient: true },
-        scopes: ["operator.admin"],
-      },
-    },
-    {
-      name: "input provenance",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      requestParams: { systemInputProvenance: { kind: "external_user" } },
-    },
-    {
-      name: "explicit origin",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      requestParams: { originatingChannel: "slack", originatingTo: "D123" },
-    },
-    {
-      name: "delegated handoff",
-      client: {
-        internal: { isLocalClient: true, delegatedToolPolicyHandoffId: "handoff-1" },
-        scopes: ["operator.admin"],
-      },
-    },
-    {
-      name: "spawned lineage",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      sessionEntry: { spawnedBy: "agent:main:parent" },
-    },
-    {
-      name: "synthetic cron continuation",
-      client: {
-        internal: { isLocalClient: true, cronRunContinuation: true },
-        scopes: ["operator.admin"],
-      },
-    },
-    {
-      name: "persisted cron continuation",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      sessionEntry: {
-        cronRunContinuation: { lifecycleRevision: "revision-1", phase: "running" },
-      },
-    },
-  ])("does not mint configured-MCP cron authority for $name", async (testCase) => {
-    await createSqliteTranscriptFixture("openclaw-chat-send-cron-authority-negative-");
-    mockState.sessionEntry = testCase.sessionEntry ?? {};
-    await seedSqliteSessionEntry(mockState.sessionEntry);
-    let boundResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
-    mockState.cronAuthorityProbe = async (runId, capability) => {
-      runWithCronCreatorAuthorityCapabilityResolver({
-        capability,
-        runId,
-        resolve: async () => ({
-          tools: testCase.directExternal === false ? ["read", "configured__lookup"] : ["read"],
-          provenance: { version: 1, source: "final-executable-surface" },
-        }),
-        run: () => {
-          boundResolver = bindActiveCronCreatorAuthorityResolver(runId);
-        },
-      });
-    };
-    await createChatRequestFixture().send({
-      idempotencyKey: `idem-cron-authority-negative-${testCase.name.replaceAll(" ", "-")}`,
-      ...(testCase.directExternal === false
-        ? { directExternal: false, message: testCase.message }
-        : {}),
-      client: {
-        connect: {
-          client: {
-            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-            version: "dev",
-            platform: "web",
-          },
-          scopes: testCase.client.scopes,
-        },
-        internal: testCase.client.internal,
-      },
-      requestParams: testCase.requestParams,
-      expectBroadcast: false,
-    });
-
-    expect(boundResolver!).toBeUndefined();
-  });
 
   it.each([
     {

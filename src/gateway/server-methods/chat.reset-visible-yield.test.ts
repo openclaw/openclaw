@@ -1,27 +1,19 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
-import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, onTestFailed, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
-import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import * as sessionAdmission from "../../sessions/session-controller.lifecycle.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as agentJob from "../agent-turn/agent-job.js";
+import { listenProvider, readProviderBody } from "../gateway-provider-fixture.test-support.js";
 import { waitForGatewayDispatch } from "../server-in-process-dispatch.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
@@ -102,32 +94,28 @@ function streamReply(response: ServerResponse, item: ToolItem | ReturnType<typeo
   );
 }
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
 it.for(["reset", "complete"] as const)(
   "preserves real chat yield metadata and the held descendant's %s outcome",
   { timeout: 90_000 },
   async (outcome, { signal }) => {
-    const home = tempDirs.make("openclaw-visible-yield-reset-");
-    const stateDir = path.join(home, ".openclaw");
-    const workspace = path.join(home, "workspace");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const pluginsDir = path.join(home, "bundled-plugins");
-    const environment = {
-      HOME: home,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_GATEWAY_TOKEN: "visible-yield-reset-test",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: pluginsDir,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    };
-    const envSnapshot = captureEnv(Object.keys(environment));
+    const token = "visible-yield-reset-test";
+    const state = await createOpenClawTestState({
+      label: "visible-yield-reset",
+      applyEnv: false,
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: token,
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      },
+    });
+    const { configPath, workspaceDir: workspace } = state;
+    const pluginsDir = state.path("bundled-plugins");
+    state.envVars.OPENCLAW_BUNDLED_PLUGINS_DIR = pluginsDir;
     const fixtureAbort = new AbortController();
     const rootMarker = `fixture://reset/${randomUUID()}`;
     const requesterMarker = `fixture://reset/${randomUUID()}`;
@@ -161,23 +149,6 @@ it.for(["reset", "complete"] as const)(
     let stopRecordingPublished: (() => void) | undefined;
     let providerServer: ReturnType<typeof createServer> | undefined;
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-    onTestFailed(() => {
-      const runs = [requester, child].map((receipt) => {
-        const run = receipt && subagentRuns.get(receipt.runId);
-        return {
-          receipt,
-          execution: run?.execution,
-          endedReason: run?.endedReason,
-          pauseReason: run?.pauseReason,
-          killIntent: run?.killIntent,
-          requesterTurnYielded: run?.requesterTurnYielded,
-        };
-      });
-      console.error(
-        "Visible yield fixture failed",
-        JSON.stringify({ fixtureErrors, runs, rootStep, requesterStep, childRequests }),
-      );
-    });
     const originalWait = agentJob.waitForAgentJob;
     const waiterSpy = vi.spyOn(agentJob, "waitForAgentJob").mockImplementation((params) => {
       const pending = originalWait(params);
@@ -256,20 +227,12 @@ it.for(["reset", "complete"] as const)(
       waitForGatewayDispatch(label, pending, 30_000, fixtureAbort.signal);
 
     try {
-      await Promise.all(
-        [workspace, stateDir, pluginsDir].map((dir) => fs.mkdir(dir, { recursive: true })),
-      );
-      for (const [key, value] of Object.entries(environment)) {
-        setTestEnvValue(key, value);
-      }
+      await fs.mkdir(pluginsDir, { recursive: true });
+      state.applyEnv();
       providerServer = createServer((request, response) => {
         const handler = (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
           const body: { input: ResponseInput[]; tools: Array<{ name: string }> } = JSON.parse(
-            Buffer.concat(chunks).toString(),
+            await readProviderBody(request),
           );
           expect(request.url).toBe("/v1/responses");
           const userTexts = body.input
@@ -380,19 +343,10 @@ it.for(["reset", "complete"] as const)(
         handlers.add(handler);
         void handler.finally(() => handlers.delete(handler));
       });
-      const server = providerServer;
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("provider did not bind loopback port");
-      }
-      const provider = buildMockOpenAiResponsesProvider(`http://127.0.0.1:${address.port}/v1`);
+      const provider = buildMockOpenAiResponsesProvider(await listenProvider(providerServer));
       gateway = await startGatewayWithClient({
         configPath,
-        token: environment.OPENCLAW_GATEWAY_TOKEN,
+        token,
         cfg: {
           agents: {
             defaults: {
@@ -418,7 +372,7 @@ it.for(["reset", "complete"] as const)(
             ],
           },
           models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
-          gateway: { auth: { mode: "token", token: environment.OPENCLAW_GATEWAY_TOKEN } },
+          gateway: { auth: { mode: "token", token } },
         },
         onEvent: (event) => {
           if (event.event !== "chat") {
@@ -539,13 +493,7 @@ it.for(["reset", "complete"] as const)(
       await Promise.allSettled(handlers);
       unsubscribe();
       waiterSpy.mockRestore();
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      clearSessionStoreCacheForTest();
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
-      envSnapshot.restore();
+      await state.cleanup();
     }
   },
 );
