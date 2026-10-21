@@ -186,6 +186,10 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
         : [
             ...(["shared", "new", "chat"] as const).map((route, index) => {
               const modules = new Set(controlUiBootModules[route]);
+              if (route === "shared") {
+                // Plugin contributions can initialize after the New Session boot capture.
+                modules.add("ui/src/plugins/control-ui-actions.ts");
+              }
               return {
                 name: `control-ui-boot-${route}`,
                 test: (id: string) => modules.has(controlUiBootManifestKey(id)),

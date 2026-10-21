@@ -247,6 +247,7 @@ const { values } = parseArgs({
     "bundle-dir": { type: "string" },
     "gateway-url": { type: "string" },
     "first-load": { type: "boolean", default: false },
+    "boot-route": { type: "string", default: "chat" },
     "cold-http-cache": { type: "boolean", default: false },
     "network-latency-ms": { type: "string" },
     "download-kbps": { type: "string" },
@@ -328,6 +329,20 @@ const cpuRuns: Record<string, ColdLoadCpuTables[]> = {};
 const runs = Number(values.runs);
 const gatewayUrl = values["gateway-url"] ? new URL(values["gateway-url"]) : undefined;
 const firstLoad = values["first-load"];
+const bootRoute = values["boot-route"];
+if (bootRoute !== "chat" && bootRoute !== "new") {
+  throw new Error("Expected boot-route chat or new");
+}
+if (
+  bootRoute === "new" &&
+  (!firstLoad ||
+    values["live-events"] ||
+    values["session-switch"] ||
+    values["streaming-reply"] ||
+    values["overlay-probe"])
+) {
+  throw new Error("boot-route new requires first-load without chat interaction phases");
+}
 const networkLatencyMs = Number(values["network-latency-ms"] ?? 0);
 const downloadKbps = Number(values["download-kbps"] ?? 0);
 const cpuThrottle = Number(values["cpu-throttle"] ?? 1);
@@ -600,7 +615,7 @@ try {
   const page = await context.newPage();
   await page.addInitScript("globalThis.__name = (fn) => fn");
   await page.addInitScript(
-    (measurePresentation) => {
+    ({ measurePresentation, bootRoute: measuredRoute }) => {
       if (window !== window.top) {
         return;
       }
@@ -612,13 +627,19 @@ try {
         firstEnabledComposerMs: null as number | null,
         firstComposerFocusMs: null as number | null,
         firstNonemptyTranscriptMs: null as number | null,
+        fontLoadEventsMs: [] as number[],
       };
       Reflect.set(window, "__coldLoadPresentation", milestones);
+      document.fonts.addEventListener("loadingdone", () => {
+        milestones.fontLoadEventsMs.push(performance.now());
+      });
       document.addEventListener("focusin", (event) => {
         if (
           milestones.firstComposerFocusMs === null &&
           event.target instanceof HTMLTextAreaElement &&
-          event.target.matches(".agent-chat__composer-combobox textarea")
+          event.target.matches(
+            ".agent-chat__composer-combobox textarea, .new-session-page__message",
+          )
         ) {
           milestones.firstComposerFocusMs = performance.now();
         }
@@ -627,7 +648,7 @@ try {
         element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
       const sample = () => {
         const composer = document.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox textarea",
+          ".agent-chat__composer-combobox textarea, .new-session-page__message",
         );
         if (
           milestones.firstEnabledComposerMs === null &&
@@ -649,14 +670,14 @@ try {
         }
         if (
           milestones.firstEnabledComposerMs === null ||
-          milestones.firstNonemptyTranscriptMs === null
+          (measuredRoute === "chat" && milestones.firstNonemptyTranscriptMs === null)
         ) {
           requestAnimationFrame(sample);
         }
       };
       requestAnimationFrame(sample);
     },
-    firstLoad || Boolean(gatewayUrl),
+    { measurePresentation: firstLoad || Boolean(gatewayUrl), bootRoute },
   );
   const rigProbeScript = values["probe-dir"]
     ? (
@@ -809,7 +830,9 @@ try {
     {
       key: controlUiBundledSettingsStorageKey(baseUrl),
       fixtureUrl: gatewayUrl
-        ? controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face)
+        ? bootRoute === "new"
+          ? new URL("/new", baseUrl).href
+          : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face)
         : null,
       bootstrap: gatewayUrl
         ? JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario))
@@ -835,17 +858,37 @@ try {
   // Fetch the real public document; the init script selects the synthetic session.
   // Session-entry authorization is outside this static-delivery benchmark.
   const url = gatewayUrl
-    ? new URL("/chat", baseUrl).href
-    : values["full-uuid-route"]
-      ? new URL(
-          `/${face}/main/${fixture.selectedSessionKey.split(":").at(-1)!.replaceAll("-", "")}`,
-          baseUrl,
-        ).href
-      : values["short-route"]
-        ? new URL(controlUiSessionPath(fixture.selectedSessionKey, "", face), baseUrl).href
-        : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face);
+    ? new URL(bootRoute === "new" ? "/new" : "/chat", baseUrl).href
+    : bootRoute === "new"
+      ? new URL("/new", baseUrl).href
+      : values["full-uuid-route"]
+        ? new URL(
+            `/${face}/main/${fixture.selectedSessionKey.split(":").at(-1)!.replaceAll("-", "")}`,
+            baseUrl,
+          ).href
+        : values["short-route"]
+          ? new URL(controlUiSessionPath(fixture.selectedSessionKey, "", face), baseUrl).href
+          : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face);
   async function settle() {
     try {
+      if (bootRoute === "new") {
+        await page.locator(".new-session-page__message").waitFor();
+        await page.waitForFunction(() => {
+          const state = Reflect.get(window, "__coldLoad")?.read();
+          const composer = document.querySelector<HTMLTextAreaElement>(
+            ".new-session-page__message",
+          );
+          return (
+            composer &&
+            !composer.disabled &&
+            state &&
+            !state.pending &&
+            !state.queued &&
+            state.idleMs > 750
+          );
+        });
+        return;
+      }
       await page.locator(".chat-pane__header").first().waitFor();
       if (values["session-event-ancestor-refs"]) {
         await page
@@ -1048,8 +1091,22 @@ try {
         ? "delta"
         : "full";
     const cdp = await context.newCDPSession(page);
-    if (values["cold-http-cache"]) {
+    const requests: Array<{ url: string; type?: string; timestamp: number; initiator: unknown }> =
+      [];
+    if (firstLoad || values["cold-http-cache"]) {
       await cdp.send("Network.enable");
+    }
+    if (firstLoad) {
+      cdp.on("Network.requestWillBeSent", (event) => {
+        requests.push({
+          url: event.request.url,
+          type: event.type,
+          timestamp: event.timestamp,
+          initiator: event.initiator,
+        });
+      });
+    }
+    if (values["cold-http-cache"]) {
       await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
     }
     if (values["network-latency-ms"] !== undefined || values["download-kbps"] !== undefined) {
@@ -1117,6 +1174,19 @@ try {
       }));
       return {
         ...Reflect.get(window, "__coldLoad").read(),
+        bootRpcs: Reflect.get(window, "__coldLoad")
+          .read()
+          .rpcs.map((rpc: LiveRpc, index: number) => {
+            const response = performance.getEntriesByName(
+              `cold-load-rpc:${index}:${rpc.method}:start`,
+            )[0];
+            return {
+              method: rpc.method,
+              requestMs: response ? response.startTime - rpc.ms : null,
+              responseMs: response?.startTime ?? null,
+              durationMs: rpc.ms,
+            };
+          }),
         presentation: Reflect.get(window, "__coldLoadPresentation"),
         http: {
           navigation: {
@@ -1152,6 +1222,12 @@ try {
         },
       };
     });
+    if (firstLoad) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.requests.json`),
+        JSON.stringify(requests, null, 2),
+      );
+    }
     if (historyValidatorDelayMs && metrics.historyValidatorResources.length !== 1) {
       throw new Error("Measured reload lacks the delayed validator resource timing");
     }
@@ -1850,6 +1926,7 @@ try {
           ? "Real Gateway HTTP documents/assets; synthetic bootstrap, WebSocket RPC and fixture media. Server cache lifecycle is controlled externally."
           : "Vite production preview HTTP; synthetic bootstrap, WebSocket RPC and fixture media.",
         firstLoad,
+        bootRoute,
         coldHttpCache: values["cold-http-cache"],
         networkLatencyMs,
         downloadKbps,
