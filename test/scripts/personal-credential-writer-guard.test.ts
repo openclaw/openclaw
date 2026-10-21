@@ -865,9 +865,12 @@ it("keeps session membership writes with the worker and canonical entry owners",
         for (const table of tables) { db.deleteFrom(table); }
       }
     `,
-    "src/config/sessions/session-accessor.sqlite-entry-store.ts": `
+    "src/config/sessions/session-accessor.sqlite-entry-write.ts": `
       import { clearSessionCollaborationForKey } from './session-accessor.sqlite-node-artifacts.js';
-      function writeSessionEntry() { clearSessionCollaborationForKey(); }
+      function prepareSessionEntryWrite() {
+        const write = () => { clearSessionCollaborationForKey(); };
+        return { write };
+      }
     `,
   });
 

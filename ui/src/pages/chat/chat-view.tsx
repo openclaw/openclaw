@@ -1,6 +1,6 @@
 import { dynamic } from "@solidjs/web";
 import type { Component } from "solid-js";
-import { createMemo, Show, untrack } from "solid-js";
+import { createMemo, merge, Show } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { ExecApprovalCard } from "../../components/exec-approval-card-solid.tsx";
@@ -14,9 +14,7 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { projectPresentation } from "../../lib/reactive/presentation.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -27,12 +25,12 @@ import {
   renderChatComposerNotices as ChatComposerNoticesView,
   renderChatTopbarNotices as ChatTopbarNotices,
 } from "./chat-view-notices.tsx";
-import { subscribeAsyncQuestionState } from "./components/chat-async-question.ts";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
 import {
   ComposerQuestionDock,
   createComposerQuestionPanel,
 } from "./components/chat-composer-question.tsx";
+import type { ComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ComposerQueue } from "./components/chat-composer-regions.tsx";
 import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import { ChatComposer } from "./components/chat-composer.tsx";
@@ -52,6 +50,7 @@ import "../../components/resizable-divider.ts";
 export type { ChatProps } from "./chat-view-frame.ts";
 
 type ChatViewInput = {
+  questions: ComposerQuestions;
   props: ChatProps;
   frame: ChatViewFrame;
   presented: boolean;
@@ -171,12 +170,12 @@ function ChatComposerView(input: ChatViewInput) {
   return (
     <ChatComposer
       {...input.props}
+      questions={input.questions}
       getTranscriptElement={input.getTranscriptElement}
       progressCard={input.props.detailsEnabled ? null : input.props.progressCard}
       progressCardInitialLoading={
         input.props.detailsEnabled ? false : input.props.progressCardInitialLoading
       }
-      asyncQuestions={input.frame.asyncQuestions}
       displayQueue={input.frame.displayQueue}
       footerContent={<ChatFooterContent {...input} />}
       notices={<ChatComposerNoticesView {...input.props} presented={input.presented} />}
@@ -189,15 +188,10 @@ function ChatComposerView(input: ChatViewInput) {
 }
 
 function ChatComposerCompanion(input: ChatViewInput) {
-  // The companion belongs to this pane's lifetime; replacement panes mount a new owner.
-  const initialPaneId = untrack(() => input.props.paneId);
   const questionPanel = createComposerQuestionPanel(
-    () => ({
-      ...input.props,
-      asyncQuestions: input.frame.asyncQuestions,
-      getTranscriptElement: input.getTranscriptElement,
-    }),
-    getChatComposerState(initialPaneId),
+    () => input.questions,
+    undefined,
+    () => input.getTranscriptElement,
   );
   return (
     <div class="chat-footer__context">
@@ -207,7 +201,7 @@ function ChatComposerCompanion(input: ChatViewInput) {
       </div>
       <ComposerQuestionDock panel={questionPanel()} />
       <ComposerQueue
-        composer={{ ...input.props, displayQueue: input.frame.displayQueue }}
+        composer={merge(input.props, { displayQueue: input.frame.displayQueue })}
         showAbortableUi={
           Boolean(input.props.canAbort && input.props.onAbort) &&
           !hasTerminalRunStatus(input.props.runStatus)
@@ -270,19 +264,27 @@ function ChatSurface(input: {
   );
 }
 
-export function ChatView(input: { props: ChatProps; application?: ApplicationContext }) {
+export function ChatView(input: {
+  props: ChatProps;
+  application?: ApplicationContext;
+  questions: ComposerQuestions;
+}) {
   return (
-    <Show when={input.application} keyed fallback={<ChatContent props={input.props} />}>
+    <Show
+      when={input.application}
+      keyed
+      fallback={<ChatContent props={input.props} questions={input.questions} />}
+    >
       {(application) => (
         <ApplicationProvider value={application}>
-          <ChatContent props={input.props} />
+          <ChatContent props={input.props} questions={input.questions} />
         </ApplicationProvider>
       )}
     </Show>
   );
 }
 
-function ChatContent(input: { props: ChatProps }) {
+function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) {
   // Composer sizing needs the viewport even before the virtualizer has rows.
   let transcriptViewport: HTMLDivElement | undefined;
   const bindTranscriptViewport = (element: HTMLDivElement) => {
@@ -325,34 +327,23 @@ function ChatContent(input: { props: ChatProps }) {
       }),
   });
   const presentation = createMemo(() => projectPresentation(input.props.presented ?? true));
-  const transcriptVisibility = createMemo(() =>
-    projectPresentation(input.props.transcriptVisible ?? true),
-  );
   const presented = () => presentation().read();
-  const paneId = createMemo(() => input.props.paneId);
-  const questions = createMemo(() =>
-    projectSource(getTranscriptState(paneId()), {
-      read: (state) => state.asyncQuestionRevision,
-      subscribe: subscribeAsyncQuestionState,
-      equality: "revision",
-    }),
-  );
-  const questionRevision = createParkedProjection(
-    () => questions().read(),
-    () => transcriptVisibility().read(),
-    paneId,
-  );
   const frame = createMemo(() => {
-    questionRevision();
-    return createChatViewFrame(input.props, (replacement) => {
-      const target =
-        replacement && replacementComposer?.isConnected
-          ? replacementComposer
-          : getChatComposerState(input.props.paneId).composerTextarea;
-      target?.focus({ preventScroll: true });
-    });
+    return createChatViewFrame(
+      input.props,
+      (replacement) => {
+        const target =
+          replacement && replacementComposer?.isConnected
+            ? replacementComposer
+            : getChatComposerState(input.props.paneId).composerTextarea;
+        target?.focus({ preventScroll: true });
+      },
+      // This view mounts only while its pane's question source exists.
+      input.questions.source()!.asyncQuestions,
+    );
   });
   const viewProps = () => ({
+    questions: input.questions,
     props: input.props,
     frame: frame(),
     presented: presented(),

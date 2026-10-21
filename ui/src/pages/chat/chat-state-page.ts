@@ -587,13 +587,18 @@ export function createPageState(
   {
     const source = chatRunPresentation(state);
     const projection = projectOwner(source, (owner) => owner.values);
+    const nonText = projectSource(source, {
+      read: (owner) => owner.values,
+      subscribe: (owner, notify) => owner.subscribeNonText(notify),
+      equality: "revision",
+    });
     for (const key of source.fields) {
       const descriptor = Object.getOwnPropertyDescriptor(state, key)!;
       Object.defineProperty(state, key, {
         ...descriptor,
         get() {
           if (getObserver()) {
-            projection.read();
+            (key === "chatStream" ? projection : nonText).read();
           }
           return Reflect.get(source.values, key);
         },

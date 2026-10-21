@@ -1,4 +1,5 @@
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
+import { merge } from "solid-js";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
@@ -179,8 +180,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     // Only a full pane has a Subagents panel of its own. Elsewhere a subagent's
     // name still opens its session and their count stays text.
     const ownsSubagentsPanel = !catalog && !this.compact;
-    const paneChatProps: ChatProps = {
-      ...chatProps,
+    const paneChatProps: ChatProps = merge(chatProps, {
       onConversationFrameRef: (element) => this.registerDetailsElement("frame", element),
       onFooterElementRef: (element) => this.registerDetailsElement("footer", element),
       error: conversationVisible ? chatProps.error : null,
@@ -208,7 +208,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       transcriptVisible: slotPresentation("conversation"),
       latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
-    };
+    } satisfies Partial<ChatProps>);
     const headerDetails: ChatDetailsViewProps | undefined = ownsSubagentsPanel
       ? {
           chat: paneChatProps,

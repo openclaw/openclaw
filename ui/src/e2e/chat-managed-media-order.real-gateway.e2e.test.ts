@@ -2,6 +2,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
@@ -21,6 +22,7 @@ import type { ChatState } from "../pages/chat/chat-state-contract.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
@@ -558,11 +560,57 @@ async function runManagedMediaScenario() {
       await assertDecoded();
       // The terminal session recap arrives independently of final text and image decode.
       // It adds height beside the bubble, so admit it before freezing live ancestry.
-      await page
-        .locator(".chat-group.assistant")
-        .filter({ hasText: intro })
-        .locator(".chat-turn-recap")
-        .waitFor({ state: "visible" });
+      try {
+        await page
+          .locator(".chat-group.assistant")
+          .filter({ hasText: intro })
+          .locator(".chat-turn-recap")
+          .waitFor({ state: "visible" });
+      } catch (error) {
+        await withTimeout(
+          page.evaluate(
+            ({ expectedSessionKey, assistantRunId }) => {
+              const pane = document.querySelector<HTMLElement & { state?: ChatPageHost }>(
+                'openclaw-chat-pane[aria-hidden="false"]',
+              );
+              const state = pane?.state;
+              const row = state?.sessionsResult?.sessions.find(
+                (entry) => entry.key === expectedSessionKey,
+              );
+              const recaps = Array.from(pane?.querySelectorAll(".chat-turn-recap") ?? []);
+              return {
+                recapPanePresent: Boolean(pane),
+                recapSessionMatches: state?.sessionKey === expectedSessionKey,
+                recapRunCleared: state?.chatRunId === null,
+                recapCount: recaps.length,
+                recapVisibleCount: recaps.filter((element) =>
+                  element.checkVisibility({ visibilityProperty: true }),
+                ).length,
+                recapAttachedCount: recaps.filter((element) =>
+                  element.closest(".chat-group.assistant"),
+                ).length,
+                recapTerminalRowPresent: Boolean(row),
+                recapTerminalRowDone: row?.status === "done",
+                recapTerminalRuntimeMs:
+                  typeof row?.runtimeMs === "number" && Number.isFinite(row.runtimeMs)
+                    ? row.runtimeMs
+                    : null,
+                recapAssistantRunPresent: assistantRunId !== null,
+                recapTerminalRunMatchesAssistant:
+                  assistantRunId !== null && row?.lastRunId === assistantRunId,
+              };
+            },
+            {
+              expectedSessionKey: sessionKey,
+              assistantRunId: readSessionMessageIdentity(assistants[0])?.runId ?? null,
+            },
+          ),
+          1_000,
+        )
+          .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+          .catch(() => undefined);
+        throw error;
+      }
       const liveOrder = await captureOrder(page, bubble, "live");
       expect(await bubble.textContent()).not.toContain("MEDIA:");
       expect(sends).toEqual([prompt]);

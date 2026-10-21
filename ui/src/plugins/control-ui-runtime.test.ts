@@ -449,7 +449,7 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
       if (event === "plugins.changed") {
         generation += 1;
       }
-      client.opts.onEvent?.(
+      client.testOptions.onEvent?.(
         createGatewayEvent(
           event,
           event === "plugins.changed" ? { generation } : { revision: next ?? "disabled" },
@@ -463,7 +463,7 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
     };
     try {
       runtime.start();
-      client.opts.onHello?.(hello);
+      client.testOptions.onHello?.(hello);
       await vi.waitFor(() => expect(runtime.registrations("replacements")).toHaveLength(1));
       runtime.selectReplacement("composer", "review/composer");
       const first = runtime.selectedReplacement("composer")!;
@@ -517,7 +517,7 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
       expect(runtime.selectedReplacement("composer")).toBeUndefined();
       runtime.selectReplacement("composer", "review/composer");
       const reinstalled = runtime.selectedReplacement("composer")!;
-      client.opts.onHello?.({ ...hello, server: { connId: "native-connection-two" } });
+      client.testOptions.onHello?.({ ...hello, server: { connId: "native-connection-two" } });
       await vi.waitFor(() => {
         expect(runtime.registrations("replacements")).toHaveLength(1);
         expect(runtime.isLoading("review")).toBe(false);

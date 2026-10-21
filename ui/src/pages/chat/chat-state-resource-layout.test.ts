@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { loadSettings, saveSettings } from "../../app/settings.ts";
-import { createChatPageStateContext } from "./chat-page.test-support.ts";
+import { createChatPageStateContext } from "./chat-state-context.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { activatePanel, openSlot } from "./sidebar-layout.ts";
 

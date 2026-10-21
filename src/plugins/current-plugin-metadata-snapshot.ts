@@ -59,7 +59,6 @@ export type CurrentPluginMetadataSnapshotParams = {
   workspaceDir?: string;
   allowWorkspaceScopedSnapshot?: boolean;
   requireDefaultDiscoveryContext?: boolean;
-  requireAgentWorkspaceCompatibility?: boolean;
 };
 
 export type PluginMetadataSnapshotScopeRunner = <T>(
@@ -387,10 +386,8 @@ export function getCompatibleProcessGatewayPluginMetadataSnapshot(
     return undefined;
   }
   if (
-    params.requireAgentWorkspaceCompatibility === true &&
-    (!params.config ||
-      state.agentWorkspaceFingerprint !==
-        resolveAgentWorkspaceFingerprint(params.config, params.env))
+    !params.config ||
+    state.agentWorkspaceFingerprint !== resolveAgentWorkspaceFingerprint(params.config, params.env)
   ) {
     return undefined;
   }

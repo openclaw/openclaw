@@ -28,7 +28,7 @@ import {
   withGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
-import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
+import { callInProcessGatewayTool as callGateway } from "./in-process-gateway.js";
 
 const publicationOperatorActions = GitHubPublicationActionSchema.properties.action.anyOf.map(
   (action) => action.const,
@@ -83,13 +83,11 @@ ${evidenceAvailable ? "- upload_evidence: upload one inspected image/video from 
 
 export function createGitHubPublishTool(
   options: {
-    callGateway?: InProcessGatewayCaller;
     publicationAvailable?: boolean;
     actionsAvailable?: boolean;
     sandbox?: SandboxContext | null;
   } = {},
 ): AnyAgentTool {
-  const callGateway = options.callGateway ?? callInProcessGatewayTool;
   const publicationAvailable = options.publicationAvailable !== false;
   const actionsAvailable = options.actionsAvailable === true;
   const refreshBaseAvailable = canRefreshGitHubPublicationBase(options.sandbox);

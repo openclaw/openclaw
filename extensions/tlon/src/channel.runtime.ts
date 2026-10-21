@@ -29,46 +29,6 @@ type ConfiguredTlonAccount = ResolvedTlonAccount & {
   code: string;
 };
 
-async function createHttpPokeApi(params: {
-  url: string;
-  code: string;
-  ship: string;
-  dangerouslyAllowPrivateNetwork?: boolean;
-  assertDirectAdapterHandoff?: () => void;
-  onPlatformSendDispatch?: () => Promise<void>;
-}) {
-  const ssrfPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
-    params.dangerouslyAllowPrivateNetwork,
-  );
-  const cookie = await authenticate(params.url, params.code, {
-    ssrfPolicy,
-    beforeRequest: params.assertDirectAdapterHandoff,
-  });
-  const channelId = `${Math.floor(Date.now() / 1000)}-${crypto.randomUUID()}`;
-  const shipName = params.ship.replace(/^~/, "");
-
-  return {
-    poke: async (pokeParams: { app: string; mark: string; json: unknown }) => {
-      params.assertDirectAdapterHandoff?.();
-      await params.onPlatformSendDispatch?.();
-      return await pokeUrbitChannel(
-        {
-          baseUrl: params.url,
-          channelId,
-          ship: shipName,
-          cookie: normalizeUrbitCookie(cookie),
-          ssrfPolicy,
-        },
-        {
-          ...pokeParams,
-          auditContext: "tlon-poke",
-          beforeRequest: params.assertDirectAdapterHandoff,
-        },
-      );
-    },
-  };
-}
-
 function resolveOutboundContext(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -120,14 +80,37 @@ async function sendTlonOutbound(params: ChannelOutboundContext, kind: "text" | "
       : undefined;
   }
 
-  const api = await createHttpPokeApi({
-    url: account.url,
-    ship: account.ship,
-    code: account.code,
-    dangerouslyAllowPrivateNetwork: account.dangerouslyAllowPrivateNetwork ?? undefined,
-    assertDirectAdapterHandoff,
-    onPlatformSendDispatch: params.onPlatformSendDispatch,
+  const { url, ship, code, dangerouslyAllowPrivateNetwork } = account;
+  const onPlatformSendDispatch = params.onPlatformSendDispatch;
+  const ssrfPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+    dangerouslyAllowPrivateNetwork ?? undefined,
+  );
+  const cookie = await authenticate(url, code, {
+    ssrfPolicy,
+    beforeRequest: assertDirectAdapterHandoff,
   });
+  const channelId = `${Math.floor(Date.now() / 1000)}-${crypto.randomUUID()}`;
+  const shipName = ship.replace(/^~/, "");
+  const api = {
+    poke: async (pokeParams: { app: string; mark: string; json: unknown }) => {
+      assertDirectAdapterHandoff?.();
+      await onPlatformSendDispatch?.();
+      return await pokeUrbitChannel(
+        {
+          baseUrl: url,
+          channelId,
+          ship: shipName,
+          cookie: normalizeUrbitCookie(cookie),
+          ssrfPolicy,
+        },
+        {
+          ...pokeParams,
+          auditContext: "tlon-poke",
+          beforeRequest: assertDirectAdapterHandoff,
+        },
+      );
+    },
+  };
   const fromShip = normalizeShip(account.ship);
   const story = kind === "media" ? buildMediaStory(text, uploadedUrl) : markdownToStory(text);
   if (parsed.kind === "dm") {

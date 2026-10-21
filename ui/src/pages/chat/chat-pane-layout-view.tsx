@@ -12,6 +12,7 @@ import { SidebarRegionView, type SidebarRegionViewProps } from "./chat-pane-side
 import { ChatBoardResetConfirmation } from "./chat-pane-surfaces.tsx";
 import { renderChatTopbarNotices } from "./chat-view-notices.tsx";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
+import type { ComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./components/chat-details.tsx";
 import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
 import { PaneHeaderView, type ChatPaneHeaderPresentation } from "./components/chat-pane-header.tsx";
@@ -75,7 +76,7 @@ export type PaneLayoutData = {
   };
 };
 
-function PaneContent(props: { data: PaneLayoutData }) {
+function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions }) {
   const presented = usePanePresentation(() => props.data.overlays.presentation);
   const header = (
     <Show
@@ -89,7 +90,11 @@ function PaneContent(props: { data: PaneLayoutData }) {
   );
   const primary = (
     <div class="chat-pane-primary-column">
-      <ChatView props={props.data.primary.chat} application={props.data.primary.application} />
+      <ChatView
+        props={props.data.primary.chat}
+        application={props.data.primary.application}
+        questions={props.questions}
+      />
     </div>
   );
   const background = <SessionBackgroundView {...props.data.background} />;
@@ -114,16 +119,22 @@ function PaneContent(props: { data: PaneLayoutData }) {
   );
 }
 
-export function PaneLayout(props: { layout: PaneLayoutData | null }): SolidJSX.Element {
+export function PaneLayout(props: {
+  layout: PaneLayoutData | null;
+  questions: ComposerQuestions;
+}): SolidJSX.Element {
   return (
     <Show
       when={props.layout}
       fallback={<main class="app-shell app-shell--booting" aria-busy="true" />}
     >
       {(layout) => (
-        <Show when={layout().subagentHeader} fallback={<PaneContent data={layout()} />}>
+        <Show
+          when={layout().subagentHeader}
+          fallback={<PaneContent data={layout()} questions={props.questions} />}
+        >
           <section class="chat-subagent-detail">
-            <PaneContent data={layout()} />
+            <PaneContent data={layout()} questions={props.questions} />
           </section>
         </Show>
       )}

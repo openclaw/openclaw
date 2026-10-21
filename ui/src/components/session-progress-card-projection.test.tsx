@@ -1,5 +1,5 @@
 import { createMemo, createSignal } from "solid-js";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import {
   projectProgressCard,
@@ -11,6 +11,8 @@ import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+
+afterEach(() => vi.restoreAllMocks());
 
 function mountProgress(initialSource: ProgressCardProjectionSource) {
   let progress!: ReturnType<typeof projectProgressCard>;
@@ -30,30 +32,38 @@ function mountProgress(initialSource: ProgressCardProjectionSource) {
   return { ...view, progress, replaceSource, redraw };
 }
 
+function progressGateway(
+  handler: Parameters<typeof createTestGatewayClient>[0] = async () => ({ card: null }),
+) {
+  const request = vi.fn(handler);
+  const application = createApplicationGateway();
+  Object.assign(application.gateway.snapshot, {
+    phase: "connected",
+    client: createTestGatewayClient(request),
+    hello: gatewayHelloForMethods(["progressCard.get"]),
+    assistantAgentId: "main",
+  });
+  const store = sessionProgressCardsForGateway(application.gateway);
+  const emit = (event: string, payload: unknown) =>
+    application.publishEvent({ type: "event", event, payload });
+  return { ...application, request, store, emit };
+}
+
+function requestedSessionKey(params: unknown) {
+  const key =
+    params && typeof params === "object" && "sessionKey" in params ? params.sessionKey : undefined;
+  if (typeof key !== "string") {
+    throw new Error("Missing progress-card session key");
+  }
+  return key;
+}
+
 describe("session progress card projection", () => {
   it("keeps source updates detached after explicit disposal while mounted", async () => {
-    const request = vi.fn().mockResolvedValue({ card: null });
-    const { gateway } = createApplicationGateway({
-      phase: "connected",
-      client: createTestGatewayClient(request),
-      hello: gatewayHelloForMethods(["progressCard.get"]),
-      offlineStable: false,
-      canvasPluginSurfaceUrl: null,
-      assistantAgentId: "main",
-      sessionKey: "",
-      lastError: null,
-      lastErrorCode: null,
-    });
-    const store = sessionProgressCardsForGateway(gateway);
+    const { store, request } = progressGateway();
     const subscribe = vi.spyOn(store, "subscribe");
-    const host = mountProgress({
-      store,
-      target: { sessionKey: "agent:main:disposed-progress" },
-    });
-    onTestFinished(() => {
-      host.unmount();
-      subscribe.mockRestore();
-    });
+    const target = { sessionKey: "agent:main:disposed-progress" };
+    const host = mountProgress({ store, target });
     await waitForSolid(() => expect(host.progress.read().loading).toBe(false));
     expect(request).toHaveBeenCalledOnce();
     expect(subscribe).toHaveBeenCalledOnce();
@@ -70,43 +80,16 @@ describe("session progress card projection", () => {
   });
 
   it("retains same-store snapshots across target changes and observes resets while hidden", async () => {
-    const request = vi.fn(async (_method: string, params?: unknown) => {
-      if (
-        !params ||
-        typeof params !== "object" ||
-        !("sessionKey" in params) ||
-        typeof params.sessionKey !== "string"
-      ) {
-        throw new Error("Missing progress-card session key");
-      }
-      return {
-        card: {
-          sessionKey: params.sessionKey,
-          revision: 1,
-          updatedAt: 1,
-          markdown: params.sessionKey,
-        },
-      };
+    const { store, request, emit } = progressGateway(async (_method: string, params?: unknown) => {
+      const sessionKey = requestedSessionKey(params);
+      const card = { sessionKey, revision: 1, updatedAt: 1, markdown: sessionKey };
+      return { card };
     });
-    const { gateway, publishEvent } = createApplicationGateway({
-      phase: "connected",
-      client: createTestGatewayClient(request),
-      hello: gatewayHelloForMethods(["progressCard.get"]),
-      offlineStable: false,
-      canvasPluginSurfaceUrl: null,
-      assistantAgentId: "main",
-      sessionKey: "",
-      lastError: null,
-      lastErrorCode: null,
-    });
-    const store = sessionProgressCardsForGateway(gateway);
     const first = { sessionKey: "agent:main:first-progress" };
     const second = { sessionKey: "agent:main:second-progress" };
     const host = mountProgress({ store, target: first });
-    onTestFinished(host.unmount);
     await waitForSolid(() => expect(host.progress.read().card?.sessionKey).toBe(first.sessionKey));
-    const firstCard = host.progress.read().card;
-    const firstLifetime = host.progress.read().lifetime;
+    const { card: firstCard, lifetime: firstLifetime } = host.progress.read();
     expect(firstLifetime).toBeDefined();
 
     host.replaceSource({ store, target: undefined });
@@ -126,11 +109,7 @@ describe("session progress card projection", () => {
 
     host.replaceSource({ store, target: undefined });
     flush();
-    publishEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: { sessionKey: first.sessionKey, reason: "reset" },
-    });
+    emit("sessions.changed", { sessionKey: first.sessionKey, reason: "reset" });
     expect(store.get(first)).toBeUndefined();
     expect(store.getLifetime(first)).toBeUndefined();
     expect(request).toHaveBeenCalledTimes(2);
@@ -146,111 +125,64 @@ describe("session progress card projection", () => {
   it("redraws only the watched progress presentation while unrelated sessions change", async () => {
     let revision = 1;
     let readError: Error | undefined;
-    const request = vi.fn(async (method: string, params?: unknown) => {
+    const { store, emit } = progressGateway(async (method: string, params?: unknown) => {
       if (method === "progressCard.refresh") {
         return { status: "accepted", runId: "refresh-run", revision };
       }
       if (readError) {
         throw readError;
       }
-      if (
-        !params ||
-        typeof params !== "object" ||
-        !("sessionKey" in params) ||
-        typeof params.sessionKey !== "string"
-      ) {
-        throw new Error("Missing progress-card session key");
-      }
-      return {
-        card: {
-          sessionKey: params.sessionKey,
-          revision,
-          updatedAt: revision,
-          markdown: `${params.sessionKey} revision ${revision}`,
-        },
+      const sessionKey = requestedSessionKey(params);
+      const card = {
+        sessionKey,
+        revision,
+        updatedAt: revision,
+        markdown: `${sessionKey} revision ${revision}`,
       };
-    });
-    const { gateway, publishEvent } = createApplicationGateway({
-      phase: "connected",
-      client: createTestGatewayClient(request),
-      hello: gatewayHelloForMethods(["progressCard.get"]),
-      offlineStable: false,
-      canvasPluginSurfaceUrl: null,
-      assistantAgentId: "main",
-      sessionKey: "",
-      lastError: null,
-      lastErrorCode: null,
+      return { card };
     });
     let target = { sessionKey: "agent:main:visible-progress" };
-    const store = sessionProgressCardsForGateway(gateway);
     const host = mountProgress({ store, target });
     const inactive = mountProgress({ store, target: undefined });
     const notified = vi.fn();
     const stop = store.subscribe(notified);
-    onTestFinished(() => {
-      host.unmount();
-      inactive.unmount();
-      stop();
-      vi.restoreAllMocks();
-    });
+    onTestFinished(stop);
     await store.load(target);
     flush();
-    const { redraw } = host;
-    const { redraw: inactiveRedraw } = inactive;
-    redraw.mockClear();
-    inactiveRedraw.mockClear();
-    notified.mockClear();
-    publishEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: { sessionKey: "agent:main:unrelated", reason: "delete" },
-    });
+    const clearNotifications = () =>
+      [host.redraw, inactive.redraw, notified].forEach((mock) => mock.mockClear());
+    clearNotifications();
+    emit("sessions.changed", { sessionKey: "agent:main:unrelated", reason: "delete" });
     flush();
     expect.soft(notified).not.toHaveBeenCalled();
-    expect.soft(redraw).not.toHaveBeenCalled();
-    notified.mockClear();
-    redraw.mockClear();
-    inactiveRedraw.mockClear();
+    expect.soft(host.redraw).not.toHaveBeenCalled();
+    clearNotifications();
 
     await store.load({ sessionKey: "agent:main:other-progress" });
     flush();
     expect(notified).toHaveBeenCalledOnce();
-    expect.soft(redraw).not.toHaveBeenCalled();
-    expect.soft(inactiveRedraw).not.toHaveBeenCalled();
+    expect.soft(host.redraw).not.toHaveBeenCalled();
+    expect.soft(inactive.redraw).not.toHaveBeenCalled();
 
     revision = 2;
-    publishEvent({
-      type: "event",
-      event: "progressCard.changed",
-      payload: { sessionKey: target.sessionKey, revision },
-    });
+    emit("progressCard.changed", { sessionKey: target.sessionKey, revision });
     await store.load(target);
     flush();
     expect(host.container.textContent).toContain("visible-progress revision 2");
 
     const card = host.progress.read().card;
-    if (!card) {
-      throw new Error("Expected the displayed progress card");
-    }
+    assert.exists(card, "Expected the displayed progress card");
     store.refresh(target, card);
     flush();
     expect(host.container.textContent).toContain("pending");
     revision = 3;
-    publishEvent({
-      type: "event",
-      event: "progressCard.changed",
-      payload: { sessionKey: target.sessionKey, revision },
-    });
+    emit("progressCard.changed", { sessionKey: target.sessionKey, revision });
     await store.load(target);
     flush();
     expect(host.container.textContent).toContain("updated");
 
     readError = new Error("Read unavailable");
-    publishEvent({
-      type: "event",
-      event: "progressCard.changed",
-      payload: { sessionKey: target.sessionKey, revision: 4 },
-    });
+    emit("progressCard.changed", { sessionKey: target.sessionKey, revision: 4 });
     await expect(store.load(target)).rejects.toThrow("Read unavailable");
     flush();
     expect(host.container.textContent).toContain("unavailable");
@@ -268,22 +200,8 @@ describe("session progress card projection", () => {
   it.each([false, true])(
     "waits for renewed view admission across a connection transition (replace client: %s)",
     async (replaceClient) => {
-      const request = vi.fn().mockResolvedValue({ card: null });
-      const snapshots = new Set<Parameters<ApplicationGateway["subscribe"]>[0]>();
-      const gateway = {
-        snapshot: {
-          phase: "connected",
-          client: createTestGatewayClient(request),
-          hello: gatewayHelloForMethods(["progressCard.get"]),
-        },
-        subscribe: (listener: Parameters<ApplicationGateway["subscribe"]>[0]) => {
-          snapshots.add(listener);
-          return () => snapshots.delete(listener);
-        },
-        subscribeEvents: () => () => undefined,
-      } as unknown as ApplicationGateway;
+      const { gateway, publish, store, request } = progressGateway();
       let admitted = true;
-      const store = sessionProgressCardsForGateway(gateway);
       const target = { sessionKey: "agent:main:connection-progress" };
       const source = (): ProgressCardProjectionSource => {
         const { client, hello } = gateway.snapshot;
@@ -297,7 +215,6 @@ describe("session progress card projection", () => {
         };
       };
       const host = mountProgress(source());
-      onTestFinished(host.unmount);
       await waitForSolid(() => expect(host.progress.read().loading).toBe(false));
       expect(request).toHaveBeenCalledTimes(1);
 
@@ -305,15 +222,11 @@ describe("session progress card projection", () => {
         gateway.snapshot.client = createTestGatewayClient(request);
       } else {
         gateway.snapshot.phase = "reconnecting";
-        for (const listener of snapshots) {
-          listener(gateway.snapshot);
-        }
+        publish(gateway.snapshot);
         gateway.snapshot.phase = "connected";
       }
       gateway.snapshot.hello = gatewayHelloForMethods(["progressCard.get"]);
-      for (const listener of snapshots) {
-        listener(gateway.snapshot);
-      }
+      publish(gateway.snapshot);
       // The new history is still pending; the Solid owner has not committed the update.
       expect(request).toHaveBeenCalledTimes(1);
       admitted = false;
@@ -333,30 +246,22 @@ describe("session progress card projection", () => {
       const target = hasTarget ? { sessionKey: "agent:main:progress-lifecycle" } : undefined;
       const request = vi.fn().mockResolvedValue({ card: null });
       const active = { snapshots: 0, events: 0 };
+      const subscribeTo = (kind: keyof typeof active) => () => {
+        active[kind] += 1;
+        return () => {
+          active[kind] -= 1;
+        };
+      };
       const gateway = {
         snapshot: { phase: "connected", client: { request }, hello: null },
-        subscribe: () => {
-          active.snapshots += 1;
-          return () => {
-            active.snapshots -= 1;
-          };
-        },
-        subscribeEvents: () => {
-          active.events += 1;
-          return () => {
-            active.events -= 1;
-          };
-        },
+        subscribe: subscribeTo("snapshots"),
+        subscribeEvents: subscribeTo("events"),
       } as unknown as ApplicationGateway;
       const store = sessionProgressCardsForGateway(gateway);
       const subscribe = vi.spyOn(store, "subscribe");
-      onTestFinished(() => {
-        vi.restoreAllMocks();
-      });
 
       for (let connections = 1; connections <= 2; connections += 1) {
         const host = mountProgress({ store, target });
-        onTestFinished(host.unmount);
         if (target) {
           await store.load(target);
           flush();

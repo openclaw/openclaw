@@ -5,7 +5,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import { refreshPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
@@ -17,7 +16,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.unstubAllEnvs();
   clearPluginMetadataLifecycleCaches();
-  resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawStateDatabaseForTest();
 });
 

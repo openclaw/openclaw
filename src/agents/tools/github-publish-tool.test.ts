@@ -11,7 +11,12 @@ import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridg
 import { createCronToolSchema } from "./cron-tool-schema.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createGitHubPublishTool } from "./github-publish-tool.js";
-import type { InProcessGatewayCaller } from "./in-process-gateway.js";
+import { callInProcessGatewayTool } from "./in-process-gateway.js";
+
+vi.mock("./in-process-gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./in-process-gateway.js")>()),
+  callInProcessGatewayTool: vi.fn(),
+}));
 
 const caller = { agentId: "main", sessionKey: "agent:main:host-owned" };
 const publication = {
@@ -20,11 +25,11 @@ const publication = {
   message: "Publication was accepted.",
 };
 function setup(actionsAvailable = false) {
-  const callGateway = vi.fn(
-    async (_method: string, _params: Record<string, unknown>) => publication,
-  );
+  const callGateway = vi
+    .mocked(callInProcessGatewayTool)
+    .mockReset()
+    .mockResolvedValue(publication);
   const tool = createGitHubPublishTool({
-    callGateway: callGateway as InProcessGatewayCaller,
     actionsAvailable,
   });
   const execute = (args: unknown, id = "choice") =>

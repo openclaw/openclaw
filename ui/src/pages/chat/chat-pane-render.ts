@@ -450,7 +450,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       toolMessages: catalog ? emptyTranscriptItems : state.chatToolMessages,
       guardianNotices: catalog ? emptyTranscriptItems : state.guardianNotices,
       streamSegments: catalog ? emptyTranscriptItems : state.chatStreamSegments,
-      stream: catalog ? null : state.chatStream,
+      get stream() {
+        return catalog ? null : state.chatStream;
+      },
       reasoning: catalog ? null : state.chatReasoning,
       streamStartedAt: catalog ? null : state.chatStreamStartedAt,
       runId: catalog ? null : projectionRunId,

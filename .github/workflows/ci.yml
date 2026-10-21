@@ -5887,36 +5887,6 @@ jobs:
 
       - *select_xcode_step
 
-      - name: Install Watch screenshot runtime
-        run: |
-          set -euo pipefail
-          # Device creation can succeed with stale runtime metadata; require a boot.
-          probe_watch_runtime() {
-            local probe_id probe_status=0
-            probe_id="$(xcrun simctl create "OpenClaw Watch runtime probe" \
-              com.apple.CoreSimulator.SimDeviceType.Apple-Watch-Ultra-4-49mm \
-              com.apple.CoreSimulator.SimRuntime.watchOS-27-0)" || return "$?"
-            xcrun simctl bootstatus "$probe_id" -b || probe_status=$?
-            if [[ "$probe_status" -eq 0 ]]; then
-              # bootstatus can exit zero after a terminated boot; query the running device.
-              xcrun simctl getenv "$probe_id" HOME >/dev/null || probe_status=$?
-            fi
-            # Failed boots may already be shut down. Always delete the task-owned probe.
-            xcrun simctl shutdown "$probe_id" || true
-            xcrun simctl delete "$probe_id" || exit "$?"
-            return "$probe_status"
-          }
-          if ! probe_watch_runtime; then
-            runtime_dir="$(mktemp -d "$RUNNER_TEMP/openclaw-watch-runtime.XXXXXX")"
-            trap 'rm -rf "$runtime_dir"' EXIT
-            xcodebuild -downloadPlatform watchOS -buildVersion 27.0 -exportPath "$runtime_dir"
-            shopt -s nullglob
-            runtime_images=("$runtime_dir"/*.dmg)
-            test "${#runtime_images[@]}" -eq 1
-            xcodebuild -importPlatform "${runtime_images[0]}"
-            probe_watch_runtime
-          fi
-
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:

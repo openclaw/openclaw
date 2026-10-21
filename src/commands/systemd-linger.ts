@@ -28,20 +28,15 @@ export async function ensureSystemdUserLingerInteractive(params: {
   runtime: RuntimeEnv;
   prompter?: LingerPrompter;
   env?: NodeJS.ProcessEnv;
-  title?: string;
   reason?: string;
-  prompt?: boolean;
   requireConfirm?: boolean;
 }): Promise<void> {
   if (process.platform !== "linux") {
     return;
   }
-  if (params.prompt === false) {
-    return;
-  }
   const env = params.env ?? process.env;
   const prompter: LingerPrompter = params.prompter ?? { note };
-  const title = params.title ?? "Systemd";
+  const title = "Systemd";
   if (!(await isSystemdUserServiceAvailable())) {
     await prompter.note("Systemd user services are unavailable. Skipping lingering checks.", title);
     return;

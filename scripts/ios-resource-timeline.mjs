@@ -12,6 +12,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const intervalMs = 15_000;
+const processSampleIntervalMs = 60_000;
 const maxOutputBytes = 4 * 1024 * 1024;
 const qualificationPhases = [
   "source-head",
@@ -365,6 +366,8 @@ function startTimeline(output) {
     previousDisks = new Map();
   let previousAt = started;
   let previousProcessAt = started;
+  let nextProcessAt = started;
+  let processSamplingStopped = false;
   const phase = () => {
     try {
       const value = readFileSync(phaseFile, "utf8").trim();
@@ -444,10 +447,24 @@ function startTimeline(output) {
     const vm = memory(await probe("/usr/bin/vm_stat"));
     const pressure = await probe("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]);
     const diskRows = disks(await probe("/usr/sbin/iostat", ["-Id"]));
-    const processOutput = await probe("/bin/ps", ["-axo", "pid=,ppid=,time=,rss=,state=,comm="]);
-    // Earlier probes can stall independently of the interval between process CPU observations.
-    const processAt = performance.now();
-    const rows = processRows(processOutput, previousProcesses, processAt - previousProcessAt);
+    let rows = [];
+    let processIntervalMs = null;
+    if (processSamplingStopped) {
+      probeStatus.ps = { wallMs: 0, outcome: "disabled-after-timeout" };
+    } else if (performance.now() < nextProcessAt) {
+      probeStatus.ps = { wallMs: 0, outcome: "not-due" };
+    } else {
+      const processOutput = await probe("/bin/ps", ["-axo", "pid=,ppid=,time=,rss=,state=,comm="]);
+      // Intentional skips retain the CPU baseline; earlier probes may delay the next observation.
+      const processAt = performance.now();
+      processIntervalMs = previousProcesses.size ? Math.round(processAt - previousProcessAt) : null;
+      rows = processRows(processOutput, previousProcesses, processAt - previousProcessAt);
+      previousProcessAt = processAt;
+      previousProcesses = new Map(rows.map((row) => [row.pid, row.cpuMs]));
+      nextProcessAt = processAt + processSampleIntervalMs;
+      // Under contention, ps termination can itself stall. Do not keep adding process scans.
+      processSamplingStopped = probeStatus.ps?.outcome === "timeout";
+    }
     if (!active) {
       return;
     }
@@ -468,7 +485,7 @@ function startTimeline(output) {
       phase: phase(),
       intervalMs: samples === 1 ? null : Math.round(at - previousAt),
       sampleWallMs: Math.round(performance.now() - at),
-      processIntervalMs: previousProcesses.size ? Math.round(processAt - previousProcessAt) : null,
+      processIntervalMs,
       probes: probeStatus,
       host: {
         cpuPercent:
@@ -507,11 +524,9 @@ function startTimeline(output) {
       collector: overhead(),
     });
     previousAt = at;
-    previousProcessAt = processAt;
     previousCpu = cpu;
     previousMemory = vm;
     previousDisks = new Map(diskRows.map((disk) => [disk.device, disk]));
-    previousProcesses = new Map(rows.map((row) => [row.pid, row.cpuMs]));
     // Delayed collection skips missed slots; there is never a catch-up queue.
     if (active) {
       timer = setTimeout(collect, intervalMs);
@@ -527,6 +542,7 @@ function startTimeline(output) {
     type: "start",
     at: new Date().toISOString(),
     intervalMs,
+    processSampleIntervalMs,
     maxOutputBytes,
     cpuCount: os.availableParallelism(),
     totalMemoryBytes: os.totalmem(),

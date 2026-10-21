@@ -96,10 +96,12 @@ export function registerCronCreatorSessionTests(fixture: {
         expect(options).not.toHaveProperty("createdActor");
       } else {
         expect(options.skillLibrarySelections).toEqual([]);
+        // Historical isolation identity is retained, but no human initiated this runtime call.
         expect(options.createdActor).toEqual({
           type: "human",
           source: "profile",
           id: "profile-ada",
+          delegatedBy: { type: "agent", id: "ops" },
         });
       }
       expect(requireCronAddPayload(context)).not.toHaveProperty("sourceConversation");
@@ -124,7 +126,7 @@ export function registerCronCreatorSessionTests(fixture: {
   );
 
   it.each(["unknown"] as const)(
-    "retains %s creator provenance through agent-created cron jobs",
+    "retains %s isolation provenance without attributing agent-created cron jobs to a human",
     async (source) => {
       loadGatewaySessionEntry.mockReturnValue({
         canonicalKey: "agent:ops:main",
@@ -148,6 +150,7 @@ export function registerCronCreatorSessionTests(fixture: {
         source,
         id: "profile-ada",
         label: "Ada",
+        delegatedBy: { type: "agent", id: "ops" },
       });
       expect(loadGatewaySessionEntry).toHaveBeenCalledWith("agent:ops:main", { agentId: "ops" });
       expect(requireCronAddPayload(context)).not.toHaveProperty("createdActor");

@@ -38,7 +38,7 @@ describe("repairStaleAgentModelRefs catalog reading", () => {
           entries: { main: {} },
         },
       },
-      { env: { OPENCLAW_STATE_DIR: stateDir }, pluginProviderIds: new Set() },
+      { env: { OPENCLAW_STATE_DIR: stateDir } },
     );
 
     expect(result.warnings).toEqual([]);
