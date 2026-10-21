@@ -1,5 +1,5 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
 import {
   createMSTeamsMessageHandlerDeps,
@@ -24,7 +24,7 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 function reflect(conversationType = "personal") {
-  const completed = createDeferred();
+  const completed = createDeferred<void>();
   const log = {
     debug: vi.fn((message: string) => {
       if (
