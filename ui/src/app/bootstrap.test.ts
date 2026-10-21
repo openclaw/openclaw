@@ -234,7 +234,8 @@ describe("bootstrapApplication", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const replaceRoute = vi.fn();
-    const { gateway, publish } = makeRoutingGateway({ phase: "connecting", client: null });
+    const routing = makeRoutingGateway({ phase: "connecting", client: null });
+    const { gateway } = routing;
     const context = {
       gateway,
       agentSelection: {
@@ -257,7 +258,7 @@ describe("bootstrapApplication", () => {
     await redirectReady;
     expect(replaceLocation).toHaveBeenCalledWith(canonicalLocation);
     expect(gateway.subscribe).toHaveBeenCalledOnce();
-    publish({
+    routing.publish({
       phase: "connected",
       client,
       hello: {

@@ -25,10 +25,18 @@ const mocks = vi.hoisted(() => ({
   loadManifestMetadataSnapshot: vi.fn(),
 }));
 
-vi.mock("../../../plugins/clawhub.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../plugins/clawhub.js")>()),
-  installPluginFromClawHub: mocks.installPluginFromClawHub,
-}));
+vi.mock("../../../plugins/clawhub.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../plugins/clawhub.js")>();
+  return {
+    ...actual,
+    installPluginFromClawHub: (params: Parameters<typeof actual.installPluginFromClawHub>[0]) =>
+      invokePluginArtifactInstallMock<Awaited<ReturnType<typeof actual.installPluginFromClawHub>>>(
+        mocks.installPluginFromClawHub,
+        params,
+        { manifest: { providers: [], channels: [], channelConfigs: {}, providerAuthChoices: [] } },
+      ),
+  };
+});
 
 vi.mock("../../../infra/install-source-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../infra/install-source-utils.js")>()),

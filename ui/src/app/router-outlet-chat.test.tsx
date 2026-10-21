@@ -26,7 +26,8 @@ type RouteId = "chat" | "dashboard" | "home" | "settings" | "new-session";
 type TestContext = Record<string, never>;
 type TestModule = OutletModule<ChatRouteData>;
 const routes = routeFixtures<RouteId, TestContext, ChatRouteData>();
-const { page, router: testRouter } = routes;
+const page = routes.page.bind(routes);
+const testRouter = routes.router.bind(routes);
 type TestRouter = ReturnType<typeof testRouter>;
 type RouterOutletElement = MountedRouterOutlet;
 
