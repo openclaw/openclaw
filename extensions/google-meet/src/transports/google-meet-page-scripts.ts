@@ -118,6 +118,8 @@ export function meetStatusScript(params: {
       '[role="combobox"][aria-label*="microphone" i]',
       '[role="listbox"][aria-label*="microphone" i]',
       '[aria-haspopup="listbox"][aria-label*="microphone" i]',
+      'button[aria-haspopup="menu"][aria-label^="microphone:" i]',
+      '[role="button"][aria-haspopup="menu"][aria-label^="microphone:" i]',
     ];
     for (const selector of selectors) {
       const control = document.querySelector(selector);
@@ -296,7 +298,7 @@ export function meetStatusScript(params: {
     ) return;
     const mediaElements = [...document.querySelectorAll('audio, video')]
       .filter((el) => typeof el.setSinkId === 'function');
-    if (mediaElements.length === 0) return;
+
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const inputFamily = audioDeviceFamily(audioInputDeviceLabel);
@@ -312,6 +314,15 @@ export function meetStatusScript(params: {
         if (devices.some((device) => device.kind === 'audiooutput')) {
           notes.push("A supported virtual speaker output was not visible to Meet.");
         }
+        return;
+      }
+      if (mediaElements.length === 0) {
+        // Meet can use WebAudio without DOM media; device presence alone does not prove selection.
+        const control = document.querySelector(
+          'button[aria-haspopup="menu"][aria-label^="speaker:" i], [role="button"][aria-haspopup="menu"][aria-label^="speaker:" i]'
+        );
+        audioOutputRouted = Boolean(control) && audioDeviceFamily(deviceNodeLabel(control)) === audioDeviceFamily(output.label);
+        if (audioOutputRouted) audioOutputDeviceLabel = output.label;
         return;
       }
       let routed = 0;
