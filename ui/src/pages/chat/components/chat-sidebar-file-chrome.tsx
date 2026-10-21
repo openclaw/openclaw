@@ -3,6 +3,7 @@ import { localEditorFilePath } from "../../../app/native-editor-locality.runtime
 import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import "../../../components/tooltip.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
@@ -39,7 +40,11 @@ export function DesktopFileNavigation(props: {
     <Show
       when={props.workspace}
       fallback={
-        <span class="sidebar-file-view__path" title={props.path}>
+        <span
+          ref={createTextOverflow(() => props.path)}
+          class="sidebar-file-view__path"
+          title={props.path}
+        >
           {props.path || props.name}
         </span>
       }

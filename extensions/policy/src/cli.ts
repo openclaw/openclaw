@@ -99,7 +99,7 @@ export function registerPolicyCli(program: Command): void {
           const report = await buildPolicyCheckReport(options, "policy watch");
           const status = policyWatchStatus(report);
           const key = `${status}:${report.attestation?.attestationHash ?? ""}:${report.exitCode}`;
-          if (previousKey === undefined || previousKey !== key || options.once === true) {
+          if (previousKey !== key || options.once === true) {
             writePolicyWatchReport(report, status, options);
             previousKey = key;
           }

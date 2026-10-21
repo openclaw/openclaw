@@ -13,7 +13,6 @@ import {
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
-  normalizeCacheKey,
   readResponseText,
   resolveCacheTtlMs,
   withSelfHostedWebToolsEndpoint,
@@ -368,24 +367,22 @@ export async function runFirecrawlSearch(
   const location = normalizeOptionalString(params.location);
   const country = normalizeOptionalString(params.country);
   const baseUrl = resolveFirecrawlBaseUrl(params.cfg);
-  const cacheKey = normalizeCacheKey(
-    JSON.stringify({
-      type: "firecrawl-search",
-      provider: providerId,
-      credential: apiKey ? sha256Hex(apiKey) : undefined,
-      q: params.query,
-      count,
-      baseUrl,
-      sources,
-      categories,
-      includeDomains,
-      excludeDomains,
-      tbs,
-      location,
-      country,
-      scrapeResults,
-    }),
-  );
+  const cacheKey = JSON.stringify({
+    type: "firecrawl-search",
+    provider: providerId,
+    credential: apiKey ? sha256Hex(apiKey) : undefined,
+    q: params.query,
+    count,
+    baseUrl,
+    sources,
+    categories,
+    includeDomains,
+    excludeDomains,
+    tbs,
+    location,
+    country,
+    scrapeResults,
+  });
   const cacheTtlMs = resolveCacheTtlMs(
     params.cfg?.tools?.web?.search?.cacheTtlMinutes,
     DEFAULT_CACHE_TTL_MINUTES,

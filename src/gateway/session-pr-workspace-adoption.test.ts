@@ -35,10 +35,7 @@ import {
 } from "../sessions/session-controller.mailbox.js";
 import { captureSessionTarget } from "../sessions/session-controller.target.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  performSessionGitHubPreparation,
-  preparePullRequestSession,
-} from "./github-pr-workspace-preparation.js";
+import { performSessionGitHubPreparation } from "./github-pr-workspace-preparation.js";
 import * as availability from "./github-publication-availability.js";
 import * as baseRefresh from "./github-publication-base-refresh.js";
 import * as inspect from "./github-publication-inspect.js";
@@ -129,14 +126,9 @@ it("adopts one empty owner and keeps original message files separate from same-n
         workspaceSource: undefined,
       },
     });
-    // The registered handler reads the conversation through this owner.
-    const handlerRead = await preparePullRequestSession(target.sessionKey, {
-      agentId: target.agentId,
-      assertCurrent() {},
-    });
-    const handlerEntry = handlerRead.readCurrent().entry;
-    handlerRead.release();
-    assert(handlerEntry, "PR preparation must read the conversation");
+    // The lower-level adoption fixture starts from the fully persisted conversation.
+    const handlerEntry = loadSessionEntryReadOnly(target);
+    assert(handlerEntry, "The adoption fixture must read the conversation");
     const input = {
       context,
       target,
@@ -432,11 +424,23 @@ it("prepares an own PR in an ordinary sandboxed chat through the registered hand
       storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
     };
     // Any earlier turn records a skills snapshot before the PR link arrives.
+    const skillsSnapshot = {
+      prompt: "",
+      skills: [],
+      librarySelections: [
+        {
+          skillId: "22222222-2222-4222-8222-222222222222",
+          revision: "b".repeat(64),
+          name: "handler-notes",
+          ownerProfileId: "handler-owner",
+        },
+      ],
+    };
     await upsertSessionEntryCore(target, {
       sessionId: "adopt-handler",
       updatedAt: 1,
       sessionRoot: state.workspaceDir,
-      skillsSnapshot: { prompt: "", skills: [], librarySelections: [] },
+      skillsSnapshot,
     });
     const manager = await SessionManager.openAsync(
       { ...target, sessionId: "adopt-handler" },
@@ -512,6 +516,7 @@ it("prepares an own PR in an ordinary sandboxed chat through the registered hand
       },
     });
     const respond = vi.fn();
+    const prepareWorktree = vi.spyOn(allocation, "prepareSessionWorktree");
     let worktree: Awaited<ReturnType<typeof managedWorktrees.findLiveByOwner>>;
     try {
       await withGatewayToolCallerIdentity(
@@ -535,6 +540,9 @@ it("prepares an own PR in an ordinary sandboxed chat through the registered hand
             respond,
           } as never),
       );
+      const worktreePreparation = prepareWorktree.mock.calls[0]?.[0];
+      assert(worktreePreparation, "PR preparation must allocate a managed workspace");
+      expect(worktreePreparation.target.entry?.skillsSnapshot).toEqual(skillsSnapshot);
       worktree = await managedWorktrees.findLiveByOwner("session", target.sessionKey);
       expect(respond).toHaveBeenCalledWith(
         true,

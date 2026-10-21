@@ -172,7 +172,12 @@ export function isGroupInviteAllowed(
   }).allowed;
 }
 
-function renderInlineItem(item: unknown, topLevel = false): string {
+// Inline styles can nest arbitrarily deeply in remote content. Stop rendering past
+// this depth and degrade to truncated plain text rather than recursing until the
+// call stack overflows; legitimate inline markup never approaches this bound.
+const MAX_INLINE_DEPTH = 100;
+
+function renderInlineItem(item: unknown, topLevel = false, depth = 0): string {
   if (typeof item === "string") {
     return item;
   }
@@ -206,23 +211,32 @@ function renderInlineItem(item: unknown, topLevel = false): string {
     const linkContent = readStringField(link, "content");
     return topLevel ? linkHref : linkContent || linkHref;
   }
-  if (Array.isArray(record.bold)) {
-    return `**${extractInlineText(record.bold)}**`;
+  const bold = Array.isArray(record.bold) ? record.bold : undefined;
+  const italics = Array.isArray(record.italics) ? record.italics : undefined;
+  const strike = Array.isArray(record.strike) ? record.strike : undefined;
+  const blockquote = topLevel && Array.isArray(record.blockquote) ? record.blockquote : undefined;
+  const nested = bold ?? italics ?? strike ?? blockquote;
+  if (!nested) {
+    return "";
   }
-  if (Array.isArray(record.italics)) {
-    return `*${extractInlineText(record.italics)}*`;
+  if (depth >= MAX_INLINE_DEPTH) {
+    return "";
   }
-  if (Array.isArray(record.strike)) {
-    return `~~${extractInlineText(record.strike)}~~`;
+  const inner = extractInlineText(nested, depth + 1);
+  if (bold) {
+    return `**${inner}**`;
   }
-  if (topLevel && Array.isArray(record.blockquote)) {
-    return `> ${extractInlineText(record.blockquote)}`;
+  if (italics) {
+    return `*${inner}*`;
   }
-  return "";
+  if (strike) {
+    return `~~${inner}~~`;
+  }
+  return `> ${inner}`;
 }
 
-function extractInlineText(items: readonly unknown[]): string {
-  return items.map((item) => renderInlineItem(item)).join("");
+function extractInlineText(items: readonly unknown[], depth = 0): string {
+  return items.map((item) => renderInlineItem(item, false, depth)).join("");
 }
 
 export function extractMessageText(content: unknown): string {

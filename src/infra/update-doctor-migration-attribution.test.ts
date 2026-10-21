@@ -26,6 +26,34 @@ import { createUpdateDoctorDatabaseWriteCapture } from "./update-doctor-result.j
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 
+async function withCapture(
+  env: NodeJS.ProcessEnv,
+  generations: ReturnType<typeof readUpdateDatabaseGenerations>,
+  operation: () => Promise<void>,
+  assertDatabaseAccess?: (requested: string) => void,
+) {
+  const warnings: string[] = [];
+  const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
+    env,
+    signal: new AbortController().signal,
+    warn: (message) => warnings.push(message),
+  })!;
+  const scope = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent() {},
+    assertDatabaseAccess,
+  });
+  try {
+    await capture.admit();
+    await scope.run(() => capture.run(operation));
+    await capture.settle();
+    return { receipt: capture.receipt, warnings };
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+    await scope.close();
+  }
+}
+
 it.each(["lease", "outside"] as const)(
   "settles prior %s writers before acquiring schema repair custody",
   async (writer) => {
@@ -43,52 +71,30 @@ it.each(["lease", "outside"] as const)(
       DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';`);
     }
     const generations = readUpdateDatabaseGenerations([pathname]);
-    const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
-      env,
-      signal: new AbortController().signal,
-      warn() {},
-    })!;
-    const scope = createOpenClawDatabaseMaintenanceScope({
-      schemaMaintenance: true,
-      assertOwnerCurrent() {},
-    });
-    try {
-      await capture.admit();
-      await scope.run(() =>
-        capture.run(async () => {
-          expect(repairOpenClawStateDatabaseIndexesForDoctor({ env }).warnings).toEqual([]);
-          expect(repairOpenClawStateDatabaseReadabilityForDoctor({ env }).warnings).toEqual([]);
-          expect(
-            repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true }).warnings,
-          ).toEqual([]);
-          if (writer === "lease") {
-            await withAgentDatabaseMaintenanceLease({ env, processBound: true }, async () => {});
-          } else {
-            using outside = new DatabaseSync(pathname);
-            outside
-              .prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)")
-              .run("test.outside-write", "99", 1);
-          }
-          if (writer === "lease") {
-            expect((await prepareOpenClawStateDatabaseSchema({ env }, "doctor")).warnings).toEqual(
-              [],
-            );
-          } else {
-            await expect(prepareOpenClawStateDatabaseSchema({ env }, "doctor")).rejects.toThrow(
-              "SQLite migration source changed after update capture.",
-            );
-          }
-          await closeOpenClawStateDatabaseAsync();
-        }),
-      );
-      await capture.settle();
-      // Closing the owned handle attributes its lease writes; outside writes stay unknown.
-      expect(capture.receipt?.unchanged).toBe(writer === "lease");
-      expect(capture.receipt?.fromGenerations).toEqual(generations);
-    } finally {
+    const { receipt } = await withCapture(env, generations, async () => {
+      expect(repairOpenClawStateDatabaseIndexesForDoctor({ env }).warnings).toEqual([]);
+      expect(repairOpenClawStateDatabaseReadabilityForDoctor({ env }).warnings).toEqual([]);
+      expect(
+        repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true }).warnings,
+      ).toEqual([]);
+      if (writer === "lease") {
+        await withAgentDatabaseMaintenanceLease({ env, processBound: true }, async () => {});
+      } else {
+        using outside = new DatabaseSync(pathname);
+        outside
+          .prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)")
+          .run("test.outside-write", "99", 1);
+      }
+      if (writer === "lease") {
+        expect((await prepareOpenClawStateDatabaseSchema({ env }, "doctor")).warnings).toEqual([]);
+      } else {
+        await expect(prepareOpenClawStateDatabaseSchema({ env }, "doctor")).rejects.toThrow(
+          "SQLite migration source changed after update capture.",
+        );
+      }
       await closeOpenClawStateDatabaseAsync();
-      await scope.close();
-    }
+    });
+    expect(receipt).toMatchObject({ unchanged: writer === "lease", fromGenerations: generations });
   },
 );
 
@@ -99,37 +105,20 @@ it("attributes a captured absent shared store and its new credential companion d
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
   const generations = readUpdateDatabaseGenerations([pathname, localPath]);
   expect(generations).toEqual({ [pathname]: null, [localPath]: null });
-  const warnings: string[] = [];
-  const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
+  const { receipt, warnings } = await withCapture(
     env,
-    signal: new AbortController().signal,
-    warn: (message) => warnings.push(message),
-  })!;
-  const scope = createOpenClawDatabaseMaintenanceScope({
-    schemaMaintenance: true,
-    assertOwnerCurrent() {},
-    assertDatabaseAccess(requested) {
-      expect(requested).toBe(pathname);
+    generations,
+    async () => {
+      openOpenClawStateDatabase({ env });
+      await closeOpenClawStateDatabaseAsync();
     },
+    (requested) => expect(requested).toBe(pathname),
+  );
+  expect(warnings).toEqual([]);
+  expect(receipt).toMatchObject({
+    unchanged: true,
+    generations: { [pathname]: expect.any(String), [localPath]: expect.any(String) },
   });
-  try {
-    await capture.admit();
-    await scope.run(() =>
-      capture.run(async () => {
-        openOpenClawStateDatabase({ env });
-        await closeOpenClawStateDatabaseAsync();
-      }),
-    );
-    await capture.settle();
-    expect(warnings).toEqual([]);
-    expect(capture.receipt).toMatchObject({
-      unchanged: true,
-      generations: { [pathname]: expect.any(String), [localPath]: expect.any(String) },
-    });
-  } finally {
-    await closeOpenClawStateDatabaseAsync();
-    await scope.close();
-  }
 });
 
 it.each(["captured-generation", null])(

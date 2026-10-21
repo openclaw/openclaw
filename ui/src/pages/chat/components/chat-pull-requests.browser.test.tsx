@@ -12,6 +12,7 @@ import baseStyles from "../../../styles/base.css?inline";
 import desktopDetailsStyles from "../../../styles/chat/details-desktop.css?inline";
 import detailsStyles from "../../../styles/chat/details.css?inline";
 import layoutStyles from "../../../styles/chat/layout.css?inline";
+import componentsStyles from "../../../styles/components.css?inline";
 
 const container = document.createElement("div");
 let mounted: ReturnType<typeof mountSolid> | undefined;
@@ -145,7 +146,7 @@ it.each([
     mounted = mountSolid(
       () => (
         <>
-          <style>{`${baseStyles}${layoutStyles}${detailsStyles}${desktopDetailsStyles}`}</style>
+          <style>{`${baseStyles}${componentsStyles}${layoutStyles}${detailsStyles}${desktopDetailsStyles}`}</style>
           <section
             class="chat-details"
             data-desktop
@@ -214,7 +215,9 @@ it.each([
       Number.parseFloat(getComputedStyle(branchLabel).lineHeight) + 1,
     );
     expect(getComputedStyle(branchLabel).textOverflow).toBe("clip");
-    expect(getComputedStyle(branchLabel).maskImage).toContain("linear-gradient");
+    await waitForSolid(() =>
+      expect(getComputedStyle(branchLabel).maskImage).toContain("linear-gradient"),
+    );
     expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
 
     const publish = page.getByRole("button", { name: "Publish PR", exact: true });
@@ -279,7 +282,7 @@ it.each([
     mounted = mountSolid(
       () => (
         <>
-          <style>{baseStyles + layoutStyles + detailsStyles}</style>
+          <style>{baseStyles + componentsStyles + layoutStyles + detailsStyles}</style>
           <section class="chat-details" style={"position:relative;width:" + width + "px"}>
             {createComponent(ChatDetailsSession, {
               presented: true,
@@ -311,7 +314,17 @@ it.each([
     expect(title.getAttribute("href")).toBe(pullRequest.url);
     expect(title.getAttribute("aria-label")).toContain("openclaw/" + repo + "#173824");
     expect(titleText.textContent).toBe(pullRequest.title);
-    expect(getComputedStyle(titleText).textOverflow).toBe("ellipsis");
+    const expectTitleFade = (overflow: boolean) =>
+      waitForSolid(() => {
+        expect(titleText.scrollWidth > titleText.clientWidth + 1).toBe(overflow);
+        expect(getComputedStyle(titleText).maskImage !== "none").toBe(overflow);
+      });
+    await expectTitleFade(true);
+    const details = container.querySelector<HTMLElement>(".chat-details")!;
+    details.style.width = "1200px";
+    await expectTitleFade(false);
+    details.style.width = `${width}px`;
+    await expectTitleFade(true);
     expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
     expect(container.querySelector<HTMLElement>(".chat-details")!.scrollWidth).toBeLessThanOrEqual(
       width,

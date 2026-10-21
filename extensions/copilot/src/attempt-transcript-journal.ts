@@ -10,7 +10,7 @@ import {
   appendSessionTranscriptMessageByIdentityStrict,
   appendSessionTranscriptMessagesByIdentity,
   publishSessionTranscriptUpdateByIdentity,
-  readVisibleSessionTranscriptMessageEntries,
+  withSessionTranscriptWrite,
   type SessionTranscriptTargetParams,
   type TranscriptEntryAnchor,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -274,10 +274,13 @@ export function createAttemptTranscriptJournal(params: {
   const appendToolGroup = async (group: ToolGroup) => {
     const writes = [group.assistant, ...group.order.map((id) => group.results.get(id)!)];
     const keys = writes.map((write) => readIdempotencyKey(write.message));
-    const persistedKeys = new Set(
-      (await readVisibleSessionTranscriptMessageEntries(target)).flatMap((entry) =>
-        entry.idempotencyKey ? [entry.idempotencyKey] : [],
-      ),
+    const { existingIdempotencyKeys: persistedKeys } = await withSessionTranscriptWrite(
+      target,
+      (transcript) =>
+        transcript.readMessageFacts({
+          idempotencyKeys: keys.filter((key) => key !== undefined),
+          activeBranchOnly: true,
+        }),
     );
     const persistedCount = keys.filter((key) => key && persistedKeys.has(key)).length;
     if (persistedCount > 0 && persistedCount < writes.length) {

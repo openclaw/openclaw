@@ -990,16 +990,12 @@ async function launchOpenClawChromeLocked(
             profile,
             headlessOptions,
           );
-          const missingDisplay =
-            stderrSignals?.missingDisplay ?? CHROME_MISSING_DISPLAY_PATTERN.test(stderrOutput);
-          if (missingDisplay && !hintHeadlessMode.headless) {
+          if (stderrSignals.missingDisplay && !hintHeadlessMode.headless) {
             hints.push(
               "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
             );
           }
-          const singletonInUse =
-            stderrSignals?.singletonInUse ?? CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput);
-          if (singletonInUse) {
+          if (stderrSignals.singletonInUse) {
             hints.push(
               `The Chromium profile "${profile.name}" is locked. Stop the existing browser or remove stale Singleton* lock files under ~/.openclaw/browser/${profile.name}/user-data.`,
             );

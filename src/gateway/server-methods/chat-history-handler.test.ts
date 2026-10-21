@@ -24,7 +24,6 @@ import {
   expectHistoryFailure as expectFailure,
   requestHistory,
 } from "./chat-history-fixtures.test-support.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import * as metadataCases from "./chat-metadata-ownership.test-support.js";
 import { connectChatMetadataAccount } from "./chat-metadata-runtime.test-support.js";
@@ -713,23 +712,12 @@ it("returns a typed selection error for an ownerless explicit fleet", async () =
   const config: OpenClawConfig = {
     agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
   };
-  const respond = vi.fn();
   const readChatMetadata = vi.fn();
-
-  await expectDefined(
-    chatHistoryHandlers["chat.metadata"],
-    'chatHistoryHandlers["chat.metadata"] test invariant',
-  )({
-    params: {},
-    respond: respond as unknown as RespondFn,
-    req: {} as never,
-    client: null,
-    isWebchatConnect: () => false,
-    context: {
-      getRuntimeConfig: () => config,
-      readChatMetadata,
-    } as unknown as GatewayRequestContext,
-  });
+  const respond = await requestHistory(
+    "chat.metadata",
+    {},
+    createDirectChatContext({ getRuntimeConfig: () => config, readChatMetadata }),
+  );
 
   expect(respond).toHaveBeenCalledWith(
     false,
