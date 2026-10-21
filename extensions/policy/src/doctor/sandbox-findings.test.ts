@@ -70,7 +70,7 @@ function findings(rules: unknown, observed: PolicyEvidence = evidence) {
 }
 
 describe("sandbox allowlist finding order", () => {
-  it.each<[string, unknown, unknown[]]>([
+  it.each<[string, unknown, ReturnType<typeof receipt>[]]>([
     ["empty mode", { requireMode: [], allowBackends: ["docker"] }, [alphaBackend, defaultBackend]],
     ["omitted backend", { requireMode: ["all"] }, [defaultMode, alphaMode]],
   ])("disables only the %s allowlist", (_name, rules, ordered) => {

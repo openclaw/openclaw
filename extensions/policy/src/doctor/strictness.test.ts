@@ -10,34 +10,26 @@ function compare(path: string) {
   };
 }
 
+const prod = { pattern: "deploy", argPattern: "^--prod$" };
+
 describe("policy doctor strictness", () => {
   it.each<[string, unknown, unknown, boolean]>([
     ["normalizes string and object requirements", [" deploy "], [{ pattern: "deploy" }], true],
     [
       "trims argument constraints",
       [{ pattern: " deploy ", argPattern: " ^--prod$ " }],
-      [{ pattern: "deploy", argPattern: "^--prod$" }],
+      [prod],
       true,
     ],
-    [
-      "treats blank optional arguments as absent",
-      [{ pattern: "deploy", argPattern: " " }],
-      ["deploy"],
-      true,
-    ],
+    ["treats blank optional arguments as absent", [{ ...prod, argPattern: " " }], ["deploy"], true],
     ["ignores list order", ["status", "deploy", "deploy"], ["deploy", "status", "deploy"], true],
     ["preserves duplicate cardinality", ["deploy", "deploy"], ["deploy"], false],
-    [
-      "rejects a removed argument constraint",
-      ["deploy"],
-      [{ pattern: "deploy", argPattern: "^--prod$" }],
-      false,
-    ],
+    ["rejects a removed argument constraint", ["deploy"], [prod], false],
     ["preserves pattern case", ["Deploy"], ["deploy"], false],
     [
       "preserves argument pattern case",
       [{ pattern: "deploy", argPattern: "^--PROD$" }],
-      [{ pattern: "deploy", argPattern: "^--prod$" }],
+      [prod],
       false,
     ],
     ["accepts matching empty requirements", [], [], true],
@@ -49,12 +41,7 @@ describe("policy doctor strictness", () => {
       ["deploy"],
       false,
     ],
-    [
-      "rejects null argument constraints",
-      [{ pattern: "deploy", argPattern: null }],
-      ["deploy"],
-      false,
-    ],
+    ["rejects null argument constraints", [{ ...prod, argPattern: null }], ["deploy"], false],
     ["rejects missing patterns", [{ argPattern: "^--prod$" }], [], false],
     ["rejects non-array requirements", {}, [], false],
   ])("exec approval requirements: %s", (_name, candidate, baseline, expected) => {
@@ -104,8 +91,7 @@ describe("policy doctor strictness", () => {
     const scopedBaselineProbe = {
       ...baselineProbe,
       route: {
-        channel: "imessage",
-        peer: { kind: "direct", id: "private" },
+        ...baselineProbe.route,
         parentPeer: { kind: "group", id: "family-thread" },
         guildId: "home",
         teamId: "family",
@@ -133,13 +119,9 @@ describe("policy doctor strictness", () => {
       [baselineProbe],
       true,
     );
+    const differentGuild = { ...scopedBaselineProbe.route, guildId: "other" };
     routingProbes(
-      [
-        {
-          ...scopedBaselineProbe,
-          route: { ...scopedBaselineProbe.route, guildId: "other" },
-        },
-      ],
+      [{ ...scopedBaselineProbe, route: differentGuild }],
       [scopedBaselineProbe],
       false,
     );
