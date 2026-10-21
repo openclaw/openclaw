@@ -198,65 +198,47 @@ function readFreshProcessNamespace() {
 }
 
 describe("Gateway owner lease", () => {
-  it.each(["legacy", "qualified"] as const)(
-    "preserves a crashed container's %s lease after its heartbeat goes stale",
-    async (kind) => {
-      await using owner = fixture();
-      const namespace = mockLinuxNamespace(owner.env.OPENCLAW_STATE_DIR);
-      seedOwner(owner.env, {
-        host: "previous-container",
-        pid: 2_147_483_647,
-        expiresAt: null,
-        heartbeatAt: Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1,
-        processNamespace:
-          kind === "qualified"
-            ? { ...namespace, host: "previous-container", pidNsInode: "foreign" }
-            : null,
-      });
-      expect(() => owner.acquire()).toThrow("openclaw gateway recover-lock");
-      expect(readGatewayOwnerLease({ env: owner.env })).toMatchObject({
-        owner: "previous-generation",
-        state: "unknown",
-      });
-    },
-  );
-
   it.each([
-    { age: 0, pid: process.pid },
-    { age: 0, pid: 2_147_483_647 },
-    { age: GATEWAY_OWNER_HEARTBEAT_STALE_MS, pid: 2_147_483_647 },
-    { age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1, pid: 2_147_483_647 },
-  ])(
-    "preserves a foreign namespace with a $age ms heartbeat regardless of local PID $pid",
-    async ({ age, pid }) => {
-      await using owner = fixture();
-      const namespace = mockLinuxNamespace(owner.env.OPENCLAW_STATE_DIR);
+    { kind: "crashed legacy", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },
+    { kind: "crashed qualified", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },
+    { kind: "foreign namespace", age: 0, pid: process.pid },
+    { kind: "foreign namespace", age: 0 },
+    { kind: "foreign namespace", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS },
+    { kind: "foreign namespace", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },
+    { kind: "unavailable namespace", age: 0 },
+    { kind: "invalid namespace", age: 0 },
+  ] as const)("preserves $kind with a $age ms heartbeat (PID $pid)", async (row) => {
+    await using owner = fixture();
+    const { kind, age } = row;
+    const unqualified = kind === "unavailable namespace" || kind === "invalid namespace";
+    const namespace = unqualified ? null : mockLinuxNamespace(owner.env.OPENCLAW_STATE_DIR);
+    if (kind === "foreign namespace") {
       vi.spyOn(Date, "now").mockReturnValue(Date.now());
-      seedOwner(owner.env, {
-        pid,
-        processNamespace: { ...namespace, pidNsInode: "foreign" },
-        heartbeatAt: Date.now() - age,
-      });
-      expect(() => owner.acquire()).toThrow("openclaw gateway recover-lock");
-      expect(readGatewayOwnerLease({ env: owner.env })).toMatchObject({
-        owner: "previous-generation",
-        state: "unknown",
-      });
-    },
-  );
-
-  it.each([
-    { label: "unavailable", processNamespace: null },
-    { label: "invalid", processNamespace: { platform: "unknown" } },
-  ])(
-    "preserves a fresh foreign host with $label namespace identity",
-    async ({ processNamespace }) => {
-      await using owner = fixture();
-      seedOwner(owner.env, { host: "previous-container", pid: 2_147_483_647, processNamespace });
-      expect(() => owner.acquire()).toThrow("heartbeat age does not prove");
-      expect(readGatewayOwnerLease({ env: owner.env })?.owner).toBe("previous-generation");
-    },
-  );
+    }
+    seedOwner(owner.env, {
+      pid: "pid" in row ? row.pid : 2_147_483_647,
+      ...(kind.startsWith("crashed") || unqualified ? { host: "previous-container" } : {}),
+      ...(kind.startsWith("crashed") ? { expiresAt: null } : {}),
+      processNamespace:
+        kind === "crashed legacy" || kind === "unavailable namespace"
+          ? null
+          : kind === "invalid namespace"
+            ? { platform: "unknown" }
+            : {
+                ...namespace,
+                ...(kind === "crashed qualified" ? { host: "previous-container" } : {}),
+                pidNsInode: "foreign",
+              },
+      heartbeatAt: Date.now() - age,
+    });
+    expect(() => owner.acquire()).toThrow(
+      unqualified ? "heartbeat age does not prove" : "openclaw gateway recover-lock",
+    );
+    expect(readGatewayOwnerLease({ env: owner.env })).toMatchObject({
+      owner: "previous-generation",
+      state: "unknown",
+    });
+  });
 
   it.each(["local identity unavailable", "different host boot"] as const)(
     "preserves a fresh foreign lease when its namespace is not comparable: %s",

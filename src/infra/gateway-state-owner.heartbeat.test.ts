@@ -343,9 +343,9 @@ it("bounds persistent EIO renewal failures without losing healthy custody", asyn
   vi.spyOn(fs, "futimesSync").mockImplementation(() => {
     throw Object.assign(new Error("synthetic EIO renewing owner"), { code: "EIO" });
   });
-  const runtime = await startRuntime(locks);
-  const initialBeat = Atomics.load(runtime.lastBeat, 0);
-  try {
+  {
+    await using runtime = await startRuntime(locks);
+    const initialBeat = Atomics.load(runtime.lastBeat, 0);
     vi.advanceTimersByTime(59_999);
     expect(vi.getTimerCount()).toBe(1);
     vi.advanceTimersByTime(1);
@@ -354,8 +354,6 @@ it("bounds persistent EIO renewal failures without losing healthy custody", asyn
     expect(Atomics.load(runtime.lastBeat, 0)).toBe(initialBeat);
     expect(events.at(-1)).toBe(`${rootPath}: utimes renewal failed: synthetic EIO renewing owner`);
     expect(vi.getTimerCount()).toBe(0);
-  } finally {
-    await runtime.stop();
   }
   expect(vi.getTimerCount()).toBe(0);
 });

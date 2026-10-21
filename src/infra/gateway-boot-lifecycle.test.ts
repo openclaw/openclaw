@@ -142,22 +142,22 @@ describe("gateway crash-loop breaker", () => {
             .select(["boot_id", "started_at_ms", "completed_at_ms", "outcome", "startup_reason"])
             .where("started_at_ms", ">=", 4_000)
             .orderBy("started_at_ms"),
-        ).rows,
+        ).rows.map(({ boot_id, started_at_ms, completed_at_ms, outcome, startup_reason }) => [
+          boot_id,
+          started_at_ms,
+          completed_at_ms,
+          outcome,
+          startup_reason,
+        ]),
       ).toEqual([
-        {
-          boot_id: firstId,
-          started_at_ms: 4_000,
-          completed_at_ms: 5_000,
-          outcome: "clean_stop",
-          startup_reason: priorCrashes === 3 ? GATEWAY_CRASH_LOOP_BREAKER_REASON : null,
-        },
-        {
-          boot_id: nextId,
-          started_at_ms: 6_000,
-          completed_at_ms: null,
-          outcome: null,
-          startup_reason: null,
-        },
+        [
+          firstId,
+          4_000,
+          5_000,
+          "clean_stop",
+          priorCrashes === 3 ? GATEWAY_CRASH_LOOP_BREAKER_REASON : null,
+        ],
+        [nextId, 6_000, null, null, null],
       ]);
     },
   );
@@ -200,13 +200,8 @@ describe("gateway crash-loop breaker", () => {
             .selectFrom("gateway_boot_lifecycle")
             .select("boot_id")
             .orderBy("boot_id"),
-        ).rows,
-      ).toEqual([
-        { boot_id: "expired" },
-        { boot_id: "prior-a" },
-        { boot_id: "prior-b" },
-        { boot_id: "prior-c" },
-      ]);
+        ).rows.map(({ boot_id }) => boot_id),
+      ).toEqual(["expired", "prior-a", "prior-b", "prior-c"]);
     },
   );
 
@@ -325,15 +320,19 @@ describe("gateway crash-loop breaker", () => {
     });
   });
 
-  it("does not count maintenance refusals toward channel suppression", async () => {
+  it.each([
+    [
+      "startup_failed",
+      "gateway.maintenance_required",
+      "Legacy workspace setup state requires migration",
+    ],
+    ["forced_stop", undefined, "gateway.stop_shutdown_timeout"],
+  ] as const)("excludes %s (%s) from crash accounting", async (outcome, startupReason, reason) => {
     const lifecycle = createLifecycleDb();
     const nowMs = 1_000_000;
-    for (let index = 0; index < 3; index++) {
+    for (let index = 0; index < GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD; index++) {
       const bootId = (await lifecycle.begin(nowMs + index)).id;
-      await lifecycle.complete(bootId, "startup_failed", nowMs + index + 1, {
-        startupReason: "gateway.maintenance_required",
-        reason: "Legacy workspace setup state requires migration",
-      });
+      await lifecycle.complete(bootId, outcome, nowMs + index + 1, { startupReason, reason });
     }
     expect(await lifecycle.inspect(nowMs + 4)).toMatchObject({
       tripped: false,
@@ -387,20 +386,15 @@ describe("gateway crash-loop breaker", () => {
             GATEWAY_CRASH_LOOP_RECOVERED_REASON,
           ])
           .orderBy("started_at_ms"),
-      ).rows,
+      ).rows.map(({ boot_id, completed_at_ms, outcome, startup_reason }) => [
+        boot_id,
+        completed_at_ms,
+        outcome,
+        startup_reason,
+      ]),
     ).toEqual([
-      {
-        boot_id: safeModeBootId,
-        completed_at_ms: nowMs + 5,
-        outcome: "safe_mode_stable",
-        startup_reason: GATEWAY_CRASH_LOOP_BREAKER_REASON,
-      },
-      {
-        boot_id: recoveredBootId,
-        completed_at_ms: null,
-        outcome: null,
-        startup_reason: GATEWAY_CRASH_LOOP_RECOVERED_REASON,
-      },
+      [safeModeBootId, nowMs + 5, "safe_mode_stable", GATEWAY_CRASH_LOOP_BREAKER_REASON],
+      [recoveredBootId, null, null, GATEWAY_CRASH_LOOP_RECOVERED_REASON],
     ]);
     expect(await lifecycle.inspect(nowMs + 5)).toMatchObject({
       recovered: false,
@@ -433,23 +427,6 @@ describe("gateway crash-loop breaker", () => {
       uncleanBoots: 3,
       recoveryPausedUntilMs: nowMs - 7 + GATEWAY_BOOT_LOOP_WINDOW_MS + 1,
     });
-  });
-
-  it("records forced stops without tripping the breaker", async () => {
-    const db = createLifecycleDb();
-    const nowMs = 1_000_000;
-
-    for (let index = 0; index < GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD; index += 1) {
-      const bootId = (await db.begin(nowMs + index)).id;
-      await db.complete(bootId, "forced_stop", nowMs + index + 1, {
-        reason: "gateway.stop_shutdown_timeout",
-      });
-    }
-
-    const decision = await db.inspect(nowMs + GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD + 1);
-
-    expect(decision.tripped).toBe(false);
-    expect(decision.uncleanBoots).toBe(0);
   });
 
   it("repairs maintenance history without clearing real startup crashes", async () => {
