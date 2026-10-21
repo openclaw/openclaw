@@ -21,6 +21,7 @@ import * as onboardInference from "../commands/onboard-inference.js";
 import * as codexRuntimePlugin from "../commands/runtime-plugin-install.js";
 import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import * as pluginArtifactIdentity from "../plugins/plugin-runtime-artifact-identity.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
@@ -122,16 +123,11 @@ export async function fixture(
             : "https://provider.example/v1",
           api: options.subscription ? "openai-chatgpt-responses" : "openai-responses",
           models: [
-            {
-              id: "gpt-5.4-mini",
+            buildCatalogModel("gpt-5.4-mini", {
               name: "Fixture model",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 128_000,
               maxTokens: 4_096,
               compat: { supportsTools: true },
-            },
+            }),
           ],
           ...(options.localService ? { localService: { command: "/fixture/model-server" } } : {}),
         },

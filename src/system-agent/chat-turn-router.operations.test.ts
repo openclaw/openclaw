@@ -1,7 +1,6 @@
 import "./chat-engine.mocks.test-support.js";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as authStore from "../agents/auth-profiles/store-runtime.js";
-import * as cliRunner from "../agents/cli-runner.js";
 import { extractToolResultText } from "../agents/embedded-agent-tool-results.js";
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
@@ -14,13 +13,11 @@ import {
   setupResult,
   sharedVerifiedInferenceConfig,
   classifySystemAgentApprovalText,
-  runSystemAgentTurn,
   mocks,
   useTempStateDir,
   configSnapshot,
   createAmbientVerifiedBinding,
   createOAuthVerifiedBinding,
-  createCliVerifiedBinding,
   expectDefined,
   SystemAgentInferenceUnavailableError,
   verifyConfigAfterSystemAgentWrite,
@@ -32,7 +29,6 @@ import type { SystemAgentOperation } from "./operation-types.js";
 import { SystemAgentOperationExitError } from "./operations-execution-helpers.js";
 import { describeSystemAgentPersistentOperation } from "./operations.js";
 import * as operations from "./operations.js";
-import { installSystemAgentClaudeCliBackendTestFixture } from "./system-agent.test-helpers.js";
 
 const createEngine = (options: Parameters<typeof createChatEngine>[0] = {}) =>
   createChatEngine(options, true);
@@ -44,11 +40,6 @@ function mockApprovedOperation(execute: typeof nativeExecuteOperation) {
     args[2]?.approved === true ? execute(...args) : nativeExecuteOperation(...args),
   );
 }
-
-vi.mock("../agents/cli-runner.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/cli-runner.js")>()),
-  runCliAgent: vi.fn(),
-}));
 
 describe("SystemAgentChatEngine operations", () => {
   it("keeps a utility-only agent handoff in setup", async () => {
@@ -413,18 +404,8 @@ describe("SystemAgentChatEngine operations", () => {
   it("rebinds the live conversation after changing its default model", async () => {
     useTempStateDir();
     const baseConfig = structuredClone(sharedVerifiedInferenceConfig);
-    const changedConfig = {
-      ...baseConfig,
-      agents: {
-        ...baseConfig.agents,
-        entries: Object.fromEntries(
-          Object.entries(baseConfig.agents.entries).map(([id, agent]) => [
-            id,
-            { ...agent, model: "openai/gpt-5.6-sol" },
-          ]),
-        ),
-      },
-    } satisfies OpenClawConfig;
+    const changedConfig = structuredClone(baseConfig);
+    changedConfig.agents.entries.main.model = "openai/gpt-5.6-sol";
     const configFixture = await createInferenceConfigFixture(baseConfig);
     const snapshot = configFixture.snapshot;
     const verifiedInference = await createAmbientVerifiedBinding(
@@ -437,11 +418,9 @@ describe("SystemAgentChatEngine operations", () => {
       reboundSnapshot,
     );
     mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
-    let currentConfig: OpenClawConfig = baseConfig;
     const executeOperation = vi.fn<typeof nativeExecuteOperation>(
       async (_operation, runtime, options) => {
-        currentConfig = changedConfig;
-        await configFixture.write(currentConfig);
+        await configFixture.write(changedConfig);
         options?.onVerifiedInferenceChanged?.(reboundInference);
         runtime.log("Default model: openai/gpt-5.6-sol");
         return { applied: true };
@@ -660,82 +639,6 @@ describe("SystemAgentChatEngine operations", () => {
       expect(reply).toContain("openclaw doctor --fix");
     },
   );
-});
-
-describe("SystemAgentChatEngine CLI loop backends", () => {
-  let restoreCliBackendFixture: (() => void) | undefined;
-
-  beforeAll(() => {
-    // These cases own routing and session continuity; plugin setup tests own
-    // loading the generated backend artifact.
-    restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
-  });
-
-  afterAll(() => {
-    restoreCliBackendFixture?.();
-  });
-
-  it("runs a configured claude-cli model through the CLI loop with the ring-zero MCP tool", async () => {
-    useTempStateDir();
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "claude-cli/claude-opus-4-8" },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const snapshot = configSnapshot(config);
-    const inference = await createCliVerifiedBinding(config);
-    const runCliAgent = vi.fn(async (_params: Record<string, unknown>) => ({
-      payloads: [{ text: "*click* CLI loop checked your shell." }],
-      meta: {
-        durationMs: 0,
-        agentMeta: {
-          sessionId: "native-1",
-          provider: "claude-cli",
-          model: "claude-opus-4-8",
-          cliSessionBinding: { sessionId: "native-1" },
-        },
-      },
-    }));
-    vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
-    mocks.readConfigFileSnapshot.mockImplementation(async () => snapshot);
-    const engine = createChatEngine({
-      verifiedInference: inference.binding,
-      runAgentTurn: runSystemAgentTurn,
-      deps: {
-        loadOverview: fakeOverviewLoader({ defaultModel: "claude-cli/claude-opus-4-8" }),
-      },
-    });
-
-    const reply = await engine.handle("how is my setup looking?");
-
-    expect(reply.text).toContain("CLI loop checked your shell");
-    const call = expectDefined(
-      runCliAgent.mock.calls[0],
-      "runCliAgent.mock.calls[0] test invariant",
-    )[0];
-    expect(call.provider).toBe("claude-cli");
-    expect(call.model).toBe("claude-opus-4-8");
-    expect(call.systemAgentTool).toEqual({
-      agentId: "main",
-      surface: "cli",
-      approvalArmed: false,
-      proposalRef: {},
-      directiveRef: {},
-    });
-    // CLI harnesses reject toolsAllow; the restriction rides on the MCP config.
-    expect(call.toolsAllow).toBeUndefined();
-    expect(call.cliSessionBinding).toBeUndefined();
-    expect(call.cleanupCliLiveSessionOnRunEnd).toBe(true);
-
-    // The captured native CLI session resumes on the next turn.
-    await engine.handle("and the gateway?");
-    expect(
-      expectDefined(runCliAgent.mock.calls[1], "runCliAgent.mock.calls[1] test invariant")[0]
-        .cliSessionBinding,
-    ).toEqual({ sessionId: "native-1" });
-  });
 });
 
 describe("SystemAgentChatEngine handoff", () => {

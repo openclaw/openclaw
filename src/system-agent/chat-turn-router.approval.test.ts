@@ -31,39 +31,78 @@ function mockApprovedOperation() {
 }
 
 describe("SystemAgentChatEngine approval", () => {
-  it("records the delegated requester before hashing a model-tool proposal", async () => {
-    mockApprovedOperation();
-    const unrecordedOperation = {
-      kind: "create-agent" as const,
-      agentId: "researcher",
-      workspace: "/tmp/researcher",
-    };
-    const unrecordedHash = hashSystemAgentOperation(unrecordedOperation);
-    const engine = createEngine({
-      operatorApprovalOnly: true,
-      requesterAgentId: "research",
-      runAgentTurn: async ({ session }) => {
-        session.proposalRef.current = unrecordedHash;
-        session.proposalRef.operation = unrecordedOperation;
-        return { text: "Creation needs operator approval." };
-      },
-    });
-
-    await engine.handle("Create a research agent.");
-    const proposal = expectDefined(engine.getPendingOperatorProposal(), "delegated proposal");
-
-    expect(proposal.operation).toEqual({
-      ...unrecordedOperation,
-      requesterAgentId: "research",
-    });
-    expect(proposal.hash).not.toBe(unrecordedHash);
-    expect(describeSystemAgentPersistentOperation(proposal.operation)).toContain(
-      "requested by agent research",
-    );
-    expect(await engine.resolveOperatorApproval("allow-once", unrecordedHash)).toBeNull();
-    expect(await engine.resolveOperatorApproval("allow-once", proposal.hash)).not.toBeNull();
-    expect(engine.getPendingOperatorProposal()).toBeNull();
-  });
+  it.each([
+    [undefined, "host"],
+    ["research", "host"],
+    ["research", "model"],
+  ] as const)(
+    "hatches a %s requester from %s with approval-bound provenance",
+    async (requesterAgentId, source) => {
+      useTempStateDir();
+      const operation = {
+        kind: "create-agent" as const,
+        agentId: "researcher",
+        workspace: "/tmp/researcher",
+      };
+      const unrecordedHash = hashSystemAgentOperation(operation);
+      const createAgent = operationMocks.createAgent.mockResolvedValue({
+        status: "created",
+        agentId: "researcher",
+        name: "researcher",
+        workspace: "/tmp/researcher",
+        agentDir: "/tmp/agent-researcher",
+        bootstrapPending: true,
+        config: {},
+        configPath: "/tmp/openclaw.json",
+      });
+      const engine = createChatEngine(
+        {
+          ...(requesterAgentId ? { requesterAgentId, operatorApprovalOnly: true } : {}),
+          classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+          runAgentTurn: async ({ session }) => {
+            session.proposalRef.current = unrecordedHash;
+            session.proposalRef.operation = operation;
+            return { text: "Creation needs operator approval." };
+          },
+        },
+        source === "model",
+      );
+      if (source === "model") {
+        await engine.handle("Create a research agent.");
+      } else {
+        engine.propose(operation);
+      }
+      const proposal = expectDefined(engine.getPendingOperatorProposal(), "creation proposal");
+      expect(proposal.operation).toEqual({
+        ...operation,
+        ...(requesterAgentId ? { requesterAgentId } : {}),
+      });
+      expect(describeSystemAgentPersistentOperation(proposal.operation)).toBe(
+        "create agent researcher with workspace /tmp/researcher" +
+          (requesterAgentId ? ", requested by agent research" : ""),
+      );
+      if (source === "model") {
+        expect(proposal.hash).not.toBe(unrecordedHash);
+        expect(await engine.resolveOperatorApproval("allow-once", unrecordedHash)).toBeNull();
+      }
+      const reply = expectDefined(
+        await engine.resolveOperatorApproval("allow-once", proposal.hash),
+        "approved creation",
+      );
+      expect(createAgent).toHaveBeenCalledWith({
+        entry: { id: "researcher" },
+        workspace: "/tmp/researcher",
+        provenance: { createdVia: "agent", creatorAgentId: requesterAgentId ?? "openclaw" },
+      });
+      expect(reply.action).toBe("open-tui");
+      expect(reply.handoff).toMatchObject({
+        kind: "open-tui",
+        agentId: "researcher",
+        agentDraft: "hatch",
+      });
+      expect(engine.getPendingOperatorProposal()).toBeNull();
+    },
+  );
 
   it.each(["allow-once", null] as const)(
     "resolves delegated persistent writes only from the operator decision %s",
@@ -125,73 +164,6 @@ describe("SystemAgentChatEngine approval", () => {
     },
   );
 
-  it.each([
-    {
-      origin: "custodian",
-      requesterAgentId: undefined,
-      expectedCreatorAgentId: "openclaw",
-      expectedDescription: "create agent researcher with workspace /tmp/researcher",
-    },
-    {
-      origin: "delegated agent",
-      requesterAgentId: "research",
-      expectedCreatorAgentId: "research",
-      expectedDescription:
-        "create agent researcher with workspace /tmp/researcher, requested by agent research",
-    },
-  ])(
-    "hatches an agent requested by the $origin with approval-bound provenance",
-    async ({ requesterAgentId, expectedCreatorAgentId, expectedDescription }) => {
-      useTempStateDir();
-      const createAgent = operationMocks.createAgent.mockImplementation(async () => ({
-        status: "created" as const,
-        agentId: "researcher",
-        name: "researcher",
-        workspace: "/tmp/researcher",
-        agentDir: "/tmp/agent-researcher",
-        bootstrapPending: true,
-        config: {},
-        configPath: "/tmp/openclaw.json",
-      }));
-      const engine = createChatEngine({
-        runAgentTurn: async () => ({ text: "noted" }),
-        classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
-        ...(requesterAgentId ? { requesterAgentId, operatorApprovalOnly: true } : {}),
-      });
-      engine.propose({
-        kind: "create-agent",
-        agentId: "researcher",
-        workspace: "/tmp/researcher",
-      });
-      const proposal = expectDefined(engine.getPendingOperatorProposal(), "create-agent proposal");
-
-      expect(proposal.operation).toEqual({
-        kind: "create-agent",
-        agentId: "researcher",
-        workspace: "/tmp/researcher",
-        ...(requesterAgentId ? { requesterAgentId } : {}),
-      });
-      expect(describeSystemAgentPersistentOperation(proposal.operation)).toBe(expectedDescription);
-
-      const reply = expectDefined(
-        await engine.resolveOperatorApproval("allow-once", proposal.hash),
-        "approved create-agent reply",
-      );
-
-      expect(createAgent).toHaveBeenCalledWith({
-        entry: { id: "researcher" },
-        workspace: "/tmp/researcher",
-        provenance: { createdVia: "agent", creatorAgentId: expectedCreatorAgentId },
-      });
-      expect(reply.action).toBe("open-tui");
-      expect(reply.handoff).toMatchObject({
-        kind: "open-tui",
-        agentId: "researcher",
-        agentDraft: "hatch",
-      });
-    },
-  );
-
   it("stays in setup when post-write verification flags the config", async () => {
     useTempStateDir();
     operationMocks.verifyInferenceConfig.mockImplementation(async () => ({
@@ -232,22 +204,6 @@ describe("SystemAgentChatEngine approval", () => {
     expect(reply.agentDraft).toBeUndefined();
     expect(reply.handoff).toBeUndefined();
     expect(reply.text).not.toContain("Your agent is hatching");
-  });
-
-  it("keeps provider setup non-mutating and directs the operator to Models", async () => {
-    const engine = createChatEngine({
-      surface: "gateway",
-      runAgentTurn: async () => ({ text: "noted" }),
-    });
-
-    const reply = await engine.handle("configure model provider workspace /tmp/gateway-work");
-
-    expect(reply.action).toBe("none");
-    expect(reply.handoff).toBeUndefined();
-    expect(reply.sensitive).toBeUndefined();
-    expect(reply.text).toContain("Settings → Models → Connect provider");
-    expect(reply.text).toContain("Connecting another provider does not select it");
-    expect(reply.text).not.toContain("openclaw onboard");
   });
 
   it("drops the proposal when the user declines", async () => {

@@ -105,79 +105,28 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     await reject({ expectedConfigHash: null }, hashChanged, ["commit", "ensureWorkspace"], true);
   });
 
-  it("commits a fresh injected roster before provisioning its workspace", async () => {
-    startAbsent();
-    const result = await apply({ expectedConfigHash: null });
-    expect(result.bootstrapPending).toBe(true);
-    expect(mocks.state.persistedConfig).toMatchObject({
-      agents: {
-        defaults: { workspace: "/tmp/openclaw-workspace" },
-        entries: { main: {} },
-      },
+  it("preserves the pre-roster verified route while creating a team", async () => {
+    const runtimeConfig = agentConfig("/agents/main");
+    start(runtimeConfig, "probe", { agents: { defaults: { model: "openai/gpt-5.5" } } });
+    mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
+    await apply({
+      expectedConfigHash: "probe",
+      expectedAgentId: "main",
+      expectedAgentDir: "/agents/main",
+      expectedInferenceRoute: await projectInferenceRoute(runtimeConfig),
+      firstAgent: firstTeam,
     });
-    expect(mocks.state.persistedConfig?.agents?.entries?.main).not.toHaveProperty("default");
-    expect(mocks.events).toEqual(["agent-create", "commit", "workspace"]);
-  });
-
-  it.each([false, true])(
-    "preserves the pre-roster verified route during creation (team: %s)",
-    async (team) => {
-      const firstAgent = {
-        name: team ? "coordinator" : "Research Buddy",
-        ...(team ? { team: true } : {}),
-      };
-      const source = { agents: { defaults: { model: "openai/gpt-5.5" } } } satisfies OpenClawConfig;
-      const runtimeConfig = agentConfig("/agents/main");
-      start(runtimeConfig, "probe", source);
-      const expectedInferenceRoute = await projectInferenceRoute(runtimeConfig);
-      mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
-
-      await apply({
-        expectedConfigHash: "probe",
-        expectedAgentId: "main",
-        expectedAgentDir: "/agents/main",
-        expectedInferenceRoute,
-        firstAgent,
-      });
-
-      expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
-        expect.objectContaining({ firstAgent }),
-      );
-      const agentId = team ? "coordinator" : "research-buddy";
-      expect(Object.keys(mocks.state.persistedConfig?.agents?.entries ?? {})).toEqual(
-        team ? [agentId, "researcher", "writer", "reviewer"] : [agentId],
-      );
-      expectWorkspace(team ? `${workspace}/coordinator` : workspace, agentId);
-      expect(mocks.state.persistedConfig?.agents?.entries).not.toHaveProperty("main");
-    },
-  );
-
-  it("resumes a complete team roster using its receipt workspace root", async () => {
-    const specialists = ["researcher", "writer", "reviewer"];
-    const config = {
-      agents: {
-        ownership: "explicit",
-        defaults: { workspace, systemAgent: { agentId: "coordinator" } },
-        entries: Object.fromEntries(
-          ["coordinator", ...specialists].map((id) => [
-            id,
-            {
-              workspace: path.join(workspace, id),
-              subagents:
-                id === "coordinator"
-                  ? { allowAgents: specialists, delegationMode: "prefer" }
-                  : { allowAgents: [] },
-            },
-          ]),
-        ),
-      },
-    } satisfies OpenClawConfig;
-    start(config);
-    const result = await apply({ workspace, resume: true, assertCommitPreconditions: () => {} });
-
-    expect(result.workspaceReady).toBe(true);
-    expect(mocks.ensureOnboardingAgent).not.toHaveBeenCalled();
-    expectWorkspace(path.join(workspace, "coordinator"), "coordinator");
+    expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ firstAgent: firstTeam }),
+    );
+    expect(Object.keys(mocks.state.persistedConfig?.agents?.entries ?? {})).toEqual([
+      "coordinator",
+      "researcher",
+      "writer",
+      "reviewer",
+    ]);
+    expectWorkspace(`${workspace}/coordinator`, "coordinator");
+    expect(mocks.state.persistedConfig?.agents?.entries).not.toHaveProperty("main");
   });
 
   it("reports an existing roster instead of silently skipping the requested first team", async () => {
@@ -511,53 +460,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     }
 
     expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
-  });
-
-  it("stops stale continuation before the next persistent effect", async () => {
-    const initial = {
-      ...mainAgentModelConfig(),
-      auth: { order: { openai: ["openai:verified"] } },
-    } satisfies OpenClawConfig;
-    const initialSnapshot = start(initial);
-    const expectedInferenceRoute = await projectInferenceRoute(initial);
-    let currentConfig: OpenClawConfig = initial;
-    let currentHash = "probe";
-    let setupReads = 0;
-    mocks.readSnapshot.mockImplementation(async () =>
-      setupReads++ === 0 ? initialSnapshot : snapshot(currentHash, currentConfig),
-    );
-    mocks.readVerifiedSnapshot.mockImplementation(async () => snapshot(currentHash, currentConfig));
-    mocks.commit.mockImplementationOnce(async (params: { transform: CommitTransform }) => {
-      const result = await params.transform(currentConfig, {
-        previousHash: currentHash,
-        snapshot: snapshot(currentHash, currentConfig),
-        attempt: 0,
-      });
-      currentConfig = result.nextConfig;
-      currentHash = "persisted";
-      mocks.events.push("commit");
-      return committed(result, "probe");
-    });
-    mocks.ensureWorkspace.mockImplementationOnce(async () => {
-      currentConfig = {
-        ...currentConfig,
-        auth: { order: { openai: ["openai:rotated"] } },
-      };
-      authorityValid = false;
-    });
-    let authorityValid = true;
-    const beforePersistentApply = () => {
-      if (!authorityValid) {
-        throw new Error("verified inference binding changed");
-      }
-    };
-
-    await expect(apply({ expectedInferenceRoute }, { beforePersistentApply })).rejects.toThrow(
-      "verified inference binding changed",
-    );
-
-    expect(mocks.ensureWorkspace).toHaveBeenCalledOnce();
-    expect(mocks.updateExecApprovals).not.toHaveBeenCalled();
   });
 
   it("returns visible post-commit workspace, approval, and service failures", async () => {

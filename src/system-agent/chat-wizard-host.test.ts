@@ -116,39 +116,6 @@ describe("SystemAgentChatEngine wizard", () => {
     expect(runs).toEqual(["pair", ["alerts", "logs"]]);
   });
 
-  it("marks sensitive hosted-wizard replies and auto-advances notes", async () => {
-    useTempStateDir();
-    const { prompt: tokenStep } = await startWizard(
-      async (_channel, prompter) => {
-        await prompter.note("Before entering the token, open the provider console.");
-        await prompter.text({ message: "Bot token", sensitive: true });
-        return "applied";
-      },
-      { surface: "gateway" },
-    );
-
-    expect(tokenStep.text).toContain("Before entering the token");
-    expect(tokenStep.text).toContain("Bot token");
-    expect(tokenStep.sensitive).toBe(true);
-    expect(tokenStep.wizardInputPending).toBe(true);
-  });
-
-  it("marks a non-card hosted-wizard step as pending input", async () => {
-    useTempStateDir();
-    const { prompt: textStep } = await startWizard(
-      async (_channel, prompter) => {
-        await prompter.text({ message: "Bot label" });
-        return "applied";
-      },
-      { surface: "gateway" },
-    );
-
-    expect(textStep.text).toContain("Bot label");
-    expect(textStep.question).toBeUndefined();
-    expect(textStep.sensitive).toBeUndefined();
-    expect(textStep.wizardInputPending).toBe(true);
-  });
-
   it("routes sensitive CLI wizard prompts to the masked channel setup flow", async () => {
     useTempStateDir();
     const { engine, prompt: reply } = await startWizard(tokenWizard(true), { surface: "cli" });
@@ -255,17 +222,6 @@ describe("SystemAgentChatEngine wizard", () => {
     expect(countCancelHints(done.text)).toBe(0);
   });
 
-  it("drops the cancel hint from the cancellation message", async () => {
-    useTempStateDir();
-    const { engine, prompt } = await startWizard(tokenWizard(), {}, "connect discord");
-    expect(prompt.text).toContain("Bot token");
-    expect(countCancelHints(prompt.text)).toBe(1);
-
-    const cancelled = await engine.handle("cancel");
-    expect(cancelled.text).toContain("cancelled");
-    expect(countCancelHints(cancelled.text)).toBe(0);
-  });
-
   it("voids a stale host proposal before an exact wizard, including cancellation", async () => {
     vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(tokenWizard());
     const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
@@ -278,11 +234,14 @@ describe("SystemAgentChatEngine wizard", () => {
     });
     engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
 
-    await engine.handle("connect discord");
+    const prompt = await engine.handle("connect discord");
+    expect(prompt.text).toContain("Bot token");
+    expect(countCancelHints(prompt.text)).toBe(1);
     const cancelled = await engine.handle("cancel");
     const laterApproval = await engine.handle("yes");
 
     expect(cancelled.text).toContain("cancelled");
+    expect(countCancelHints(cancelled.text)).toBe(0);
     expect(engine.getPendingOperatorProposal()).toBeNull();
     expect(runConfigSet).not.toHaveBeenCalled();
     expect(runAgentTurn.mock.calls.at(-1)?.[0]?.approvalArmed).toBe(false);
@@ -349,6 +308,10 @@ describe("SystemAgentChatEngine wizard", () => {
 
     const awaiting = await engine.handle("connect telegram");
     expect(awaiting.step?.type).toBe("text");
+    expect(awaiting.text).toContain("Bot token");
+    expect(awaiting.question).toBeUndefined();
+    expect(awaiting.sensitive).toBeUndefined();
+    expect(awaiting.wizardInputPending).toBe(true);
 
     const done = await engine.handle("123:abc");
     expect(done.text).toContain("telegram is configured");
@@ -373,17 +336,6 @@ describe("SystemAgentChatEngine wizard", () => {
 
     expect(selected).toBe("beta");
     expect(engine.historySince(0)).toContainEqual({ role: "user", text: "Beta" });
-  });
-
-  it("cancels the current hosted wizard through a typed direct action", async () => {
-    useTempStateDir();
-    const { engine, stepId } = await startGatewayWizard();
-    const cancelled = await engine.cancelWizard({ stepId });
-
-    expect(cancelled.text).toContain("cancelled");
-    expect(cancelled.step).toBeUndefined();
-    expect(cancelled.wizardInputPending).toBeUndefined();
-    expect(engine.historySince(0)).toContainEqual({ role: "user", text: "Cancel" });
   });
 
   it("cancels the local hosted wizard after its inference binding drifts", async () => {
@@ -417,6 +369,9 @@ describe("SystemAgentChatEngine wizard", () => {
     const cancelled = await engine.cancelWizard({ stepId });
 
     expect(cancelled.text).toContain("cancelled");
+    expect(cancelled.step).toBeUndefined();
+    expect(cancelled.wizardInputPending).toBeUndefined();
+    expect(engine.historySince(0)).toContainEqual({ role: "user", text: "Cancel" });
   });
 
   it("rejects a stale structured answer without changing the active step", async () => {
@@ -438,23 +393,5 @@ describe("SystemAgentChatEngine wizard", () => {
 
     expect(engine.historySince(0)).toContainEqual({ role: "user", text: "<redacted secret>" });
     expect(JSON.stringify(engine.historySince(0))).not.toContain("raw-secret-value");
-  });
-
-  it("keeps the numbered text grammar for text-only wizard clients", async () => {
-    useTempStateDir();
-    let selected: unknown;
-    const { engine } = await startGatewayWizard({}, async (_channel, prompter) => {
-      selected = await prompter.select({
-        message: "Choose one",
-        options: [
-          { value: "alpha", label: "Alpha" },
-          { value: "beta", label: "Beta" },
-        ],
-      });
-      return "applied";
-    });
-    await engine.handle("2");
-
-    expect(selected).toBe("beta");
   });
 });

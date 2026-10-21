@@ -229,7 +229,7 @@ export function resetSetupApplyMocks(): void {
   mocks.ensureOnboardingAgent.mockImplementation(
     async ({ config: current, firstAgent, workspace }) => {
       const name = firstAgent?.name ?? "main";
-      const id = name === "Research Buddy" ? "research-buddy" : name.toLowerCase();
+      const id = name.toLowerCase();
       const team = firstAgent?.team === true;
       const createdAgentIds = team ? [id, "researcher", "writer", "reviewer"] : [id];
       const next = {

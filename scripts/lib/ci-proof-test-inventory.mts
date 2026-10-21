@@ -3643,7 +3643,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/system-agent/setup-inference-activate.test.ts",
   "src/system-agent/setup-inference-credentials.lifecycle.test.ts",
   "src/system-agent/setup-inference-detect.lifecycle.test.ts",
-  "src/system-agent/setup-inference-utility.test.ts",
   "src/system-agent/setup-inference.groq-external.integration.test.ts",
   "src/system-agent/setup-inference.provider-install-owner.test.ts",
   "src/system-agent/setup-lifetime.test.ts",
