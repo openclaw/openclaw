@@ -64,15 +64,12 @@ it("honors bare Periphery ignore comments on or above declarations", () => {
   expect(filterIgnoredFindings(findings, root)).toEqual([]);
 });
 
-it("fails closed when a finding has no USR", () => {
-  expect(() => validateFindings([finding({ ids: [] })], "iOS")).toThrow(
-    "iOS finding 0 has no usable Swift USR",
-  );
-});
-
-it("rejects findings outside shared OpenClawKit", () => {
-  expect(() => validateFindings([finding({ location: "Sources/App.swift:1:1" })], "macOS")).toThrow(
-    "macOS finding 0 is outside shared OpenClawKit sources",
+it.each([
+  ["iOS", { ids: [] }, "has no usable Swift USR"],
+  ["macOS", { location: "Sources/App.swift:1:1" }, "is outside shared OpenClawKit sources"],
+] as const)("fails closed for invalid %s findings: %s", (label, overrides, error) => {
+  expect(() => validateFindings([finding(overrides)], label)).toThrow(
+    `${label} finding 0 ${error}`,
   );
 });
 
@@ -99,18 +96,17 @@ it("runs two consumer scans and a same-run intersection", () => {
   expect(workflow.jobs?.["scan-macos"]?.name).toBe("Scan shared kit from macOS");
   expect(workflow.jobs?.intersect?.needs).toEqual(["scope", "scan-ios", "scan-macos"]);
 
-  expect(artifact("scan-ios", "Upload iOS consumer report")?.name).toBe(
-    "shared-periphery-ios-${{ github.run_id }}-${{ github.run_attempt }}",
-  );
-  expect(artifact("macos-index", "Upload macOS consumer report")?.name).toBe(
-    "shared-periphery-macos-${{ github.run_id }}-${{ github.run_attempt }}",
-  );
-  expect(artifact("intersect", "Download iOS consumer report")?.name).toBe(
-    "shared-periphery-ios-${{ github.run_id }}-${{ steps.producers.outputs.ios-attempt }}",
-  );
-  expect(artifact("intersect", "Download macOS consumer report")?.name).toBe(
-    "shared-periphery-macos-${{ github.run_id }}-${{ steps.producers.outputs.macos-attempt }}",
-  );
+  for (const [platform, job, label] of [
+    ["ios", "scan-ios", "iOS"],
+    ["macos", "macos-index", "macOS"],
+  ] as const) {
+    expect(artifact(job, `Upload ${label} consumer report`)?.name).toBe(
+      `shared-periphery-${platform}-\${{ github.run_id }}-\${{ github.run_attempt }}`,
+    );
+    expect(artifact("intersect", `Download ${label} consumer report`)?.name).toBe(
+      `shared-periphery-${platform}-\${{ github.run_id }}-\${{ steps.producers.outputs.${platform}-attempt }}`,
+    );
+  }
   expect(artifact("intersect", "Upload shared intersection")).toMatchObject({
     name: "shared-periphery-intersection-${{ github.run_id }}",
     overwrite: true,

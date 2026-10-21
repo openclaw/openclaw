@@ -19,6 +19,9 @@ export class TranscriptEndAnchor {
   }
 
   recordLayoutCorrection(before: number, after: number): void {
+    if (before === after) {
+      return;
+    }
     if (this.offset !== null && Math.abs(this.offset - before) <= 1) {
       this.offset = after;
     } else {

@@ -3,6 +3,7 @@ import { Show, onSettled, createMemo, createSignal, merge } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
@@ -167,7 +168,9 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                       }
                     >
                       <MachineIcon />
-                      <span>{summaryHost()}</span>
+                      <span ref={createTextOverflow(summaryHost)} title={summaryHost()}>
+                        {summaryHost()}
+                      </span>
                     </Show>
                   </span>
                 </Show>
@@ -182,7 +185,9 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                         {() => (
                           <>
                             <MachineIcon />
-                            <span>{host()}</span>
+                            <span ref={createTextOverflow(host)} title={host()}>
+                              {host()}
+                            </span>
                           </>
                         )}
                       </EnvironmentAction>
@@ -199,7 +204,12 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                       content: (view) => (
                         <>
                           <MachineIcon />
-                          <span>{host() ?? view.label}</span>
+                          <span
+                            ref={createTextOverflow(() => host() ?? view.label)}
+                            title={host() ?? view.label}
+                          >
+                            {host() ?? view.label}
+                          </span>
                           <Icon name="moreHorizontal" />
                         </>
                       ),
@@ -211,7 +221,7 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                 {(branch) => (
                   <div class="chat-details__row chat-environment__row" title={branch()}>
                     <Icon name="gitBranch" />
-                    <span>{branch()}</span>
+                    <span ref={createTextOverflow(branch)}>{branch()}</span>
                     <Show when={session()?.worktree}>
                       <small class="chat-details__badge">{t("chat.sessionDetails.worktree")}</small>
                     </Show>

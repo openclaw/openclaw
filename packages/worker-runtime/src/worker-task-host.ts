@@ -48,6 +48,11 @@ export type WorkerTaskHost = {
   observeResourceReply?(this: void): void;
   workerStarted(worker: WorkerLifecycle, pool: object): void;
   workerRetiring(worker: WorkerLifecycle, reason: WorkerRetirementReason): void;
+  /** Best-effort telemetry before native stop; the host bounds waiting, including synchronous service. */
+  flushWorkerDiagnostics?(
+    worker: WorkerLifecycle,
+    reason: WorkerRetirementReason,
+  ): RetainedOperation<void> | undefined;
   computeCapacity: WorkerComputeCapacity;
   pools: {
     register<T extends ResourceOwningPool>(pool: T): T;

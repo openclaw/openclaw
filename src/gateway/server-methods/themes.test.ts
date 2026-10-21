@@ -138,6 +138,21 @@ function themePreferences(id: string, mode = "dark") {
   return { "ui.theme": id, "ui.themeMode": mode };
 }
 
+function savedTheme(id: string, definition: ReturnType<typeof themeDefinition>) {
+  return { ...themePreferences(`user/${id}`), [`ui.themeDefinition.${id}`]: definition };
+}
+
+function syntheticClient(identity?: AgentRuntimeIdentity, profileId?: string): GatewayClient {
+  return {
+    ...client(profileId),
+    internal: { syntheticClient: true, ...(identity ? { agentRuntimeIdentity: identity } : {}) },
+  };
+}
+
+function defaultMode(mode: "dark" | "light") {
+  return { context: { getRuntimeConfig: () => ({ ui: { prefs: { themeMode: mode } } }) } };
+}
+
 const success = (payload?: unknown) => ({
   ok: true,
   ...(payload === undefined ? {} : { payload }),
@@ -315,9 +330,7 @@ it("imports and applies in one durable profile mutation, preserving other prefer
   preferences({
     "ui.accent": "#aabbcc",
     "ui.fontFamily": "serif",
-    "ui.themeDefinition.xenovessel": definition,
-    "ui.theme": "user/xenovessel",
-    "ui.themeMode": "dark",
+    ...savedTheme("xenovessel", definition),
   });
   preferences({}, otherId);
   await expectRpc(invoke("themes.get", { id: "user/xenovessel" }), { theme: branding, definition });
@@ -375,13 +388,9 @@ it("clears theme overrides against Gateway defaults while retaining saved custom
   await expectRpc(setTheme({ id: null, mode: "light" }), {
     current: { id: "claw", mode: "light", overrides: { mode: "light" } },
   });
-  await expectRpc(
-    setTheme(
-      { mode: null },
-      { context: { getRuntimeConfig: () => ({ ui: { prefs: { themeMode: "dark" } } }) } },
-    ),
-    { current: { id: "claw", mode: "dark", overrides: {} } },
-  );
+  await expectRpc(setTheme({ mode: null }, defaultMode("dark")), {
+    current: { id: "claw", mode: "dark", overrides: {} },
+  });
   preferences({ "ui.themeDefinition.dark": definition });
 });
 
@@ -397,21 +406,10 @@ it("selects a dark-only imported theme in one call and refuses explicit incompat
     current: { id: "user/xenovessel", mode: "dark" },
     application: "saved",
   });
-  const saved = {
-    ...themePreferences("user/xenovessel"),
-    "ui.themeDefinition.xenovessel": definition,
-  };
+  const saved = savedTheme("xenovessel", definition);
   preferences(saved);
   for (const mode of ["light", null]) {
-    await expectError(
-      setTheme(
-        { mode },
-        {
-          context: { getRuntimeConfig: () => ({ ui: { prefs: { themeMode: "light" } } }) },
-        },
-      ),
-      incompatible,
-    );
+    await expectError(setTheme({ mode }, defaultMode("light")), incompatible);
     preferences(saved);
   }
 });
@@ -526,13 +524,7 @@ it("reads and writes through a merged profile alias and notifies both identities
   }
   expect(result).toMatchObject(success({ current: { id: "user/merged" }, application: "saved" }));
   preferences();
-  preferences(
-    {
-      "ui.themeDefinition.merged": definition,
-      ...themePreferences("user/merged"),
-    },
-    otherId,
-  );
+  preferences(savedTheme("merged", definition), otherId);
   preferences({}, unrelatedId);
   for (const profileId of [requesterId, otherId]) {
     await expectRpc(invoke("themes.get", {}, { client: client(profileId) }), {
@@ -608,11 +600,7 @@ it.each(["runtime", "ambient"])(
   "uses only the trusted %s requester's profile after its browser closes",
   async (source) => {
     const identity = runtimeIdentity(requesterId);
-    const synthetic = client(otherId);
-    synthetic.internal = {
-      syntheticClient: true,
-      ...(source === "runtime" ? { agentRuntimeIdentity: identity } : {}),
-    };
+    const synthetic = syntheticClient(source === "runtime" ? identity : undefined, otherId);
     const action = () =>
       setTheme(
         { mode: "dark" },
@@ -722,11 +710,7 @@ it("keeps every personal theme action scoped to the selected accepted turn parti
 it.each([false, true])(
   "does not use a synthetic client's incidental profile when requester identity is absent (runtime=%s)",
   async (runtime) => {
-    const synthetic = client(requesterId);
-    synthetic.internal = {
-      syntheticClient: true,
-      ...(runtime ? { agentRuntimeIdentity: runtimeIdentity() } : {}),
-    };
+    const synthetic = syntheticClient(runtime ? runtimeIdentity() : undefined, requesterId);
     await expectError(setTheme({ mode: "dark" }, { client: synthetic }));
     preferences();
   },
@@ -748,8 +732,7 @@ it("rejects model-selected profile targeting", async () => {
 
 it("rolls back both import and selection when the live run retires at the commit boundary", async () => {
   const identity = runtimeIdentity(requesterId);
-  const synthetic = client();
-  synthetic.internal = { syntheticClient: true, agentRuntimeIdentity: identity };
+  const synthetic = syntheticClient(identity);
   let active = true;
   let reachedCommit = false;
   beforeWorkerCommit(() => {

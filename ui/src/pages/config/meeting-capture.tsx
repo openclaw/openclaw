@@ -2,7 +2,7 @@ import type { TranscriptsStatusResult } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { Errored, For, Loading, Show, createMemo, createSignal } from "solid-js";
+import { Errored, For, Loading, Show, createMemo, createSignal, onSettled } from "solid-js";
 import { TRANSCRIPT_SOURCE_LOCATOR_FIELDS } from "../../../../src/plugins/manifest-contract-keys.js";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
@@ -56,8 +56,12 @@ export function MeetingCaptureSettings(props: SettingsProps) {
     method: "transcripts.status",
     access: hasOperatorReadAccess,
     configHash: "hash",
-    onStatus: (status) =>
-      retainLocatorRequirements(status, editing(), editedProviderId(), locatorRequirements()),
+    onStatus: (status, isCurrent) =>
+      onSettled(() => {
+        if (isCurrent()) {
+          retainLocatorRequirements(status, editing(), editedProviderId(), locatorRequirements());
+        }
+      }),
   });
   const [editing, setEditing] = createSignal<number | "new" | null>(null);
   const [editError, setEditError] = createSignal<string | null>(null);

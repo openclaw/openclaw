@@ -29,6 +29,7 @@ import {
   canManageChatSessionSharing,
   ChatSessionSharingModeIcon,
   projectChatSessionSharingRoster,
+  chatSessionMembershipLabel,
 } from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -227,11 +228,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                 />
               </Show>
               <span class="chat-pane__sharing-permission">
-                {t(
-                  isCreator()
-                    ? "chat.sessionSharing.owner"
-                    : "chat.sessionSharing.permissionUnavailable",
-                )}
+                {chatSessionMembershipLabel(isCreator(), selected())}
               </span>
               <span
                 class="chat-pane__sharing-member-check"
@@ -279,9 +276,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                         type="button"
                         class="chat-pane__sharing-person"
                         disabled={Boolean(reason() || props.state?.loading)}
-                        title={
-                          reason() ?? t("chat.sessionSharing.permissionUnavailableDescription")
-                        }
+                        title={reason()}
                       >
                         <Content />
                       </button>
@@ -297,13 +292,14 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
   const showPermissions = () =>
     props.membersAvailable !== false &&
     (!result() || props.state?.loading || Boolean(props.state?.error) || people().length > 0);
+  const permissionItems = () => (showPermissions() ? rosterItems()().map((item) => item()) : []);
   // The observer and its ref share the mounted permissions subtree's lifetime.
   const SharingPermissions = (view: { children: JSX.Element }) => {
     const scroll = useScrollState();
     return (
       <section class="chat-pane__sharing-section chat-pane__sharing-permissions">
         <div class="chat-pane__sharing-section-label chat-pane__sharing-search-heading">
-          <span>{t("chat.sessionSharing.messagePermissions")}</span>
+          <span>{t("chat.sessionSharing.sessionMembers")}</span>
           <Show when={people().length > 0}>
             <button
               ref={[
@@ -516,11 +512,11 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
         kind: "group",
         id: "permissions",
         get items() {
-          return showPermissions() ? rosterItems()().map((item) => item()) : [];
+          return permissionItems();
         },
-        render: (children) => (
+        render: (renderItems) => (
           <Show when={showPermissions()}>
-            <SharingPermissions>{children}</SharingPermissions>
+            <SharingPermissions>{renderItems(permissionItems)}</SharingPermissions>
           </Show>
         ),
       },

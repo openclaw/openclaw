@@ -138,66 +138,53 @@ function holdBusy(target: string) {
 }
 
 describe("heartbeat runner skips when target session is busy", () => {
-  it(
-    "defers scheduled heartbeat while main-session restart recovery owns the session",
+  it.for([
+    ["interrupted", "scheduled", true],
+    ["admitted", "immediate", true],
+    ["current-delivery", "scheduled", true],
+    ["current-delivery", "manual", false],
+    ["previous-lifecycle", "scheduled", false],
+    ["different-run", "scheduled", false],
+  ] as const)("honors restart ownership %s", async ([owner, intent, busy]) =>
     heartbeatCase(async ({ seed, run, replySpy }) => {
-      await seed({
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: { cycleId: "restart-cycle", revision: 1, chargedAttempts: 0 },
-      });
-      expectBusy(await run({ intent: "scheduled" }), replySpy);
-    }),
-  );
-
-  it(
-    "defers automatic heartbeat while an admitted recovery owns the current lifecycle",
-    heartbeatCase(async ({ seed, run, replySpy }) => {
-      await seed({
-        abortedLastRun: false,
-        mainRestartRecovery: {
-          cycleId: "restart-cycle",
-          revision: 2,
-          chargedAttempts: 1,
-          foregroundClaims: {
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-            tokens: ["recovery-owner"],
-          },
-        },
-      });
-      expectBusy(await run({ intent: "immediate" }), replySpy);
-    }),
-  );
-
-  it.each(["scheduled", "manual"] as const)(
-    "honors current restart delivery ownership for %s wakes",
-    async (intent) =>
-      heartbeatCase(async ({ seed, run, replySpy }) => {
-        await seed(recoveryDelivery());
+      const admitted = owner === "admitted";
+      await seed(
+        owner === "interrupted" || admitted
+          ? {
+              ...(admitted ? {} : { status: "interrupted" as const }),
+              abortedLastRun: !admitted,
+              mainRestartRecovery: {
+                cycleId: "restart-cycle",
+                revision: admitted ? 2 : 1,
+                chargedAttempts: admitted ? 1 : 0,
+                ...(admitted
+                  ? {
+                      foregroundClaims: {
+                        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+                        tokens: ["recovery-owner"],
+                      },
+                    }
+                  : {}),
+              },
+            }
+          : recoveryDelivery(
+              owner === "different-run" ? "another-restart-recovery-run" : "restart-recovery-run",
+              owner === "previous-lifecycle"
+                ? "previous-gateway-lifecycle"
+                : getAgentEventLifecycleGeneration(),
+            ),
+      );
+      if (owner !== "interrupted" && !admitted) {
         replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-        const result = await run({ intent });
-        if (intent === "scheduled") {
-          expectBusy(result, replySpy);
-        } else {
-          expect(result.status).toBe("ran");
-          expect(replySpy).toHaveBeenCalledOnce();
-        }
-      })(),
-  );
-
-  it.each(["previous-lifecycle", "different-run"])(
-    "ignores restart delivery owned by %s",
-    async (owner) =>
-      heartbeatCase(async ({ seed, run, replySpy }) => {
-        await seed(
-          owner === "previous-lifecycle"
-            ? recoveryDelivery("restart-recovery-run", "previous-gateway-lifecycle")
-            : recoveryDelivery("another-restart-recovery-run"),
-        );
-        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-        expect((await run({ intent: "scheduled" })).status).toBe("ran");
+      }
+      const result = await run({ intent });
+      if (busy) {
+        expectBusy(result, replySpy);
+      } else {
+        expect(result.status).toBe("ran");
         expect(replySpy).toHaveBeenCalledOnce();
-      })(),
+      }
+    })(),
   );
 
   it.each([
@@ -449,59 +436,42 @@ describe("heartbeat runner skips when target session is busy", () => {
     }),
   );
 
-  it(
-    "records a busy skip while a recent final delivery is pending",
-    heartbeatCase(async ({ seed, run, replySpy }) => {
-      await seed({
-        updatedAt: Date.now(),
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: "The requested report is ready.",
-          createdAt: Date.now(),
-        },
-      });
-      expectBusy(await run(), replySpy);
-    }),
-  );
-
-  it(
-    "does not defer a recent pending acknowledgement under the fixed ack budget",
-    heartbeatCase(async ({ seed, run, replySpy }) => {
-      await seed({
-        lastProvider: "heartbeat",
-        lastTo: "heartbeat",
-        updatedAt: Date.now(),
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: "HEARTBEAT_OK short",
-          createdAt: Date.now(),
-        },
-      });
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-      expect((await run()).status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledOnce();
-    }),
-  );
-
-  it(
-    "does not replay stale pending final delivery through a later heartbeat",
-    heartbeatCase(async ({ cfg, seed, run, replySpy }) => {
-      cfg.agents!.defaults!.heartbeat = { every: "30m", target: "telegram" };
-      await seed({
-        lastTo: "default-heartbeat-target",
-        updatedAt: Date.now() - 60_000,
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: "private prior user answer",
-          createdAt: Date.now() - 60_000,
-        },
-      });
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-      const telegram = observeHeartbeatSend("telegram");
-      expect((await run()).status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledOnce();
-      expect(replySpy.mock.calls[0]?.[1]).toMatchObject({ isHeartbeat: true });
-      expect(telegram).not.toHaveBeenCalled();
-    }),
+  it.for(["recent final", "acknowledgement", "stale final"] as const)(
+    "handles pending delivery: %s",
+    async (kind) =>
+      heartbeatCase(async ({ cfg, seed, run, replySpy }) => {
+        const stale = kind === "stale final";
+        const ack = kind === "acknowledgement";
+        if (stale) {
+          cfg.agents!.defaults!.heartbeat = { every: "30m", target: "telegram" };
+        }
+        const timestamp = Date.now() - (stale ? 60_000 : 0);
+        await seed({
+          ...(ack ? { lastProvider: "heartbeat", lastTo: "heartbeat" } : {}),
+          ...(stale ? { lastTo: "default-heartbeat-target" } : {}),
+          updatedAt: timestamp,
+          pendingFinalDelivery: {
+            kind: "replayable",
+            text: stale
+              ? "private prior user answer"
+              : ack
+                ? "HEARTBEAT_OK short"
+                : "The requested report is ready.",
+            createdAt: timestamp,
+          },
+        });
+        if (kind === "recent final") {
+          expectBusy(await run(), replySpy);
+          return;
+        }
+        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+        const telegram = stale ? observeHeartbeatSend("telegram") : undefined;
+        expect((await run()).status).toBe("ran");
+        expect(replySpy).toHaveBeenCalledOnce();
+        if (stale) {
+          expect(replySpy.mock.calls[0]?.[1]).toMatchObject({ isHeartbeat: true });
+          expect(telegram).not.toHaveBeenCalled();
+        }
+      })(),
   );
 });

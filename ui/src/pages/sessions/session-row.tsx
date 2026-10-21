@@ -342,7 +342,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
               class="icon-btn"
               type="button"
               title={t("chat.sidebar.openSessionMenu")}
-              aria-label={t("chat.sidebar.openSessionMenu")}
+              aria-label={`${t("chat.sidebar.openSessionMenu")}: ${row().key}`}
               aria-haspopup="menu"
               aria-expanded={props.sessionMenu?.key === row().key ? "true" : "false"}
               onClick={(event) => {

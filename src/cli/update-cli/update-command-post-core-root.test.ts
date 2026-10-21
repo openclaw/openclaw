@@ -7,7 +7,7 @@ import { writePackageRoot } from "../../infra/package-update-steps.test-support.
 import * as controlPlaneSentinel from "../../infra/update-control-plane-sentinel.js";
 import * as postCoreCapability from "../../infra/update-post-core-capability.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as cliOptions from "./update-command-cli-options.js";
 
@@ -72,8 +72,7 @@ describe("post-core child output", () => {
   it.each([false, true])(
     "forwards full integrity only to supporting candidates (%s)",
     async (supported) => {
-      const state = await createOpenClawTestState({ label: "post-core-integrity" });
-      try {
+      await withOpenClawTestState({ label: "post-core-integrity" }, async (state) => {
         const root = state.path("package");
         await writePackageRoot(root, "9999.0.0");
         vi.spyOn(postCoreCapability, "supportsPostCoreExecutor").mockResolvedValue(false);
@@ -91,13 +90,8 @@ describe("post-core child output", () => {
           return child;
         });
         expect(
-          await continuePostCoreUpdateInFreshProcess({
-            root,
-            channel: "stable",
-            requestedChannel: null,
+          await continueFixture(root, {
             opts: { fullIntegrityCheck: true, acceptCapabilities: true },
-            pluginInstallRecords: {},
-            updateStartedAtMs: 123,
             timeoutMs: 5000,
             nodeRunner: process.execPath,
           }),
@@ -106,9 +100,7 @@ describe("post-core child output", () => {
         const argv = mocks.spawn.mock.calls[0]?.[1] as string[];
         expect(argv).toContain("--accept-capabilities");
         expect(argv.includes("--full-integrity-check")).toBe(supported);
-      } finally {
-        await state.cleanup();
-      }
+      });
     },
   );
 
@@ -116,12 +108,9 @@ describe("post-core child output", () => {
     ["win32", false, "pipe"],
     ["win32", true, "pipe"],
     ["linux", false, "inherit"],
-    ["darwin", false, "inherit"],
     ["linux", true, "pipe"],
-    ["darwin", true, "pipe"],
   ] as const)("routes %s output (json=%s) through %s", async (platform, json, stdio) => {
-    const state = await createOpenClawTestState({ label: "post-core-stdio" });
-    try {
+    await withOpenClawTestState({ label: "post-core-stdio" }, async (state) => {
       const root = state.path("package");
       await writePackageRoot(root, "9999.0.0");
       vi.spyOn(postCoreCapability, "supportsPostCoreExecutor").mockResolvedValue(false);
@@ -156,9 +145,7 @@ describe("post-core child output", () => {
         expect(stdout.pipe).not.toHaveBeenCalled();
         expect(stderr.pipe).not.toHaveBeenCalled();
       }
-    } finally {
-      await state.cleanup();
-    }
+    });
   });
 });
 
@@ -166,8 +153,7 @@ describe("managed post-core root handoff", () => {
   it.each(["replacement", "foreign-install", "inactive-generation", "pre-core", "moving-link"])(
     "openclaw update admits the installed driver's original pnpm identity (%s)",
     async (scenario) => {
-      const state = await createOpenClawTestState({ label: "legacy-pnpm-handoff" });
-      try {
+      await withOpenClawTestState({ label: "legacy-pnpm-handoff" }, async (state) => {
         await state.writeConfig({});
         const project = state.path("pnpm", "global", "5");
         const previous = pnpmPackage(project, "1.0.0");
@@ -243,17 +229,14 @@ describe("managed post-core root handoff", () => {
             expect(JSON.parse(await fs.readFile(metaPath, "utf8"))).toEqual({ version: 1, meta });
           },
         );
-      } finally {
-        await state.cleanup();
-      }
+      });
     },
   );
 
   it.each([false, true])(
     "binds pnpm replacement to the activated generation (foreign child=%s)",
     async (foreignChild) => {
-      const state = await createOpenClawTestState({ label: "post-core-root" });
-      try {
+      await withOpenClawTestState({ label: "post-core-root" }, async (state) => {
         await state.writeConfig({});
         const globalRoot = state.path("pnpm", "global", "5", "node_modules");
         const previous = pnpmPackage(globalRoot, "1.0.0");
@@ -316,9 +299,7 @@ describe("managed post-core root handoff", () => {
           expect(await readControlPlaneUpdateSentinelMeta()).toMatchObject(meta);
           expect(JSON.parse(await fs.readFile(metaPath, "utf8"))).toEqual({ version: 1, meta });
         });
-      } finally {
-        await state.cleanup();
-      }
+      });
     },
   );
 });

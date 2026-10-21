@@ -20,8 +20,8 @@ const jobId = "automation-result-job";
 type Invocation =
   NonNullable<AgentRunContext["cronRunsByJobId"]> extends Map<string, infer T> ? T : never;
 
-function createInvocation() {
-  const invocation: Invocation = { nextCheckEnabled: false, assertCurrent: () => {} };
+function createInvocation(nextCheckEnabled = false) {
+  const invocation: Invocation = { nextCheckEnabled, assertCurrent: () => {} };
   const claim = claimAgentRunContext(
     runId,
     {
@@ -48,6 +48,18 @@ describe("automation invocation tools", () => {
     releaseAgentRunContext(runId, ownedClaim);
     clearAgentRunContext(runId);
   });
+
+  it.each(["inactive", "active", "paced"] as const)(
+    "describes available invocation actions for a %s automation",
+    (state) => {
+      const invocation = state === "inactive" ? undefined : createInvocation(state === "paced");
+      ownedClaim = invocation?.claim;
+      const tool = invocation?.tool ?? createTestCronTool({ runId, selfRemoveOnlyJobId: jobId });
+      expect(tool.description.includes("scratch_get")).toBe(state !== "inactive");
+      expect(tool.description.includes("record_result")).toBe(state !== "inactive");
+      expect(tool.description.includes("next_check")).toBe(state === "paced");
+    },
+  );
 
   it("accepts one concise structured result without dispatching another turn", async () => {
     const { invocation, claim, tool } = createInvocation();

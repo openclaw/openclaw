@@ -53,6 +53,14 @@ type SettingsProps = {
   buildEditor?: () => JSX.Element;
   advancedExpanded?: boolean;
 };
+function RunSubmissionResult(props: { completion: Promise<void> }) {
+  const submitted = createMemo(async () => {
+    await props.completion;
+    return undefined;
+  });
+  return <>{submitted()}</>;
+}
+
 export function SessionStorageSettings(props: SettingsProps) {
   const context = useApplication();
   const {
@@ -78,7 +86,9 @@ export function SessionStorageSettings(props: SettingsProps) {
     },
   });
   const [ageDraft, setAgeDraft] = createSignal<string | null>(null);
-  const [runError, setRunError] = createSignal<string | null>(null);
+  const [runSubmission, setRunSubmission] = createSignal<{ completion: Promise<void> } | null>(
+    null,
+  );
   const [runOutcome, setRunOutcome] = createSignal<string | null>(null);
   const [submitting, setSubmitting] = createOptimistic(false);
   // Admission and retirement are synchronous; Solid owns the visible submission state.
@@ -108,7 +118,7 @@ export function SessionStorageSettings(props: SettingsProps) {
     if (identityChanged) {
       followingRun = false;
       setAgeDraft(null);
-      setRunError(null);
+      setRunSubmission(null);
       setRunOutcome(null);
     }
   }
@@ -136,7 +146,7 @@ export function SessionStorageSettings(props: SettingsProps) {
               .filter(Boolean)
               .join(" "),
       );
-      setRunError(null);
+      setRunSubmission(null);
       followingRun = false;
     }
   }
@@ -194,7 +204,7 @@ export function SessionStorageSettings(props: SettingsProps) {
     );
   }
   const ageValue = liveValue(() => ageDraft() ?? String(storageConfig().afterDays));
-  const runNow = action(function* () {
+  async function runNow() {
     const currentClient = client();
     const ownsConnection = capture();
     if (!canRun() || !currentClient || !ownsConnection()) {
@@ -202,17 +212,25 @@ export function SessionStorageSettings(props: SettingsProps) {
     }
     const operation = new AbortController();
     runOperation = operation;
-    setSubmitting(true);
-    setRunError(null);
-    setRunOutcome(null);
+    const completion = currentClient.request<SessionsStorageStatusResult>(
+      "sessions.storage.run",
+      {},
+      { signal: operation.signal },
+    );
+    return presentRun(completion, operation, ownsConnection);
+  }
+  const presentRun = action(function* (
+    completion: Promise<SessionsStorageStatusResult>,
+    operation: AbortController,
+    ownsConnection: () => boolean,
+  ) {
     const isCurrent = () => runOperation === operation && ownsConnection();
     try {
-      const response: SessionsStorageStatusResult =
-        yield currentClient.request<SessionsStorageStatusResult>(
-          "sessions.storage.run",
-          {},
-          { signal: operation.signal },
-        );
+      if (isCurrent()) {
+        setSubmitting(true);
+        setRunOutcome(null);
+      }
+      const response: SessionsStorageStatusResult = yield completion;
       if (!isCurrent()) {
         return;
       }
@@ -224,7 +242,7 @@ export function SessionStorageSettings(props: SettingsProps) {
       refreshStatus();
     } catch (error) {
       if (isCurrent()) {
-        setRunError(formatUiError(error));
+        throw error;
       }
     } finally {
       if (isCurrent()) {
@@ -452,7 +470,17 @@ export function SessionStorageSettings(props: SettingsProps) {
                 title={t("configView.sessionStorage.runNow")}
                 description={t("configView.sessionStorage.runHint")}
                 control={
-                  <button class="btn" disabled={!canRun()} onClick={() => void runNow()}>
+                  <button
+                    class="btn"
+                    disabled={!canRun()}
+                    onClick={() => {
+                      const completion = runNow();
+                      // Show tracks the receipt, leaving promise reads inside the error boundary.
+                      setRunSubmission({ completion });
+                      // The same receipt reports submission failures through the inline boundary.
+                      void completion.catch(() => undefined);
+                    }}
+                  >
                     {t(
                       submissionPending() || status()?.maintenance.running
                         ? "configView.sessionStorage.running"
@@ -461,10 +489,29 @@ export function SessionStorageSettings(props: SettingsProps) {
                   </button>
                 }
               />
-              {submissionPending() ? undefined : runError() &&
-                runError() !== status()?.maintenance.lastError ? (
-                <SettingsEmpty message={<span role="alert">{runError()}</span>} />
-              ) : runOutcome() ? (
+              <Show when={runSubmission()} keyed>
+                {(submission) => (
+                  <Errored
+                    fallback={(error) => (
+                      <Show
+                        when={
+                          !submissionPending() &&
+                          formatUiError(error()) !== status()?.maintenance.lastError
+                        }
+                      >
+                        <SettingsEmpty
+                          message={<span role="alert">{formatUiError(error())}</span>}
+                        />
+                      </Show>
+                    )}
+                  >
+                    <Loading fallback={undefined}>
+                      <RunSubmissionResult completion={submission.completion} />
+                    </Loading>
+                  </Errored>
+                )}
+              </Show>
+              {!submissionPending() && runOutcome() ? (
                 <SettingsEmpty message={<span role="status">{runOutcome()}</span>} />
               ) : undefined}
             </>

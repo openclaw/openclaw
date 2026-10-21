@@ -13,6 +13,7 @@ import type {
 import { serveOwnedWorkerTasks } from "../../infra/worker-task-server.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
+import { isSessionHistoryReadOperation } from "./session-history-read-operation-kind.js";
 import {
   encodeSessionTranscriptWorkerError,
   encodeSessionTranscriptRequestError,
@@ -105,13 +106,6 @@ serveOwnedWorkerTasks(
         return usageCostWorkerFailure(error);
       }
     }
-    const [
-      { isSessionHistoryReadOperation, prepareSessionHistoryReadOperation },
-      { runWithSessionTranscriptReadFence },
-    ] = await Promise.all([
-      import("./session-history-read-operation.worker.js"),
-      import("./session-transcript-read-fence.js"),
-    ]);
     const readRequest = async (): Promise<
       SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]
     > => {
@@ -142,6 +136,8 @@ serveOwnedWorkerTasks(
         return { kind: request.kind, result: { ...result, indexing } };
       }
       if (isSessionHistoryReadOperation(request)) {
+        const { prepareSessionHistoryReadOperation } =
+          await import("./session-history-read-operation.worker.js");
         const execute = await prepareSessionHistoryReadOperation(request);
         return execute();
       }
@@ -402,7 +398,7 @@ serveOwnedWorkerTasks(
         const { readSessionEntryList } = await import("./session-entry-list.worker.js");
         return {
           kind: "session-entry-list" as const,
-          ...readSessionEntryList(request),
+          ...(await readSessionEntryList(request)),
         };
       }
       if (request.kind === "session-store-projection") {
@@ -610,6 +606,8 @@ serveOwnedWorkerTasks(
         const { deliverSessionMemoryEntries } = await import("./session-memory-entry.worker.js");
         return await deliverSessionMemoryEntries(request.entries, channel, control);
       }
+      const { runWithSessionTranscriptReadFence } =
+        await import("./session-transcript-read-fence.js");
       return await runWithSessionTranscriptReadFence(
         request.admission,
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {

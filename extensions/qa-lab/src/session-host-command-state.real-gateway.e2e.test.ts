@@ -209,7 +209,7 @@ suite.define(() => {
             await page.reload();
             await page.locator("#new-session-where-trigger").click();
             await row(unauthorizedIdentity.deviceId).waitFor();
-            expect(await row(unauthorizedIdentity.deviceId).isEnabled()).toBe(true);
+            await expect.poll(() => row(unauthorizedIdentity.deviceId).isEnabled()).toBe(true);
             await capture("03-invocable-after-reallow.png");
           },
         );

@@ -1,5 +1,5 @@
 export const HEARTBEAT_TASK_DECLARATION_PREFIX = "heartbeat-task:";
-export const HEARTBEAT_DECLARATION_PREFIX = "heartbeat:";
+const HEARTBEAT_DECLARATION_PREFIX = "heartbeat:";
 /** Retired weekly Workshop curator jobs; the store deletes these rows on load. */
 export const RETIRED_SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX = "skill-collection-review:";
 

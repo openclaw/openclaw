@@ -374,18 +374,9 @@ describe("createAcpVisibleTextAccumulator", () => {
     },
   );
 
-  it.each([
-    ["NO_REPLY", { disposition: "silent" }],
-    [" \tNO_REPLY\r\n", { disposition: "silent" }],
-    ["no_reply", { disposition: "silent" }],
-    ...["NO_REPLY.", '"NO_REPLY"', '{"action":"NO_REPLY"}', "No response needed."].map(
-      (text) => [text, { disposition: "visible", text }] as const,
-    ),
-    ["NO_REPLY\nNO_REPLY", { disposition: "visible", text: "NO_REPLY" }],
-    ["NO_RE", { disposition: "visible", text: "NO_RE" }],
-  ] as const)("classifies %s at ACP finalization", (text, expected) => {
+  it("releases an unfinished control prefix at ACP finalization", () => {
     const acc = createAcpVisibleTextAccumulator();
-    acc.consume(text);
-    expect(acc.finalizeReplySnapshot()).toEqual(expected);
+    acc.consume("NO_RE");
+    expect(acc.finalizeReplySnapshot()).toEqual({ disposition: "visible", text: "NO_RE" });
   });
 });

@@ -15,7 +15,6 @@ const mocks = vi.hoisted(() => ({
   resolveCompletionOrigin: vi.fn(async () => undefined),
   custodyCurrent: true,
   custodyError: new Error("Completion custody retired"),
-  isCustodyCurrent: vi.fn((custody: CompletionCustody) => custody.isCurrent()),
   runWithCustody: vi.fn(
     <T>(custody: CompletionCustody, _scope: CompletionScope, run: () => T): T => {
       if (!custody.isCurrent()) {
@@ -25,10 +24,10 @@ const mocks = vi.hoisted(() => ({
     },
   ),
 }));
+// mock-isolation: Keep process-global custody and Gateway continuation state outside this fixture.
 vi.mock("../agents/agent-harness-completion-custody.js", () => ({
   captureAgentHarnessCompletionCustody: vi.fn(),
   createAgentHarnessCompletionEventSink: vi.fn(),
-  isAgentHarnessCompletionCustodyCurrent: mocks.isCustodyCurrent,
   runWithAgentHarnessCompletionCustody: mocks.runWithCustody,
 }));
 vi.mock("../agents/agent-harness-completion-delivery.js", () => ({

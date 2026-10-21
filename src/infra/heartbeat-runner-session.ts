@@ -17,7 +17,7 @@ import {
 import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
 import type { HeartbeatConfig } from "./heartbeat-config.js";
 
-export function resolveHeartbeatSessionKey(
+function resolveHeartbeatSessionKey(
   cfg: OpenClawConfig,
   agentId: string,
   heartbeat?: HeartbeatConfig,
