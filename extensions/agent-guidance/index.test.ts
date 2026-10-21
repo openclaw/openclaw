@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,12 +9,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-type BeforePromptBuildHook = PluginHookRegistration<"before_prompt_build">["handler"];
-const promptEvent: Parameters<BeforePromptBuildHook>[0] = {
-  prompt: "Synthetic request.",
-  messages: [],
-};
-const mainContext: Parameters<BeforePromptBuildHook>[1] = { agentId: "main" };
+type Hook = PluginHookRegistration<"before_prompt_build">["handler"];
+const promptEvent: Parameters<Hook>[0] = { prompt: "Synthetic request.", messages: [] };
+const mainContext: Parameters<Hook>[1] = { agentId: "main" };
 
 let directory: string;
 const file = (name: string) => path.join(directory, name);
@@ -23,7 +21,7 @@ const run = (extra: Record<string, unknown> = {}) =>
 const valid = (value: unknown) => plugin.configSchema?.safeParse?.(value).success;
 beforeEach(() => {
   directory = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), "agent-guidance-")));
-  write("instructions.md", "Synthetic guidance V1.");
+  write("instructions.md", "V1");
 });
 afterEach(() => fs.rmSync(directory, { recursive: true, force: true }));
 
@@ -40,13 +38,8 @@ function registerGuidance(pluginConfig: OpenClawPluginApi["pluginConfig"]) {
   register(pluginConfig, (hookName, handler) => {
     registrations.push({ pluginId: "agent-guidance", source: "test", hookName, handler });
   });
-  const registration = registrations.find(
-    (entry): entry is PluginHookRegistration<"before_prompt_build"> =>
-      entry.hookName === "before_prompt_build",
-  );
-  if (!registration) {
-    throw new Error("expected before_prompt_build hook registration");
-  }
+  const registration = registrations.find((entry) => entry.hookName === "before_prompt_build");
+  assert(registration, "expected before_prompt_build hook registration");
   return registration.handler;
 }
 
@@ -65,7 +58,7 @@ it("adds ordered system context only for exact selected agent IDs", async () => 
   const hook = registerGuidance(config({ prepend: ["nested/first.md", "second.md"] }));
   expect(await hook(promptEvent, mainContext)).toEqual({
     prependSystemContext: "First.\n\nSecond.",
-    appendSystemContext: "Synthetic guidance V1.",
+    appendSystemContext: "V1",
   });
   const misleadingEvent = { ...promptEvent, agentId: "main" };
   expect(await hook(misleadingEvent, { agentId: "other" })).toBeUndefined();
@@ -75,11 +68,9 @@ it("adds ordered system context only for exact selected agent IDs", async () => 
 
 it("retains a registration snapshot until a new registration reads edited files", async () => {
   const hook = registerGuidance(config());
-  write("instructions.md", "Synthetic guidance V2.");
-  expect(await hook(promptEvent, mainContext)).toEqual({
-    appendSystemContext: "Synthetic guidance V1.",
-  });
-  expect(await run()).toEqual({ appendSystemContext: "Synthetic guidance V2." });
+  write("instructions.md", "V2");
+  expect(await hook(promptEvent, mainContext)).toEqual({ appendSystemContext: "V1" });
+  expect(await run()).toEqual({ appendSystemContext: "V2" });
 });
 
 it.each([
@@ -96,36 +87,26 @@ it.each([
   ["non-string agent", { agents: [1] }],
   ["long agent", { agents: ["a".repeat(129)] }],
   ["too many agents", { agents: Array.from({ length: 65 }, (_, i) => `agent-${i}`) }],
-  ["no files", { append: [] }],
   ["null files", { append: null }],
   ["duplicate files", { prepend: ["instructions.md"] }],
   ["too many files", { append: Array.from({ length: 9 }, (_, i) => `${i}.md`) }],
 ])("rejects %s configuration", (_name, extra) => {
-  if (Array.isArray(extra)) {
-    expect(valid(extra)).toBe(false);
-    return;
-  }
-  const value = extra === undefined ? undefined : config(extra);
-  if (_name === "unknown field" || _name === "empty agents") {
+  const value = extra === undefined || Array.isArray(extra) ? extra : config(extra);
+  if (Array.isArray(extra) || ["unknown field", "empty agents"].includes(_name)) {
     expect(valid(value)).toBe(false);
   }
   expect(() => registerGuidance(value)).toThrow("agent-guidance:");
 });
 
-it.each([
-  "../rules.md",
-  "nested/../rules.md",
-  "/rules.md",
-  "C:/rules.md",
-  "a\\b.md",
-  "a//b.md",
-  "a/./b.md",
-  "a.md:stream",
-  "https://host/file",
-  "rules.md\0",
-  "a/",
-  "a".repeat(257),
-])("rejects unsafe file name %s", (name) =>
+it.each(
+  [
+    ["../rules.md", "nested/../rules.md"],
+    ["/rules.md", "C:/rules.md"],
+    ["a\\b.md", "a//b.md", "a/./b.md", "a/"],
+    ["a.md:stream", "https://host/file", "rules.md\0"],
+    ["a".repeat(257)],
+  ].flat(),
+)("rejects unsafe file name %s", (name) =>
   expect(() => registerGuidance(config({ append: [name] }))).toThrow("relative file names"),
 );
 
@@ -133,14 +114,10 @@ it.each(["", " \n", "bad\0text", Buffer.from([0xff]), "a".repeat(16385)])(
   "rejects invalid file content without disclosing text or paths (%#)",
   (content) => {
     write("instructions.md", content);
-    expect.assertions(3);
-    try {
-      registerGuidance(config());
-    } catch (error) {
-      expect(String(error)).toContain("instruction file 1 could not be loaded");
-      expect(String(error)).not.toContain(directory);
-      expect(String(error)).not.toContain("bad\0text");
-    }
+    // Allowlisted error text excludes both path separators and the payload's NUL.
+    expect(() => registerGuidance(config())).toThrow(
+      /^agent-guidance: instruction file 1 could not be loaded; [\w ,;-]+$/,
+    );
   },
 );
 
@@ -175,9 +152,8 @@ it.each([
 
 it("does not register a partial contribution when a later file fails", () => {
   const on = vi.fn<OpenClawPluginApi["on"]>();
-  expect(() =>
-    register(config({ prepend: ["instructions.md"], append: ["missing.md"] }), on),
-  ).toThrow("instruction file 2");
+  const value = config({ prepend: ["instructions.md"], append: ["missing.md"] });
+  expect(() => register(value, on)).toThrow("instruction file 2");
   expect(on).not.toHaveBeenCalled();
 });
 
@@ -191,16 +167,13 @@ it.each([
   [{ prepend: [], append: ["instructions.md"] }, true],
   [{ prepend: ["instructions.md"], append: [] }, true],
   [{ prepend: ["instructions.md"], append: ["second.md"] }, true],
-] as const)(
-  "validates instruction lists through schema and registration (%#)",
-  async (files, accepted) => {
-    write("second.md", "Second.");
-    const value = { directory, agents: ["main"], ...files };
-    expect(valid(value)).toBe(accepted);
-    if (accepted) {
-      expect(await registerGuidance(value)(promptEvent, mainContext)).toBeDefined();
-    } else {
-      expect(() => registerGuidance(value)).toThrow("configure 1 to 8 instruction files in total");
-    }
-  },
-);
+] as const)("validates schema and registration (%#)", async (files, accepted) => {
+  write("second.md", "Second.");
+  const value = { directory, agents: ["main"], ...files };
+  expect(valid(value)).toBe(accepted);
+  if (accepted) {
+    expect(await registerGuidance(value)(promptEvent, mainContext)).toBeDefined();
+  } else {
+    expect(() => registerGuidance(value)).toThrow("configure 1 to 8 instruction files in total");
+  }
+});
