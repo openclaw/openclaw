@@ -315,105 +315,68 @@ const resolvedCohortMarker = "ended without a result";
 
 const awaitedChildTask = "Hold the awaited child of a finished parent turn until it is stopped.";
 
-/** A parent either yields on its child or finishes while awaiting it. */
-function startSingleChildModel(
-  task: string,
-  parentYields: boolean,
+/** One or more held/paused children, followed by a yielding or idle requester. */
+function startChildModel(
+  tasks: readonly string[],
+  parentYields = true,
   child: "hold" | "pause" = "hold",
 ) {
-  const spawnedChild = createDeferred<{ runId: string; sessionKey: string }>();
-  const childStarted = createDeferred();
-  const continued = createDeferred();
-  const continuations: string[] = [];
-  let parentRequestCount = 0;
-  return {
-    child: spawnedChild.promise,
-    childStarted: childStarted.promise,
-    continued: continued.promise,
-    continuations: () => [...continuations],
-    handle: async (...[body, request, response, sequence]: Parameters<ModelHandler>) => {
-      const { spawn, pause, reply } = modelActions(response, sequence);
-      if (!body.includes(parentPrompt)) {
-        if (!body.includes(task)) {
-          return false;
-        }
-        if (child === "hold") {
-          await holdUntilStopped(request, response, () => childStarted.resolve());
-          return true;
-        }
-        childStarted.resolve();
-        return body.includes("function_call_output") ? false : pause();
-      }
-      if (body.includes(stoppedResult)) {
-        throw new Error("A stopped child result reached its requester");
-      }
-      if (parentYields ? body.includes(resolvedCohortMarker) : parentRequestCount >= 2) {
-        continuations.push(body);
-        continued.resolve();
-        return reply(
-          parentYields ? "PARENT_RECEIVED_RESOLVED_COHORT" : "PARENT_RECEIVED_STOPPED_CHILD",
-        );
-      }
-      parentRequestCount += 1;
-      if (parentRequestCount === 1) {
-        return spawn(task);
-      }
-      if (parentRequestCount === 2) {
-        const [spawned] = spawnReceipts(body);
-        if (!spawned) {
-          throw new Error("Parent did not retain the child spawn receipt");
-        }
-        spawnedChild.resolve(spawned);
-        return parentYields ? pause() : reply("PARENT_AWAITS_CHILD");
-      }
-      return false;
-    },
-  };
-}
-
-const yieldedPairTasks = [
-  "Hold the first child of a yielded pair until it is stopped.",
-  "Hold the second child of a yielded pair until it is stopped.",
-] as const;
-
-/** A parent spawns two holding children, then yields on both. */
-function startYieldedPairModel() {
   const spawnedChildren = createDeferred<{ runId: string; sessionKey: string }[]>();
-  const childrenStarted = yieldedPairTasks.map(() => createDeferred());
+  const childrenStarted = tasks.map(() => createDeferred());
+  const continued = createDeferred();
   const continuations: string[] = [];
   let parentRequestCount = 0;
   return {
     children: spawnedChildren.promise,
     childrenStarted: Promise.all(childrenStarted.map((started) => started.promise)),
+    continued: continued.promise,
     continuations: () => [...continuations],
     handle: async (...[body, request, response, sequence]: Parameters<ModelHandler>) => {
       const { spawn, pause, reply } = modelActions(response, sequence);
       if (!body.includes(parentPrompt)) {
-        const index = yieldedPairTasks.findIndex((task) => body.includes(task));
+        const index = tasks.findIndex((task) => body.includes(task));
         if (index < 0) {
           return false;
         }
-        await holdUntilStopped(request, response, () => childrenStarted[index]!.resolve());
-        return true;
+        const started = childrenStarted[index]!;
+        if (child === "hold") {
+          await holdUntilStopped(request, response, () => started.resolve());
+          return true;
+        }
+        started.resolve();
+        return body.includes("function_call_output") ? false : pause();
       }
       if (body.includes(stoppedResult)) {
         throw new Error("A stopped child result reached its requester");
       }
+      const isContinuation =
+        parentYields && tasks.length === 1
+          ? body.includes(resolvedCohortMarker)
+          : parentRequestCount > tasks.length;
+      if (isContinuation) {
+        continuations.push(body);
+        continued.resolve();
+        return reply(
+          tasks.length > 1
+            ? "PARENT_RECEIVED_STOPPED_PAIR"
+            : parentYields
+              ? "PARENT_RECEIVED_RESOLVED_COHORT"
+              : "PARENT_RECEIVED_STOPPED_CHILD",
+        );
+      }
       parentRequestCount += 1;
-      if (parentRequestCount <= yieldedPairTasks.length) {
-        return spawn(yieldedPairTasks[parentRequestCount - 1]!);
+      if (parentRequestCount <= tasks.length) {
+        return spawn(tasks[parentRequestCount - 1]!);
       }
-      if (parentRequestCount === yieldedPairTasks.length + 1) {
+      if (parentRequestCount === tasks.length + 1) {
         const spawned = spawnReceipts(body);
-        if (spawned.length !== yieldedPairTasks.length) {
-          throw new Error("Parent did not retain both spawn receipts");
+        if (!spawned[0] || (tasks.length > 1 && spawned.length !== tasks.length)) {
+          throw new Error("Parent did not retain every child spawn receipt");
         }
-        spawnedChildren.resolve(spawned);
-        return pause();
+        spawnedChildren.resolve(tasks.length === 1 ? [spawned[0]] : spawned);
+        return parentYields ? pause() : reply("PARENT_AWAITS_CHILD");
       }
-      // Every later parent request is a continuation the stopped children started.
-      continuations.push(body);
-      return reply("PARENT_RECEIVED_STOPPED_PAIR");
+      return false;
     },
   };
 }
@@ -589,8 +552,8 @@ it.each([
   async ({ ending, continuations }) => {
     // Stop reaches a dormant child through its registry row. Stop of an active child is
     // confirmed when its controller operation settles, with no reconciliation delay.
-    const script = startSingleChildModel(
-      onlyChildTask,
+    const script = startChildModel(
+      [onlyChildTask],
       true,
       ending === "child stop" ? "pause" : "hold",
     );
@@ -600,8 +563,8 @@ it.each([
     const parentSessionKey = `agent:main:${parentRunId}`;
     try {
       await startParentTurn(gateway.client, parentRunId);
-      const child = await script.child;
-      await script.childStarted;
+      const child = (await script.children)[0]!;
+      await script.childrenStarted;
       await waitForAgent(gateway.client, parentRunId);
       await waitForRun(
         child.runId,
@@ -643,14 +606,14 @@ it.each([
 ] as const)(
   "tells a parent $notices time(s) when the user stops the $stopped of an awaited child",
   async ({ stopped, notices: expectedNotices }) => {
-    const script = startSingleChildModel(awaitedChildTask, false);
+    const script = startChildModel([awaitedChildTask], false);
     const gateway = await startProof(script, `subagent-awaited-${stopped}-stop`);
     const parentRunId = `subagent-awaited-${stopped}-stop-parent`;
     const parentSessionKey = `agent:main:${parentRunId}`;
     try {
       await startParentTurn(gateway.client, parentRunId);
-      const child = await script.child;
-      await script.childStarted;
+      const child = (await script.children)[0]!;
+      await script.childrenStarted;
       await waitForAgent(gateway.client, parentRunId);
       expect(getSubagentRunByRunId(child.runId)?.requesterSettleWake?.requesterYieldBatch).not.toBe(
         true,
@@ -702,7 +665,10 @@ it.each([
 );
 
 it("confirms a stopped child's kill without losing either of two overlapping confirmations", async () => {
-  const script = startYieldedPairModel();
+  const script = startChildModel([
+    "Hold the first child of a yielded pair until it is stopped.",
+    "Hold the second child of a yielded pair until it is stopped.",
+  ]);
   const gateway = await startProof(script, "subagent-yielded-pair-parent-stop");
   const parentRunId = "subagent-yielded-pair-parent-stop-parent";
   const parentSessionKey = `agent:main:${parentRunId}`;

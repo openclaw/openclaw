@@ -31,6 +31,7 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
@@ -176,22 +177,7 @@ beforeEach(async () => {
   runEmbeddedAgent.mockImplementation(async (params) => {
     modelStarted.resolve();
     const signal = params.abortSignal;
-    let onAbort: (() => void) | undefined;
-    const aborted = new Promise<void>((resolve) => {
-      onAbort = resolve;
-      if (signal?.aborted) {
-        resolve();
-      } else {
-        signal?.addEventListener("abort", onAbort, { once: true });
-      }
-    });
-    try {
-      await Promise.race([releaseModel.promise, aborted]);
-    } finally {
-      if (onAbort) {
-        signal?.removeEventListener("abort", onAbort);
-      }
-    }
+    await racePromiseWithAbortSignal(releaseModel.promise, signal, (aborted) => aborted.reason);
     signal?.throwIfAborted();
     return {
       payloads: [{ text: answer }],
@@ -824,7 +810,7 @@ it.runIf(process.platform === "linux").each([false, true])(
 it.runIf(process.platform === "linux")(
   "isolates registered Talk replay across authenticated callers",
   async () => {
-    const { runTalkCallerReplay } = await import("./server.talk-caller-replay.test-support.js");
+    const { runTalkCallerReplay } = await import("./server.talk-native-action.test-support.js");
     await runTalkCallerReplay({
       ...parityFixture(),
       voiceSessionId: expectDefined(voiceSessionId, "shared voice identity"),
