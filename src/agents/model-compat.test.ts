@@ -6,6 +6,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderModernModelRef: vi.fn(),
 }));
 
+// mock-isolation: Model identity tests control provider claims without activating a runtime registry.
 vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
 }));

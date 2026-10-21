@@ -27,6 +27,7 @@ vi.mock("../daemon/service.js", async (importOriginal) => ({
   }),
 }));
 
+// mock-isolation: Keep advertised links deterministic while measuring config-runtime loading.
 vi.mock("../gateway/control-ui-links.js", () => ({
   resolveAdvertisedControlUiLinks: async () => ({
     httpUrl: "http://127.0.0.1:18789/",
@@ -34,25 +35,30 @@ vi.mock("../gateway/control-ui-links.js", () => ({
   }),
 }));
 
+// mock-isolation: Cold-route proof must not inspect the operator's desktop host.
 vi.mock("../gateway/desktop/host-source.js", () => ({
   inspectHostDesktop: async () => ({ status: { enabled: false, state: "disabled" } }),
 }));
 
+// mock-isolation: Network discovery is outside the config-import boundary being measured.
 vi.mock("../infra/network-discovery-display.js", () => ({
   inspectBestEffortPrimaryTailnetIPv4: () => ({ tailnetIPv4: undefined }),
   resolveBestEffortGatewayBindHostForDisplay: async () => ({ bindHost: "127.0.0.1" }),
 }));
 
+// mock-isolation: Supply an idle port without probing the operator's live services.
 vi.mock("../infra/ports-inspect.js", () => ({
   inspectPortConnections: async (port: number) => ({ port, connections: [] }),
   inspectPortUsage: async (port: number) => ({ port, status: "free", listeners: [], hints: [] }),
   inspectPortUsages: async () => new Map(),
 }));
 
+// mock-isolation: Cold-route proof uses no installed plugins or operator plugin state.
 vi.mock("../plugins/installed-plugin-index-record-reader.js", () => ({
   loadInstalledPluginIndexInstallRecords: async () => ({}),
 }));
 
+// mock-isolation: Capture CLI output and exits without writing to or terminating the test process.
 vi.mock("../runtime.js", () => ({
   defaultRuntime: {
     error: vi.fn(),

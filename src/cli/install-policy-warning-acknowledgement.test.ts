@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions as resolveOptions } from "./install-policy-warning-acknowledgement.ts";
 
 const promptText = vi.hoisted(() => vi.fn());
+// mock-isolation: Supply explicit acknowledgement answers without an interactive terminal prompt.
 vi.mock("./prompt.js", () => ({ promptText }));
 const streams = [process.stdin, process.stdout];
 const originalTtys = streams.map((stream) => Object.getOwnPropertyDescriptor(stream, "isTTY"));

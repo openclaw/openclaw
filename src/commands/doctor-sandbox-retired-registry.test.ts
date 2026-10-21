@@ -10,6 +10,7 @@ const at = (name: string) => path.join(fixture.root, name);
 const read = (file: string) => fs.readFileSync(file, "utf8");
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 vi.mock("../agents/sandbox/docker.js", () => ({}));
+// mock-isolation: Retired-registry repairs must address only each test's temporary sandbox paths.
 vi.mock("../agents/sandbox/constants.js", () => {
   const prop = (p: string) => ({ enumerable: true, get: () => path.join(fixture.root, p) });
   const paths = {
