@@ -94,19 +94,17 @@ export function registerSessionNativeRuntimeConsentTests(support: {
 
   async function prepareConsent(entry: Partial<SessionEntry> = {}) {
     const sessionKey = `agent:main:native-consent-${++nextConsentSession}`;
-    const scope = { agentId: "main", sessionKey };
+    const { scope, seed, read } = sessionMutationFixture(sessionKey);
     support.getConfig().agents!.defaults!.sandbox = { mode: "all" };
     support.getConfig().tools = { fs: { workspaceOnly: true }, deny: ["exec"] };
-    await upsertSessionEntryCore(scope, {
-      sessionId: sessionKey,
+    await seed({
       lifecycleRevision: "native-consent-generation",
-      updatedAt: 1,
       label: "Keep this chat",
       ...nativeSelection,
       permissionMode: "workspace",
       ...entry,
     });
-    const before = loadSessionEntry(scope);
+    const before = read();
     const requestContext = nativeContext();
     support.prepareRuntime.mockResolvedValue(readyRuntime());
     const patch = {
@@ -127,7 +125,6 @@ export function registerSessionNativeRuntimeConsentTests(support: {
     ) => patchSession({ key: sessionKey, ...params }, scopes, requestContext, requestClient);
     const accept = async (params: Record<string, unknown>) =>
       expect((await run(params))[0]).toBe(true);
-    const read = () => loadSessionEntry(scope);
     const claim = (runId: string) =>
       claimAgentRunContext(
         runId,
@@ -313,15 +310,11 @@ export function registerSessionNativeRuntimeConsentTests(support: {
 
   it("retargets queued work on native model selection", async () => {
     const sessionKey = "agent:main:model-only-patch";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        sessionId: sessionKey,
-        updatedAt: 1,
-        agentRuntimeOverride: "openclaw",
-        nativeRuntimeConsent: "previous-native-runtime",
-      },
-    );
+    const { seed, read } = sessionMutationFixture(sessionKey);
+    await seed({
+      agentRuntimeOverride: "openclaw",
+      nativeRuntimeConsent: "previous-native-runtime",
+    });
     const requestContext = nativeContext();
     support.prepareRuntime.mockResolvedValue({
       kind: "ready",
@@ -337,7 +330,7 @@ export function registerSessionNativeRuntimeConsentTests(support: {
       );
       expect(response[0]).toBe(true);
       expect(queued).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
-      const stored = loadSessionEntry({ agentId: "main", sessionKey });
+      const stored = read();
       expect(stored).toMatchObject(nativeSelection);
       expect(stored).not.toHaveProperty("nativeRuntimeConsent");
     } finally {
@@ -406,4 +399,14 @@ export function createSessionMutationContext(
     dedupe: new Map(),
     ...(cron ? { cron } : {}),
   } as unknown as GatewayRequestContext;
+}
+
+export function sessionMutationFixture(sessionKey: string, agentId = "main") {
+  const scope = { agentId, sessionKey };
+  return {
+    scope,
+    read: () => loadSessionEntry(scope),
+    seed: (entry: Partial<SessionEntry> = {}) =>
+      upsertSessionEntryCore(scope, { sessionId: sessionKey, updatedAt: 1, ...entry }),
+  };
 }

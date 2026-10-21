@@ -51,26 +51,6 @@ export function registerSessionOperatorPreparationTests(fixture: {
   const entry = (key: string) => loadSessionEntry(scope(key));
   const transcript = (key: string, sessionId: string) =>
     loadTranscriptEvents({ ...scope(key), sessionId });
-  const operator = () => fixture.personClient(fixture.profileId(), ["operator.admin"]);
-  const contextFor = (client: GatewayClient) => {
-    const context = fixture.context();
-    context.getClientConnIds = (filter) =>
-      new Set(
-        client.connId && !client.invalidated && (!filter || filter(client)) ? [client.connId] : [],
-      );
-    return context;
-  };
-  const operatorOptions = (caller: GatewayClient, context: GatewayRequestContext) => ({
-    cfg: context.getRuntimeConfig(),
-    getCurrentConfig: context.getRuntimeConfig,
-    agentId: "main",
-    model: "openai/gpt-5.6-sol",
-    commandSource: "test",
-    requestingOperatorProfileId: fixture.profileId(),
-    requestingOperatorScopes: caller.connect.scopes,
-    loadGatewayModelCatalogSnapshot: () =>
-      context.loadGatewayModelCatalogSnapshot({ agentId: "main" }),
-  });
   const sessionHeader = expect.arrayContaining([expect.objectContaining({ type: "session" })]);
   const incognitoResponse = [
     true,
@@ -111,6 +91,35 @@ export function registerSessionOperatorPreparationTests(fixture: {
   const cases = (["sessions.patch", "sessions.patchMany", "sessions.create"] as const).flatMap(
     (method) => (["params", "caller", "target"] as const).map((change) => ({ method, change })),
   );
+  function preparedOperator() {
+    const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
+    const context = fixture.context();
+    context.getClientConnIds = (filter) =>
+      new Set(
+        caller.connId && !caller.invalidated && (!filter || filter(caller)) ? [caller.connId] : [],
+      );
+    return {
+      caller,
+      context,
+      options: () => ({
+        cfg: context.getRuntimeConfig(),
+        getCurrentConfig: context.getRuntimeConfig,
+        agentId: "main",
+        model: "openai/gpt-5.6-sol",
+        commandSource: "test",
+        requestingOperatorProfileId: fixture.profileId(),
+        requestingOperatorScopes: caller.connect.scopes,
+        loadGatewayModelCatalogSnapshot: () =>
+          context.loadGatewayModelCatalogSnapshot({ agentId: "main" }),
+      }),
+      start: (
+        method: Parameters<typeof startRequest>[0],
+        params: Record<string, unknown>,
+        requestId: string,
+        authorize = true,
+      ) => startRequest(method, params, caller, context, requestId, authorize),
+    };
+  }
   describe("session mutation operator preparation", () => {
     it.for([
       ...cases,
@@ -132,8 +141,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
         }
         const before = entry(key);
         const otherBefore = entry(otherKey);
-        const caller = operator();
-        const context = contextFor(caller);
+        const { caller, start } = preparedOperator();
         const patch = { model: "openai/gpt-5.6-sol", label: `capture-${method}-${change}` };
         const target = { key };
         const params: Record<string, unknown> =
@@ -183,7 +191,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
               : vi
                   .spyOn(patchDiscovery, "discoverSessionPatchTargets")
                   .mockImplementation((...args) => recordTarget(discoverTargets(...args)));
-        const request = startRequest(method, params, caller, context, key);
+        const request = start(method, params, key);
         const { responses } = request;
         const running = request.running.then(
           () => undefined,
@@ -271,20 +279,13 @@ export function registerSessionOperatorPreparationTests(fixture: {
     it("creates a logical secondary agent session in the main agent's missing exact shared store", async () => {
       const storePath = path.join(sessionDirs.make(), "shared.sqlite");
       try {
-        const caller = operator();
-        const context = contextFor(caller);
+        const { context, start } = preparedOperator();
         const cfg = context.getRuntimeConfig();
         cfg.session = { ...cfg.session, store: storePath };
         await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
         const key = "agent:work:dashboard:shared-physical-main";
         const params = { agentId: "work", key, model: "openai/gpt-5.6-sol" };
-        const { responses, running } = startRequest(
-          "sessions.create",
-          params,
-          caller,
-          context,
-          key,
-        );
+        const { responses, running } = start("sessions.create", params, key);
         await running;
         expect(responses).toHaveLength(1);
         expect(responses[0]?.[0], JSON.stringify(responses[0])).toBe(true);
@@ -309,8 +310,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
       const root = sessionDirs.make();
       const repoRoot = await initializeRepository(root, "project");
       const project = await registerProjectRegistry({ path: repoRoot });
-      const caller = operator();
-      const context = contextFor(caller);
+      const { caller, context, options } = preparedOperator();
       const key = "agent:main:dashboard:captured-project-creation";
       const statePath = resolveOpenClawStateSqlitePath();
       const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
@@ -328,7 +328,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
         void preparation.catch(() => {});
         try {
           const result = await createGatewaySession({
-            ...operatorOptions(caller, context),
+            ...options(),
             key,
             operatorAuthority: preparation,
             prepareLifecycle: async () => {
@@ -364,18 +364,11 @@ export function registerSessionOperatorPreparationTests(fixture: {
       });
     });
     it("preserves fresh System incognito creation", async () => {
-      const caller = operator();
+      const { caller, start } = preparedOperator();
       delete caller.authenticatedUserProfile;
       caller.internal = { operatorRoleActor: { kind: "system" } };
       const params = { agentId: "main", incognito: true, model: "openai/gpt-5.6-sol" };
-      const { responses, running } = startRequest(
-        "sessions.create",
-        params,
-        caller,
-        contextFor(caller),
-        "system-incognito",
-        false,
-      );
+      const { responses, running } = start("sessions.create", params, "system-incognito", false);
       await running;
       expect(responses[0]).toMatchObject(incognitoResponse);
     });
@@ -421,8 +414,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
             now: i + 1,
           })),
         });
-        const caller = operator();
-        const context = contextFor(caller);
+        const { caller, context, options } = preparedOperator();
         const prepareFork = sessionFork.prepareSessionForkFromParent;
         const revoked = new Error("original creation source ended before entry commit");
         const runOutsideCreation = AsyncLocalStorage.snapshot();
@@ -482,7 +474,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
           void preparation.catch(() => {});
           try {
             return await createGatewaySession({
-              ...operatorOptions(caller, context),
+              ...options(),
               key: fork && incognito ? undefined : childKey,
               parentSessionKey: fork ? parentKey : undefined,
               fork,
