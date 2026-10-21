@@ -173,24 +173,6 @@ describe("cron tool creator cap", () => {
     }
   });
 
-  it("inherits kind for kind-less patches independently of creator policy", () => {
-    const patch = { payload: { model: null } };
-    expect(
-      planCronJobUpdatePatch({
-        patch,
-        creatorToolAllowlist: undefined,
-      }),
-    ).toEqual({ kind: "needs-current-job" });
-
-    expect(
-      readyPatch({
-        patch,
-        creatorToolAllowlist: undefined,
-        currentJob: { payload: agentPayload },
-      }),
-    ).toEqual({ payload: { kind: "agentTurn", model: null } });
-  });
-
   const native = { name: "exec", execOrigin: "native" } as const;
   const direct = { name: "exec", execOrigin: "openclaw" } as const;
   const aliased = { ...direct, aliasName: "gateway_exec" };

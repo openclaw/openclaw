@@ -10,26 +10,14 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import type { CronJob } from "../../cron/types.js";
-import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
-import {
-  createCronCreatorAuthorityCapability,
-  runWithCronCreatorAuthorityCapability,
-} from "../cron-creator-authority-context.js";
 import { createCronTool } from "./cron-tool.js";
+import { withCronManagementCaller } from "./cron-tool.management.test-support.js";
 import {
   createHostStreamApprovalProvider,
   proveHostStreamApprovalEffects,
 } from "./cron-tool.stream-exec-policy.e2e.test-support.js";
 import type { CronToolOptions, GatewayToolCaller } from "./cron-tool.types.js";
-import {
-  withGatewayToolCallerIdentity,
-  withoutGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { withoutGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import * as gatewayModule from "./gateway.js";
 import type { GatewayCallOptions } from "./gateway.js";
 
@@ -104,45 +92,22 @@ async function withWeakManagementTool<T>(
   run: (tool: ReturnType<typeof createCronTool>) => Promise<T>,
 ): Promise<T> {
   const runId = "cron-stream-management-authority";
-  const { operationalRunInstance } = createTestAdmittedRunContext(runId);
-  const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  const capability = createCronCreatorAuthorityCapability(
-    runId,
-    { kind: "unknown" },
-    { source: "control-ui-admin" },
-  );
-  if (!capability) {
-    throw new Error("expected management authority capability");
-  }
-  const identity: AgentRuntimeIdentity = {
-    kind: "agentRuntime",
-    agentId: "main",
-    sessionKey: "agent:main:control-ui",
-    operationalRunInstance,
-    delegatedAuthority: { ...authority, kind: "local" },
-  };
-  try {
-    using _ = vi
-      .spyOn(gatewayModule, "callGatewayTool")
-      .mockImplementation((...args) =>
-        withoutGatewayToolCallerIdentity(() => callGatewayTool(...args)),
-      );
-    return await runWithCronCreatorAuthorityCapability(capability, () =>
-      withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, () =>
-        run(
-          createCronTool({
-            runId,
-            agentSessionKey: identity.sessionKey,
-            creatorToolAllowlist: ["read"],
-            execOverrides: { host: "gateway", security: "full", ask: "off" },
-            sandboxed: false,
-          }),
-        ),
-      ),
+  using _ = vi
+    .spyOn(gatewayModule, "callGatewayTool")
+    .mockImplementation((...args) =>
+      withoutGatewayToolCallerIdentity(() => callGatewayTool(...args)),
     );
-  } finally {
-    releaseAgentRunDelegatedAuthority(authority);
-  }
+  return await withCronManagementCaller(runId, (identity) =>
+    run(
+      createCronTool({
+        runId,
+        agentSessionKey: identity.sessionKey,
+        creatorToolAllowlist: ["read"],
+        execOverrides: { host: "gateway", security: "full", ask: "off" },
+        sandboxed: false,
+      }),
+    ),
+  );
 }
 
 function seedRestartExhaustedStream(instance: OpenClawTestInstance, jobId: string): void {

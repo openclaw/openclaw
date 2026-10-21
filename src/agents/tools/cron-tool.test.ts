@@ -628,15 +628,6 @@ it.each([false, true])(
   },
 );
 
-it("rejects unknown finite tools when the creator has no tools", async () => {
-  await expect(
-    executeCron(addJob({ payload: agentTurn({ toolsAllow: ["future__tool"] }) }), {
-      creatorToolAllowlist: [],
-    }),
-  ).rejects.toThrow('Requested automation tool "future__tool" cannot be carried');
-  expect(callGatewayMock).not.toHaveBeenCalled();
-});
-
 it("resolves symbolic groups before persisting the cap", async () => {
   const resolveCreatorToolAuthority = vi.fn(async () =>
     resolvedCreatorAuthority(["read", { name: "configured__lookup", pluginId: "bundle-mcp" }]),

@@ -459,52 +459,43 @@ describe("cron shorthand and schedule recovery", () => {
       expectAdd(expected);
     });
 
-    it.each([
-      {
-        name: "explicit on-exit creation",
-        args: {
+    const watcherName = "Build watcher";
+    const report = { kind: "agentTurn", message: "Report build output" };
+    const tail = ["tail", "-F", "/tmp/build.log"];
+    it.each<[label: string, args: Record<string, unknown>, error?: string]>([
+      [
+        "on-exit",
+        { action: "add", kind: "on-exit", command: "pnpm build", cwd: "/repo", message: "rebuilt" },
+        "automation on-exit schedules cannot be created or edited",
+      ],
+      ["command-only update", { action: "update", jobId: "job", command: "make" }],
+      [
+        "flat command without kind",
+        {
           action: "add",
-          kind: "on-exit",
-          command: "pnpm build",
-          cwd: "/repo",
-          message: "rebuilt",
-        },
-        error: "automation on-exit schedules cannot be created or edited",
-      },
-      {
-        name: "ambiguous command-only update",
-        args: { action: "update", jobId: "job", command: "make" },
-        error: "Read the full automations schema and WATCH OUTPUT example",
-      },
-      {
-        name: "command creation with a flat interval but no schedule kind",
-        args: {
-          action: "add",
-          name: "Build watcher",
+          name: watcherName,
           everyMs: 60_000,
-          command: ["tail", "-F", "/tmp/build.log"],
-          message: "Report build output",
+          command: tail,
+          message: report.message,
         },
-        error: "Read the full automations schema and WATCH OUTPUT example",
-      },
-      {
-        name: "command creation with a nested cron expression but no schedule kind",
-        args: {
+      ],
+      [
+        "nested command without kind",
+        {
           action: "add",
           job: {
-            name: "Build watcher",
-            schedule: { expr: "* * * * *", command: ["tail", "-F", "/tmp/build.log"] },
-            payload: { kind: "agentTurn", message: "Report build output" },
+            name: watcherName,
+            schedule: { expr: "* * * * *", command: tail },
+            payload: report,
           },
         },
-        error: "Read the full automations schema and WATCH OUTPUT example",
-      },
-      {
-        name: "malformed stream creation without a schedule kind",
-        args: {
+      ],
+      [
+        "malformed stream",
+        {
           action: "add",
           job: {
-            name: "Build watcher",
+            name: watcherName,
             schedule: {
               type: "stream",
               command: "/usr/bin/tail -n 0 -F /tmp/build.log",
@@ -513,12 +504,14 @@ describe("cron shorthand and schedule recovery", () => {
             payload: { type: "send_message", conversationId: "current", template: "{{line}}" },
           },
         },
-        error: "Read the full automations schema and WATCH OUTPUT example",
+      ],
+    ])(
+      "rejects %s before Gateway effects",
+      async (_label, args, error = "Read the full automations schema and WATCH OUTPUT example") => {
+        await expect(execute(args)).rejects.toThrow(error);
+        expect(callGatewayMock).not.toHaveBeenCalled();
       },
-    ])("rejects $name before Gateway effects", async ({ args, error }) => {
-      await expect(execute(args)).rejects.toThrow(error);
-      expect(callGatewayMock).not.toHaveBeenCalled();
-    });
+    );
 
     it("loads the current revision before updating a flat trigger", async () => {
       callGatewayMock.mockResolvedValueOnce({
