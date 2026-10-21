@@ -755,7 +755,8 @@ it("refuses another guest and lost access before binding, PR import and earlier 
           roles: {
             default: "guest",
             definitions: {
-              guest: { sessions: { others: "none" }, agents: ["main"], scopes },
+              // Team guests can view shared conversations they do not own.
+              guest: { sessions: { others: "view" }, agents: ["main"], scopes },
               revoked: { sessions: { others: "none" }, agents: [], scopes: [] },
             },
           },
@@ -865,6 +866,13 @@ it("refuses another guest and lost access before binding, PR import and earlier 
           true,
           { file: { content: "original notes\n" } },
         ]);
+        // The other guest may view the conversation's current files, never its originals.
+        const worktree = await managedWorktrees.findLiveByOwner("session", target.sessionKey);
+        assert(worktree, "Preparation must bind the PR workspace");
+        await fs.writeFile(path.join(worktree.path, "notes.md"), "PR notes\n");
+        expect(await requestSessionFile(context, target.sessionKey, {}, otherClient)).toMatchObject(
+          [true, { file: { content: "PR notes\n" } }],
+        );
         const refused = [false, undefined];
         expect((await readEarlier(otherClient)).slice(0, 2)).toEqual(refused);
         await setGuestRole("revoked");
