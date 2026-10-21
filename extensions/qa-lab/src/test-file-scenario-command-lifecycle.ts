@@ -81,7 +81,6 @@ export function runQaScenarioCommandLifecycle(
         : {}),
       executionTimeoutMs: execution.timeoutMs,
       forwardParentSignals: true,
-      initialSignal: "SIGTERM",
       onSettled: (outcome) => {
         const primary = outcome.primary;
         if (primary.type === "spawn-error" || primary.type === "stream-error") {
