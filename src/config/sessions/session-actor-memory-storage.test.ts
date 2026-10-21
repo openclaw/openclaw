@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type {
@@ -37,9 +38,7 @@ afterEach(() => {
 });
 
 function storage(actor: SessionActor): SessionActorStorage {
-  if (!actor.storage) {
-    throw new Error("Memory actor has no storage capability");
-  }
+  assert(actor.storage, "Memory actor has no storage capability");
   return actor.storage;
 }
 async function fixture(seed = false) {
@@ -194,9 +193,7 @@ describe("actor-owned memory storage", () => {
     async (change) => {
       const { actor, store } = await fixture(true);
       const expected = await entry(store);
-      if (!expected) {
-        throw new Error("Expected seeded entry");
-      }
+      assert(expected, "Expected seeded entry");
       if (change === "entry") {
         expect(await patch(store, "Keep this update")).toMatchObject({ kind: "committed" });
       } else {
@@ -233,9 +230,7 @@ describe("actor-owned memory storage", () => {
   it("archives a current entry without overwriting a newer entry from a stale plan", async () => {
     const { actor, store } = await fixture(true);
     const expected = await entry(store);
-    if (!expected) {
-      throw new Error("Expected seeded entry");
-    }
+    assert(expected, "Expected seeded entry");
     expect(await patch(store, "Newer label")).toMatchObject({ kind: "committed" });
     expectCommitted(await archive(store, expected), {
       archivedSessionKeys: [],
@@ -386,9 +381,7 @@ describe("actor-owned memory storage", () => {
       value: { label: "Saved" },
       failure: { message: "publication failed" },
     });
-    if (result.kind !== "committed") {
-      throw new Error("Expected committed result");
-    }
+    assert(result.kind === "committed", "Expected committed result");
     result.value!.label = "Caller mutation";
     Object.assign(result.changes[0]!.after!.version, { sequence: 100 });
     expect(actor.snapshot(authority)?.entry?.label).toBe("Saved");
@@ -415,9 +408,7 @@ describe("actor-owned memory storage", () => {
         kind: "stage",
         trackCompletion: true,
       });
-      if (expected.kind !== "stage") {
-        throw new Error("Expected staging snapshot");
-      }
+      assert(expected.kind === "stage", "Expected staging snapshot");
       return mutate(selected, "session.pendingInput.mutate", {
         ...input,
         kind: "stage",

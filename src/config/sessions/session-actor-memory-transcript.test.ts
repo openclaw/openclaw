@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
   SessionActorAppend,
@@ -14,6 +15,7 @@ import type { InternalSessionEntry } from "./types.js";
 const sessionKey = "agent:main:dashboard:incognito-transcript-test";
 const sessionId = "session-1";
 const path = ":memory:transcript-test";
+const scope = { agentId: "main", storePath: path, sessionKey, sessionId };
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
 afterEach(() => {
@@ -23,10 +25,28 @@ afterEach(() => {
 });
 
 function committed<Value>(outcome: SessionActorOutcome<Value>) {
-  if (outcome.kind !== "committed") {
-    throw new Error(`Expected a committed command: ${JSON.stringify(outcome)}`);
-  }
+  assert(outcome.kind === "committed", "Expected a committed command");
   return outcome;
+}
+
+type MetadataInput = Extract<SessionActorAppend, { kind: "metadata" }>["input"];
+function messageInput(
+  id: string,
+  parentId: string,
+  messageJson: string,
+  validateTurn = false,
+  time = 2,
+) {
+  return {
+    event: { type: "message" as const, id, parentId, timestamp: new Date(time).toISOString() },
+    message: { messageJson, cwd: "/synthetic", validateTurn },
+  };
+}
+
+function metadataResult(outcome: SessionActorOutcome<unknown>) {
+  const result = committed(outcome).receipt.transcript.append;
+  assert(result?.kind === "metadata");
+  return result.value;
 }
 
 function expectMessage(
@@ -44,6 +64,25 @@ function expectPending(
   consumedInputIds: string[],
 ) {
   expect(receipt.pendingInputReceipt).toEqual({ transcriptInputId, consumedInputIds });
+}
+
+function pendingFacts(
+  message: { idempotencyKey: string },
+  inputId: string,
+  transcriptInputId = inputId,
+): SessionPendingInputWorkerFacts {
+  return {
+    agentId: "main",
+    databaseAgentId: "main",
+    databasePath: path,
+    sessionKey,
+    sessionId,
+    inputId,
+    transcriptInputId,
+    idempotencyKey: message.idempotencyKey,
+    lifecycleGeneration: "life-1",
+    messageJson: JSON.stringify(message),
+  };
 }
 
 function turn(
@@ -114,10 +153,15 @@ async function fixture(
     write: async (...args: Parameters<typeof turn>) => committed(await append(turn(...args))),
     metadata: (
       commandId: string,
-      input: Extract<SessionActorAppend, { kind: "metadata" }>["input"],
+      input: Omit<MetadataInput, "scope" | "options"> &
+        Partial<Pick<MetadataInput, "scope" | "options">>,
     ) =>
       actor.appendTranscriptEvent(
-        { commandId, phaseId: "turn", append: { kind: "metadata", input } },
+        {
+          commandId,
+          phaseId: "turn",
+          append: { kind: "metadata", input: { scope, options: {}, ...input } },
+        },
         authority,
       ),
     stage: (commandId: string, source: SessionPendingInputWorkerFacts) =>
@@ -158,39 +202,17 @@ describe("memory actor transcript", () => {
     const messageJson =
       '{ "role": "assistant", "content": "Exact bytes", "timestamp": 2, "idempotencyKey": "answer" }';
     const input = {
-      scope: { agentId: "main", storePath: path, sessionKey, sessionId },
-      event: {
-        type: "message" as const,
-        id: "assistant-1",
-        parentId: "user-1",
-        timestamp: "1970-01-01T00:00:00.002Z",
-      },
-      message: { messageJson, cwd: "/synthetic", validateTurn: false },
-      options: {},
+      ...messageInput("assistant-1", "user-1", messageJson),
       view: { loadedVersion: { generation: null, rawSeq: null, updatedAt: null } },
     };
     const first = committed(await metadata("metadata", input));
-    const result = first.receipt.transcript.append;
-    if (
-      result?.kind !== "metadata" ||
-      !result.value.reload?.ok ||
-      result.value.reload.value.kind !== "full"
-    ) {
-      throw new Error("Expected full metadata reload");
-    }
-    expect(result.value.reload.value.snapshot.eventJson?.at(-1)).toContain(
-      `"message":${messageJson}}`,
-    );
+    const result = metadataResult(first);
+    assert(result.reload?.ok && result.reload.value.kind === "full");
+    expect(result.reload.value.snapshot.eventJson?.at(-1)).toContain(`"message":${messageJson}}`);
     const replay = committed(
       await metadata("replay", { ...input, event: { ...input.event, id: "retry-id" } }),
     );
-    expect(replay.receipt.transcript.appendedMessages).toMatchObject([
-      {
-        appended: false,
-        messageId: "assistant-1",
-        message: { content: "Exact bytes" },
-      },
-    ]);
+    expectMessage(replay.receipt, false, "assistant-1", { content: "Exact bytes" });
     expect(replay.receipt.transcript.after).toEqual(first.receipt.transcript.after);
   });
 
@@ -199,7 +221,6 @@ describe("memory actor transcript", () => {
     const beforeSibling = actor.snapshot(authority)!.transcript.version;
     await write([{ message: { role: "assistant", content: "Sibling" }, eventId: "sibling" }]);
     const beforePair = actor.snapshot(authority)!.transcript.version;
-    const scope = { agentId: "main", storePath: path, sessionKey, sessionId };
     const initialModel = {
       type: "model_change" as const,
       id: "model",
@@ -217,24 +238,17 @@ describe("memory actor transcript", () => {
     };
     const outcome = committed(
       await metadata("initial-metadata", {
-        scope,
         initialModel,
         event: JSON.stringify(thinking),
         options: { appendIntent: "active-branch", expectedMutationAt: beforePair.updatedAt },
         view: { loadedVersion: beforeSibling },
       }),
     );
-    const appended = outcome.receipt.transcript.append;
-    if (
-      appended?.kind !== "metadata" ||
-      !appended.value.reload?.ok ||
-      appended.value.reload.value.kind !== "full"
-    ) {
-      throw new Error("Expected the complete rebased metadata view");
-    }
-    expect(appended.value.snapshot).toMatchObject({ ok: true, value: { before: beforePair } });
-    expect(appended.value.initialModelParentId).toBe("sibling");
-    expect(appended.value.reload.value.snapshot.events.slice(-3)).toMatchObject([
+    const appended = metadataResult(outcome);
+    assert(appended.reload?.ok && appended.reload.value.kind === "full");
+    expect(appended.snapshot).toMatchObject({ ok: true, value: { before: beforePair } });
+    expect(appended.initialModelParentId).toBe("sibling");
+    expect(appended.reload.value.snapshot.events.slice(-3)).toMatchObject([
       { id: "sibling" },
       { id: "model", parentId: "sibling" },
       { id: "thinking", parentId: "model", thinkingLevel: "high" },
@@ -243,10 +257,8 @@ describe("memory actor transcript", () => {
     const beforeRefusal = actor.snapshot(authority);
     expect(
       await metadata("incomplete-pair", {
-        scope,
         initialModel: { ...initialModel, id: "rolled-back-model", parentId: "thinking" },
         event: JSON.stringify({ ...thinking, parentId: "rolled-back-model" }),
-        options: {},
       }),
     ).toMatchObject({ kind: "rolled-back" });
     expect(actor.snapshot(authority)).toEqual(beforeRefusal);
@@ -275,13 +287,7 @@ describe("memory actor transcript", () => {
         },
       },
     ]);
-    expect(replay.receipt.transcript.appendedMessages).toMatchObject([
-      {
-        appended: false,
-        messageId: "prepared-1",
-        message: accepted,
-      },
-    ]);
+    expectMessage(replay.receipt, false, "prepared-1", accepted);
     const skipped = await write([
       {
         message: { ...original, idempotencyKey: "suppressed" },
@@ -302,19 +308,7 @@ describe("memory actor transcript", () => {
       timestamp: 2,
       idempotencyKey: "pending",
     };
-    const messageJson = JSON.stringify(message);
-    const custody: SessionPendingInputWorkerFacts = {
-      agentId: "main",
-      databaseAgentId: "main",
-      databasePath: path,
-      sessionKey,
-      sessionId,
-      inputId: "input-2",
-      transcriptInputId: "input-2",
-      idempotencyKey: "pending",
-      lifecycleGeneration: "life-1",
-      messageJson,
-    };
+    const custody = pendingFacts(message, "input-2");
     committed(await stage("stage", custody));
     const plan = {
       ...turn([
@@ -335,20 +329,13 @@ describe("memory actor transcript", () => {
     expect(actor.snapshot(authority)).toEqual(snapshot);
     const promoted = committed(
       await metadata("promote", {
-        scope: { agentId: "main", storePath: path, sessionKey, sessionId },
-        event: {
-          type: "message",
-          id: "host-candidate",
-          parentId: "user-1",
-          timestamp: "1970-01-01T00:00:00.002Z",
-        },
+        ...messageInput("host-candidate", "user-1", custody.messageJson),
         message: {
           messageJson: JSON.stringify({ ...message, content: "New host candidate" }),
           cwd: "/synthetic",
           validateTurn: false,
           pendingInput: { facts: custody },
         },
-        options: {},
       }),
     );
     expectMessage(promoted.receipt, true, "input-2", message);
@@ -381,19 +368,7 @@ describe("memory actor transcript", () => {
       timestamp: 2,
       idempotencyKey: "collected",
     };
-    const messageJson = JSON.stringify(message);
-    const source: SessionPendingInputWorkerFacts = {
-      agentId: "main",
-      databaseAgentId: "main",
-      databasePath: path,
-      sessionKey,
-      sessionId,
-      inputId: "source-input",
-      transcriptInputId: "collected-transcript",
-      idempotencyKey: "collected",
-      lifecycleGeneration: "life-1",
-      messageJson,
-    };
+    const source = pendingFacts(message, "source-input", "collected-transcript");
     committed(await stage("stage-collected", source));
     const plan = { ...turn([{ message }]), custody: { ...source, sources: [source] } };
     const first = committed(await append(plan));
@@ -507,14 +482,12 @@ describe("memory actor transcript", () => {
       },
     );
     const first = committed(await append(plan));
-    expect(first.value).toMatchObject({
+    const goalResult = (replayed: boolean) => ({
       result: {
-        sessionTurnMutationResult: {
-          replayed: false,
-          result: { goalId: "goal-1", runId: "goal-run" },
-        },
+        sessionTurnMutationResult: { replayed, result: { goalId: "goal-1", runId: "goal-run" } },
       },
     });
+    expect(first.value).toMatchObject(goalResult(false));
     expect(first.receipt.transcript.appendedMessages[0]?.message).toMatchObject({
       __openclaw: {
         intent: { kind: "session-goal-start", goalId: "goal-1", operationId: "goal-operation" },
@@ -522,21 +495,12 @@ describe("memory actor transcript", () => {
     });
     const snapshot = actor.snapshot(authority)!;
     const replay = committed(await append(plan));
-    expect(replay.value).toMatchObject({
-      result: {
-        sessionTurnMutationResult: {
-          replayed: true,
-          result: { goalId: "goal-1", runId: "goal-run" },
-        },
-      },
-    });
+    expect(replay.value).toMatchObject(goalResult(true));
     expect(replay.receipt.transcript.appendedMessages).toEqual([]);
     expect(actor.snapshot(authority)?.entry).toEqual(snapshot.entry);
     expect(replay.receipt.transcript.after).toEqual(snapshot.transcript.version);
     const identity = actor.target.database;
-    if (identity.kind !== "memory") {
-      throw new Error("Expected memory identity");
-    }
+    assert(identity.kind === "memory");
     expect(
       await append({
         ...plan,
@@ -587,24 +551,16 @@ describe("memory actor transcript", () => {
       },
     ]);
     const user = latest.receipt.transcript.appendedMessages[0]?.anchor;
-    if (!user) {
-      throw new Error("Expected admitted user anchor");
-    }
+    assert(user, "Expected admitted user anchor");
     const result = committed(
       await metadata("bounded", {
-        scope: { agentId: "main", storePath: path, sessionKey, sessionId },
-        event: {
-          type: "message",
-          id: "final",
-          parentId: "display",
-          timestamp: "1970-01-01T00:00:00.004Z",
-        },
-        message: {
-          messageJson: JSON.stringify({ role: "assistant", content: "Answer" }),
-          cwd: "/synthetic",
-          validateTurn: true,
-        },
-        options: {},
+        ...messageInput(
+          "final",
+          "display",
+          JSON.stringify({ role: "assistant", content: "Answer" }),
+          true,
+          4,
+        ),
         view: {
           loadedVersion: { generation: null, rawSeq: null, updatedAt: null },
           limits: { maxBytes: 4096, maxEvents: 2 },
@@ -612,15 +568,9 @@ describe("memory actor transcript", () => {
         },
       }),
     );
-    const appended = result.receipt.transcript.append;
-    if (
-      appended?.kind !== "metadata" ||
-      !appended.value.reload?.ok ||
-      appended.value.reload.value.kind !== "bounded"
-    ) {
-      throw new Error("Expected bounded reload");
-    }
-    const context = appended.value.reload.value.snapshot;
+    const appended = metadataResult(result);
+    assert(appended.reload?.ok && appended.reload.value.kind === "bounded");
+    const context = appended.reload.value.snapshot;
     expect(context.events).toMatchObject([
       { type: "session" },
       { id: "reset" },
@@ -631,8 +581,10 @@ describe("memory actor transcript", () => {
     expect(context.parents.get("final")).toBe("display");
     expect(context.opaqueParents.get("display")).toBe("user-2");
     expect(context.firstKeptRanges.get("reset")).toEqual({ startIndex: 1, endIndex: 1 });
-    expect(context.boundaryCount).toBe(1);
-    expect(context.activeLeafEntryId).toBe("final");
-    expect(context.truncated).toBe(true);
+    expect(context).toMatchObject({
+      boundaryCount: 1,
+      activeLeafEntryId: "final",
+      truncated: true,
+    });
   });
 });
