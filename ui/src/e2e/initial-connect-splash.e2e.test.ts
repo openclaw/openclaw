@@ -230,7 +230,7 @@ suite.define(() => {
     let chatModuleRequested = false;
     const chatModule = createDeferredCore();
     await page.route(`${new URL(suite.server.baseUrl).origin}/**`, async (route) => {
-      if (new URL(route.request().url()).pathname.endsWith("/chat-page.ts")) {
+      if (new URL(route.request().url()).pathname.endsWith("/chat-page.tsx")) {
         chatModuleRequested = true;
         await chatModule.promise;
       }
@@ -317,7 +317,7 @@ suite.define(() => {
       "/src/pages/debug/debug-overlay-content.ts",
       "/src/components/desktop/desktop-panel.ts",
       "/src/components/terminal/terminal-panel-registration.ts",
-      "/src/pages/chat/chat-page.ts",
+      "/src/pages/chat/chat-page.tsx",
     ]);
     const requestedWorkspaceModules = new Set<string>();
     page.on("request", (request) => {

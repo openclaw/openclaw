@@ -2074,3 +2074,25 @@ starts real agent turns, and waits for success. The report must observe each
 turn's start and settlement events and each loopback inference request. Model
 and catalog traffic is reported separately and is excluded from the healthy-row
 rate comparison. The default run starts no model provider.
+
+## Prompt history fingerprints
+
+`prompt-cache-history-measure.ts` runs the production `convertToLlm` and history
+fingerprint owner over 400 synthetic assistant messages with text and nested tool
+arguments. It separates one cold call from 100 warm calls for append-normalized,
+sealed/reloaded, and mutable SDK history. It counts SHA-256 calls and UTF-8 input
+bytes per observation and per message, plus elapsed and process CPU time. These
+are fingerprint work counts, not whole-Gateway allocation or provider latency.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/prompt-cache-history-measure.ts \
+  --start-at <future-epoch-ms>
+```
+
+To compare a baseline, save its `prompt-cache-history.ts` beside the current
+module and pass its absolute path with `--owner`. Use the same runtime and fixture
+on both sides of each concurrent, locked pair, swapping CPU halves between pairs.
+Run at least five pairs. The retained append-normalized case should eliminate
+repeated nested-argument hashing; sealed history should remain at zero warm hash
+bytes, and mutable SDK content must still be inspected. Diagnostic output and
+in-place mutation coverage live in `prompt-cache-observability.history.test.ts`.
