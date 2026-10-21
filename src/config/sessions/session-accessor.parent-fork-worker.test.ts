@@ -54,7 +54,7 @@ it.each(["executor", "discovery"] as const)(
             .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
             .mockImplementation((...args): ReturnType<typeof capture> => {
               const owner = capture(...args);
-              const release = owner.release;
+              const release = owner.release.bind(owner);
               owner.release = async () => {
                 await release();
                 cleanupFailures++;

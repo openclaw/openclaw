@@ -100,17 +100,24 @@ it("keeps reads off writer queues and behind earlier writes", async ({ state }) 
     { include: ["worker.request"] },
   );
   try {
-    await store.lookup("missing");
-    await store.lookupMany(["a", "missing"]);
-    await store.entries();
-    await store.count();
-    await pluginStateEntriesInKeyRange({
-      pluginId,
-      ...scope,
-      keyStartInclusive: "a",
-      keyEndExclusive: "b",
-      limit: 10,
-    });
+    expect(await store.lookup("missing")).toBeUndefined();
+    expect(await store.lookupMany(["a", "missing"])).toEqual([
+      { ok: true, value: "first" },
+      { ok: true, value: undefined },
+    ]);
+    expect((await store.entries()).map(({ key, value }) => [key, value])).toEqual([["a", "first"]]);
+    expect(await store.count()).toBe(1);
+    expect(
+      (
+        await pluginStateEntriesInKeyRange({
+          pluginId,
+          ...scope,
+          keyStartInclusive: "a",
+          keyEndExclusive: "b",
+          limit: 10,
+        })
+      ).map(({ key, value }) => [key, value]),
+    ).toEqual([["a", "first"]]);
     await waitForDiagnosticEventsDrained();
     expect(queued).toHaveLength(5);
     expect(queued).not.toContain("sqlite_writer");
