@@ -1,5 +1,6 @@
 import { createComponent } from "solid-js";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, onTestFinished } from "vitest";
+import { page } from "vitest/browser";
 import { MessageMarkdown } from "../pages/chat/components/chat-message-text-view.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -7,6 +8,7 @@ import "../styles/base.css";
 import "../styles/components.css";
 import "../styles/chat/startup-layout.css";
 import "../styles/chat/text.css";
+import "../styles/layout.mobile.css";
 
 let scroller: HTMLElement;
 
@@ -15,9 +17,12 @@ afterEach(() => {
   scroller?.remove();
 });
 
-it.each([299, 300, 301, 1200])(
-  "keeps code actions available while reading %i source lines",
-  async (lines) => {
+it.each([390, 1100].flatMap((width) => [299, 300, 301, 1200].map((lines) => ({ width, lines }))))(
+  "keeps code actions available while reading $lines source lines at $width px",
+  async ({ width, lines }) => {
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    onTestFinished(() => page.viewport(viewport.width, viewport.height));
+    await page.viewport(width, 844);
     scroller = document.body.appendChild(document.createElement("section"));
     scroller.className = "chat-thread";
     scroller.style.cssText = "height:400px;width:600px";
