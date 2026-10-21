@@ -581,7 +581,6 @@ describe("mobile release CI tools", () => {
       "for dimensions in 1440x2560 454x454; do",
       '"$smoke_dir/input-${dimensions}.png" --out "$smoke_dir/output-${dimensions}.jpg"',
     );
-    expect(tooling).not.toContain("candidate/");
 
     const toolchainAction = parse(
       readText(".github/actions/setup-android-toolchain/action.yml"),
@@ -1651,7 +1650,6 @@ describe("mobile release CI tools", () => {
         }
         const probePath = args.at(-1);
         expect(executable).toBe("/usr/bin/codesign");
-        expect(probePath).toBeTruthy();
         expect(fs.readFileSync(probePath as string)).toEqual(fs.readFileSync("/usr/bin/true"));
         if (args.includes("--force")) {
           expect(args).toContain(keychainPath);

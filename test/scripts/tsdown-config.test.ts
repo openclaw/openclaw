@@ -1120,7 +1120,7 @@ console.log("relocated session card renders with bundled fonts");
   );
 
   it.each(
-    ["runtime", "declarations", ...workerBuildTargets.map(([target]) => target)].flatMap((target) =>
+    ["runtime", "declarations", "worker", "client-credentials", "receiver"].flatMap((target) =>
       [false, true].map((verbose) => ({ target, verbose })),
     ),
   )(
