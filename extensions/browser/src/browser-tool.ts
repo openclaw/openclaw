@@ -32,7 +32,7 @@ import {
   resolveBrowserToolNodeTarget,
   resolveBrowserToolTimeoutMs,
 } from "./browser-tool.routing.js";
-import type { BrowserToolCapabilities } from "./browser-tool.schema.js";
+import { BROWSER_ACT_REQUEST_KEYS, type BrowserToolCapabilities } from "./browser-tool.schema.js";
 import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
 import type { browserAct } from "./browser/client-actions.js";
 import {
@@ -177,37 +177,6 @@ async function readHostSystemProfiles(params: {
   }
 }
 
-const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
-  "kind",
-  "actions",
-  "stopOnError",
-  "targetId",
-  "ref",
-  "doubleClick",
-  "button",
-  "modifiers",
-  "x",
-  "y",
-  "text",
-  "submit",
-  "slowly",
-  "key",
-  "delayMs",
-  "startRef",
-  "endRef",
-  "values",
-  "fields",
-  "width",
-  "height",
-  "timeMs",
-  "textGone",
-  "selector",
-  "url",
-  "loadState",
-  "fn",
-  "timeoutMs",
-] as const;
-
 function readActRequestParam(params: Record<string, unknown>) {
   const requestParam = params.request;
   const nestedRequest =
@@ -222,7 +191,7 @@ function readActRequestParam(params: Record<string, unknown>) {
     typeof request.kind === "string" &&
     typeof params.kind === "string" &&
     request.kind !== params.kind;
-  for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
+  for (const key of BROWSER_ACT_REQUEST_KEYS) {
     if (Object.hasOwn(request, key) || !Object.hasOwn(params, key)) {
       continue;
     }
