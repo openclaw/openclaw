@@ -1,7 +1,7 @@
 import { describe, expect, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import "../../lib/toast-host.ts";
+import "../../lib/toast-host.tsx";
 import type { SessionGroupMutationResult } from "../app-sidebar.ts";
 import { installDialogPolyfill, submitInputDialog, waitForInputDialog } from "../modal-dialog.ts";
 import { openSubmenu, selectMenuValue } from "../session-menu.ts";

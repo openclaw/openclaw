@@ -5,7 +5,7 @@ import { i18n } from "../i18n/index.ts";
 import { waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { showToast, type ToastOptions } from "./toast.ts";
-import "./toast-host.ts";
+import "./toast-host.tsx";
 
 const rect = (element: Element) => element.getBoundingClientRect();
 async function useViewport(width: number, height = 844) {

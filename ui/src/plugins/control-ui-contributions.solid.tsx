@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { iconData, type IconName } from "../components/icon-data.ts";
 import type { SidebarMenus } from "../components/sidebar-menus.tsx";
@@ -90,7 +90,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
       },
     ),
   );
-  onCleanup(() => {
+  onSettled(() => () => {
     lifetime.abort();
     actionLifetimes.clear();
   });

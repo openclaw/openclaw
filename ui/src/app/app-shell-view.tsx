@@ -1,4 +1,4 @@
-import "../lib/toast-host.ts";
+import "../lib/toast-host.tsx";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { registerModalSurface } from "../components/overlay-registry.ts";
