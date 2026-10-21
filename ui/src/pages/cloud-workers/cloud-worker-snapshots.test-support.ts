@@ -48,9 +48,6 @@ export function snapshotListFixture(): SnapshotsResult {
       createdAtMs: Date.now() - 3_600_000,
       lastDemandAtMs: Date.now() - 60_000,
       baseCommit: "0123456789abcdef",
-      runtimeIdentity: {
-        nodeBootstrapSha256: "abcdef0123456789".repeat(4),
-      },
       allocationCount: 21,
       held: true,
       retirement: { checkpointId: "image-app-predecessor" },
@@ -72,25 +69,15 @@ export function snapshotListFixture(): SnapshotsResult {
       state: "no-image",
       allocationCount: 0,
       held: false,
-      capture: {
-        selector: "capture-uncertain",
-        phase: "uncertain",
-        stale: false,
-      },
+      capture: { selector: "capture-uncertain", phase: "uncertain", stale: false },
     },
     {
       profileKey: "profile-key-machine",
       profileId: "linux-build",
-      backend: "aws",
-      machineClass: "burst",
       state: "no-image",
       allocationCount: 1,
       held: false,
-      capture: {
-        selector: "capture-building",
-        phase: "creating",
-        stale: true,
-      },
+      capture: { selector: "capture-building", phase: "creating", stale: true },
     },
   ];
   return {
@@ -103,21 +90,6 @@ export function snapshotListFixture(): SnapshotsResult {
         os: "linux",
         warmImages: "on",
         reason: "Warm images are enabled for this Linux class.",
-      },
-      {
-        id: "cold-build",
-        backend: "aws",
-        machineClass: "standard",
-        os: "linux",
-        warmImages: "off",
-        reason: "Warm images are explicitly disabled.",
-      },
-      {
-        id: "classless-build",
-        backend: "aws",
-        os: "linux",
-        warmImages: "off",
-        reason: "A machine class is required.",
       },
     ],
     legacyLeases: [

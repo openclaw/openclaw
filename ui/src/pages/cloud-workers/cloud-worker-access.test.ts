@@ -5,15 +5,17 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import {
-  button,
-  mountPage,
-  setupSnapshotsDomSuite,
-} from "./cloud-worker-snapshots-dom.test-support.ts";
+import { button } from "./cloud-worker-snapshots-dom.test-support.ts";
 import {
   buildEnvironmentFixture,
   snapshotListFixture,
 } from "./cloud-worker-snapshots.test-support.ts";
+import {
+  machineProfile,
+  setupSnapshotTests,
+  waitRequest,
+  waitText,
+} from "./cloud-workers.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../components/confirm-dialog.ts")>()),
@@ -23,7 +25,7 @@ vi.mock("../../lib/toast.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/toast.ts")>()),
   showToast: vi.fn(),
 }));
-setupSnapshotsDomSuite();
+const mountPage = setupSnapshotTests();
 const methods = ["environments.list", "crabbox.images.list", "config.patch"];
 
 describe("Cloud worker access retirement", () => {
@@ -35,7 +37,7 @@ describe("Cloud worker access retirement", () => {
       const inventory = { environments: [buildEnvironmentFixture()] };
       const advertisedMethods =
         pendingMethod === "environments.list" ? ["environments.list", "config.patch"] : methods;
-      const fixture = mountPage(advertisedMethods, {
+      const { page, request, harness, client } = mountPage(advertisedMethods, {
         response: (method, params) => {
           if (method === pendingMethod && params?.projection !== "profiles" && hold) {
             return pending.promise;
@@ -45,86 +47,57 @@ describe("Cloud worker access retirement", () => {
             : undefined;
         },
       });
-      try {
-        await waitForSolid(() =>
-          expect(fixture.request).toHaveBeenCalledWith(
-            pendingMethod,
-            pendingMethod === "environments.list" ? { includePreparedDetails: true } : {},
-          ),
-        );
-        fixture.harness.publish(
-          true,
-          fixture.client,
-          gatewayHelloForMethods(advertisedMethods, ["operator.read"]),
-        );
-        flush();
-        expect(fixture.page.querySelector(".cloud-environments__row")).toBeNull();
-        hold = false;
-        pending.resolve(pendingMethod === "environments.list" ? inventory : snapshotListFixture());
-        await Promise.all(fixture.request.mock.results.map((result) => result.value));
-        flush();
-        expect(fixture.page.querySelector(".cloud-environments__row")).toBeNull();
-        expect(fixture.page.textContent).not.toContain("github.com/acme/app");
-        expect(fixture.page.textContent).not.toContain("legacy-worker");
+      await waitRequest(
+        request,
+        pendingMethod,
+        pendingMethod === "environments.list" ? { includePreparedDetails: true } : {},
+      );
+      harness.publish(true, client, gatewayHelloForMethods(advertisedMethods, ["operator.read"]));
+      flush();
+      expect(page.querySelector(".cloud-environments__row")).toBeNull();
+      hold = false;
+      pending.resolve(pendingMethod === "environments.list" ? inventory : snapshotListFixture());
+      await Promise.all(request.mock.results.map((result) => result.value));
+      flush();
+      expect(page.querySelector(".cloud-environments__row")).toBeNull();
+      expect(page.textContent).not.toContain("github.com/acme/app");
+      expect(page.textContent).not.toContain("legacy-worker");
 
-        fixture.harness.publish(true, fixture.client, gatewayHelloForMethods(advertisedMethods));
-        window.dispatchEvent(new Event("focus"));
-        await waitForSolid(() => expect(fixture.page.textContent).toContain("github.com/acme/app"));
-      } finally {
-        fixture.dispose();
-      }
+      harness.publish(true, client, gatewayHelloForMethods(advertisedMethods));
+      window.dispatchEvent(new Event("focus"));
+      await waitText(() => page, "github.com/acme/app");
     },
   );
 
   it("retires machine-profile drafts and a pending catalog after admin access is revoked", async () => {
     const pending = createDeferred<unknown>();
-    const fixture = mountPage(methods, {
-      config: {
-        cloudWorkers: {
-          profiles: {
-            linux: { provider: "crabbox", settings: { provider: "aws", class: "standard" } },
-          },
-        },
-      },
+    const { page, request, harness, client } = mountPage(methods, {
+      config: { cloudWorkers: { profiles: { linux: machineProfile() } } },
       response: (method, params) =>
         method === "environments.list" && params?.projection === "profiles"
           ? pending.promise
           : undefined,
     });
-    try {
-      const edit = await waitForSolid(() => {
-        const control = button(fixture.page, "Edit");
-        expect(control.disabled).toBe(false);
-        return control;
-      });
-      edit.click();
-      flush();
-      for (const label of ["Setup command", "Setup environment names"]) {
-        const field = expectDefined(
-          fixture.page.querySelector<HTMLInputElement | HTMLTextAreaElement>(
-            `[aria-label="${label}"]`,
-          ),
-          label,
-        );
-        field.value = "Unsaved private setup";
-        field.dispatchEvent(new Event("input", { bubbles: true }));
-      }
-      flush();
-      fixture.harness.publish(
-        true,
-        fixture.client,
-        gatewayHelloForMethods(methods, ["operator.read"]),
+    await waitForSolid(() => expect(button(page, "Edit").disabled).toBe(false));
+    button(page, "Edit").click();
+    flush();
+    for (const label of ["Setup command", "Setup environment names"]) {
+      const field = expectDefined(
+        page.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[aria-label="${label}"]`),
+        label,
       );
-      flush();
-      expect(fixture.page.querySelector('[aria-label="Setup command"]')).toBeNull();
-      expect(fixture.page.querySelector('[aria-label="Setup environment names"]')).toBeNull();
-      pending.resolve({ environments: [], profiles: [{ id: "linux" }] });
-      await Promise.all(fixture.request.mock.results.map((result) => result.value));
-      flush();
-      expect(fixture.page.textContent).not.toContain("Advertised");
-      expect(fixture.page.textContent).not.toContain("Unsaved private setup");
-    } finally {
-      fixture.dispose();
+      field.value = "Unsaved private setup";
+      field.dispatchEvent(new Event("input", { bubbles: true }));
     }
+    flush();
+    harness.publish(true, client, gatewayHelloForMethods(methods, ["operator.read"]));
+    flush();
+    expect(page.querySelector('[aria-label="Setup command"]')).toBeNull();
+    expect(page.querySelector('[aria-label="Setup environment names"]')).toBeNull();
+    pending.resolve({ environments: [], profiles: [{ id: "linux" }] });
+    await Promise.all(request.mock.results.map((result) => result.value));
+    flush();
+    expect(page.textContent).not.toContain("Advertised");
+    expect(page.textContent).not.toContain("Unsaved private setup");
   });
 });
