@@ -55,7 +55,8 @@ function advance<T>(elapsed: number, result: T): T {
   clock += elapsed;
   return result;
 }
-const run = (request = isolatedRequest()) => work.run(() => runIsolatedCompletion(request));
+const run = (request: Parameters<typeof runIsolatedCompletion>[0] = isolatedRequest()) =>
+  work.run(() => runIsolatedCompletion(request));
 function expectPhase(details: object, durationMs?: number) {
   expect(events).toEqual([
     expect.objectContaining({

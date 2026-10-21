@@ -65,8 +65,8 @@ describe.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
         const newer = [20, 200, null] as const;
         const older = [18, 100, 50] as const;
         const aliases = [
-          row(ordinary, ...(newest === "ordinary" ? newer : older)),
-          row(namespaced, ...(newest === "namespaced" ? newer : older)),
+          newest === "ordinary" ? row(ordinary, ...newer) : row(ordinary, ...older),
+          newest === "namespaced" ? row(namespaced, ...newer) : row(namespaced, ...older),
         ];
         const retained: AgentDatabases[] = [
           row(ordinary, 18, 300, 75, "other"),

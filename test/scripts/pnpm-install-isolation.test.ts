@@ -73,7 +73,8 @@ it("keeps installed compiler inputs unchanged when another checkout imports the 
       encoding: "utf8",
       timeout: 30_000,
     });
-    expect(result, result.stdout + result.stderr).toMatchObject({ error: undefined, status: 0 });
+    expect(result.error, result.stdout + result.stderr).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
     return path.join(cwd, "node_modules/isolation-fixture/index.js");
   };
   const first = install("first");

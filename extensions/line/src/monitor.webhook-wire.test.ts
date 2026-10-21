@@ -85,7 +85,12 @@ describe("monitorLineProvider webhook body limits over a real connection", () =>
     });
     const handler = requireRegisteredHandler();
     try {
-      await withServer(handler, (baseUrl) => run(`${baseUrl}/line/webhook`));
+      await withServer(
+        (req, res) => {
+          void handler(req, res);
+        },
+        (baseUrl) => run(`${baseUrl}/line/webhook`),
+      );
     } finally {
       await monitor.stop();
     }

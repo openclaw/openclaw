@@ -41,12 +41,13 @@ it.each(["linked owner", "configured owner", "allowlisted non-owner"])(
   "passes only live owner capabilities through native plugin dispatch: %s",
   (role) =>
     withDiscordNativeAdminFixture(async ({ cfg, profile, publishConfig, run }) => {
-      cfg.commands!.allowFrom = { discord: [`user:${user}`] };
+      const commands = (cfg.commands ??= {});
+      commands.allowFrom = { discord: [`user:${user}`] };
       if (role !== "linked owner") {
         setUserProfileRole(profile.id, "member");
       }
       if (role === "configured owner") {
-        cfg.commands!.ownerAllowFrom = [`discord:${user}`];
+        commands.ownerAllowFrom = [`discord:${user}`];
       }
       publishConfig();
       const handler = vi.fn(async () => ({ text: "owner-ok" }));
@@ -82,12 +83,12 @@ it.each(["linked owner", "configured owner", "allowlisted non-owner"])(
         if (role === "linked owner") {
           setUserProfileRole(profile.id, "member");
         } else {
-          cfg.commands.ownerAllowFrom = ["discord:999999999999999999"];
+          commands.ownerAllowFrom = ["discord:999999999999999999"];
           publishConfig();
         }
         expect(observed?.assertOwnerCurrent).toThrow("authority changed");
       }
-      cfg.commands.allowFrom = { discord: [] };
+      commands.allowFrom = { discord: [] };
       publishConfig();
       expect((await run({ pluginCommand: command })).followUp).toHaveBeenCalledWith(
         expect.objectContaining({ content: denied }),

@@ -60,6 +60,10 @@ it.each(["path", "supplied", "busy-timeout"] as const)(
     const next = acquirePath();
     expect(next).not.toBe(first);
     expect(opens()).toBe(2);
+    cache.closeOpenClawStateDatabaseByPath(pathname);
+    expect(next.db.isOpen).toBe(false);
+    expect(acquirePath().db.isOpen).toBe(true);
+    expect(opens()).toBe(3);
   },
 );
 

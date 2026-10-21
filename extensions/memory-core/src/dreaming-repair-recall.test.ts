@@ -70,7 +70,7 @@ async function seedRecallSources() {
   };
   return {
     workspaceDir,
-    async expectState(archived: boolean) {
+    expectState: async (archived: boolean) => {
       expect({
         recalls: new Set(await readShortTermRecallEntries({ workspaceDir, nowMs })),
         phases: (await readPhaseSignalStore(workspaceDir, nowIso)).entries,
