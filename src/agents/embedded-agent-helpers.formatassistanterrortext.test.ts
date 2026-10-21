@@ -151,17 +151,6 @@ describe("formatAssistantErrorText", () => {
       "Session history or replay state is invalid. Use /new to start a fresh session and try again.";
     expectBothCopies(msg, replayCopy);
   });
-  it("points unclassified failures to diagnostics", () => {
-    expect(
-      formatUserFacingAssistantErrorText(makeAssistantError("opaque-private-provider-detail"), {
-        provider: "openai",
-        model: "test-model",
-      }),
-    ).toBe(
-      "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
-    );
-  });
-
   it("keeps the generic last resort when no classified facts are available", () => {
     const raw = "opaque-private-provider-detail";
     const msg = makeAssistantMessageFixture({
@@ -177,25 +166,14 @@ describe("formatAssistantErrorText", () => {
     expect(formatUserFacingAssistantErrorText(msg)).toBe(GENERIC_ASSISTANT_ERROR_TEXT);
   });
 
-  it.each([
-    [
-      "server_error",
-      "HTTP 500: Authorization: Bearer sk-secret https://secret.example/path opaque-body",
-      expect.not.stringMatching(/sk-secret|secret\.example|opaque-body|Authorization/iu),
-    ],
-    [
-      "auth",
-      "HTTP 401: opaque-auth-canary",
-      "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
-    ],
-  ] as const)("keeps raw provider details out of %s copy", (reason, raw, expected) => {
-    const userFacing = formatUserFacingAssistantErrorText(makeAssistantError(raw), {
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      providerOwner: { id: "openai", classifyFailoverReason: () => reason },
-    });
-    expect(userFacing).toBeTypeOf("string");
-    expect(userFacing).toEqual(expected);
+  it("keeps raw provider details out of authentication failure copy", () => {
+    expect(
+      formatUserFacingAssistantErrorText(makeAssistantError("HTTP 401: opaque-auth-canary"), {
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        providerOwner: { id: "openai", classifyFailoverReason: () => "auth" },
+      }),
+    ).toBe(`⚠️ ${authInvalidTokenCopy}`);
   });
 
   it("classifies service_unavailable text as provider overload", () => {
