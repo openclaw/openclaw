@@ -162,6 +162,7 @@ describe("ClawRouter cold prepared catalog", () => {
     const value = createPreparedModelCatalogWorkerInput({
       agentFacts: prepared.agentFacts[0]!,
       pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+      preferBuiltPluginArtifacts: true,
     });
     if (refreshedAuth) {
       // The new credential must enter through the worker's durable auth refresh,
