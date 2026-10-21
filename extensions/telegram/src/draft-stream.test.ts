@@ -721,71 +721,51 @@ const replyQuote = {
 };
 
 describe("Telegram preview native quotes", () => {
-  it.each([false, true])(
-    "retains the accepted preview after quote rejection (rich: %s)",
-    async (rich) => {
-      const api = createMockDraftApi();
-      const send = rich ? api.raw.sendRichMessage : api.sendMessage;
-      send.mockRejectedValueOnce(new Error("Bad Request: quote not found"));
-      const stream = createDraftStream(api, {
-        thread: { id: 99, scope: "forum" },
-        replyToMessageId: 7,
-        replyToMode: "all",
-        replyQuote,
-        richMessages: rich,
-        renderText: (text) => (rich ? renderRichText(text) : { text, parseMode: "HTML" }),
+  it("retains the accepted rich preview after quote rejection", async () => {
+    const api = createMockDraftApi();
+    api.raw.sendRichMessage.mockRejectedValueOnce(new Error("Bad Request: quote not found"));
+    const stream = createDraftStream(api, {
+      thread: { id: 99, scope: "forum" },
+      replyToMessageId: 7,
+      replyToMode: "all",
+      replyQuote,
+      richMessages: true,
+      renderText: renderRichText,
+    });
+    try {
+      await updateAndFlush(stream, "First");
+      stream.update("Final");
+      await stream.stop();
+      const requests = api.raw.sendRichMessage.mock.calls.map(([params]) => params);
+      expect(requests).toHaveLength(2);
+      expect(requests[0]).toMatchObject({
+        message_thread_id: 99,
+        reply_parameters: {
+          message_id: 7,
+          allow_sending_without_reply: true,
+          quote: replyQuote.text,
+          quote_position: 0,
+          quote_entities: replyQuote.entities,
+        },
       });
-      try {
-        await updateAndFlush(stream, "First");
-        stream.update("Final");
-        await stream.stop();
-        const requests = rich
-          ? api.raw.sendRichMessage.mock.calls.map(([params]) => params)
-          : api.sendMessage.mock.calls.map((call) => call[2]);
-        expect(requests).toHaveLength(2);
-        expect(requests[0]).toMatchObject({
-          message_thread_id: 99,
-          reply_parameters: {
-            message_id: 7,
-            allow_sending_without_reply: true,
-            quote: replyQuote.text,
-            quote_position: 0,
-            quote_entities: replyQuote.entities,
-          },
-        });
-        expect(requests[1]).toMatchObject(
-          rich
-            ? {
-                message_thread_id: 99,
-                reply_parameters: { message_id: 7, allow_sending_without_reply: true },
-              }
-            : {
-                message_thread_id: 99,
-                reply_to_message_id: 7,
-                allow_sending_without_reply: true,
-              },
-        );
-        expect(requests[1]).not.toHaveProperty("reply_parameters.quote");
-        if (rich) {
-          expect(api.raw.editMessageText).toHaveBeenCalledWith(
-            expect.objectContaining({ chat_id: 123, message_id: 17 }),
-          );
-          expect(api.sendMessage).not.toHaveBeenCalled();
-        } else {
-          expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Final", {
-            parse_mode: "HTML",
-          });
-        }
-        expect(stream.currentMessageSnapshot()).toMatchObject({
-          text: "Final",
-          replyToMessageId: 7,
-        });
-        expect(api.deleteMessage).not.toHaveBeenCalled();
-      } finally {
-        await stream.discard();
-      }
-    },
-  );
+      expect(requests[1]).toMatchObject({
+        message_thread_id: 99,
+        reply_parameters: { message_id: 7, allow_sending_without_reply: true },
+      });
+      expect(requests[1]).not.toHaveProperty("reply_parameters.quote");
+      expect(api.raw.editMessageText).toHaveBeenCalledWith(
+        expect.objectContaining({ chat_id: 123, message_id: 17 }),
+      );
+      expect(api.sendMessage).not.toHaveBeenCalled();
+      expect(stream.currentMessageSnapshot()).toMatchObject({
+        text: "Final",
+        replyToMessageId: 7,
+      });
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+    } finally {
+      await stream.discard();
+    }
+  });
 
   it.each([
     { failure: "quote", retirement: "authorization" },

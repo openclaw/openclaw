@@ -275,26 +275,12 @@ describe("telegram doctor", () => {
   });
 
   it("removes retired group history context mode keys", () => {
-    expect(
-      telegramDoctor.legacyConfigRules?.some((rule) =>
-        rule.match?.(
-          {
-            includeGroupHistoryContext: "mention-only",
-          },
-          {},
-        ),
-      ),
-    ).toBe(true);
-    expect(
-      telegramDoctor.legacyConfigRules?.some((rule) =>
-        rule.match?.(
-          {
-            work: { includeGroupHistoryContext: "none" },
-          },
-          {},
-        ),
-      ),
-    ).toBe(true);
+    for (const scope of [
+      { includeGroupHistoryContext: "mention-only" },
+      { work: { includeGroupHistoryContext: "none" } },
+    ]) {
+      expect(telegramDoctor.legacyConfigRules?.some((rule) => rule.match?.(scope, {}))).toBe(true);
+    }
 
     const result = telegramDoctor.normalizeCompatibilityConfig!({
       cfg: telegramConfig({

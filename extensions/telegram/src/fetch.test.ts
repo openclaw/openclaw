@@ -1,6 +1,7 @@
 import type { LookupAddress, LookupOneOptions } from "node:dns";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
+import * as proxyCapture from "openclaw/plugin-sdk/proxy-capture";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTelegramFetch, resolveTelegramTransport } from "./fetch.js";
@@ -88,21 +89,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
       error: vi.fn(),
     }),
   }),
-  isTruthyEnvValue: (value?: string) => {
-    if (typeof value !== "string") {
-      return false;
-    }
-    switch (value.trim().toLowerCase()) {
-      case "":
-      case "0":
-      case "false":
-      case "no":
-      case "off":
-        return false;
-      default:
-        return true;
-    }
-  },
   isWSL2Sync: () => false,
 }));
 
@@ -293,6 +279,50 @@ afterEach(() => {
 });
 
 describe("resolveTelegramFetch", () => {
+  it("preserves caller responses, errors, and dispatcher ownership when capture rejects", async () => {
+    const capture = vi
+      .spyOn(proxyCapture, "captureHttpExchangeAsync")
+      .mockRejectedValue(new Error("diagnostic store failed"));
+    const syncCapture = vi.spyOn(proxyCapture, "captureHttpExchange");
+    const response = Response.json({ ok: true, result: { id: 123 } });
+    const failure = new Error("Telegram request failed");
+    undiciFetch.mockResolvedValueOnce(response).mockRejectedValueOnce(failure);
+    const callerDispatcher = { destroy: vi.fn() };
+    const init = { method: "POST", body: "{}", dispatcher: callerDispatcher };
+    const transport = resolveTelegramTransport(undefined, {
+      network: { autoSelectFamily: false, dnsResultOrder: "verbatim" },
+    });
+    const url = "https://api.telegram.org/botfixture/getMe";
+    try {
+      await expect(transport.fetch(url, init)).resolves.toBe(response);
+      await expect(response.json()).resolves.toEqual({ ok: true, result: { id: 123 } });
+      expect(undiciFetch).toHaveBeenCalledOnce();
+      expect(undiciFetch).toHaveBeenCalledWith(url, expect.objectContaining(init));
+      await expect(transport.fetch(url, init)).rejects.toBe(failure);
+      expect(undiciFetch).toHaveBeenCalledTimes(2);
+      expect(capture).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          url,
+          method: "POST",
+          requestBody: "{}",
+          response,
+          meta: { subsystem: "telegram-fetch" },
+        }),
+      );
+      expect(syncCapture).not.toHaveBeenCalled();
+    } finally {
+      await transport.close();
+      capture.mockRestore();
+      syncCapture.mockRestore();
+    }
+    await transport.close();
+    expect(AgentCtor).toHaveBeenCalledOnce();
+    expect(AgentCtor.mock.instances[0]?.destroy).toHaveBeenCalledOnce();
+    expect(callerDispatcher.destroy).not.toHaveBeenCalled();
+    await expect(transport.fetch(url, init)).rejects.toThrow("Telegram transport is closed");
+    expect(undiciFetch).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     { network: { dnsResultOrder: "verbatim" as const }, expected: true },
     { network: { dnsResultOrder: "ipv4first" as const, autoSelectFamily: true }, expected: true },

@@ -62,6 +62,10 @@ describe("isTelegramAuthenticationError", () => {
 });
 
 describe("isRecoverableTelegramNetworkError", () => {
+  const snippet = new Error("Undici: socket failure");
+  const fetchFailure = new Error("TypeError: fetch failed");
+  const envelope = new Error("Network request for 'sendMessage' failed!");
+  type Options = Parameters<typeof isRecoverableTelegramNetworkError>[1];
   it.each([
     ["ETIMEDOUT", "timeout"],
     ["ENETDOWN", "network down"],
@@ -71,65 +75,39 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(errorWithCode(message, code))).toBe(true);
   });
 
-  it("detects AbortError names", () => {
-    const err = Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
-    expect(isRecoverableTelegramNetworkError(err)).toBe(true);
-  });
-
-  it("detects expanded message patterns", () => {
-    expect(isRecoverableTelegramNetworkError(new Error("TypeError: fetch failed"))).toBe(true);
-    expect(isRecoverableTelegramNetworkError(new Error("Undici: socket failure"))).toBe(true);
-  });
-
-  it("treats undici fetch failed errors as recoverable in send context", () => {
-    const recoverable = (error: Error, context: "send" | "polling") =>
-      isRecoverableTelegramNetworkError(error, { context });
-    expect([
-      recoverable(new TypeError("fetch failed"), "send"),
-      recoverable(new Error("TypeError: fetch failed"), "send"),
-      recoverable(new TypeError("fetch failed"), "polling"),
-    ]).toEqual([true, true, true]);
-  });
-
-  it("honors allowMessageMatch=false for broad snippet matches", () => {
-    expect(
-      isRecoverableTelegramNetworkError(new Error("Undici: socket failure"), {
-        allowMessageMatch: false,
-      }),
-    ).toBe(false);
-    expect(
-      isRecoverableTelegramNetworkError(new Error("TypeError: fetch failed"), {
-        allowMessageMatch: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("skips broad message matches for send context", () => {
-    const networkRequestErr = new Error("Network request for 'sendMessage' failed!");
-    expect(isRecoverableTelegramNetworkError(networkRequestErr, { context: "send" })).toBe(false);
-    expect(isRecoverableTelegramNetworkError(networkRequestErr, { context: "polling" })).toBe(true);
-
-    const undiciSnippetErr = new Error("Undici: socket failure");
-    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "send" })).toBe(false);
-    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "polling" })).toBe(true);
-  });
-
-  it("allows snippet retries for idempotent operations", () => {
-    const error = new Error("Undici: socket failure");
-    expect(
-      (["delete", "react", "edit", "action", "send"] as const).map((context) =>
-        isRecoverableTelegramNetworkError(error, { context }),
+  it.each<[Error, boolean, Options?]>([
+    [Object.assign(new Error("The operation was aborted"), { name: "AbortError" }), true],
+    [fetchFailure, true],
+    [snippet, true],
+    [new TypeError("fetch failed"), true, { context: "send" }],
+    [fetchFailure, true, { context: "send" }],
+    [new TypeError("fetch failed"), true, { context: "polling" }],
+    [snippet, false, { allowMessageMatch: false }],
+    [fetchFailure, true, { allowMessageMatch: false }],
+    [envelope, false, { context: "send" }],
+    [envelope, true, { context: "polling" }],
+    [snippet, false, { context: "send" }],
+    [snippet, true, { context: "polling" }],
+    [snippet, true, { context: "delete" }],
+    [snippet, true, { context: "react" }],
+    [snippet, true, { context: "edit" }],
+    [snippet, true, { context: "action" }],
+    [
+      new Error("Network request for 'sendMessage' failed after 2 attempts."),
+      true,
+      { context: "send" },
+    ],
+    [new Error("invalid token"), false],
+    [new Error("Request to 'getUpdates' timed out after 500 seconds"), true],
+    [
+      new MockHttpError(
+        "Bad Request: invalid token",
+        new Error("Unauthorized: bot token is invalid"),
       ),
-    ).toEqual([true, true, true, true, false]);
-  });
-
-  it("treats grammY failed-after envelope errors as recoverable in send context", () => {
-    expect(
-      isRecoverableTelegramNetworkError(
-        new Error("Network request for 'sendMessage' failed after 2 attempts."),
-        { context: "send" },
-      ),
-    ).toBe(true);
+      false,
+    ],
+  ])("classifies %s as recoverable=%s with %j (#3815, #7239)", (error, expected, options) => {
+    expect(isRecoverableTelegramNetworkError(error, options)).toBe(expected);
   });
 
   it("keeps request-not-started markers recoverable across Telegram contexts", () => {
@@ -141,23 +119,6 @@ describe("isRecoverableTelegramNetworkError", () => {
 
     expect(isRecoverableTelegramNetworkError(marker, { context: "send" })).toBe(true);
     expect(isRecoverableTelegramNetworkError(wrapped, { context: "polling" })).toBe(true);
-  });
-
-  it("returns false for unrelated errors", () => {
-    expect(isRecoverableTelegramNetworkError(new Error("invalid token"))).toBe(false);
-  });
-
-  it("detects grammY 'timed out' long-poll errors (#7239)", () => {
-    const err = new Error("Request to 'getUpdates' timed out after 500 seconds");
-    expect(isRecoverableTelegramNetworkError(err)).toBe(true);
-  });
-
-  it("rejects non-network HttpError contents (#3815)", () => {
-    const error = new MockHttpError(
-      "Bad Request: invalid token",
-      new Error("Unauthorized: bot token is invalid"),
-    );
-    expect(isRecoverableTelegramNetworkError(error)).toBe(false);
   });
 });
 

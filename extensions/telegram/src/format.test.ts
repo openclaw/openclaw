@@ -51,6 +51,30 @@ describe("Telegram formatting", () => {
   });
 
   it.each([
+    ["nested tag overhead", "<b><i><u>x</u></i></b>", 10, ["x"]],
+    ["surrogate tag overhead", "<b>😀x</b>", 8, ["😀x"]],
+    ["combining tag overhead", "<b></b>e\u0301x", 8, ["e\u0301x"]],
+    [
+      "formatting after dropped link",
+      `<a href="https://example.com/${"x".repeat(40)}">first</a><b>second</b>`,
+      20,
+      ["first<b>second</b>"],
+    ],
+    ["zero limit", "abc", 0, ["a", "b", "c"]],
+    ["fractional limit", "abc", 2.9, ["ab", "c"]],
+    ["unlimited", "<b>&amp;😀</b>".repeat(1000), Infinity, ["<b>&amp;😀</b>".repeat(1000)]],
+    ["empty unlimited", "", Infinity, []],
+    [
+      "oversized entity cluster",
+      `&amp;${"\u0301".repeat(4000)}Z`,
+      4000,
+      [`&amp;${"\u0301".repeat(3995)}`, `${"\u0301".repeat(5)}Z`],
+    ],
+  ] as const)("splits HTML at the payload boundary: %s", (_name, html, cap, expected) => {
+    expect(splitTelegramHtmlChunks(html, cap)).toEqual(expected);
+  });
+
+  it.each([
     ["`<b>literal</b>`", "<code>&lt;b&gt;literal&lt;/b&gt;</code>"],
     [
       "```\n<blockquote>literal</blockquote>\n```",
@@ -229,31 +253,12 @@ describe("Telegram formatting", () => {
     ["x &#55296; y", "x &#55296; y"],
     ["x &#xDFFF; y", "x &#xDFFF; y"],
     ["x &#x1F600; &#128512; y", "x 😀 😀 y"],
-  ])("decodes only valid numeric entities: %s", (input, expected) => {
+    ["first<b>second</b>", "firstsecond"],
+  ])("projects fallback text without invalid entities or markup: %s", (input, expected) => {
     expect(telegramHtmlToPlainTextFallback(input)).toBe(expected);
   });
 
-  it.each([
-    ["<b><i><u>x</u></i></b>", 10, ["x"]],
-    ["<b>😀x</b>", 8, ["😀x"]],
-    ["<b></b>e\u0301x", 8, ["e\u0301x"]],
-  ] as const)(
-    "drops tag overhead that prevents payload from fitting: %s",
-    (html, cap, expected) => {
-      expect(splitTelegramHtmlChunks(html, cap)).toEqual(expected);
-    },
-  );
-
-  it("keeps later formatting balanced after dropping an oversized tag scope", () => {
-    const oversizedLink = `<a href="https://example.com/${"x".repeat(40)}">first</a>`;
-    const chunks = splitTelegramHtmlChunks(`${oversizedLink}<b>second</b>`, 20);
-
-    expect(chunks).toEqual(["first<b>second</b>"]);
-    expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
-    expect(telegramHtmlToPlainTextFallback(chunks.join(""))).toBe("firstsecond");
-  });
-
-  it("keeps a family emoji whole when the Telegram cap lands inside its ZWJ sequence", () => {
+  it("keeps a family emoji whole when the cap lands inside its ZWJ sequence", () => {
     const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
     const prefix = "a".repeat(3998);
     const input = `${prefix}${family}Z`;
@@ -298,28 +303,8 @@ describe("Telegram formatting", () => {
     },
   );
 
-  it("makes progress when an entity-leading cluster exceeds the cap", () => {
-    expect(splitTelegramHtmlChunks(`&amp;${"\u0301".repeat(4000)}Z`, 4000)).toEqual([
-      `&amp;${"\u0301".repeat(3995)}`,
-      `${"\u0301".repeat(5)}Z`,
-    ]);
-  });
-
   it("rejects NaN instead of repeatedly emitting chunks without consuming input", () => {
     expect(() => splitTelegramHtmlChunks("<b>abcdef</b>", Number.NaN)).toThrow(TypeError);
-  });
-
-  it.each([
-    [0, ["a", "b", "c"]],
-    [2.9, ["ab", "c"]],
-  ] as const)("normalizes limit %s before splitting", (limit, expected) => {
-    expect(splitTelegramHtmlChunks("abc", limit)).toEqual(expected);
-  });
-
-  it("supports unlimited HTML and empty input", () => {
-    const html = "<b>&amp;😀</b>".repeat(1000);
-    expect(splitTelegramHtmlChunks(html, Number.POSITIVE_INFINITY)).toEqual([html]);
-    expect(splitTelegramHtmlChunks("", Number.POSITIVE_INFINITY)).toEqual([]);
   });
 
   it("preserves supported tg-time markup", () => {
