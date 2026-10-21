@@ -1,7 +1,4 @@
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildFeishuConversationId, parseFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuTarget, stripFeishuProviderPrefix } from "./targets.js";
 import { getFeishuThreadBindingManager } from "./thread-bindings.js";
@@ -79,10 +76,7 @@ export function handleFeishuSubagentDeliveryTarget(event: FeishuSubagentDelivery
         if (existingBindings.length > 1) {
           if (rawTo && normalizedTarget && !threadId && !isChatTarget) {
             const directMatches = existingBindings.filter(
-              (entry) =>
-                entry.accountId === manager.accountId &&
-                entry.conversationId === normalizedTarget &&
-                !entry.parentConversationId,
+              (entry) => entry.conversationId === normalizedTarget && !entry.parentConversationId,
             );
             if (directMatches.length === 1) {
               return directMatches[0]!;
@@ -143,8 +137,7 @@ export function handleFeishuSubagentDeliveryTarget(event: FeishuSubagentDelivery
         (entry) =>
           entry.accountId === requesterConversation.accountId &&
           entry.conversationId === requesterConversation.conversationId &&
-          normalizeOptionalString(entry.parentConversationId) ===
-            normalizeOptionalString(requesterConversation.parentConversationId),
+          entry.parentConversationId === requesterConversation.parentConversationId,
       );
       if (matched) {
         return matched;
@@ -159,35 +152,25 @@ export function handleFeishuSubagentDeliveryTarget(event: FeishuSubagentDelivery
     return undefined;
   }
 
-  const resolveFeishuDeliveryOrigin = (): {
-    channel: "feishu";
-    accountId: string;
-    to: string;
-    threadId?: string;
-  } => {
-    const deliveryTo = binding.deliveryTo?.trim();
-    const deliveryThreadId = binding.deliveryThreadId?.trim();
-    const parsed = deliveryTo
-      ? null
-      : parseFeishuConversationId({
-          conversationId: binding.conversationId,
-          parentConversationId: binding.parentConversationId,
-        });
-    const threadId = deliveryTo ? deliveryThreadId : parsed?.topicId;
-    return {
-      channel: "feishu",
+  const deliveryTo = binding.deliveryTo;
+  const parsed = deliveryTo
+    ? null
+    : parseFeishuConversationId({
+        conversationId: binding.conversationId,
+        parentConversationId: binding.parentConversationId,
+      });
+  const threadId = deliveryTo ? binding.deliveryThreadId : parsed?.topicId;
+  return {
+    origin: {
+      channel: "feishu" as const,
       accountId: binding.accountId,
       to:
         deliveryTo ||
         (parsed?.topicId
-          ? `chat:${binding.parentConversationId?.trim() || parsed.chatId}`
+          ? `chat:${binding.parentConversationId || parsed.chatId}`
           : `user:${binding.conversationId}`),
       ...(threadId ? { threadId } : {}),
-    };
-  };
-
-  return {
-    origin: resolveFeishuDeliveryOrigin(),
+    },
   };
 }
 

@@ -1,4 +1,4 @@
-import "../lib/toast-host.ts";
+import "../lib/toast-host.tsx";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { registerModalSurface } from "../components/overlay-registry.ts";
@@ -184,7 +184,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
                   }
                   onClick={() => props.host.viewCallbacks.toggleSidebar()}
                 >
-                  <Icon name="panelLeftOpen" />
+                  <Icon name="sessionSidebarOpen" />
                 </button>
               </openclaw-tooltip>
             </Show>
@@ -360,6 +360,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
         <openclaw-terminal-panel
           ref={(element) => (props.host.terminalPanel = element)}
           inert={view().navDrawerOpen}
+          prop:mobile={view().mobileNavLayout}
           prop:client={view().gatewaySnapshot.client}
           prop:gatewayConnected={view().gatewayConnected}
           prop:available={view().terminalAvailable}

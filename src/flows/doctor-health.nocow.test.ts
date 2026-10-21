@@ -1,5 +1,5 @@
 import "./doctor-health.test-support.js";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -37,8 +37,8 @@ afterEach(() => {
 
 it.skipIf(process.platform !== "linux")(
   "joins Doctor's inspection child and database handles before rewriting both stores",
-  async () => {
-    await withOpenClawTestState(
+  () =>
+    withOpenClawTestState(
       {
         scenario: "external-service",
         label: "doctor-health-nocow",
@@ -62,10 +62,11 @@ it.skipIf(process.platform !== "linux")(
         setRuntimeConfigSnapshot(cfg);
         mocks.config.mockReturnValue(cfg);
         mocks.packageRoot.mockReturnValue(undefined);
-        const seeded = [
+        const openStores = () => [
           openOpenClawStateDatabase(),
           openOpenClawAgentDatabase({ agentId: "main" }),
         ];
+        const seeded = openStores();
         for (const database of seeded) {
           database.db.exec(
             "CREATE TABLE nocow_payload(value TEXT); INSERT INTO nocow_payload VALUES ('preserved');",
@@ -75,24 +76,20 @@ it.skipIf(process.platform !== "linux")(
         await closeOpenClawAgentDatabasesAsync(state.stateDir);
         await closeOpenClawStateDatabaseByPathAsync(paths[0]!);
         const originalInodes = paths.map((pathname) => fs.statSync(pathname).ino);
-        let reader: ChildProcess | undefined;
         let readerClosed = false;
         let handles: typeof seeded = [];
         mocks.runContributions.mockImplementationOnce(async () => {
-          handles = [openOpenClawStateDatabase(), openOpenClawAgentDatabase({ agentId: "main" })];
+          handles = openStores();
           await replaceSessionEntry(
             { agentId: "main", sessionKey: "agent:main:nocow", env: state.env },
             { sessionId: "doctor-nocow", updatedAt: 1 },
           );
           const location = await runSqliteReadOnlyWorker(paths[1]!, { mode: "sync" });
           expect(await adoptPreparedLocation(location).cleanupAsync()).toBe(true);
-          const children = vi.mocked(spawn).mock.calls.flatMap(([, args], index) => {
-            if (!Array.isArray(args)) {
-              return [];
-            }
+          const children = vi.mocked(spawn).mock.results.flatMap((result) => {
+            const child = result.type === "return" ? result.value : undefined;
+            const args = child?.spawnargs ?? [];
             const marker = args.indexOf(SQLITE_READONLY_CHILD_ARG);
-            const spawned = vi.mocked(spawn).mock.results[index];
-            const child = spawned?.type === "return" ? spawned.value : undefined;
             return marker >= 0 &&
               args[marker + 1] === "session" &&
               child?.exitCode === null &&
@@ -101,14 +98,13 @@ it.skipIf(process.platform !== "linux")(
               : [];
           });
           expect(children).toHaveLength(1);
-          reader = children[0]!;
+          const reader = children[0]!;
           reader.once("close", () => {
             readerClosed = true;
           });
           expect(handles.every((database) => database.db.isOpen)).toBe(true);
         });
         tools.beforeExchange = () => {
-          expect(reader).toBeDefined();
           expect(readerClosed).toBe(true);
           expect(handles.every((database) => !database.db.isOpen)).toBe(true);
         };
@@ -118,7 +114,6 @@ it.skipIf(process.platform !== "linux")(
           { repair: true, nonInteractive: true, workspaceSuggestions: false },
         );
         expect(readerClosed).toBe(true);
-        // Exchanges are per file; each store still reports completion once.
         const rewrites = log.mock.calls
           .flat()
           .filter(
@@ -131,16 +126,11 @@ it.skipIf(process.platform !== "linux")(
         expect(log.mock.calls.flat().join("\n")).not.toContain("SQLite NOCOW repair refused");
         for (const [index, pathname] of paths.entries()) {
           expect(fs.statSync(pathname).ino).not.toBe(originalInodes[index]);
-          const database = openNodeSqliteDatabase(pathname, { readOnly: true });
-          try {
-            expect(database.prepare("SELECT value FROM nocow_payload").get()?.value).toBe(
-              "preserved",
-            );
-          } finally {
-            database.close();
-          }
+          using database = openNodeSqliteDatabase(pathname, { readOnly: true });
+          expect(database.prepare("SELECT value FROM nocow_payload").get()).toMatchObject({
+            value: "preserved",
+          });
         }
       },
-    );
-  },
+    ),
 );

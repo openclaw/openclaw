@@ -72,3 +72,212 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+/* The picker floats over the existing canvas; it never reserves a rail or padding. */
+.chat-dashboard-menu {
+  position: absolute;
+  z-index: 2;
+  top: 10px;
+  right: 12px;
+}
+
+.chat-dashboard-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--accent);
+  opacity: 0.45;
+  transition: opacity 120ms ease;
+}
+
+.chat-dashboard-menu__trigger:is(:hover, :focus-visible, [aria-expanded="true"]) {
+  opacity: 1;
+}
+
+.board-session-surface:has(.board-tabs) .chat-dashboard-menu__trigger {
+  border: 1px solid var(--border);
+  background: transparent;
+  opacity: 1;
+}
+
+.sidebar-region--mobile-host .chat-dashboard-menu__trigger {
+  opacity: 1;
+}
+
+.chat-dashboard-menu__trigger > .oc-menu-item__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-dashboard-menu__trigger svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.65px;
+}
+
+.chat-dashboard-menu__trigger .chat-dashboard-menu__chevron {
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.chat-dashboard-menu__panel {
+  width: 350px;
+  min-width: 0;
+  max-width: calc(100vw - 24px);
+  padding: 8px;
+  border-radius: 22px;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.chat-dashboard-menu__panel .oc-menu-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 16px;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  font: inherit;
+}
+
+.chat-dashboard-menu__panel .oc-menu-item__icon {
+  grid-column: 1;
+  grid-row: 1;
+  margin: 0;
+  color: var(--muted);
+}
+
+.chat-dashboard-menu__panel .session-menu__icon,
+.chat-dashboard-menu__panel .session-menu__check,
+.chat-dashboard-menu__panel .board-widget__menu-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-dashboard-menu__panel .oc-menu-item__icon svg,
+.chat-dashboard-menu__panel .session-menu__check svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-dashboard-menu__panel .oc-menu-item__label {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+
+.chat-dashboard-menu__panel .oc-menu-item__check,
+.chat-dashboard-menu__panel .oc-menu-item__submenu-icon {
+  grid-column: 3;
+  grid-row: 1;
+  margin: 0;
+}
+
+.chat-dashboard-menu__panel .oc-menu-item__check {
+  color: var(--accent);
+}
+
+.chat-dashboard-menu__panel .session-menu__text,
+.chat-dashboard-menu__panel .session-menu__description {
+  display: block;
+  min-width: 0;
+  white-space: normal;
+}
+
+.chat-dashboard-menu__panel .session-menu__description {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.chat-dashboard-menu__panel [data-value="dashboard-default"] {
+  align-items: start;
+  padding-block: 8px;
+}
+
+.chat-dashboard-menu__default-status {
+  position: relative;
+}
+
+.chat-dashboard-menu__default-status .session-menu__status {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 8px 36px 8px 10px;
+  max-width: none;
+  font: inherit;
+}
+
+.chat-dashboard-menu__default-status .session-menu__check {
+  color: var(--muted);
+}
+
+.chat-dashboard-menu__default-status > svg {
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+}
+
+.chat-dashboard-menu__panel .board-widget__menu-separator {
+  margin: 7px 2px;
+  border-top: 1px solid var(--details-separator);
+}
+
+.chat-dashboard-menu__panel .board-widget__menu-heading {
+  padding: 3px 10px 6px;
+  font-size: 12px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.chat-dashboard-menu__sizes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 0 6px 5px;
+}
+
+.chat-dashboard-menu__sizes .board-widget__preset {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-height: 44px;
+  padding: 5px 2px;
+  border: 1px solid transparent;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-dashboard-menu__sizes .oc-menu-item__details {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.chat-dashboard-menu__sizes .is-current {
+  border-color: var(--border);
+  background: var(--bg-hover);
+}
+
+.chat-dashboard-menu__sizes .is-current .oc-menu-item__label {
+  color: var(--accent);
+}
+
+.chat-dashboard-menu__panel .board-widget__menu-danger,
+.chat-dashboard-menu__panel .board-widget__menu-danger .oc-menu-item__icon {
+  color: var(--danger);
+}

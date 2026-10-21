@@ -65,7 +65,10 @@ type AuditErrorCode = OnePasswordErrorCode | AuditInternalErrorCode;
 
 type BrokerStores = {
   audit: PluginStateKeyedStore<AuditRow>;
-  grants: PluginStateKeyedStore<StandingGrant>;
+  grants: Pick<
+    PluginStateKeyedStore<StandingGrant, 2>,
+    "register" | "lookup" | "lookupMany" | "entries" | "delete"
+  >;
   pending: PluginStateKeyedStore<PendingAuthorization>;
 };
 
@@ -73,7 +76,6 @@ type BrokerOptions = {
   resolveConfig: () => OnePasswordConfig | undefined;
   opClient: Pick<OpClient, "getItem">;
   stores: BrokerStores;
-  now?: () => number;
 };
 
 type AccessContext = {
@@ -175,7 +177,6 @@ export class OnePasswordBroker {
   private readonly resolveConfig: () => OnePasswordConfig | undefined;
   private readonly opClient: Pick<OpClient, "getItem">;
   private readonly stores: BrokerStores;
-  private readonly now: () => number;
   private readonly cache = new Map<string, CacheEntry>();
   private lastConfigFingerprint: string | null | undefined;
 
@@ -183,7 +184,6 @@ export class OnePasswordBroker {
     this.resolveConfig = options.resolveConfig;
     this.opClient = options.opClient;
     this.stores = options.stores;
-    this.now = options.now ?? Date.now;
   }
 
   private observeConfigFingerprint(fingerprint: string | null): void {
@@ -228,7 +228,7 @@ export class OnePasswordBroker {
     outcome: AuditOutcome,
     options: { errorCode?: AuditErrorCode } = {},
   ): Promise<void> {
-    const timestampMs = this.now();
+    const timestampMs = Date.now();
     const key = `${String(timestampMs).padStart(16, "0")}:${context.toolCallId}:${randomUUID()}`;
     await this.stores.audit.register(key, {
       timestampMs,
@@ -243,7 +243,7 @@ export class OnePasswordBroker {
   }
 
   private async pruneStaleGrants(config: OnePasswordConfig): Promise<void> {
-    const now = this.now();
+    const now = Date.now();
     for (const entry of await this.stores.grants.entries()) {
       const item = Object.hasOwn(config.items, entry.value.slug)
         ? config.items[entry.value.slug]
@@ -339,7 +339,7 @@ export class OnePasswordBroker {
       grant &&
       grant.agentId === context.agentId &&
       grant.slug === input.slug &&
-      grant.expiresAtMs > this.now() &&
+      grant.expiresAtMs > Date.now() &&
       grant.targetFingerprint === fingerprintOnePasswordTarget(item)
     ) {
       await authorize("grant");
@@ -393,21 +393,14 @@ export class OnePasswordBroker {
     let grants: Array<StandingGrant | undefined> = [];
     if (agentId) {
       const keys = items.map(([slug]) => standingGrantKey(agentId, slug));
-      if (this.stores.grants.lookupMany) {
-        grants = (await this.stores.grants.lookupMany(keys)).map((result) => {
-          if (!result.ok) {
-            throw result.error;
-          }
-          return result.value;
-        });
-      } else {
-        const entries = new Map(
-          (await this.stores.grants.entries()).map((entry) => [entry.key, entry.value]),
-        );
-        grants = keys.map((key) => entries.get(key));
-      }
+      grants = (await this.stores.grants.lookupMany(keys)).map((result) => {
+        if (!result.ok) {
+          throw result.error;
+        }
+        return result.value;
+      });
     }
-    const now = this.now();
+    const now = Date.now();
     return items.map(([slug, item], index) => {
       const grant = grants[index];
       return {
@@ -505,7 +498,7 @@ export class OnePasswordBroker {
         !grant ||
         grant.agentId !== authorization.agentId ||
         grant.slug !== input.slug ||
-        grant.expiresAtMs <= this.now() ||
+        grant.expiresAtMs <= Date.now() ||
         grant.targetFingerprint !== fingerprintOnePasswordTarget(item)
       ) {
         await this.audit(authorization, "error", { errorCode: "GRANT_EXPIRED" });
@@ -517,7 +510,7 @@ export class OnePasswordBroker {
     }
 
     if (authorization.persistGrant) {
-      const grantedAtMs = this.now();
+      const grantedAtMs = Date.now();
       const ttlMs = Math.round(config.grantTtlHours * 60 * 60 * 1000);
       try {
         await this.pruneStaleGrants(config);
@@ -542,7 +535,7 @@ export class OnePasswordBroker {
     const targetFingerprint = fingerprintOnePasswordTarget(item);
     if (
       cached &&
-      cached.expiresAtMs > this.now() &&
+      cached.expiresAtMs > Date.now() &&
       cached.targetFingerprint === targetFingerprint
     ) {
       await this.audit(authorization, "cache-hit");
@@ -562,7 +555,7 @@ export class OnePasswordBroker {
         this.cache.set(input.slug, {
           ...secret,
           targetFingerprint,
-          expiresAtMs: this.now() + config.cacheTtlSeconds * 1000,
+          expiresAtMs: Date.now() + config.cacheTtlSeconds * 1000,
         });
       }
       return { slug: input.slug, ...secret };

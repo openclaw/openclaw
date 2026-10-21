@@ -13,6 +13,7 @@ import {
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   BaseMessageInteractiveComponent,
   BaseComponentInteraction,
@@ -20,7 +21,10 @@ import type {
   MessagePayload,
 } from "../internal/discord.js";
 import { splitDiscordModelRef } from "./model-picker-preference-primitives.js";
-import { readDiscordModelPickerRecentModels } from "./model-picker-preferences.js";
+import {
+  readDiscordModelPickerRecentModels,
+  recordDiscordModelPickerRecentModel,
+} from "./model-picker-preferences.js";
 import {
   DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   createDiscordModelPickerModelToken,
@@ -38,7 +42,6 @@ import {
   renderDiscordModelPickerRecentsView,
 } from "./model-picker.view.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
-import { applyDiscordModelPickerSelection } from "./native-command-model-picker-apply.js";
 import {
   buildDiscordModelPickerAllowedModelRefs,
   buildDiscordModelPickerNoticePayload,
@@ -139,7 +142,9 @@ function listDiscordModelPickerProviderModels(
   provider: string,
 ): string[] {
   // Legacy index callbacks depend on JavaScript's original UTF-16 code-unit ordering.
-  return [...(data.byProvider.get(provider) ?? [])].toSorted();
+  return [...(data.byProvider.get(provider) ?? [])].toSorted((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
 }
 
 function resolveDiscordModelPickerModelRefByToken(
@@ -505,38 +510,89 @@ async function handleDiscordModelPickerInteraction(
       await showNotice("That model picker expired. Reopen /model to try again.");
       return;
     }
-    const applyResult = await applyDiscordModelPickerSelection({
-      ...ctx,
-      interaction,
-      selectionCommand,
-      dispatchCommandInteraction: params.dispatchCommandInteraction,
-      cfg,
-      route,
-      resolvedModelRef,
-      selectedRuntime,
-      preferenceScope,
-      settleMs: ctx.postApplySettleMs ?? 250,
-      resolveCurrentSelection: async (currentRoute) => {
+    const settleMs = ctx.postApplySettleMs ?? 250;
+    const noticeMessage = await (async () => {
+      const failureNotice = `❌ Failed to apply ${resolvedModelRef}. Try /model ${resolvedModelRef} directly.`;
+      try {
+        const dispatchResult = await withTimeout(
+          params.dispatchCommandInteraction({
+            readPolicy: ctx.readPolicy,
+            interaction,
+            prompt: selectionCommand.prompt,
+            command: selectionCommand.command,
+            commandArgs: selectionCommand.args,
+            cfg,
+            discordConfig: ctx.discordConfig,
+            accountId: ctx.accountId,
+            sessionPrefix: ctx.sessionPrefix,
+            preferFollowUp: true,
+            threadBindings: ctx.threadBindings,
+            suppressReplies: true,
+            buildContext: ctx.buildContext,
+            dispatchReplyFromConfig: ctx.dispatchReplyFromConfig,
+            pluginCommandDispatch: { kind: "non-plugin" },
+          }),
+          12000,
+        );
+        if (!dispatchResult.accepted) {
+          return failureNotice;
+        }
+        const hiddenFinalReply = dispatchResult.hiddenFinalReply;
+        const effectiveRoute = dispatchResult.effectiveRoute ?? route;
+        if (settleMs > 0) {
+          await new Promise((resolve) => {
+            setTimeout(resolve, settleMs);
+          });
+        }
+
         const currentEntry = await createDiscordModelPickerSessionReader({
           cfg,
-          route: currentRoute,
+          route: effectiveRoute,
         })();
-        const currentContext = { ...modelContext, route: currentRoute, sessionEntry: currentEntry };
-        return {
-          modelRef: await resolveDiscordModelPickerCurrentModel(currentContext),
-          runtime: resolveDiscordModelPickerCurrentRuntime(currentContext),
+        const currentContext = {
+          ...modelContext,
+          route: effectiveRoute,
+          sessionEntry: currentEntry,
         };
-      },
-    });
+        const effectiveModelRef = await resolveDiscordModelPickerCurrentModel(currentContext);
+        const effectiveRuntime = resolveDiscordModelPickerCurrentRuntime(currentContext);
+        const currentSelection = `Current selection: ${effectiveModelRef} with runtime ${effectiveRuntime}.`;
+        if (hiddenFinalReply?.isError) {
+          return `${hiddenFinalReply.text?.trim()}\n${currentSelection}`;
+        }
+        const runtime = selectedRuntime?.trim();
+        const expectedRuntime =
+          runtime === "auto" || runtime === "default" ? "auto" : runtime || undefined;
+        const verified =
+          effectiveModelRef === resolvedModelRef &&
+          (expectedRuntime === undefined || effectiveRuntime === expectedRuntime);
+        if (verified) {
+          await recordDiscordModelPickerRecentModel({
+            scope: preferenceScope,
+            modelRef: resolvedModelRef,
+            limit: 5,
+          }).catch(() => undefined);
+        }
+
+        return verified
+          ? hiddenFinalReply?.text?.trim() || `✅ Model set to ${resolvedModelRef}.`
+          : `⚠️ Tried to set ${resolvedModelRef}${expectedRuntime ? ` with runtime ${expectedRuntime}` : ""}, but current selection is ${effectiveModelRef} with runtime ${effectiveRuntime}.`;
+      } catch (error) {
+        if (error instanceof Error && error.message === "timeout") {
+          return `⏳ Model change to ${resolvedModelRef} is still processing. Check /status in a few seconds.`;
+        }
+        return failureNotice;
+      }
+    })();
 
     const delivered = await params.safeInteractionCall("model picker follow-up", () =>
       interaction.followUp({
-        ...buildDiscordModelPickerNoticePayload(applyResult.noticeMessage),
+        ...buildDiscordModelPickerNoticePayload(noticeMessage),
         ephemeral: true,
       }),
     );
     if (delivered !== null) {
-      await recordReply(selectionCommand.prompt, applyResult.noticeMessage, "selection");
+      await recordReply(selectionCommand.prompt, noticeMessage, "selection");
     }
     return;
   }

@@ -6,7 +6,6 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { removeDraftAttachment } from "./chat-attachment-draft.ts";
-import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { AttachmentRemove, CompactAttachmentFile } from "./chat-attachment-file.tsx";
 import type { AttachmentPreviewEntry } from "./chat-attachments.tsx";
 import { ComposerPastedText } from "./chat-composer-pasted-text.tsx";
@@ -117,16 +116,7 @@ function AttachmentTile(props: {
 }) {
   const att = () => props.entry.attachment;
   const reading = () => props.entry.state === "reading";
-  const failed = () => props.entry.state === "error";
-  const preparing = () =>
-    Boolean(
-      props.entry.preparation || (props.entry.errorMessage && att().mimeType.startsWith("video/")),
-    );
-  const failureLabel = () =>
-    t(props.entry.errorMessage ?? "chat.attachments.readFailed", {
-      names: att().fileName ?? t("chat.attachments.attachedFile"),
-      more: "",
-    });
+  const preparing = () => Boolean(props.entry.preparation);
   const removeLabel = () => {
     const name = att().fileName;
     return name?.trim()
@@ -146,7 +136,6 @@ function AttachmentTile(props: {
                 {
                   "chat-attachment-thumb--preparation": preparing(),
                   "chat-attachment-thumb--file": !att().mimeType.startsWith("image/"),
-                  "chat-attachment-thumb--error": failed(),
                 },
               ]}
               aria-busy={reading() && props.entry.preparation !== "offer" ? "true" : "false"}
@@ -168,30 +157,12 @@ function AttachmentTile(props: {
                     </button>
                   ) : (
                     <span class="chat-attachment-file__meta" role="status">
-                      {failed()
-                        ? failureLabel()
-                        : t("chat.attachments.compressing", {
-                            progress: String(Math.floor((props.entry.progress ?? 0) * 100)),
-                          })}
+                      {t("chat.attachments.compressing", {
+                        progress: String(Math.floor((props.entry.progress ?? 0) * 100)),
+                      })}
                     </span>
                   )}
                 </div>
-              ) : failed() ? (
-                <openclaw-tooltip prop:content={failureLabel()}>
-                  <span
-                    class="chat-attachment-error"
-                    tabindex="0"
-                    role="img"
-                    aria-label={failureLabel()}
-                  >
-                    <AttachmentFileIcon
-                      filename={att().fileName ?? ""}
-                      mimeType={att().mimeType}
-                      mode="large-placeholder"
-                      unavailable
-                    />
-                  </span>
-                </openclaw-tooltip>
               ) : reading() ? undefined : att().mimeType.startsWith("image/") &&
                 getChatAttachmentPreviewUrl(att()) ? (
                 <AttachmentImage

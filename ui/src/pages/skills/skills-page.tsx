@@ -1,6 +1,7 @@
-import { createEffect, createMemo, createStore, onCleanup, onSettled } from "solid-js";
+import { createEffect, createMemo, createStore, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
+import type { SolidRouteProps } from "../../app-route-types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   hasOperatorAdminAccess,
@@ -85,6 +86,14 @@ export type SkillsRouteData = {
 };
 
 export type SkillsPageProps = { routeData?: SkillsRouteData; surface?: "discovery" | "settings" };
+
+export function createSkillsRenderer(surface: "discovery" | "settings") {
+  return (props: SolidRouteProps<SkillsRouteData>) => (
+    <Show when={Boolean(props.data)}>
+      <SkillsPage routeData={props.data} surface={surface} />
+    </Show>
+  );
+}
 
 export function SkillsPage(props: SkillsPageProps) {
   const context = useApplication();
@@ -266,14 +275,14 @@ export function SkillsPage(props: SkillsPageProps) {
     const stopSkills = skills.subscribe(() => onSettled(syncIcons));
     syncSelection();
     syncIcons();
-    return () => [stopAgents, ...stopSelections, stopSkills].forEach((stop) => stop());
-  });
-  onCleanup(() => {
-    active = false;
-    clearClawHubSearchTimer();
-    searchRequest.cancel();
-    skills.dispose();
-    clawhubIcons.reset();
+    return () => {
+      active = false;
+      [stopAgents, ...stopSelections, stopSkills].forEach((stop) => stop());
+      clearClawHubSearchTimer();
+      searchRequest.cancel();
+      skills.dispose();
+      clawhubIcons.reset();
+    };
   });
 
   function syncSearch(scope: NonNullable<typeof lastSearchScope>, query: string) {

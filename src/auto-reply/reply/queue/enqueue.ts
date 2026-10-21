@@ -67,57 +67,6 @@ function isRunAlreadyQueued(run: FollowupRun, items: FollowupRun[]): boolean {
   return false;
 }
 
-function appendQueueItem(params: {
-  key: string;
-  queue: ReturnType<typeof getFollowupQueue>;
-  run: FollowupRun;
-  recentMessageIdKey?: string;
-  runFollowup?: (run: FollowupRun) => Promise<void>;
-  restartIfIdle: boolean;
-  front: boolean;
-}): void {
-  params.queue.lastEnqueuedAt = Date.now();
-  params.queue.lastRun = params.run.run;
-  params.run.queueAbortSignal = params.queue.abortController.signal;
-  const input = params.run.controllerInput!;
-  input.payload = "ready";
-  if (params.front) {
-    params.queue.priority = input;
-  }
-  if (params.recentMessageIdKey) {
-    recordRecentQueueMessageId(params.run, params.recentMessageIdKey);
-  }
-  const runFollowup = params.runFollowup;
-  if (runFollowup) {
-    rememberFollowupDrainCallback(params.key, runFollowup, params.queue);
-  }
-  const signal = resolveFollowupAbortSignal({
-    abortSignal: params.run.abortSignal,
-    operatorAuthority: params.run.operatorAuthority,
-  });
-  if (signal && runFollowup) {
-    const onAbort = () => {
-      // Cancellation must release pending ownership even while normal draining is dormant.
-      void dropAbortedFollowups(params.queue, runFollowup).catch((error: unknown) => {
-        defaultRuntime.error?.(`followup queue cancellation failed: ${String(error)}`);
-      });
-    };
-    const disposeSource = input.custody.disposeSource;
-    input.custody.disposeSource = () => {
-      signal.removeEventListener("abort", onAbort);
-      disposeSource?.();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-    }
-  }
-  if (params.restartIfIdle) {
-    params.queue.dispatchEnabled = true;
-    params.queue.wake();
-  }
-}
-
 export function enqueueFollowupRun(
   key: string,
   run: FollowupRun,
@@ -204,15 +153,47 @@ export function enqueueFollowupRun(
     if (!deferOverflow && !applyFollowupQueueOverflow(queue, run)) {
       return false;
     }
-    appendQueueItem({
-      key,
-      queue,
-      run,
-      recentMessageIdKey,
-      runFollowup,
-      restartIfIdle,
-      front: options.position === "front" && (!deferOverflow || options.steerCandidate === true),
+    const front =
+      options.position === "front" && (!deferOverflow || options.steerCandidate === true);
+    queue.lastEnqueuedAt = Date.now();
+    queue.lastRun = run.run;
+    run.queueAbortSignal = queue.abortController.signal;
+    const queuedInput = run.controllerInput!;
+    queuedInput.payload = "ready";
+    if (front) {
+      queue.priority = queuedInput;
+    }
+    if (recentMessageIdKey) {
+      recordRecentQueueMessageId(run, recentMessageIdKey);
+    }
+    if (runFollowup) {
+      rememberFollowupDrainCallback(key, runFollowup, queue);
+    }
+    const signal = resolveFollowupAbortSignal({
+      abortSignal: run.abortSignal,
+      operatorAuthority: run.operatorAuthority,
     });
+    if (signal && runFollowup) {
+      const onAbort = () => {
+        // Cancellation must release pending ownership even while normal draining is dormant.
+        void dropAbortedFollowups(queue, runFollowup).catch((error: unknown) => {
+          defaultRuntime.error?.(`followup queue cancellation failed: ${String(error)}`);
+        });
+      };
+      const disposeSource = queuedInput.custody.disposeSource;
+      queuedInput.custody.disposeSource = () => {
+        signal.removeEventListener("abort", onAbort);
+        disposeSource?.();
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) {
+        onAbort();
+      }
+    }
+    if (restartIfIdle) {
+      queue.dispatchEnabled = true;
+      queue.wake();
+    }
     if (!options.steerCandidate) {
       settleSessionControllerSourceInjectionOrder(input, false);
     }

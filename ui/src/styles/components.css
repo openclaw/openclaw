@@ -1355,6 +1355,14 @@ openclaw-toast-host[data-toast-placement="shell"]
   }
 }
 
+.app-toast--top-center {
+  left: 50%;
+  right: auto;
+  width: max-content;
+  max-width: min(370px, calc(100vw - 32px));
+  transform: translateX(-50%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .app-toast--bottom,
   .app-toast--anchored,
@@ -1369,6 +1377,22 @@ openclaw-toast-host[data-toast-placement="shell"]
 .app-toast__dismiss:hover,
 .app-toast__dismiss:focus-visible {
   color: var(--text-strong);
+}
+
+.app-toast--error {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+  background: color-mix(in srgb, var(--danger) 12%, var(--popover));
+  color: var(--danger);
+}
+
+.app-toast--error :is(.app-toast__icon, .app-toast__action, .app-toast__dismiss) {
+  color: inherit;
+}
+
+.app-toast--error .app-toast__action,
+.app-toast--error :is(.app-toast__action, .app-toast__dismiss):is(:hover, :focus-visible) {
+  background: var(--danger-subtle);
+  color: inherit;
 }
 
 .btn--icon {
@@ -3083,6 +3107,147 @@ td.data-table-key-col {
 
 .exec-approval-actions .btn {
   gap: 8px;
+}
+
+/* Opted in by the mobile composer. Width alone must not restyle desktop cards. */
+.exec-approval-card.exec-approval-card--mobile {
+  min-height: 36px;
+  min-width: 0;
+  flex-shrink: 0;
+  padding: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--composer-attached-surface, var(--chat-composer-surface, var(--card)));
+  border-color: var(--chat-composer-hairline, var(--border));
+  border-radius: 22px;
+  font-family: var(--font-body);
+}
+
+.exec-approval-card--mobile .exec-approval-header {
+  gap: 8px;
+}
+
+.exec-approval-card--mobile .exec-approval-title {
+  font-weight: 500;
+}
+
+.exec-approval-card--mobile .exec-approval-countdown {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.exec-approval-mobile-disclosure {
+  min-width: 0;
+  flex-shrink: 0;
+  margin-top: 12px;
+  overflow: hidden;
+}
+
+.exec-approval-mobile-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--bg-hover);
+  cursor: var(--cursor-action);
+  list-style: none;
+}
+
+.exec-approval-mobile-summary::-webkit-details-marker {
+  display: none;
+}
+
+.exec-approval-mobile-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.exec-approval-mobile-terminal,
+.exec-approval-mobile-chevron {
+  width: 16px;
+  height: 20px;
+  flex: 0 0 16px;
+  color: var(--muted);
+}
+
+.exec-approval-mobile-disclosure[open] .exec-approval-mobile-chevron {
+  transform: rotate(180deg);
+}
+
+.exec-approval-mobile-summary .exec-approval-command {
+  flex: 1;
+  min-width: 0;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.exec-approval-mobile-summary .exec-approval-command[data-scrollable="true"] {
+  mask-image: linear-gradient(to right, black calc(100% - 20px), transparent);
+}
+
+.exec-approval-mobile-disclosure[open] .exec-approval-command {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  mask-image: none;
+}
+
+.exec-approval-mobile-host {
+  display: contents;
+}
+
+.exec-approval-mobile-metadata .exec-approval-meta {
+  font-weight: 500;
+}
+
+.exec-approval-mobile-metadata .exec-approval-meta-row span:last-child {
+  font-weight: 400;
+}
+
+.exec-approval-mobile-host .exec-approval-meta-row span:last-child {
+  font-family: var(--font-body);
+  font-weight: 500;
+}
+
+.exec-approval-card--mobile .exec-approval-actions:not(openclaw-modal-actions) {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.exec-approval-card--mobile .exec-approval-actions .btn {
+  width: auto;
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.exec-approval-card--mobile .exec-approval-mobile-action--allow-always {
+  margin-right: auto;
+  border: 1px solid var(--chat-composer-hairline, var(--border));
+  background: transparent;
+  color: var(--text);
+}
+
+.exec-approval-card--mobile .exec-approval-mobile-action--deny {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text);
 }
 
 .exec-approval-list {

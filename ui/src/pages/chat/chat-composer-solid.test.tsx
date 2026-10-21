@@ -19,6 +19,7 @@ import {
 import { createTestChatPane, getPaneTestRuntime } from "./chat-pane.test-support.ts";
 import { keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { clearSubmittedComposerState, cancelChatDelivery } from "./chat-send-composer.ts";
+import { appendChatAttachmentFiles } from "./components/chat-attachments.ts";
 import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
@@ -125,6 +126,33 @@ it("updates edits and history from the draft owner without remounting the input"
   flush();
   expect(draftChanged).not.toHaveBeenCalled();
   expect(view.textarea()).toBe(textarea);
+});
+
+it("publishes attachment read progress through the composer owner without a draft edit", async () => {
+  const { owner, state, view } = mountOwnedComposer();
+  let reportProgress: (() => void) | undefined;
+  vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader) {
+    reportProgress = () =>
+      this.dispatchEvent(
+        new ProgressEvent("progress", { lengthComputable: true, loaded: 1, total: 2 }),
+      );
+  });
+  onTestFinished(() => owner.attachmentReads.abortReads());
+  const props = owner.attachmentInputProps(state);
+  view.update(props);
+  appendChatAttachmentFiles(
+    [new File(["progress"], "progress.txt", { type: "text/plain" })],
+    props,
+  );
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".chat-attachment-loading > span")).not.toBeNull(),
+  );
+  reportProgress?.();
+  flush();
+  expect(
+    view.container.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
+  ).toBe("scaleX(0.5)");
+  expect(view.textarea().value).toBe("");
 });
 
 it("publishes submitted and restored drafts without remounting the input", () => {

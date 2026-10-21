@@ -140,16 +140,18 @@ it.each([false, true])(
     const release = createDeferred();
     // oxlint-disable-next-line typescript/unbound-method -- Rebound to the original page-store receiver below.
     const originalRead = SessionSnapshotStore.prototype.read;
-    const storedRead = vi
-      .spyOn(SessionSnapshotStore.prototype, "read")
-      .mockImplementation(async function (this: SessionSnapshotStore, key) {
-        const snapshot = await originalRead.call(this, key);
-        if (key === mainSnapshotKey) {
-          entered.resolve();
-          await release.promise;
-        }
-        return snapshot;
-      });
+    vi.spyOn(SessionSnapshotStore.prototype, "read").mockImplementation(async function (
+      this: SessionSnapshotStore,
+      key,
+      onBoard,
+    ) {
+      const snapshot = await originalRead.call(this, key, onBoard);
+      if (key === mainSnapshotKey) {
+        entered.resolve();
+        await release.promise;
+      }
+      return snapshot;
+    });
     let pane: ChatPaneRuntime | undefined;
     const connected = vi.spyOn(ChatPaneRuntime.prototype, "start");
     const provider = createSolidApplicationContextProvider(context);
@@ -183,7 +185,6 @@ it.each([false, true])(
       );
       expect(expectDefined(pane, "mounted pane runtime").element).toBe(paneElement);
       expect(chatHistoryRequests(pageState()).initialSnapshotHydration).toBeDefined();
-      expect(storedRead).toHaveBeenCalledWith(mainSnapshotKey);
       await entered.promise;
       expect(pane?.agentId).toBeUndefined();
       const state = pageState();

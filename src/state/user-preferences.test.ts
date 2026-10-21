@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
@@ -147,14 +149,25 @@ describe("user preferences", () => {
   });
 
   it("caps each profile at 128 keys while allowing deletions to free capacity", () => {
-    const { fill, set, get } = preferences();
+    const { options, fill, set, get } = preferences();
     fill(127);
     expect(set({ "key-127": true })).toEqual(success);
     expect(set({ "key-128": true })).toEqual({
       ok: false,
       error: { code: "profile-key-limit", limit: 128, currentCount: 128 },
     });
-    expect(set({ "key-0": null })).toEqual(success);
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db),
+      ["keys"],
+      (sql) => (/^select "pref_key" from "user_preferences"/iu.test(sql) ? "keys" : null),
+    );
+    try {
+      expect(set({ "key-0": null })).toEqual(success);
+      expect(set({}, { "key-0": null })).toEqual(success);
+      expect(reads.counts.keys).toBe(0);
+    } finally {
+      reads.restore();
+    }
     expect(set({ "key-128": true })).toEqual(success);
     expect(get(["key-0", "key-128"])).toEqual({ "key-128": true });
   });

@@ -12,13 +12,13 @@ import {
   type QaEvidenceSummaryJson,
   type QaEvidenceSummaryV3Json,
 } from "./evidence-summary.js";
-import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
 import {
   buildScriptProducerEvidence,
   createScenarioRunnerTestHarness,
   makeTestFileScenario,
   QA_TEST_RUNNER_DEFAULTS,
   resolveScriptAttemptOutputDir,
+  runQaTestFileScenariosWithCommand as runQaTestFileScenarios,
   writeScriptProducerEvidence,
 } from "./test-file-scenario-runner.test-support.js";
 

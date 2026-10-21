@@ -628,7 +628,7 @@ export class ManagedWorktreeService {
     const setupBytes = runRepositorySetup
       ? Math.max(
           WORKTREE_SETUP_HEADROOM_BYTES,
-          await directorySizeBytes(repository.sourceRoot, true, {
+          await directorySizeBytes(repository.sourceRoot, {
             signal: params.signal,
             assertCurrent: params.commitGuard,
           }),

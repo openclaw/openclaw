@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import { expect, it, vi } from "vitest";
-import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { readPersistedSharedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { runSecretsCommand } from "../cli/secrets-cli-output.js";
@@ -14,26 +17,16 @@ import { runSecretsConfigureInteractive } from "./configure.js";
 
 it.each([true, false])(
   "keeps configure JSON output parseable without changing shared credentials (store present: %s)",
-  async (storePresent) => {
-    await withOpenClawTestState({ layout: "home" }, async (state) => {
+  (storePresent) =>
+    withOpenClawTestState({ layout: "home" }, async (state) => {
       await state.writeConfig({});
       const sharedStore = createAuthProfileStoreFixture({
-        "openai:plaintext": {
-          type: "api_key",
-          provider: "openai",
-          key: "synthetic-plaintext-value",
-        },
+        "openai:plaintext": createApiKeyCredential("openai", "synthetic-plaintext-value"),
         "openai:residue": {
-          type: "api_key",
-          provider: "openai",
-          key: "synthetic-residue-value",
+          ...createApiKeyCredential("openai", "synthetic-residue-value"),
           keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
         },
-        "openai:reference": {
-          type: "api_key",
-          provider: "openai",
-          key: "$OPENAI_API_KEY",
-        },
+        "openai:reference": createApiKeyCredential("openai", "$OPENAI_API_KEY"),
       });
       noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, state.env);
       if (storePresent) {
@@ -50,12 +43,10 @@ it.each([true, false])(
       const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
       let stdout = "";
       let stderr = "";
-      const stdoutWrite = vi
-        .spyOn(defaultRuntime, "writeJson")
-        .mockImplementation((value, space) => {
-          stdout += `${JSON.stringify(value, null, space && space > 0 ? space : undefined)}\n`;
-        });
-      const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value, space) => {
+        stdout += `${JSON.stringify(value, null, space && space > 0 ? space : undefined)}\n`;
+      });
+      const error = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
         stderr += String(chunk);
         return true;
       });
@@ -65,15 +56,13 @@ it.each([true, false])(
           runSecretsCommand(
             true,
             () => runSecretsConfigureInteractive({ env: state.env, skipProviderSetup: true }),
-            () => {
-              throw new Error("JSON failures must not use the human renderer.");
-            },
+            () => expect.fail("JSON failures must not use the human renderer."),
             1,
           ),
         ).rejects.toMatchObject({ code: 1 });
       } finally {
-        stdoutWrite.mockRestore();
-        stderrWrite.mockRestore();
+        json.mockRestore();
+        error.mockRestore();
         if (stdinTTY) {
           Object.defineProperty(process.stdin, "isTTY", stdinTTY);
         } else {
@@ -99,6 +88,5 @@ it.each([true, false])(
       expect(`${stdout}${stderr}`).not.toContain("synthetic-plaintext-value");
       expect(`${stdout}${stderr}`).not.toContain("synthetic-residue-value");
       expect(await fs.readFile(state.configPath, "utf8")).toBe(configBefore);
-    });
-  },
+    }),
 );

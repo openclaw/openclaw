@@ -284,9 +284,6 @@ export async function createNativeRuntime(
           },
         });
         assertActive();
-        await assertWorkspace(workspace);
-        await assertWorkspace(assignedWorkspace);
-        assertActive();
         return result;
       } finally {
         activeTurns.delete(controller);

@@ -2,12 +2,12 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import { attachSteerBackend } from "../../auto-reply/reply/agent-runner-steer-adoption.test-support.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.entry.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
@@ -19,6 +19,8 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createChatSendMessageInjectionStarter } from "./chat-send-message-injection.js";
+
+type Injection = Parameters<typeof attachSteerBackend>[2];
 
 it.each(
   (["compatible", "restricted", "different profile"] as const).flatMap((caller) =>
@@ -80,37 +82,28 @@ it.each(
         model: owner.run.model,
       });
       const queueMessage = vi.fn(async () => {});
-      const claim = vi.fn<
-        NonNullable<ReplyBackendMessageInjectionV2["claimPendingUserInputAnswer"]>
-      >(async (_text, options, assertCurrent, authorityKind) => {
-        expect(options?.toolAuthorityFingerprint).toBe(fingerprint);
-        expect(options).not.toHaveProperty("toolAuthorityOverlay");
-        expect(authorityKind).toBe("source-bound");
-        assertCurrent();
-        return true;
-      });
-      const cancel = vi.fn<NonNullable<ReplyBackendMessageInjectionV2["cancelPendingUserInput"]>>(
+      const claim = vi.fn<NonNullable<Injection["claimPendingUserInputAnswer"]>>(
+        async (_text, options, assertCurrent, authorityKind) => {
+          expect(options?.toolAuthorityFingerprint).toBe(fingerprint);
+          expect(options).not.toHaveProperty("toolAuthorityOverlay");
+          expect(authorityKind).toBe("source-bound");
+          assertCurrent();
+          return true;
+        },
+      );
+      const cancel = vi.fn<NonNullable<Injection["cancelPendingUserInput"]>>(
         async (_resolvedBy, assertCurrent, authorityKind) => {
           expect(authorityKind).toBe("source-bound");
           assertCurrent();
           return true;
         },
       );
-      operation.attachBackend({
-        kind: "embedded",
-        supportsTranscriptCommitWait: true,
+      attachSteerBackend(operation, fingerprint, {
         runId,
-        toolAuthorityFingerprint: fingerprint,
-        cancel: vi.fn(),
-        messageInjectionV2: {
-          version: 2,
-          isAvailable: () => true,
-          queueMessage,
-          claimPendingUserInputAnswer: claim,
-          cancelPendingUserInput: cancel,
-        },
+        queueMessage,
+        claimPendingUserInputAnswer: claim,
+        cancelPendingUserInput: cancel,
       });
-      operation.setPhase("running");
       registerAgentRunContext(runId, { isControlUiVisible: false, projectSessionMessages: false });
       try {
         const target = captureCurrentReplyMessageInjectionTarget(sessionKey);

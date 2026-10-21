@@ -9,7 +9,7 @@ import {
   readNativeQaSubagentRuns,
 } from "./execution-identity-storage-inspection.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
-import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
+import { runQaSuiteScenarioDefinition } from "./suite-runtime-flow.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
 function createGateway(stateDir: string) {
@@ -134,7 +134,6 @@ describe("inspectQaExecutionIdentityStorage", () => {
         cfg: {},
       },
       scenario,
-      runScenario: runQaSuiteScenarioSteps,
       constants: {
         imageUnderstandingPngBase64: "",
         imageUnderstandingLargePngBase64: "",

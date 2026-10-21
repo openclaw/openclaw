@@ -8,6 +8,7 @@ import { loadPluginManifest } from "../plugins/manifest.js";
 import { readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import * as fileDescriptor from "./file-descriptor.js";
 import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 
@@ -111,6 +112,52 @@ it("rejects hardlinked files larger than their inventory budget", async () => {
   await fs.chmod(f.worker, 0o644);
   await fs.appendFile(f.worker, "// grew after inventory\n");
   await expect(f.link()).rejects.toThrow("Plugin entry changed after snapshot inventory");
+});
+
+it.each(["matching", "size", "mode", "sha256"] as const)(
+  "verifies changed-identity retained files (%s)",
+  async (check) => {
+    const f = await fixture(async (source) => {
+      await writeFile(source, "dist/unique.js", workerCode);
+    });
+    const source = f.original("dist/unique.js");
+    const originalMode = stat(source).mode & 0o7777;
+    beforeLink((file) => {
+      if (file !== source) {
+        return;
+      }
+      fsSync.renameSync(source, `${source}.previous`);
+      fsSync.writeFileSync(
+        source,
+        check === "size"
+          ? `${workerCode}\n`
+          : check === "sha256"
+            ? workerCode.toUpperCase()
+            : workerCode,
+      );
+      fsSync.chmodSync(source, check === "mode" ? originalMode ^ 0o100 : originalMode);
+    });
+    const result = await f.link();
+    if (check === "matching") {
+      expect(result).not.toHaveProperty("unusableReason");
+      expect(await read(f.retained("dist/unique.js"))).toBe(workerCode);
+      expect(inode(f.retained("dist/unique.js"))).not.toEqual(inode(`${source}.previous`));
+    } else {
+      expect(result).toMatchObject({
+        unusableReason: `Retained runtime verification failed (${check}): ${source}`,
+      });
+    }
+  },
+);
+
+it("keeps same-inode source edits on the fast path without hashing again", async () => {
+  const f = await fixture();
+  const hash = vi.spyOn(fileDescriptor, "hashFileMutationSnapshotSync");
+  await fs.chmod(f.worker, 0o644);
+  await fs.writeFile(f.worker, workerCode.toUpperCase());
+  await expect(f.link()).resolves.not.toHaveProperty("unusableReason");
+  expect(hash).not.toHaveBeenCalled();
+  expect(inode(f.retained("dist/state/worker.js"))).toEqual(inode(f.worker));
 });
 
 it.each([false, true])(
@@ -247,7 +294,7 @@ it.each([false, true])(
       ]);
     }
     expect(counts).toEqual({ linked: payloads.length + 2, copied: files.size + 1 });
-    expect(link).toHaveBeenCalledTimes(counts.linked);
+    expect(link).toHaveBeenCalledTimes(payloads.length + 2);
     for (const relative of payloads) {
       const original = stat(f.original(path.join(relativePlugin, relative)));
       const retained = stat(f.retained(path.join(relativePlugin, relative)));

@@ -1,4 +1,3 @@
-// Covers repair hints for official external plugin installs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as catalog from "./official-external-plugin-catalog.js";
 import { installableEntry } from "./official-external-plugin-catalog.test-support.js";
@@ -10,39 +9,38 @@ import {
   tracksPluginDependencyStatus,
 } from "./official-external-plugin-repair-hints.js";
 
-const mocks = vi.hoisted(() => ({
-  resolveConfiguredChannelPresencePolicy: vi.fn(),
-}));
+const resolvePresence = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Repair cases supply missing or blocked channel owners without a live registry.
 vi.mock("./channel-plugin-ids.js", () => ({
-  resolveConfiguredChannelPresencePolicy: (params: unknown) =>
-    mocks.resolveConfiguredChannelPresencePolicy(params),
+  resolveConfiguredChannelPresencePolicy: resolvePresence,
 }));
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
-  beforeEach(() => {
-    mocks.resolveConfiguredChannelPresencePolicy.mockReset();
+function channelHint(channelId: string, effective: boolean, blockedReasons: string[]) {
+  resolvePresence.mockReturnValue([
+    {
+      channelId,
+      sources: ["explicit-config"],
+      effective,
+      pluginIds: effective ? [channelId] : [],
+      blockedReasons,
+    },
+  ]);
+  return resolveMissingOfficialExternalChannelPluginRepairHint({
+    config: {
+      channels: { [channelId]: channelId === "feishu" ? { appId: "cli_xxx" } : { enabled: true } },
+    },
+    channelId,
   });
+}
+
+describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
+  beforeEach(() => resolvePresence.mockReset());
 
   it("returns an install hint when a configured official external channel has no owner", () => {
-    mocks.resolveConfiguredChannelPresencePolicy.mockReturnValue([
-      {
-        channelId: "feishu",
-        sources: ["explicit-config"],
-        effective: false,
-        pluginIds: [],
-        blockedReasons: ["no-channel-owner"],
-      },
-    ]);
-
-    expect(
-      resolveMissingOfficialExternalChannelPluginRepairHint({
-        config: { channels: { feishu: { appId: "cli_xxx" } } },
-        channelId: "feishu",
-      }),
-    ).toEqual({
+    expect(channelHint("feishu", false, ["no-channel-owner"])).toEqual({
       pluginId: "feishu",
       channelId: "feishu",
       label: "Feishu",
@@ -55,19 +53,11 @@ describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
   });
 
   it.each([
-    {
-      sourceRef: "public-npm",
-      installSpec: "@acme/plugin@1.2.3",
-      target: "npm:@acme/plugin@1.2.3",
-    },
-    {
-      sourceRef: "public-clawhub",
-      installSpec: "clawhub:@acme/plugin@1.2.3",
-      target: "clawhub:@acme/plugin@1.2.3",
-    },
+    ["public-npm", "@acme/plugin@1.2.3", "npm:@acme/plugin@1.2.3"],
+    ["public-clawhub", "clawhub:@acme/plugin@1.2.3", "clawhub:@acme/plugin@1.2.3"],
   ])(
-    "preserves the $sourceRef registry in a pinned catalog repair command",
-    ({ sourceRef, installSpec, target }) => {
+    "preserves the %s registry in a pinned catalog repair command",
+    (sourceRef, installSpec, target) => {
       vi.spyOn(catalog, "getOfficialExternalPluginCatalogEntry").mockReturnValue(
         installableEntry("acme-plugin", { sourceRef, package: "@acme/plugin", version: "1.2.3" }),
       );
@@ -86,72 +76,35 @@ describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
         channelIds: [],
       }),
     ).toEqual([]);
-    expect(mocks.resolveConfiguredChannelPresencePolicy).not.toHaveBeenCalled();
+    expect(resolvePresence).not.toHaveBeenCalled();
   });
 
   it("does not return install hints for policy-blocked official external channel owners", () => {
-    mocks.resolveConfiguredChannelPresencePolicy.mockReturnValue([
-      {
-        channelId: "whatsapp",
-        sources: ["explicit-config"],
-        effective: false,
-        pluginIds: [],
-        blockedReasons: ["not-in-allowlist"],
-      },
-    ]);
-
-    expect(
-      resolveMissingOfficialExternalChannelPluginRepairHint({
-        config: { channels: { whatsapp: { enabled: true } } },
-        channelId: "whatsapp",
-      }),
-    ).toBeNull();
+    expect(channelHint("whatsapp", false, ["not-in-allowlist"])).toBeNull();
   });
 
   it("does not return install hints for active official external channel owners", () => {
-    mocks.resolveConfiguredChannelPresencePolicy.mockReturnValue([
-      {
-        channelId: "whatsapp",
-        sources: ["explicit-config"],
-        effective: true,
-        pluginIds: ["whatsapp"],
-        blockedReasons: [],
-      },
-    ]);
-
-    expect(
-      resolveMissingOfficialExternalChannelPluginRepairHint({
-        config: { channels: { whatsapp: { enabled: true } } },
-        channelId: "whatsapp",
-      }),
-    ).toBeNull();
+    expect(channelHint("whatsapp", true, [])).toBeNull();
   });
 });
 
 describe("resolveExternalPluginRuntimeDependencyRepairHint", () => {
   it.each([
-    {
-      name: "names the official install command for the package that owns the id",
-      candidate: { origin: "bundled", pluginId: "discord", packageName: "@openclaw/discord" },
-      expected: "openclaw plugins install npm:@openclaw/discord",
-    },
-    {
-      name: "keeps install repair for a separately installed copy of a core plugin",
-      candidate: { origin: "config", pluginId: "cloudflare", packageName: "@openclaw/cloudflare" },
-      expected: "openclaw plugins install npm:@openclaw/cloudflare",
-    },
-    {
-      name: "withholds the official install command from a foreign package reusing the id",
-      candidate: {
-        origin: "bundled",
-        pluginId: "discord",
-        packageName: "@example/discord-fork",
-        packageBuild: { bundledDist: false },
-      },
-      expected: "reinstall or update the plugin package",
-    },
-  ])("$name", ({ candidate, expected }) => {
-    const hint = resolveExternalPluginRuntimeDependencyRepairHint(candidate);
+    ["bundled", "discord", "@openclaw/discord", "openclaw plugins install npm:@openclaw/discord"],
+    [
+      "config",
+      "cloudflare",
+      "@openclaw/cloudflare",
+      "openclaw plugins install npm:@openclaw/cloudflare",
+    ],
+    ["bundled", "discord", "@example/discord-fork", "reinstall or update the plugin package"],
+  ])("repairs %s %s from %s with %s", (origin, pluginId, packageName, expected) => {
+    const hint = resolveExternalPluginRuntimeDependencyRepairHint({
+      origin,
+      pluginId,
+      packageName,
+      ...(packageName === "@example/discord-fork" ? { packageBuild: { bundledDist: false } } : {}),
+    });
     expect(hint).toContain("runtime dependencies are missing");
     expect(hint).toContain(expected);
   });
@@ -168,28 +121,17 @@ describe("resolveExternalPluginRuntimeDependencyRepairHint", () => {
 });
 
 describe("tracksPluginDependencyStatus", () => {
-  it.each(["config"])(
-    "keeps dependency checks for a %s install that claims bundled distribution",
-    (origin) => {
-      expect(
-        tracksPluginDependencyStatus({
-          origin,
-          pluginId: "cua-computer",
-          packageName: "@example/cua-computer",
-          packageBuild: { bundledDist: true },
-        }),
-      ).toBe(true);
-    },
-  );
-
-  it("keeps staged CUA dependency ownership with the bundled host", () => {
+  it.each([
+    ["config", "@example/cua-computer", true],
+    ["bundled", "@openclaw/cua-computer", false],
+  ] as const)("tracks %s CUA dependency ownership: %s → %s", (origin, packageName, expected) => {
     expect(
       tracksPluginDependencyStatus({
-        origin: "bundled",
+        origin,
         pluginId: "cua-computer",
-        packageName: "@openclaw/cua-computer",
+        packageName,
         packageBuild: { bundledDist: true },
       }),
-    ).toBe(false);
+    ).toBe(expected);
   });
 });

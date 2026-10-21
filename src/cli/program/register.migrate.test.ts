@@ -2,36 +2,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenClawCommand } from "./openclaw-command.js";
 import { registerMigrateCommand } from "./register.migrate.js";
 
-const mocks = vi.hoisted(() => ({
-  ExitError: class ExitError extends Error {},
+const commands = vi.hoisted(() => ({
   migrateApplyCommand: vi.fn(),
   migrateDefaultCommand: vi.fn(),
   migrateListCommand: vi.fn(),
   migratePlanCommand: vi.fn(),
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
 }));
+const runtime = vi.hoisted(() => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }));
+// mock-isolation: route parsing must not import credentials or mutate real migration state.
+vi.mock("../../commands/migrate.js", () => commands);
 
-vi.mock("../../commands/migrate.js", () => ({
-  migrateApplyCommand: mocks.migrateApplyCommand,
-  migrateDefaultCommand: mocks.migrateDefaultCommand,
-  migrateListCommand: mocks.migrateListCommand,
-  migratePlanCommand: mocks.migratePlanCommand,
-}));
-
+// mock-isolation: capture command exits without terminating the test worker.
 vi.mock("../../runtime.js", () => ({
-  ExitError: mocks.ExitError,
-  defaultRuntime: mocks.runtime,
+  ExitError: class ExitError extends Error {},
+  defaultRuntime: runtime,
 }));
 
-async function runCli(args: string[]): Promise<void> {
+async function runCli(args: string): Promise<void> {
   const program = new OpenClawCommand();
   program.enablePositionalOptions();
   registerMigrateCommand(program);
-  await program.parseAsync(args, { from: "user" });
+  await program.parseAsync(["migrate", ...args.split(" ")], { from: "user" });
 }
 
 beforeEach(() => vi.resetAllMocks());
@@ -40,12 +31,12 @@ describe("registered migration routes", () => {
   it.each([
     {
       args: "codex --agent research --item auth:openai --dry-run",
-      command: mocks.migrateDefaultCommand,
+      command: commands.migrateDefaultCommand,
       options: { targetAgentId: "research", itemIds: ["auth:openai"], dryRun: true },
     },
     {
       args: "--from /tmp/source --skill alpha --plugin beta --include-secrets --overwrite --json --no-auth-credentials plan hermes",
-      command: mocks.migratePlanCommand,
+      command: commands.migratePlanCommand,
       options: {
         provider: "hermes",
         source: "/tmp/source",
@@ -59,7 +50,7 @@ describe("registered migration routes", () => {
     },
     {
       args: "--yes --no-backup --force --backup-output /tmp/backup.tgz --no-auth-credentials apply hermes",
-      command: mocks.migrateApplyCommand,
+      command: commands.migrateApplyCommand,
       options: {
         provider: "hermes",
         yes: true,
@@ -71,12 +62,12 @@ describe("registered migration routes", () => {
     },
     {
       args: "apply hermes --yes",
-      command: mocks.migrateApplyCommand,
+      command: commands.migrateApplyCommand,
       options: { noBackup: false, authCredentials: true },
     },
     {
       args: "--from /tmp/parent --agent parent --skill parent --item auth:parent apply hermes --from /tmp/child --agent child --skill child --item auth:child --no-backup --no-auth-credentials --force --yes",
-      command: mocks.migrateApplyCommand,
+      command: commands.migrateApplyCommand,
       options: {
         source: "/tmp/child",
         targetAgentId: "child",
@@ -87,24 +78,21 @@ describe("registered migration routes", () => {
       },
     },
   ])("resolves migration options for $args", async ({ args, command, options }) => {
-    await runCli(["migrate", ...args.split(" ")]);
-    expect(command).toHaveBeenCalledExactlyOnceWith(
-      mocks.runtime,
-      expect.objectContaining(options),
-    );
+    await runCli(args);
+    expect(command).toHaveBeenCalledExactlyOnceWith(runtime, expect.objectContaining(options));
   });
 
   it("inherits parent JSON into list", async () => {
-    await runCli(["migrate", "--json", "list"]);
-    expect(mocks.migrateListCommand).toHaveBeenCalledExactlyOnceWith(mocks.runtime, { json: true });
+    await runCli("--json list");
+    expect(commands.migrateListCommand).toHaveBeenCalledExactlyOnceWith(runtime, { json: true });
   });
 
   it("rejects a parent dry-run before apply can mutate", async () => {
-    await runCli("migrate --dry-run apply hermes --yes".split(" "));
-    expect(mocks.migrateApplyCommand).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
+    await runCli("--dry-run apply hermes --yes");
+    expect(commands.migrateApplyCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("--dry-run is not supported for `openclaw migrate apply`"),
     );
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

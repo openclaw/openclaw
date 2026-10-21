@@ -1,15 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
 import { recordLegacyAcpMigrationSources } from "../../config/sessions/session-accessor.sqlite-acp-provenance.js";
-import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { readSessionEntryCache } from "../../config/sessions/session-accessor.sqlite-entry-cache.js";
+import {
+  readExactSessionEntryRow,
+  writeArchivedSessionEntries,
+  writeSessionEntry,
+} from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { readTranscriptContextVersionInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import {
   createSessionActorWorkerFixture,
   type Mutation,
 } from "../../config/sessions/session-actor-worker.test-support.js";
+import type { SessionEntryWritePostimages } from "../../config/sessions/session-entry-write-postimage.js";
+import { readTranscriptContextVersionsInTransaction } from "../../config/sessions/session-transcript-context-versions.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../sql-connection.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
@@ -87,6 +98,218 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
   "%s prepared entry writes",
   (engine) => {
     useMixedAgentPair(engine, engine);
+
+    it("batches archive entries with exact shared-window, rollback, and cache outcomes", () =>
+      withEngineStoreAdmission(() => {
+        const database = openOpenClawAgentDatabase({ agentId: "main" });
+        const options = { agentId: "main", path: database.path };
+        const keys = [
+          "agent:main:archive-a",
+          ...Array.from({ length: 63 }, (_, index) => `agent:main:archive-middle-${index}`),
+          "agent:main:archive-b",
+        ];
+        const untouched = "agent:main:archive-unselected";
+        const skills = { prompt: "Retained archive instructions", skills: [] };
+        const now = vi.spyOn(Date, "now").mockReturnValue(20);
+        const recorder = tripRecorder(database.db);
+        const read = (key: string) => {
+          const row = readExactSessionEntryRow(database, key, "full", "canonical", true);
+          if (!row) {
+            throw new Error("Missing archive equivalence fixture row");
+          }
+          return row;
+        };
+        const current = () =>
+          [...keys, untouched].map((key) => {
+            const entry = read(key).entry;
+            return persisted(database.db, key, entry.sessionId);
+          });
+        const inputs = () =>
+          [...keys, keys[1]!].map((sessionKey, index) => {
+            const previous = read(sessionKey);
+            return {
+              sessionKey,
+              previous,
+              entry: {
+                ...previous.entry,
+                archivedAt: 30,
+                archiveReason: "age-retention" as const,
+                ...(index === 0 ? { hookExternalContentSource: "gmail" as const } : {}),
+                ...(sessionKey === keys[1] ? { label: index === 1 ? "superseded" : "final" } : {}),
+              },
+            };
+          });
+        const rawUnselectedWrite = () => {
+          const entry = { ...read(untouched).entry, label: "untracked update before archive" };
+          database.db
+            .prepare("UPDATE session_nodes SET entry_json = ?, label = ? WHERE session_key = ?")
+            .run(JSON.stringify(entry), entry.label, untouched);
+        };
+        try {
+          runOpenClawAgentWriteTransaction((owner) => {
+            for (const [index, key] of [...keys, untouched].entries()) {
+              writeSessionEntry(owner, key, {
+                sessionId: index === 0 || index === 64 ? "archive-shared" : `archive-${index}`,
+                updatedAt: 10,
+                skillsSnapshot: skills,
+              });
+            }
+            appendTranscriptEventsInTransaction(
+              owner,
+              { agentId: "main", sessionKey: keys.at(-1)!, sessionId: "archive-shared" },
+              [{ type: "session", id: "archive-shared", version: 3 }],
+            );
+          }, options);
+          const initial = current();
+          let sequential: ReturnType<typeof current> | undefined;
+          const rollback = new Error("archive equivalence rollback");
+          expect(() =>
+            runOpenClawAgentWriteTransaction((owner) => {
+              rawUnselectedWrite();
+              for (const input of inputs()) {
+                writeSessionEntry(owner, input.sessionKey, input.entry);
+              }
+              sequential = current();
+              throw rollback;
+            }, options),
+          ).toThrow(rollback);
+          expect(current()).toEqual(initial);
+
+          readSessionEntryCache(database, { cache: true, projection: "list" });
+          expect(() =>
+            runOpenClawAgentWriteTransaction((owner) => {
+              rawUnselectedWrite();
+              writeArchivedSessionEntries(owner, inputs(), new Map());
+              throw rollback;
+            }, options),
+          ).toThrow(rollback);
+          expect(current()).toEqual(initial);
+          expect(
+            readSessionEntryCache(database, { cache: true, projection: "list" }).entries.get(
+              keys[0]!,
+            )?.archivedAt,
+          ).toBeUndefined();
+
+          const postimages: SessionEntryWritePostimages = new Map();
+          const written = recorder.capture("archiveBatch", () =>
+            runOpenClawAgentWriteTransaction((owner) => {
+              rawUnselectedWrite();
+              return writeArchivedSessionEntries(owner, inputs(), postimages);
+            }, options),
+          );
+          expect(current()).toEqual(sequential);
+          expect(written.map((entry) => entry.archivedAt)).toEqual(
+            Array.from({ length: 66 }, () => 30),
+          );
+          expect([written[1]?.label, written.at(-1)?.label]).toEqual(["final", "final"]);
+          expect(current()[0]).toMatchObject({
+            node: { archived_at: 30, snapshot_revision: 1 },
+            snapshots: snapshotRows(skills),
+            window: { session_key: keys.at(-1), hook_external_content_source: "gmail" },
+          });
+          for (const key of keys) {
+            const state = persisted(database.db, key, read(key).entry.sessionId);
+            const postimage = postimages.get(key);
+            expect(postimage).toBeDefined();
+            expect(state.window).toMatchObject(postimage!.window);
+            expect(postimage?.entry.skillsSnapshot).toEqual(skills);
+          }
+          expect(
+            readSessionEntryCache(database, { cache: true, projection: "list" }).entries.get(
+              untouched,
+            )?.label,
+          ).toBe("untracked update before archive");
+          if (engine === "postgres") {
+            expect(recorder.counts.archiveBatch).toBe(3);
+          }
+        } finally {
+          now.mockRestore();
+        }
+      }));
+
+    it("keeps batched empty, hot, cold, and changed transcript versions equivalent", () =>
+      withEngineStoreAdmission(() => {
+        const database = openOpenClawAgentDatabase({ agentId: "main" });
+        const options = { agentId: "main", path: database.path };
+        const ids = [
+          "version-absent",
+          "version-empty",
+          "version-hot",
+          "version-cold",
+          "version-hot",
+        ];
+        const scope = (sessionId: string) => ({
+          agentId: "main",
+          sessionKey: `agent:main:${sessionId}`,
+          sessionId,
+        });
+        const now = vi.spyOn(Date, "now").mockReturnValue(20);
+        const read = () => {
+          const batch = readTranscriptContextVersionsInTransaction(database, ids);
+          expect(batch).toEqual(
+            ids.map((id) => readTranscriptContextVersionInTransaction(database, id)),
+          );
+          return batch;
+        };
+        try {
+          runOpenClawAgentWriteTransaction((owner) => {
+            for (const id of ids.slice(1, 4)) {
+              writeSessionEntry(owner, scope(id).sessionKey, { sessionId: id, updatedAt: 10 });
+            }
+            appendTranscriptEventsInTransaction(owner, scope("version-hot"), [
+              { type: "session", id: "version-hot", version: 3 },
+              { type: "custom", customType: "version", data: { value: "first" } },
+            ]);
+            owner.db
+              .prepare(
+                "INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at) VALUES (?, ?, ?)",
+              )
+              .run("version-cold", "cold-generation", 17);
+            owner.db
+              .prepare("UPDATE session_windows SET transcript_updated_at = ? WHERE session_id = ?")
+              .run(17, "version-cold");
+            owner.db
+              .prepare(`INSERT INTO session_transcript_cold_archives
+              (session_id, generation, archive_name, archive_sha256, event_count, raw_bytes, archive_bytes, last_seq, archived_at, storage, archive_blob)
+              VALUES (?, ?, ?, ?, 10, 1, 1, 9, 17, 'file', NULL)`)
+              .run("version-cold", "cold-generation", "version-cold.zst", "0".repeat(64));
+          }, options);
+          const before = read();
+          expect(before).toEqual([
+            { rawSeq: null, generation: null, updatedAt: null },
+            { rawSeq: null, generation: null, updatedAt: null },
+            { rawSeq: 1, generation: expect.any(String), updatedAt: 20 },
+            { rawSeq: 9, generation: "cold-generation", updatedAt: 17 },
+            { rawSeq: 1, generation: expect.any(String), updatedAt: 20 },
+          ]);
+          const rollback = new Error("rollback changed transcript versions");
+          expect(() =>
+            runOpenClawAgentWriteTransaction((owner) => {
+              readTranscriptContextVersionInTransaction(owner, "version-hot");
+              appendTranscriptEventsInTransaction(owner, scope("version-hot"), [
+                { type: "custom", customType: "version", data: { value: "later" } },
+              ]);
+              owner.db
+                .prepare(
+                  "UPDATE session_transcript_cold_archives SET last_seq = 11 WHERE session_id = ?",
+                )
+                .run("version-cold");
+              owner.db
+                .prepare(
+                  "UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?",
+                )
+                .run("cold-next", "version-cold");
+              const changed = read();
+              expect(changed[2]?.rawSeq).toBe(2);
+              expect(changed[3]).toEqual({ rawSeq: 11, generation: "cold-next", updatedAt: 17 });
+              throw rollback;
+            }, options),
+          ).toThrow(rollback);
+          expect(read()).toEqual(before);
+        } finally {
+          now.mockRestore();
+        }
+      }));
 
     it("commits actor and patch entry pairs without extra writes or publishing a refused commit", async () => {
       const initialSkills = { prompt: "Initial instructions", skills: [] };

@@ -62,7 +62,10 @@ const { values } = parseArgs({
     "workload-cpu-profile": { type: "boolean", default: false },
     "capture-responses": { type: "boolean", default: false },
     "trace-gc": { type: "boolean", default: false },
+    "worker-memory": { type: "boolean", default: false },
+    "baseline-owners": { type: "boolean", default: false },
     "stress-tools": { type: "boolean", default: false },
+    "operator-access-policy": { type: "boolean", default: false },
     "stress-subagents": { type: "boolean", default: false },
     "mixed-rpc": { type: "boolean", default: false },
     "stream-start-diagnostics": { type: "boolean", default: false },
@@ -86,6 +89,8 @@ const { values } = parseArgs({
     runs: { type: "string", default: "20" },
     sessions: { type: "string", default: "100" },
     "history-turns": { type: "string", default: "0" },
+    "history-last-turns": { type: "string", default: "0" },
+    "history-payload-kib": { type: "string", default: "0" },
     "seed-history": { type: "boolean", default: false },
     rounds: { type: "string", default: "5" },
     "duration-ms": { type: "string", default: "3600000" },
@@ -139,14 +144,22 @@ if (
 }
 const retentionScenario = scenario === "attempt-retention";
 const idleScenario = scenario === "session-idle-retention";
+const soakScenario = scenario === "memory-soak";
 const historyTurns = integer(values["history-turns"], "--history-turns", 0);
-if ((historyTurns || values["seed-history"]) && !idleScenario) {
-  throw new Error("--history-turns and --seed-history require session-idle-retention");
+const historyLastTurns = integer(values["history-last-turns"], "--history-last-turns", 0);
+const historyPayloadBytes =
+  integer(values["history-payload-kib"], "--history-payload-kib", 0) * 1024;
+if ((historyTurns || values["seed-history"]) && !idleScenario && !soakScenario) {
+  throw new Error(
+    "--history-turns and --seed-history require session-idle-retention or memory-soak",
+  );
 }
 if (values["seed-history"] && !historyTurns) {
   throw new Error("--seed-history requires --history-turns > 0");
 }
-const soakScenario = scenario === "memory-soak";
+if ((historyLastTurns || historyPayloadBytes) && !historyTurns) {
+  throw new Error("--history-last-turns and --history-payload-kib require --history-turns");
+}
 const reasoningScenario = retentionScenario || idleScenario || soakScenario;
 if (
   (values["session-census"] || values["fingerprint-retention"]) &&
@@ -167,6 +180,7 @@ if (
   !values.allocations &&
   !values["stream-start-allocations"] &&
   !values["workload-cpu-profile"] &&
+  !values["operator-access-policy"] &&
   scenario !== "transcript-broadcast" &&
   !retentionScenario &&
   !idleScenario &&
@@ -227,6 +241,9 @@ const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-m
 const memoryIntervalMs = integer(values["memory-interval-ms"], "--memory-interval-ms");
 const retainedProfileMs = integer(values["retained-profile-ms"], "--retained-profile-ms", 0);
 const resetEveryRounds = integer(values["reset-every-rounds"], "--reset-every-rounds", 0);
+if (soakScenario && historyTurns && resetEveryRounds) {
+  throw new Error("Seeded memory-soak histories require --reset-every-rounds 0");
+}
 if (
   soakScenario &&
   (values["stream-start-allocations"] ||
@@ -246,6 +263,14 @@ if (connectionScenario && listIntervalMs) {
 if (values["stress-tools"] && !toolScenario) {
   throw new Error(
     "--stress-tools requires chat.send, attempt-retention, session-idle-retention, or memory-soak",
+  );
+}
+if (
+  values["operator-access-policy"] &&
+  (scenario !== "chat.send" || !values["stress-tools"] || listIntervalMs !== 0)
+) {
+  throw new Error(
+    "--operator-access-policy requires --scenario chat.send --stress-tools and no polling",
   );
 }
 if (values["stress-subagents"] && (!soakScenario || !values["stress-tools"])) {
@@ -382,6 +407,102 @@ if (scenario === "plugins.reload") {
   const plugin = writePluginFixtures(output, { count: 1, activationOnStartup: true });
   reloadPluginId = plugin.pluginIds[0];
   cfg.plugins = { enabled: true, allow: plugin.pluginIds, load: { paths: [plugin.pluginsDir] } };
+}
+const authorityChannel = "openclaw-operator-authority-bench";
+const authorityEmail = "operator@authority.example.test";
+const authorityOrigin = "https://authority.example.test";
+if (values["operator-access-policy"]) {
+  const id = "synthetic-operator-access";
+  const pluginDir = path.join(output, id);
+  mkdirSync(pluginDir);
+  writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id,
+      activation: { onStartup: true },
+      configSchema: { type: "object", additionalProperties: false },
+    }),
+  );
+  writeFileSync(
+    path.join(pluginDir, "index.cjs"),
+    `
+module.exports = { id: ${JSON.stringify(id)}, register(api) {
+  const channel = ${JSON.stringify(authorityChannel)};
+  let active = false, profileId, unsubscribe;
+  const counts = { authorize: 0, resume: 0, assert: 0, tools: 0, transcriptUpdates: 0, messageAppends: 0 };
+  const messages = new Set();
+  const controller = new AbortController();
+  const grant = { grantId: "00000000-0000-4000-8000-000000000001", signal: controller.signal,
+    assertCurrent() { if (active) counts.assert++; controller.signal.throwIfAborted(); } };
+  function checkProfile(context) {
+    if (context.profile.profileId === "gateway-owner" ||
+        !context.profile.emails.includes(${JSON.stringify(authorityEmail)}) || !context.requiredByRole)
+      throw new Error("Synthetic policy requires its non-owner operator");
+    profileId = context.profile.profileId;
+  }
+  api.registerGatewayAccessPolicy({
+    authorize(context) { checkProfile(context); if (active) counts.authorize++; return grant; },
+    resume(context) { checkProfile(context); if (active) counts.resume++;
+      if (context.grantId !== grant.grantId) throw new Error("Synthetic grant mismatch"); return grant; }
+  });
+  api.on("after_tool_call", () => { if (active) counts.tools++; });
+  function control(message) {
+    if (message?.channel !== channel || typeof message.id !== "string" ||
+        !["start", "stop"].includes(message.action)) return;
+    active = message.action === "start";
+    if (active) { for (const key of Object.keys(counts)) counts[key] = 0; messages.clear(); }
+    process.send?.({ channel, id: message.id, counts: { ...counts }, profileId });
+  }
+  api.registerService({ id: "synthetic-authority-counters",
+    start() {
+      unsubscribe = api.runtime.events.onSessionTranscriptUpdate((update) => {
+        if (!active || !update.target.sessionKey.startsWith("agent:main:transcript-broadcast-measure-")) return;
+        counts.transcriptUpdates++;
+        if (update.message !== undefined && Number.isSafeInteger(update.messageSeq)) {
+          const key = update.target.sessionKey + ":" + update.messageSeq;
+          if (!messages.has(key)) { messages.add(key); counts.messageAppends++; }
+        }
+      });
+      process.on("message", control);
+    },
+    stop() { active = false; process.off("message", control); unsubscribe?.(); controller.abort(); }
+  });
+} };
+`,
+  );
+  cfg.plugins.load = {
+    ...cfg.plugins.load,
+    paths: [...(cfg.plugins.load?.paths ?? []), pluginDir],
+  };
+  if (cfg.plugins.allow?.length) {
+    cfg.plugins.allow.push(id);
+  }
+  cfg.plugins.entries[id] = { enabled: true };
+  cfg.gateway = {
+    ...cfg.gateway,
+    trustedProxies: ["127.0.0.1"],
+    auth: {
+      mode: "trusted-proxy",
+      identityScopes: { [authorityEmail]: ["operator.admin"] },
+      trustedProxy: {
+        userHeader: "x-forwarded-user",
+        requiredHeaders: ["x-forwarded-proto"],
+        allowLoopback: true,
+      },
+    },
+    controlUi: { ...cfg.gateway.controlUi, allowedOrigins: [authorityOrigin] },
+    roles: {
+      default: "synthetic-operator",
+      definitions: {
+        "synthetic-operator": {
+          scopes: ["operator.admin"],
+          agents: "*",
+          sessions: { others: "write" },
+          accessPolicyPlugin: id,
+        },
+      },
+    },
+  };
 }
 const toolPaths = Array.from({ length: retentionScenario ? 3 : 1 }, (_, index) => {
   const file = path.join(root, "workspace", `synthetic-tool-input-${index}.txt`);
@@ -1058,6 +1179,8 @@ const env = {
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
   ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
+  ...(values["worker-memory"] ? { OPENCLAW_BENCH_WORKER_MEMORY_DIR: output } : {}),
+  ...(values["baseline-owners"] ? { OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS: "1" } : {}),
 };
 function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, ipc = false) {
   const log = createWriteStream(path.join(output, `${name}.log`));
@@ -1218,7 +1341,8 @@ if (values["seed-history"]) {
       const manager = await SessionManager.openAsync(target, path.join(root, "workspace"));
       await manager.appendModelChange("openai", "gpt-4.1");
       await manager.appendThinkingLevelChange("off");
-      for (let turn = 0; turn < historyTurns; turn++) {
+      const turns = index === keys.length - 1 && historyLastTurns ? historyLastTurns : historyTurns;
+      for (let turn = 0; turn < turns; turn++) {
         const callId = `fixture-${turn}`;
         const assistant = {
           role: "assistant" as const,
@@ -1237,6 +1361,22 @@ if (values["seed-history"]) {
           ...assistant,
           stopReason: "toolUse",
           content: [
+            ...(historyPayloadBytes
+              ? [
+                  {
+                    type: "thinking" as const,
+                    thinking: `Synthetic reasoning ${turn}.`,
+                    thinkingSignature: JSON.stringify({
+                      type: "reasoning",
+                      id: `rs_fixture_${index}_${turn}`,
+                      summary: [],
+                      encrypted_content: promptContent
+                        .update(Buffer.alloc(historyPayloadBytes / 2))
+                        .toString("hex"),
+                    }),
+                  },
+                ]
+              : []),
             { type: "toolCall", id: callId, name: "read", arguments: { path: "fixture.txt" } },
           ],
         });
@@ -1246,7 +1386,14 @@ if (values["seed-history"]) {
           toolName: "read",
           isError: false,
           content: [
-            { type: "text", text: `Synthetic file ${turn}.\n${"Fixture content. ".repeat(128)}` },
+            {
+              type: "text",
+              text: `Synthetic file ${turn}.\n${
+                historyPayloadBytes
+                  ? promptContent.update(Buffer.alloc(historyPayloadBytes / 2)).toString("hex")
+                  : "Fixture content. ".repeat(128)
+              }`,
+            },
           ],
           timestamp: timestamp + turn,
         });
@@ -1258,7 +1405,10 @@ if (values["seed-history"]) {
       }
       console.log(`SEEDED ${index + 1}/${sessionCount}`);
     }
-    writeFileSync(historySeedPath, JSON.stringify({ sessionCount, historyTurns }));
+    writeFileSync(
+      historySeedPath,
+      JSON.stringify({ sessionCount, historyTurns, historyLastTurns, historyPayloadBytes }),
+    );
   } finally {
     await agentDb.closeOpenClawAgentDatabasesAsync();
     await stateDb.closeOpenClawStateDatabaseAsync();
@@ -1268,19 +1418,24 @@ if (values["seed-history"]) {
 }
 if (historyTurns) {
   const seeded = JSON.parse(readFileSync(historySeedPath, "utf8"));
-  if (seeded.sessionCount !== sessionCount || seeded.historyTurns !== historyTurns) {
-    throw new Error("Run --seed-history with matching --sessions and --history-turns first");
+  if (
+    seeded.sessionCount !== sessionCount ||
+    seeded.historyTurns !== historyTurns ||
+    (seeded.historyLastTurns ?? 0) !== historyLastTurns ||
+    (seeded.historyPayloadBytes ?? 0) !== historyPayloadBytes
+  ) {
+    throw new Error("Run --seed-history with matching session count and history options first");
   }
 }
 const connectParams = {
   minProtocol: PROTOCOL_VERSION,
   maxProtocol: PROTOCOL_VERSION,
   client: {
-    id: "gateway-client",
+    id: values["operator-access-policy"] ? "openclaw-control-ui" : "gateway-client",
     displayName: "synthetic-broadcast-measurement",
     version: "1.0.0",
     platform: process.platform,
-    mode: "backend",
+    mode: values["operator-access-policy"] ? "webchat" : "backend",
   },
   role: "operator",
   scopes: ["operator.read", "operator.admin"],
@@ -1292,6 +1447,56 @@ const connectParams = {
     ...(values["session-envelope-refs"] ? ["session-event-field-refs"] : []),
   ],
 };
+async function controlAuthorityCounters(child: ChildProcess, action: "start" | "stop") {
+  const id = randomUUID();
+  const response = Promise.withResolvers<unknown>();
+  const onMessage = (message: unknown) => {
+    if (isRecord(message) && message.channel === authorityChannel && message.id === id) {
+      response.resolve(message);
+    }
+  };
+  child.on("message", onMessage);
+  const timeout = setTimeout(
+    () => response.reject(new Error("Authority counter IPC timed out")),
+    10000,
+  );
+  try {
+    child.send({ channel: authorityChannel, id, action }, (error) => {
+      if (error) {
+        response.reject(error);
+      }
+    });
+    const message = await response.promise;
+    if (
+      !isRecord(message) ||
+      !isRecord(message.counts) ||
+      typeof message.profileId !== "string" ||
+      message.profileId === "gateway-owner"
+    ) {
+      throw new Error("Authority probe did not attest a non-owner operator");
+    }
+    const counts = message.counts;
+    const count = (key: string) => {
+      const value = counts[key];
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+        throw new Error(`Invalid authority counter ${key}`);
+      }
+      return value;
+    };
+    return {
+      profileId: message.profileId,
+      authorize: count("authorize"),
+      resume: count("resume"),
+      assert: count("assert"),
+      tools: count("tools"),
+      transcriptUpdates: count("transcriptUpdates"),
+      messageAppends: count("messageAppends"),
+    };
+  } finally {
+    clearTimeout(timeout);
+    child.off("message", onMessage);
+  }
+}
 function summarizeLatencies(latencies: number[]) {
   const sorted = latencies.toSorted((a, b) => a - b);
   return {
@@ -1971,6 +2176,16 @@ async function connectClient(index: number) {
   let receivedFrameBytes = 0;
   const client = createGatewayWsClient({
     url: `ws://127.0.0.1:${port}`,
+    ...(values["operator-access-policy"]
+      ? {
+          origin: authorityOrigin,
+          headers: {
+            "x-forwarded-user": authorityEmail,
+            "x-forwarded-proto": "https",
+            "x-forwarded-for": "203.0.113.50",
+          },
+        }
+      : {}),
     onEvent: (event) => {
       lastSubscriberEventAt = performance.now();
       if (event.seq !== undefined) {
@@ -2066,6 +2281,7 @@ async function connectClient(index: number) {
     !hello.features.methods.includes("sessions.list") ||
     !hello.features.methods.includes("sessions.describe") ||
     hello.auth.role !== "operator" ||
+    (values["operator-access-policy"] && hello.auth.method !== "trusted-proxy") ||
     !hello.auth.scopes.includes("operator.admin") ||
     hello.snapshot.sessionDefaults?.defaultAgentId !== "main"
   ) {
@@ -2126,15 +2342,23 @@ try {
   });
   await ready(mockPort, "/health");
   gateway = launch(
-    buildGatewayBenchChildArgs(values.entry, port, [
-      ...(values.allocations || values["stream-start-allocations"] || values["trace-gc"]
-        ? ["--trace-gc-nvp"]
-        : []),
-      "--import",
-      "./scripts/tsx.mjs",
-      "--import",
-      "./scripts/lib/gateway-bench-profile-preload.ts",
-    ]),
+    buildGatewayBenchChildArgs(
+      values.entry,
+      port,
+      [
+        ...(values.allocations || values["stream-start-allocations"] || values["trace-gc"]
+          ? ["--trace-gc-nvp"]
+          : []),
+        "--import",
+        "./scripts/tsx.mjs",
+        "--import",
+        "./scripts/lib/gateway-bench-profile-preload.ts",
+        ...(values["worker-memory"] || values["baseline-owners"]
+          ? ["--import", "./scripts/perf/transcript-worker-memory-preload.ts"]
+          : []),
+      ],
+      values["operator-access-policy"] ? "trusted-proxy" : "none",
+    ),
     "gateway",
     {},
     true,
@@ -2622,7 +2846,9 @@ try {
                       client,
                       method,
                       {
-                        sessionKey: `agent:main:team-shape-session-${clientIndex % fixtureSessionCount}`,
+                        sessionKey: historyTurns
+                          ? keys[clientIndex % keys.length]
+                          : `agent:main:team-shape-session-${clientIndex % fixtureSessionCount}`,
                         limit: 50,
                       },
                       onResponse,
@@ -2720,6 +2946,9 @@ try {
           }
         }
       : workload;
+    if (values["operator-access-policy"]) {
+      await controlAuthorityCounters(gateway, "start");
+    }
     const allocation =
       values.allocations && !soakScenario
         ? await measureGatewayAllocations(
@@ -2731,6 +2960,17 @@ try {
         : undefined;
     if (!values.allocations || soakScenario) {
       await measuredWorkload();
+    }
+    const authorityCounts = values["operator-access-policy"]
+      ? await controlAuthorityCounters(gateway, "stop")
+      : undefined;
+    if (
+      authorityCounts &&
+      (!authorityCounts.assert || !authorityCounts.tools || !authorityCounts.messageAppends)
+    ) {
+      throw new Error(
+        "Authority probe must observe policy assertions, real tools, and committed message updates",
+      );
     }
     if (values["mixed-rpc"] && Object.values(rpcLatencies).some((latencies) => !latencies.length)) {
       throw new Error("mixed RPC workload must observe every method; increase cohort duration");
@@ -2832,6 +3072,21 @@ try {
       round,
       scenario,
       allocation,
+      ...(authorityCounts
+        ? {
+            operatorAccessPolicy: {
+              ...authorityCounts,
+              scope:
+                "plugin callbacks in the measured turn window; not all host authority invocations",
+              assertionsPerTurn: authorityCounts.assert / sessionCount,
+              assertionsPerToolCompletion: authorityCounts.assert / authorityCounts.tools,
+              assertionsPerMessageAppend: authorityCounts.assert / authorityCounts.messageAppends,
+              workloadAllocatedBytesPerAssertion: allocation
+                ? allocation.sampledAllocatedBytes / authorityCounts.assert
+                : undefined,
+            },
+          }
+        : {}),
       ...(workloadCpuProfilePath
         ? { workloadCpuProfile: summarizeCpuProfile(workloadCpuProfilePath) }
         : {}),
@@ -2862,6 +3117,7 @@ try {
       streamStart,
       ...(values["mixed-rpc"]
         ? {
+            ...(recordListRequests ? { rpcRequests: listRequests } : {}),
             rpcLatencyMs: Object.fromEntries(
               Object.entries(rpcLatencies).map(([method, latencies]) => [
                 method,
@@ -3139,6 +3395,7 @@ try {
     listIntervalMs,
     mixedRpc: values["mixed-rpc"],
     stressTools: values["stress-tools"],
+    operatorAccessPolicy: values["operator-access-policy"],
     stressSubagents: values["stress-subagents"],
     cronRuns,
     ...(values["mixed-rpc"] ? { diffEditControlVerified: true, diffEditVisibilityMs } : {}),
@@ -3201,6 +3458,9 @@ try {
           memoryIntervalMs,
           retainedProfileMs,
           resetEveryRounds,
+          historyTurns,
+          historyLastTurns,
+          historyPayloadBytes,
           sessionResets,
           completedSoakRounds,
           initialRetainedResources,

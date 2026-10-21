@@ -14,21 +14,13 @@ import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts
 import { MarkdownHtml } from "./solid/markdown-html.tsx";
 import { SanitizedHtml } from "./solid/sanitized-html.tsx";
 
-const chunk = vi.hoisted(() => {
-  let release!: () => void;
-  return {
-    waiting: new Promise<void>((resolve) => {
-      release = resolve;
-    }),
-    release: () => release(),
-  };
-});
+const chunk = vi.hoisted(() => Promise.withResolvers<void>());
 vi.mock("./markdown-highlight-runtime.ts", async (importOriginal) => {
-  await chunk.waiting;
+  await chunk.promise;
   return importOriginal();
 });
 
-it("keeps code readable while loading and refreshes cached, streamed, and reader HTML", async () => {
+it("preserves readable code and node state across lazy highlighting", async () => {
   expect(toSanitizedMarkdownHtml("Plain **text**")).toBe("<p>Plain <strong>text</strong></p>\n");
   const sample = corpus[0]!;
   const initial = "Intro\n\n```ts\n" + "const value = 1;\n".repeat(12);
@@ -63,38 +55,33 @@ it("keeps code readable while loading and refreshes cached, streamed, and reader
     }));
     return <div class="retained-fixture" ref={ref} onClick={handleMarkdownCodeBlockClick} />;
   }
-  const view = mountSolid(() => {
-    return (
-      <>
-        <Prose />
-        <TranscriptMarkdown streaming={streaming()} />
-        <TranscriptMarkdown streaming={false} history={true} />
-        <div class="retained-fixture" onClick={handleMarkdownCodeBlockClick}>
-          <MessageJson
-            json={json}
-            messageKey="lazy-json"
-            options={{ role: "assistant", isStreaming: false }}
-            markdownOptions={{ codeBlockInteraction: "interactive" }}
-          />
-        </div>
-        <MarkdownHtml class="static-fixture" markdown={sample.source} />
-        <SanitizedHtml
-          class="streaming-fixture"
-          html={toStreamingMarkdownParts(sample.source, {}, "lazy-code").join("")}
+  const view = mountSolid(() => (
+    <>
+      <Prose />
+      <TranscriptMarkdown streaming={streaming()} />
+      <TranscriptMarkdown streaming={false} history={true} />
+      <div class="retained-fixture" onClick={handleMarkdownCodeBlockClick}>
+        <MessageJson
+          json={json}
+          messageKey="lazy-json"
+          options={{ role: "assistant", isStreaming: false }}
+          markdownOptions={{ codeBlockInteraction: "interactive" }}
         />
-        <LinkReaderMarkdown body={sample.source} base="https://example.com/guide" />
-      </>
-    );
-  });
+      </div>
+      <MarkdownHtml class="static-fixture" markdown={sample.source} />
+      <SanitizedHtml
+        class="streaming-fixture"
+        html={toStreamingMarkdownParts(sample.source, {}, "lazy-code").join("")}
+      />
+      <LinkReaderMarkdown body={sample.source} base="https://example.com/guide" />
+    </>
+  ));
+  const find = (selector: string) => view.container.querySelector<HTMLElement>(selector);
   expect(view.container.querySelectorAll("code")).toHaveLength(6);
-  expect(view.container.querySelector(".static-fixture code")?.textContent).toContain(
-    'console.log("<safe>", answer)',
-  );
-  expect(view.container.querySelector(".hljs-keyword")).toBeNull();
-  expect(view.container.querySelector(".streaming-fixture")?.innerHTML).not.toContain(
-    "hljs-keyword",
-  );
-  expect(view.container.querySelector("safe")).toBeNull();
+  expect(find(".static-fixture code")?.textContent).toContain('console.log("<safe>", answer)');
+  expect(find(".hljs-keyword")).toBeNull();
+  expect(find(".streaming-fixture")?.innerHTML).not.toContain("hljs-keyword");
+  expect(find("safe")).toBeNull();
   expect(proseRuns).toEqual({ cached: 1, streaming: 1 });
   toStreamingMarkdownParts("▀▀▀▀\n\n", {}, "pending-block-art");
   expect(
@@ -111,9 +98,7 @@ it("keeps code readable while loading and refreshes cached, streamed, and reader
   }
   wrappers[2]!.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')!.click();
   setStream(initial + "```\n\nReady.");
-  await waitForSolid(() =>
-    expect(view.container.querySelector(".retained-fixture")?.textContent).toContain("Ready."),
-  );
+  await waitForSolid(() => expect(find(".retained-fixture")?.textContent).toContain("Ready."));
   setStreaming(false);
   await waitForSolid(() => {
     for (const wrapper of wrappers) {
@@ -121,7 +106,7 @@ it("keeps code readable while loading and refreshes cached, streamed, and reader
     }
   });
 
-  chunk.release();
+  chunk.resolve();
   await waitForSolid(() =>
     expect(view.container.querySelectorAll(".hljs-keyword")).toHaveLength(27),
   );
@@ -131,8 +116,8 @@ it("keeps code readable while loading and refreshes cached, streamed, and reader
   }
   expect(wrappers[2]!.classList.contains("is-json-raw")).toBe(true);
   expect(proseRuns).toEqual({ cached: 1, streaming: 1 });
-  expect(view.container.querySelector(".static-fixture")?.innerHTML).toBe(sample.html);
-  expect(view.container.querySelector(".streaming-fixture")?.innerHTML).toBe(sample.html);
+  expect(find(".static-fixture")?.innerHTML).toBe(sample.html);
+  expect(find(".streaming-fixture")?.innerHTML).toBe(sample.html);
 });
 
 it.each(corpus)("preserves transcript $name byte for byte", ({ source, html, options }) => {

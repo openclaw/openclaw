@@ -1,20 +1,32 @@
-import { createMemo, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
+import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
-import { Icon, type IconName } from "../../../components/solid/icon.tsx";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
-import "../../../components/tooltip.ts";
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
+import "../../../components/tooltip.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
-import type { EditorId } from "../../../lib/editor-links.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
-import type { FileCopyAction, FileCopyFeedback } from "./chat-file-copy.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
+import "../../../styles/session-panel-rail.css";
+
+import type { FileViewControls } from "./chat-file-reader-controls.ts";
+import { measureFileScroll } from "./chat-file-scroll.ts";
 import { HtmlPreview, HtmlPreviewSourceFallback } from "./chat-html-preview-view.tsx";
-import type { FileHtmlPreviewControls } from "./chat-html-preview.ts";
 import type { FileSidebarContent, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
 import { ChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.tsx";
+import { DesktopFileChrome, FileCopyButton, FileTextAction } from "./chat-sidebar-file-chrome.tsx";
+import {
+  SidebarFileMobileRail,
+  SidebarFileMobileTextControls,
+  mobileFileTextMenuActions,
+} from "./chat-sidebar-file-mobile.tsx";
+
+export { DesktopFileNavigation, FileAction } from "./chat-sidebar-file-chrome.tsx";
 
 registerCodeBlocksEnglish();
 registerFilePreviewEnglish();
@@ -37,10 +49,6 @@ export function saveFileWrapPreference(wrap: boolean): void {
   }
 }
 
-export function hasUniformLineEndings(content: string): boolean {
-  return new Set(content.match(/\r\n?|\n/g)).size <= 1;
-}
-
 export function computeFileMatches(content: string, query: string): number[] {
   const normalizedQuery = query.toLocaleLowerCase();
   if (!normalizedQuery) {
@@ -53,99 +61,47 @@ export function computeFileMatches(content: string, query: string): number[] {
     );
 }
 
-export type FileViewControls = {
-  htmlPreview?: FileHtmlPreviewControls;
-  copyFeedback: FileCopyFeedback;
-  editorRef?: (element: HTMLElement) => void;
-  searchInputRef?: (element: HTMLInputElement) => void;
-  searchToggleRef?: (element: HTMLButtonElement) => void;
-  currentMatchIndex: number;
-  dirty: boolean;
-  execNode: string | null;
-  editorMenuOpen: boolean;
-  editing: boolean;
-  loadingEditor: boolean;
-  mountKey: number;
-  matches: number[];
-  query: string;
-  saveNotice: { kind: "conflict" } | { kind: "error"; message: string } | null;
-  saving: boolean;
-  searchOpen: boolean;
-  wrap: boolean;
-  onCopy: (action: FileCopyAction) => void;
-  onDiscard: () => void;
-  onEdit: () => void;
-  onNextMatch: () => void;
-  onOpenEditor: (editor: EditorId) => void;
-  onOverwrite: () => void;
-  onPreviousMatch: () => void;
-  onReload: () => void;
-  onReveal?: (path: string) => void;
-  onSave: () => void;
-  onSearchInput: (query: string) => void;
-  onSearchKeydown: (event: KeyboardEvent) => void;
-  onEditorMenuOpenChange: (open: boolean) => void;
-  onToggleSearch: () => void;
-  onToggleWrap: () => void;
-};
-
-function FileAction(props: {
-  label: string;
-  icon: IconName;
-  onClick: () => void;
-  class?: string;
-  pressed?: boolean;
-  ref?: (element: HTMLButtonElement) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <openclaw-tooltip prop:content={props.label}>
-      <button
-        class={["btn btn--sm sidebar-file-view__action", props.class]}
-        type="button"
-        // Native refs run unowned; capture the callback in its rendering scope.
-        ref={props.ref}
-        aria-label={props.label}
-        aria-pressed={props.pressed === undefined ? undefined : props.pressed ? "true" : "false"}
-        disabled={props.disabled}
-        onClick={() => props.onClick()}
-      >
-        <Icon name={props.icon} />
-      </button>
-    </openclaw-tooltip>
+function FileMarkdown(props: { controls: FileViewControls; onSelect: (event: Event) => void }) {
+  let scroll!: HTMLDivElement;
+  let article!: HTMLElement;
+  onSettled(() => {
+    const releaseScroll = props.controls.onScrollPortRef?.(scroll);
+    const releaseArticle = props.controls.onScrollPortRef?.(article);
+    return () => {
+      releaseScroll?.();
+      releaseArticle?.();
+    };
+  });
+  const markdownRef = createMarkdownRef(() => ({
+    incremental: true,
+    content: toSanitizedMarkdownHtml(
+      props.controls.markdown?.content ?? "",
+      props.controls.markdown?.options,
+    ),
+  }));
+  const schedule = createLayoutMeasurement(
+    () => [props.controls.presentation, props.controls.markdown],
+    () => measureFileScroll(scroll, props.controls.presentation === "mobile"),
+    { targets: () => [scroll, article] },
   );
-}
-
-function FileCopyButton(props: { action: FileCopyAction; controls?: FileViewControls }) {
-  const feedback = () => props.controls?.copyFeedback[props.action];
   return (
-    <FileAction
-      label={t(
-        feedback() === "failed"
-          ? "common.copyFailed"
-          : feedback() === "copied"
-            ? "common.copied"
-            : props.action === "path"
-              ? "chat.detailPanel.copyPath"
-              : "chat.detailPanel.copyContents",
-      )}
-      icon={feedback() === "copied" ? "check" : "copy"}
-      onClick={() => props.controls?.onCopy(props.action)}
-      class={feedback() === "copied" ? "copied" : ""}
-    />
-  );
-}
-
-function FileTextAction(props: { label: string; onClick: () => void; disabled?: boolean }) {
-  return (
-    <button
-      class="btn btn--sm"
-      type="button"
-      disabled={props.disabled}
-      onClick={() => props.onClick()}
+    <div
+      class="sidebar-file-view__markdown-scroll"
+      onScroll={schedule}
+      ref={(element) => {
+        scroll = element;
+      }}
     >
-      {props.label}
-    </button>
+      <article
+        ref={(element) => {
+          article = element;
+          markdownRef(element);
+        }}
+        class="sidebar-markdown sidebar-file-view__markdown"
+        onPointerUp={(event) => props.onSelect(event)}
+        onKeyUp={(event) => props.onSelect(event)}
+      />
+    </div>
   );
 }
 
@@ -155,123 +111,96 @@ export function SidebarFile(props: {
   controls?: FileViewControls;
   runtime?: AttachmentSidebarRuntime;
 }) {
+  const desktop = () => props.controls?.presentation !== "mobile";
+  const mobile = () => props.controls?.presentation === "mobile";
+  const mobileSource = () =>
+    props.controls?.htmlPreview?.source ?? props.controls?.readingMode !== "preview";
+  const selectMarkdown = (event: Event) => {
+    const selection = document.getSelection();
+    if (
+      selection &&
+      !selection.isCollapsed &&
+      event.currentTarget instanceof Element &&
+      event.currentTarget.contains(selection.anchorNode)
+    ) {
+      props.controls?.onSelectContent?.();
+    }
+  };
   const mountKey = createMemo(() => props.controls?.mountKey ?? props.content);
   // Wrap the key so the initial zero key also mounts; only an identity change replaces the editor host.
   const mountIdentity = createMemo(() => ({ key: mountKey() }));
   return (
-    <section class={["sidebar-file-view", { "sidebar-file-view--wrap": props.controls?.wrap }]}>
-      <div class="sidebar-file-view__path-bar">
-        <div class="sidebar-file-view__path-field">
-          <span class="sidebar-file-view__path" title={props.content.path}>
-            {props.content.path}
-          </span>
-          <FileCopyButton action="path" controls={props.controls} />
-          <McpAppCatalog
-            surface="file"
-            sessionKey={props.runtime?.sessionKey ?? props.content.draftContext?.sessionKey ?? ""}
-            agentId={props.runtime?.agentId ?? ""}
-            filePath={props.content.path}
+    <section
+      class={[
+        "sidebar-file-view",
+        {
+          "sidebar-file-view--wrap": props.controls?.wrap,
+          "sidebar-file-view--desktop": desktop(),
+          "sidebar-file-view--mobile": mobile(),
+          "sidebar-file-view--editing": props.controls?.editing,
+        },
+      ]}
+    >
+      <Show when={desktop() && !props.controls?.workspace?.showingFolder && props.controls}>
+        {(controls) => (
+          <DesktopFileChrome
+            content={props.content}
+            controls={controls()}
+            runtime={props.runtime}
           />
-        </div>
-        <Show when={props.controls}>
-          {(controls) => (
-            <div class="sidebar-file-view__actions">
-              <Show when={props.content.download}>
-                {(download) => (
-                  <FileDownloadButton
-                    scopeKey={[
-                      props.content.sessionFileSource?.sessionKey ?? props.runtime?.sessionKey,
-                      props.content.path,
-                      props.runtime?.connectionEpoch,
-                    ].join("\0")}
-                    download={(signal) => download()(signal)}
-                    class="btn btn--sm sidebar-file-view__action"
-                  />
-                )}
-              </Show>
-              <Show when={!controls().htmlPreview || controls().htmlPreview?.source}>
-                <FileAction
-                  label={t(
-                    controls().wrap ? "chat.codeBlock.disableWrap" : "chat.codeBlock.enableWrap",
+        )}
+      </Show>
+      <Show when={mobile() && props.controls}>
+        {(controls) => (
+          <SidebarFileMobileRail
+            name={props.content.name}
+            identity={props.content.path}
+            back={controls().back}
+            menuActions={mobileFileTextMenuActions({
+              controls: controls(),
+              path: props.content.path,
+              source: mobileSource(),
+            })}
+            actions={
+              <>
+                <McpAppCatalog
+                  surface="file"
+                  sessionKey={
+                    props.runtime?.sessionKey ?? props.content.draftContext?.sessionKey ?? ""
+                  }
+                  agentId={props.runtime?.agentId ?? ""}
+                  filePath={props.content.path}
+                />
+                <Show when={props.content.download}>
+                  {(download) => (
+                    <FileDownloadButton
+                      scopeKey={[
+                        props.runtime?.sessionKey,
+                        props.content.path,
+                        props.runtime?.connectionEpoch,
+                      ].join("\0")}
+                      download={(signal) => download()(signal)}
+                      class="sidebar-file-mobile__button"
+                    />
                   )}
-                  icon="wrapText"
-                  onClick={() => controls().onToggleWrap()}
-                  class="sidebar-file-view__wrap"
-                  pressed={controls().wrap}
+                </Show>
+                <ChatSidebarEditorMenu
+                  absolutePath={localEditorFilePath(props.content, controls().execNode)}
+                  open={controls().editorMenuOpen}
+                  onOpenChange={(open) => controls().onEditorMenuOpenChange(open)}
+                  onOpenEditor={(editor) => controls().onOpenEditor(editor)}
                 />
-              </Show>
-              <Show when={controls().htmlPreview}>
-                {(preview) => (
-                  <button
-                    class="btn btn--sm"
-                    type="button"
-                    aria-pressed={preview().source ? "true" : "false"}
-                    onClick={() => preview().onToggle()}
-                  >
-                    {preview().source
-                      ? t("chat.workspaceFiles.preview")
-                      : t("chat.detailPanel.viewSource")}
-                  </button>
-                )}
-              </Show>
-              <Show
-                when={controls().editing}
-                fallback={
-                  <>
-                    <Show when={props.content.edit}>
-                      <FileAction
-                        label={t("chat.detailPanel.editFile")}
-                        icon="edit"
-                        onClick={() => controls().onEdit()}
-                        disabled={controls().loadingEditor}
-                      />
-                    </Show>
-                    <FileAction
-                      label={t("chat.detailPanel.searchInFile")}
-                      icon="search"
-                      onClick={() => controls().onToggleSearch()}
-                      class="sidebar-file-view__search-toggle"
-                      ref={controls().searchToggleRef}
-                      pressed={controls().searchOpen}
-                    />
-                    <Show when={controls().onReveal}>
-                      <FileAction
-                        label={t("chat.detailPanel.showInFiles")}
-                        icon="folder"
-                        onClick={() => controls().onReveal?.(props.content.path)}
-                      />
-                    </Show>
-                    <ChatSidebarEditorMenu
-                      absolutePath={localEditorFilePath(props.content, controls().execNode)}
-                      open={controls().editorMenuOpen}
-                      onOpenChange={(open) => controls().onEditorMenuOpenChange(open)}
-                      onOpenEditor={(editor) => controls().onOpenEditor(editor)}
-                    />
-                    <FileCopyButton action="contents" controls={controls()} />
-                  </>
-                }
-              >
-                <FileTextAction
-                  label={t(controls().saving ? "common.saving" : "common.save")}
-                  onClick={() => controls().onSave()}
-                  disabled={!controls().dirty || controls().saving}
-                />
-                <FileTextAction
-                  label={t("chat.detailPanel.discard")}
-                  onClick={() => controls().onDiscard()}
-                  disabled={controls().saving}
-                />
-              </Show>
-            </div>
-          )}
-        </Show>
-      </div>
+              </>
+            }
+          />
+        )}
+      </Show>
       <Show when={Object.values(props.controls?.copyFeedback ?? {}).includes("failed")}>
         <div class="file-view__save-notice" role="alert">
           {t("common.copyFailed")}
         </div>
       </Show>
-      <Show when={props.controls?.searchOpen && props.controls}>
+      <Show when={!mobile() && props.controls?.searchOpen && props.controls}>
         {(controls) => (
           <div class="file-view__search" onKeyDown={(event) => controls().onSearchKeydown(event)}>
             <input
@@ -335,45 +264,82 @@ export function SidebarFile(props: {
           </div>
         )}
       </Show>
-      <Show when={props.controls?.htmlPreview}>
-        {(preview) => (
-          <div class="chat-html-preview" hidden={preview().source}>
-            <Show when={preview().presentation}>
-              {(presentation) => <HtmlPreview {...presentation()} />}
+      <div class="sidebar-file-view__workspace-body">
+        <div
+          class={["sidebar-file-view__document", { "sidebar-file-mobile__body": mobile() }]}
+          hidden={!mobile() && props.controls?.workspace?.showingFolder}
+        >
+          <Show when={props.controls?.htmlPreview}>
+            {(preview) => (
+              <div class="chat-html-preview" hidden={preview().source}>
+                <Show when={preview().presentation}>
+                  {(presentation) => <HtmlPreview {...presentation()} desktop={!mobile()} />}
+                </Show>
+              </div>
+            )}
+          </Show>
+          <div
+            class="sidebar-file-view__canvas"
+            hidden={Boolean(props.controls?.htmlPreview && !props.controls.htmlPreview.source)}
+          >
+            <Show when={desktop()}>
+              <div class="sidebar-file-view__floating-copy">
+                <FileCopyButton action="contents" controls={props.controls} />
+              </div>
             </Show>
+            <Show when={props.controls?.markdown && props.controls.readingMode === "preview"}>
+              <FileMarkdown controls={props.controls!} onSelect={selectMarkdown} />
+            </Show>
+            <div
+              class="file-view"
+              hidden={
+                props.controls?.readingMode === "preview" ||
+                Boolean(props.controls?.htmlPreview && !props.controls.htmlPreview.source)
+              }
+            >
+              <Show when={props.controls?.htmlPreview?.sourceFallback}>
+                {(fallback) => <HtmlPreviewSourceFallback {...fallback()} />}
+              </Show>
+              <Show when={mountIdentity()} keyed>
+                {(_identity) => (
+                  // The editor mount retains its callback through control replacement.
+                  <div class="file-view__mount" ref={props.controls?.editorRef} />
+                )}
+              </Show>
+              <Show when={props.controls?.loadingEditor}>
+                <PanelLoadingSkeleton
+                  variant="review"
+                  label={t("common.loading")}
+                  compact={false}
+                  overlay
+                />
+              </Show>
+            </div>
           </div>
-        )}
-      </Show>
-      <div
-        class="file-view"
-        hidden={Boolean(props.controls?.htmlPreview && !props.controls.htmlPreview.source)}
-      >
-        <Show when={props.controls?.htmlPreview?.sourceFallback}>
-          {(fallback) => <HtmlPreviewSourceFallback {...fallback()} />}
-        </Show>
-        <Show when={mountIdentity()} keyed>
-          {(_identity) => (
-            // The editor mount retains its callback through control replacement.
-            <div class="file-view__mount" ref={props.controls?.editorRef} />
-          )}
-        </Show>
-        <Show when={props.controls?.loadingEditor}>
-          <PanelLoadingSkeleton
-            variant="review"
-            label={t("common.loading")}
-            compact={false}
-            overlay
-          />
-        </Show>
-      </div>
-      <Show when={!props.controls?.editing && !props.controls?.htmlPreview}>
-        <div class="sidebar-file-view__footer">
-          <FileTextAction
-            label={t("chat.detailPanel.viewRawText")}
-            onClick={() => props.onViewRawText()}
-          />
+          <Show when={mobile() && props.controls}>
+            {(controls) => (
+              <SidebarFileMobileTextControls
+                controls={controls()}
+                canEdit={Boolean(props.content.edit)}
+                active={controls().active !== false}
+                mode={
+                  controls().htmlPreview ??
+                  (controls().markdown
+                    ? {
+                        source: mobileSource(),
+                        onToggle: () =>
+                          controls().onReadingModeChange?.(
+                            mobileSource() ? "preview" : "highlighted",
+                          ),
+                      }
+                    : undefined)
+                }
+                onCloseFind={(reason) => controls().onCloseSearch?.(reason)}
+              />
+            )}
+          </Show>
         </div>
-      </Show>
+      </div>
     </section>
   );
 }

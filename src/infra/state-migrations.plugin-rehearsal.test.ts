@@ -125,20 +125,17 @@ it.each(["direct", "automatic", "post-session"] as const)(
       ],
     });
     const inventory = resolveLivePluginDoctorStateMigrationInventory({ config, env });
+    const common = { config, env, inventory };
     const run = () =>
       runner === "automatic"
         ? autoMigrateLegacyPluginDoctorState({ config, env, homedir: () => stateDir })
         : runner === "post-session"
           ? runPostSessionPluginDoctorStateRepairs({
-              config,
-              env,
-              inventory,
+              ...common,
               maintenanceAuthority: { assertCurrent() {} },
             })
           : runPluginDoctorStateMigrationPlans({
-              config,
-              env,
-              inventory,
+              ...common,
               detected: {
                 stateDir,
                 oauthDir: path.join(stateDir, "credentials"),

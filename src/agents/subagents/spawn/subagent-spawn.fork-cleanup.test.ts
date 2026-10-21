@@ -28,7 +28,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let decisionWork: typeof import("../../../audit/execution-decision-work.js");
   let identityAdmission: typeof import("../../../audit/execution-identity-admission.js");
   let callerContext: typeof import("../../tools/gateway-caller-context.js");
-  let resetScheduler: () => void;
+  let observeSwarmSchedulerWork: typeof import("../swarm/swarm-scheduler.lifecycle.test-support.js").observeSwarmSchedulerWork;
+  let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
   let restoreUpsert: () => void;
   let forkedEntry: SessionEntry | undefined;
   const registerSubagentRun = vi.fn();
@@ -105,8 +106,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     sessions = await import("../../../config/sessions/session-accessor.js");
     ({ forkSessionEntryFromParent: forkSession } =
       await import("../../../auto-reply/reply/session-fork.js"));
-    const { testing } = await import("../swarm/swarm-scheduler.test-support.js");
-    resetScheduler = () => testing.reset();
+    ({ observeSwarmSchedulerWork } =
+      await import("../swarm/swarm-scheduler.lifecycle.test-support.js"));
     const runtime = await import("./subagent-spawn.runtime.js");
     const upsert = vi
       .spyOn(runtime, "upsertSessionEntryCore")
@@ -121,6 +122,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   });
 
   beforeEach(async () => {
+    schedulerWork = observeSwarmSchedulerWork();
     tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     config = {
@@ -133,7 +135,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     threadBindingAvailable = false;
     forkedEntry = undefined;
     fork.mockClear();
-    resetScheduler();
     registerSubagentRun.mockReset().mockResolvedValue(undefined);
     startQueuedSubagentRun.mockReset().mockResolvedValue(false);
     settleFailedQueuedSubagentLaunch.mockReset().mockResolvedValue(true);
@@ -198,9 +199,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     }
   });
 
-  afterEach(() => {
-    resetScheduler();
-  });
+  afterEach(() => schedulerWork.close());
 
   afterAll(() => {
     restoreUpsert();

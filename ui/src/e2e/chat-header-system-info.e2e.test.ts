@@ -52,7 +52,11 @@ suite.define(() => {
         await gateway.waitForRequest("chat.startup");
         const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         await pane.waitFor();
-        await pane.getByText("Scoped workspace", { exact: true }).first().waitFor();
+        await pane
+          .getByText("Scoped workspace", { exact: true })
+          .filter({ visible: true })
+          .first()
+          .waitFor();
         const workspace = pane.getByRole("button", {
           name: "Workspace actions for scoped-proof",
         });

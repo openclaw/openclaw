@@ -203,7 +203,7 @@ export function createModelProviders(
     canStart: canMutate,
     onDiscover: () => {
       setMessage("connection", null);
-      void discovery.open();
+      discovery.open();
     },
     onApiKey: (provider) => {
       state.addProviderId = provider;

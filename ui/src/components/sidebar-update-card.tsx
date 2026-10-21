@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createMemo, createSignal, flush, onCleanup } from "solid-js";
+import { Show, createMemo, createSignal, flush, onSettled } from "solid-js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
@@ -81,7 +81,9 @@ export function SidebarUpdateCard(
   let refreshPending: ReturnType<typeof refreshScope> | undefined;
   let targetCheckPending = false;
   const updateNativeAvailability = () => setNativeUpdateAvailable(hasNativeUpdateBridge());
-  onCleanup(listen(window, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT, updateNativeAvailability));
+  onSettled(() =>
+    listen(window, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT, updateNativeAvailability),
+  );
   createInterval(
     () => setNow(Date.now()),
     () => {
@@ -337,7 +339,7 @@ export function SidebarUpdateCard(
                 ref={sidebarAttentionFocusRef()}
                 class="sidebar-update-card__review sidebar-update-card__review--primary"
                 type="button"
-                onClick={props.onReviewUpdate}
+                onClick={() => props.onReviewUpdate?.()}
               >
                 {t("updates.reviewUpdate")}
               </button>
@@ -544,7 +546,7 @@ export function SidebarUpdateCard(
               ref={sidebarAttentionFocusRef()}
               class="sidebar-update-card__review"
               type="button"
-              onClick={props.onReviewUpdate}
+              onClick={() => props.onReviewUpdate?.()}
             >
               {t("updates.reviewUpdate")}
             </button>

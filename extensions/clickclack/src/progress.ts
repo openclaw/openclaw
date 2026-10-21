@@ -122,9 +122,6 @@ export function createClickClackAgentProgressPublisher(params: {
         if (!frame) {
           continue;
         }
-        if (frame.lineId) {
-          queuedLines.delete(frame.lineId);
-        }
         try {
           await params.client.publishEphemeral({
             ...params.target,

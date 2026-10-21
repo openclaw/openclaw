@@ -1,5 +1,39 @@
 # Team-shaped synthetic state
 
+## Workboard dashboard reads
+
+`workboard-read-measure.ts` exercises the real source Gateway and Workboard SQLite
+owner over signed synthetic WebSocket connections. Run it on an approved benchmark
+host. Prepare each fixture outside the measurement CPU allocation:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/workboard-read-measure.ts \
+  --root /path/to/new-fixture --port 41510 --prepare --boards 24 --cards 50
+node --import ./scripts/tsx.mjs scripts/perf/workboard-read-measure.ts \
+  --root /path/to/new-fixture --port 41510 --clients 12 --waves 80 \
+  --interval-ms 250 --start-at <future-epoch-ms> --output /path/to/result.json
+```
+
+Preparation creates 1,200 synthetic cards through public RPCs; their example PR
+URLs cause no GitHub requests. Measurements warm all board pages, then replay
+concurrent `workboard.boards.list` and `workboard.cards.list` calls, first without
+writes and then after one card status change per wave. Every response verifies
+card counts, board status aggregates, and changed card status. Reuse an untouched
+prepared fixture for each sample; measured status writes remain in its state.
+
+Reports include calls, errors, round-trip and handler p50/p99, response JSON bytes,
+Gateway process CPU, worker request classes, and observed board aggregate/metadata
+read commands on the existing worker transport. Handler seconds per 15 minutes
+are extrapolated from this replay's request rate, not a production forecast.
+Diagnostic loss, missing handler observations, stale data, and missed scheduled
+phase starts fail the run. This measures server RPCs, not browser rendering.
+
+For A/B comparisons use separate identical fixtures, ports, and source checkouts.
+Hold the host's exclusive measurement lock around each concurrent pair, use the
+same `--start-at` on both sides, and swap CPU halves for the next pair. Both warm
+and mutation phases have independent shared start times. Compare paired
+differences across at least two pairs; record outside load for context.
+
 ## Usage metadata bursts
 
 `chat-metadata-burst-measure.ts` requests `sessions.usage` on a cold 5,000-session
@@ -896,6 +930,52 @@ node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
   --reset-every-rounds 20 --list-interval-ms 2000 --heap-snapshot
 ```
 
+To retain long active histories during a memory soak, seed with
+`--scenario memory-soak --runs 8 --history-turns 512 --history-last-turns 2500
+--history-payload-kib 16 --reset-every-rounds 0 --seed-history`, then run with
+the same options without `--seed-history`. The last session contains the larger
+turn count. Each seeded turn has a separate deterministic synthetic reasoning
+signature and tool result of the requested KiB each; the default zero preserves
+the smaller reopen fixture. In this mode, `--mixed-rpc` history polls select the
+active seeded sessions, including the larger last session. Keep fixture writes sequential and record actual
+database bytes before choosing the shape on a shared filesystem.
+
+Add `--worker-memory` in a separate diagnostic pass to record bounded task-kind
+memory under `transcript-worker-<thread>.jsonl`. The private preload observes
+the real transcript worker's task transport and samples after JSON parses of at
+least 1 KiB, capturing the raw-row plus decoded-object high water. It records
+task-start/end heap, peak observed heap, parsed bytes, heap limit, and the count
+and final old-generation bytes of major collections during each task. Tasks with
+no major collection keep that value absent. Periodic samples separately label
+the last observed post-GC baseline. It does not force GC, retain payloads,
+or change production worker limits. These are sampled lower bounds, not an exact
+allocation total; per-parse sampling adds overhead, so compare equally instrumented
+pairs and keep uninstrumented RPC acceptance timing separate.
+
+For a focused cold-process bounded-hydration diagnostic on that same fixture:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-hydration-headroom.ts \
+  --state-dir /path/to/seeded-fixture --output /path/to/hydration-result \
+  --revision <measured-commit-sha> --max-mib 64 --rounds 4
+```
+
+This uses the normal hydration owner and actual transcript task worker, checks
+that repeated reads return identical results, and leaves a three-second idle
+observation after the task burst. It does not establish Gateway throughput.
+Use separate matching fixtures, a shared `--start-at`, the measurement lock,
+and swapped CPU halves for baseline/candidate pairs. Follow it with the actual
+Gateway swarm and history/list latency comparison.
+
+For a comparison in one source checkout, `--baseline-owners` substitutes sibling
+`.baseline.ts` copies of `session-transcript.worker`,
+`session-accessor.sqlite-history-query`, `session-memory-entry.worker`, and
+`session-accessor.sqlite-active-context` under `src/config/sessions`. Create those
+four copies from the recorded baseline commit before applying the candidate;
+they are temporary sandbox artifacts. Both sides otherwise use the same import
+graph, dependencies, and driver. Omit `--worker-memory` for the uninstrumented
+Gateway latency pairs; the baseline loader still selects the pinned owners.
+
 This runs paced cohorts after five minutes of warmup, with one real `read` tool
 and a streamed completion per turn, including the same synthetic reasoning
 signature and replay check as `attempt-retention`. Diagnostics and the Prometheus plugin are
@@ -1430,6 +1510,82 @@ Use loopback ports at least 40000. Never read/copy production databases or touch
 production services. Stop your own Gateway, then remove your sandbox after
 recording results. Local validation is limited to changed-file format/lint and
 focused tests; PR CI owns broad gates.
+
+## Operator authority allocations
+
+`operator-authority-measure.ts` isolates five real synchronous authority owners:
+`auth-policy`, `retained-grant`, `model-execution`, `admitted-run`, and
+`transcript-guard`. Its synthetic non-owner operator has an explicitly required
+access-policy plugin, registered
+through `createApi(...).registerGatewayAccessPolicy(...)` with the normal plugin
+instance invocation wrappers. Setup authorizes and resumes the grant once;
+rechecks use the retained authority, as the recovery owner does. The fixture
+exposes no other plugin runtime capabilities and starts no Gateway or services.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/operator-authority-measure.ts \
+  --scenario model-execution --iterations 20000 --warmup 5000 \
+  --revision <commit-sha> --output /path/to/authority.json
+```
+
+The JSON records estimated allocated bytes per check, elapsed and main-thread CPU
+nanoseconds per check, and auth-policy, resume-owner, plugin-authorize,
+plugin-resume, and plugin-assert counts. Setup and warmup are excluded. Allocation
+uses V8 sampling at 32 KiB with both collected-object flags enabled; the report
+is allocation churn, not retained-heap delta. Raw profiles accompany `--output`,
+and the report includes the fifteen largest allocation sites with eight-frame
+stacks. A post-capture positive control requires grant revocation to fail the
+very next retained-authority check.
+
+Use at least five simultaneous baseline/candidate pairs on the approved
+benchmark host, with one `--scenario` and the same future `--start-at <epoch-ms>`
+per pair. Alternate the assigned CPU halves under the exclusive measurement
+lock. Compare median paired differences with spread; warm both sides identically.
+Builds belong outside the measurement window. The source can also be bundled
+with esbuild for the host, preserving Node built-ins and installed dependencies;
+use the same bundler options and dependency tree for both revisions.
+
+These are owner-check denominators. `model-execution` calls the real bound model
+assertion; `admitted-run` uses `prepareSystemAgentRunAdmission`, admission, and the
+real admitted-run active assertion. `transcript-guard` captures the real owned
+transcript assertion with that admitted run as its commit guard, without writing
+storage. None is a model turn, tool step, transcript append, or measured production
+frequency. Derive those counts from an instrumented
+Gateway turn separately. This probe does not include profile-database access,
+other access policies, contextual-ingress callbacks, or transport allocation.
+
+For real turn counts, add `--operator-access-policy` to the existing streaming
+driver's `chat.send --stress-tools` scenario. A small isolated fixture is enough
+to exercise this path before the larger deployment-shaped comparison:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts \
+  --state-dir /path/to/new-authority-state --sessions 1 --runs 0 --approvals 0 \
+  --cron 0 --projects 1 --transcript-mib 1 --port 41481
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/new-authority-state --entry src/entry.ts \
+  --port 41481 --mock-port 41482 --scenario chat.send --stress-tools \
+  --operator-access-policy --rounds 1 --chunks 10 --chunk-interval-ms 1
+```
+
+This option enables a synthetic required access-policy plugin and authenticates
+a non-owner operator through a loopback trusted proxy. The plugin rejects owner
+identity, checks the synthetic email, and records live authorize, resume, and
+assert callbacks. The normal code-mode tool runs `read` and `exec` against the
+fixture. Each measured round reports plugin assertions per completed turn, per
+`after_tool_call` completion, and per unique committed message sequence observed
+through `onSessionTranscriptUpdate`. Raw transcript-update counts are separate:
+they are not all transcript writes or synchronous precommit checks. These ratios
+normalize the full turn window; they do not attribute each check to one tool or
+append. Standalone host auth-policy invocations are not counted by the plugin.
+
+The mode permits only `chat.send --stress-tools`, with its one client and one
+active turn, and rejects background RPC polling. Counter start/stop uses private
+child IPC outside allocation capture. Add `--allocations` for whole-workload
+sampled bytes divided by policy assertions; this includes normal turn work and
+counter hooks, and is not isolated bytes allocated by one assertion. Use matched
+instrumentation and the same paired host procedure for comparisons. The tiny
+fixture proves the path, not deployment capacity or production recheck rates.
 
 ## Allocated bytes per RPC or turn
 

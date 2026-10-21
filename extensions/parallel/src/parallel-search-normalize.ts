@@ -54,40 +54,6 @@ type NormalizedParallelSearchRequest = {
   clientModel?: string;
 };
 
-function normalizeParallelSearchRequest(
-  args: Record<string, unknown>,
-  configuredCount: unknown,
-  sessionIdMaxLength: number,
-): { error: ReturnType<typeof invalidSearchQueriesPayload> } | NormalizedParallelSearchRequest {
-  const objective =
-    truncateUtf16Safe(readStringParam(args, "objective") ?? "", PARALLEL_MAX_OBJECTIVE_CHARS) ||
-    undefined;
-  const cliQuery =
-    truncateUtf16Safe(readStringParam(args, "query") ?? "", PARALLEL_MAX_OBJECTIVE_CHARS) ||
-    undefined;
-  let searchQueries = normalizeParallelSearchQueries(readStringArrayParam(args, "search_queries"));
-  if (searchQueries.length === 0 && cliQuery) {
-    searchQueries = normalizeParallelSearchQueries([cliQuery]);
-  }
-  if (searchQueries.length === 0) {
-    return { error: invalidSearchQueriesPayload() };
-  }
-  return {
-    objective,
-    searchQueries,
-    count: resolveParallelSearchCount(args, configuredCount),
-    sessionId: normalizeBoundedOptionalString(
-      readStringParam(args, "session_id"),
-      sessionIdMaxLength,
-    ),
-    clientModel:
-      truncateUtf16Safe(
-        readStringParam(args, "client_model") ?? "",
-        PARALLEL_CLIENT_MODEL_MAX_LENGTH,
-      ) || undefined,
-  };
-}
-
 export async function executeParallelSearchRequest(params: {
   provider: "parallel" | "parallel-free";
   endpoint: string;
@@ -99,16 +65,52 @@ export async function executeParallelSearchRequest(params: {
     timeoutSeconds: number,
   ) => Promise<ParallelSearchResponse>;
 }): Promise<Record<string, unknown>> {
-  const request = normalizeParallelSearchRequest(
-    params.args,
-    params.searchConfig?.maxResults,
-    params.provider === "parallel"
-      ? PARALLEL_SESSION_ID_MAX_LENGTH
-      : PARALLEL_FREE_SESSION_ID_MAX_LENGTH,
-  );
-  if ("error" in request) {
-    return request.error;
+  const { args } = params;
+  const configuredCount = params.searchConfig?.maxResults;
+  const objective =
+    truncateUtf16Safe(readStringParam(args, "objective") ?? "", PARALLEL_MAX_OBJECTIVE_CHARS) ||
+    undefined;
+  const cliQuery =
+    truncateUtf16Safe(readStringParam(args, "query") ?? "", PARALLEL_MAX_OBJECTIVE_CHARS) ||
+    undefined;
+  let searchQueries = normalizeParallelSearchQueries(readStringArrayParam(args, "search_queries"));
+  if (searchQueries.length === 0 && cliQuery) {
+    searchQueries = normalizeParallelSearchQueries([cliQuery]);
   }
+  if (searchQueries.length === 0) {
+    return {
+      error: "invalid_search_queries",
+      message:
+        "search_queries must be a non-empty array of keyword strings (max 5, max 200 chars each). See https://docs.parallel.ai/search/best-practices.",
+      docs: "https://docs.openclaw.ai/tools/parallel-search",
+    };
+  }
+  const requestedCount = readPositiveIntegerParam(args, "count", {
+    max: PARALLEL_MAX_SEARCH_COUNT,
+    message: `count must be an integer from 1 to ${PARALLEL_MAX_SEARCH_COUNT}.`,
+  });
+  const value =
+    requestedCount ??
+    (typeof configuredCount === "number" ? configuredCount : DEFAULT_SEARCH_COUNT);
+  const request: NormalizedParallelSearchRequest = {
+    objective,
+    searchQueries,
+    count: resolveIntegerOption(value, DEFAULT_SEARCH_COUNT, {
+      min: 1,
+      max: PARALLEL_MAX_SEARCH_COUNT,
+    }),
+    sessionId: normalizeBoundedOptionalString(
+      readStringParam(args, "session_id"),
+      params.provider === "parallel"
+        ? PARALLEL_SESSION_ID_MAX_LENGTH
+        : PARALLEL_FREE_SESSION_ID_MAX_LENGTH,
+    ),
+    clientModel:
+      truncateUtf16Safe(
+        readStringParam(args, "client_model") ?? "",
+        PARALLEL_CLIENT_MODEL_MAX_LENGTH,
+      ) || undefined,
+  };
   const cacheKey = buildSearchCacheKey([
     params.provider,
     params.apiKey ? sha256Hex(params.apiKey) : undefined,
@@ -153,23 +155,6 @@ export async function executeParallelSearchRequest(params: {
   return payload;
 }
 
-function resolveParallelSearchCount(
-  args: Record<string, unknown>,
-  configuredCount: unknown,
-): number {
-  const requestedCount = readPositiveIntegerParam(args, "count", {
-    max: PARALLEL_MAX_SEARCH_COUNT,
-    message: `count must be an integer from 1 to ${PARALLEL_MAX_SEARCH_COUNT}.`,
-  });
-  const value =
-    requestedCount ??
-    (typeof configuredCount === "number" ? configuredCount : DEFAULT_SEARCH_COUNT);
-  return resolveIntegerOption(value, DEFAULT_SEARCH_COUNT, {
-    min: 1,
-    max: PARALLEL_MAX_SEARCH_COUNT,
-  });
-}
-
 // Parallel's API caps each entry at 200 chars and accepts up to 5 queries. We
 // trim, drop empties/duplicates, truncate over-long entries to the API's hard
 // limit, and cap to the API's maximum so a malformed call from the model
@@ -193,15 +178,6 @@ function normalizeParallelSearchQueries(candidates: string[] = []): string[] {
     }
   }
   return out;
-}
-
-function invalidSearchQueriesPayload() {
-  return {
-    error: "invalid_search_queries",
-    message:
-      "search_queries must be a non-empty array of keyword strings (max 5, max 200 chars each). See https://docs.parallel.ai/search/best-practices.",
-    docs: "https://docs.openclaw.ai/tools/parallel-search",
-  };
 }
 
 function mapParallelResults(response: ParallelSearchResponse, count: number) {

@@ -1,18 +1,12 @@
 const STREAM_DISCONNECT_GRACE_MS = 2_000;
 
-export type StreamDisconnectLifecycle = {
-  connect: (providerCallId: string, streamId: string) => void;
-  disconnect: (providerCallId: string, streamId: string) => void;
-  retire: (providerCallId: string, streamId: string) => void;
-};
-
 type StreamState = {
   streamId: string;
   disconnectTimer?: ReturnType<typeof setTimeout>;
 };
 
 /** Track the current carrier stream and expire disconnected calls after reconnect grace. */
-export class StreamDisconnectGrace implements StreamDisconnectLifecycle {
+export class StreamDisconnectGrace {
   private readonly streams = new Map<string, StreamState>();
 
   constructor(

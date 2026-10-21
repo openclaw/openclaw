@@ -9,7 +9,7 @@ import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import type {
   SessionMembershipFact,
@@ -44,8 +44,9 @@ function readSessionMembershipRowsInDatabase(
   return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
     runSqliteReadSnapshotSync(database.db, () => {
       assertCanonicalSqliteSessionKeysCurrent(database);
-      let entries = selectSessionEntryRows(database, "list")
-        .select("updated_at")
+      let entries = getSessionKysely(database.db)
+        .selectFrom("session_nodes")
+        .select(["session_key", "entry_json", "updated_at"])
         .orderBy("session_key");
       let members = getSessionKysely(database.db)
         .selectFrom("session_members")
