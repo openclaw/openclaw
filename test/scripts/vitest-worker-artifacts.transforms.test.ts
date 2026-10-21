@@ -2,12 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, vi } from "vitest";
-import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import {
   createControlledWorkerCompiler,
   createWorkerArtifactTest,
+  inWorkerArtifactFixture,
   readFixtureLines,
 } from "./vitest-worker-artifacts.test-support.js";
 import { workerTransformProbe } from "./vitest-worker-artifacts.transforms.test-support.js";
@@ -20,10 +20,8 @@ const generationDirectory = (url: string) => fileURLToPath(new URL("../../", url
 describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
   it.for((["single", "projects"] as const).map((layout) => ({ layout })))(
     "preserves filesystem transforms across fresh generations, source mode, and edits ($layout)",
-    ({ layout }, { workerArtifacts }) =>
-      workerArtifacts.fixtureLifetime.run(async () => {
-        const { runtime, startBorrower } = workerArtifacts.createFixtureCommands();
-        const directory = workerArtifacts.fixtureDirectory();
+    ({ layout }, context) =>
+      inWorkerArtifactFixture(context, async ({ runtime, startBorrower, directory }) => {
         const { config, value, configuredValue, parent, cacheDirectory } = workerTransformProbe(
           directory,
           layout,
@@ -44,21 +42,11 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
         };
         const generations = new Set<string>();
         const owner = createVitestWorkerRun(controlled.env);
-        const runManaged = managedChild.runManagedCommand;
         let redirectedCompilers = 0;
         // The second owner lives in this process; its child env cannot intercept its spawn.
-        const compilerLaunch = vi
-          .spyOn(managedChild, "runManagedCommand")
-          .mockImplementation((options) => {
-            if (
-              options.args?.[0] === path.join(root, "scripts/lib/vitest-worker-compiler.mts") &&
-              options.args[1] === owner.descriptor.directory
-            ) {
-              redirectedCompilers += 1;
-              return runManaged({ ...options, args: controlled.args(owner.descriptor.directory) });
-            }
-            return runManaged(options);
-          });
+        const compilerLaunch = controlled.intercept(owner.descriptor.directory, () => {
+          redirectedCompilers += 1;
+        });
         const preparationLog = vi.spyOn(console, "error");
         try {
           const launch = async (

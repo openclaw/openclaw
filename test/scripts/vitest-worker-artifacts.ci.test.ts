@@ -19,6 +19,7 @@ import {
   createControlledWorkerCompiler,
   createWorkerArtifactTest,
   fixtureFileBeforeSettlement,
+  inWorkerArtifactFixture,
   readFixtureLines,
   writeFixture,
 } from "./vitest-worker-artifacts.test-support.js";
@@ -192,10 +193,8 @@ it.runIf(process.platform !== "win32").for([
   { parallelism: 2, shared: false },
 ])(
   "owns real CI group generations (parallelism=$parallelism, shared=$shared)",
-  ({ parallelism, shared }, { workerArtifacts, signal }) =>
-    workerArtifacts.fixtureLifetime.run(async () => {
-      const { node } = workerArtifacts.createFixtureCommands();
-      const directory = workerArtifacts.fixtureDirectory();
+  ({ parallelism, shared }, context) =>
+    inWorkerArtifactFixture(context, async ({ node, directory, signal }) => {
       const fixture = createCiProbe(directory);
       const groupOwner = pathToFileURL(path.join(root, "scripts/vitest-process-group.mts")).href;
       const capability = shared

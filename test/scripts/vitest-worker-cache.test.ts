@@ -18,6 +18,7 @@ import {
   retainVitestWorkerArtifacts,
 } from "../../scripts/lib/vitest-worker-cache.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeWorkerFixtureManifest } from "./fixtures/vitest-worker-compiler.mjs";
 import { writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 vi.mock("../../scripts/lib/native-typescript-config.mts", { spy: true });
@@ -73,29 +74,14 @@ function fixture() {
       "build-info.json": "{}\n",
       "nested/deeper.js": 'export const nested = "fixture";\n',
     };
-    const hashes: Record<string, string> = {};
-    for (const [name, bytes] of Object.entries(outputs).toSorted(([a], [b]) =>
-      a.localeCompare(b),
-    )) {
-      const filename = path.join(directory, "dist", name);
-      fs.mkdirSync(path.dirname(filename), { recursive: true });
-      fs.writeFileSync(filename, bytes);
-      hashes[name] = hashVitestWorkerArtifact(bytes);
-    }
-    fs.chmodSync(path.join(directory, "dist/probe.js"), 0o755);
     const inputs = Object.fromEntries(
-      [...Object.keys(sources), ...configFiles]
-        .map((name) => path.resolve(root, name))
-        .toSorted()
-        .map((filename) => [filename, hashVitestWorkerArtifact(fs.readFileSync(filename))]),
+      [...Object.keys(sources), ...configFiles].map((name) => {
+        const filename = path.resolve(root, name);
+        return [filename, fs.readFileSync(filename)];
+      }),
     );
-    const manifest: VitestWorkerManifest = {
-      inputs,
-      outputs: hashes,
-      identity: hashVitestWorkerArtifact(JSON.stringify([inputs, hashes])),
-      durationMs: 1,
-    };
-    fs.writeFileSync(path.join(directory, "manifest.json"), JSON.stringify(manifest));
+    const manifest: VitestWorkerManifest = writeWorkerFixtureManifest(directory, inputs, outputs);
+    fs.chmodSync(path.join(directory, "dist/probe.js"), 0o755);
     return manifest;
   };
   return {

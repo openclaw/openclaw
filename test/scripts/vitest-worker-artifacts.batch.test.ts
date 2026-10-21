@@ -9,6 +9,7 @@ import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js"
 import {
   createControlledWorkerCompiler,
   createWorkerArtifactTest,
+  inWorkerArtifactFixture,
   readFixtureLines,
   workerBorrowingProbe,
   writeFixture,
@@ -26,10 +27,8 @@ const cacheProbe = `const cacheEnvironment=()=>({
 
 subprocess.for([0, 1])(
   "owns compiled worker artifacts through batch completion (exit %s)",
-  (expectedCode, { workerArtifacts }) =>
-    workerArtifacts.fixtureLifetime.run(async () => {
-      const { node } = workerArtifacts.createFixtureCommands();
-      const directory = workerArtifacts.fixtureDirectory();
+  (expectedCode, context) =>
+    inWorkerArtifactFixture(context, async ({ node, directory }) => {
       const { config } = workerBorrowingProbe(directory);
       const observed = path.join(directory, "generations.jsonl");
       const completed = path.join(directory, "completed.json");
@@ -154,8 +153,8 @@ subprocess.for([
     ).map((mode) => ({ route, mode })),
   ),
   { route: "batch", mode: "ready" },
-])("$route runner owns worker preparation through $mode", ({ route, mode }, { workerArtifacts }) =>
-  workerArtifacts.fixtureLifetime.run(async () => {
+])("$route runner owns worker preparation through $mode", ({ route, mode }, context) =>
+  inWorkerArtifactFixture(context, async ({ node, directory, write: fixture }) => {
     const [selectedFile, selectedConfig]: [string, string] = route.startsWith("contracts-")
       ? [packageContract, contractsConfig]
       : mode === "code-mode"
@@ -163,9 +162,6 @@ subprocess.for([
         : mode === "capture"
           ? [discordCapture, e2eConfig]
           : [coreWorker, infraConfig];
-    const { node } = workerArtifacts.createFixtureCommands();
-    const directory = workerArtifacts.fixtureDirectory();
-    const fixture = (name: string, source: string) => writeFixture(directory, name, source);
     const compiled = path.join(directory, "compiled.jsonl");
     const launched = path.join(directory, "launched.json");
     const compilerReceipt = path.join(directory, "compiler.json");
