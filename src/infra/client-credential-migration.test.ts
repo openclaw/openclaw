@@ -28,6 +28,7 @@ import {
   recoverClientCredentialStore,
 } from "./client-credential-migration.js";
 import {
+  openMigrationCredentials,
   captureClientCredentialMigrationFixture,
   createClientCredentialMigrationFixture,
 } from "./client-credential-migration.test-support.js";
@@ -39,10 +40,7 @@ import {
 } from "./client-credential-readiness.js";
 import { serializeClientCredentialReceipt } from "./client-credential-receipt.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
-import {
-  openClientCredentialCustody,
-  runClientCredentialOperation,
-} from "./client-credential-store.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
 import { createLegacyNodeAuthFixture } from "./client-credential-store.test-support.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
@@ -153,7 +151,7 @@ describe("local client credential extraction", () => {
       try {
         upgradeNative(f, maintenance);
         {
-          using local = openClientCredentialCustody(f.env, { migration: true })!;
+          using local = openMigrationCredentials(f.env);
           expect(
             readClientCredentialReceipt(local.database)?.receipt.legacyImports["auth:primary"],
           ).toEqual(authTablePresent ? { sha256: null } : undefined);
@@ -214,7 +212,7 @@ describe("local client credential extraction", () => {
       },
     });
     {
-      using local = openClientCredentialCustody(env, { migration: true })!;
+      using local = openMigrationCredentials(env);
       expect(readClientCredentialReceipt(local.database)).toMatchObject({
         phase: "complete",
         receipt: { source: null, sharedFile: null },
@@ -313,7 +311,7 @@ describe("local client credential extraction", () => {
         openOpenClawStateDatabase({ env });
         await closeOpenClawStateDatabaseAsync();
         {
-          using local = openClientCredentialCustody(env, { migration: true })!;
+          using local = openMigrationCredentials(env);
           const stored = readClientCredentialReceipt(local.database)!;
           // Older bootstraps persisted only a file binding, including after completion.
           stored.receipt.source = null;
@@ -324,7 +322,7 @@ describe("local client credential extraction", () => {
           runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
         ).toEqual({ kind: "identity", identity });
         {
-          using local = openClientCredentialCustody(env, { migration: true })!;
+          using local = openMigrationCredentials(env);
           const stored = readClientCredentialReceipt(local.database)!;
           expect(stored).toMatchObject({
             phase: "complete",
@@ -362,56 +360,6 @@ describe("local client credential extraction", () => {
     },
   );
 
-  it("preserves exact identity and scopes, strips only socket material, then retires source tables", async () => {
-    await using f = await fixture();
-    f.migrate();
-    const target = openClientCredentialCustody(f.env, {
-      createIfMissing: false,
-      migration: true,
-    })!;
-    try {
-      expect(target.database.prepare("SELECT * FROM device_identities").get()).toEqual({
-        identity_key: "primary",
-        device_id: f.identity.deviceId,
-        public_key_pem: f.identity.publicKeyPem,
-        private_key_pem: f.identity.privateKeyPem,
-        created_at_ms: 12,
-        updated_at_ms: 99,
-      });
-      expect(
-        target.database.prepare("SELECT token,role,scopes_json FROM device_auth_tokens").get(),
-      ).toEqual({
-        token: "token-original",
-        role: "v2.gateway.operator",
-        scopes_json: '["operator.read"]',
-      });
-      expect(
-        target.database
-          .prepare("SELECT socket_path,socket_token FROM native_exec_socket_credentials")
-          .get(),
-      ).toEqual({ socket_path: "/socket", socket_token: "socket-token" });
-      expect(readClientCredentialReceipt(target.database)?.phase).toBe("complete");
-    } finally {
-      target.close();
-    }
-    expect(
-      f.source.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
-    ).toBeUndefined();
-    const row = f.source
-      .prepare(
-        "SELECT raw_json,socket_path,has_socket_token,updated_at_ms FROM exec_approvals_config",
-      )
-      .get()!;
-    expect(JSON.parse(String(row.raw_json))).toEqual({
-      version: 1,
-      socket: { future: "keep" },
-      defaults: { security: "deny" },
-      agents: {},
-    });
-    expect(row).toMatchObject({ socket_path: null, has_socket_token: 0, updated_at_ms: 55 });
-    expect(f.source.prepare("SELECT value FROM unaffected").get()).toEqual({ value: "preserve" });
-  });
-
   it("migrates large credential stores without losing identities, tokens, or gateway scopes", async () => {
     // Each table exceeds SQLite's 32766-parameter limit when copied in one INSERT.
     const rowCount = 7_000;
@@ -422,15 +370,37 @@ describe("local client credential extraction", () => {
       "SELECT * FROM gateway_origin_device_tokens ORDER BY gateway_scope, device_id, role",
     ].map((query) => ({ query, rows: f.source.prepare(query).all() }));
     f.migrate();
-    using target = openClientCredentialCustody(f.env, {
-      createIfMissing: false,
-      migration: true,
-    })!;
+    using target = openMigrationCredentials(f.env);
     for (const snapshot of snapshots) {
       expect(snapshot.rows).toHaveLength(rowCount);
       expect(target.database.prepare(snapshot.query).all()).toEqual(snapshot.rows);
     }
     expect(readClientCredentialReceipt(target.database)?.phase).toBe("complete");
+    expect(f.source.prepare("SELECT value FROM unaffected").get()).toEqual({ value: "preserve" });
+    expect(
+      f.source.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
+    ).toBeUndefined();
+    expect(
+      target.database
+        .prepare("SELECT socket_path,socket_token FROM native_exec_socket_credentials")
+        .get(),
+    ).toEqual({ socket_path: "/socket", socket_token: "socket-token" });
+    const policy = f.source
+      .prepare(
+        "SELECT raw_json,socket_path,has_socket_token,updated_at_ms FROM exec_approvals_config",
+      )
+      .get()!;
+    expect({ ...policy, raw_json: JSON.parse(String(policy.raw_json)) }).toEqual({
+      raw_json: {
+        version: 1,
+        socket: { future: "keep" },
+        defaults: { security: "deny" },
+        agents: {},
+      },
+      socket_path: null,
+      has_socket_token: 0,
+      updated_at_ms: 55,
+    });
   });
 
   it("leaves copied on source rollback and rebuilds an orphan without merging newer cached tokens", async () => {
@@ -442,22 +412,11 @@ describe("local client credential extraction", () => {
       legacyImport,
     } = createLegacyNodeAuthFixture(f.identity.deviceId);
     expect(() =>
-      f.maintenance.run(() =>
-        runSqliteImmediateTransactionSync(f.source, () => {
-          prepareClientCredentialMigration(f.source, {
-            path: f.sourcePath,
-            env: f.env,
-            fromVersion: 25,
-            capture: f.maintenance.capture,
-          });
-          throw new Error("interrupt before shared commit");
-        }),
-      ),
+      f.migrate(() => {
+        throw new Error("interrupt before shared commit");
+      }),
     ).toThrow("interrupt before shared commit");
-    const target = openClientCredentialCustody(f.env, {
-      createIfMissing: false,
-      migration: true,
-    })!;
+    const target = openMigrationCredentials(f.env);
     try {
       expect(readClientCredentialReceipt(target.database)?.phase).toBe("copied");
       runSqliteImmediateTransactionSync(target.database, () =>
@@ -485,20 +444,22 @@ describe("local client credential extraction", () => {
       { identity_key: "primary" },
     ]);
     f.migrate();
-    const current = openClientCredentialCustody(f.env, {
-      createIfMissing: false,
-      migration: true,
-    })!;
+    const current = openMigrationCredentials(f.env);
     try {
       expect(current.database.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
         token: "token-original",
       });
-      const imported = importClientCredentialLegacy(current, legacyImport);
+      expect(importClientCredentialLegacy(current, legacyImport)).toBe(false);
+      expect(
+        importClientCredentialLegacy(current, {
+          ...legacyImport,
+          sha256: "b".repeat(64),
+        }),
+      ).toBe(false);
       expect(current.run({ kind: "token.read", key: legacyToken })).toEqual({
         kind: "token",
         token: null,
       });
-      expect(imported).toBe(false);
       expect(fs.readFileSync(legacyPath, "utf8")).toBe(legacyJson);
     } finally {
       current.close();
@@ -514,10 +475,7 @@ describe("local client credential extraction", () => {
     const sourceRow = f.source.prepare("SELECT * FROM device_identities").get();
     f.migrate();
     {
-      using local = openClientCredentialCustody(f.env, {
-        createIfMissing: false,
-        migration: true,
-      })!;
+      using local = openMigrationCredentials(f.env);
       expect(local.database.prepare("SELECT * FROM device_identities").get()).toEqual(sourceRow);
       expect(readClientCredentialReceipt(local.database)).toMatchObject({
         phase: "complete",
@@ -535,18 +493,7 @@ describe("local client credential extraction", () => {
   it("retains shared credentials and socket material when token scope validation fails", async () => {
     await using f = await fixture();
     f.source.prepare("UPDATE device_auth_tokens SET scopes_json='{}'").run();
-    expect(() =>
-      f.maintenance.run(() =>
-        runSqliteImmediateTransactionSync(f.source, () =>
-          prepareClientCredentialMigration(f.source, {
-            path: f.sourcePath,
-            env: f.env,
-            fromVersion: 25,
-            capture: f.maintenance.capture,
-          }),
-        ),
-      ),
-    ).toThrow("invalid token record");
+    expect(() => f.migrate()).toThrow("invalid token record");
     expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
     expect(f.source.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
       token: "token-original",
@@ -561,71 +508,37 @@ describe("local client credential extraction", () => {
     });
   });
 
-  it("finishes an interrupted local publication only against the already-retired source", async () => {
-    await using f = await fixture();
-    f.migrate();
-    const target = openClientCredentialCustody(f.env, {
-      createIfMissing: false,
-      migration: true,
-    })!;
-    try {
-      runSqliteImmediateTransactionSync(target.database, () =>
-        target.database.prepare("UPDATE client_credential_migration SET phase='copied'").run(),
+  it.each([false, true])(
+    "finishes interrupted publication after source retirement (deferred header=%s)",
+    async (deferredHeader) => {
+      await using f = await fixture();
+      f.migrate();
+      {
+        using target = openMigrationCredentials(f.env);
+        runSqliteImmediateTransactionSync(target.database, () =>
+          target.database.prepare("UPDATE client_credential_migration SET phase='copied'").run(),
+        );
+      }
+      f.source.exec(
+        deferredHeader
+          ? `CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY,value_json TEXT); INSERT INTO config_machine_state VALUES ('state.schema.contentVersion','${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION}');`
+          : `UPDATE schema_meta SET schema_version=${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION}; PRAGMA user_version=${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION};`,
       );
-    } finally {
-      target.close();
-    }
-    f.source.exec(
-      `UPDATE schema_meta SET schema_version=${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION}; PRAGMA user_version=${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION};`,
-    );
-    recoverClientCredentialStore(f.source, { path: f.sourcePath, env: f.env });
-    const current = openClientCredentialCustody(f.env, {
-      createIfMissing: false,
-      migration: true,
-    })!;
-    try {
-      expect(readClientCredentialReceipt(current.database)?.phase).toBe("complete");
-    } finally {
-      current.close();
-    }
-    expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(true);
-  });
-
-  it("resumes after committed retirement while an older updater defers the published header", async () => {
-    await using f = await fixture();
-    f.migrate();
-    const target = openClientCredentialCustody(f.env, {
-      createIfMissing: false,
-      migration: true,
-    })!;
-    try {
-      runSqliteImmediateTransactionSync(target.database, () =>
-        target.database.prepare("UPDATE client_credential_migration SET phase='copied'").run(),
-      );
-    } finally {
-      target.close();
-    }
-    f.source.exec(
-      `CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY,value_json TEXT); INSERT INTO config_machine_state VALUES ('state.schema.contentVersion','${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION}');`,
-    );
-    expect(f.source.prepare("PRAGMA user_version").get()).toEqual({ user_version: 25 });
-    recoverClientCredentialStore(f.source, { path: f.sourcePath, env: f.env });
-    const recovered = openClientCredentialCustody(f.env, {
-      createIfMissing: false,
-      migration: true,
-    })!;
-    try {
+      expect(f.source.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: deferredHeader ? 25 : CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
+      });
+      recoverClientCredentialStore(f.source, { path: f.sourcePath, env: f.env });
+      using recovered = openMigrationCredentials(f.env);
       expect(readClientCredentialReceipt(recovered.database)?.phase).toBe("complete");
-    } finally {
-      recovered.close();
-    }
-  });
+      expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(true);
+    },
+  );
 });
 
 it("checks the Swift receipt fixture against actual canonical migration output", async () => {
   await using f = await fixture(true);
   f.migrate();
-  using target = openClientCredentialCustody(f.env, { createIfMissing: false, migration: true })!;
+  using target = openMigrationCredentials(f.env);
   const actual = readClientCredentialReceipt(target.database)!;
   expect(actual.receipt.source!.generation).toBe(f.maintenance.capture.generation);
   expect(actual.receipt.source!.generation).toMatch(/^[a-f0-9]{64}$/u);
@@ -643,10 +556,7 @@ it("checks the Swift receipt fixture against actual canonical migration output",
     executeCanonicalStateSchema(fresh, { includeVersionLazyAdditiveTables: true });
     writeCurrentStateSchemaMetadata(fresh, 123);
   });
-  using freshOwner = openClientCredentialCustody(freshEnv, {
-    createIfMissing: false,
-    migration: true,
-  })!;
+  using freshOwner = openMigrationCredentials(freshEnv);
   const freshStored = readClientCredentialReceipt(freshOwner.database)!;
   expect(freshStored.receipt.source?.identity).toBe(`${freshPath}:123`);
   freshStored.receipt.sharedFile = { path: "/fixture/state/openclaw.sqlite", dev: "1", ino: "2" };
@@ -674,7 +584,7 @@ it("promotes an unchanged independent native source without losing refreshed loc
   const f = nativeFixture();
   const snapshot = readIndependentClientCredentialSource(f.sourcePath);
   {
-    using local = openClientCredentialCustody(f.env, { createIfMissing: true, migration: true })!;
+    using local = openMigrationCredentials(f.env, true);
     runSqliteImmediateTransactionSync(local.database, () => {
       local.database
         .prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)")
@@ -721,7 +631,7 @@ it("promotes an unchanged independent native source without losing refreshed loc
         }),
       ),
     );
-    using local = openClientCredentialCustody(f.env, { migration: true })!;
+    using local = openMigrationCredentials(f.env);
     expect(local.database.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
       token: "refreshed-after-import",
     });
@@ -757,7 +667,7 @@ it("rebuilds large changed native sources without reimporting revoked JSON crede
   fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
   fs.writeFileSync(legacyPath, raw);
   {
-    using local = openClientCredentialCustody(f.env, { createIfMissing: true, migration: true })!;
+    using local = openMigrationCredentials(f.env, true);
     runSqliteImmediateTransactionSync(local.database, () => {
       local.database
         .prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)")
@@ -839,7 +749,7 @@ it("rebuilds large changed native sources without reimporting revoked JSON crede
     token: null,
   });
   {
-    using local = openClientCredentialCustody(f.env, { migration: true })!;
+    using local = openMigrationCredentials(f.env);
     expect(local.database.prepare("SELECT * FROM device_auth_tokens ORDER BY role").all()).toEqual(
       restoredTokens,
     );
@@ -856,7 +766,7 @@ it("rebuilds large changed native sources without reimporting revoked JSON crede
       kind: "token",
       token: null,
     });
-    using local = openClientCredentialCustody(f.env, { migration: true })!;
+    using local = openMigrationCredentials(f.env);
     expect(readClientCredentialReceipt(local.database)?.receipt.legacyImports).toEqual({
       "auth:primary": { sha256: createHash("sha256").update(raw).digest("hex") },
       "auth:node": { sha256: null },

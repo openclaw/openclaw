@@ -60,7 +60,7 @@ function makeNativeApprovalCapability(
     supportsApproverDmSurface?: boolean;
     resolveApproverDmTargets?: ApprovalNativeAdapter["resolveApproverDmTargets"];
   } & ApprovalNativeRuntimeAdapterStubParams = {},
-): ApprovalCapability {
+) {
   const preferredSurface = params.preferredSurface ?? "origin";
   return {
     native: {
@@ -77,7 +77,7 @@ function makeNativeApprovalCapability(
         : {}),
     },
     nativeRuntime: createApprovalNativeRuntimeAdapterStubs(params),
-  };
+  } satisfies ApprovalCapability;
 }
 
 async function createTestApprovalHandler(
@@ -185,17 +185,21 @@ describe("createChannelApprovalHandlerFromCapability", () => {
   });
 
   it.each([false, true])(
-    "retains plugin kind through stop with compatibility override=%s",
+    "retains the normalized request and selected kind through stop (override=%s)",
     async (override) => {
       const unbindPending = vi.fn();
       const shouldHandle = vi.fn().mockReturnValue(true);
-      const resolveApprovalKind = vi.fn().mockReturnValue("plugin");
-      const approvalRuntime = await createTestApprovalHandler({
-        eventKinds: ["plugin"],
+      const approvalKind = override ? "exec" : "plugin";
+      const resolveApprovalKind = vi.fn().mockReturnValue(approvalKind);
+      const capability = makeNativeApprovalCapability({
+        eventKinds: [approvalKind],
         shouldHandle,
         unbindPending,
         ...(override ? { resolveApprovalKind } : {}),
       });
+      const buildPendingPayload = vi.fn().mockResolvedValue({ text: "pending" });
+      capability.nativeRuntime.presentation.buildPendingPayload = buildPendingPayload;
+      const approvalRuntime = await requireHandler({ ...TEST_HANDLER_PARAMS, capability });
       const request = override
         ? makePluginRequest("plugin:legacy-owned-id")
         : makePluginRequest("custom:1", { turnSourceChannel: "test", turnSourceTo: "origin-chat" });
@@ -205,71 +209,81 @@ describe("createChannelApprovalHandlerFromCapability", () => {
         expect(resolveApprovalKind).toHaveBeenCalledWith(normalizedRequest);
       }
       expect(shouldHandle).toHaveBeenCalledWith(
-        expect.objectContaining({ request: normalizedRequest, approvalKind: "plugin" }),
+        expect.objectContaining({ request: normalizedRequest, approvalKind }),
+      );
+      expect(buildPendingPayload).toHaveBeenCalledWith(
+        expect.objectContaining({ request: normalizedRequest, approvalKind }),
       );
       await approvalRuntime.stop();
 
       expect(unbindPending).toHaveBeenCalledOnce();
       expect(firstCallArg(unbindPending)).toHaveProperty("request", normalizedRequest);
-      expect(firstCallArg(unbindPending)).toHaveProperty("approvalKind", "plugin");
+      expect(firstCallArg(unbindPending)).toHaveProperty("approvalKind", approvalKind);
     },
   );
 
-  it("normalizes and cleans up system-agent entries through a lazy native runtime", async () => {
-    const shouldHandle = vi.fn().mockReturnValue(true);
-    const unbindPending = vi.fn();
-    const onFinalized = vi.fn();
-    const buildResolvedResult = vi.fn().mockResolvedValue({ kind: "leave" });
-    const nativeRuntime = createApprovalNativeRuntimeAdapterStubs({
-      eventKinds: ["system-agent"],
-      shouldHandle,
-      buildResolvedResult,
-      unbindPending,
-      onFinalized,
-    });
-    const approvalRuntime = await requireHandler({
-      ...TEST_HANDLER_PARAMS,
-      capability: {
-        ...makeNativeApprovalCapability(),
-        nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
-          eventKinds: nativeRuntime.eventKinds,
-          ...nativeRuntime.availability,
-          load: async () => nativeRuntime,
-        }),
-      },
-    });
-    const request = {
-      id: "system-agent:1",
-      request: {
-        title: "OpenClaw change",
-        description: "restart the Gateway",
-        command: "restart the Gateway",
-        proposalHash: "a".repeat(64),
-        allowedDecisions: ["allow-once", "deny"] as const,
-        sessionId: "delegation-1",
-      },
-      createdAtMs: 0,
-      expiresAtMs: Date.now() + 60_000,
-    };
+  it.each(["resolved", "expired"] as const)(
+    "normalizes and cleans up %s system-agent entries through a lazy native runtime",
+    async (phase) => {
+      const shouldHandle = vi.fn().mockReturnValue(true);
+      const unbindPending = vi.fn();
+      const onFinalized = vi.fn();
+      const buildResult = vi.fn().mockResolvedValue({ kind: "leave" });
+      const otherResult = vi.fn().mockResolvedValue({ kind: "leave" });
+      const nativeRuntime = createApprovalNativeRuntimeAdapterStubs({
+        eventKinds: ["system-agent"],
+        shouldHandle,
+        buildResolvedResult: phase === "resolved" ? buildResult : otherResult,
+        unbindPending,
+        onFinalized,
+      });
+      nativeRuntime.presentation.buildExpiredResult =
+        phase === "expired" ? buildResult : otherResult;
+      const approvalRuntime = await requireHandler({
+        ...TEST_HANDLER_PARAMS,
+        capability: {
+          ...makeNativeApprovalCapability(),
+          nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+            eventKinds: nativeRuntime.eventKinds,
+            ...nativeRuntime.availability,
+            load: async () => nativeRuntime,
+          }),
+        },
+      });
+      const request = {
+        id: "system-agent:1",
+        request: {
+          title: "OpenClaw change",
+          description: "restart the Gateway",
+          command: "restart the Gateway",
+          proposalHash: "a".repeat(64),
+          allowedDecisions: ["allow-once", "deny"] as const,
+          sessionId: "delegation-1",
+        },
+        createdAtMs: 0,
+        expiresAtMs: Date.now() + 60_000,
+      };
 
-    await approvalRuntime.handleRequested(request);
-    expect(shouldHandle).toHaveBeenCalledWith(
-      expect.objectContaining({ approvalKind: "system-agent" }),
-    );
-    await approvalRuntime.handleResolved({
-      id: request.id,
-      decision: "deny",
-      ts: 1,
-    } as never);
+      await approvalRuntime.handleRequested(request);
+      expect(shouldHandle).toHaveBeenCalledWith(
+        expect.objectContaining({ approvalKind: "system-agent" }),
+      );
+      if (phase === "resolved") {
+        await approvalRuntime.handleResolved({ id: request.id, decision: "deny", ts: 1 } as never);
+      } else {
+        await approvalRuntime.handleExpired(request.id);
+      }
 
-    expect(unbindPending).toHaveBeenCalledWith(
-      expect.objectContaining({ approvalKind: "system-agent" }),
-    );
-    expect(buildResolvedResult).toHaveBeenCalledOnce();
-    expect(onFinalized).toHaveBeenCalledWith(
-      expect.objectContaining({ approvalKind: "system-agent", phase: "resolved" }),
-    );
-  });
+      expect(unbindPending).toHaveBeenCalledWith(
+        expect.objectContaining({ approvalKind: "system-agent" }),
+      );
+      expect(buildResult).toHaveBeenCalledOnce();
+      expect(otherResult).not.toHaveBeenCalled();
+      expect(onFinalized).toHaveBeenCalledWith(
+        expect.objectContaining({ approvalKind: "system-agent", phase }),
+      );
+    },
+  );
 
   it.each(["resolved", "stop"] as const)(
     "continues %s cleanup after an unbind failure",

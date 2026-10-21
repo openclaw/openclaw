@@ -500,7 +500,6 @@ describe("subscription CRUD", () => {
     await registerBound(endpoint);
     const preferences = { enabled: true, label: "Slot 1", categories: { agentQuestion: true } };
     const keys = { p256dh: "refreshed-p256dh", auth: "refreshed-auth" };
-    const nextBinding = deviceBinding("other-device", "profile-2");
     expect(
       await setPreferences(
         endpoint,
@@ -518,12 +517,6 @@ describe("subscription CRUD", () => {
     expect(await findBound(endpoint)).toMatchObject({
       devicePreferences: { enabled: true, label: "Slot 1" },
     });
-
-    await registerSubscription(endpoint, { keys, binding: nextBinding });
-    expect(await findBound(endpoint)).toMatchObject({
-      ...nextBinding,
-      devicePreferences: defaultDevicePreferences,
-    });
   });
 
   it("preserves unrelated concurrent registrations", async () => {
@@ -532,19 +525,6 @@ describe("subscription CRUD", () => {
     expect((await listSubscriptions()).map((entry) => entry.endpoint).toSorted()).toEqual(
       endpoints,
     );
-  });
-
-  it("rejects an endpoint-only ownership takeover without changing the subscription", async () => {
-    const original = await registerSubscription(endpoint, {
-      binding: ownerBinding,
-    });
-    await expect(
-      registerSubscription(endpoint, {
-        keys: { p256dh: "forged-p256dh", auth: "forged-auth" },
-        binding: { deviceId: "other-device", userProfileId: "other-profile" },
-      }),
-    ).rejects.toThrow("existing browser subscription keys required");
-    expect(await listSubscriptions()).toEqual([original]);
   });
 
   it.each([

@@ -20,9 +20,9 @@ import {
   prepareClientCredentialMigration,
   recoverClientCredentialStore,
 } from "./client-credential-migration.js";
+import { openMigrationCredentials } from "./client-credential-migration.test-support.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { readClientCredentialReceipt } from "./client-credential-readiness.js";
-import { openClientCredentialCustody } from "./client-credential-store.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { openEngineStore } from "./database-engine/open.js";
 import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";
@@ -229,10 +229,7 @@ describe.skipIf(!connection)(
       const migrated = f.open(true);
       try {
         {
-          using local = openClientCredentialCustody(f.env, {
-            createIfMissing: false,
-            migration: true,
-          })!;
+          using local = openMigrationCredentials(f.env);
           expect(local.database.prepare("SELECT * FROM device_identities").get()).toEqual({
             identity_key: "primary",
             device_id: f.identity.deviceId,
@@ -313,10 +310,7 @@ describe.skipIf(!connection)(
         { token: "retained-token" },
       ]);
       {
-        using local = openClientCredentialCustody(f.env, {
-          createIfMissing: false,
-          migration: true,
-        })!;
+        using local = openMigrationCredentials(f.env);
         expect(readClientCredentialReceipt(local.database)?.phase).toBe("copied");
         runSqliteImmediateTransactionSync(local.database, () => {
           local.database.prepare("UPDATE device_auth_tokens SET token='orphan-token'").run();
@@ -331,10 +325,7 @@ describe.skipIf(!connection)(
       const migrated = f.open(true);
       migrated.close();
       {
-        using current = openClientCredentialCustody(f.env, {
-          createIfMissing: false,
-          migration: true,
-        })!;
+        using current = openMigrationCredentials(f.env);
         expect(current.database.prepare("SELECT token FROM device_auth_tokens").all()).toEqual([
           { token: "retained-token" },
         ]);
@@ -354,10 +345,7 @@ describe.skipIf(!connection)(
       const migrated = f.open(true);
       try {
         {
-          using local = openClientCredentialCustody(f.env, {
-            createIfMissing: false,
-            migration: true,
-          })!;
+          using local = openMigrationCredentials(f.env);
           runSqliteImmediateTransactionSync(local.database, () =>
             local.database.prepare("UPDATE client_credential_migration SET phase='copied'").run(),
           );
@@ -366,10 +354,7 @@ describe.skipIf(!connection)(
           recoverClientCredentialStore(migrated, { path: f.pathname, env: f.env }),
         );
         {
-          using recovered = openClientCredentialCustody(f.env, {
-            createIfMissing: false,
-            migration: true,
-          })!;
+          using recovered = openMigrationCredentials(f.env);
           expect(readClientCredentialReceipt(recovered.database)?.phase).toBe("complete");
         }
       } finally {

@@ -61,6 +61,10 @@ describe("prepareExecApprovalPresentation", () => {
       kind: params.kind,
       scope: { ...scope, target: "Stripe\\u{202E}" },
     });
+    const emojiScope = { ...scope, target: "🦞".repeat(128) };
+    expect(
+      prepare(params.kind, { ...params.request, scope: emojiScope }, allowedDecisions),
+    ).toMatchObject({ scope: emojiScope });
 
     const oversizedScopePresentation = prepare(
       params.kind,

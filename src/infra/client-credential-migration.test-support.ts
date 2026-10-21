@@ -7,10 +7,15 @@ import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-st
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { prepareClientCredentialMigration } from "./client-credential-migration.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
+import { openClientCredentialCustody } from "./client-credential-store.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+
+export function openMigrationCredentials(env: NodeJS.ProcessEnv, createIfMissing = false) {
+  return openClientCredentialCustody(env, { createIfMissing, migration: true })!;
+}
 
 export async function captureClientCredentialMigrationFixture(sourcePath: string) {
   await createVerifiedSqliteSnapshot({ sourcePath, targetPath: `${sourcePath}.captured` });
@@ -155,16 +160,17 @@ export async function createClientCredentialMigrationFixture(
     env,
     identity,
     maintenance,
-    migrate() {
+    migrate(afterCopy?: () => void) {
       maintenance.run(() =>
-        runSqliteImmediateTransactionSync(source, () =>
+        runSqliteImmediateTransactionSync(source, () => {
           prepareClientCredentialMigration(source, {
             path: sourcePath,
             env,
             fromVersion: 25,
             capture: maintenance.capture,
-          }),
-        ),
+          });
+          afterCopy?.();
+        }),
       );
     },
     async [Symbol.asyncDispose]() {
