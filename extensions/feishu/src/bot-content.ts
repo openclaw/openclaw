@@ -41,6 +41,9 @@ export function resolveFeishuGroupSession(params: {
     (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled" ||
     threadReply;
   const groupSessionScope = resolveConfiguredFeishuGroupSessionScope({ groupConfig, feishuCfg });
+  // Native topic chats report thread_id on every message (root_id can point at a quoted
+  // message), so prefer it there. Ordinary-group threads keep the reply root ID so the first
+  // turn and follow-ups stay in one session.
   const normalizedTopicGroupThreadId =
     chatType === "topic_group" ? (normalizedThreadId ?? normalizedRootId) : undefined;
   const topicScope =
