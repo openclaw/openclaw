@@ -20,6 +20,7 @@ import "./question-page-registration.ts";
 
 const tag = "openclaw-question-page";
 type QuestionPage = HTMLElementTagNameMap[typeof tag];
+const answers = { answers: { audience: ["The design team"] } };
 
 function question(id = "question-one") {
   return {
@@ -41,7 +42,7 @@ function question(id = "question-one") {
   };
 }
 
-function mount(request: GatewayRequestHandler) {
+async function mount(request: GatewayRequestHandler) {
   const harness = createApplicationGateway();
   const { gateway } = harness;
   harness.publish({
@@ -54,6 +55,7 @@ function mount(request: GatewayRequestHandler) {
   page.questionId = "question-one";
   provider.append(page);
   document.body.append(provider);
+  await settle(page);
   return {
     page,
     update(this: void, patch: Partial<ApplicationGatewaySnapshot>) {
@@ -74,20 +76,14 @@ function retry(page: QuestionPage) {
   );
 }
 
-beforeEach(async () => {
-  await i18n.setLocale("en");
-});
-
-afterEach(() => {
-  document.body.replaceChildren();
-});
+beforeEach(() => i18n.setLocale("en"));
+afterEach(() => document.body.replaceChildren());
 
 it.each(["question", "outside"] as const)(
-  "restores focus after removing a question only when it held focus (%s)",
+  "restores focus only from the removed question (%s)",
   async (focusAt) => {
     const request = vi.fn().mockResolvedValue({ question: question() });
-    const { page } = mount(request);
-    await settle(page);
+    const { page } = await mount(request);
     await questionPanelIn(page);
     const input = page.querySelector("textarea")!;
     const outside = document.body.appendChild(document.createElement("button"));
@@ -115,12 +111,8 @@ it("recovers a failed reconnect lookup without losing the typed answer", async (
     .mockResolvedValueOnce({ question: question() })
     .mockRejectedValueOnce(new Error("temporary transport failure"))
     .mockResolvedValueOnce({ question: question() })
-    .mockResolvedValueOnce({
-      status: "answered",
-      answers: { answers: { audience: ["The design team"] } },
-    });
-  const { page, update } = mount(request);
-  await settle(page);
+    .mockResolvedValueOnce({ status: "answered", answers });
+  const { page, update } = await mount(request);
   await questionPanelIn(page);
   const input = page.querySelector("textarea")!;
   input.value = "The design team";
@@ -139,46 +131,39 @@ it("recovers a failed reconnect lookup without losing the typed answer", async (
   await settle(page);
   expect(request).toHaveBeenLastCalledWith(
     "question.resolve",
-    {
-      id: "question-one",
-      answers: { answers: { audience: ["The design team"] } },
-    },
+    { id: "question-one", answers },
     expect.any(Object),
   );
   await waitForSolid(() => expect(page.textContent).toContain("Answered"));
   expect(page.querySelector(".chat-question-summary")?.textContent).toContain("The design team");
 });
 
-it.each(["id", "client"] as const)(
-  "ignores a late retry rejection after the %s changes",
-  async (change) => {
-    const pending = createDeferred<unknown>();
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("temporary lookup failure"))
-      .mockReturnValueOnce(pending.promise)
-      .mockResolvedValue({ question: question("question-two") });
-    const { page, update } = mount(request);
-    await settle(page);
-    expect(retry(page)).toBeDefined();
-    retry(page)!.click();
-    await settle(page);
-    if (change === "id") {
-      page.questionId = "question-two";
-      await page.updateComplete;
-    } else {
-      update({
-        client: createTestGatewayClient(vi.fn().mockResolvedValue({ question: question() })),
-      });
-    }
-    await settle(page);
-    await questionPanelIn(page);
-    pending.reject(new Error("old lookup failed"));
-    await settle(page);
-    expect(page.querySelector("textarea")).not.toBeNull();
-    expect(retry(page)).toBeUndefined();
-  },
-);
+it.each(["id", "client"] as const)("ignores stale retry rejection (%s)", async (change) => {
+  const pending = createDeferred<unknown>();
+  const request = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("temporary lookup failure"))
+    .mockReturnValueOnce(pending.promise)
+    .mockResolvedValue({ question: question("question-two") });
+  const { page, update } = await mount(request);
+  expect(retry(page)).toBeDefined();
+  retry(page)!.click();
+  await settle(page);
+  if (change === "id") {
+    page.questionId = "question-two";
+    await page.updateComplete;
+  } else {
+    update({
+      client: createTestGatewayClient(vi.fn().mockResolvedValue({ question: question() })),
+    });
+  }
+  await settle(page);
+  await questionPanelIn(page);
+  pending.reject(new Error("old lookup failed"));
+  await settle(page);
+  expect(page.querySelector("textarea")).not.toBeNull();
+  expect(retry(page)).toBeUndefined();
+});
 
 it("keeps confirmed missing questions unavailable without a retry", async () => {
   const request = vi.fn().mockRejectedValue(
@@ -188,8 +173,7 @@ it("keeps confirmed missing questions unavailable without a retry", async () => 
       details: { reason: "QUESTION_NOT_FOUND" },
     }),
   );
-  const { page } = mount(request);
-  await settle(page);
+  const { page } = await mount(request);
   expect(page.textContent).toContain("Unavailable");
   expect(retry(page)).toBeUndefined();
 });
@@ -201,8 +185,7 @@ it("loads only the final question when native IDs change in one turn", async () 
     }
     return { question: question(params.id) };
   });
-  const { page } = mount(request);
-  await settle(page);
+  const { page } = await mount(request);
   await questionPanelIn(page);
 
   page.questionId = "question-two";
