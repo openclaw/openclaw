@@ -8,7 +8,10 @@ import {
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
-import { waitForGatewayRecoveryScope } from "./new-session-page.test-support.ts";
+import {
+  replaceGatewayClient,
+  waitForGatewayRecoveryScope,
+} from "./new-session-page.test-support.ts";
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
@@ -119,6 +122,9 @@ suite.define(() => {
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
       await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+      const reconnectSocketCount = await gateway.getSocketCount();
+      await replaceGatewayClient(page);
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(reconnectSocketCount);
       await expect.poll(() => rows.count()).toBe(2);
       for (const key of ownKeys) {
         await sidebar.locator('[data-session-key="' + key + '"]').waitFor({ state: "visible" });
