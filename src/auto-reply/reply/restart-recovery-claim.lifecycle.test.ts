@@ -294,7 +294,7 @@ it.each(["active-storage", "retired-storage", "retired-cleanup"] as const)(
               staleError,
             )
           : storageError;
-      const reads = vi
+      using _ = vi
         .spyOn(entryReads, "readSessionEntryInWorker")
         .mockImplementationOnce(async () => {
           if (failure !== "active-storage") {
@@ -302,12 +302,8 @@ it.each(["active-storage", "retired-storage", "retired-cleanup"] as const)(
           }
           throw expected;
         });
-      try {
-        operation.abortForRestart();
-        await expect(controller.isArmed()).rejects.toBe(expected);
-      } finally {
-        reads.mockRestore();
-      }
+      operation.abortForRestart();
+      await expect(controller.isArmed()).rejects.toBe(expected);
     });
   },
 );
@@ -419,7 +415,7 @@ describe("restart recovery claim settlement", () => {
       });
       await writerEntered.promise;
       let interruptedAtCommit = false;
-      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+      using admission = probe.admission(workerAdmission, (request, grant, admit) => {
         if (
           !interruptedAtCommit &&
           (interruption === "commit-rotation" || interruption === "commit-abort") &&
@@ -456,11 +452,8 @@ describe("restart recovery claim settlement", () => {
       } finally {
         releaseWriter.resolve();
       }
-      try {
-        await Promise.all([handoff, clearing]);
-      } finally {
-        admission.mockRestore();
-      }
+      await Promise.all([handoff, clearing]);
+      admission.mockRestore();
       expect(interruptedAtCommit).toBe(
         interruption === "commit-rotation" || interruption === "commit-abort",
       );

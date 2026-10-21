@@ -5,17 +5,12 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntry,
-  updateSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { isRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createRecoveryControllerFixture } from "./recovery-controller.fixture.test-support.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
-import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const claim = (runId: string, sourceRunId = runId) => ({
@@ -26,46 +21,31 @@ type ClaimOptions = Parameters<typeof createReplyRestartRecoveryClaimController>
 
 async function claimFixture(sessionKey: string, overrides: Partial<InternalSessionEntry> = {}) {
   const scope = {
+    agentId: "main",
     storePath: path.join(tempDirs.make("openclaw-claim-"), "agents/main/sessions/sessions.json"),
     sessionKey,
   };
-  const state: { entry: InternalSessionEntry } = {
-    entry: {
-      abortedLastRun: true,
-      ...claim("interrupted-run"),
-      restartRecoverySourceIngress: "control-ui",
-      sessionId: "session",
-      status: "interrupted",
-      updatedAt: 1,
-      ...overrides,
-    },
-  };
-  await replaceSessionEntry(scope, state.entry);
-  const actor = createReplyRecoveryActorFixture({
-    agentId: "main",
-    ...scope,
-    getSessionId: () => state.entry.sessionId,
+  const fixture = await createRecoveryControllerFixture(scope, {
+    abortedLastRun: true,
+    ...claim("interrupted-run"),
+    restartRecoverySourceIngress: "control-ui",
+    sessionId: "session",
+    status: "interrupted",
+    updatedAt: 1,
+    ...overrides,
   });
-  const setEntry = vi.fn((next: InternalSessionEntry) => {
-    state.entry = next;
-  });
+  const setEntry = vi.fn(fixture.setEntry);
   return {
-    ...actor,
-    scope,
-    state,
+    ...fixture,
+    get entry() {
+      return fixture.entry;
+    },
     setEntry,
+    updateEntry: fixture.setEntry,
     read: () => loadSessionEntry(scope),
     controller: (options: Partial<ClaimOptions>) =>
-      createReplyRestartRecoveryClaimController({
-        agentId: "main",
-        ...scope,
-        acquireSessionActor: () => actor.acquireSessionActor(),
+      fixture.controller({
         admissionRunId: "queued-run",
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        getEntry: () => state.entry,
-        getSessionId: () => state.entry.sessionId,
-        isRestartAbort: () => false,
-        resolveDeliveryContext: () => undefined,
         setEntry,
         ...options,
       }),
@@ -138,8 +118,8 @@ it("tracks a channel claim after retiring an aborted Control UI predecessor", as
     },
     target: {
       agentId: "main",
-      sessionEntry: fixture.state.entry,
-      sessionId: fixture.state.entry.sessionId,
+      sessionEntry: fixture.entry,
+      sessionId: fixture.entry.sessionId,
       ...fixture.scope,
     },
     updateMode: "none",
@@ -174,9 +154,11 @@ it("tracks a channel claim after retiring an aborted Control UI predecessor", as
     restartRecoverySourceIngress: "channel",
   });
 
-  fixture.state.entry = (await updateSessionEntry(fixture.scope, () => ({
-    abortedLastRun: true,
-  }))) as InternalSessionEntry;
+  fixture.updateEntry(
+    (await updateSessionEntry(fixture.scope, () => ({
+      abortedLastRun: true,
+    }))) as InternalSessionEntry,
+  );
   await expect(controller.isArmed()).resolves.toBe(true);
   await controller.clear();
 

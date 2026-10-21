@@ -39,14 +39,33 @@ vi.mock("../../infra/outbound/deliver.js", () => ({
 
 const { routeReply: routeReplyRuntime } = await import("./route-reply.js");
 type RouteReplyParams = Parameters<typeof routeReplyRuntime>[0];
-const routeReply = (
-  params: Omit<RouteReplyParams, "replyKind"> & { replyKind?: RouteReplyParams["replyKind"] },
-) => routeReplyRuntime({ replyKind: "final", ...params });
+const routeReply = (params: Partial<RouteReplyParams> = {}) =>
+  routeReplyRuntime({
+    replyKind: "final",
+    payload: { text: "hello" },
+    channel: "telegram",
+    to: "chat-1",
+    cfg: {},
+    ...params,
+  });
 
-function createChannelPlugin(id: ChannelPlugin["id"], label: string): ChannelPlugin {
+function suppressDelivery(reason: string) {
+  mocks.deliverOutboundPayloads.mockImplementationOnce(
+    async ({
+      onPayloadDeliveryOutcome,
+    }: {
+      onPayloadDeliveryOutcome?: (outcome: unknown) => void;
+    }) => {
+      onPayloadDeliveryOutcome?.({ index: 0, status: "suppressed", reason });
+      return [];
+    },
+  );
+}
+
+function createChannelPlugin(): ChannelPlugin {
   return createChannelTestPluginBase({
-    id,
-    label,
+    id: "telegram",
+    label: "Telegram",
     config: { listAccountIds: () => [], resolveAccount: () => ({}) },
   });
 }
@@ -58,12 +77,7 @@ describe("routeReply delivery result", () => {
       createTestRegistry([
         {
           pluginId: "telegram",
-          plugin: createChannelPlugin("telegram", "Telegram"),
-          source: "test",
-        },
-        {
-          pluginId: "whatsapp",
-          plugin: createChannelPlugin("whatsapp", "WhatsApp"),
+          plugin: createChannelPlugin(),
           source: "test",
         },
       ]),
@@ -110,7 +124,7 @@ describe("routeReply delivery result", () => {
           },
         });
       }
-      const plugin = createChannelPlugin("telegram", "Telegram");
+      const plugin = createChannelPlugin();
       if (outcome === "channel_transform") {
         plugin.messaging = {
           transformReplyPayload: ({ payload }) => (payload.mediaUrl ? null : payload),
@@ -128,20 +142,7 @@ describe("routeReply delivery result", () => {
       if (outcome === "invisible") {
         mocks.deliverOutboundPayloads.mockResolvedValueOnce([]);
       } else if (outcome === "no-identity") {
-        mocks.deliverOutboundPayloads.mockImplementationOnce(
-          async ({
-            onPayloadDeliveryOutcome,
-          }: {
-            onPayloadDeliveryOutcome?: (outcome: unknown) => void;
-          }) => {
-            onPayloadDeliveryOutcome?.({
-              index: 0,
-              status: "suppressed",
-              reason: "adapter_returned_no_identity",
-            });
-            return [];
-          },
-        );
+        suppressDelivery("adapter_returned_no_identity");
       } else if (outcome === "not-dispatched") {
         mocks.deliverOutboundPayloads.mockRejectedValueOnce(notDispatched);
       } else if (outcome === "unknown") {
@@ -236,71 +237,17 @@ describe("routeReply delivery result", () => {
   );
 
   it.each([
-    "cancelled_by_message_sending_hook",
-    "empty_after_message_sending_hook",
-    "adapter_returned_no_send",
+    ["cancelled_by_message_sending_hook", { suppressed: true }],
+    ["empty_after_message_sending_hook", { suppressed: true }],
+    ["adapter_returned_no_send", { suppressed: true }],
+    ["adapter_returned_no_identity", { ambiguous: true }],
   ] as const)(
-    "projects intentional suppression for %s without claiming delivery",
-    async (reason) => {
-      mocks.deliverOutboundPayloads.mockImplementationOnce(
-        async ({
-          onPayloadDeliveryOutcome,
-        }: {
-          onPayloadDeliveryOutcome?: (outcome: unknown) => void;
-        }) => {
-          onPayloadDeliveryOutcome?.({
-            index: 0,
-            status: "suppressed",
-            reason,
-          });
-          return [];
-        },
-      );
-
-      const res = await routeReply({
-        payload: { text: "hello" },
-        channel: "telegram",
-        to: "chat-1",
-        cfg: {} as never,
-      });
-
-      expect(res).toEqual({
-        ok: true,
-        delivered: false,
-        suppressed: true,
-      });
+    "projects suppression or ambiguity for %s without claiming delivery",
+    async (reason, outcome) => {
+      suppressDelivery(reason);
+      expect(await routeReply()).toEqual({ ok: true, delivered: false, ...outcome });
     },
   );
-
-  it("treats a send without adapter identity as ambiguous and non-retryable", async () => {
-    mocks.deliverOutboundPayloads.mockImplementationOnce(
-      async ({
-        onPayloadDeliveryOutcome,
-      }: {
-        onPayloadDeliveryOutcome?: (outcome: unknown) => void;
-      }) => {
-        onPayloadDeliveryOutcome?.({
-          index: 0,
-          status: "suppressed",
-          reason: "adapter_returned_no_identity",
-        });
-        return [];
-      },
-    );
-
-    const res = await routeReply({
-      payload: { text: "hello" },
-      channel: "telegram",
-      to: "chat-1",
-      cfg: {} as never,
-    });
-
-    expect(res).toEqual({
-      ok: true,
-      delivered: false,
-      ambiguous: true,
-    });
-  });
 
   it("preserves session writer authority through route normalization", async () => {
     mocks.deliverOutboundPayloads.mockResolvedValueOnce([
@@ -319,9 +266,6 @@ describe("routeReply delivery result", () => {
         { text: "hello" },
         { sessionWriterDeliveryAuthority: authority },
       ),
-      channel: "telegram",
-      to: "chat-1",
-      cfg: {} as never,
     });
 
     const call = mocks.deliverOutboundPayloads.mock.calls[0];
@@ -346,12 +290,7 @@ describe("routeReply delivery result", () => {
     });
     mocks.deliverOutboundPayloads.mockRejectedValueOnce(failure);
 
-    const res = await routeReply({
-      payload: { text: "hello" },
-      channel: "telegram",
-      to: "chat-1",
-      cfg: {} as never,
-    });
+    const res = await routeReply();
 
     expect(res).toEqual({
       ok: false,
@@ -364,27 +303,13 @@ describe("routeReply delivery result", () => {
   });
 
   it.each([
-    ["skipped", false, undefined],
-    ["suppressed", false, undefined],
-    ["unknown", true, undefined],
-    ["ok", true, undefined],
-  ] as const)(
-    "reports message id %s visibility as %s",
-    async (messageId, delivered, returnedId) => {
-      mocks.deliverOutboundPayloads.mockResolvedValueOnce([{ channel: "telegram", messageId }]);
+    ["skipped", false],
+    ["suppressed", false],
+    ["unknown", true],
+    ["ok", true],
+  ] as const)("reports message id %s visibility as %s", async (messageId, delivered) => {
+    mocks.deliverOutboundPayloads.mockResolvedValueOnce([{ channel: "telegram", messageId }]);
 
-      const res = await routeReply({
-        payload: { text: "hello" },
-        channel: "telegram",
-        to: "chat-1",
-        cfg: {} as never,
-      });
-
-      expect(res).toEqual({
-        ok: true,
-        delivered,
-        ...(returnedId === undefined ? {} : { messageId: returnedId }),
-      });
-    },
-  );
+    expect(await routeReply()).toEqual({ ok: true, delivered });
+  });
 });

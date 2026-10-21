@@ -150,6 +150,16 @@ async function setupStop(createEntry = true) {
 
 registerAbortAcknowledgmentCases({ sessionKey, setupStop });
 
+function createStopOperation(state: Awaited<ReturnType<typeof setupStop>>, agentId?: string) {
+  return createReplyOperation({
+    agentId,
+    sessionKey,
+    sessionId: state.entry.sessionId,
+    target: state.target,
+    resetTriggered: false,
+  });
+}
+
 it.each(["idle", "leased", "replaced"] as const)(
   "public Stop retires captured idle MCP state safely (%s)",
   async (mode) => {
@@ -214,18 +224,23 @@ it.each(["idle", "leased", "replaced"] as const)(
 );
 
 describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) => {
+  function stop(
+    state: Awaited<ReturnType<typeof setupStop>>,
+    isCommandTargetCurrent: NonNullable<
+      HandleCommandsParams["opts"]
+    >["isCommandTargetCurrent"] = state.isCommandTargetCurrent,
+  ) {
+    return pathKind === "fast"
+      ? tryFastAbortFromMessage({ ...state, isCommandTargetCurrent })
+      : handleStopCommand({ ...state.params, opts: { isCommandTargetCurrent } }, true);
+  }
+
   it.each(["completed", "running", "backend-error", "cleanup-error"] as const)(
     "stops a %s request's command while preserving its independent service",
     async (phase) => {
       const state = await setupStop();
       const runId = `channel-owned-exec-${pathKind}`;
-      const operation = createReplyOperation({
-        agentId: "main",
-        sessionKey,
-        sessionId: state.entry.sessionId,
-        target: state.target,
-        resetTriggered: false,
-      });
+      const operation = createStopOperation(state, "main");
       const commands: ProcessSession[] = [];
       const supervisor = getProcessSupervisor();
       const spawn = supervisor.spawn.bind(supervisor);
@@ -397,14 +412,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
             sessionSource: current.source,
           });
         }
-        await expect(
-          pathKind === "fast"
-            ? tryFastAbortFromMessage({ ...state, isCommandTargetCurrent: staleCurrent })
-            : handleStopCommand(
-                { ...state.params, opts: { isCommandTargetCurrent: staleCurrent } },
-                true,
-              ),
-        ).rejects.toThrow("selected session changed");
+        await expect(stop(state, staleCurrent)).rejects.toThrow("selected session changed");
         expect(ordinaryCommand.cancellationRequested).not.toBe(true);
         expect(child?.abortSignal.aborted).not.toBe(true);
         if (pathKind === "fast" && phase === "backend-error") {
@@ -420,10 +428,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
           });
           await writerEntered.promise;
         }
-        const stopping =
-          pathKind === "fast"
-            ? tryFastAbortFromMessage(state)
-            : handleStopCommand(state.params, true);
+        const stopping = stop(state);
         if (phase === "backend-error" || phase === "cleanup-error") {
           const rejection = expect(stopping).rejects.toThrow(
             phase === "backend-error"
@@ -700,9 +705,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
       });
     }
     try {
-      await (pathKind === "fast"
-        ? tryFastAbortFromMessage(state)
-        : handleStopCommand(state.params, true));
+      await stop(state);
       expect(selected.abortSignal.aborted).toBe(true);
       expect(foreign.abortSignal.aborted).toBe(false);
     } finally {
@@ -856,12 +859,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
       { storePath: state.storePath, sessionKey },
       { ...state.entry, updatedAt: 100, chatType: "group", delivery },
     );
-    const operation = createReplyOperation({
-      sessionKey,
-      sessionId: state.entry.sessionId,
-      target: state.target,
-      resetTriggered: false,
-    });
+    const operation = createStopOperation(state);
     operation.attachBackend({
       kind: "embedded",
       cancel: () => queueMicrotask(() => operation.complete()),
@@ -887,9 +885,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
       return current?.sessionKey === sessionKey;
     };
     state.params.opts = { isCommandTargetCurrent: state.isCommandTargetCurrent };
-    const failure = await (
-      pathKind === "fast" ? tryFastAbortFromMessage(state) : handleStopCommand(state.params, true)
-    ).then(
+    const failure = await stop(state).then(
       () => undefined,
       (error: unknown) => error,
     );
@@ -929,12 +925,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
         },
       );
       await entered.promise;
-      const operation = createReplyOperation({
-        sessionKey,
-        sessionId: "session-a",
-        target: state.target,
-        resetTriggered: false,
-      });
+      const operation = createStopOperation(state);
       operation.attachBackend({
         kind: "embedded",
         cancel: () => queueMicrotask(() => operation.complete()),
@@ -943,10 +934,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
       const aborted = createDeferred();
       const onAbort = () => aborted.resolve();
       operation.abortSignal.addEventListener("abort", onAbort, { once: true });
-      const stopping =
-        pathKind === "fast"
-          ? tryFastAbortFromMessage(state)
-          : handleStopCommand(state.params, true);
+      const stopping = stop(state);
       onTestFinished(async () => {
         operation.abortSignal.removeEventListener("abort", onAbort);
         release.resolve();
@@ -981,12 +969,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
 
   it("stops issuing effects when cancellation releases its active publisher authority", async () => {
     const state = await setupStop();
-    const operation = createReplyOperation({
-      sessionKey,
-      sessionId: "session-a",
-      target: state.target,
-      resetTriggered: false,
-    });
+    const operation = createStopOperation(state);
     operation.attachBackend({
       kind: "embedded",
       cancel: () => queueMicrotask(() => operation.complete()),
@@ -994,9 +977,9 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     });
     state.isCommandTargetCurrent = () => !operation.abortSignal.aborted;
     state.params.opts = { isCommandTargetCurrent: state.isCommandTargetCurrent };
-    await expect(
-      pathKind === "fast" ? tryFastAbortFromMessage(state) : handleStopCommand(state.params, true),
-    ).rejects.toThrow("The selected session changed before it could be stopped.");
+    await expect(stop(state)).rejects.toThrow(
+      "The selected session changed before it could be stopped.",
+    );
     expect(operation.abortSignal.aborted).toBe(true);
     expect(
       loadSessionEntry({ storePath: state.storePath, sessionKey })?.abortedLastRun,

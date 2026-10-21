@@ -42,8 +42,8 @@ import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-age
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
+import { createRecoveryControllerFixture } from "./recovery-controller.fixture.test-support.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
-import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const deliveryContext = {
@@ -100,37 +100,24 @@ async function createStoredClaim(
   const entry = { sessionId: "session", updatedAt: 1, ...fields };
   await replaceSessionEntry(scope, entry);
   const operation = createOperation?.(scope, entry);
-  return { ...bindClaim(scope, entry, params, operation), operation };
+  return { ...(await bindClaim(scope, entry, params, operation)), operation };
 }
 
-function bindClaim(
+async function bindClaim(
   scope: ClaimScope,
   initialEntry: InternalSessionEntry,
   params: Partial<ClaimControllerParams> = {},
   operation?: ReplyOperation,
 ) {
-  let entry = initialEntry;
-  let sessionId = entry.sessionId;
+  let sessionId = initialEntry.sessionId;
   const getSessionId = params.getSessionId ?? (() => sessionId);
-  const actor = createReplyRecoveryActorFixture({
-    ...scope,
-    agentId: scope.agentId ?? "main",
-    getSessionId,
-    operation,
-  });
-  const controller = createReplyRestartRecoveryClaimController({
-    ...scope,
-    getEntry: () => entry,
-    getSessionId,
-    setEntry: (next) => {
-      entry = next;
-    },
-    lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    isRestartAbort: () => false,
-    resolveDeliveryContext: () => undefined,
-    ...params,
-    acquireSessionActor: () => actor.acquireSessionActor(),
-  });
+  const actor = await createRecoveryControllerFixture(
+    scope,
+    initialEntry,
+    { ...params, getSessionId },
+    async () => null,
+  );
+  const controller = actor.controller({}, operation);
   return {
     controller,
     admit: controller.admitUserTurn,
@@ -138,9 +125,9 @@ function bindClaim(
     checkpoint: controller.checkpointBeforeAgentReply,
     clear: controller.clear,
     scope,
-    current: () => entry,
+    current: () => actor.entry,
     read: () => loadSessionEntry(scope),
-    recorder: (message = userMessage()) => createRecorder(scope, entry, message),
+    recorder: (message = userMessage()) => createRecorder(scope, actor.entry, message),
     retarget: () => {
       sessionId = "successor-session";
     },
@@ -863,7 +850,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       } else {
         await replaceSessionEntry(scope, entry);
       }
-      await using fixture = bindClaim({ agentId: "main", ...scope }, entry, {
+      await using fixture = await bindClaim({ agentId: "main", ...scope }, entry, {
         resolveDeliveryContext: () => deliveryContext,
         sourceTurnId,
         requesterOrigin,

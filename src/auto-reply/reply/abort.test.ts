@@ -111,8 +111,8 @@ describe("abort handling", () => {
     cfg: OpenClawConfig;
     sessionKey?: string;
     parentSessionKey?: string;
-    from: string;
-    to: string;
+    from?: string;
+    to?: string;
     senderId?: string;
     commandSource?: "native" | "text";
     targetSessionKey?: string;
@@ -120,12 +120,14 @@ describe("abort handling", () => {
     timestamp?: number;
     body?: string;
   }) {
+    const from = params.from ?? "telegram:123";
+    const to = params.to ?? from;
     for (const key of [
       params.sessionKey,
       params.parentSessionKey,
       params.targetSessionKey,
-      params.from,
-      params.to,
+      from,
+      to,
     ]) {
       if (key) {
         trackedAbortMemoryKeys.add(key);
@@ -138,8 +140,8 @@ describe("abort handling", () => {
         CommandAuthorized: true,
         Provider: "telegram",
         Surface: "telegram",
-        From: params.from,
-        To: params.to,
+        From: from,
+        To: to,
         ...(params.sessionKey ? { SessionKey: params.sessionKey } : {}),
         ...(params.parentSessionKey ? { ParentSessionKey: params.parentSessionKey } : {}),
         ...(params.senderId ? { SenderId: params.senderId } : {}),
@@ -209,6 +211,25 @@ describe("abort handling", () => {
     return { operation, cancel };
   }
 
+  function addChild(
+    storePath: string,
+    requesterSessionKey: string,
+    childSessionKey: string,
+    overrides: Partial<SubagentRunFixture> & Pick<SubagentRunFixture, "runId">,
+  ) {
+    return addSubagentFixture({
+      childSessionKey,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
+      requesterSessionKey,
+      requesterDisplayKey: requesterSessionKey,
+      task: "stop child",
+      cleanup: "keep",
+      createdAt: Date.now(),
+      ...overrides,
+    });
+  }
+
   function bindAcpSessionForTest(targetSessionKey: string) {
     vi.spyOn(getSessionBindingService(), "resolveByConversationAsync").mockImplementation(
       async (conversation) => ({
@@ -256,8 +277,6 @@ describe("abort handling", () => {
     const result = await runStopCommand({
       cfg,
       sessionKey: "telegram:123",
-      from: "telegram:123",
-      to: "telegram:123",
     });
     expect(result.handled).toBe(true);
   });
@@ -281,8 +300,6 @@ describe("abort handling", () => {
     const result = await runStopCommand({
       cfg,
       sessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
       senderId: "123",
       commandSource: "text",
     });
@@ -335,16 +352,9 @@ describe("abort handling", () => {
     });
     cfg.commands = { ...cfg.commands, ownerAllowFrom: ["telegram:123"] };
     enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
-    await addSubagentFixture({
+    await addChild(storePath, sessionKey, childKey, {
       runId: "bare-stop-child-run",
-      childSessionKey: childKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey }),
-      requesterSessionKey: sessionKey,
-      requesterDisplayKey: sessionKey,
       task: "bare stop child",
-      cleanup: "keep",
-      createdAt: Date.now(),
     });
     const hook = vi.fn();
     registerInternalHook("command:stop", hook);
@@ -353,8 +363,6 @@ describe("abort handling", () => {
       const result = await runStopCommand({
         cfg,
         sessionKey,
-        from: "telegram:123",
-        to: "telegram:123",
         senderId: "123",
         commandSource: "text",
         body: "stop",
@@ -384,8 +392,6 @@ describe("abort handling", () => {
     const result = await runStopCommand({
       cfg,
       sessionKey: lookupKey,
-      from: "telegram:123",
-      to: "telegram:123",
     });
 
     expect(result.handled).toBe(true);
@@ -403,16 +409,17 @@ describe("abort handling", () => {
       cfg,
       parentSessionKey: sessionKey,
       from: "telegram:parent-only",
-      to: "telegram:parent-only",
       messageSid: "56",
       timestamp: 1234567890001,
     });
 
     expect(result.handled).toBe(true);
     const entry = readAbortSessionEntry(storePath, sessionKey);
-    expect(entry?.abortedLastRun).toBe(true);
-    expect(entry?.abortCutoffMessageSid).toBe("56");
-    expect(entry?.abortCutoffTimestamp).toBe(1234567890001);
+    expect(entry).toMatchObject({
+      abortedLastRun: true,
+      abortCutoffMessageSid: "56",
+      abortCutoffTimestamp: 1234567890001,
+    });
   });
 
   it("does not persist cutoff metadata when native /stop targets a different session", async () => {
@@ -426,8 +433,6 @@ describe("abort handling", () => {
     const result = await runStopCommand({
       cfg,
       sessionKey: slashSessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
       targetSessionKey,
       messageSid: "999",
       timestamp: 1234567890000,
@@ -455,34 +460,19 @@ describe("abort handling", () => {
       },
     });
 
-    await addSubagentFixture({
+    await addChild(storePath, sessionKey, depth1Key, {
       runId: "run-1",
-      childSessionKey: depth1Key,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: depth1Key }),
-      requesterSessionKey: sessionKey,
-      requesterDisplayKey: "telegram:parent",
       task: "orchestrator",
-      cleanup: "keep",
-      createdAt: Date.now(),
     });
-    await addSubagentFixture({
+    await addChild(storePath, depth1Key, depth2Key, {
       runId: "run-2",
-      childSessionKey: depth2Key,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: depth2Key }),
-      requesterSessionKey: depth1Key,
-      requesterDisplayKey: depth1Key,
       task: "leaf worker",
-      cleanup: "keep",
-      createdAt: Date.now(),
     });
 
     const result = await runStopCommand({
       cfg,
       sessionKey,
       from: "telegram:parent",
-      to: "telegram:parent",
     });
 
     expect(result.stoppedSubagents).toBe(2);
@@ -495,15 +485,9 @@ describe("abort handling", () => {
     const { storePath, cfg } = await createAbortConfig({
       sessionIdsByKey: { [sessionKey]: "yield-parent", [childKey]: "yield-child" },
     });
-    await addSubagentFixture({
+    await addChild(storePath, sessionKey, childKey, {
       runId: "run-yield-child",
-      childSessionKey: childKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey }),
-      requesterSessionKey: sessionKey,
-      requesterDisplayKey: sessionKey,
       task: "paused worker",
-      cleanup: "keep",
       createdAt: now - 1_000,
       endedAt: now - 500,
       pauseReason: "sessions_yield",
@@ -539,42 +523,25 @@ describe("abort handling", () => {
       {
         runId: "run-stale-parent",
         childSessionKey: depth1Key,
-        childAgentId: "main",
-        requesterSessionKey: sessionKey,
-        requesterDisplayKey: "telegram:parent",
         task: "stale orchestrator",
-        cleanup: "keep",
         createdAt: now - 2_000,
         startedAt: now - 1_900,
       },
       {
         runId: "run-current-parent",
         childSessionKey: depth1Key,
-        childAgentId: "main",
-        requesterSessionKey: sessionKey,
-        requesterDisplayKey: "telegram:parent",
         task: "current orchestrator",
-        cleanup: "keep",
         createdAt: now - 1_000,
         startedAt: now - 900,
         endedAt: now - 500,
         outcome: { status: "ok" },
       },
-    ] satisfies SubagentRunFixture[]) {
-      await addSubagentFixture({
-        ...fixture,
-        sessionEntry: loadSessionEntry({ storePath, sessionKey: fixture.childSessionKey }),
-      });
+    ] satisfies Partial<SubagentRunFixture>[]) {
+      await addChild(storePath, sessionKey, fixture.childSessionKey, fixture);
     }
-    await addSubagentFixture({
+    await addChild(storePath, depth1Key, depth2Key, {
       runId: "run-active-child",
-      childSessionKey: depth2Key,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: depth2Key }),
-      requesterSessionKey: depth1Key,
-      requesterDisplayKey: depth1Key,
       task: "leaf worker",
-      cleanup: "keep",
       createdAt: now - 400,
     });
 
@@ -582,7 +549,6 @@ describe("abort handling", () => {
       cfg,
       sessionKey,
       from: "telegram:parent",
-      to: "telegram:parent",
     });
 
     expect(result.stoppedSubagents).toBe(1);
@@ -607,42 +573,24 @@ describe("abort handling", () => {
       },
     });
 
-    await addSubagentFixture({
+    await addChild(storePath, oldParentKey, childKey, {
       runId: "run-shared-child-stale-parent",
-      childSessionKey: childKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey }),
-      requesterSessionKey: oldParentKey,
       controllerSessionKey: oldParentKey,
-      requesterDisplayKey: oldParentKey,
       task: "shared child stale parent",
-      cleanup: "keep",
       createdAt: now - 2_000,
       endedAt: now - 1_000,
       outcome: { status: "ok" },
     });
-    await addSubagentFixture({
+    await addChild(storePath, childKey, leafKey, {
       runId: "run-leaf-active",
-      childSessionKey: leafKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: leafKey }),
-      requesterSessionKey: childKey,
       controllerSessionKey: childKey,
-      requesterDisplayKey: childKey,
       task: "leaf worker",
-      cleanup: "keep",
       createdAt: now - 500,
     });
-    await addSubagentFixture({
+    await addChild(storePath, newParentKey, childKey, {
       runId: "run-shared-child-current-parent",
-      childSessionKey: childKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey }),
-      requesterSessionKey: newParentKey,
       controllerSessionKey: newParentKey,
-      requesterDisplayKey: newParentKey,
       task: "shared child current parent",
-      cleanup: "keep",
       createdAt: now - 250,
     });
 
@@ -667,8 +615,6 @@ describe("abort handling", () => {
     const pending = runStopCommand({
       cfg,
       sessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
       senderId: "123",
     });
     cfg.commands.ownerAllowFrom = ["telegram:other-owner"];
@@ -683,9 +629,7 @@ describe("abort handling", () => {
     const { root, cfg } = await createAbortConfig({
       sessionIdsByKey: { [sessionKey]: activeSessionId },
     });
-    const operation = createAbortOperation(cfg, sessionKey, activeSessionId);
-    const cancel = vi.fn(() => queueMicrotask(() => operation.complete()));
-    operation.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
+    const { operation } = createActiveAbortOperation(cfg, sessionKey, activeSessionId);
     vi.mocked(markSessionAbortTarget).mockRejectedValueOnce(
       new Error("simulated persistence failure"),
     );
@@ -694,8 +638,6 @@ describe("abort handling", () => {
     const result = await runStopCommand({
       cfg,
       sessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
     });
 
     expect(result.handled).toBe(true);
@@ -710,9 +652,7 @@ describe("abort handling", () => {
     const canonicalKey = "agent:main:telegram:group:-1001234567890:topic:99";
     const sessionId = "resolved-persistence-failure";
     const { root, cfg } = await createAbortConfig();
-    const operation = createAbortOperation(cfg, canonicalKey, sessionId);
-    const cancel = vi.fn(() => queueMicrotask(() => operation.complete()));
-    operation.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
+    const { operation } = createActiveAbortOperation(cfg, canonicalKey, sessionId);
     vi.mocked(markSessionAbortTarget).mockResolvedValueOnce({
       entry: {
         sessionId,
@@ -736,8 +676,6 @@ describe("abort handling", () => {
     const result = await runStopCommand({
       cfg,
       sessionKey: requestedKey,
-      from: "telegram:123",
-      to: "telegram:123",
     });
 
     expect(result.handled).toBe(true);
@@ -755,8 +693,6 @@ describe("abort handling", () => {
     const result = await runStopCommand({
       cfg,
       sessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
     });
 
     expect(result.handled).toBe(true);
@@ -774,9 +710,7 @@ describe("abort handling", () => {
         [sessionKey]: sessionId,
       },
     });
-    const operation = createAbortOperation(cfg, sessionKey, sessionId);
-    const cancel = vi.fn(() => queueMicrotask(() => operation.complete()));
-    operation.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
+    const { operation, cancel } = createActiveAbortOperation(cfg, sessionKey, sessionId);
     let finishPersistence: (() => void) | undefined;
     const persistenceStarted = new Promise<void>((resolveStarted) => {
       vi.mocked(markSessionAbortTarget).mockImplementationOnce(
@@ -813,24 +747,16 @@ describe("abort handling", () => {
         lifecycleRevision: "slow-persistence-child-revision",
       },
     );
-    await addSubagentFixture({
+    await addChild(storePath, sessionKey, childKey, {
       runId: "slow-child-run",
-      childSessionKey: childKey,
-      childAgentId: "main",
       sessionEntry: loadSessionEntry({ storePath, agentId: "main", sessionKey: childKey }),
-      requesterSessionKey: sessionKey,
-      requesterDisplayKey: sessionKey,
       task: "slow child",
-      cleanup: "keep",
-      createdAt: Date.now(),
     });
 
     const child = createActiveAbortOperation(cfg, childKey, childSessionId, "slow-child-run");
     const resultPromise = runStopCommand({
       cfg,
       sessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
     });
     await persistenceStarted;
 
@@ -888,7 +814,6 @@ describe("abort handling", () => {
       cfg,
       sessionKey,
       from: "telegram:finalizing",
-      to: "telegram:finalizing",
     });
 
     expect(result).toMatchObject({
@@ -931,7 +856,6 @@ describe("abort handling", () => {
       cfg,
       sessionKey: sourceSessionKey,
       from: "discord:C3",
-      to: "discord:C3",
       targetSessionKey: acpSessionKey,
       commandSource: "native",
     });
@@ -963,7 +887,6 @@ describe("abort handling", () => {
       cfg,
       parentSessionKey: sourceSessionKey,
       from: "discord:C4",
-      to: "discord:C4",
       targetSessionKey: acpSessionKey,
       commandSource: "native",
     });
@@ -992,22 +915,16 @@ describe("abort handling", () => {
         lifecycleRevision: `${entry.sessionId}-revision`,
       });
     }
-    const run = (runId: string, childSessionKey: string): SubagentRunFixture => ({
-      runId,
-      childSessionKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, agentId: "main", sessionKey: childSessionKey }),
-      requesterSessionKey: sessionKey,
-      requesterDisplayKey: sessionKey,
-      task: "stop despite persistence failure",
-      cleanup: "keep",
-      createdAt: Date.now(),
-    });
-    for (const fixture of [
-      run("run-persistence-failure-first", firstChildKey),
-      run("run-persistence-failure-second", secondChildKey),
-    ]) {
-      await addSubagentFixture(fixture);
+    const createdAt = Date.now();
+    for (const [runId, childKey] of [
+      ["run-persistence-failure-first", firstChildKey],
+      ["run-persistence-failure-second", secondChildKey],
+    ] as const) {
+      await addChild(storePath, sessionKey, childKey, {
+        runId,
+        sessionEntry: loadSessionEntry({ storePath, agentId: "main", sessionKey: childKey }),
+        createdAt,
+      });
     }
     const children = [firstChildKey, secondChildKey].map((childSessionKey) => {
       const sessionId = loadSessionEntry({ storePath, sessionKey: childSessionKey })!.sessionId;
