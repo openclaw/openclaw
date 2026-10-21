@@ -1,134 +1,177 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const hoisted = vi.hoisted(() => ({ cleanup: vi.fn(), clear: vi.fn(), flush: vi.fn() }));
+const hoisted = vi.hoisted(() => ({
+  cleanupEmbeddedAttemptResources: vi.fn(),
+  clearToolSearchCatalog: vi.fn(),
+  flushEmbeddedAttemptTrajectoryRecorder: vi.fn(),
+  warn: vi.fn(),
+}));
 
-vi.mock("../../tool-search.js", () => ({ clearToolSearchCatalog: hoisted.clear }));
-vi.mock("../logger.js", () => ({ log: { warn: vi.fn() } }));
+vi.mock("../../tool-search.js", () => ({
+  clearToolSearchCatalog: hoisted.clearToolSearchCatalog,
+}));
+vi.mock("../logger.js", () => ({
+  log: { warn: hoisted.warn },
+}));
 vi.mock("./attempt-trajectory-flush.js", () => ({
-  flushEmbeddedAttemptTrajectoryRecorder: hoisted.flush,
+  flushEmbeddedAttemptTrajectoryRecorder: hoisted.flushEmbeddedAttemptTrajectoryRecorder,
 }));
 vi.mock("./attempt-subscription-cleanup.js", () => ({
-  cleanupEmbeddedAttemptResources: hoisted.cleanup,
+  cleanupEmbeddedAttemptResources: hoisted.cleanupEmbeddedAttemptResources,
 }));
 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-settle.js";
 
+const attempt = {
+  runId: "run-1",
+  sessionId: "session-1",
+  sessionFile: "/tmp/session.jsonl",
+} as never;
+
 function createInput(overrides: Record<string, unknown> = {}) {
+  const transcriptLifecycle = {
+    beginCleanup: vi.fn(async (onDrained?: () => void) => onDrained?.()),
+    dispose: vi.fn(async () => undefined),
+  };
+  const emitDiagnosticRunCompleted = vi.fn();
+  const trajectoryRecorder = {
+    recordEvent: vi.fn(),
+    describeFlushState: vi.fn(),
+    flush: vi.fn(),
+  };
   const state: { terminal: AgentRunAttemptTerminal; beforeAgentRunBlockedBy?: string } = {
     terminal: { kind: "ok" },
   };
   return {
-    attempt: { runId: "run-1", sessionId: "session-1" },
-    transcriptLifecycle: {
-      beginCleanup: vi.fn(async (onDrained?: () => void) => onDrained?.()),
-      dispose: vi.fn(async () => undefined),
-    },
+    attempt,
+    transcriptLifecycle,
     toolSearchCatalogRef: {},
     buildAbortSettlePromise: () => null,
-    trajectoryRecorder: { recordEvent: vi.fn() },
+    trajectoryRecorder,
     trajectoryEndRecorded: false,
-    emitDiagnosticRunCompleted: vi.fn(),
+    emitDiagnosticRunCompleted,
     state,
     ...overrides,
   };
 }
 
-function expectResourceCleanup(fields: Record<string, unknown>) {
-  expect(hoisted.cleanup).toHaveBeenCalledWith(expect.objectContaining(fields));
-}
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  hoisted.cleanup.mockResolvedValue(undefined);
-  hoisted.flush.mockResolvedValue(undefined);
-});
-
-it("records the terminal event before transcript-safe resource cleanup", async () => {
-  const clearTranscriptRunCallbacks = vi.fn();
-  const input = createInput({ sessionManager: { clearTranscriptRunCallbacks } });
-  hoisted.cleanup.mockImplementation(async () => {
-    expect(clearTranscriptRunCallbacks).toHaveBeenCalledOnce();
+describe("cleanupEmbeddedAttemptSessionPhase", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    hoisted.cleanupEmbeddedAttemptResources.mockResolvedValue(undefined);
+    hoisted.flushEmbeddedAttemptTrajectoryRecorder.mockResolvedValue(undefined);
   });
 
-  await cleanupEmbeddedAttemptSessionPhase(input as never);
+  it("records the terminal event before transcript-safe resource cleanup", async () => {
+    const clearTranscriptRunCallbacks = vi.fn();
+    const input = createInput({ sessionManager: { clearTranscriptRunCallbacks } });
+    hoisted.cleanupEmbeddedAttemptResources.mockImplementation(async () => {
+      expect(clearTranscriptRunCallbacks).toHaveBeenCalledOnce();
+    });
 
-  expect(input.trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
-    "session.ended",
-    expect.objectContaining({ status: "cleanup", aborted: false }),
-  );
-  expect(hoisted.flush).toHaveBeenCalledWith(
-    expect.objectContaining({
-      runId: "run-1",
-      sessionId: "session-1",
-      trajectoryRecorder: input.trajectoryRecorder,
-    }),
-  );
-  expect(hoisted.clear).toHaveBeenCalledWith({ catalogRef: input.toolSearchCatalogRef });
-  expectResourceCleanup({ aborted: false });
-  expect(input.transcriptLifecycle.beginCleanup).toHaveBeenCalledOnce();
-  expect(input.transcriptLifecycle.dispose).toHaveBeenCalledOnce();
-  expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("completed", null, undefined);
-});
-
-it.each(["compaction observation", "blocked", "abort during flush"] as const)(
-  "reports cleanup status for %s",
-  async (kind) => {
-    const input = createInput();
-    const error = new Error("request aborted");
-    if (kind === "blocked") {
-      input.state.beforeAgentRunBlockedBy = "before_agent";
-    } else if (kind === "abort during flush") {
-      hoisted.flush.mockImplementation(async () => {
-        input.state.terminal = {
-          kind: "timeout",
-          source: "external",
-          phase: "prompt",
-          aborted: true,
-          failure: { source: "prompt", error },
-        };
-      });
-    } else {
-      input.state.terminal = { kind: "timeout", phase: "compaction", source: "observation" };
-    }
     await cleanupEmbeddedAttemptSessionPhase(input as never);
-    expectResourceCleanup({ aborted: kind !== "blocked" });
-    expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith(
-      kind === "abort during flush" ? "error" : kind === "blocked" ? "blocked" : "completed",
-      kind === "abort during flush" ? error : null,
-      kind === "blocked" ? { blockedBy: "before_agent" } : undefined,
-    );
-  },
-);
 
-it("re-reads cancellation after draining transcript writes before resource cleanup", async () => {
-  const controller = new AbortController();
-  const drain = createDeferred();
-  const draining = createDeferred();
-  const abortSettle = createDeferred();
-  const buildAbortSettlePromise = vi.fn(() => abortSettle.promise);
-  const input = createInput({
-    attempt: { runId: "run-1", sessionId: "session-1", abortSignal: controller.signal },
-    buildAbortSettlePromise,
+    expect(input.trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
+      "session.ended",
+      expect.objectContaining({ status: "cleanup", aborted: false }),
+    );
+    expect(hoisted.flushEmbeddedAttemptTrajectoryRecorder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+        trajectoryRecorder: input.trajectoryRecorder,
+      }),
+    );
+    expect(hoisted.clearToolSearchCatalog).toHaveBeenCalledWith({
+      catalogRef: input.toolSearchCatalogRef,
+    });
+    expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
+      expect.objectContaining({ aborted: false }),
+    );
+    expect(input.transcriptLifecycle.beginCleanup).toHaveBeenCalledOnce();
+    expect(input.transcriptLifecycle.dispose).toHaveBeenCalledOnce();
+    expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("completed", null, undefined);
   });
-  input.transcriptLifecycle.beginCleanup.mockImplementation(async () => {
-    draining.resolve();
-    await drain.promise;
+
+  it("keeps compaction timeout observations abort-like only for cleanup", async () => {
+    const input = createInput();
+    input.state.terminal = { kind: "timeout", phase: "compaction", source: "observation" };
+
+    await cleanupEmbeddedAttemptSessionPhase(input as never);
+
+    expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
+      expect.objectContaining({ aborted: true }),
+    );
+    expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("completed", null, undefined);
   });
-  const cleanup = cleanupEmbeddedAttemptSessionPhase(input as never);
-  await draining.promise;
-  controller.abort();
-  expect(hoisted.cleanup).not.toHaveBeenCalled();
-  drain.resolve();
-  await cleanup;
-  expectResourceCleanup({
-    aborted: true,
-    abortSignal: controller.signal,
-    abortSettlePromise: abortSettle.promise,
+
+  it("emits the before-agent blocked status and owner", async () => {
+    const input = createInput();
+    input.state.beforeAgentRunBlockedBy = "before_agent";
+
+    await cleanupEmbeddedAttemptSessionPhase(input as never);
+
+    expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("blocked", null, {
+      blockedBy: "before_agent",
+    });
   });
-  expect(buildAbortSettlePromise).toHaveBeenCalledOnce();
-  expect(input.transcriptLifecycle.dispose).toHaveBeenCalledOnce();
-  expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledOnce();
-  abortSettle.resolve();
+
+  it("re-reads cancellation after draining transcript writes before resource cleanup", async () => {
+    const controller = new AbortController();
+    const drain = createDeferred();
+    const draining = createDeferred();
+    const abortSettle = createDeferred();
+    const buildAbortSettlePromise = vi.fn(() => abortSettle.promise);
+    const input = createInput({
+      attempt: { runId: "run-1", sessionId: "session-1", abortSignal: controller.signal },
+      buildAbortSettlePromise,
+    });
+    input.transcriptLifecycle.beginCleanup.mockImplementation(async () => {
+      draining.resolve();
+      await drain.promise;
+    });
+    const cleanup = cleanupEmbeddedAttemptSessionPhase(input as never);
+    await draining.promise;
+    controller.abort();
+    expect(hoisted.cleanupEmbeddedAttemptResources).not.toHaveBeenCalled();
+    drain.resolve();
+    await cleanup;
+    expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
+      expect.objectContaining({
+        aborted: true,
+        abortSignal: controller.signal,
+        abortSettlePromise: abortSettle.promise,
+      }),
+    );
+    expect(buildAbortSettlePromise).toHaveBeenCalledOnce();
+    expect(input.transcriptLifecycle.dispose).toHaveBeenCalledOnce();
+    expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledOnce();
+    abortSettle.resolve();
+  });
+
+  it("re-reads abort state after trajectory flushing", async () => {
+    const input = createInput();
+    hoisted.flushEmbeddedAttemptTrajectoryRecorder.mockImplementation(async () => {
+      input.state.terminal = {
+        kind: "timeout",
+        source: "external",
+        phase: "prompt",
+        aborted: true,
+        failure: { source: "prompt", error: new Error("request aborted") },
+      };
+    });
+
+    await cleanupEmbeddedAttemptSessionPhase(input as never);
+
+    expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
+      expect.objectContaining({ aborted: true }),
+    );
+    expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith(
+      "error",
+      expect.objectContaining({ message: "request aborted" }),
+      undefined,
+    );
+  });
 });

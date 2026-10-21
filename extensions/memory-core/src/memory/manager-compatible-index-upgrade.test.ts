@@ -88,7 +88,10 @@ it("retains the previous custom-auth index and cache after credential rotation",
           });
         try {
           const seeded = (await openManager()).manager;
-          assert(seeded?.sync, "fixture memory index manager is unavailable");
+          assert(
+            seeded && typeof seeded.sync === "function",
+            "fixture memory index manager is unavailable",
+          );
           await seeded.sync({ reason: "test", force: true });
           const dbPath = seeded.status().dbPath;
           assert(dbPath, "fixture database path is missing");
@@ -120,7 +123,10 @@ it("retains the previous custom-auth index and cache after credential rotation",
           cfg = configure("fixture-rotated-key");
           setRuntimeConfigSnapshot(cfg);
           const rotated = (await openManager()).manager;
-          assert(rotated?.sync, "rotated memory index manager did not reopen");
+          assert(
+            rotated && typeof rotated.sync === "function",
+            "rotated memory index manager did not reopen",
+          );
           expect(await rotated.search("alpha")).toContainEqual(noteResult);
           expect(rotated.status().custom?.indexIdentity).toEqual({ status: "valid" });
           expect(documentRequests()).toBe(indexedDocuments);

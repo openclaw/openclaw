@@ -6,10 +6,8 @@ import {
   createUnitVitestConfigWithOptions,
 } from "./vitest/vitest.unit.config.ts";
 
-const { writePatternFile: patternFile, cleanup } = createPatternFileHelper(
-  "openclaw-vitest-unit-config-",
-);
-afterEach(cleanup);
+const patterns = createPatternFileHelper("openclaw-vitest-unit-config-");
+afterEach(() => patterns.cleanup());
 
 describe("unit vitest config", () => {
   it.each([false, true])(
@@ -27,14 +25,17 @@ describe("unit vitest config", () => {
       const options = { argv: ["node", "vitest", "run", ...plan.forwardedArgs] };
       const env = excludeAll
         ? {
-            OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE: patternFile("exclude.json", targets),
+            OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE: patterns.writePatternFile("exclude.json", targets),
           }
         : {};
       const cliConfig = createUnitVitestConfigWithOptions(env, options).test!;
       const routedConfig = createUnitVitestConfigWithOptions(
         {
           ...env,
-          OPENCLAW_VITEST_INCLUDE_FILE: patternFile("include.json", plan.includePatterns),
+          OPENCLAW_VITEST_INCLUDE_FILE: patterns.writePatternFile(
+            "include.json",
+            plan.includePatterns,
+          ),
         },
         options,
       ).test!;

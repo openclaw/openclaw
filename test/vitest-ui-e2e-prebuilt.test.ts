@@ -93,6 +93,13 @@ it("rejects retained UI assets after a same-source runtime rebuild without repai
   expect(fs.readFileSync(indexPath)).toEqual(index);
 });
 
+it("rejects incomplete UI without repairing it", () => {
+  const target = path.join(root, "dist/control-ui/assets/entry.js");
+  fs.rmSync(target, { recursive: true, force: true });
+  expect(() => assertPrebuiltUiE2eRuntime(root)).toThrow("Control UI assets");
+  expect(fs.existsSync(target)).toBe(false);
+});
+
 it.each([false, true])("sets the native CLI outcome after teardown (drift: %s)", (drift) => {
   const repoRoot = path.resolve(import.meta.dirname, "..");
   fs.symlinkSync(path.join(repoRoot, "node_modules"), path.join(root, "node_modules"), "junction");

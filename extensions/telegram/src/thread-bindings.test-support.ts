@@ -14,13 +14,15 @@ import {
 } from "./thread-bindings-store.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
-export const acpHost = vi.hoisted(() => ({ read: vi.fn() }));
+const acpHost = vi.hoisted(() => ({ read: vi.fn() }));
 
 vi.mock("openclaw/plugin-sdk/acp-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/acp-runtime")>();
   acpHost.read.mockImplementation(actual.readAcpSessionEntryAsync);
   return { ...actual, readAcpSessionEntryAsync: acpHost.read };
 });
+
+export { acpHost };
 
 export const TELEGRAM_THREAD_BINDINGS_TEST_CFG: OpenClawConfig = {
   channels: { telegram: { botToken: "test-token" } },

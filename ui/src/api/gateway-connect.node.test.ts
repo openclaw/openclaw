@@ -8,7 +8,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import * as nodes from "../lib/nodes/index.ts";
 import { startConnect, useHandshakeHarness } from "./gateway-handshake.test-support.ts";
-import { wsInstances } from "./gateway-socket.test-support.ts";
+import { getLatestWebSocket, wsInstances } from "./gateway-socket.test-support.ts";
 import type { GatewayBrowserClient } from "./gateway.ts";
 
 const createClient = useHandshakeHarness();
@@ -39,7 +39,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
   let client: GatewayBrowserClient;
 
   it("releases cached view work after connect is sent, before hello", async () => {
-    client = new GatewayBrowserClient({ url: "ws://scopes.example.test" });
+    client = createClient({ url: "ws://scopes.example.test" });
     client.start();
     const ws = getLatestWebSocket();
     const dispatch = vi.fn(() => {
@@ -60,7 +60,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
   });
 
   it("does not strand cached view work when the connection stops before dispatch", async () => {
-    client = new GatewayBrowserClient({ url: "ws://scopes.example.test" });
+    client = createClient({ url: "ws://scopes.example.test" });
     client.start();
     const dispatch = vi.fn();
     void client.initialConnectSent.then(dispatch);

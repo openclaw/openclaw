@@ -26,7 +26,7 @@ afterEach(async () => {
     for (const [server] of listeners) {
       server.closeAllConnections();
       if (server.listening) {
-        await promisify(server.close).call(server);
+        await promisify(server.close.bind(server))();
       }
     }
   } finally {

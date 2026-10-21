@@ -1,15 +1,17 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   prepareSandboxDependencyTemplate,
   resolveSandboxDependencyTemplateIdentity,
 } from "./dependency-template.js";
+import { createSandboxTestContext } from "./test-fixtures.js";
+import type { SandboxConfig } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   exec: vi.fn(),
   ensure: vi.fn(),
   retire: vi.fn(),
   registry: vi.fn(),
+  current: vi.fn(),
 }));
 vi.mock("./container-engine.js", () => ({
   DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
@@ -23,22 +25,52 @@ vi.mock("./podman-runtime.js", () => ({
   bindPodmanSandboxEngine: vi.fn(),
 }));
 vi.mock("./registry.js", () => ({
-  assertSandboxRegistryEntryCurrent: vi.fn(),
+  assertSandboxRegistryEntryCurrent: mocks.current,
   readRegistry: mocks.registry,
 }));
 
 const directory = "/owned/template";
 const image = `sha256:${"a".repeat(64)}`;
 const containerId = "b".repeat(64);
-const cfg = resolveSandboxConfigForAgent();
-Object.assign(cfg.docker, {
-  image: "fixture:mutable",
-  network: "bridge",
-  user: "1000:1000",
-  env: { REGISTRY_PASSWORD: "private-fixture" },
-  binds: ["/private:/private"],
-  setupCommand: "private-setup",
-});
+const cfg: SandboxConfig = {
+  mode: "all",
+  backend: "docker",
+  scope: "session",
+  workspaceAccess: "rw",
+  workspaceRoot: "/owned",
+  dockerTmpfsSource: "default",
+  docker: createSandboxTestContext({
+    dockerOverrides: {
+      image: "fixture:mutable",
+      network: "bridge",
+      env: { REGISTRY_PASSWORD: "private-fixture" },
+      binds: ["/private:/private"],
+      setupCommand: "private-setup",
+    },
+  }).docker,
+  ssh: {
+    command: "ssh",
+    workspaceRoot: "/workspace",
+    strictHostKeyChecking: true,
+    updateHostKeys: false,
+  },
+  browser: {
+    enabled: false,
+    image: "unused",
+    containerPrefix: "unused",
+    network: "none",
+    cdpPort: 9222,
+    vncPort: 5900,
+    noVncPort: 6080,
+    headless: true,
+    noVncEnabled: false,
+    allowHostControl: false,
+    autoStart: false,
+    autoStartTimeoutMs: 1000,
+  },
+  tools: {},
+  prune: { idleHours: 24, maxAgeDays: 7 },
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -64,14 +96,14 @@ beforeEach(() => {
   });
 });
 
-async function prepare(config = cfg, signal?: AbortSignal, rollbackGuard = vi.fn()) {
-  const identity = await resolveSandboxDependencyTemplateIdentity(config, {
+async function prepare(signal?: AbortSignal, rollbackGuard = vi.fn()) {
+  const identity = await resolveSandboxDependencyTemplateIdentity(cfg, {
     assertCurrent: () => {},
   });
   expect(identity).toBeDefined();
   return await prepareSandboxDependencyTemplate({
     directory,
-    cfg: config,
+    cfg,
     scopeKey: "fixture",
     identity: identity!,
     signal,
@@ -87,11 +119,12 @@ it("installs the pinned guest image without session credentials or writable Git 
     image,
     workdir: "/workspace",
     network: "bridge",
+    env: { CI: "1" },
     binds: undefined,
     setupCommand: undefined,
   });
+  expect(admitted.cfg.docker.env).not.toHaveProperty("REGISTRY_PASSWORD");
   expect(admitted.agentWorkspaceDir).toBe(directory);
-  expect(admitted.cfg.docker.env).toEqual({ CI: "1" });
   expect(admitted.readOnlyResourceMounts).toEqual([
     { hostPath: "/owned/template/.git", containerPath: "/workspace/.git" },
   ]);
@@ -110,7 +143,21 @@ it("records install failure without exposing installer output and retires the wr
 });
 
 it("uses offline installation when the sandbox has no network", async () => {
-  await prepare({ ...cfg, docker: { ...cfg.docker, network: "none" } });
+  const offlineCfg = { ...cfg, docker: { ...cfg.docker, network: "none" } };
+  const identity = await resolveSandboxDependencyTemplateIdentity(offlineCfg, {
+    assertCurrent: () => {},
+  });
+  if (!identity) {
+    throw new Error("Fixture image identity is missing");
+  }
+  await prepareSandboxDependencyTemplate({
+    directory,
+    cfg: offlineCfg,
+    scopeKey: "fixture",
+    identity,
+    assertCurrent: () => {},
+    rollbackGuard: () => {},
+  });
   expect(mocks.exec.mock.calls.find(([, args]) => args[0] === "exec")?.[1]).toContain(
     "exec pnpm install --offline --frozen-lockfile",
   );
@@ -123,7 +170,7 @@ it("settles cancellation through independent cleanup authority", async () => {
     controller.abort(new Error("run ended"));
     return { containerName: "builder", containerId };
   });
-  await expect(prepare(cfg, controller.signal, rollbackGuard)).rejects.toThrow("run ended");
+  await expect(prepare(controller.signal, rollbackGuard)).rejects.toThrow("run ended");
   expect(rollbackGuard).toHaveBeenCalled();
   expect(mocks.retire).toHaveBeenCalledOnce();
 });

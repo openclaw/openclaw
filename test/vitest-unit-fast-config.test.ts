@@ -380,6 +380,16 @@ describe("unit-fast vitest lane", () => {
             !unitFastTimerTestFiles.includes(file) && !unitFastIsolatedTestFiles.includes(file),
         ),
       });
+      expect(testConfig.include).toEqual(
+        expect.arrayContaining([
+          "src/agents/agent-tools.deferred-followup-guidance.test.ts",
+          "src/acp/runtime/registry.test.ts",
+          "src/commands/text-format.test.ts",
+          "src/plugins/config-policy.test.ts",
+          "src/sessions/session-lifecycle-events.test.ts",
+          "src/plugin-sdk/text-chunking.test.ts",
+        ]),
+      );
     },
   );
 
