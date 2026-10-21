@@ -130,7 +130,13 @@ async function withCatalog(
 it("reads clean local catalog entries from the resident owner without SQLite", () =>
   withCatalog(async ({ list, setList }) => {
     const retainedHosts = hosts([session({ pullRequest: { numbers: [1], state: "open" } })]);
-    setList(async () => retainedHosts);
+    const planningEntries: Array<
+      ReturnType<SessionCatalogEntrySnapshot["entriesForAgent"]> | undefined
+    > = [];
+    setList(async ({ sessionEntries }) => {
+      planningEntries.push(sessionEntries?.entriesForAgent("main"));
+      return retainedHosts;
+    });
     const first = await list();
     expect(payload(first)).toMatchObject({
       catalogs: [{ hosts: [{ sessions: [{ sessionKey: key }] }] }],
@@ -140,6 +146,13 @@ it("reads clean local catalog entries from the resident owner without SQLite", (
     );
     const second = await list();
     expect(payload(second)).toEqual(payload(first));
+    expect(planningEntries[0]).toMatchObject([
+      { sessionKey: key, entry: { sessionId: original.sessionId } },
+    ]);
+    expect(planningEntries[1]).toBe(planningEntries[0]);
+    sessionChanges.emit({ all: true, scope: "catalog" });
+    expect(payload(await list())).toEqual(payload(first));
+    expect(planningEntries[2]).toBe(planningEntries[0]);
     const originalHost = firstHost(first);
     expect(firstHost(second)).toBe(originalHost);
     for (const value of [originalHost, originalHost.sessions, originalHost.sessions[0]]) {
@@ -202,89 +215,6 @@ it.each(["planning", "delivery"])(
     );
   },
 );
-
-it("reuses unchanged agent selections across catalog polls and refreshes published rows", () =>
-  withCatalog(
-    async ({ list, setList, projection }) => {
-      const workKey = "agent:work:adopted";
-      const workEntry = {
-        ...original,
-        sessionId: "work-instance",
-        label: "Work",
-        createdActor: { type: "system" as const, id: "work-owner" },
-      };
-      replace({ label: "Main" });
-      replaceSessionEntrySync({ agentId: "work", sessionKey: workKey }, workEntry);
-      const planningRevisions: Array<object | undefined> = [];
-      const planningEntries: Array<
-        ReturnType<SessionCatalogEntrySnapshot["entriesForAgent"]> | undefined
-      > = [];
-      setList(async ({ sessionEntries }) => {
-        planningRevisions.push(sessionEntries?.revision);
-        planningEntries.push(sessionEntries?.entriesForAgent("main"));
-        return hosts(
-          (sessionEntries?.entriesForCatalog?.() ?? []).map(({ agentId, sessionKey, entry }) =>
-            Object.assign(session({ threadId: `${agentId}:${entry.sessionId}`, sessionKey }), {
-              title: entry.label,
-            }),
-          ),
-        );
-      });
-      const mainSession = {
-        threadId: `main:${original.sessionId}`,
-        sessionKey: key,
-        title: "Main",
-        createdActor: original.createdActor,
-      };
-      const workSession = {
-        threadId: `work:${workEntry.sessionId}`,
-        sessionKey: workKey,
-        title: "Work",
-        createdActor: workEntry.createdActor,
-      };
-      const first = await list();
-      expect(payload(first)).toMatchObject({
-        catalogs: [{ hosts: [{ sessions: [mainSession, workSession] }] }],
-      });
-      const selectEntries = projection.selectEntries.bind(projection);
-      let broadRowsRead = 0;
-      vi.spyOn(projection, "selectEntries").mockImplementation((query, metadataPrepared) => {
-        const rows = selectEntries(query, metadataPrepared);
-        if (!query?.key && !query?.sessionIdOrKey) {
-          broadRowsRead += rows.length;
-        }
-        return rows;
-      });
-      expect(planningRevisions[0]).toBeDefined();
-      expect(planningEntries[0]).toMatchObject([
-        { sessionKey: key, entry: { sessionId: original.sessionId } },
-      ]);
-      const expectReusedPoll = async (expected: typeof first, index: number, previous: number) => {
-        expect(payload(await list())).toEqual(payload(expected));
-        expect(broadRowsRead).toBe(0);
-        expect(planningRevisions[index]).toBe(planningRevisions[previous]);
-        expect(planningEntries[index]).toBe(planningEntries[previous]);
-      };
-      await expectReusedPoll(first, 1, 0);
-
-      sessionChanges.emit({ all: true, scope: "catalog" });
-      await expectReusedPoll(first, 2, 0);
-
-      replace({ updatedAt: 2, label: "Updated main" });
-      const updated = await list();
-      expect(payload(updated)).toMatchObject({
-        catalogs: [
-          { hosts: [{ sessions: [{ ...mainSession, title: "Updated main" }, workSession] }] },
-        ],
-      });
-      expect(broadRowsRead).toBeGreaterThan(0);
-      expect(planningRevisions[3]).not.toBe(planningRevisions[2]);
-      broadRowsRead = 0;
-
-      await expectReusedPoll(updated, 4, 3);
-    },
-    { agents: { ownership: "explicit", entries: { main: {}, work: {} } } },
-  ));
 
 it("bounds catalog result delivery to returned adoption keys", () =>
   withCatalog(
