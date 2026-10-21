@@ -711,8 +711,17 @@ are connected, select one explicitly. When local execution is allowed by policy,
 use managed `exec` for local Claude MCP turns, or the native shell when the backend
 retains it.
 
-When a run passes configured MCP servers to the CLI natively (runs without an
-exact tool selection), `tools.allow` and `tools.deny` also constrain those servers.
+Local bundled `claude-cli` turns serve configured MCP servers through the
+Gateway's existing bridge as `<server>__<tool>` tools. This includes local turns
+with effective `tools.exec.host: "node"`: Claude does not spawn another copy of
+each configured server. Without an exact or restricted tool selection, that mode
+keeps native Bash on the Gateway host, Claude's native tools, user settings, and
+native permission handling. The separate bridge `exec` capability still targets
+the selected node. Changing the configured MCP surface starts one fresh Claude
+session for an affected existing conversation; OpenClaw history is preserved.
+
+When another backend passes configured MCP servers to its harness natively,
+`tools.allow` and `tools.deny` also constrain those servers.
 OpenClaw lists each server through its session-scoped runtime, assigns the same
 provider-safe `<safe-server>__<safe-tool>` identities used by embedded tools,
 and applies the complete layered policy before process spawn or Codex

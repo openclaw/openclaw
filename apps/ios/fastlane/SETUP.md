@@ -285,17 +285,25 @@ bounded `ios-resource-timeline.jsonl` while their main command runs. This tempor
 instrumentation investigates runner contention; it does not change test deadlines,
 simulator services, build parallelism, or release admission.
 
-The collector takes one serial sample approximately every 15 seconds. It records
+The collector takes one serial host sample approximately every 15 seconds. It records
 host CPU counters, load, memory compression and swap activity, memory-pressure
-level, disk activity, and at most twelve top CPU/RSS process rows. Process rows
+level, and disk activity. It samples processes at most once a minute, recording
+at most twelve top CPU/RSS process rows. Process rows
 contain PIDs, parent PIDs and roles, state, CPU time, and RSS. Roles use a fixed
 allowlist plus bounded executable basenames from installed Apple simulator runtime
 system directories. Device data, app bundles, containers, and other unknown names
 remain `other`. Fixed origin categories distinguish runtime, Xcode,
 and host-system executable locations where recognizable. Grouped counts and CPU
 deltas cover every parsed process, including rows outside the top-process display.
-`cpuObservedCount` identifies rows with a previous observation; a missing `ps`
-probe leaves the summary null and resets that baseline. It never exports arguments, environment values, paths, or application
+`cpuObservedCount` identifies rows with a previous observation. A failed `ps`
+probe leaves the summary null and resets that baseline. Intentionally skipped
+process samples retain the baseline for the next observation, with CPU deltas
+covering the full interval. They have empty process rows, a null summary and
+process interval, and an explicit `not-due` probe outcome. After the first `ps`
+timeout, process polling stops for the rest of the run with a
+`disabled-after-timeout` outcome; host metrics continue. The first stalled probe
+can still delay host samples until it returns.
+The collector never exports arguments, environment values, paths, or application
 content. Fixed phase labels correlate samples with builds, simulator startup,
 Gateway preparation, native tests, screenshots, archiving, and upload.
 

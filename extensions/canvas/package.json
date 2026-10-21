@@ -11,7 +11,8 @@
   "dependencies": {
     "@a2ui/web_core": "0.13.0",
     "@solidjs/web": "2.0.0-rc.14",
-    "signal-utils": "0.21.1",
+    "dompurify": "3.4.17",
+    "marked": "18.1.1",
     "solid-js": "2.0.0-rc.14",
     "typebox": "1.3.37"
   },

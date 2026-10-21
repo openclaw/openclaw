@@ -213,7 +213,7 @@ function ensureChromeApi(script: EnsurePortScript | "disconnect") {
 }
 
 describe("requestRelayEnsure", () => {
-  it("returns the relay status when the native host answers with the echoed nonce", async () => {
+  it("settles the exact relay wake-up request after the native host answers", async () => {
     const chromeApi = ensureChromeApi((request) => {
       expect(request).toEqual({
         v: 1,
@@ -223,15 +223,12 @@ describe("requestRelayEnsure", () => {
       });
       return { v: 1, ok: true, nonce: request.nonce, relay: "spawned" };
     });
-    await expect(requestRelayEnsure(20123, chromeApi)).resolves.toEqual({ status: "spawned" });
+    await expect(requestRelayEnsure(20123, chromeApi)).resolves.toBeUndefined();
   });
 
-  it.each<EnsurePortScript | "disconnect">([
-    () => ({ v: 1, ok: true, nonce: "AAAAAAAAAAAAAAAAAAAAAA", relay: "spawned" }),
-    "disconnect",
-  ])("treats an unavailable native response (%s) as unavailable", async (script) => {
-    await expect(requestRelayEnsure(20123, ensureChromeApi(script))).resolves.toEqual({
-      status: "unavailable",
-    });
+  it("reports native disconnection to the reconnect owner's failure handler", async () => {
+    await expect(requestRelayEnsure(20123, ensureChromeApi("disconnect"))).rejects.toThrow(
+      "Native messaging host disconnected.",
+    );
   });
 });

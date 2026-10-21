@@ -11,6 +11,7 @@ import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { createChatViewFrame } from "./chat-view-frame.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ComposerQueue } from "./components/chat-composer-regions.tsx";
 import { ChatThread } from "./components/chat-thread-view.tsx";
 import {
@@ -97,7 +98,10 @@ it("shows connected review waits without changing delivery versions or crossing 
   const [viewProps, setViewProps] = createSignal(currentProps());
   const view = mountSolid(
     () => {
-      const frame = createMemo(() => createChatViewFrame(viewProps(), () => undefined));
+      const questions = createComposerQuestions(props.paneId, viewProps);
+      const frame = createMemo(() =>
+        createChatViewFrame(viewProps(), () => undefined, questions.source()!.asyncQuestions),
+      );
       return [
         createComponent(ChatThread, {
           get props() {

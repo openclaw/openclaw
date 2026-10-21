@@ -30,7 +30,6 @@ const MAX_REJECTION_TRACKED = 1_024;
 const REJECTION_RESEND_COOLDOWN_MS = 15 * 60 * 1_000;
 
 interface ReefReceiptNotifierOptions {
-  now?: () => number;
   scheduler: PluginServiceSchedulerV1;
   onError?: (error: unknown, receiptId: string) => void;
 }
@@ -158,7 +157,7 @@ export class ReefReceiptNotifier {
         state,
       };
     }
-    const now = this.now();
+    const now = Date.now();
     const rejectionCooldownActive =
       previous !== undefined && now - previous.lastRejectionAt < REJECTION_RESEND_COOLDOWN_MS;
     const resendCooldownActive =
@@ -181,10 +180,6 @@ export class ReefReceiptNotifier {
             : {}),
       },
     };
-  }
-
-  private now(): number {
-    return this.options.now?.() ?? Date.now();
   }
 
   private async touchPeerState(rejection: ReefDeliveryRejection): Promise<ReefPeerNoticeState> {

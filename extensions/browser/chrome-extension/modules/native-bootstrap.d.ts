@@ -60,7 +60,7 @@ export function requestRelayEnsure(
       lastError?: { message?: string };
     };
   },
-): Promise<{ status: "spawned" | "running" | "skipped" | "unavailable" }>;
+): Promise<void>;
 
 export function prepareRetiredCopilotState(
   chromeApi?: RetiredCopilotStorage,

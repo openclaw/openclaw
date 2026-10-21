@@ -84,6 +84,10 @@ export function useMenuMachine(
   let lastPointerX: number | undefined;
   let lastPointerY: number | undefined;
   let focusFromKeyboard = false;
+  // Retained-focus lists reveal keyboard, opening, and catalog highlights. A pointer
+  // highlight is already under the cursor; revealing a clipped edge row would fight
+  // an in-progress wheel or trackpad scroll.
+  let pointerHighlight = false;
   const itemNodes = new Set<HTMLElement>();
   const ownsTarget = (target: HTMLElement) =>
     ![...overlay.children].some((child) => child.open && containsComposed(child.surface, target)) &&
@@ -103,7 +107,7 @@ export function useMenuMachine(
     const id = service.computed("highlightedId");
     const rows = items();
     const node = id ? rows.find((item) => item.id === id) : undefined;
-    if (node && options.focus === "retain") {
+    if (node && options.focus === "retain" && !pointerHighlight) {
       revealInScrollRegion(overlay.surface, node);
     }
     const active = service.scope.getActiveElement();
@@ -307,6 +311,9 @@ export function useMenuMachine(
         type: open ? "CONTROLLED.OPEN" : "CONTROLLED.CLOSE",
         previousEvent: service.service.event,
       });
+      if (open) {
+        pointerHighlight = false;
+      }
       if (open && options.items) {
         const enabled = options.items().filter((item) => !item.disabled);
         service.send({
@@ -351,6 +358,7 @@ export function useMenuMachine(
           enabled.find((item) => item.value === selected)?.value ?? enabled[0]?.value ?? null;
         if (api.highlightedValue !== next) {
           // Zag queues send(); a stale catalog correction must not replace a later opening choice.
+          pointerHighlight = false;
           service.service.context.set("highlightedValue", next);
         }
       }
@@ -363,6 +371,7 @@ export function useMenuMachine(
     if (event.defaultPrevented || event.isComposing || !overlay.open) {
       return;
     }
+    pointerHighlight = false;
     const editing =
       event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
     const fromButton =
@@ -495,6 +504,7 @@ export function useMenuMachine(
             return;
           }
           focusFromKeyboard = false;
+          pointerHighlight = true;
           result.onPointerMove?.(event);
         },
         tabIndex: options.focus !== "retain" && api.highlightedValue === value ? 0 : -1,
@@ -640,6 +650,7 @@ export function useMenuMachine(
             return;
           }
           focusFromKeyboard = true;
+          pointerHighlight = false;
           const value = target.dataset.value;
           if (value && value !== read().highlightedValue) {
             read().setHighlightedValue(value);

@@ -256,9 +256,7 @@ function restoreAuthProfileMigrationArchiveNoClobber(
   return "restored";
 }
 
-export function archiveAuthProfileMigrationSource(
-  receipt: AuthProfileMigrationSourceReceipt,
-): void {
+function archiveAuthProfileMigrationSource(receipt: AuthProfileMigrationSourceReceipt): void {
   if (fs.existsSync(receipt.sourcePath)) {
     const sourceBytes = fs.readFileSync(receipt.sourcePath);
     if (sha256Hex(sourceBytes) !== receipt.sourceSha256) {

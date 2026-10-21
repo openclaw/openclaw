@@ -36,7 +36,6 @@ export class ActiveFaceTimeCall extends FaceTimeCallInstance {
     feedDevice: string;
     microphoneDevice: string;
     processInputVerified: boolean;
-    processOutputSuppressed: boolean;
   };
   lastHelperAction?: HelperActionResult;
   lastRoutingError?: string;
@@ -129,7 +128,9 @@ export type FaceTimeRuntimeStatus = {
     maxRemoteMeterLevel?: number;
     realtimeActive: boolean;
     audioReady: boolean;
-    audioTransport?: ActiveFaceTimeCall["audioTransport"];
+    audioTransport?: ActiveFaceTimeCall["audioTransport"] & {
+      processOutputSuppressed: boolean;
+    };
     lastHelperAction?: HelperActionResult;
     lastRoutingError?: string;
     carrierHangupPending?: boolean;

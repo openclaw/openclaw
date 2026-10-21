@@ -167,6 +167,14 @@ An already running simulator stops the command before capture; shut it down
 when it is no longer in use and rerun. This changes only the screenshot
 environment, not the app's rendered states.
 
+Immediately before Watch capture, the shared lane resolves the runtime and creates
+its simulator. CI can repair a missing or unavailable Watch runtime once, including
+when it disappears during the phone or tablet captures. The repair replaces only
+the selected Watch runtime's registered image, or installs it if absent, and logs
+runtime availability, image state, and mounted-path existence without filesystem
+paths. Local runs leave runtime installation to the operator. Boot and capture
+failures still stop the lane without retrying screenshots.
+
 The screenshot-only job enables `OPENCLAW_SNAPSHOT_DIAGNOSTICS=1`. To collect the
 same diagnostics locally:
 
