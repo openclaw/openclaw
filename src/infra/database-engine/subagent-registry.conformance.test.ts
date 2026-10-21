@@ -9,6 +9,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import type { OpenClawStateReadCommand } from "../../state/openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
@@ -68,49 +69,41 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       await closeOpenClawStateDatabaseByPathAsync(database.path);
       withEngineStoreAdmission(() => openOpenClawStateDatabase());
       const context = captureOpenClawStateWorkerContext();
-      const options = { path: database.path, env: process.env };
+      const read = <C extends OpenClawStateReadCommand>(command: C) =>
+        executeExistingOpenClawStateRead({ path: database.path, env: process.env }, command, {
+          context,
+          current: true,
+        });
       expect(await readAllSubagentRunsInWorker(context)).toEqual(before);
 
-      const maintenance = await executeExistingOpenClawStateRead(
-        options,
-        { type: "subagents.runs", scope: { kind: "maintenance" } },
-        { context, current: true },
-      );
+      const maintenance = await read({ type: "subagents.runs", scope: { kind: "maintenance" } });
       assert(maintenance?.ok && maintenance.type === "subagents.runs");
-      expect([...maintenance.runs.keys()]).toEqual(runIds);
-      for (const record of maintenance.runs.values()) {
-        expect(record).toMatchObject({
-          execution: { status: "terminal", endedAt: 250 },
-          delivery: { status: "pending" },
-        });
-        expect(record).not.toHaveProperty("task");
-        expect(record).not.toHaveProperty("completion");
-      }
-
-      const sessions = await executeExistingOpenClawStateRead(
-        options,
-        { type: "subagents.sessionList" },
-        { context, current: true },
-      );
+      const sessions = await read({ type: "subagents.sessionList" });
       assert(sessions?.ok && sessions.type === "subagents.sessionList" && "runs" in sessions);
-      expect([...sessions.runs.keys()]).toEqual(runIds);
-      for (const record of sessions.runs.values()) {
-        expect(record).toMatchObject({
-          requesterStorePath: storePath,
-          controllerStorePath: storePath,
-          controllerSessionKey: "agent:main:controller",
-          execution: { status: "terminal", outcome: { status: "ok" } },
-          delivery: { status: "pending" },
-        });
-        expect(record).not.toHaveProperty("task");
-        expect(record).not.toHaveProperty("completion");
+      for (const [projection, fields] of [
+        [maintenance, { execution: { status: "terminal", endedAt: 250 } }],
+        [
+          sessions,
+          {
+            requesterStorePath: storePath,
+            controllerStorePath: storePath,
+            controllerSessionKey: "agent:main:controller",
+            execution: { status: "terminal", outcome: { status: "ok" } },
+          },
+        ],
+      ] as const) {
+        expect([...projection.runs.keys()]).toEqual(runIds);
+        for (const record of projection.runs.values()) {
+          expect(record).toMatchObject({ ...fields, delivery: { status: "pending" } });
+          expect(record).not.toHaveProperty("task");
+          expect(record).not.toHaveProperty("completion");
+        }
       }
 
-      const selected = await executeExistingOpenClawStateRead(
-        options,
-        { type: "subagents.runs", scope: { kind: "ids", runIds: [runIds[1]!] } },
-        { context, current: true },
-      );
+      const selected = await read({
+        type: "subagents.runs",
+        scope: { kind: "ids", runIds: [runIds[1]!] },
+      });
       assert(selected?.ok && selected.type === "subagents.runs");
       expect([...selected.runs.keys()]).toEqual([runIds[1]]);
       expect(selected.runs.get(runIds[1]!)).toEqual(before.get(runIds[1]!));

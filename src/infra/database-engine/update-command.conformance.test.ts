@@ -25,6 +25,16 @@ import { getPostgresPhysicalFacts } from "./physical-facts.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
+const connectionRef = {
+  source: "env",
+  provider: "default",
+  id: "OPENCLAW_UPDATE_TEST_DSN",
+} as const;
+const postgresConfig = (schemaPrefix?: string): OpenClawConfig => ({
+  plugins: { enabled: false },
+  database: { engine: "postgres", postgres: { connection: connectionRef, schemaPrefix } },
+});
+const update = () => updateCommand({ tag: "main", yes: true, json: true, restart: false });
 
 function anchorTables(databasePath: string) {
   using anchor = openNodeSqliteDatabase(databasePath, { readOnly: true });
@@ -33,6 +43,11 @@ function anchorTables(databasePath: string) {
 
 describe.skipIf(!connection)("PostgreSQL updater command admission", () => {
   const { fixture } = installFreshUpdateFixture();
+  async function expectNoNativeState() {
+    await expect(fs.stat(fixture.databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
+    expect(getDatabaseEngineSelection()).toBeUndefined();
+  }
 
   it.each([false, true])(
     "settles update refusal in the selected PostgreSQL ledger (managed profile=%s)",
@@ -71,16 +86,9 @@ describe.skipIf(!connection)("PostgreSQL updater command admission", () => {
           },
         });
       }
-      const config = {
-        plugins: { enabled: false },
-        database: {
-          engine: "postgres",
-          postgres: {
-            connection: { source: "env", provider: "default", id: "OPENCLAW_UPDATE_TEST_DSN" },
-            schemaPrefix: `update_command_${randomUUID().replaceAll("-", "").slice(0, 12)}`,
-          },
-        },
-      } satisfies OpenClawConfig;
+      const config = postgresConfig(
+        `update_command_${randomUUID().replaceAll("-", "").slice(0, 12)}`,
+      );
       await fs.mkdir(selectedState, { recursive: true });
       if (managedProfile) {
         await fs.writeFile(
@@ -112,9 +120,7 @@ describe.skipIf(!connection)("PostgreSQL updater command admission", () => {
         const before = anchorTables(databasePath);
         expect(before).toEqual([{ name: "openclaw_engine_anchor" }]);
 
-        await expect(
-          updateCommand({ tag: "main", yes: true, json: true, restart: false }),
-        ).rejects.toMatchObject({ code: 1 });
+        await expect(update()).rejects.toMatchObject({ code: 1 });
         expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
           expect.objectContaining({ status: "error", reason: "unsupported-package-target" }),
         );
@@ -128,7 +134,7 @@ describe.skipIf(!connection)("PostgreSQL updater command admission", () => {
         expect(getDatabaseEngineSelection()).toBeUndefined();
         if (managedProfile) {
           expect(env).not.toHaveProperty("OPENCLAW_UPDATE_TEST_DSN");
-          await expect(fs.stat(fixture.databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+          await expectNoNativeState();
         }
       } finally {
         await closeOpenClawStateDatabaseByPathAsync(databasePath);
@@ -147,31 +153,15 @@ describe.skipIf(!connection)("PostgreSQL updater command admission", () => {
   it("refuses an unresolved PostgreSQL connection before creating native state", async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH!;
     await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        database: {
-          engine: "postgres",
-          postgres: {
-            connection: { source: "env", provider: "default", id: "OPENCLAW_UPDATE_TEST_DSN" },
-          },
-        },
-      }),
-    );
+    await fs.writeFile(configPath, JSON.stringify({ database: postgresConfig().database }));
     vi.stubEnv("OPENCLAW_UPDATE_TEST_DSN", undefined);
-    await expect(
-      updateCommand({ tag: "main", yes: true, json: true, restart: false }),
-    ).rejects.toThrow(/resolvable PostgreSQL DSN/);
-    await expect(fs.stat(fixture.databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-    expect(getDatabaseEngineSelection()).toBeUndefined();
+    await expect(update()).rejects.toThrow(/resolvable PostgreSQL DSN/);
+    await expectNoNativeState();
   });
 
   it("refuses unreadable configuration before defaulting to native state", async () => {
     await fs.mkdir(process.env.OPENCLAW_CONFIG_PATH!, { recursive: true });
-    await expect(
-      updateCommand({ tag: "main", yes: true, json: true, restart: false }),
-    ).rejects.toMatchObject({ code: 1 });
+    await expect(update()).rejects.toMatchObject({ code: 1 });
     expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
       expect.objectContaining({
         status: "error",
@@ -182,8 +172,6 @@ describe.skipIf(!connection)("PostgreSQL updater command admission", () => {
         }),
       }),
     );
-    await expect(fs.stat(fixture.databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-    expect(getDatabaseEngineSelection()).toBeUndefined();
+    await expectNoNativeState();
   });
 });
