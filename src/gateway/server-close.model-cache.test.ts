@@ -139,10 +139,7 @@ it(
     let closing: Promise<void> | undefined;
     const restorers: Array<() => void> = [];
     try {
-      const aPort = await fixture.reservePort();
-      const aServer = await fixture.start(aPort);
-      const a = fixture.kernels.get(aPort);
-      assert(a);
+      const { server: aServer, kernel: a } = await fixture.startServer();
       const aMetadata = a.getPluginMetadataSnapshot();
       assert(aMetadata);
       const aCache = getPluginMetadataSnapshotCache(aMetadata);

@@ -24,7 +24,13 @@ function progressHarness(mode?: ReplayMode, timeOffset = 0, sessionKey?: string)
   const snapshot = () => state.runs.get("run-1")?.progressSnapshot;
   let seq = 0;
   const send = (stream: string, data: Record<string, unknown>) => event(++seq, stream, data);
-  return { state, wire, event, send, snapshot, events: () => snapshot()?.events };
+  const tool = (
+    sequence: number,
+    phase: string,
+    toolCallId: string,
+    data: Record<string, unknown> = {},
+  ) => event(sequence, "tool", { phase, toolCallId, ...data });
+  return { state, wire, event, send, tool, snapshot, events: () => snapshot()?.events };
 }
 
 function withUnreadTail(field: string, value: unknown, onRead: () => void) {
@@ -127,7 +133,6 @@ describe("createChatRunState", () => {
     if (!finalized) {
       state.toolEventRecipients.get("active");
     }
-    expect(state.toolEventRecipients.get("expired")).toBeUndefined();
     expect(state.toolEventRecipients.get("expired")).toBeUndefined();
     expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
     expect(state.runs.has("expired")).toBe(keepState);
@@ -310,13 +315,12 @@ describe("createChatRunState", () => {
   );
 
   it("replays completed owners and standalone notices until bounded eviction", () => {
-    const { event, events, snapshot: getSnapshot } = progressHarness(undefined, 1_000, "main");
-    const tool = (
-      seq: number,
-      phase: string,
-      toolCallId: string,
-      data: Record<string, unknown> = {},
-    ) => event(seq, "tool", { phase, toolCallId, ...data });
+    const {
+      event,
+      tool,
+      events,
+      snapshot: getSnapshot,
+    } = progressHarness(undefined, 1_000, "main");
     const review = (seq: number, id: string, status: string) =>
       tool(seq, "review", "active", { review: { id, label: "Guardian", status } });
     const preamble = (seq: number, itemId: string, progressText: string) =>
@@ -403,7 +407,7 @@ describe("createChatRunState", () => {
   });
 
   it("captures native JSON once, frozen and byte-exact", () => {
-    const { event, snapshot: getSnapshot } = progressHarness();
+    const { tool, snapshot: getSnapshot } = progressHarness();
     let serializations = 0;
     let reads = 0;
     const details = {
@@ -436,18 +440,12 @@ describe("createChatRunState", () => {
         return value;
       },
     });
-    event(1, "tool", {
-      phase: "result",
-      toolCallId: "done",
+    tool(1, "result", "done", {
       result: { details, first: shared, again: shared, last: revocable.proxy },
     });
     const firstSnapshot = getSnapshot();
     expect(firstSnapshot?.byteLength).toBe(jsonBytes(firstSnapshot?.events[0]));
-    event(2, "tool", {
-      phase: "input_delta",
-      toolCallId: "active",
-      diff: { added: 1, removed: 0 },
-    });
+    tool(2, "input_delta", "active", { diff: { added: 1, removed: 0 } });
     expect([serializations, reads, numberHints]).toEqual([1, 1, ["number", "number"]]);
     const snapshot = getSnapshot();
     expect(snapshot?.events[0]?.data.result).toEqual({
@@ -557,18 +555,10 @@ describe("createChatRunState", () => {
   );
 
   it("bounds review-heavy reconnects with adverse outcomes attached to owners", () => {
-    const { event: record, events: getEvents } = progressHarness(undefined, 1_000);
-    const event = (seq: number, data: Record<string, unknown>) => record(seq, "tool", data);
-    event(1, {
-      phase: "start",
-      name: "exec",
-      toolCallId: "reviewed",
-      args: { command: "printf reviewed" },
-    });
+    const { tool, events: getEvents } = progressHarness(undefined, 1_000);
+    tool(1, "start", "reviewed", { name: "exec", args: { command: "printf reviewed" } });
     for (let index = 0; index < 60; index += 1) {
-      event(index + 2, {
-        phase: "review",
-        toolCallId: "reviewed",
+      tool(index + 2, "review", "reviewed", {
         approvalReviewOutcome: "denied",
         review: {
           id: `review-${index}`,
