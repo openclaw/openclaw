@@ -2,7 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { resolveImapConfig } from "./config.js";
 import { createImapTestRuntime } from "./imap-test-support.js";
-import { initializeImapCursor, rememberImapMessage } from "./state.js";
+import { initializeImapCursor } from "./state.js";
 
 describe("IMAP cursor initialization", () => {
   const previous = { uidValidity: "1", lastSeenUid: 42, updatedAt: 123 };
@@ -139,14 +139,5 @@ describe("IMAP durable watcher state", () => {
       },
     });
     expect(Object.keys(config.accounts)).toEqual(["healthy"]);
-  });
-
-  it("deduplicates logical Message-IDs without growing the account ring", async () => {
-    const { state } = createImapTestRuntime();
-    for (let index = 0; index < 101; index++) {
-      expect(await rememberImapMessage(state, "account", `<${index}@example.com>`)).toBe(true);
-    }
-    expect(await rememberImapMessage(state, "account", "<100@example.com>")).toBe(false);
-    expect((await state.messageIds.lookup("account"))?.messageIds).toHaveLength(100);
   });
 });

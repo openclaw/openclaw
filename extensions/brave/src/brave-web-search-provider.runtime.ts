@@ -32,20 +32,147 @@ import {
   isPrivateIpAddress,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveBraveMode } from "../web-search-shared.js";
 import {
-  type BraveLlmContextResponse,
-  mapBraveLlmContextResults,
-  normalizeBraveCountry,
-  normalizeBraveLanguageParams,
-} from "./brave-web-search-provider.shared.js";
+  asNonArrayRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveBraveMode } from "../web-search-shared.js";
 
 const DEFAULT_BRAVE_BASE_URL = "https://api.search.brave.com";
 const BRAVE_SEARCH_ENDPOINT_PATH = "/res/v1/web/search";
 const BRAVE_LLM_CONTEXT_ENDPOINT_PATH = "/res/v1/llm/context";
 const braveHttpLogger = createSubsystemLogger("brave/http");
 type BraveEndpointMode = "selfHosted" | "strict";
+
+type BraveLlmContextResponse = {
+  grounding: { generic?: { url: string; title: string; snippets: string[] }[] };
+  sources?: Record<string, { age?: string[] }>;
+};
+
+const BRAVE_COUNTRY_CODES = new Set([
+  "AR",
+  "AU",
+  "AT",
+  "BE",
+  "BR",
+  "CA",
+  "CL",
+  "DK",
+  "FI",
+  "FR",
+  "DE",
+  "GR",
+  "HK",
+  "IN",
+  "ID",
+  "IT",
+  "JP",
+  "KR",
+  "MY",
+  "MX",
+  "NL",
+  "NZ",
+  "NO",
+  "CN",
+  "PL",
+  "PT",
+  "PH",
+  "RU",
+  "SA",
+  "ZA",
+  "ES",
+  "SE",
+  "CH",
+  "TW",
+  "TR",
+  "GB",
+  "US",
+  "ALL",
+]);
+
+const BRAVE_SEARCH_LANG_CODES = new Set([
+  "ar",
+  "eu",
+  "bn",
+  "bg",
+  "ca",
+  "zh-hans",
+  "zh-hant",
+  "hr",
+  "cs",
+  "da",
+  "nl",
+  "en",
+  "en-gb",
+  "et",
+  "fi",
+  "fr",
+  "gl",
+  "de",
+  "el",
+  "gu",
+  "he",
+  "hi",
+  "hu",
+  "is",
+  "it",
+  "jp",
+  "kn",
+  "ko",
+  "lv",
+  "lt",
+  "ms",
+  "ml",
+  "mr",
+  "nb",
+  "pl",
+  "pt-br",
+  "pt-pt",
+  "pa",
+  "ro",
+  "ru",
+  "sr",
+  "sk",
+  "sl",
+  "es",
+  "sv",
+  "ta",
+  "te",
+  "th",
+  "tr",
+  "uk",
+  "vi",
+]);
+
+const BRAVE_SEARCH_LANG_ALIASES: Record<string, string> = {
+  ja: "jp",
+  zh: "zh-hans",
+  "zh-cn": "zh-hans",
+  "zh-hk": "zh-hant",
+  "zh-sg": "zh-hans",
+  "zh-tw": "zh-hant",
+};
+
+const BRAVE_UI_LANG_LOCALE = /^([a-z]{2})-([a-z]{2})$/i;
+
+function normalizeBraveSearchLang(value: string | undefined): string | undefined {
+  const lower = normalizeLowercaseStringOrEmpty(value);
+  const canonical = BRAVE_SEARCH_LANG_ALIASES[lower] ?? lower;
+  return BRAVE_SEARCH_LANG_CODES.has(canonical) ? canonical : undefined;
+}
+
+function normalizeBraveUiLang(value: string | undefined): string | undefined {
+  const match = normalizeOptionalString(value)?.match(BRAVE_UI_LANG_LOCALE);
+  if (!match) {
+    return undefined;
+  }
+  const [, language, region] = match;
+  if (!language || !region) {
+    return undefined;
+  }
+  return `${normalizeLowercaseStringOrEmpty(language)}-${region.toUpperCase()}`;
+}
 
 type BraveSearchResponse = {
   web?: {
@@ -158,16 +285,26 @@ export async function executeBraveSearch(
     const braveEndpointMode = await validateBraveBaseUrl(braveBaseUrl, signal);
     signal?.throwIfAborted();
     const { query, count } = readWebSearchQueryAndCount(args, searchConfig);
-    const country = normalizeBraveCountry(readStringParam(args, "country"));
+    const rawCountry = normalizeOptionalString(readStringParam(args, "country"));
+    const canonicalCountry = rawCountry?.toUpperCase();
+    const country = canonicalCountry
+      ? BRAVE_COUNTRY_CODES.has(canonicalCountry)
+        ? canonicalCountry
+        : "ALL"
+      : undefined;
     const language = readStringParam(args, "language");
     const search_lang = readStringParam(args, "search_lang");
     const ui_lang = readStringParam(args, "ui_lang");
-    const normalizedLanguage = normalizeBraveLanguageParams({
-      search_lang: search_lang || language,
-      ui_lang,
-    });
-
-    if (normalizedLanguage.invalidField === "search_lang") {
+    const rawSearchLang = normalizeOptionalString(search_lang || language);
+    const rawUiLang = normalizeOptionalString(ui_lang);
+    let searchLangCandidate = rawSearchLang;
+    let uiLangCandidate = rawUiLang;
+    if (normalizeBraveUiLang(rawSearchLang) && normalizeBraveSearchLang(rawUiLang)) {
+      searchLangCandidate = rawUiLang;
+      uiLangCandidate = rawSearchLang;
+    }
+    const normalizedSearchLang = normalizeBraveSearchLang(searchLangCandidate);
+    if (searchLangCandidate && !normalizedSearchLang) {
       return {
         error: "invalid_search_lang",
         message:
@@ -175,14 +312,15 @@ export async function executeBraveSearch(
         docs: "https://docs.openclaw.ai/tools/web",
       };
     }
-    if (normalizedLanguage.invalidField === "ui_lang") {
+    const normalizedUiLang = normalizeBraveUiLang(uiLangCandidate);
+    if (uiLangCandidate && !normalizedUiLang) {
       return {
         error: "invalid_ui_lang",
         message: "ui_lang must be a language-region locale like 'en-US'.",
         docs: "https://docs.openclaw.ai/tools/web",
       };
     }
-    if (normalizedLanguage.ui_lang && braveMode === "llm-context") {
+    if (normalizedUiLang && braveMode === "llm-context") {
       return {
         error: "unsupported_ui_lang",
         message:
@@ -240,8 +378,8 @@ export async function executeBraveSearch(
       query,
       requestedCount,
       country,
-      normalizedLanguage.search_lang,
-      ...(braveMode === "web" ? [normalizedLanguage.ui_lang] : []),
+      normalizedSearchLang,
+      ...(braveMode === "web" ? [normalizedUiLang] : []),
       freshness,
       dateAfter,
       llmContextDateEnd,
@@ -265,8 +403,8 @@ export async function executeBraveSearch(
     if (country) {
       url.searchParams.set("country", country);
     }
-    if (normalizedLanguage.search_lang) {
-      url.searchParams.set("search_lang", normalizedLanguage.search_lang);
+    if (normalizedSearchLang) {
+      url.searchParams.set("search_lang", normalizedSearchLang);
     }
     if (freshness) {
       url.searchParams.set("freshness", freshness);
@@ -279,8 +417,8 @@ export async function executeBraveSearch(
     }
     if (braveMode === "web") {
       url.searchParams.set("count", String(requestedCount));
-      if (normalizedLanguage.ui_lang) {
-        url.searchParams.set("ui_lang", normalizedLanguage.ui_lang);
+      if (normalizedUiLang) {
+        url.searchParams.set("ui_lang", normalizedUiLang);
       }
     }
     logBraveHttp(diagnosticsEnabled, "request", {
@@ -320,9 +458,25 @@ export async function executeBraveSearch(
             httpResponse,
             errorLabel,
           );
+          const genericResults = Array.isArray(data.grounding?.generic)
+            ? data.grounding.generic
+            : [];
           return {
             mode: "llm-context" as const,
-            results: mapBraveLlmContextResults(data),
+            results: genericResults.map((entry) => ({
+              url: entry.url ?? "",
+              title: entry.title ?? "",
+              snippets: (entry.snippets ?? []).filter(
+                (snippet) => typeof snippet === "string" && snippet.length > 0,
+              ),
+              siteName: resolveSiteName(entry.url) || undefined,
+              // Brave's fixed age slots contain timestamp (3), date (1), and relative age (2).
+              // Only the absolute forms belong in published; never infer a date from recency.
+              published:
+                data.sources?.[entry.url]?.age?.[3] ||
+                data.sources?.[entry.url]?.age?.[1] ||
+                undefined,
+            })),
             sources: data.sources,
           };
         }

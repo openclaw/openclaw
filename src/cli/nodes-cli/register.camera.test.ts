@@ -4,7 +4,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
 import { writeCameraPayloadToFile } from "../nodes-camera.js";
-import { registerNodesCameraCommands } from "./register.camera.js";
+import { registerNodesCli } from "./register.js";
 import * as rpc from "./rpc.js";
 
 const capturedInvokeParams: Record<string, unknown>[] = [];
@@ -26,7 +26,8 @@ vi.mock("../nodes-camera.js", async () => {
   };
 });
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -59,9 +60,13 @@ vi.mock("./rpc.js", async () => {
   };
 });
 
-function buildRootCommand(): Command {
-  const nodes = new Command("nodes");
-  registerNodesCameraCommands(nodes);
+async function buildRootCommand(): Promise<Command> {
+  const program = new Command();
+  await registerNodesCli(program, ["node", "openclaw", "nodes", "camera"]);
+  const nodes = program.commands.find((command) => command.name() === "nodes");
+  if (!nodes) {
+    throw new Error("expected nodes command to be registered");
+  }
   return nodes.exitOverride().configureOutput({ writeErr: () => {}, writeOut: () => {} });
 }
 
@@ -77,7 +82,7 @@ describe("nodes camera snap CLI option forwarding", () => {
   });
 
   it.each(["   "])("rejects blank --facing %j before invoking the node", async (facing) => {
-    const nodes = buildRootCommand();
+    const nodes = await buildRootCommand();
     await expect(
       nodes.parseAsync(cameraSnapArgs(["--node", "test-node", "--facing", facing])),
     ).rejects.toThrow(/invalid facing/i);
@@ -89,16 +94,16 @@ describe("nodes camera snap CLI option forwarding", () => {
     { facing: "both", expected: ["front", "back"] },
     { facing: " FRONT ", expected: ["front"] },
   ])("forwards normalized --facing $facing", async ({ facing, expected }) => {
-    await buildRootCommand().parseAsync(
-      cameraSnapArgs(["--node", "test-node", "--facing", facing]),
-    );
+    await (
+      await buildRootCommand()
+    ).parseAsync(cameraSnapArgs(["--node", "test-node", "--facing", facing]));
     expect(capturedInvokeParams.map((invoke) => invoke.params)).toEqual(
       expected.map((value) => expect.objectContaining({ facing: value })),
     );
   });
 
   it("makes one facing-less request and forwards deviceId when --facing is omitted", async () => {
-    const nodes = buildRootCommand();
+    const nodes = await buildRootCommand();
     await nodes.parseAsync(cameraSnapArgs(["--node", "test-node", "--device-id", "camera-device"]));
 
     expect(rpc.callNodesGatewayCli).toHaveBeenCalledTimes(1);
@@ -115,7 +120,7 @@ describe("nodes camera snap CLI option forwarding", () => {
   });
 
   it("forwards explicit --quality and --delay-ms values in RPC params", async () => {
-    const nodes = buildRootCommand();
+    const nodes = await buildRootCommand();
     await nodes.parseAsync(
       cameraSnapArgs(["--node", "test-node", "--quality", "0.7", "--delay-ms", "500"]),
     );
@@ -154,7 +159,7 @@ describe("nodes camera snap CLI option forwarding", () => {
 
       try {
         await expect(
-          buildRootCommand().parseAsync(
+          (await buildRootCommand()).parseAsync(
             cameraSnapArgs(["--node", "test-node", "--facing", "both"]),
           ),
         ).rejects.toThrow(/invalid base64|invalid media format/i);
@@ -177,21 +182,23 @@ describe("nodes camera snap CLI option forwarding", () => {
     });
 
     await expect(
-      buildRootCommand().parseAsync(cameraSnapArgs(["--node", "test-node", "--facing", "both"])),
+      (await buildRootCommand()).parseAsync(
+        cameraSnapArgs(["--node", "test-node", "--facing", "both"]),
+      ),
     ).rejects.toThrow(/invalid media format/i);
     expect(rpc.callNodesGatewayCli).toHaveBeenCalledTimes(1);
     expect(writeCameraPayloadToFile).not.toHaveBeenCalled();
   });
 
   it("rejects out-of-range --quality", async () => {
-    const nodes = buildRootCommand();
+    const nodes = await buildRootCommand();
     await expect(
       nodes.parseAsync(cameraSnapArgs(["--node", "test-node", "--quality", "1.5"])),
     ).rejects.toThrow("--quality must be at most 1");
   });
 
   it("rejects negative --delay-ms", async () => {
-    const nodes = buildRootCommand();
+    const nodes = await buildRootCommand();
     await expect(
       nodes.parseAsync(cameraSnapArgs(["--node", "test-node", "--delay-ms", "-1"])),
     ).rejects.toThrow("--delay-ms must be a non-negative integer");
@@ -206,7 +213,9 @@ describe("nodes camera snap CLI option forwarding", () => {
       },
     });
 
-    await buildRootCommand().parseAsync(["node", "nodes", "camera", "list", "--node", "test-node"]);
+    await (
+      await buildRootCommand()
+    ).parseAsync(["node", "nodes", "camera", "list", "--node", "test-node"]);
 
     const output = vi.mocked(defaultRuntime.log).mock.calls.join("\n");
     expect(output).not.toContain("\u001b");

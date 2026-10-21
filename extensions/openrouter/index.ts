@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOpenRouterModelFamilyId } from "openclaw/plugin-sdk/model-ref-parse";
 import type {
   ProviderDefaultThinkingPolicyContext,
@@ -178,7 +179,8 @@ const OPENROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
 type EndpointResult =
   | { ok: true; data: Record<string, unknown> }
   | { ok: false; status: number }
-  | { ok: false; reason: "malformed" | "transport" };
+  | { ok: false; reason: "malformed" }
+  | { ok: false; reason: "transport"; error: string };
 
 type OpenRouterLimitReset = "daily" | "weekly" | "monthly";
 
@@ -527,8 +529,8 @@ export default defineSingleProviderPluginEntry({
               policy: ssrfPolicy,
               auditContext: "openrouter-usage",
             });
-          } catch {
-            return { ok: false, reason: "transport" };
+          } catch (error) {
+            return { ok: false, reason: "transport", error: formatErrorMessage(error) };
           }
           try {
             const { response } = guardedResponse;
@@ -537,18 +539,16 @@ export default defineSingleProviderPluginEntry({
               // Awaiting one branch here can hold the error result until the other ends.
               return { ok: false, status: response.status };
             }
-            try {
-              const root = readRecord(
-                await readProviderJsonResponse(response, "OpenRouter usage", {
-                  maxBytes: OPENROUTER_USAGE_RESPONSE_MAX_BYTES,
-                  chunkTimeoutMs: 0,
-                }),
-              );
-              const data = readRecord(root?.data);
-              return data ? { ok: true, data } : { ok: false, reason: "malformed" };
-            } catch {
-              return { ok: false, reason: "malformed" };
-            }
+            const root = readRecord(
+              await readProviderJsonResponse(response, "OpenRouter usage", {
+                maxBytes: OPENROUTER_USAGE_RESPONSE_MAX_BYTES,
+                chunkTimeoutMs: 0,
+              }),
+            );
+            const data = readRecord(root?.data);
+            return data ? { ok: true, data } : { ok: false, reason: "malformed" };
+          } catch {
+            return { ok: false, reason: "malformed" };
           } finally {
             await guardedResponse.release();
           }
@@ -567,14 +567,16 @@ export default defineSingleProviderPluginEntry({
           if (status !== undefined) {
             return buildUsageHttpErrorSnapshot({ provider: "openrouter", status });
           }
-          const transportFailed = [creditsResult, keyResult].some(
+          const transportFailure = [creditsResult, keyResult].find(
             (result) => "reason" in result && result.reason === "transport",
           );
           return {
             provider: "openrouter",
             displayName: "OpenRouter",
             windows: [],
-            error: transportFailed ? "Usage unavailable" : "Malformed usage response",
+            error: transportFailure
+              ? `Usage unavailable: ${transportFailure.error}`
+              : "Malformed usage response",
           };
         }
         const credits = creditsResult.ok ? creditsResult.data : undefined;

@@ -27,6 +27,7 @@ import {
 } from "../github-publication-availability.js";
 import { refreshManagedWorkspaceBase } from "../github-publication-base-refresh.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
+import { performSessionGitHubInspection } from "../github-publication-inspect.js";
 import { isGitHubPublicationSuperseded } from "../github-publication-relevance.js";
 import { prepareGitHubPublicationRequesterV2 } from "../github-publication-requester.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -167,6 +168,10 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
     "sessions.github.action",
     validateSessionGitHubActionParams,
     async (options) => {
+      if (options.params.action === "inspect_pr") {
+        await performSessionGitHubInspection({ ...options, params: options.params });
+        return;
+      }
       if (options.params.action !== "refresh_base") {
         await performSessionGitHubAction({ ...options, params: options.params });
         return;

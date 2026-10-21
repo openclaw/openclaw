@@ -71,7 +71,14 @@ afterEach(() => {
 
 describe("method scope resolution and authorization", () => {
   it("admits own PR preparation while retaining full-write admission for privileged actions", () => {
-    for (const action of ["refresh_base", "edit", "request_review", "ready", "upload_evidence"]) {
+    for (const action of [
+      "inspect_pr",
+      "refresh_base",
+      "edit",
+      "request_review",
+      "ready",
+      "upload_evidence",
+    ]) {
       allow("sessions.github.action", ["operator.sessions.write"], { action });
     }
     deny("operator.write", "sessions.github.action", ["operator.sessions.write"], {
