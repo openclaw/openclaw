@@ -517,7 +517,9 @@
   --bg-muted: #efebe4;
   --bg-content: #f4f1ec;
 
-  --session-header-control-bg: color-mix(in srgb, var(--text) 4%, var(--bg-content));
+  --session-header-sharing-bg: color-mix(in srgb, var(--text) 9%, var(--bg-content));
+  --session-header-sharing-hover-bg: color-mix(in srgb, var(--text) 12%, var(--bg-content));
+  --session-header-sharing-active-bg: color-mix(in srgb, var(--text) 15%, var(--bg-content));
   --session-header-control-hover-bg: color-mix(in srgb, var(--text) 7%, var(--bg-content));
   --session-header-control-active-bg: color-mix(in srgb, var(--text) 11%, var(--bg-content));
   --session-header-control-active-color: color-mix(in srgb, var(--accent) 20%, var(--text));

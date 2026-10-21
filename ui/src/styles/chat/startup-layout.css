@@ -436,7 +436,7 @@
   justify-content: center;
   border-color: transparent;
   border-radius: var(--radius-full);
-  background: var(--session-header-control-bg, transparent);
+  background: transparent;
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle {
@@ -1297,7 +1297,7 @@ openclaw-chat-sidebar-region,
   padding: 0;
   border-color: transparent;
   border-radius: var(--radius-full);
-  background: var(--session-header-control-bg, transparent);
+  background: transparent;
 }
 
 .sidebar-region__panels-toggle .chat-icon-btn.chat-pane__panels-toggle:hover {

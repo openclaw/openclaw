@@ -785,13 +785,13 @@
   padding: 0 8px;
   border-color: transparent;
   border-radius: var(--radius-full);
-  background: var(--session-header-control-bg, var(--bg-elevated));
+  background: var(--session-header-sharing-bg, var(--bg-elevated));
   font-size: 12px;
 }
 
 .chat-pane__sharing-menu--desktop
   > .btn.chat-pane__sharing-trigger:is(:hover:not(:disabled), [aria-expanded="true"]) {
-  background: var(--session-header-control-hover-bg, var(--bg-hover));
+  background: var(--session-header-sharing-hover-bg, var(--bg-hover));
   color: var(--text);
 }
 
@@ -814,7 +814,7 @@
 
 .chat-pane__sharing-menu--desktop
   > .btn.chat-pane__sharing-trigger[aria-expanded="true"]:not(:disabled) {
-  background: var(--session-header-control-active-bg, var(--bg-hover));
+  background: var(--session-header-sharing-active-bg, var(--bg-hover));
   color: var(--session-header-control-active-color, var(--text));
 }
 
