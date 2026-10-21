@@ -2,6 +2,11 @@ import { vi, type Mock } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { getMockCallOutput } from "./test-runtime-capture.js";
 
+function callArg<T>(mock: Mock, index = 0): T | undefined {
+  return mock.mock.calls[index]?.[0] as T | undefined;
+}
+type PluginCall = Record<string, unknown> & { config?: OpenClawConfig };
+
 export function createUpdateConfigMock() {
   const readConfigFileSnapshot = vi.fn();
   return {
@@ -25,21 +30,11 @@ export function createUpdateConfigMock() {
     }),
     assertConfigWriteAllowedInCurrentMode: () => {
       if (process.env.OPENCLAW_NIX_MODE === "1") {
-        throw new Error(
-          [
-            "Config is managed by Nix (`OPENCLAW_NIX_MODE=1`), so OpenClaw treats openclaw.json as immutable.",
-            "Do not run setup, onboarding, openclaw update, plugin install/update/uninstall/enable, doctor repair/token-generation, or config set against this file.",
-            "Agent-first Nix setup: https://github.com/openclaw/nix-openclaw#quick-start",
-            "OpenClaw Nix overview: https://docs.openclaw.ai/install/nix",
-          ].join("\n"),
-        );
+        throw new Error("Config is managed by Nix (`OPENCLAW_NIX_MODE=1`).");
       }
     },
     ConfigMutationConflictError: class ConfigMutationConflictError extends Error {
-      constructor(message: string) {
-        super(message);
-        this.name = "ConfigMutationConflictError";
-      }
+      override name = "ConfigMutationConflictError";
     },
     parseConfigJson5: (raw: string) => {
       try {
@@ -72,17 +67,9 @@ export function createUpdateFixtureAssertions({
   defaultRuntime: typeof import("../runtime.js").defaultRuntime;
 }) {
   const syncPluginCall = (index = 0) =>
-    (
-      syncPluginsForUpdateChannel.mock.calls as unknown as Array<
-        [Record<string, unknown> & { channel?: string; config?: OpenClawConfig }]
-      >
-    )[index]?.[0];
+    callArg<PluginCall & { channel?: string }>(syncPluginsForUpdateChannel, index);
   const npmPluginUpdateCall = (index = 0) =>
-    (
-      updateNpmInstalledPlugins.mock.calls as unknown as Array<
-        [Record<string, unknown> & { config?: OpenClawConfig; timeoutMs?: number }]
-      >
-    )[index]?.[0];
+    callArg<PluginCall & { timeoutMs?: number }>(updateNpmInstalledPlugins, index);
   const setupConfigMutationWithRetryMock = (
     onCommitted?: (snapshot: ConfigFileSnapshot, nextConfig: OpenClawConfig) => void,
   ) => {
