@@ -245,7 +245,6 @@ async function writeAdapterWrapper(
   fileName: string,
   script: string,
 ): Promise<string> {
-  await fs.mkdir(baseDir, { recursive: true });
   const wrapperPath = path.join(baseDir, fileName);
   await fs.writeFile(wrapperPath, script, {
     encoding: "utf8",

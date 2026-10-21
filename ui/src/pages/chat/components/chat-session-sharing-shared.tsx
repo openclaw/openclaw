@@ -182,6 +182,16 @@ export const CHAT_SESSION_SHARING_DESCRIPTION_KEYS: Record<SessionVisibility, st
   draft: "chat.sessionSharing.draftDescription",
 };
 
+export function chatSessionMembershipLabel(owner: boolean, member: boolean) {
+  return t(
+    owner
+      ? "chat.sessionSharing.owner"
+      : member
+        ? "chat.sessionSharing.member"
+        : "chat.sessionSharing.visitor",
+  );
+}
+
 export function projectChatSessionSharingRoster(props: ChatSessionSharingProps) {
   const result = props.state?.result;
   const creator = result?.owner;
@@ -197,11 +207,9 @@ export function projectChatSessionSharingRoster(props: ChatSessionSharingProps) 
       identity,
       fixed,
       selected,
-      permissionLabel: t(
-        fixed ? "chat.sessionSharing.owner" : "chat.sessionSharing.permissionUnavailable",
-      ),
+      membershipLabel: chatSessionMembershipLabel(fixed, selected),
       disabledReason: fixed
-        ? t("chat.sessionSharing.creator")
+        ? t("chat.sessionSharing.owner")
         : props.state?.loading
           ? t("common.loading")
           : selected

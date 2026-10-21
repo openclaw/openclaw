@@ -1,6 +1,6 @@
 import "../../../styles/chat/side-panel.css";
 import { Portal } from "@solidjs/web";
-import { For, Show, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { For, Show, createSignal, onSettled, untrack } from "solid-js";
 import { registryFor } from "../../../components/overlay-registry.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT } from "../../../components/panel-hosted-tabs.ts";
 import {
@@ -654,16 +654,16 @@ function Region(props: RegionProps, host: RegionElement) {
   onSettled(() => {
     scheduleGeometryCommit();
     scheduleFocusTransition();
-  });
-  onCleanup(() => {
-    regionOperations.delete(host);
-    stopHostedTabs();
-    listeners.abort();
-    focusedSurface = null;
-    cancelLayout(host);
-    if (focusFrame !== null) {
-      cancelAnimationFrame(focusFrame);
-    }
+    return () => {
+      regionOperations.delete(host);
+      stopHostedTabs();
+      listeners.abort();
+      focusedSurface = null;
+      cancelLayout(host);
+      if (focusFrame !== null) {
+        cancelAnimationFrame(focusFrame);
+      }
+    };
   });
   return (
     <Show when={props.elements}>

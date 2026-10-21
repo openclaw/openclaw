@@ -62,9 +62,8 @@ type HelperAuthSession = PendingHelperHandshake & {
 };
 
 function hasExactKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(record).toSorted();
-  const expected = [...keys].toSorted();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+  const actual = Object.keys(record);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
 }
 
 export class FaceTimeHelperSocketServer {
@@ -577,9 +576,6 @@ export class FaceTimeHelperSocketServer {
       throw new FaceTimeHelperUnavailableError("FaceTime helper action queue is full");
     }
     const transactionId = randomUUID();
-    if (!this.#socketAuthSessions.has(socket)) {
-      throw new FaceTimeHelperUnavailableError("FaceTime helper socket is not authenticated");
-    }
     return await new Promise<HelperActionResult>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.#pending.delete(transactionId);

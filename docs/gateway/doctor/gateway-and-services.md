@@ -83,6 +83,9 @@ restoration failure; slow startup does not undo a completed repair.
   </Accordion>
   <Accordion title="10. systemd linger (Linux)">
     If running as a systemd user service, doctor enables lingering if needed so the gateway stays alive after logout.
+
+    Doctor also warns when the enclosing user manager has a host-shutdown timeout below 90 seconds. This host policy needs an operator decision; reinstalling the Gateway cannot change it. See [Linux](/platforms/linux#gateway-service-systemd).
+
   </Accordion>
   <a id="11-workspace-status-skills-plugins-and-taskflows" />
   <Accordion title="11. Workspace status (skills and plugins)">

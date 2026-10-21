@@ -33,39 +33,27 @@ it("preserves external absolute paths as normalized absolute paths", () => {
   expect(normalizeTrackedRepoPath(externalFile)).toBe(externalFile.split(path.sep).join("/"));
 });
 
+const timedFile = {
+  name: path.join(process.cwd(), "src", "alpha.test.ts"),
+  startTime: 100,
+  endTime: 460,
+  assertionResults: [
+    { duration: 25, fullName: "alpha fast", status: "passed" },
+    { duration: 0, fullName: "alpha zero", status: "passed" },
+  ],
+};
 it.each([
-  {
-    kind: "file",
-    collect: collectVitestFileDurations,
-    testResults: [
-      {
-        name: path.join(process.cwd(), "src", "alpha.test.ts"),
-        startTime: 100,
-        endTime: 460,
-        assertionResults: [{}, {}],
-      },
-      { name: "src/zero.test.ts", startTime: 300, endTime: 300, assertionResults: [{}] },
-    ],
-    expected: [{ file: "src/alpha.test.ts", durationMs: 360, testCount: 2 }],
-  },
-  {
-    kind: "assertion",
-    collect: collectVitestAssertionDurations,
-    testResults: [
-      {
-        name: path.join(process.cwd(), "src", "alpha.test.ts"),
-        assertionResults: [
-          { duration: 25, fullName: "alpha fast", status: "passed" },
-          { duration: 0, fullName: "alpha zero", status: "passed" },
-        ],
-      },
-    ],
-    expected: [
-      { file: "src/alpha.test.ts", durationMs: 25, fullName: "alpha fast", status: "passed" },
-    ],
-  },
-])("extracts $kind durations with normalized paths", ({ collect, testResults, expected }) => {
-  expect(collect({ testResults }, normalizeTrackedRepoPath)).toEqual(expected);
+  [collectVitestFileDurations, { file: "src/alpha.test.ts", durationMs: 360, testCount: 2 }],
+  [
+    collectVitestAssertionDurations,
+    { file: "src/alpha.test.ts", durationMs: 25, fullName: "alpha fast", status: "passed" },
+  ],
+] as const)("extracts durations with normalized paths (%s)", (collect, expected) => {
+  const testResults = [
+    timedFile,
+    { name: "src/zero.test.ts", startTime: 300, endTime: 300, assertionResults: [{}] },
+  ];
+  expect(collect({ testResults }, normalizeTrackedRepoPath)).toEqual([expected]);
 });
 
 describe("scripts/test-report-utils runVitestJsonReport", () => {

@@ -17,6 +17,14 @@ import {
 } from "./persistent-exec.types.js";
 import type { SandboxConfig, SandboxContext } from "./types.js";
 
+export function assertLocalSandboxWorkspaceBackend(backend: SandboxConfig["backend"]) {
+  if (backend !== "docker" && backend !== "podman") {
+    throw new Error(
+      "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
+    );
+  }
+}
+
 /** A writable project is an exact managed projection, never a role-policy override. */
 export async function prepareLocalSandboxWorkspace(params: {
   cfg: OpenClawConfig;
@@ -65,14 +73,28 @@ export async function prepareLocalSandboxWorkspace(params: {
     assertCurrent,
     workerAuthority: { ...owner.workerAuthority, assertCurrent },
   };
+  let pendingCheckpoint: Promise<void> | undefined;
+  const checkpoint = (): Promise<void> => {
+    if (pendingCheckpoint) {
+      return pendingCheckpoint;
+    }
+    const pending = withLocalWorkspaceProjection(owner, (state) => {
+      // Quiescence is now held. Later requests need their own capture; only
+      // requests waiting together for custody can share this checkpoint.
+      pendingCheckpoint = undefined;
+      return state.synchronize("canonical");
+    }).finally(() => {
+      if (pendingCheckpoint === pending) {
+        pendingCheckpoint = undefined;
+      }
+    });
+    pendingCheckpoint = pending;
+    return pending;
+  };
   try {
     assertCurrent();
     markManagedWorktreePreparation();
-    if (params.sandbox.backend !== "docker" && params.sandbox.backend !== "podman") {
-      throw new Error(
-        "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
-      );
-    }
+    assertLocalSandboxWorkspaceBackend(params.sandbox.backend);
     const existing = await withLocalWorkspaceProjection(executionOwner, (state) => state.reuse());
     let workspaceDir: string;
     if (existing) {
@@ -131,15 +153,13 @@ export async function prepareLocalSandboxWorkspace(params: {
         try {
           await withLocalWorkspaceProjection(owner, run, { provision: true });
           // TERM handlers may write after an already-running final checkpoint has completed.
-          await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+          await checkpoint();
         } finally {
           release();
         }
       },
-      checkpoint: async () => {
-        // Stop closes execution admission; accepted output still settles under its workspace owner.
-        await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
-      },
+      // Stop closes execution admission; accepted output still settles under its workspace owner.
+      checkpoint,
       [Symbol.dispose]: () => {
         disposed = true;
         releaseOwner();

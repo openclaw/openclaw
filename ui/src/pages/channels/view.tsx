@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import "../../styles/channels.css";
 import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
@@ -13,8 +13,13 @@ import {
 import "../../components/openclaw-mascot.ts";
 import { WizardBusyButton, WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import {
+  channelSnapshotEntryIsActive,
+  resolveChannelAccounts,
+  type ChannelRead,
+  type ChannelsState,
+} from "../../lib/channels/index.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../components/modal-dialog.ts";
@@ -44,16 +49,7 @@ const RECOMMENDED_CHANNEL_ORDER: string[] = [
   "nostr",
 ];
 
-export function ChannelsView(props: ChannelsProps) {
-  const snapshot = createMemo(() => props.channels.channelsSnapshot);
-  const channelOrder = createMemo(() => resolveChannelOrder(snapshot()));
-  // Key both lists so status updates cannot retarget an in-flight channel click.
-  const connected = createMemo(() =>
-    channelOrder().filter((key) => channelSnapshotEntryIsActive(snapshot(), key)),
-  );
-  const available = createMemo(() =>
-    channelOrder().filter((key) => !channelSnapshotEntryIsActive(snapshot(), key)),
-  );
+function ChannelStatusNotices(props: { channels: ChannelsState; error: string | null }) {
   const showingStaleSnapshot = () =>
     Boolean(
       props.channels.channelsLoading &&
@@ -68,22 +64,73 @@ export function ChannelsView(props: ChannelsProps) {
         .map((warning) => formatUiExternalText(warning))
         .join("; ") ?? "",
   );
+  return (
+    <>
+      {showingStaleSnapshot() ? (
+        <div class="callout info">{t("channels.refreshingStaleSnapshot")}</div>
+      ) : undefined}
+      {props.channels.channelsSnapshot?.partial ? (
+        <div class="callout warn">
+          {t("channels.hub.partialSnapshot")}
+          {partialWarnings()}
+        </div>
+      ) : undefined}
+      {props.error ? <div class="callout danger">{props.error}</div> : undefined}
+    </>
+  );
+}
+
+function ChannelStatusSettled(props: { channels: ChannelsState; receipt: ChannelRead }) {
+  const ready = createMemo(async () => {
+    const error = await props.receipt.completion;
+    if (error !== null) {
+      throw new Error(error);
+    }
+    return true;
+  });
+  return (
+    <Show when={ready()}>
+      <ChannelStatusNotices channels={props.channels} error={null} />
+    </Show>
+  );
+}
+
+function ChannelStatusFeedback(props: { channels: ChannelsState }) {
+  const retained = () => (
+    <ChannelStatusNotices channels={props.channels} error={props.channels.channelsError} />
+  );
+  return (
+    <Show when={props.channels.channelsRead} keyed fallback={retained()}>
+      {(receipt) => (
+        <Errored
+          fallback={(error) => (
+            <ChannelStatusNotices channels={props.channels} error={formatUiError(error())} />
+          )}
+        >
+          <Loading fallback={retained()}>
+            <ChannelStatusSettled channels={props.channels} receipt={receipt} />
+          </Loading>
+        </Errored>
+      )}
+    </Show>
+  );
+}
+
+export function ChannelsView(props: ChannelsProps) {
+  const snapshot = createMemo(() => props.channels.channelsSnapshot);
+  const channelOrder = createMemo(() => resolveChannelOrder(snapshot()));
+  // Key both lists so status updates cannot retarget an in-flight channel click.
+  const connected = createMemo(() =>
+    channelOrder().filter((key) => channelSnapshotEntryIsActive(snapshot(), key)),
+  );
+  const available = createMemo(() =>
+    channelOrder().filter((key) => !channelSnapshotEntryIsActive(snapshot(), key)),
+  );
 
   return (
     <>
       <SettingsPage>
-        {showingStaleSnapshot() ? (
-          <div class="callout info">{t("channels.refreshingStaleSnapshot")}</div>
-        ) : undefined}
-        {props.channels.channelsSnapshot?.partial ? (
-          <div class="callout warn">
-            {t("channels.hub.partialSnapshot")}
-            {partialWarnings()}
-          </div>
-        ) : undefined}
-        {props.channels.channelsError ? (
-          <div class="callout danger">{props.channels.channelsError}</div>
-        ) : undefined}
+        <ChannelStatusFeedback channels={props.channels} />
         {props.wizardHost.blockedByDirtyConfig() && props.config.configFormDirty ? (
           <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
         ) : undefined}

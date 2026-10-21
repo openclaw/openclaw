@@ -47,6 +47,10 @@ it("joins managed reload acquisition during Gateway close", async () => {
     });
   });
   const restorers: Array<() => void> = [];
+  const postReadyMaintenance = vi
+    .spyOn(await import("./server-runtime-services.js"), "scheduleGatewayPostReadyMaintenance")
+    .mockImplementation(() => {});
+  restorers.push(() => postReadyMaintenance.mockRestore());
   const bridgeKey = `__managed_model_close_${path.basename(fixture.state.root)}`;
   Object.defineProperty(globalThis, bridgeKey, {
     configurable: true,

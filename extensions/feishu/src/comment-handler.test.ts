@@ -246,28 +246,20 @@ describe("handleFeishuCommentEvent", () => {
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 
-  it("issues a pairing challenge before dynamic comment-agent creation", async () => {
-    const currentCfg = buildConfig({
+  it("issues a private pairing challenge in the comment thread before dynamic agent creation", async () => {
+    const log = vi.fn();
+    const cfg = buildConfig({
       dmPolicy: "pairing",
       allowFrom: [],
       dynamicAgentCreation: { enabled: true },
     });
-    useRuntime(currentCfg);
-
-    await handleComment();
-
-    expect(maybeCreateDynamicAgentMock).not.toHaveBeenCalled();
-    expect(deliverCommentThreadTextMock).toHaveBeenCalledTimes(1);
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("issues a pairing challenge in the comment thread when dmPolicy=pairing", async () => {
-    const log = vi.fn();
+    useRuntime(cfg);
     await handleComment({
       runtime: { log, error: vi.fn(), exit: vi.fn() },
-      cfg: buildConfig({ dmPolicy: "pairing", allowFrom: [] }),
+      cfg,
     });
 
+    expect(maybeCreateDynamicAgentMock).not.toHaveBeenCalled();
     expect(deliverCommentThreadTextMock).toHaveBeenCalledTimes(1);
     expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
       createFeishuClientMock.mock.results[0]?.value,

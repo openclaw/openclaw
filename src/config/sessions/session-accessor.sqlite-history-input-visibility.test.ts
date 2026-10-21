@@ -14,6 +14,7 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { replaceSessionEntry, waitForSessionTranscriptProjection } from "./session-accessor.js";
+import { clearHistoryNavigation } from "./session-accessor.sqlite-history.test-support.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 it.each([false, true])(
@@ -95,14 +96,7 @@ it.each([false, true])(
       await waitForSessionTranscriptProjection(scope);
       if (compacted) {
         runOpenClawAgentWriteTransaction(
-          (writeDatabase) =>
-            writeDatabase.db
-              .prepare(`UPDATE transcript_events
-            SET navigation_type = NULL, navigation_custom_type = NULL,
-                navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-                navigation_last_custom_type = NULL, navigation_valid = 1
-            WHERE session_id = ?`)
-              .run(scope.sessionId),
+          (writeDatabase) => clearHistoryNavigation(writeDatabase, scope.sessionId),
           { agentId: database.agentId, path: database.path },
         );
       }

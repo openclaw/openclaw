@@ -138,6 +138,8 @@ function ConfigBody(props: {
           nowMs={props.state.nowMs()}
           configBusy={props.state.mutationDisabled()}
           updateBusy={props.state.updateBusy()}
+          statusRead={props.state.updateStatusRead()}
+          onCheckStatus={props.state.refreshUpdateStatus}
         />
       </Show>
       <Show when={props.pageId === "memory"}>

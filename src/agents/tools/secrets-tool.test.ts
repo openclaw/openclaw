@@ -128,6 +128,14 @@ function outcome<T>(pending: Promise<T>) {
     (error: unknown) => ({ error }),
   );
 }
+
+function settleOnCleanup(pending: Promise<unknown>, release: () => void) {
+  const settled = Promise.allSettled([pending]);
+  onTestFinished(async () => {
+    release();
+    await settled;
+  });
+}
 let storeTransportSpy: MockInstance<typeof gatewayTransport.callGatewayTool> | undefined;
 let questionResolverSpy:
   | MockInstance<typeof questionDispatch.resolveAgentQuestionGatewayCall>
@@ -315,11 +323,7 @@ describe("secrets tool", () => {
       runId: "run-secrets",
     });
     const pending = tool.execute("call-secret", proposedRequest);
-    const toolSettlement = Promise.allSettled([pending]);
-    onTestFinished(async () => {
-      answer.resolve({ status: "cancelled" });
-      await toolSettlement;
-    });
+    settleOnCleanup(pending, () => answer.resolve({ status: "cancelled" }));
     await waiting;
 
     await expect(
@@ -548,11 +552,7 @@ describe("secrets tool", () => {
       secretRequest,
       controller.signal,
     );
-    const toolSettlement = Promise.allSettled([pending]);
-    onTestFinished(async () => {
-      controller.abort();
-      await toolSettlement;
-    });
+    settleOnCleanup(pending, () => controller.abort());
     await vi.waitFor(() =>
       expect(methodCalls(gateway, "question.waitAnswer").length).toBeGreaterThan(0),
     );
@@ -659,11 +659,7 @@ describe("secrets tool", () => {
         channel,
       );
       const pending = secretTool(gateway, options).execute("call-secret-direct", secretRequest);
-      const toolSettlement = Promise.allSettled([pending]);
-      onTestFinished(async () => {
-        answer.resolve({ status: "cancelled" });
-        await toolSettlement;
-      });
+      settleOnCleanup(pending, () => answer.resolve({ status: "cancelled" }));
       await waiting;
       if (deliver) {
         await vi.waitFor(() => expect(sent).toHaveLength(1));
@@ -701,12 +697,10 @@ describe("secrets tool", () => {
         return promptReleased.promise;
       }),
     ).execute("call-secret-direct-abort", secretRequest);
-    const toolSettlement = Promise.allSettled([pending]);
-    onTestFinished(async () => {
+    settleOnCleanup(pending, () => {
       answer.resolve({ status: "cancelled" });
       metadata.resolve({ entries: [secretEntry] });
       promptReleased.resolve();
-      await toolSettlement;
     });
 
     await vi.waitFor(() => expect(capturedSignal).toBeDefined());

@@ -263,16 +263,14 @@ async function clearDocumentContent(client: Lark.Client, docToken: string) {
   });
   assertFeishuApiSuccess(existing);
 
-  const childIds =
-    existing.data?.items
-      ?.filter((b) => b.parent_id === docToken && b.block_type !== 1)
-      .map((b) => b.block_id) ?? [];
+  const childCount =
+    existing.data?.items?.filter((b) => b.parent_id === docToken && b.block_type !== 1).length ?? 0;
 
-  if (childIds.length > 0) {
-    await deleteBlockChildren(client, docToken, docToken, 0, childIds.length);
+  if (childCount > 0) {
+    await deleteBlockChildren(client, docToken, docToken, 0, childCount);
   }
 
-  return childIds.length;
+  return childCount;
 }
 
 type DocxUpload = Awaited<ReturnType<typeof resolveDocxUploadInput>>;

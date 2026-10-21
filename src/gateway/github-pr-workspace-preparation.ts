@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SessionGitHubActionParams } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
+import { canPrepareGitHubPullRequest } from "../agents/sandbox/github-publication.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
@@ -37,36 +38,13 @@ function samePullRequest(
   );
 }
 
-export async function performSessionGitHubPreparation(
-  options: Omit<GatewayRequestHandlerOptions, "params"> & {
-    params: Extract<SessionGitHubActionParams, { action: "prepare_pr" }>;
-  },
-): Promise<void> {
-  const { params, context } = options;
-  const caller = getGatewayToolCallerIdentity();
-  const sandbox = caller?.workspaceBaseRefreshSandbox;
-  if (
-    !caller ||
-    !sandbox?.enabled ||
-    !sandbox.backend ||
-    sandbox.workspaceSource !== "managed-worktree"
-  ) {
-    throw new Error(
-      "Run prepare_pr from this conversation's sandboxed agent in a managed workspace.",
-    );
-  }
-  if (sandbox.workspaceAccess === "ro") {
-    throw new Error("The workspace is read-only; prepare_pr requires a writable sandbox.");
-  }
-  if (
-    params.sessionKey !== caller.sessionKey ||
-    (params.agentId && normalizeAgentId(params.agentId) !== normalizeAgentId(caller.agentId))
-  ) {
-    throw new Error("PR preparation must use the current conversation's workspace.");
-  }
-  using selected = await prepareGitHubPublicationSession(params.sessionKey, {
-    agentId: caller.agentId ?? params.agentId,
-    assertCurrent: () => options.sessionMutationAuthorization?.assertCurrent(),
+/** The conversation as preparation and adoption compare it, including its skills snapshot. */
+export function preparePullRequestSession(
+  sessionKey: string,
+  options: { agentId?: string; assertCurrent: () => void },
+) {
+  return prepareGitHubPublicationSession(sessionKey, {
+    ...options,
     // The worktree owner retains its binding; preparation itself writes the nested PR association.
     fields: [
       "sessionId",
@@ -78,6 +56,40 @@ export async function performSessionGitHubPreparation(
       "visibility",
       "incognito",
     ],
+    // Adoption's file-source check selects skill libraries from the full entry.
+    projection: ["skillsSnapshot"],
+  });
+}
+
+export async function performSessionGitHubPreparation(
+  options: Omit<GatewayRequestHandlerOptions, "params"> & {
+    params: Extract<SessionGitHubActionParams, { action: "prepare_pr" }>;
+  },
+): Promise<void> {
+  const { params, context } = options;
+  const caller = getGatewayToolCallerIdentity();
+  let sandbox = caller?.workspaceBaseRefreshSandbox;
+  const adopting = sandbox?.workspaceSource !== "managed-worktree";
+  if (
+    !caller ||
+    !canPrepareGitHubPullRequest(sandbox) ||
+    (adopting && !caller.workspacePrAdoptionSessionId)
+  ) {
+    throw new Error(
+      sandbox?.workspaceAccess === "ro"
+        ? "The workspace is read-only; prepare_pr requires a writable sandbox."
+        : "Run prepare_pr from this conversation's sandboxed agent in a managed workspace.",
+    );
+  }
+  if (
+    params.sessionKey !== caller.sessionKey ||
+    (params.agentId && normalizeAgentId(params.agentId) !== normalizeAgentId(caller.agentId))
+  ) {
+    throw new Error("PR preparation must use the current conversation's workspace.");
+  }
+  using selected = await preparePullRequestSession(params.sessionKey, {
+    agentId: caller.agentId ?? params.agentId,
+    assertCurrent: () => options.sessionMutationAuthorization?.assertCurrent(),
   });
   const loaded = selected.readCurrent();
   if (!loaded.entry?.sessionId) {
@@ -91,74 +103,136 @@ export async function performSessionGitHubPreparation(
     selected.readCurrent();
     admitted.requester.assertCurrent();
   };
-  using owner = await resolveLocalWorkspaceOwner({
-    ...session,
-    cfg: context.getRuntimeConfig(),
-    assertCurrent: assertSession,
-  });
-  if (!owner) {
-    throw new Error(
-      "PR preparation requires this conversation's existing local managed workspace.",
-    );
+  if (adopting && caller.workspacePrAdoptionSessionId !== loaded.entry.sessionId) {
+    throw new Error("The conversation changed before PR preparation handoff.");
   }
   const placements = context.workerSessionPlacementService;
-  if (!placements?.withWorkspaceExclusion) {
+  if (
+    !placements?.withWorkspaceExclusion ||
+    (adopting && !placements.withLocalWorkspaceReservation)
+  ) {
     throw new Error("Workspace coordination is unavailable; retry after Gateway startup.");
   }
-  const result = await placements.withWorkspaceExclusion(
-    loaded.entry.sessionId,
-    async (assertOwned) => {
-      const assertWorkspace = () => {
-        assertSession();
-        owner.assertCurrent();
-        assertOwned();
-      };
-      const inspected = await inspectOwnGitHubPullRequest({
-        pullRequestUrl: params.pullRequestUrl,
-        agentId: session.agentId,
-        requester: admitted.requester,
-        assertCurrent: assertWorkspace,
-      });
-      const identity = await prepareCurrentGitHubPublicationIdentity(
-        session.agentId,
-        inspected.assertCurrent,
-      );
-      const assertCurrent = () => {
-        assertWorkspace();
-        inspected.assertCurrent();
-        if (!matchesCurrentGitHubPublicationIdentity({ agentId: session.agentId, identity })) {
-          throw new Error("The GitHub publisher changed; retry PR preparation.");
-        }
-      };
-      await assertExistingPullRequestWriteAccess({
-        pullRequest: inspected.result,
-        identity,
-        assertCurrent,
-      });
-      const { url, host, number, base, head } = inspected.result;
-      if (!head) {
-        throw new Error("The original PR head is unavailable; saved work was preserved.");
+  const inspectCurrent = async (assertWorkspace: () => void) => {
+    const inspected = await inspectOwnGitHubPullRequest({
+      pullRequestUrl: params.pullRequestUrl,
+      agentId: session.agentId,
+      requester: admitted.requester,
+      assertCurrent: assertWorkspace,
+    });
+    const identity = await prepareCurrentGitHubPublicationIdentity(
+      session.agentId,
+      inspected.assertCurrent,
+    );
+    const assertCurrent = () => {
+      assertWorkspace();
+      inspected.assertCurrent();
+      if (!matchesCurrentGitHubPublicationIdentity({ agentId: session.agentId, identity })) {
+        throw new Error("The GitHub publisher changed; retry PR preparation.");
       }
-      return await prepareManagedPullRequestWorkspace({
-        owner,
-        storePath: loaded.storePath,
-        identity,
-        sandbox,
-        pullRequest: { url, host, number, base, head },
-        assertCurrent,
-        verifyCurrentPullRequest: async () => {
+    };
+    await assertExistingPullRequestWriteAccess({
+      pullRequest: inspected.result,
+      identity,
+      assertCurrent,
+    });
+    return { inspected, identity, assertCurrent };
+  };
+  const prepare = async (assertOwned: () => void) => {
+    const assertPlacement = () => {
+      assertSession();
+      assertOwned();
+    };
+    using resources = new DisposableStack();
+    if (adopting) {
+      const [{ adoptUnboundPullRequestWorkspace }, { resolveSandboxContext }] = await Promise.all([
+        import("./session-pr-workspace-adoption.js"),
+        import("../agents/sandbox/context.js"),
+      ]);
+      // Allocation and the later source import each observe current GitHub eligibility.
+      const eligibility = await inspectCurrent(assertPlacement);
+      const entry = await adoptUnboundPullRequestWorkspace({
+        context,
+        target: { ...session, storePath: loaded.storePath },
+        entry: loaded.entry!,
+        sandbox: sandbox!,
+        assertCurrent: eligibility.assertCurrent,
+        verifyBeforeBinding: async () => {
           await assertExistingPullRequestWriteAccess({
-            pullRequest: inspected.result,
-            identity,
-            assertCurrent,
+            pullRequest: eligibility.inspected.result,
+            identity: eligibility.identity,
+            assertCurrent: eligibility.assertCurrent,
           });
         },
         signal: options.signal,
-        conflictsResolved: params.conflictsResolved,
-        baseCommit: params.expectedHeadCommit,
       });
-    },
-  );
+      assertPlacement();
+      const preparedSandbox = await resolveSandboxContext({
+        config: context.getRuntimeConfig(),
+        ...session,
+        workspaceDir: entry.spawnedCwd,
+        skillsSnapshot: entry.skillsSnapshot,
+        assertCurrent: assertPlacement,
+      });
+      if (!preparedSandbox?.enabled || preparedSandbox.workspaceSource !== "managed-worktree") {
+        preparedSandbox?.[Symbol.dispose]?.();
+        throw new Error(
+          "The PR workspace was saved, but its sandbox is not ready. Retry prepare_pr in this conversation.",
+        );
+      }
+      sandbox = preparedSandbox;
+      resources.defer(() => preparedSandbox[Symbol.dispose]?.());
+    }
+    using owner = await resolveLocalWorkspaceOwner({
+      ...session,
+      cfg: context.getRuntimeConfig(),
+      assertCurrent: assertPlacement,
+    });
+    if (!owner) {
+      throw new Error(
+        "PR preparation requires this conversation's existing local managed workspace.",
+      );
+    }
+    const assertWorkspace = () => {
+      assertPlacement();
+      owner.assertCurrent();
+    };
+    const { inspected, identity, assertCurrent } = await inspectCurrent(assertWorkspace);
+    const { url, host, number, base, head } = inspected.result;
+    if (!head) {
+      throw new Error("The original PR head is unavailable; saved work was preserved.");
+    }
+    return await prepareManagedPullRequestWorkspace({
+      owner,
+      storePath: loaded.storePath,
+      identity,
+      sandbox: sandbox!,
+      pullRequest: { url, host, number, base, head },
+      assertCurrent,
+      verifyCurrentPullRequest: async () => {
+        await assertExistingPullRequestWriteAccess({
+          pullRequest: inspected.result,
+          identity,
+          assertCurrent,
+        });
+      },
+      signal: options.signal,
+      conflictsResolved: params.conflictsResolved,
+      baseCommit: params.expectedHeadCommit,
+    });
+  };
+  let result: Awaited<ReturnType<typeof prepare>>;
+  if (adopting) {
+    if (!placements.withLocalWorkspaceReservation) {
+      throw new Error("Workspace coordination is unavailable; retry after Gateway startup.");
+    }
+    result = await placements.withLocalWorkspaceReservation(
+      { ...session, sessionId: loaded.entry.sessionId },
+      prepare,
+    );
+  } else {
+    result = await placements.withWorkspaceExclusion(loaded.entry.sessionId, prepare);
+  }
   assertSession();
   options.respond(true, result);
 }

@@ -15,9 +15,11 @@ function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
   );
 }
 
-function normalizeIdentityValue(value: string, maxLength = 160): string {
-  const trimmed = value.trim().replace(/[\r\n]+/g, " ");
-  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
+function normalizeIdentityValue(value: string): string {
+  return value
+    .trim()
+    .replace(/[\r\n]+/g, " ")
+    .slice(0, 160);
 }
 
 function usesKnownNativeOpenAIRoute(provider: string, baseUrl?: string): boolean {
