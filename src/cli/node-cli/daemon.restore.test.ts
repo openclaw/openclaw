@@ -16,6 +16,14 @@ const service = createMockGatewayService();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const observed = { revision: "observed", definition: "failed-node", stored: false };
 const workingDirectory = "/retained/node-workspace";
+const programArguments = ["/failed/node", "/failed/openclaw.mjs", "node", "run"];
+
+async function runNode(...args: string[]) {
+  const program = new Command().exitOverride();
+  program.configureOutput({ writeErr: () => {}, writeOut: () => {} });
+  registerNodeCli(program);
+  await program.parseAsync(["node", "openclaw", "node", ...args]);
+}
 
 vi.mock("../../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../runtime.js")>()),
@@ -44,11 +52,6 @@ vi.mock("../../daemon/runtime-paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-paths.js")>()),
   resolveSystemNodeInfo: async () => null,
 }));
-vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/systemd.js")>()),
-  isSystemdUserServiceAvailable: async () => false,
-}));
-
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
@@ -67,10 +70,7 @@ beforeEach(() => {
     stderr: "",
   }));
   vi.mocked(service.isLoaded).mockResolvedValue(true);
-  vi.mocked(service.readCommand).mockResolvedValue({
-    programArguments: ["/failed/node", "/failed/openclaw.mjs", "node", "run"],
-    workingDirectory,
-  });
+  vi.mocked(service.readCommand).mockResolvedValue({ programArguments, workingDirectory });
 });
 
 afterEach(() => {
@@ -88,10 +88,7 @@ it.each([
   async ({ runtime, pinned, changed, launcher }) => {
     const root = tempDirs.make("openclaw-node-restore-");
     const cli = {
-      executable: path.join(
-        root,
-        runtime === "node" && process.platform === "win32" ? "node.exe" : runtime,
-      ),
+      executable: path.join(root, runtime),
       entrypoint: path.join(root, "dist", "index.js"),
       sqliteLibrary: pinned ? path.join(root, "libsqlite3.dylib") : null,
     };
@@ -103,20 +100,11 @@ it.each([
       }
     }
     vi.stubEnv("OPENCLAW_SQLITE_LIBRARY", "/controller/libsqlite3.dylib");
-    const program = new Command().exitOverride();
-    program.configureOutput({ writeErr: () => {}, writeOut: () => {} });
-    registerNodeCli(program);
-    await program.parseAsync([
-      "node",
-      "openclaw",
-      "node",
+    await runNode(
       "install",
-      "--host",
-      "gateway.example",
-      "--port",
-      "18789",
-      "--runtime",
-      runtime,
+      "--host=gateway.example",
+      "--port=18789",
+      `--runtime=${runtime}`,
       "--force",
       "--json",
       "--auth-from-env",
@@ -128,7 +116,7 @@ it.each([
       "--restore-service-cli",
       JSON.stringify(cli),
       ...(pinned ? ["--runtime-path", cli.executable] : []),
-    ]);
+    );
     if (changed) {
       expect(service.install).not.toHaveBeenCalled();
       expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
@@ -142,13 +130,8 @@ it.each([
     expect(service.install).toHaveBeenCalledOnce();
     const installed = vi.mocked(service.install).mock.calls[0]?.[0];
     const runtimeArgs = runtime === "bun" ? ["--no-install"] : [];
-    expect(installed?.programArguments.slice(0, 4 + runtimeArgs.length)).toEqual([
-      cli.executable,
-      ...runtimeArgs,
-      launcherPath,
-      "node",
-      "run",
-    ]);
+    const prefix = [cli.executable, ...runtimeArgs, launcherPath, "node", "run"];
+    expect(installed?.programArguments.slice(0, prefix.length)).toEqual(prefix);
     expect(installed?.runtimePinUpdate).toEqual({
       expected: observed,
       pin: pinned ? { runtime, path: cli.executable } : undefined,
@@ -160,42 +143,30 @@ it.each([
   },
 );
 
-it.each([true, false])(
-  "observes node runtime custody only from an inspected definition (%s)",
-  async (known) => {
-    if (!known) {
+it.each(["known", "unknown", "migrationPending"] as const)(
+  "reports %s node runtime custody",
+  async (status) => {
+    if (status === "unknown") {
       vi.mocked(service.readCommand).mockRejectedValueOnce(new Error("inspection unavailable"));
     }
-    const program = new Command().exitOverride();
-    registerNodeCli(program);
-    await program.parseAsync(["node", "openclaw", "node", "status", "--json"]);
+    mocks.pending.mockReturnValue(status === "migrationPending");
+    await runNode("status", "--json");
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
       service: expect.objectContaining({
-        runtimeIntent: known ? { ...observed, status: "known" } : { status: "unknown" },
+        runtimeIntent: {
+          status,
+          ...(status === "known" ? observed : {}),
+          ...(status === "migrationPending" ? { nextStep: "run openclaw doctor" } : {}),
+        },
       }),
     });
-    if (known) {
+    if (status === "known") {
       expect(mocks.pin).toHaveBeenCalledWith(
         expect.objectContaining({ kind: "node" }),
-        expect.objectContaining({
-          programArguments: ["/failed/node", "/failed/openclaw.mjs", "node", "run"],
-        }),
+        expect.objectContaining({ programArguments }),
       );
     } else {
       expect(mocks.pin).not.toHaveBeenCalled();
     }
   },
 );
-
-it("reports pending node runtime migration without claiming unpinned custody", async () => {
-  mocks.pending.mockReturnValue(true);
-  const program = new Command().exitOverride();
-  registerNodeCli(program);
-  await program.parseAsync(["node", "openclaw", "node", "status", "--json"]);
-  expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
-    service: expect.objectContaining({
-      runtimeIntent: { status: "migrationPending", nextStep: "run openclaw doctor" },
-    }),
-  });
-  expect(mocks.pin).not.toHaveBeenCalled();
-});
