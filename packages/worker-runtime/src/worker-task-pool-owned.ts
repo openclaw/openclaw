@@ -10,12 +10,16 @@ import type {
   WorkerTaskResponse,
 } from "./worker-task-pool.types.js";
 
+// Bounds a never-settling async host request handler when the task carries no deadline.
+const DEFAULT_HOST_CALLBACK_TIMEOUT_MS = 300_000;
+
 export function createWorkerHostExchange<Input, Output>(
   task: Task<Input, Output>,
   request: unknown,
+  onHostCallbackTimeout: (task: Task<Input, Output>) => void,
 ): NonNullable<Task<Input, Output>["exchange"]> {
   const name = isRecord(request) ? (request.kind ?? request.type) : request;
-  return (task.exchange = {
+  const exchange = (task.exchange = {
     id: ++task.exchangeSequence,
     // Retain only a bounded operation label, never callback payloads or paths.
     name:
@@ -24,6 +28,31 @@ export function createWorkerHostExchange<Input, Output>(
     sent: false,
     onConsumed: undefined,
   });
+  if (
+    task.options.onRequest &&
+    task.options.hostTimeout !== "owner" &&
+    task.deadline === undefined
+  ) {
+    // A never-settling host handler must not strand its parked worker forever: with no
+    // task deadline nothing else bounds the host-callback phase of an interactive task.
+    const watchdogMs = task.options.hostCallbackTimeoutMs ?? DEFAULT_HOST_CALLBACK_TIMEOUT_MS;
+    if (watchdogMs > 0) {
+      clearTimeout(task.hostCallbackTimer);
+      task.hostCallbackTimer = setTimeout(() => onHostCallbackTimeout(task), watchdogMs);
+    }
+  }
+  return exchange;
+}
+
+/** Ends the host-callback phase: drops the watchdog and banks host wait time. */
+export function finishWorkerHostWait<Input, Output>(task: Task<Input, Output>): void {
+  clearTimeout(task.hostCallbackTimer);
+  task.hostCallbackTimer = undefined;
+  const startedAt = task.hostWaitStartedAt;
+  if (startedAt !== undefined) {
+    task.hostWaitStartedAt = undefined;
+    task.hostWaitMs += performance.now() - startedAt;
+  }
 }
 
 export function dispatchOwnedWorkerRequest<Input, Output>(

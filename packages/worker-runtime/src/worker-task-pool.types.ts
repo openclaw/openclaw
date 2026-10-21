@@ -68,6 +68,12 @@ export type WorkerTaskOptions<Input> = {
   timeoutMs?: number;
   /** Only callbacks with their own deadline may replace the pool clock during host waits. */
   hostTimeout?: "owner";
+  /**
+   * Bounds the host-callback phase of an interactive task when the task carries no
+   * overall deadline. A never-settling async request handler otherwise strands its
+   * parked worker (and any pinned SQLite read snapshot) indefinitely. `0` disables.
+   */
+  hostCallbackTimeoutMs?: number;
   signal?: AbortSignal;
   transferList?: (input: Input) => readonly Transferable[];
   onRequest?: (value: unknown, context: WorkerTaskRequestContext) => Promise<WorkerTaskResponse>;
@@ -132,6 +138,8 @@ export type Task<Input, Output> = Omit<PromiseWithResolvers<Output>, "resolve"> 
   input?: WorkerTaskInput<Input>;
   options: OwnedWorkerTaskOptions<Input>;
   timer?: NodeJS.Timeout;
+  /** Watchdog for the host-callback phase of deadline-less interactive tasks. */
+  hostCallbackTimer?: NodeJS.Timeout;
   deadline?: number;
   abort: () => void;
   done: boolean;

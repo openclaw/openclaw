@@ -30,6 +30,7 @@ import {
   closeOwnedWorkerTask,
   createWorkerHostExchange,
   dispatchOwnedWorkerRequest,
+  finishWorkerHostWait,
   joinOwnedWorkerTask,
   prepareWorkerTaskInput,
   expireWorkerTasks,
@@ -561,7 +562,9 @@ export class WorkerTaskPoolCore<Input, Output> {
       clearTimeout(task.timer);
       task.deadline = undefined;
     }
-    const exchange = createWorkerHostExchange(task, message.value);
+    const exchange = createWorkerHostExchange(task, message.value, (hostTask) =>
+      this.timeout(hostTask),
+    );
     task.hostWaitStartedAt = performance.now();
     this.dispatch();
     this.computeCapacity?.requestCheckpoints();
@@ -669,11 +672,7 @@ export class WorkerTaskPoolCore<Input, Output> {
   }
 
   private finishHostWait(task: Task<Input, Output>): void {
-    const startedAt = task.hostWaitStartedAt;
-    if (startedAt !== undefined) {
-      task.hostWaitStartedAt = undefined;
-      task.hostWaitMs += performance.now() - startedAt;
-    }
+    finishWorkerHostWait(task);
   }
 
   private finish(task: Task<Input, Output>, error?: Error, value?: Output, retire = false): void {

@@ -1,4 +1,5 @@
 import { WorkerTaskPoolCore, type WorkerRetirementReason } from "@openclaw/worker-runtime";
+import { registerSqliteWalBlockedReaderRecovery } from "./sqlite-wal-blocked-reader-recovery.js";
 import { createWorkerTaskHost } from "./worker-task-host.js";
 import type {
   WorkerTaskInput,
@@ -14,6 +15,7 @@ export type { WorkerTaskResponse } from "./worker-task-pool.types.js";
 /** Existing SDK surface; task custody remains an internal capability. */
 export class WorkerTaskPool<Input, Output> {
   private readonly core: WorkerTaskPoolCore<Input, Output>;
+  private readonly stopWalRecovery: () => void;
 
   constructor(options: WorkerTaskPoolOptions<Output>) {
     this.core = new WorkerTaskPoolCore<Input, Output>(
@@ -24,6 +26,11 @@ export class WorkerTaskPool<Input, Output> {
         getSnapshot: () => this.getSnapshot(),
       },
     );
+    // Sustained WAL blocks outlive healthy reader etiquette; rotating recycles pinned
+    // pooled connections so the next checkpoint can fold the journal.
+    this.stopWalRecovery = registerSqliteWalBlockedReaderRecovery(() => {
+      void this.core.rotate().catch(() => undefined);
+    });
   }
 
   run(input: WorkerTaskInput<Input>, options: WorkerTaskOptions<Input>): Promise<Output> {
@@ -47,6 +54,7 @@ export class WorkerTaskPool<Input, Output> {
   }
 
   close(error?: Error, reason?: WorkerRetirementReason): Promise<void> {
+    this.stopWalRecovery();
     return this.core.close(error, reason);
   }
 }
@@ -62,6 +70,9 @@ export function createOwnedWorkerTaskPool<Input, Output>(
     undefined,
     ownerOptions,
   );
+  const stopWalRecovery = registerSqliteWalBlockedReaderRecovery(() => {
+    void core.rotate().catch(() => undefined);
+  });
   return {
     run: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
       core.run(input, taskOptions),
@@ -74,6 +85,9 @@ export function createOwnedWorkerTaskPool<Input, Output>(
     startCloseResources: (key?: string) => core.startCloseResources(key),
     startRotate: () => core.startRotate(),
     getSnapshot: () => core.getSnapshot(),
-    close: (error?: Error) => core.close(error),
+    close: (error?: Error) => {
+      stopWalRecovery();
+      return core.close(error);
+    },
   };
 }
