@@ -18,6 +18,7 @@ import {
   dispatchInboundMessageMock,
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
+  onceMessage,
   rpcReq,
 } from "./test-helpers.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
@@ -79,6 +80,15 @@ export function installGatewayServerChatTestSuite(
   };
   return {
     request,
+    waitForEvent: (eventName: string, payload: Record<string, unknown>) =>
+      onceMessage(
+        socket(),
+        (event) =>
+          event.type === "event" &&
+          event.event === eventName &&
+          expect.objectContaining(payload).asymmetricMatch(event.payload),
+        8_000,
+      ),
     sendChat: (
       idempotencyKey: string,
       message = "hello",
@@ -127,8 +137,13 @@ export function installGatewayServerChatTestSuite(
       });
       return blockedReply.resolve;
     },
-    sendChatAndExpectStarted: (runId: string, message = "/context list") =>
-      request("chat.send", { sessionKey: "main", message, idempotencyKey: runId }, "started"),
+    sendChatAndExpectStarted: (runId: string, message = "/context list", target = socket()) =>
+      request(
+        "chat.send",
+        { sessionKey: "main", message, idempotencyKey: runId },
+        { runId, status: "started" },
+        target,
+      ),
     settleGatewayFixture,
     waitForAgentRunDrained: async (runId: string, target = socket()) => {
       await expectDefined(requestExecution, "request execution observer").waitForCompletion(runId);

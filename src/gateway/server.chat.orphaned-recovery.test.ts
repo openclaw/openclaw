@@ -193,19 +193,13 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         runId,
         status: retry ? "ok" : "started",
       });
-      if (!retry) {
-        await vi.waitFor(
-          async () => {
+      await vi.waitFor(
+        async () => {
+          if (!retry) {
             const outcome = await client.request("agent.wait", { runId, timeoutMs: 30_000 });
             expect(outcome, JSON.stringify(outcome)).toMatchObject({ status: "ok" });
-          },
-          { timeout: 30_000 },
-        );
-      }
-      await vi.waitFor(
-        () => {
-          const entry = loadSessionEntry(target);
-          expect(entry?.status).toBe("done");
+          }
+          expect(loadSessionEntry(target)?.status).toBe("done");
         },
         { timeout: 30_000 },
       );

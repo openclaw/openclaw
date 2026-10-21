@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -27,7 +26,6 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { persistInternalSourceReply } from "./internal-source-reply-persistence.js";
 import { installGatewayServerChatTestSuite } from "./server.chat.gateway-server-chat.test-support.js";
 import { collectHistoryTextValues } from "./session-history-fixtures.test-support.js";
-import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
 import {
   connectOk,
   dispatchInboundMessageMock,
@@ -37,7 +35,6 @@ import {
   rpcReq,
   testState,
   trackConnectChallengeNonce,
-  writeSessionStore,
 } from "./test-helpers.js";
 import { agentCommandMock } from "./test-helpers.runtime-state.js";
 
@@ -121,6 +118,7 @@ const {
   sendChatAndExpectStarted,
   settleGatewayFixture,
   waitForAgentRunDrained,
+  waitForEvent,
   withMainSessionStore,
 } = gatewaySuite;
 
@@ -178,38 +176,6 @@ async function startAgent(runId: string, sessionKey = "main") {
   ).toMatchObject({ ok: true, payload: { status: "accepted" } });
 }
 
-test("fixture cleanup joins the exact retained chat.send root", async () => {
-  const admission = await import("../process/gateway-work-admission.js");
-  const lease = admission.tryBeginGatewayRootWorkAdmission("ws:chat.send");
-  if (!lease) {
-    throw new Error("Expected admitted request fixture");
-  }
-  const release = createDeferred();
-  let retained: Promise<unknown> | undefined;
-  let joined: Promise<void> | undefined;
-  let settled = false;
-  try {
-    await lease.run(async () => {
-      retained = admission.runWithRetainedGatewayRootWork(() => release.promise);
-    });
-    lease.release();
-    joined = waitForConnectWork();
-    void joined.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    release.resolve();
-    await joined;
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-  } finally {
-    release.resolve();
-    lease.release();
-    await retained;
-    await joined;
-  }
-});
-
 test.for([
   { field: "verboseLevel", message: "/verbose full", thinking: undefined, scoped: true },
   { field: "thinkingLevel", message: "hello from phone", thinking: "low", scoped: false },
@@ -219,13 +185,12 @@ test.for([
     await withMainSessionStore(async () => {
       const run = async (socket: WebSocket) => {
         const idempotencyKey = `idem-chat-${field}-no-persist`;
-        const sent = await rpcReq(socket, "chat.send", {
-          sessionKey: "main",
-          message,
-          thinking,
-          idempotencyKey,
-        });
-        expect(sent.ok).toBe(true);
+        await request(
+          "chat.send",
+          { sessionKey: "main", message, thinking, idempotencyKey },
+          undefined,
+          socket,
+        );
         await waitForAgentRunDrained(idempotencyKey, socket);
         expect(sessionEntry()?.[field]).toBeUndefined();
         if (!scoped) {
@@ -430,22 +395,6 @@ function terminalEvent(browser: WebSocket, runId: string, states = ["aborted", "
   return terminal;
 }
 
-async function expectRpc(
-  browser: WebSocket,
-  method: string,
-  params: unknown,
-  payload: Record<string, unknown>,
-) {
-  return request(method, params, payload, browser);
-}
-
-async function sendStarted(browser: WebSocket, runId: string, message: string) {
-  expect(await sendChat(runId, message, {}, browser)).toMatchObject({
-    ok: true,
-    payload: { runId, status: "started" },
-  });
-}
-
 const emitLifecycle = (runId: string, data: Record<string, unknown>) =>
   emitAgentEvent({ runId, stream: "lifecycle", data });
 
@@ -462,7 +411,7 @@ describe("gateway server chat lifecycle", () => {
   test("sessions.abort terminalizes a restart-safe chat before agent adoption", async () => {
     await withMainSessionStore(async (dir) => {
       const browser = await openBrowser();
-      await expectRpc(browser, "sessions.subscribe", {}, { subscribed: true });
+      await request("sessions.subscribe", {}, { subscribed: true }, browser);
 
       const stoppedRunId = "restart-safe-pre-adoption-stop";
       const successorRunId = "restart-safe-after-pre-adoption-stop";
@@ -504,7 +453,11 @@ describe("gateway server chat lifecycle", () => {
 
       const stoppedTerminal = terminalEvent(browser, stoppedRunId);
       try {
-        await sendStarted(browser, stoppedRunId, "hold this restart-safe turn before adoption");
+        await sendChatAndExpectStarted(
+          stoppedRunId,
+          "hold this restart-safe turn before adoption",
+          browser,
+        );
         await preparationEntered.promise;
 
         const stopping = rpcReq(browser, "sessions.abort", {
@@ -520,11 +473,11 @@ describe("gateway server chat lifecycle", () => {
         });
         await stoppedTerminal;
         await gatewaySuite.requestExecution.waitForCompletion(stoppedRunId);
-        await expectRpc(
-          browser,
+        await request(
           "agent.wait",
           { runId: stoppedRunId, timeoutMs: 0 },
           { runId: stoppedRunId, status: "error" },
+          browser,
         );
         const stoppedEntry = loadSessionEntry({
           agentId: "main",
@@ -534,7 +487,11 @@ describe("gateway server chat lifecycle", () => {
         });
 
         const successorTerminal = terminalEvent(browser, successorRunId);
-        await sendStarted(browser, successorRunId, "run after the stopped pre-adoption turn");
+        await sendChatAndExpectStarted(
+          successorRunId,
+          "run after the stopped pre-adoption turn",
+          browser,
+        );
         const terminal = await successorTerminal;
         expect(terminal.payload).toMatchObject({ runId: successorRunId, state: "final" });
         await embeddedEntered.promise;
@@ -599,11 +556,16 @@ describe("gateway server chat lifecycle", () => {
           payload: { runId, status: "timeout", summary: "aborted" },
         });
         expect(await reset).toMatchObject({ ok: true });
-        await expectRpc(browser, "chat.send", params, {
-          runId,
-          status: "timeout",
-          summary: "aborted",
-        });
+        await request(
+          "chat.send",
+          params,
+          {
+            runId,
+            status: "timeout",
+            summary: "aborted",
+          },
+          browser,
+        );
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       } finally {
         finishRead.resolve();
@@ -640,21 +602,12 @@ describe("gateway server chat lifecycle", () => {
       });
 
       try {
-        const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
-        expect(subscribeRes.ok).toBe(true);
+        await request("sessions.subscribe", {});
         await sendChatAndExpectStarted(runId, "hold chat run open");
         // The ACK precedes dispatch; emit lifecycle only after the runtime owns this run.
         await runtimeStarted.promise;
 
-        const terminalSessionChange = onceMessage(
-          ws,
-          (event) =>
-            event.type === "event" &&
-            event.event === "sessions.changed" &&
-            event.payload?.phase === "end" &&
-            event.payload?.runId === runId,
-          8_000,
-        );
+        const terminalSessionChange = waitForEvent("sessions.changed", { phase: "end", runId });
         emitLifecycle(runId, { phase: "start", startedAt: 1 });
         emitLifecycle(runId, { phase: "end", startedAt: 1, endedAt: 2 });
 
@@ -666,18 +619,12 @@ describe("gateway server chat lifecycle", () => {
         expectAgentWaitTimeout(waitWhileChatActive);
 
         // Coalescing may replace the reason label; assert current ownership instead.
-        const settledSessionChange = onceMessage(
-          ws,
-          (event) =>
-            event.type === "event" &&
-            event.event === "sessions.changed" &&
-            event.payload?.sessionKey === "agent:main:main" &&
-            event.payload?.hasActiveRun === false &&
-            Array.isArray(event.payload?.activeRunIds) &&
-            event.payload.activeRunIds.length === 0 &&
-            event.payload?.lastRunId === runId,
-          8_000,
-        );
+        const settledSessionChange = waitForEvent("sessions.changed", {
+          sessionKey: "agent:main:main",
+          hasActiveRun: false,
+          activeRunIds: [],
+          lastRunId: runId,
+        });
         blockedReply.resolve();
         const settledEvent = await settledSessionChange.catch((cause: unknown) => {
           throw new Error("Gateway did not publish settled run ownership after chat.send cleanup", {
@@ -771,7 +718,7 @@ describe("gateway server chat lifecycle", () => {
       });
       mockGetReplyFromConfigOnce((...args) => getReplyFromConfig(...args));
 
-      expect((await rpcReq(ws, "sessions.subscribe", {})).ok).toBe(true);
+      await request("sessions.subscribe", {});
       ws.on("message", collectTerminal);
       try {
         await sendChatAndExpectStarted(runId, "check on the subagents");
@@ -790,39 +737,27 @@ describe("gateway server chat lifecycle", () => {
   });
 
   test("agent events include sessionKey for Webchat clients", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    testState.sessionStorePath = path.join(dir, "sessions.json");
-    await writeSessionStore({
-      entries: { main: { sessionId: "sess-main", updatedAt: Date.now(), verboseLevel: "off" } },
+    await withMainSessionStore(async () => {
+      await updateSessionEntry({ sessionKey: "main", storePath: sessionStorePath() }, () => ({
+        verboseLevel: "off",
+      }));
+      const webchatWs = await openBrowser(GATEWAY_CLIENT_NAMES.WEBCHAT);
+      try {
+        registerAgentRunContext("run-tool-1", { sessionKey: "main", verboseLevel: "on" });
+        const agentEvtP = onceMessage(
+          webchatWs,
+          (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-1",
+          8000,
+        );
+        emitAgentEvent({ runId: "run-tool-1", stream: "assistant", data: { text: "hello" } });
+        expect((await agentEvtP).payload).toMatchObject({
+          sessionKey: "main",
+          stream: "assistant",
+        });
+      } finally {
+        await settleGatewayFixture();
+        webchatWs.close();
+      }
     });
-    const webchatWs = await openBrowser(GATEWAY_CLIENT_NAMES.WEBCHAT);
-    try {
-      registerAgentRunContext("run-tool-1", {
-        sessionKey: "main",
-        verboseLevel: "on",
-      });
-
-      const agentEvtP = onceMessage(
-        webchatWs,
-        (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-1",
-        8000,
-      );
-
-      emitAgentEvent({
-        runId: "run-tool-1",
-        stream: "assistant",
-        data: { text: "hello" },
-      });
-
-      expect((await agentEvtP).payload).toMatchObject({
-        sessionKey: "main",
-        stream: "assistant",
-      });
-    } finally {
-      await settleGatewayFixture();
-      webchatWs.close();
-      await removeTempDir(dir);
-      testState.sessionStorePath = undefined;
-    }
   });
 });

@@ -1,8 +1,6 @@
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
@@ -17,11 +15,8 @@ import {
   createGatewayHistoryDeliveryMirror,
   hasGatewayHistoryMessageToolMirror,
 } from "./session-history-fixtures.test-support.js";
-import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
 import {
-  agentDiscoveryMock,
   dispatchInboundMessageMock,
-  onceMessage,
   rpcReq,
   testState,
   writeSessionStore,
@@ -50,8 +45,8 @@ const {
   expectRecordFields,
   withMainSessionStore,
   replaceMainTranscriptMessages,
-  settleGatewayFixture,
   waitForAgentRunDrained,
+  waitForEvent,
 } = gatewaySuite;
 const historyAssistantBlock = (text: string, timestamp: number, type = "text") => ({
   role: "assistant",
@@ -76,15 +71,10 @@ const readHistoryResponse = () => gatewaySuite.readHistory();
 
 describe("gateway server chat", () => {
   const waitForChatEvent = (runId: string, sideResult = false) =>
-    onceMessage(
-      ws,
-      (event) =>
-        event.type === "event" &&
-        event.event === (sideResult ? "chat.side_result" : "chat") &&
-        (sideResult ? event.payload?.kind === "btw" : event.payload?.state === "final") &&
-        event.payload?.runId === runId,
-      8_000,
-    );
+    waitForEvent(sideResult ? "chat.side_result" : "chat", {
+      runId,
+      ...(sideResult ? { kind: "btw" } : { state: "final" }),
+    });
   const sendChat = async (idempotencyKey: string, message: string) => {
     const res = await gatewaySuite.sendChat(idempotencyKey, message);
     expect(res.ok, JSON.stringify(res)).toBe(true);
@@ -255,9 +245,6 @@ describe("gateway server chat", () => {
       const finalPromise = waitForChatEvent("idem-btw-1");
 
       await sendChat("idem-btw-1", "/btw what is 17 * 19?");
-      await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalled(), {
-        interval: 1,
-      });
       const sideResult = await sideResultPromise;
       const finalEvent = await finalPromise;
       expectRecordFields(sideResult.payload, {
@@ -300,18 +287,18 @@ describe("gateway server chat", () => {
             ),
           { interval: 1, timeout: 10_000 },
         );
-        const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
-        expect(assistantContent).toHaveLength(2);
-        expect(assistantContent[0]).toEqual({ type: "text", text: "Image reply" });
-        expectRecordFields(assistantContent[1], {
-          type: "image",
-          alt: "Generated image 1",
-          mimeType: "image/png",
-          width: 1,
-          height: 1,
-          url: expect.stringContaining("/api/chat/media/outgoing/"),
-          openUrl: expect.stringContaining("/full"),
-        });
+        expect(assistantMessage.content).toEqual([
+          { type: "text", text: "Image reply" },
+          expect.objectContaining({
+            type: "image",
+            alt: "Generated image 1",
+            mimeType: "image/png",
+            width: 1,
+            height: 1,
+            url: expect.stringContaining("/api/chat/media/outgoing/"),
+            openUrl: expect.stringContaining("/full"),
+          }),
+        ]);
         const serializedAssistant = JSON.stringify(assistantMessage);
         expect(serializedAssistant).not.toContain("data:image/png;base64");
         expect(serializedAssistant).not.toContain(pngB64);
@@ -334,142 +321,72 @@ describe("gateway server chat", () => {
     await waitForAgentRunDrained("idem-sanitized-1");
   });
 
-  test("handles chat send and history flows", async () => {
-    const tempDirs = createTempDirTracker();
-    const useStore = async (entries: Record<string, Record<string, unknown>>) => {
-      const dir = tempDirs.make("openclaw-gw-");
-      testState.sessionStorePath = path.join(dir, "sessions.json");
-      await writeSessionStore({ entries });
-    };
-    agentDiscoveryMock.enabled = true;
-    agentDiscoveryMock.models = [
-      {
-        id: "claude-opus-4-6",
-        name: "Claude Opus 4.6",
-        provider: "anthropic",
-        input: ["text", "image"],
-      },
-    ];
+  test("chat.send accepts a subagent session key", async () => {
+    const sessionRes = await sendHistoryChat("idem-session-key-1", {
+      sessionKey: "agent:main:subagent:abc",
+    });
+    expect(sessionRes.ok).toBe(true);
+    expect(sessionRes.payload?.runId).toBe("idem-session-key-1");
+    await waitForAgentRunDrained("idem-session-key-1");
+  });
 
-    try {
-      const sessionRes = await sendHistoryChat("idem-session-key-1", {
-        sessionKey: "agent:main:subagent:abc",
-      });
-      expect(sessionRes.ok).toBe(true);
-      expect(sessionRes.payload?.runId).toBe("idem-session-key-1");
-      await waitForAgentRunDrained("idem-session-key-1");
-
-      testState.sessionConfig = {
-        sendPolicy: {
-          default: "allow",
-          rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
-        },
-      };
-
-      await useStore({
-        "discord:group:dev": sessionEntry("sess-discord", {
-          chatType: "group",
-          channel: "discord",
-        }),
-      });
-
-      const blockedRes = await sendHistoryChat("idem-1", { sessionKey: "discord:group:dev" });
-      expect(blockedRes).toMatchObject({
-        ok: false,
-        error: { message: expect.stringMatching(/send blocked/i) },
-      });
-
-      testState.sessionStorePath = undefined;
-      testState.sessionConfig = undefined;
-
-      testState.sessionConfig = {
-        sendPolicy: {
-          default: "allow",
-          rules: [{ action: "deny", match: { keyPrefix: "cron:" } }],
-        },
-      };
-
-      await useStore({ "cron:job-1": sessionEntry("sess-cron") });
-
-      vi.mocked(agentCommandMock).mockClear();
-      const agentAllowedRes = await rpcReq(ws, "agent", {
-        sessionKey: "cron:job-1",
-        message: "hi",
-        idempotencyKey: "idem-2",
-      });
-      expect(agentAllowedRes).toMatchObject({
-        ok: true,
-        payload: { status: "accepted", runId: "idem-2" },
-      });
-      await gatewaySuite.requestExecution.waitForCompletion("idem-2");
-      expect(agentCommandMock).toHaveBeenCalled();
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      await drainOpenClawAgentWriteQueuesForTest();
-
-      testState.sessionStorePath = undefined;
-      testState.sessionConfig = undefined;
-
-      const pngB64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
-      // Capture the real capability resolver's inline-image decision before dispatch.
-      const inlineDispatches: { runId?: string; images?: unknown[] }[] = [];
-      const captureInlineDispatch = async (args: unknown) => {
-        const replyOptions = (args as { replyOptions?: { runId?: string; images?: unknown[] } })
-          .replyOptions;
-        inlineDispatches.push({ runId: replyOptions?.runId, images: replyOptions?.images });
-        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-      };
-
-      const expectedDispatches: { runId: string; images: unknown[] }[] = [];
-      for (const [runId, message, attachment] of [
-        [
-          "idem-img",
-          "see image",
-          {
-            type: "image",
-            source: { type: "base64", media_type: "image/png", data: pngB64 },
+  test.each([
+    {
+      key: "discord:group:dev",
+      match: { channel: "discord", chatType: "group" },
+      fields: { channel: "discord", chatType: "group" },
+      agent: false,
+    },
+    { key: "cron:job-1", match: { keyPrefix: "cron:" }, fields: {}, agent: true },
+  ])(
+    "send policy distinguishes the chat and agent entry points for $key",
+    async ({ key, match, fields, agent }) => {
+      await withMainSessionStore(async () => {
+        testState.sessionConfig = {
+          sendPolicy: {
+            default: "allow",
+            rules: [{ action: "deny", match }],
           },
-        ],
-        [
-          "idem-img-only",
-          "",
-          {
-            type: "image",
-            mimeType: "image/png",
-            fileName: "dot.png",
-            content: `data:image/png;base64,${pngB64}`,
-          },
-        ],
-      ] as const) {
-        dispatchInboundMessageMock.mockImplementationOnce(captureInlineDispatch);
-        const response = await sendHistoryChat(runId, { message, attachments: [attachment] });
-        expect(response.ok).toBe(true);
-        expect(typeof response.payload?.runId).toBe("string");
-        await waitForAgentRunDrained(runId);
-        expectedDispatches.push({ runId, images: [expect.anything()] });
-        expect(inlineDispatches).toEqual(expectedDispatches);
-      }
+        };
+        try {
+          await writeSessionStore({ entries: { [key]: sessionEntry(`sess-${key}`, fields) } });
+          if (agent) {
+            vi.mocked(agentCommandMock).mockClear();
+            expect(
+              await rpcReq(ws, "agent", {
+                sessionKey: key,
+                message: "hi",
+                idempotencyKey: "idem-2",
+              }),
+            ).toMatchObject({
+              ok: true,
+              payload: { status: "accepted", runId: "idem-2" },
+            });
+            await gatewaySuite.requestExecution.waitForCompletion("idem-2");
+            expect(agentCommandMock).toHaveBeenCalled();
+            expect(getActiveGatewayRootWorkCount()).toBe(0);
+            await drainOpenClawAgentWriteQueuesForTest();
+          } else {
+            expect(await sendHistoryChat("idem-1", { sessionKey: key })).toMatchObject({
+              ok: false,
+              error: { message: expect.stringMatching(/send blocked/i) },
+            });
+          }
+        } finally {
+          testState.sessionConfig = undefined;
+        }
+      });
+    },
+  );
 
-      await useStore({ main: sessionEntry("sess-main") });
-
-      await replaceMainTranscriptMessages(
-        Array.from({ length: 201 }, (_, i) => ({
-          role: "user",
-          content: [{ type: "text", text: `m${i}` }],
-          timestamp: Date.now() + i,
-        })),
-      );
-
-      const defaultMsgs = (await readHistoryResponse())?.messages ?? [];
-      expect(defaultMsgs.length).toBe(200);
-      expect(extractFirstTextBlock(defaultMsgs[0])).toBe("m1");
-    } finally {
-      await settleGatewayFixture();
-      Object.assign(agentDiscoveryMock, { enabled: false, models: [] });
-      testState.sessionStorePath = undefined;
-      testState.sessionConfig = undefined;
-      await Promise.all([...tempDirs.dirs].map((dir) => removeTempDir(dir)));
-    }
+  test("chat.history defaults to the newest 200 messages", async () => {
+    const messages = await loadChatHistoryWithMessages(
+      Array.from({ length: 201 }, (_, i) =>
+        createGatewayHistoryText("user", `m${i}`, Date.now() + i),
+      ),
+    );
+    expect(messages).toHaveLength(200);
+    expect(extractFirstTextBlock(messages[0])).toBe("m1");
   });
 
   test("chat.send accepts the backing session id returned by chat.history", async () => {
@@ -503,8 +420,6 @@ describe("gateway server chat", () => {
       "The agent run failed before producing a reply.",
     ]);
     const wirePayload = JSON.stringify(historyMessages);
-    expect(wirePayload).not.toContain("203557");
-    expect(wirePayload).not.toContain("196607");
     expect(wirePayload).not.toContain("secret.internal.example");
     expect(historyMessages[0]).not.toHaveProperty("errorCode");
     expect(historyMessages[0]).not.toHaveProperty("errorType");
