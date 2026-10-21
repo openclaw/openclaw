@@ -24,7 +24,11 @@ const invalidSnapshot = {
   ],
   warnings: [],
 };
-const runtime = () => ({ ...createTestRuntime(), writeJson: vi.fn<(value: unknown) => void>() });
+const runtime = () => ({
+  ...createTestRuntime(),
+  writeStdout: vi.fn(),
+  writeJson: vi.fn<(value: unknown) => void>(),
+});
 async function withJsonOutput<T>(run: () => Promise<T>) {
   return withConsoleLogsRoutedToStderrForJson(
     ["node", "openclaw", "agents", "list", "--json"],
