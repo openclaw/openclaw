@@ -75,14 +75,10 @@ describe("canvas documents", () => {
   });
 
   it("materializes inline html bundles as index documents", async () => {
-    const document = await createHtmlDocument(
-      "<!doctype html><html><head><style>.demo{color:red}</style></head><body><div class='demo'>Front</div></body></html>",
-      { title: "Preview" },
-    );
-
+    const html = "<style>.demo{color:red}</style><div class='demo'>Front</div>";
+    const document = await createHtmlDocument(html, { title: "Preview" });
     const indexHtml = await readFile(documentPath(document.id, "index.html"), "utf8");
-    expect(indexHtml).toContain("<div class='demo'>Front</div>");
-    expect(indexHtml).toContain("<style>.demo{color:red}</style>");
+    expect(indexHtml).toBe(html);
     expect(document.title).toBe("Preview");
     expect(document.entryUrl).toBe(`/__openclaw__/canvas/documents/${document.id}/index.html`);
     await expect(readHtml(document.id)).resolves.toEqual({ html: indexHtml });
@@ -103,8 +99,7 @@ describe("canvas documents", () => {
     const first = await createHtmlDocument("<div>first</div>", { id: "status-card" });
     const second = await createHtmlDocument("<div>second</div>", { id: "status-card" });
 
-    expect(first.id).toBe("status-card");
-    expect(second.id).toBe("status-card");
+    expect([first.id, second.id]).toEqual(["status-card", "status-card"]);
     const indexHtml = await readFile(documentPath(second.id, "index.html"), "utf8");
     expect(indexHtml).toContain("second");
     expect(indexHtml).not.toContain("first");
