@@ -341,8 +341,8 @@ describe("AgentsPage gateway lifecycle", () => {
       refreshPanel(page);
       await waitForFast(() => expect(page.read().overview.modelCatalog[0]?.id).toBe("old"));
       emitCatalogChanged(currentGateway);
-      await waitForFast(() =>
-        expect(page.read().readData().chatModelCatalogStatus.error).toBe(
+      await waitForFast(async () =>
+        expect(page.read().readData().chatModelCatalogRead).rejects.toThrow(
           hasRows
             ? "Some models could not be refreshed. Open Models to try again."
             : "Models unavailable",
@@ -351,10 +351,9 @@ describe("AgentsPage gateway lifecycle", () => {
       expect(page.read().overview.modelCatalog).toEqual(models);
 
       page.read().overview.onModelCatalogOpen?.();
-      await waitForFast(() =>
-        expect(page.read().readData().chatModelCatalogStatus.stale).toBe(false),
+      await waitForFast(async () =>
+        expect(page.read().readData().chatModelCatalogRead).resolves.toBeUndefined(),
       );
-      expect(page.read().readData().chatModelCatalogStatus.error).toBeNull();
       expect(page.read().overview.modelCatalog).toEqual([]);
       expect(request.mock.calls.map(([method, params]) => ({ method, params }))).toEqual(
         Array.from({ length: 3 }, () => ({
@@ -506,15 +505,17 @@ describe("AgentsPage gateway lifecycle", () => {
     const { page } = mountPage({ request } as unknown as GatewayBrowserClient, "overview");
 
     refreshPanel(page);
-    await waitForFast(() => {
-      expect(page.read().readData().chatModelCatalogStatus.error).toBe("model catalog unavailable");
+    await waitForFast(async () => {
+      await expect(page.read().readData().chatModelCatalogRead).rejects.toThrow(
+        "model catalog unavailable",
+      );
     });
     expect(page.read().overview.modelCatalog).toEqual([]);
 
     refreshPanel(page);
     await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(models));
 
-    expect(page.read().readData().chatModelCatalogStatus.error).toBeNull();
+    await expect(page.read().readData().chatModelCatalogRead).resolves.toBeUndefined();
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {
       view: "configured",
