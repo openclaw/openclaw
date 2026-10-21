@@ -61,7 +61,8 @@ vi.mock("../../infra/update-check.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-check.js")>()),
   resolveNpmChannelTag: async () => ({ tag: "latest", version: "2027.1.0" }),
 }));
-vi.mock("../../infra/update-check-package-target.js", () => ({
+vi.mock("../../infra/update-check-package-target.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-check-package-target.js")>()),
   fetchNpmPackageTargetStatus: async () => ({ version: "2027.1.0", nodeEngine: ">=26.12.1" }),
 }));
 vi.mock("../../../node-sqlite.mjs", async (original) => ({

@@ -3866,7 +3866,6 @@
 ["src/cli/update-cli/update-command-service.integration.test.ts","./update-command-service-drain.js","cb07b7ddfbe7b66def81ca8c4ab100e8cb569fd4031b6146c052c0d19ee04739",1]
 ["src/cli/update-cli/update-command-service.test.ts","./update-command-config-snapshot.js","b10b03a833c7fb630ea6c16bf70989d058a15385c31faa3f65539873440029dc",1]
 ["src/cli/update-cli/update-command-target.n1-prefix.test.ts","../../infra/disk-space.js","bb2f75d5228d8eeada2a089491f95b42997ff7371e8fee6bef98565335486736",1]
-["src/cli/update-cli/update-command-target.n1-prefix.test.ts","../../infra/update-check-package-target.js","097d37976bac9a9462482c1c658931edc5af88a31170f5267ffb958bf9d942d7",1]
 ["src/cli/update-cli/update-command-target.n1-prefix.test.ts","./update-command-config.js","47362ba6489aa4e7f5ccbcb42714176f8a7c76c8ebeedf6bf1c5c661d3b92644",1]
 ["src/cli/update-cli/update-command-target.n1-prefix.test.ts","./update-command-node-runtime-resolution.js","639056565d3e5757f5dcb6bfe692d69e68d832a9aa86794822f02e180b4dbfec",1]
 ["src/cli/update-cli/update-command-target.n1-prefix.test.ts","./update-command-package-destination.js","aed8d065f8308e62c7eabb8ba86502696be6532290099806eec73d3b5f018981",1]
