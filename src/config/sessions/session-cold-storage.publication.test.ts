@@ -123,7 +123,6 @@ const result: SessionColdMutationResult = {
   sessionKey: "agent:main:committed-window",
 };
 const changes = vi.fn();
-const factChanges = vi.fn();
 let subscriptions: (() => void)[];
 
 beforeEach(() => {
@@ -132,7 +131,7 @@ beforeEach(() => {
   observed.native.mockImplementation(() => {
     throw new Error("Restore publication executed SQLite on the calling thread");
   });
-  subscriptions = [sessionChanges.subscribe(changes), sessionChanges.subscribeFacts(factChanges)];
+  subscriptions = [sessionChanges.subscribe(changes)];
 });
 afterEach(() => {
   subscriptions.forEach((unsubscribe) => unsubscribe());
@@ -211,35 +210,13 @@ it("cancels a queued restoration without releasing its admitted predecessor", as
     controller.abort(expired);
     expect(await withinTest(outcome, signal)).toEqual([{ status: "rejected", reason: expired }]);
     expect(observed.worker).toHaveBeenCalledOnce();
+    expect(changes).not.toHaveBeenCalled();
     expect(observed.release).not.toHaveBeenCalled();
   } finally {
     finished.resolve([{ result }]);
     await Promise.allSettled([first, second]);
   }
   expect(observed.worker).toHaveBeenCalledOnce();
-});
-
-it("publishes the committed key exactly once after the worker settles, without host SQLite", async () => {
-  const { entered, finished } = holdWorker();
-  const pending = restore();
-  try {
-    await awaitGateBeforeSettlement(entered.promise, pending, "Restore worker was not dispatched");
-    expect(changes).not.toHaveBeenCalled();
-    expect(observed.release).not.toHaveBeenCalled();
-  } finally {
-    finished.resolve([{ result }]);
-    await pending;
-  }
-  const change = {
-    storePath: preparation.target.path,
-    sessionKey: "agent:main:committed-window",
-    scope: "transcript",
-  };
-  expect(changes).toHaveBeenCalledExactlyOnceWith(change);
-  expect(factChanges).toHaveBeenCalledExactlyOnceWith({
-    ...change,
-    facts: { kind: "unchanged" },
-  });
 });
 
 it.each(["cleanup incomplete", "database", "caller", "request"])(

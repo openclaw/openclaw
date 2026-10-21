@@ -680,6 +680,8 @@ describe("cold transcript storage workers", () => {
         (inspection ??= openNodeSqliteDatabase(fixture.options.path, { readOnly: true }));
       const changes = vi.fn(() => Boolean(readSessionColdTranscript(readOnly(), historicalId)));
       const unsubscribe = sessionChanges.subscribe(changes);
+      const facts = vi.fn();
+      const unsubscribeFacts = sessionChanges.subscribeFacts(facts);
       try {
         await restoreSessionColdTranscript(fixture.scope);
         expect(fixture.snapshot(readOnly())).toEqual(fixture.original);
@@ -714,14 +716,17 @@ describe("cold transcript storage workers", () => {
         expect(readOnly().prepare("PRAGMA foreign_key_check").all()).toEqual([]);
         await restoreSessionColdTranscript(fixture.scope);
         expect(fixture.snapshot(readOnly())).toEqual(fixture.original);
-        expect(changes).toHaveBeenCalledExactlyOnceWith({
+        const change = {
           storePath: fixture.scope.storePath,
           sessionKey: fixture.scope.sessionKey,
           scope: "transcript",
-        });
+        };
+        expect(changes).toHaveBeenCalledExactlyOnceWith(change);
+        expect(facts).toHaveBeenCalledExactlyOnceWith({ ...change, facts: { kind: "unchanged" } });
         expect(changes.mock.results[0]?.value).toBe(false);
       } finally {
         unsubscribe();
+        unsubscribeFacts();
         inspection?.close();
       }
     },
