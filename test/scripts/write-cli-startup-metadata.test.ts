@@ -1278,19 +1278,10 @@ finally:
     writeFileSync(outputPath, '{"rootHelpText":"old help"}\n');
     fs.chmodSync(outputPath, 0o640);
     fs.chmodSync(distDir, 0o750);
-    mkdirSync(path.join(extensionsDir, "matrix"), { recursive: true });
-    writeFileSync(
-      path.join(extensionsDir, "matrix", "package.json"),
-      JSON.stringify({
-        openclaw: {
-          channel: {
-            id: "matrix",
-            order: 120,
-            label: "Matrix",
-          },
-        },
-      }),
-      "utf8",
+    writeFixtureFile(
+      extensionsDir,
+      "matrix/package.json",
+      JSON.stringify({ openclaw: { channel: { id: "matrix", order: 120, label: "Matrix" } } }),
     );
 
     await testing.writeCliStartupMetadata({
@@ -1507,23 +1498,15 @@ finally:
     await writeMetadata();
     expect(nodesRenderCount).toBe(2);
 
-    writeFixtureFile(
-      tempRoot,
-      "extensions/canvas/src/cli.ts",
-      "export const canvasCliHelp = 'canvas changed help';\n",
-    );
-
-    await writeMetadata();
-
-    expect(nodesRenderCount).toBe(3);
-    expect(readMetadata(outputPath).nodesHelpText).toContain("openclaw nodes 3");
-
-    writeFixtureFile(tempRoot, "src/plugins/cli.ts", "export const pluginCliHelp = 'changed';\n");
-
-    await writeMetadata();
-
-    expect(nodesRenderCount).toBe(4);
-    expect(readMetadata(outputPath).nodesHelpText).toContain("openclaw nodes 4");
+    for (const [file, contents, expectedCount] of [
+      ["extensions/canvas/src/cli.ts", "export const canvasCliHelp = 'canvas changed help';\n", 3],
+      ["src/plugins/cli.ts", "export const pluginCliHelp = 'changed';\n", 4],
+    ] as const) {
+      writeFixtureFile(tempRoot, file, contents);
+      await writeMetadata();
+      expect(nodesRenderCount).toBe(expectedCount);
+      expect(readMetadata(outputPath).nodesHelpText).toContain(`openclaw nodes ${expectedCount}`);
+    }
   });
 
   it("regenerates help when build version or commit changes", async () => {

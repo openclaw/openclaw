@@ -39,10 +39,6 @@ function collectBuildSources(params?: Parameters<typeof collectBundledPluginBuil
   );
 }
 
-function expectNoPrefixMatches(values: string[], prefix: string) {
-  expect(values.filter((value) => value.startsWith(prefix))).toEqual([]);
-}
-
 describe("bundled plugin build entries", () => {
   it("preserves tracked entry names and ignores deleted or untracked plugin inputs", () => {
     const cwd = tempDirs.make("openclaw-tracked-plugin-entries-");
@@ -310,10 +306,9 @@ describe("bundled plugin build entries", () => {
     );
     expect(reorderedSources).toEqual(sources);
     expect(artifacts).toEqual(baselineArtifacts);
-    expectNoPrefixMatches(artifacts, "dist/extensions/clickclack/");
-    expectNoPrefixMatches(artifacts, "dist/extensions/msteams/");
-    expectNoPrefixMatches(artifacts, "dist/extensions/slack/");
-    expectNoPrefixMatches(artifacts, "dist/extensions/whatsapp/");
+    for (const id of ["clickclack", "msteams", "slack", "whatsapp"]) {
+      expect(artifacts.filter((entry) => entry.startsWith(`dist/extensions/${id}/`))).toEqual([]);
+    }
   });
 
   it("sorts Docker-selected build entries without git metadata", () => {
@@ -321,23 +316,12 @@ describe("bundled plugin build entries", () => {
     const extensionsDir = path.join(repoDir, "extensions");
 
     for (const pluginId of ["clickclack", "msteams", "slack"]) {
-      const pluginDir = path.join(extensionsDir, pluginId);
-      fs.mkdirSync(pluginDir, { recursive: true });
-      fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {};\n");
-      fs.writeFileSync(
-        path.join(pluginDir, "openclaw.plugin.json"),
-        `${JSON.stringify({ id: pluginId })}\n`,
-      );
-      fs.writeFileSync(
-        path.join(pluginDir, "package.json"),
-        `${JSON.stringify({
-          name: `@openclaw/${pluginId}`,
-          openclaw: {
-            extensions: ["./index.ts"],
-            build: { bundledDist: false },
-          },
-        })}\n`,
-      );
+      write(repoDir, `extensions/${pluginId}/index.ts`, "export default {};\n");
+      write(repoDir, `extensions/${pluginId}/openclaw.plugin.json`, { id: pluginId });
+      write(repoDir, `extensions/${pluginId}/package.json`, {
+        name: `@openclaw/${pluginId}`,
+        openclaw: { extensions: ["./index.ts"], build: { bundledDist: false } },
+      });
     }
 
     const unsortedDirents = fs.readdirSync(extensionsDir, { withFileTypes: true }).toReversed();

@@ -102,10 +102,9 @@ function collectPages(entry: NavEntry | NavEntry[] | undefined): string[] {
   if (typeof entry === "string") {
     return [entry];
   }
-  if (Array.isArray(entry)) {
-    return entry.flatMap((item) => collectPages(item));
-  }
-  return [entry.page, entry.pages, entry.groups, entry.tabs].flatMap(collectPages);
+  return (
+    Array.isArray(entry) ? entry : [entry.page, entry.pages, entry.groups, entry.tabs]
+  ).flatMap(collectPages);
 }
 function findNestedGroup(pages: NavGroup["pages"] | undefined, name: string): NavGroup | undefined {
   for (const entry of pages ?? []) {
@@ -247,9 +246,7 @@ it.each([
   { fault: "exit", error: "npm lock failure" },
   { fault: "stale", error: "publisher manifest and lock must both pin" },
 ])("syncs an independent publisher lock with $fault outcome", async ({ fault, error }) => {
-  const fixture = publisherFixture("2.2.0", {
-    sourceSha: "fixture-source",
-  });
+  const fixture = publisherFixture("2.2.0", { sourceSha: "fixture-source" });
   const { root, publishRoot, exists, read, write, json, append } = fixture;
   const bin = path.join(root, "bin");
   fs.mkdirSync(bin);

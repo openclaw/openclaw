@@ -64,14 +64,14 @@ function expectedRunArgs(wrapper: string[], cpus = "16") {
 
 function runDockerRunArgs(pathPrefix: string) {
   const script = [
-    "source scripts/lib/live-docker-auth.sh",
+    sourceAuth,
     "unset OPENCLAW_LIVE_DOCKER_DISABLE_RESOURCE_LIMITS OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS",
     "unset OPENCLAW_LIVE_DOCKER_MEMORY OPENCLAW_DOCKER_E2E_MEMORY",
     "unset OPENCLAW_LIVE_DOCKER_CPUS OPENCLAW_DOCKER_E2E_CPUS",
     "unset OPENCLAW_LIVE_DOCKER_PIDS_LIMIT OPENCLAW_DOCKER_E2E_PIDS_LIMIT",
     "ARGS=()",
     "openclaw_live_init_docker_run_args ARGS 42s || exit $?",
-    "printf '%s\\n' \"${ARGS[@]}\"",
+    printArgs,
   ];
   return runBash(script, { PATH: pathPrefix });
 }
@@ -108,7 +108,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     const result = runBash(
       [
         "set -euo pipefail",
-        "source scripts/lib/live-docker-auth.sh",
+        sourceAuth,
         "unset OPENCLAW_DOCKER_AUTH_DIRS DOCKER_HOME_DIR",
         'openclaw_live_collect_auth_for_providers ","',
         "openclaw_live_finalize_auth_mounts",
@@ -141,15 +141,16 @@ describe("scripts/lib/live-docker-auth.sh", () => {
   it("prestages selected auth and preserves equivalent external mounts", () => {
     const homeDir = tempDirs.make("openclaw-live-docker-auth-source-");
     const dockerHomeDir = tempDirs.make("openclaw-live-docker-auth-target-");
-    mkdirSync(path.join(homeDir, ".gemini"), { recursive: true });
-    mkdirSync(path.join(homeDir, ".codex"), { recursive: true });
-    writeFileSync(path.join(homeDir, ".gemini", "token"), "gemini-token\n", "utf8");
-    writeFileSync(path.join(homeDir, ".codex", "auth.json"), "codex-token\n", "utf8");
+    const authFiles = { ".gemini/token": "gemini-token\n", ".codex/auth.json": "codex-token\n" };
+    for (const [file, contents] of Object.entries(authFiles)) {
+      mkdirSync(path.dirname(path.join(homeDir, file)), { recursive: true });
+      writeFileSync(path.join(homeDir, file), contents, "utf8");
+    }
 
     const result = runBash(
       [
         "set -euo pipefail",
-        "source scripts/lib/live-docker-auth.sh",
+        sourceAuth,
         "unset OPENCLAW_DOCKER_AUTH_DIRS",
         "DOCKER_AUTH_PRESTAGED=0",
         'openclaw_live_collect_auth_for_providers "openai,gemini"',
@@ -170,12 +171,9 @@ describe("scripts/lib/live-docker-auth.sh", () => {
       "-v",
       `${homeDir}/.codex/auth.json:/host-auth-files/.codex/auth.json:ro`,
     ]);
-    expect(readFileSync(path.join(dockerHomeDir, ".gemini", "token"), "utf8")).toBe(
-      "gemini-token\n",
-    );
-    expect(readFileSync(path.join(dockerHomeDir, ".codex", "auth.json"), "utf8")).toBe(
-      "codex-token\n",
-    );
+    for (const [file, contents] of Object.entries(authFiles)) {
+      expect(readFileSync(path.join(dockerHomeDir, file), "utf8")).toBe(contents);
+    }
   });
 
   it("caps default CPU limits using live capacity before shared capacity", () => {
@@ -191,15 +189,12 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     );
   });
 
-  it("falls back to plain timeout when kill-after is unavailable", () => {
-    expect(resolveDockerRunArgs(makeTimeoutBin("timeout", true))).toEqual(
-      expectedRunArgs(["timeout"]),
-    );
-  });
-
-  it("uses gtimeout when timeout is unavailable", () => {
-    expect(resolveDockerRunArgs(makeTimeoutBin("gtimeout"))).toEqual(
-      expectedRunArgs(["gtimeout", "--kill-after=30s"]),
+  it.each([
+    ["timeout", true, ["timeout"]],
+    ["gtimeout", false, ["gtimeout", "--kill-after=30s"]],
+  ] as const)("uses %s (plain=%s)", (command, plain, wrapper) => {
+    expect(resolveDockerRunArgs(makeTimeoutBin(command, plain))).toEqual(
+      expectedRunArgs([...wrapper]),
     );
   });
 
@@ -250,7 +245,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
   });
 
   it("rejects invalid live Docker pids limits before live Docker setup", () => {
-    const result = runBash([sourceAuth, "ARGS=()", "openclaw_live_init_docker_run_args ARGS 42s"], {
+    const result = runBash(initArgs.slice(0, -1), {
       OPENCLAW_DOCKER_E2E_PIDS_LIMIT: "",
       OPENCLAW_LIVE_DOCKER_PIDS_LIMIT: "many",
       PATH: makeTimeoutBin(),
