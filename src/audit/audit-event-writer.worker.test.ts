@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
@@ -15,7 +16,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createAgentEventAuditRecorder } from "./agent-event-audit.js";
 import { listAuditEvents, recordAuditEventInDatabase } from "./audit-event-store.js";
-import { createAuditEventWriter } from "./audit-event-writer.js";
+import { createAuditEventWriter, type AuditEventWriter } from "./audit-event-writer.js";
 import { input, messageEvent, decisionReceipt } from "./audit-event-writer.test-support.js";
 import { createAuditEventRecorder } from "./audit-recorder.js";
 import {
@@ -27,10 +28,7 @@ import {
   createExecutionIdentityAdmissionToken,
   enqueueExecutionIdentityContextAtAdmission,
 } from "./execution-identity-admission.js";
-import {
-  captureExecutionIdentityAdmissionEnvelope,
-  persistExecutionIdentityAdmissionEnvelope,
-} from "./execution-identity.test-support.js";
+import { prepareExecutionIdentityContextAtAdmission } from "./execution-identity.test-support.js";
 import { recordOutboundMessageProgressInDatabase } from "./message-delivery-progress-store.js";
 
 const pruneFault = useSqliteWorkerFault([
@@ -52,6 +50,45 @@ afterEach(async () => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function observeProcessRequests() {
+  let count = 0;
+  const stop = onInternalDiagnosticEvent(
+    (event) => {
+      if (
+        event.type === "worker.request" &&
+        event.phase === "queued" &&
+        event.requestClass === "audit.writer.process"
+      ) {
+        count += 1;
+      }
+    },
+    { include: ["worker.request"] },
+  );
+  return {
+    get count() {
+      return count;
+    },
+    stop,
+  };
+}
+
+function messageRecorder(writer: AuditEventWriter) {
+  return createAuditEventRecorder({
+    scheduler: createTestGatewayScheduler(),
+    getConfig: () => ({ logging: { audit: { messages: "all" } } }),
+    writer,
+  });
+}
+
+function admissionFacts(runId: string) {
+  return {
+    runId,
+    agentId: "main",
+    ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+    runtime: { kind: "embedded" },
+  } as const;
+}
+
 describe("audit writer shared worker", () => {
   it("records a warm run start and finish with one worker request", async () => {
     const stateDir = tempDirs.make("openclaw-audit-run-pair-");
@@ -65,23 +102,9 @@ describe("audit writer shared worker", () => {
     const recorder = createAgentEventAuditRecorder({ writer, getConfig: () => ({}) });
     await writer.ready;
     expect(writer.record({ ...input(), sourceId: "warm-seed", runId: "warm-seed" })).toBe(true);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextTurn();
     expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(1);
-    let requests = 0;
-    const stopObserving = onInternalDiagnosticEvent(
-      (event) => {
-        if (
-          event.type === "worker.request" &&
-          event.phase === "queued" &&
-          event.requestClass === "audit.writer.process"
-        ) {
-          requests += 1;
-        }
-      },
-      { include: ["worker.request"] },
-    );
+    const requests = observeProcessRequests();
     const event = {
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -95,14 +118,10 @@ describe("audit writer shared worker", () => {
     };
     try {
       recorder.record(event);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       const duringTurn = (await listAuditEvents({ database, limit: 10 })).events;
       recorder.record({ ...event, seq: 2, data: { phase: "end" } });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       const events = (await listAuditEvents({ database, limit: 10 })).events.filter(
         ({ runId }) => runId === event.runId,
       );
@@ -110,12 +129,12 @@ describe("audit writer shared worker", () => {
         "agent.run.finished",
         "agent.run.started",
       ]);
-      expect(requests, "warm audit worker request count").toBe(1);
+      expect(requests.count, "warm audit worker request count").toBe(1);
       expect(duringTurn).toHaveLength(1);
       expect(errors).toEqual([]);
     } finally {
       await recorder.stop();
-      stopObserving();
+      requests.stop();
     }
   });
 
@@ -152,29 +171,13 @@ describe("audit writer shared worker", () => {
       expect(nativeOpens).toBe(1);
       nativeOpens = 0;
       const counters = observeMainThreadSql({ includeClose: true });
-      let processRequests = 0;
-      const stopObserving = onInternalDiagnosticEvent(
-        (event) => {
-          if (
-            event.type === "worker.request" &&
-            event.phase === "queued" &&
-            event.requestClass === "audit.writer.process"
-          ) {
-            processRequests += 1;
-          }
-        },
-        { include: ["worker.request"] },
-      );
+      const requests = observeProcessRequests();
       const writer = createAuditEventWriter({
         scheduler: createTestGatewayScheduler(),
         stateDir,
         onError: (error) => errors.push(error),
       });
-      const recorder = createAuditEventRecorder({
-        scheduler: createTestGatewayScheduler(),
-        getConfig: () => ({ logging: { audit: { messages: "all" } } }),
-        writer,
-      });
+      const recorder = messageRecorder(writer);
       const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
       try {
         await writer.ready;
@@ -182,15 +185,11 @@ describe("audit writer shared worker", () => {
           pruneFault.enable(1);
         }
         expect(
-          enqueueExecutionIdentityContextAtAdmission(
-            {
-              runId: receipt.runId,
-              agentId: "main",
-              ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-              runtime: { kind: "embedded" },
-            },
-            { enabled: true, token, runtimeInstanceId: "worker-runtime" },
-          )?.accepted,
+          enqueueExecutionIdentityContextAtAdmission(admissionFacts(receipt.runId), {
+            enabled: true,
+            token,
+            runtimeInstanceId: "worker-runtime",
+          })?.accepted,
         ).toBe(true);
         expect(writer.recordExecutionDecision(receipt)).toBe(true);
         expect(
@@ -234,7 +233,7 @@ describe("audit writer shared worker", () => {
           expect(nativeOpens).toBe(0);
           counters.expectIdle();
         } finally {
-          stopObserving();
+          requests.stop();
           counters.restore();
           restoreConstructor();
         }
@@ -242,14 +241,17 @@ describe("audit writer shared worker", () => {
 
       const replayed = mode === "worker death after committed prefix";
       const owner = openOpenClawStateDatabase(database).db;
-      expect(owner.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
-        count: 3,
-      });
       expect(
-        owner.prepare("SELECT COUNT(*) AS count FROM outbound_message_execution_bindings").get(),
-      ).toEqual({ count: 1 });
+        owner
+          .prepare(`SELECT
+          (SELECT COUNT(*) FROM audit_events) AS events,
+          (SELECT COUNT(*) FROM outbound_message_execution_bindings) AS bindings,
+          (SELECT COUNT(*) FROM outbound_message_progress) AS progress,
+          (SELECT COUNT(*) FROM audit_events WHERE kind = 'message') AS messages`)
+          .get(),
+      ).toEqual({ events: 3, bindings: 1, progress: 1, messages: 1 });
       expect(errors).toHaveLength(replayed ? 1 : 0);
-      expect(processRequests).toBe(replayed ? 2 : 1);
+      expect(requests.count).toBe(replayed ? 2 : 1);
       expect(
         owner
           .prepare(
@@ -260,16 +262,6 @@ describe("audit writer shared worker", () => {
         { run_id: "run-1", action: "agent.run.started" },
         { run_id: "run-1", action: "agent.run.finished" },
       ]);
-      expect(
-        owner.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get(),
-      ).toEqual({
-        count: 1,
-      });
-      expect(
-        owner.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE kind = 'message'").get(),
-      ).toEqual({
-        count: 1,
-      });
       const decisions = pageExecutionDecisionFactsForContextInDatabase(owner, {
         context: token,
         limit: 10,
@@ -307,11 +299,7 @@ describe("audit writer shared worker", () => {
         }
       },
     });
-    const recorder = createAuditEventRecorder({
-      scheduler: createTestGatewayScheduler(),
-      getConfig: () => ({ logging: { audit: { messages: "all" } } }),
-      writer,
-    });
+    const recorder = messageRecorder(writer);
     try {
       await writer.ready;
       pruneFault.enable(2);
@@ -343,40 +331,21 @@ describe("audit writer shared worker", () => {
     try {
       const receipt = decisionReceipt();
       recordAuditEventInDatabase(input(), options);
-      persistExecutionIdentityAdmissionEnvelope(
-        captureExecutionIdentityAdmissionEnvelope(
-          {
-            runId: receipt.runId,
-            agentId: "main",
-            ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-            runtime: { kind: "embedded" },
-          },
-          {
-            now: 0,
-            contextId: receipt.contextId,
-            executionId: receipt.executionId,
-            runtimeInstanceId: "prune-runtime",
-          },
-        ),
-        { ...options, now: 0 },
-      );
+      prepareExecutionIdentityContextAtAdmission(admissionFacts(receipt.runId), {
+        ...options,
+        now: 0,
+        contextId: receipt.contextId,
+        executionId: receipt.executionId,
+        runtimeInstanceId: "prune-runtime",
+      });
       recordExecutionDecisionFactInDatabase(receipt, { ...options, now: 0 });
       recordOutboundMessageProgressInDatabase(
         {
+          ...messageEvent("message.outbound.queued"),
           sourceId: "prune-progress",
           sourceSequence: 1,
           occurredAt: 0,
-          kind: "message",
-          action: "message.outbound.queued",
-          status: "started",
-          outcome: "queued",
-          actorType: "agent",
-          actorId: "main",
-          agentId: "main",
           runId: "prune-run",
-          direction: "outbound",
-          channel: "qa-channel",
-          conversationKind: "direct",
           targetId: "synthetic-target",
         },
         options,

@@ -23,7 +23,6 @@ export function captureExecutionIdentityAdmissionEnvelope(
     runtimeInstanceId?: string;
   } = {},
 ): ExecutionIdentityAdmissionEnvelope {
-  const { contextId, executionId, runtimeInstanceId, now } = options;
   let envelope: ExecutionIdentityAdmissionEnvelope | undefined;
   const clear = configureExecutionIdentityAdmissionSink((captured) => {
     if (captured.kind === "capture") {
@@ -34,10 +33,7 @@ export function captureExecutionIdentityAdmissionEnvelope(
   try {
     const result = enqueueExecutionIdentityContextAtAdmission(admissionFacts, {
       enabled: true,
-      ...(contextId !== undefined ? { contextId } : {}),
-      ...(executionId !== undefined ? { executionId } : {}),
-      ...(runtimeInstanceId !== undefined ? { runtimeInstanceId } : {}),
-      ...(now !== undefined ? { now } : {}),
+      ...options,
     });
     if (!result || !envelope) {
       throw new Error("expected admission envelope");
@@ -64,18 +60,16 @@ export function prepareExecutionIdentityContextAtAdmission(
   options: Parameters<typeof captureExecutionIdentityAdmissionEnvelope>[1] &
     Parameters<typeof persistExecutionIdentityAdmissionEnvelope>[1] = {},
 ) {
-  const { contextId, executionId, runtimeInstanceId, now, limits, ...database } = options;
-  const envelope = captureExecutionIdentityAdmissionEnvelope(admissionFacts, {
-    ...(contextId !== undefined ? { contextId } : {}),
-    ...(executionId !== undefined ? { executionId } : {}),
-    ...(runtimeInstanceId !== undefined ? { runtimeInstanceId } : {}),
-    ...(now !== undefined ? { now } : {}),
-  });
-  return persistExecutionIdentityAdmissionEnvelope(envelope, {
-    ...database,
-    ...(now !== undefined ? { now } : {}),
-    ...(limits !== undefined ? { limits } : {}),
-  });
+  const { contextId, executionId, runtimeInstanceId, now, ...database } = options;
+  return persistExecutionIdentityAdmissionEnvelope(
+    captureExecutionIdentityAdmissionEnvelope(admissionFacts, {
+      contextId,
+      executionId,
+      runtimeInstanceId,
+      now,
+    }),
+    { ...database, now },
+  );
 }
 
 export async function recordDeniedApprovalForRun(
@@ -103,8 +97,7 @@ export async function recordDeniedApprovalForRun(
               tokenVersion: 1,
               createdAt: 100,
               runId,
-              contextId: binding.contextId,
-              executionId: binding.executionId,
+              ...binding,
             },
           }
         : {}),
