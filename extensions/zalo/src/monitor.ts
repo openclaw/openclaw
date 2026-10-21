@@ -76,11 +76,6 @@ const WEBHOOK_CLEANUP_TIMEOUT_MS = 5_000;
 const ZALO_TYPING_TIMEOUT_MS = 5_000;
 const UNIX_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 
-// Guidance sent for an unsupported event with no recoverable text (for example
-// a sticker or a link-preview card whose text Zalo omitted).
-const UNSUPPORTED_MESSAGE_NOTICE =
-  "Sorry, I can't read that kind of Zalo message. Please resend its content as plain text.";
-
 type ZaloCoreRuntime = ReturnType<typeof getZaloRuntime>;
 type ZaloProcessingContext = {
   token: string;
@@ -159,8 +154,13 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
 
   switch (event_name) {
     case "message.text.received":
+    case "message.unsupported.received":
       if (message.text?.trim()) {
         await processMessageWithPipeline({ message, text: message.text, ...sharedContext });
+      } else if (event_name === "message.unsupported.received") {
+        runtime.log?.(
+          `[${account.accountId}] Zalo unsupported message has no recoverable text; ask the sender to resend as plain text.`,
+        );
       }
       break;
     case "message.image.received":
@@ -172,37 +172,7 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
     case "message.sticker.received":
       logVerbose(core, runtime, `[${account.accountId}] Received sticker from ${message.from.id}`);
       break;
-    case "message.unsupported.received":
-      await handleUnsupportedMessage({
-        message,
-        ...sharedContext,
-      });
-      break;
   }
-}
-
-async function handleUnsupportedMessage(
-  params: ZaloProcessingContext & { message: ZaloMessage },
-): Promise<void> {
-  const { message, token, statusSink, fetcher } = params;
-  // Zalo keeps the sender's text on some unsupported events (for example URL
-  // link-preview cards in DMs); recover those through the normal authorized pipeline.
-  if (message.text?.trim()) {
-    await processMessageWithPipeline({ ...params, text: message.text });
-    return;
-  }
-  const authorization = await authorizeZaloMessage({ ...params, text: undefined });
-  if (!authorization) {
-    return;
-  }
-  // Let notice-send failures propagate so the durable webhook ingress can retry
-  // transient errors instead of tombstoning the event and losing the guidance.
-  await sendMessage(
-    token,
-    { chat_id: authorization.chatId, text: UNSUPPORTED_MESSAGE_NOTICE },
-    fetcher,
-  );
-  statusSink?.({ lastOutboundAt: Date.now() });
 }
 
 async function handleImageMessage(
