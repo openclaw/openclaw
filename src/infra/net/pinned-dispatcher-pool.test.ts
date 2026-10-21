@@ -12,22 +12,20 @@ function createDispatcher() {
   };
 }
 
+function acquire(pool: PinnedDispatcherPool, key: string, dispatcher: Dispatcher) {
+  return pool.acquire({ key, createDispatcher: () => dispatcher });
+}
+
 describe("PinnedDispatcherPool", () => {
   it("reuses an exact live key and closes it only at lifecycle shutdown", async () => {
     const pool = new PinnedDispatcherPool({ maxEntries: 2, idleTtlMs: 60_000 });
     const created = createDispatcher();
     const create = vi.fn(() => created.dispatcher);
 
-    const first = pool.acquire({
-      key: "origin-a/pin-a",
-      createDispatcher: create,
-    });
+    const first = pool.acquire({ key: "origin-a/pin-a", createDispatcher: create });
     expect(first?.reused).toBe(false);
     await first?.release();
-    const second = pool.acquire({
-      key: "origin-a/pin-a",
-      createDispatcher: create,
-    });
+    const second = pool.acquire({ key: "origin-a/pin-a", createDispatcher: create });
 
     expect(second?.dispatcher).toBe(first?.dispatcher);
     expect(second?.reused).toBe(true);
@@ -43,14 +41,8 @@ describe("PinnedDispatcherPool", () => {
     const pool = new PinnedDispatcherPool({ maxEntries: 2, idleTtlMs: 60_000 });
     const oldDispatcher = createDispatcher();
     const nextDispatcher = createDispatcher();
-    const oldLease = pool.acquire({
-      key: "origin-a/pin-a",
-      createDispatcher: () => oldDispatcher.dispatcher,
-    });
-    const nextLease = pool.acquire({
-      key: "origin-a/pin-b",
-      createDispatcher: () => nextDispatcher.dispatcher,
-    });
+    const oldLease = acquire(pool, "origin-a/pin-a", oldDispatcher.dispatcher);
+    const nextLease = acquire(pool, "origin-a/pin-b", nextDispatcher.dispatcher);
 
     expect(nextLease?.dispatcher).toBe(nextDispatcher.dispatcher);
     expect(oldDispatcher.close).not.toHaveBeenCalled();
@@ -67,16 +59,10 @@ describe("PinnedDispatcherPool", () => {
   it("falls back to caller-owned dispatchers when capacity is fully leased", async () => {
     const pool = new PinnedDispatcherPool({ maxEntries: 1, idleTtlMs: 60_000 });
     const firstDispatcher = createDispatcher();
-    const first = pool.acquire({
-      key: "origin-a/pin-a",
-      createDispatcher: () => firstDispatcher.dispatcher,
-    });
+    const first = acquire(pool, "origin-a/pin-a", firstDispatcher.dispatcher);
     const secondFactory = vi.fn(() => createDispatcher().dispatcher);
 
-    const second = pool.acquire({
-      key: "origin-b/pin-b",
-      createDispatcher: secondFactory,
-    });
+    const second = pool.acquire({ key: "origin-b/pin-b", createDispatcher: secondFactory });
 
     expect(second).toBeUndefined();
     expect(secondFactory).not.toHaveBeenCalled();

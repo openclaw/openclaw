@@ -1,4 +1,3 @@
-// Node proxy agent tests cover shared Node HTTP(S) proxy agent construction.
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { inspect } from "node:util";
@@ -21,18 +20,13 @@ function withProxyEnv<T>(
   fn: () => T,
 ): T {
   const previousEnv = process.env;
-  const scopedEnv = { ...previousEnv };
-  for (const key of PROXY_ENV_KEYS) {
-    const value = env[key];
-    if (value === undefined) {
-      delete scopedEnv[key];
-    } else {
-      scopedEnv[key] = value;
-    }
-  }
   // These agents consume JS env values; keep their fixtures out of Bun's native fetch proxy cache.
-  process.env = scopedEnv;
+  process.env = { ...previousEnv };
   try {
+    for (const key of PROXY_ENV_KEYS) {
+      delete process.env[key];
+    }
+    Object.assign(process.env, env);
     return fn();
   } finally {
     process.env = previousEnv;
@@ -120,38 +114,27 @@ describe("createNodeProxyAgent", () => {
 
   it("preserves caller Node agent options on env proxy agents", () => {
     withProxyEnv({ HTTPS_PROXY: "http://proxy.example:8080" }, () => {
-      const agent = createNodeProxyAgent({
-        mode: "env",
-        targetUrl: "https://collector.example.test/v1/traces",
-        agentOptions: {
-          keepAlive: true,
-          keepAliveMsecs: 750,
-          maxSockets: 3,
-          maxTotalSockets: 6,
-          maxFreeSockets: 2,
-          scheduling: "fifo",
-          timeout: 5000,
-          ca: "collector-ca",
-          cert: "collector-cert",
-          key: "collector-key",
-        },
-      });
-
-      expect(agent?.options).toMatchObject({
-        keepAlive: true,
-        timeout: 5000,
-        ca: "collector-ca",
-        cert: "collector-cert",
-        key: "collector-key",
-      });
-      expect(agent).toMatchObject({
+      const poolOptions = {
         keepAlive: true,
         keepAliveMsecs: 750,
         maxSockets: 3,
         maxTotalSockets: 6,
         maxFreeSockets: 2,
-        scheduling: "fifo",
+        scheduling: "fifo" as const,
+      };
+      const tlsOptions = {
+        timeout: 5000,
+        ca: "collector-ca",
+        cert: "collector-cert",
+        key: "collector-key",
+      };
+      const agent = createNodeProxyAgent({
+        mode: "env",
+        targetUrl: "https://collector.example.test/v1/traces",
+        agentOptions: { ...poolOptions, ...tlsOptions },
       });
+      expect(agent?.options).toMatchObject({ keepAlive: true, ...tlsOptions });
+      expect(agent).toMatchObject(poolOptions);
       agent?.destroy();
     });
   });

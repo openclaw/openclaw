@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { fetchWithSsrFGuard } from "./fetch-guard.js";
+import { fetchWithSsrFGuard, type GuardedFetchOptions } from "./fetch-guard.js";
 import { withGuardedFetchRequestAuthority } from "./fetch-request-authority.js";
 
 const lookupFn = async () => [{ address: "93.184.216.34", family: 4 }];
+const request = (options: Partial<GuardedFetchOptions>) =>
+  fetchWithSsrFGuard({ url: "https://public.example/resource", lookupFn, ...options });
 
 describe("guarded fetch request authority", () => {
   it.each(["beforeRequest", "scoped authority", "scoped final authority"])(
@@ -15,10 +17,8 @@ describe("guarded fetch request authority", () => {
         withGuardedFetchRequestAuthority(
           owner === "scoped authority" ? asynchronousGuard : () => {},
           async () =>
-            fetchWithSsrFGuard({
-              url: "https://public.example/resource",
+            request({
               fetchImpl,
-              lookupFn,
               beforeRequest: owner === "beforeRequest" ? (asynchronousGuard as never) : undefined,
             }),
           // oxlint-disable-next-line typescript/no-misused-promises -- Deliberately violates the synchronous final-dispatch contract.
@@ -48,8 +48,7 @@ describe("guarded fetch request authority", () => {
         expect(beforeRequest).not.toHaveBeenCalled();
         await withGuardedFetchRequestAuthority(undefined, async () => {
           expect(beforeRequest).not.toHaveBeenCalled();
-          const result = await fetchWithSsrFGuard({
-            url: "https://public.example/resource",
+          const result = await request({
             fetchImpl,
             lookupFn: async () => {
               const addresses = await lookupFn();
@@ -69,8 +68,7 @@ describe("guarded fetch request authority", () => {
     const release = createDeferred();
     const beforeRequest = vi.fn();
     const fetchImpl = vi.fn(async () => new Response("ok"));
-    const fetch = () =>
-      fetchWithSsrFGuard({ url: "https://public.example/resource", fetchImpl, lookupFn });
+    const fetch = () => request({ fetchImpl });
     let retained: Promise<unknown> | undefined;
     const retain = async () => {
       retained = release.promise.then(fetch);
@@ -104,10 +102,9 @@ describe("fetchWithSsrFGuard redirect policy", () => {
     );
 
     await expect(
-      fetchWithSsrFGuard({
+      request({
         url: "https://api.example.com/upload",
         fetchImpl,
-        lookupFn,
         rejectCrossOriginUnsafeRedirectReplay: true,
         init: {
           method: "POST",
@@ -124,7 +121,7 @@ describe("fetchWithSsrFGuard redirect policy", () => {
     const fetchImpl = vi.fn();
 
     await expect(
-      fetchWithSsrFGuard({
+      request({
         url: "https://api.example.com/upload",
         fetchImpl,
         allowCrossOriginUnsafeRedirectReplay: true,

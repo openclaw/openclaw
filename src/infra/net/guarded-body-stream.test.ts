@@ -74,9 +74,7 @@ describe("wrapGuardedBodyStream", () => {
       });
     try {
       await started.promise;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       expect(settled).toBe(false);
       expect(cleanup).toHaveBeenCalledOnce();
       expect(source.locked).toBe(false);
@@ -104,9 +102,7 @@ describe("wrapGuardedBodyStream", () => {
     try {
       const completed = await Promise.race([
         operation.then(() => true),
-        new Promise<boolean>((resolve) => {
-          setImmediate(() => resolve(false));
-        }),
+        nextTurn().then(() => false),
       ]);
       expect(completed).toBe(true);
       expect(order).toEqual([reason, "cleanup"]);

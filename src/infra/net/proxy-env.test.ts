@@ -1,5 +1,3 @@
-// Proxy environment tests cover env precedence, EnvHttpProxyAgent options, and
-// NO_PROXY host/port/CIDR matching.
 import { describe, expect, it } from "vitest";
 import {
   hasEnvHttpProxyConfigured,
@@ -54,68 +52,18 @@ describe("resolveEnvHttpProxyAgentOptions", () => {
 
 describe("matchesNoProxy", () => {
   it.each([
-    {
-      name: "matches wildcard",
-      url: "https://api.openai.com/v1/chat",
-      env: { NO_PROXY: "*" } as NodeJS.ProcessEnv,
-      expected: true,
-    },
-    {
-      name: "does not match when suffix is not a domain boundary",
-      url: "https://notopenai.com/v1",
-      env: { NO_PROXY: "openai.com" } as NodeJS.ProcessEnv,
-      expected: false,
-    },
-    {
-      name: "parses mixed comma-and-whitespace list",
-      url: "https://api.openai.com",
-      env: { NO_PROXY: "localhost, 127.0.0.1\tapi.openai.com" } as NodeJS.ProcessEnv,
-      expected: true,
-    },
-    {
-      name: "matches bracketed IPv6 literal",
-      url: "http://[::1]:8080/health",
-      env: { NO_PROXY: "[::1]:8080" } as NodeJS.ProcessEnv,
-      expected: true,
-    },
-    {
-      name: "matches zero-valued IPv4 addresses",
-      url: "http://0.0.0.0/",
-      env: { NO_PROXY: "0.*" } as NodeJS.ProcessEnv,
-      expected: true,
-    },
-    {
-      name: "matches high-bit IPv4 wildcard octets",
-      url: "http://255.128.64.32/",
-      env: { NO_PROXY: "255.*.64.32" } as NodeJS.ProcessEnv,
-      expected: true,
-    },
-    {
-      name: "matches IPv4 CIDR with a zero-length prefix",
-      url: "http://255.128.64.32/",
-      env: { NO_PROXY: "0.0.0.0/0" } as NodeJS.ProcessEnv,
-      expected: true,
-    },
-    {
-      name: "matches IPv4 CIDR with a full-length prefix",
-      url: "http://255.128.64.32/",
-      env: { NO_PROXY: "255.128.64.32/32" } as NodeJS.ProcessEnv,
-      expected: true,
-    },
-    {
-      name: "does not let non-final IPv4 wildcards ignore remaining octets",
-      url: "http://8.1.2.3:8990/v1/messages",
-      env: { NO_PROXY: "8.*.8.8" } as NodeJS.ProcessEnv,
-      expected: false,
-    },
-    {
-      name: "returns false for malformed target URL",
-      url: "not-a-url",
-      env: { NO_PROXY: "*" } as NodeJS.ProcessEnv,
-      expected: false,
-    },
-  ])("$name", ({ url, env, expected }) => {
-    expect(matchesNoProxy(url, env)).toBe(expected);
+    ["https://api.openai.com/v1/chat", "*", true],
+    ["https://notopenai.com/v1", "openai.com", false],
+    ["https://api.openai.com", "localhost, 127.0.0.1\tapi.openai.com", true],
+    ["http://[::1]:8080/health", "[::1]:8080", true],
+    ["http://0.0.0.0/", "0.*", true],
+    ["http://255.128.64.32/", "255.*.64.32", true],
+    ["http://255.128.64.32/", "0.0.0.0/0", true],
+    ["http://255.128.64.32/", "255.128.64.32/32", true],
+    ["http://8.1.2.3:8990/v1/messages", "8.*.8.8", false],
+    ["not-a-url", "*", false],
+  ])("matchesNoProxy(%s, %s) = %s", (url, noProxy, expected) => {
+    expect(matchesNoProxy(url, { NO_PROXY: noProxy })).toBe(expected);
   });
 });
 
@@ -134,19 +82,9 @@ describe("shouldUseEnvHttpProxyForUrl", () => {
   });
 
   it.each([
-    {
-      name: "uses HTTP_PROXY for http URLs",
-      url: "http://api.example.com/v1",
-      env: { HTTP_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
-      expected: true,
-    },
-    {
-      name: "keeps strict mode for non-http URLs",
-      url: "file:///tmp/input.txt",
-      env: { HTTPS_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
-      expected: false,
-    },
-  ])("$name", ({ url, env, expected }) => {
+    ["http://api.example.com/v1", { HTTP_PROXY: "http://proxy.test:8080" }, true],
+    ["file:///tmp/input.txt", { HTTPS_PROXY: "http://proxy.test:8080" }, false],
+  ] as const)("uses the env proxy for %s: %s → %s", (url, env, expected) => {
     expect(shouldUseEnvHttpProxyForUrl(url, env)).toBe(expected);
   });
 });
