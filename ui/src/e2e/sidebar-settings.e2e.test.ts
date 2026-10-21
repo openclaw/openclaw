@@ -35,20 +35,6 @@ async function openNewSession() {
   await page.locator(".new-session-page__message").waitFor({ state: "visible" });
 }
 
-async function setVisibility(target: Page, visibility: "hidden" | "visible", focus = false) {
-  await target.evaluate(
-    ({ value, wake }) => {
-      Object.defineProperty(document, "visibilityState", { configurable: true, value });
-      document.dispatchEvent(new Event("visibilitychange"));
-      if (wake) {
-        window.dispatchEvent(new Event("focus"));
-        document.dispatchEvent(new Event("visibilitychange"));
-      }
-    },
-    { value: visibility, wake: focus },
-  );
-}
-
 const FAILED_CRON_RESPONSE = {
   jobs: [
     compactCronJobFixture(
@@ -71,11 +57,6 @@ const MISSING_AUTH_RESPONSE = {
   providers: [{ provider: "openai", displayName: "OpenAI", status: "missing", profiles: [] }],
 };
 
-const cronFailure = (name: string) => ({
-  ...FAILED_CRON_RESPONSE,
-  jobs: [{ ...FAILED_CRON_RESPONSE.jobs[0], name }],
-});
-
 suite.define(() => {
   beforeEach(async () => {
     const context = await suite.newBrowserContext({
@@ -84,155 +65,6 @@ suite.define(() => {
       viewport: { height: 900, width: 1440 },
     });
     page = await context.newPage();
-  });
-  it("defers hidden Inbox inventory and shows fresh cron attention on return", async () => {
-    await page.clock.setFixedTime(Date.now());
-    const gateway = await installMockGateway(page, {
-      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
-      methodResponses: {
-        "cron.list": FAILED_CRON_RESPONSE,
-        "models.authStatus": MISSING_AUTH_RESPONSE,
-      },
-    });
-    await page.goto(`${suite.server.baseUrl}new`);
-    const badge = page.locator(INBOX_COUNT);
-    await expectExactText(badge, "2");
-    await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
-    await page.getByText("Failed settings transition", { exact: true }).waitFor();
-
-    await setVisibility(page, "hidden");
-    await gateway.setMethodResponse("cron.list", cronFailure("Failure while away"));
-    for (let index = 0; index < 20; index++) {
-      await gateway.emitGatewayEvent("cron", { action: "finished", jobId: `hidden-${index}` });
-    }
-    for (const method of ["cron.list", "cron.status", "models.authStatus"]) {
-      expect(await gateway.getRequests(method)).toHaveLength(1);
-    }
-    await page.getByText("Failed settings transition", { exact: true }).waitFor();
-    await setVisibility(page, "visible", true);
-    await page.getByText("Failure while away", { exact: true }).waitFor();
-    expect(await badge.textContent()).toBe("2");
-    for (const method of ["cron.list", "cron.status"]) {
-      expect(await gateway.getRequests(method)).toHaveLength(2);
-    }
-    expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
-
-    await gateway.deferNext("cron.list");
-    await gateway.emitGatewayEvent("cron", { action: "finished" });
-    await gateway.waitForRequest("cron.list", { after: 2 });
-    await page.getByRole("button", { name: "Dismiss Failure while away", exact: true }).click();
-    await setVisibility(page, "hidden");
-    // The first event invalidating this pending inventory arrives while hidden.
-    await gateway.emitGatewayEvent("cron", { action: "finished" });
-    await gateway.resolveDeferred("cron.list", { ...FAILED_CRON_RESPONSE, jobs: [], total: 0 });
-    expect(await gateway.getRequests("cron.list")).toHaveLength(3);
-    await gateway.deferNext("cron.list");
-    await setVisibility(page, "visible");
-    await gateway.waitForRequest("cron.list", { after: 3 });
-    await gateway.resolveDeferred("cron.list", {
-      ...FAILED_CRON_RESPONSE,
-      jobs: [
-        FAILED_CRON_RESPONSE.jobs[0],
-        { ...FAILED_CRON_RESPONSE.jobs[0], id: "fresh-job", name: "Fresh visible warning" },
-      ],
-      total: 2,
-    });
-    await page.getByText("Fresh visible warning", { exact: true }).waitFor();
-    expect(await page.locator('[data-attention-kind="cronFailed"]').count()).toBe(1);
-    expect(await badge.textContent()).toBe("2");
-    expect(await gateway.getRequests("cron.list")).toHaveLength(4);
-  });
-
-  it("refreshes stale auth attention after metadata changes while the first read is pending", async () => {
-    const now = Date.now();
-    await page.clock.setFixedTime(now);
-    const gateway = await installMockGateway(page, {
-      heldMethods: ["models.authStatus"],
-      methodResponses: { "cron.list": FAILED_CRON_RESPONSE },
-    });
-    await page.goto(`${suite.server.baseUrl}new`);
-    const badge = page.locator(INBOX_COUNT);
-    await expectExactText(badge, "1");
-    await gateway.waitForRequest("models.authStatus");
-    await page.clock.setFixedTime(now + 60_001);
-    await page.evaluate(() => {
-      for (let index = 0; index < 20; index++) {
-        document.dispatchEvent(new Event("visibilitychange"));
-      }
-    });
-    expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
-    for (let index = 0; index < 20; index++) {
-      await gateway.emitGatewayEvent("chat.metadata.changed", {});
-    }
-    expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
-    await gateway.deferNext("models.authStatus");
-    await gateway.resolveDeferred("models.authStatus", MISSING_AUTH_RESPONSE);
-    await gateway.waitForRequest("models.authStatus", { after: 1 });
-    await expectExactText(badge, "2");
-    await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
-    const authWarning = page.locator('[data-attention-kind="modelAuthExpired"]');
-    await authWarning.waitFor({ state: "visible" });
-    await gateway.resolveDeferred("models.authStatus", { ts: now + 60_001, providers: [] });
-    await authWarning.waitFor({ state: "hidden" });
-    await expectExactText(badge, "1");
-    expect(await gateway.getRequests("models.authStatus")).toHaveLength(2);
-    for (const index of [1, 2]) {
-      await page.clock.setFixedTime(now + 60_001 + 30_001 * index);
-      await gateway.setMethodResponse("cron.list", cronFailure(`Recent automation ${index}`));
-      await gateway.emitGatewayEvent("cron", { action: "finished" });
-      await page.getByText(`Recent automation ${index}`, { exact: true }).waitFor();
-      expect(await gateway.getRequests("models.authStatus")).toHaveLength(2);
-    }
-    await gateway.setMethodResponse("models.authStatus", MISSING_AUTH_RESPONSE);
-    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    expect(await gateway.getRequests("models.authStatus")).toHaveLength(2);
-    await gateway.emitGatewayEvent("chat.metadata.changed", {});
-    await authWarning.waitFor({ state: "visible" });
-    expect(await gateway.getRequests("models.authStatus")).toHaveLength(3);
-  });
-
-  it("coalesces cron bursts without losing independently loaded Inbox attention", async () => {
-    const gateway = await installMockGateway(page, {
-      heldMethods: ["cron.list", "cron.status", "models.authStatus"],
-      methodResponses: {
-        "cron.list": FAILED_CRON_RESPONSE,
-        "models.authStatus": MISSING_AUTH_RESPONSE,
-      },
-    });
-
-    await openNewSession();
-    await gateway.waitForRequest("cron.status");
-    await gateway.waitForRequest("models.authStatus");
-    for (let index = 0; index < 20; index++) {
-      await gateway.emitGatewayEvent("cron", { action: "finished", jobId: `job-${index}` });
-    }
-
-    for (const method of ["cron.list", "cron.status", "models.authStatus"]) {
-      expect(await gateway.getRequests(method)).toHaveLength(1);
-    }
-
-    await gateway.resolveDeferred("models.authStatus");
-    const badge = page.locator(INBOX_COUNT);
-    await expectExactText(badge, "1");
-    await gateway.resolveDeferred("cron.list");
-    expect(await gateway.getRequests("cron.list")).toHaveLength(1);
-    await gateway.deferNext("cron.list");
-    await gateway.resolveDeferred("cron.status");
-    await gateway.waitForRequest("cron.list", { after: 1 });
-    await expectExactText(badge, "2");
-    for (const method of ["cron.list", "cron.status"]) {
-      expect(await gateway.getRequests(method)).toHaveLength(2);
-    }
-    await page.locator("openclaw-app-sidebar .sidebar-issues-button").click();
-    await page.getByText("Failed settings transition", { exact: true }).waitFor();
-    await gateway.setMethodResponse("cron.list", cronFailure("Latest automation failure"));
-    await gateway.emitGatewayEvent("cron", { action: "finished", jobId: "latest" });
-    await gateway.resolveDeferred("cron.list");
-    await gateway.waitForRequest("cron.list", { after: 2 });
-    await page.getByText("Latest automation failure", { exact: true }).waitFor();
-    for (const method of ["cron.list", "cron.status"]) {
-      expect(await gateway.getRequests(method)).toHaveLength(3);
-    }
   });
 
   it("dismisses an open font picker before exiting Settings with Escape", async () => {

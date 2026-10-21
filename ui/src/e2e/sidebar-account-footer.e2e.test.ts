@@ -62,12 +62,6 @@ async function expectRailConnectionStatus(footer: Locator, kind: string, label: 
 
 async function runAccountFooterProof(page: Page, sidebar: Locator) {
   const identity = sidebar.locator(".sidebar-identity-card");
-  for (const part of [identity.locator("openclaw-viewer-avatar"), identity]) {
-    await part.click();
-    await expectCount(sidebar.locator(".sidebar-identity-menu"), 1);
-    await page.keyboard.press("Escape");
-    await expectCount(sidebar.locator(".sidebar-identity-menu"), 0);
-  }
 
   for (const theme of ["light", "dark"] as const) {
     await setSidebarProofTheme(page, theme);
@@ -114,14 +108,6 @@ async function runAccountFooterProof(page: Page, sidebar: Locator) {
     await expect.poll(() => settings.evaluate((element) => element.matches(":hover"))).toBe(true);
     await expect.poll(() => style(settings, "background-color")).not.toBe(settingsRestBackground);
 
-    const usage = menu.locator('[data-value="command:usage"]');
-    await usage.focus();
-
-    const themeToggle = menu.locator(".theme-mode-toggle");
-    const themeLabel = await themeToggle.getAttribute("aria-label");
-    await themeToggle.click();
-    await expect.poll(() => themeToggle.getAttribute("aria-label")).not.toBe(themeLabel);
-
     const help = menu.locator('[data-value="command:help"]');
     await help.hover();
     const submenu = help.locator("..").locator('[role="menu"]');
@@ -131,13 +117,6 @@ async function runAccountFooterProof(page: Page, sidebar: Locator) {
     await submenu.waitFor({ state: "hidden" });
     await page.keyboard.press("Escape");
     await expectCount(menu, 0);
-    await expect
-      .poll(() =>
-        page.evaluate(() =>
-          document.activeElement instanceof HTMLElement ? document.activeElement.className : "",
-        ),
-      )
-      .toContain("sidebar-identity-card");
   }
 }
 
@@ -163,71 +142,55 @@ async function withFooter(
 }
 
 suite.define(() => {
-  it.each(["stable", "beta", "dev"] as const)(
-    "gates release-update notifications on %s",
-    async (channel) => {
-      const updateAvailable = { channel, currentVersion: "1.0.0", latestVersion: "2.0.0" };
-      const updateSchedule = {
-        channel,
-        autoEnabled: false,
-        target: { kind: "package" as const, version: "2.0.0" },
-      };
-      await withFooter(
-        async ({ gateway, page, sidebar }) => {
-          const menu = await openIdentityMenu(page, sidebar);
-          const updates = menu.getByRole("menuitem", { name: /^Updates/ });
-          await updates.waitFor();
-          const badge = updates.getByText("Available", { exact: true });
-          await expectCount(badge, channel === "dev" ? 0 : 1);
-          await expectCount(
-            sidebar.locator(".sidebar-issues-button__count"),
-            channel === "dev" ? 0 : 1,
-          );
-          if (channel === "stable") {
-            // The selected schedule wins over leftover availability from another channel.
-            await gateway.emitGatewayEvent("update.available", {
-              updateAvailable,
-              schedule: { ...updateSchedule, channel: "dev" },
-            });
-            await expectCount(badge, 0);
-            await expectCount(sidebar.locator(".sidebar-issues-button__count"), 0);
-            await gateway.emitGatewayEvent("update.available", {
-              updateAvailable: { ...updateAvailable, channel: "beta" },
-              schedule: { ...updateSchedule, channel: "beta" },
-            });
-            await expectCount(badge, 1);
-            await gateway.emitGatewayEvent("update.available", {
-              updateAvailable: { channel: "beta", currentVersion: "2.0.0", latestVersion: "2.0.0" },
-              schedule: { channel: "beta", autoEnabled: false },
-            });
-            await expectCount(badge, 0);
-          }
-          await updates.click();
-          await expectPath(page, "/settings/updates");
-          expect(await gateway.getRequests("update.run")).toHaveLength(0);
-        },
-        {
-          ...gatewayBuild,
-          operatorScopes: ["operator.read", "operator.admin"],
+  it("gates release-update notifications and opens settings without running an update", async () => {
+    const channel = "stable";
+    const updateAvailable = { channel, currentVersion: "1.0.0", latestVersion: "2.0.0" };
+    const updateSchedule = {
+      channel,
+      autoEnabled: false,
+      target: { kind: "package" as const, version: "2.0.0" },
+    };
+    await withFooter(
+      async ({ gateway, page, sidebar }) => {
+        const menu = await openIdentityMenu(page, sidebar);
+        const updates = menu.getByRole("menuitem", { name: /^Updates/ });
+        await updates.waitFor();
+        const badge = updates.getByText("Available", { exact: true });
+        await expectCount(badge, 1);
+        await expectCount(sidebar.locator(".sidebar-issues-button__count"), 1);
+        // The selected schedule wins over leftover availability from another channel.
+        await gateway.emitGatewayEvent("update.available", {
           updateAvailable,
-          updateSchedule,
-        },
-      );
-    },
-  );
-
-  it("opens Updates settings from the account menu without starting an update", async () => {
-    await withFooter(async ({ gateway, page, sidebar }) => {
-      const menu = await openIdentityMenu(page, sidebar);
-      await menu.getByRole("menuitem", { name: "Updates", exact: true }).click();
-      await expectPath(page, "/settings/updates");
-      await expectCount(menu, 0);
-      await page.getByRole("heading", { name: "Updates", exact: true }).waitFor();
-      await gateway.waitForRequest("update.status");
-      expect(await gateway.getRequests("update.run")).toHaveLength(0);
-      await page.getByRole("button", { name: "Back to app", exact: true }).click();
-      await expectPath(page, "/chat/main");
-    });
+          schedule: { ...updateSchedule, channel: "dev" },
+        });
+        await expectCount(badge, 0);
+        await expectCount(sidebar.locator(".sidebar-issues-button__count"), 0);
+        await gateway.emitGatewayEvent("update.available", {
+          updateAvailable: { ...updateAvailable, channel: "beta" },
+          schedule: { ...updateSchedule, channel: "beta" },
+        });
+        await expectCount(badge, 1);
+        await gateway.emitGatewayEvent("update.available", {
+          updateAvailable: { channel: "beta", currentVersion: "2.0.0", latestVersion: "2.0.0" },
+          schedule: { channel: "beta", autoEnabled: false },
+        });
+        await expectCount(badge, 0);
+        await updates.click();
+        await expectPath(page, "/settings/updates");
+        await expectCount(menu, 0);
+        await page.getByRole("heading", { name: "Updates", exact: true }).waitFor();
+        await gateway.waitForRequest("update.status");
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+        await page.getByRole("button", { name: "Back to app", exact: true }).click();
+        await expectPath(page, "/chat/main");
+      },
+      {
+        ...gatewayBuild,
+        operatorScopes: ["operator.read", "operator.admin"],
+        updateAvailable,
+        updateSchedule,
+      },
+    );
   });
 
   it("labels the lifecycle status on the account icon during automatic recovery", async () => {

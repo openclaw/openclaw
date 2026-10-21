@@ -23,7 +23,6 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
-const baselineMode = process.env.OPENCLAW_SIDEBAR_BASELINE === "1";
 const selectedKey = "agent:main:dashboard:00000000-0000-4000-8000-000000000006";
 const railPins = ["route:sessions", `session:${selectedKey}`, "plugin:reports/overview"];
 const pluginPath = "/__openclaw__/plugins/control-ui/reports/one/index.js";
@@ -146,7 +145,7 @@ const settleFrames = (page: Page) =>
   );
 
 suite.define(() => {
-  it.each(baselineMode ? (["sessions"] as const) : (["sessions", "pages"] as const))(
+  it.each(["sessions", "pages"] as const)(
     "restores the %s view and pinned rail before hello through late counts and plugins",
     async (view) => {
       const agents: AgentsListResult = {
@@ -327,9 +326,7 @@ suite.define(() => {
               )
               .toEqual(["main", "forge", "scout"]);
           }
-          if (!baselineMode) {
-            await waitForSavedSidebar(page, view);
-          }
+          await waitForSavedSidebar(page, view);
           expect(
             await sidebar.locator(`[data-navigation-view="${view}"]`).getAttribute("aria-pressed"),
           ).toBe("true");
@@ -340,9 +337,7 @@ suite.define(() => {
                 .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-sidebar-entry"))),
             )
             .toEqual(railPins);
-          if (!baselineMode) {
-            await waitForSavedSidebar(page, view);
-          }
+          await waitForSavedSidebar(page, view);
           await settleFrames(page);
           const reference = await observeShape(sidebar);
           const settled = await reference.evaluate((observer) => observer.current());
@@ -363,50 +358,6 @@ suite.define(() => {
             online: [],
           });
           expect(settled.selectedBounds).not.toBeNull();
-
-          if (baselineMode) {
-            await page.reload();
-            await gateway.waitForRequest("connect");
-            await sidebar.waitFor({ state: "visible" });
-            await page.evaluate(() => document.fonts.ready.then(() => undefined));
-            const baseline = await observeShape(sidebar);
-            await capture(page, sidebar, "sidebar-old-before-hello.png");
-            await gateway.resolveDeferred("connect");
-            await sidebar.locator('[data-sidebar-entry="plugin:reports/overview"]').waitFor();
-            await sidebar.locator('[data-agent-group="scout"]').waitFor();
-            await expect
-              .poll(() =>
-                sidebar.locator("[data-agent-group] .sidebar-agent-roster__copy").allTextContents(),
-              )
-              .toEqual(["Harbor", "Forge", "Scout"]);
-            await settleFrames(page);
-            const reloaded = await baseline.evaluate((observer) => observer.current());
-            const baselineSamples = await baseline.evaluate((observer) => observer.stop());
-            await baseline.dispose();
-            expect(reloaded.navigation.filter((key) => key?.startsWith("session:"))).toHaveLength(
-              1,
-            );
-            expect(reloaded.sessions).toEqual(settled.sessions);
-            expect(reloaded.rail).toEqual(railPins);
-            expect(reloaded.avatarText).toEqual(["⚓", "🔧", "🔭"]);
-            await capture(page, sidebar, "sidebar-old-settled.png");
-            await writeFile(
-              path.join(suite.artifactDir, "sidebar-cold-load.json"),
-              JSON.stringify(
-                {
-                  baseline:
-                    "Baseline source signed-in reload after a real authenticated prior visit",
-                  previousVisit: settled,
-                  baselineSamples,
-                  reloaded,
-                  baselineLayoutChanges: baselineSamples.length - 1,
-                },
-                null,
-                2,
-              ),
-            );
-            return;
-          }
 
           await reloadCached();
           const restored = await observeShape(sidebar);

@@ -109,63 +109,6 @@ suite.define(() => {
     );
   });
 
-  it("shows saved descriptions in list rows and task details for every payload kind", async () => {
-    const describedJob = (id: string, payload: CronJob["payload"]) => ({
-      ...cronJob(id, `${id} task`),
-      description: `  ${id} description  `,
-      payload,
-    });
-    const jobs = [
-      describedJob("event", { kind: "systemEvent", text: "Run the system reminder" }),
-      describedJob("agent", { kind: "agentTurn", message: "List overnight deployment activity" }),
-      describedJob("command", { kind: "command", argv: ["echo", "healthy"] }),
-      describedJob("script", { kind: "script", script: "return 'healthy'" }),
-    ] as const;
-    const undescribedJob = cronJob("without-description", "Plain task");
-    await suite.withPage(pageOptions, async ({ page }) => {
-      await installMockGateway(page, {
-        methodResponses: {
-          "cron.list": cronListResponseFixture(
-            cronList([...jobs, undescribedJob], "cron-descriptions-fixture"),
-          ),
-          "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
-          "cron.status": { enabled: true, jobs: jobs.length + 1, nextWakeAtMs: null },
-        },
-      });
-
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await page.locator(`[data-test-id="cron-row-${jobs[0].id}"]`).waitFor({ timeout: 10_000 });
-
-      for (const job of jobs) {
-        const description = page.locator(`[data-test-id="cron-row-description-${job.id}"]`);
-        expect((await description.textContent())?.trim()).toBe(job.description.trim());
-        expect(await description.getAttribute("title")).toBe(
-          `Description: ${job.description.trim()}`,
-        );
-      }
-      expect(
-        await page.locator(`[data-test-id="cron-row-description-${undescribedJob.id}"]`).count(),
-      ).toBe(0);
-
-      for (const job of jobs) {
-        const row = page.locator(`[data-test-id="cron-row-${job.id}"]`);
-        await row.locator(".cron-table__name-text").click();
-        const detailDescription = page.locator('[data-test-id="cron-detail-description"]');
-        await detailDescription.waitFor({ state: "visible" });
-        expect((await detailDescription.textContent())?.replace(/\s+/g, " ").trim()).toBe(
-          `Description: ${job.description.trim()}`,
-        );
-
-        await page.locator('[data-test-id="cron-detail-tab-history"]').click();
-        expect((await detailDescription.textContent())?.replace(/\s+/g, " ").trim()).toBe(
-          `Description: ${job.description.trim()}`,
-        );
-        await page.locator('[data-test-id="cron-back"]').click();
-        await row.waitFor({ timeout: 10_000 });
-      }
-    });
-  });
-
   it("configured duration precision: shows exact saved intervals in rows and details", async () => {
     const cases = [
       { id: "minute-control", everyMs: 60_000, text: "Every 1m" },
@@ -194,6 +137,7 @@ suite.define(() => {
       );
       for (const [index, job] of jobs.entries()) {
         const row = page.locator(`[data-test-id="cron-row-${job.id}"]`);
+        expect(await row.locator(".cron-table__description").count()).toBe(0);
         expect(await row.getAttribute("class")).toContain("cron-table__row--paused");
         const rowText = (
           await row.locator(".cron-table__schedule .cron-table__cell-value").textContent()

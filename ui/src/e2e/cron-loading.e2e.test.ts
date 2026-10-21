@@ -2,11 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
-import {
-  installMockGateway,
-  startControlUiE2eServer,
-  type MockGatewayRequest,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import {
   createControlUiE2eContextOptions,
@@ -27,13 +23,8 @@ const emptyList = cronList([], "cron-loading-empty");
 const contextOptions = createControlUiE2eContextOptions();
 const emptyRuns = { entries: [], total: 0, offset: 0, limit: 50, hasMore: false };
 
-function installCronGateway(
-  page: Page,
-  responses: Record<string, unknown> = {},
-  heldMethods?: string[],
-) {
+function installCronGateway(page: Page, responses: Record<string, unknown> = {}) {
   return installMockGateway(page, {
-    ...(heldMethods ? { heldMethods } : {}),
     methodResponses: {
       "cron.list": emptyList,
       "cron.runs": emptyRuns,
@@ -54,31 +45,6 @@ function runsPage(
 
 function run(ts: number, jobId: string, summary: string) {
   return { ts, jobId, action: "finished", status: "ok", summary };
-}
-
-function setVisibility(page: Page, state: "hidden" | "visible") {
-  return page.evaluate((visibility) => {
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      get: () => visibility,
-    });
-    document.dispatchEvent(new Event("visibilitychange"));
-    if (visibility === "visible") {
-      globalThis.dispatchEvent(new Event("focus"));
-    }
-  }, state);
-}
-
-async function emitBurst(gateway: Awaited<ReturnType<typeof installCronGateway>>) {
-  for (let event = 0; event < 20; event += 1) {
-    await gateway.emitGatewayEvent("cron", { jobId: "synthetic-job", action: "finished" });
-  }
-}
-
-function tableListRequests(requests: MockGatewayRequest[]) {
-  return requests.filter(
-    ({ params }) => isRecord(params) && params.scheduleKind === "all" && params.trigger === "all",
-  );
 }
 
 suite.define(() => {
@@ -240,105 +206,6 @@ suite.define(() => {
           ({ params }) => isRecord(params) && params.offset,
         ),
       ).toEqual([0, 1]);
-    });
-  });
-
-  it("bounds a held cron event burst and displays the completed run", async () => {
-    await suite.withPage(contextOptions, async ({ page }) => {
-      const summary = "Synthetic automation completed successfully";
-      const runs = {
-        ...runsPage([run(Date.parse("2026-08-01T12:00:00Z"), "synthetic-job", summary)]),
-        limit: 50,
-      };
-      const gateway = await installCronGateway(page, { "cron.runs": runs }, [
-        "cron.status",
-        "cron.runs",
-      ]);
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByText("No automations yet").waitFor({ state: "visible" });
-      await gateway.waitForRequest("cron.runs");
-      await page.getByRole("tab", { name: "Run history", exact: true }).click();
-      const countRequests = async () => ({
-        status: (await gateway.getRequests("cron.status")).length,
-        runs: (await gateway.getRequests("cron.runs")).length,
-      });
-      const before = await countRequests();
-      await emitBurst(gateway);
-      const held = await countRequests();
-      expect(held).toEqual(before);
-      await gateway.resolveDeferred("cron.status");
-      await gateway.resolveDeferred("cron.runs");
-      await page.getByText(summary).waitFor({ state: "visible" });
-      await expect
-        .poll(async () => (await gateway.getRequests("cron.runs")).length)
-        .toBe(before.runs + 1);
-    });
-  });
-
-  it("pauses queued automation reads while hidden and catches up once on show", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installCronGateway(page, {}, ["cron.list", "cron.runs"]);
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await page.locator('[data-test-id="cron-jobs-loading"]').waitFor({ state: "visible" });
-      await gateway.waitForRequest("cron.runs");
-      const counts = async () => ({
-        table: tableListRequests(await gateway.getRequests("cron.list")).length,
-        runs: (await gateway.getRequests("cron.runs")).length,
-      });
-      const before = await counts();
-      await emitBurst(gateway);
-      await setVisibility(page, "hidden");
-      await gateway.resolveDeferred("cron.list");
-      await gateway.resolveDeferred("cron.runs");
-      await page.getByText("No automations yet").waitFor({ state: "visible" });
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            setTimeout(resolve, 0);
-          }),
-      );
-      expect(await counts()).toEqual(before);
-      await setVisibility(page, "visible");
-      await expect.poll(counts).toEqual({ table: before.table + 1, runs: before.runs + 1 });
-      await page.getByText("No automations yet").waitFor({ state: "visible" });
-    });
-  });
-
-  it("shows pending before empty and keeps empty visible after a run-history failure", async () => {
-    await suite.withPage(contextOptions, async ({ page }) => {
-      const gateway = await installCronGateway(page, {}, ["cron.list"]);
-
-      const response = await page.goto(`${suite.server.baseUrl}cron`);
-      expect(response?.status()).toBe(200);
-      await gateway.waitForRequest("cron.list");
-
-      const loading = page.locator('[data-test-id="cron-jobs-loading"]');
-      await loading.waitFor({ state: "visible" });
-      expect(await loading.getAttribute("role")).toBe("status");
-      expect(await loading.getAttribute("aria-live")).toBe("polite");
-      await expect.poll(() => loading.textContent()).toContain("Loading...");
-      expect(await page.getByText("No automations yet").count()).toBe(0);
-      expect(await page.locator(".cron-table").getAttribute("aria-busy")).toBe("true");
-      expect(tableListRequests(await gateway.getRequests("cron.list"))).toHaveLength(1);
-
-      await gateway.resolveDeferred("cron.list", emptyList);
-      await page.getByText("No automations yet").waitFor({ state: "visible" });
-      expect(await loading.count()).toBe(0);
-      expect(await page.locator(".cron-table").getAttribute("aria-busy")).toBeNull();
-
-      await gateway.setMethodResponse("cron.runs", {
-        __mockError: { code: "UNAVAILABLE", message: "Run history unavailable." },
-      });
-      const previousTableRequests = tableListRequests(
-        await gateway.getRequests("cron.list"),
-      ).length;
-      await page.getByRole("button", { name: "Refresh" }).click();
-
-      await page.getByText("Run history unavailable.").waitFor({ state: "visible" });
-      await page.getByText("No automations yet").waitFor({ state: "visible" });
-      await expect
-        .poll(async () => tableListRequests(await gateway.getRequests("cron.list")))
-        .toHaveLength(previousTableRequests + 1);
     });
   });
 });

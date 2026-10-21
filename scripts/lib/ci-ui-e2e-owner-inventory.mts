@@ -1047,17 +1047,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["cron"],
     ["ui/src/lib/cron/types.ts"],
   ),
-  pageWatch(
-    "ui/src/e2e/cron-history-recovery.e2e.test.ts",
-    ["cron"],
-    [
-      "ui/src/lib/cron/types.ts",
-      "ui/src/pages/cron/cron-page.tsx",
-      "ui/src/pages/cron/cron-page-controller.ts",
-    ],
-  ),
-  pageWatch("ui/src/e2e/cron-job-link.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
-  pageWatch("ui/src/e2e/cron-pacing.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   pageWatch("ui/src/e2e/cron-remove.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   pageWatch("ui/src/e2e/cron-run-completion.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   pageWatch("ui/src/e2e/cron-run-feedback.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
@@ -1069,7 +1058,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["cron"],
     ["ui/src/lib/cron/types.ts"],
   ),
-  pageWatch("ui/src/e2e/cron-trigger-filter.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   {
     testFile: "ui/src/e2e/csp-jitless.e2e.test.ts",
     ownerRoots: ["src/gateway/control-ui-csp.ts", "ui/src/main.ts", "ui/src/pages/chat/route.ts"],
@@ -1974,11 +1962,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch("ui/src/e2e/sidebar-plugin-order.e2e.test.ts", ["chat", "workboard"]),
   pageWatch("ui/src/e2e/sidebar-refresh-availability.e2e.test.ts", ["new-session"]),
   pageWatch("ui/src/e2e/sidebar-restart-recovery.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
-  pageWatch(
-    "ui/src/e2e/sidebar-roster-completeness.capture.e2e.test.ts",
-    ["chat"],
-    sessionMenuOwnerRoots,
-  ),
   pageWatch("ui/src/e2e/sidebar-selection-overflow.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/sidebar-session-stability.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch(

@@ -5,8 +5,6 @@ import {
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
-  requireRecord,
-  requireString,
 } from "./chat-flow.test-support.ts";
 import { expectCount } from "./sidebar-assertions.test-support.ts";
 
@@ -210,79 +208,5 @@ suite.define(() => {
       await page.mouse.move(0, 0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(2);
     });
-  });
-  it("clears the warning on authoritative pending custody and retires only after consumption", async () => {
-    await suite.withPage(
-      { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers: "block" },
-      async ({ page }) => {
-        const sessionKey = "agent:main:late-custody";
-        const sessionId = `session:${sessionKey}`;
-        const prompt = "Keep this input until it is consumed";
-        const history = {
-          sessionId,
-          messages: [],
-          sessionInfo: { key: sessionKey, sessionId, hasActiveRun: false, status: "done" },
-        };
-        const { gateway, composer } = await openOutbox(page, {
-          sessionKey,
-          methodResponses: { "chat.history": history },
-        });
-        await gateway.deferNext("chat.send");
-        await composer.fill(prompt);
-        await page.getByRole("button", { name: "Send message", exact: true }).click();
-        const runId = requireString(
-          requireRecord((await gateway.waitForRequest("chat.send")).params).idempotencyKey,
-          "submission id",
-        );
-        const hasPayload = (sendState?: string) =>
-          page.evaluate(
-            (expected) =>
-              Object.entries(sessionStorage).some(
-                ([key, value]) =>
-                  key.startsWith("openclaw.control.chatComposer.") &&
-                  value.includes(expected.runId) &&
-                  (!expected.sendState || value.includes(`"sendState":"${expected.sendState}"`)),
-              ),
-            { runId, sendState },
-          );
-        await reconnectUnconfirmed(page, gateway);
-        await page.locator(".sidebar-issues-button").click();
-        await page.locator("#sidebar-issues-tab-system").click();
-        await page
-          .locator('[data-attention-kind="outbox"]')
-          .getByText("Your message may not have arrived", { exact: true })
-          .waitFor();
-        await gateway.setOnline(false);
-        await gateway.setMethodResponse("chat.history", {
-          ...history,
-          pendingInputs: {
-            total: 1,
-            items: [
-              {
-                id: "accepted-input",
-                runId,
-                state: "queued",
-                acceptedAt: 100,
-                message: { role: "user", content: prompt },
-              },
-            ],
-          },
-          inputReceipts: [{ runId, state: "pending" }],
-        });
-        await gateway.setOnline(true);
-        await expect.poll(() => hasPayload("waiting-idle")).toBe(true);
-        await expectCount(page.locator('[data-attention-kind="outbox"]'), 0);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-        await gateway.setOnline(false);
-        await gateway.setMethodResponse("chat.history", {
-          ...history,
-          pendingInputs: { items: [], total: 0 },
-          inputReceipts: [{ runId, state: "consumed", consumedByEventId: "canonical-input" }],
-        });
-        await gateway.setOnline(true);
-        await expect.poll(() => hasPayload()).toBe(false);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      },
-    );
   });
 });

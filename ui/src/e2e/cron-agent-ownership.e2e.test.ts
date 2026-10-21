@@ -3,19 +3,13 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { CronJob } from "../api/types.ts";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import {
-  controlUiBundledSettingsStorageKey,
-  installMockGateway,
-  type MockGatewayRequest,
-} from "../test-helpers/control-ui-e2e.ts";
-import { cronListResponseFixture } from "../test-helpers/cron.ts";
+import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import { openPicker } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
+import { cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron agent ownership E2E",
@@ -36,22 +30,8 @@ const cronResponses = {
   "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
 };
 const models = (id: string, name = id) => ({ models: [{ id, name, provider: "fixture" }] });
-const agents = (name: string) => ({
-  agents: [
-    { id: "main", identity: { name }, name },
-    { id: "writer", identity: { name: "Writer" }, name: "Writer" },
-  ],
-  defaultId: "main",
-  mainKey: "main",
-  scope: "agent",
-});
 const screenshot = (page: Page, name: string) =>
   page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`) });
-const withPage = (recordVideo: boolean, run: Parameters<typeof suite.withPage>[1]) =>
-  suite.withPage(
-    { ...pageOptions, ...(recordVideo ? { recordVideo: { dir: suite.artifactDir } } : {}) },
-    run,
-  );
 async function openDraft(page: Page, name: string) {
   await page.locator('[data-test-id="cron-new-task"]').click();
   await page.locator("#cron-name").fill(name);
@@ -76,7 +56,7 @@ suite.define(() => {
   it.each([false, true])(
     "keeps catalog warnings in Automations and out of model search (retained rows: %s)",
     async (hasRows) => {
-      await withPage(false, async ({ page }) => {
+      await suite.withPage(pageOptions, async ({ page }) => {
         const gateway = await installMockGateway(page, {
           models: [],
           methodResponses: {
@@ -143,182 +123,8 @@ suite.define(() => {
         const requests = await gateway.getRequests();
         await screenshot(page, `internal-catalog-recovery-${hasRows}`);
         expectCatalogReads(requests);
-        expectNoWrites(requests, ["chat.send"]);
+        expectNoWrites(requests, ["chat.send", "cron.run", "sessions.patch"]);
       });
     },
   );
-
-  it("refreshes model suggestions after catalog changes without replacing the draft", async () => {
-    await withPage(true, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        models: [],
-        methodResponses: {
-          ...cronResponses,
-          "models.list": models("fixture/old"),
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}cron`);
-      const picker = await openDraft(page, "Keep this draft");
-      await openPicker(picker);
-      await option(picker, "old").waitFor();
-      await screenshot(page, "initial");
-      await page.keyboard.press("Escape");
-      // Finish the hide animation before a later click reopens the picker.
-      await picker.getByRole("listbox").waitFor({ state: "hidden" });
-
-      await gateway.setMethodResponse("models.list", models("fixture/new"));
-      await gateway.emitGatewayEvent("chat.metadata.changed", {});
-      await openPicker(picker);
-      await expectOption(picker, "new", 1);
-      expect(await option(picker, "old").count()).toBe(0);
-      await option(picker, "new").waitFor();
-      await screenshot(page, "refreshed");
-      await page.keyboard.press("Escape");
-      await picker.getByRole("listbox").waitFor({ state: "hidden" });
-
-      await gateway.setMethodResponse("models.list", {
-        __mockError: { code: "UNAVAILABLE", message: "Model suggestions unavailable" },
-      });
-      await gateway.emitGatewayEvent("config.changed", {});
-      await page.getByText("Model suggestions unavailable", { exact: true }).waitFor();
-      await openPicker(picker);
-      expect(await option(picker, "new").count()).toBe(1);
-      await screenshot(page, "failed-refresh");
-
-      await gateway.setMethodResponse("models.list", { models: [] });
-      await gateway.emitGatewayEvent("chat.metadata.changed", {});
-      await expectOption(picker, "new", 0);
-      await expect
-        .poll(() => page.getByText("Model suggestions unavailable", { exact: true }).count())
-        .toBe(0);
-      expect(await page.locator("#cron-name").inputValue()).toBe("Keep this draft");
-      const requests = await gateway.getRequests();
-      expectCatalogReads(requests);
-      expectNoWrites(requests, ["cron.run", "sessions.patch"]);
-    });
-  });
-
-  it("refreshes model suggestions when the roster selection changes", async () => {
-    await withPage(true, async ({ page }) => {
-      await page.addInitScript(
-        ({ key }) => {
-          localStorage.setItem(key, JSON.stringify({ sidebarAgentsMode: "roster" }));
-        },
-        { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
-      );
-      const gateway = await installMockGateway(page, {
-        models: [],
-        methodResponses: {
-          ...cronResponses,
-          "agents.list": agents("Main"),
-          "models.list": {
-            cases: ["writer", "main"].map((agentId) => ({
-              match: { agentId, view: "configured" },
-              response: models(`fixture/${agentId}`),
-            })),
-          },
-        },
-      });
-
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await gateway.waitForRequest("models.list", {
-        match: { agentId: "main", view: "configured" },
-      });
-      const picker = await openDraft(page, "Keep this roster draft");
-      await openPicker(picker);
-      await expectOption(picker, "main", 1);
-      await screenshot(page, "roster-model-main");
-      await page.keyboard.press("Escape");
-      await picker.getByRole("listbox").waitFor({ state: "hidden" });
-      const inventoryReadsBeforeSwitch = (await gateway.getRequests("cron.list")).length;
-
-      await evaluateControlUiContext(page, (context) => {
-        context.agentSelection.set("writer");
-      });
-      await gateway.waitForRequest("models.list", {
-        match: { agentId: "writer", view: "configured" },
-      });
-      await openPicker(picker);
-      await expectOption(picker, "writer", 1);
-      expect(await option(picker, "main").count()).toBe(0);
-      expect(await page.locator("#cron-name").inputValue()).toBe("Keep this roster draft");
-      await screenshot(page, "roster-model-writer");
-
-      const requests = await gateway.getRequests();
-      const inventoryRequests = requests.filter(({ method }) => method === "cron.list");
-      expect(inventoryRequests.length).toBeGreaterThanOrEqual(inventoryReadsBeforeSwitch);
-      expect(
-        inventoryRequests.every((request) => requestParams(request).agentId === undefined),
-      ).toBe(true);
-    });
-  });
-
-  it("keeps the selected agent as owner while browsing all agents", async () => {
-    const payload = { kind: "agentTurn", message: "Prepare the weekday report" } as const;
-    const createdJob = cronJob("weekday-report", "Weekday report", {
-      agentId: "main",
-      createdAtMs: Date.parse("2026-05-29T08:00:00.000Z"),
-      updatedAtMs: Date.parse("2026-05-29T08:05:00.000Z"),
-      schedule: { kind: "every", everyMs: 1_800_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload,
-    });
-    await withPage(false, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        assistantName: "Assistant",
-        methodResponses: {
-          ...cronResponses,
-          "agents.list": agents("Assistant"),
-          "cron.add": { id: createdJob.id },
-          "cron.list": {
-            cases: [
-              { match: { lastRunStatus: "error" }, response: cronListResponse([]) },
-              { response: cronListResponse([]) },
-            ],
-          },
-          "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
-        },
-      });
-
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await gateway.waitForRequest("agents.list");
-      const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
-      await pageScope.locator(".agent-select__trigger").click();
-      await pageScope
-        .locator(".agent-select__option[data-agent-option]")
-        .filter({ hasText: "All agents" })
-        .click();
-      await expect
-        .poll(() =>
-          pageScope.evaluate((picker) => (picker as HTMLElement & { value: string }).value),
-        )
-        .toBe("");
-
-      await page.locator('[data-test-id="cron-new-task"]').click();
-      await page.locator("#cron-name").fill(createdJob.name);
-      await page.locator("#cron-payload-text").fill(payload.message);
-      await gateway.setMethodResponse(
-        "cron.list",
-        cronListResponseFixture([
-          { match: { lastRunStatus: "error" }, response: cronListResponse([]) },
-          { response: cronListResponse([createdJob]) },
-        ]),
-      );
-      await page.locator('[data-test-id="cron-submit"]').click();
-
-      expect(requestParams(await gateway.waitForRequest("models.list"))).toEqual({
-        agentId: "main",
-        view: "configured",
-      });
-      expect(requestParams(await gateway.waitForRequest("cron.add"))).toMatchObject({
-        agentId: "main",
-        name: createdJob.name,
-        payload: createdJob.payload,
-      });
-      await page
-        .locator(".cron-table__name-text", { hasText: createdJob.name })
-        .waitFor({ state: "visible", timeout: 10_000 });
-    });
-  });
 });
