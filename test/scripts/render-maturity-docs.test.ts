@@ -64,28 +64,6 @@ function evidenceFixture(options: Partial<Parameters<typeof writeQaEvidence>[0]>
   };
 }
 
-function readScorecard(outputDir: string) {
-  return fs.readFileSync(path.join(outputDir, "maturity/scorecard.md"), "utf8");
-}
-
-function expectHistoricalScorecard(scorecard: string, identity: string) {
-  for (const text of [
-    "Coverage Unscored",
-    `Historical evidence: taxonomy identity ${identity}`,
-    "1 passed",
-    "Historical category evidence",
-  ]) {
-    expect(scorecard).toContain(text);
-  }
-  expect(scorecard).not.toContain("Readiness by area");
-  const category = allProfileScorecardFixture().categoryReports[0]!;
-  expect(scorecard).toContain(category.name);
-  expect(scorecard).toContain(category.id);
-  expect(scorecard.replace(/ +\|/gu, " |")).toContain(
-    `| ${category.name} | ${category.id} | 0 of ${category.features.total} (0%) | 0 of ${category.coverageIds.total} (0%) |`,
-  );
-}
-
 function createMaturityInvocation(count: number) {
   return createQaEvidenceInvocation({
     scenarios: Array.from({ length: count }, () => ({
