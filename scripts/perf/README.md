@@ -1355,8 +1355,10 @@ and profile path. Join native IDs to the existing memory samples' `workerHeaps`
 and `workerMemoryMissing` script identities before attributing bytes to an owner.
 Read successful worker profiles with `readGatewayHeapProfile` and report main,
 owner-worker, all-worker, and combined bytes per completed foreground turn
-separately. Retired or unidentified workers are missing evidence, never zero
-allocation. Worker profiling also samples worker resource usage every 100 ms;
+separately. During profiling, intentional worker termination first exports its
+active profiles, waiting at most five seconds for an unresponsive worker.
+Unexpected exits, failed exports, or unidentified workers are missing evidence,
+never zero allocation. Worker profiling also samples worker resource usage every 100 ms;
 enable it identically on both sides of a comparison.
 
 `--soak-rounds <n>` runs exactly that many measured cohorts instead of admitting

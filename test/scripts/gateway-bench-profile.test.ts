@@ -394,14 +394,25 @@ it.each([
 
     const retiredPath = path.join(directory, `${kind}-retired`);
     await controlGatewayProfile(child, kind, "start", retiredPath, { includeWorkers: true });
+    expect(await sendMessage(child, { run: true })).toMatchObject({ complete: true });
     expect(await sendMessage(child, { retire: true })).toMatchObject({ retired: true });
     await controlGatewayProfile(child, kind, "stop", retiredPath, { includeWorkers: true });
-    const incomplete = await readJson<WorkerProfileManifest>(`${retiredPath}.workers.json`);
-    expect(workerIdentities(incomplete)).toEqual(workerIdentities(manifest));
-    for (const recording of incomplete.workers) {
-      expect(recording.completed).not.toBe(true);
-      expect(recording.error).toBeTruthy();
-      expect(recording.samplingStoppedAt).toBeUndefined();
+    const retired = await readJson<WorkerProfileManifest>(`${retiredPath}.workers.json`);
+    expect(workerIdentities(retired)).toEqual(workerIdentities(manifest));
+    for (const recording of retired.workers) {
+      expect(recording.completed).toBe(true);
+      expect(recording.error).toBeUndefined();
+      expect(recording.samplingStoppedAt).toBeGreaterThan(recording.samplingStartedAt!);
+      if (recording.threadId === completed.threadId) {
+        if (kind === "cpu") {
+          const profile = await readJson<Profiler.Profile>(recording.profilePath);
+          expect(profile.samples?.length ?? 0).toBeGreaterThan(50);
+        } else {
+          expect(
+            readGatewayHeapProfile(recording.profilePath).sampledAllocatedBytes,
+          ).toBeGreaterThan(1_000_000);
+        }
+      }
     }
   },
   30_000,

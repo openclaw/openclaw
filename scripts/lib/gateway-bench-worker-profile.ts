@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import type { Session } from "node:inspector/promises";
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
 import { coerceErrorMessage as errorMessage } from "./error-format.mts";
 import {
@@ -29,6 +30,7 @@ type WorkerRecording = {
   samplingStartedAt?: number;
   samplingStoppedAt?: number;
   pending: Promise<void>;
+  stopping?: Promise<void>;
   completed?: boolean;
   error?: string;
 };
@@ -57,6 +59,7 @@ type WorkerReply = {
 export class GatewayBenchWorkerProfiler {
   private workers = new Set<Worker>();
   private targets = new Map<string, WorkerTarget>();
+  private activeRecordings = new Map<WorkerRecording, GatewayProfileCommand["kind"]>();
   private captures = new Map<GatewayProfileCommand["kind"], Capture>();
   private requests = new Map<
     number,
@@ -74,6 +77,20 @@ export class GatewayBenchWorkerProfiler {
     this.inspector = inspector;
     process.on("worker", (worker) => {
       this.workers.add(worker);
+      const terminate = worker.terminate.bind(worker);
+      worker.terminate = async () => {
+        const recordings = [...this.activeRecordings].filter(
+          ([recording]) => recording.threadId === worker.threadId,
+        );
+        if (recordings.length > 0) {
+          // Export before intentional retirement; an unresponsive worker must still terminate.
+          await Promise.race([
+            Promise.all(recordings.map(([recording, kind]) => this.finish(kind, recording))),
+            delay(5_000, undefined, { ref: false }),
+          ]);
+        }
+        return await terminate();
+      };
       worker.once("exit", () => this.workers.delete(worker));
     });
     inspector.on(
@@ -159,8 +176,7 @@ export class GatewayBenchWorkerProfiler {
     if (this.captures.has(kind)) {
       throw new Error(`Worker ${kind} profiling already started`);
     }
-    // Native Worker.startHeapProfile can crash Node on termination. Inspector targets
-    // instead detach cleanly, letting us record incomplete capture without changing retirement.
+    // Native Worker.startHeapProfile can crash Node on termination; use inspector targets.
     this.enabled ??= this.inspector.post("NodeWorker.enable", { waitForDebuggerOnStart: false });
     await this.enabled;
     const capture: Capture = { kind, profilePath, heapOptions, recordings: [], samples: [] };
@@ -183,6 +199,7 @@ export class GatewayBenchWorkerProfiler {
       pending: Promise.resolve(),
     };
     capture.recordings.push(recording);
+    this.activeRecordings.set(recording, capture.kind);
     recording.pending = (async () => {
       try {
         if (recording.threadId === undefined) {
@@ -232,6 +249,29 @@ export class GatewayBenchWorkerProfiler {
     }));
   }
 
+  private finish(kind: GatewayProfileCommand["kind"], recording: WorkerRecording): Promise<void> {
+    return (recording.stopping ??= (async () => {
+      await recording.pending;
+      if (recording.error) {
+        return;
+      }
+      try {
+        const result = await this.post(
+          recording.target,
+          kind === "cpu" ? "Profiler.stop" : "HeapProfiler.stopSampling",
+        );
+        recording.samplingStoppedAt = performance.now();
+        if (!result?.profile) {
+          throw new Error("Worker profiler returned no profile");
+        }
+        writeFileSync(recording.profilePath, JSON.stringify(result.profile), { mode: 0o600 });
+        recording.completed = true;
+      } catch (error) {
+        recording.error = errorMessage(error);
+      }
+    })().finally(() => this.activeRecordings.delete(recording)));
+  }
+
   async stop(kind: GatewayProfileCommand["kind"]): Promise<void> {
     const capture = this.captures.get(kind);
     if (!capture) {
@@ -242,28 +282,7 @@ export class GatewayBenchWorkerProfiler {
     clearInterval(capture.timer);
     await capture.polling;
     await this.sample(capture);
-    await Promise.all(
-      capture.recordings.map(async (recording) => {
-        await recording.pending;
-        if (recording.error) {
-          return;
-        }
-        try {
-          const result = await this.post(
-            recording.target,
-            kind === "cpu" ? "Profiler.stop" : "HeapProfiler.stopSampling",
-          );
-          recording.samplingStoppedAt = performance.now();
-          if (!result?.profile) {
-            throw new Error("Worker profiler returned no profile");
-          }
-          writeFileSync(recording.profilePath, JSON.stringify(result?.profile), { mode: 0o600 });
-          recording.completed = true;
-        } catch (error) {
-          recording.error = errorMessage(error);
-        }
-      }),
-    );
+    await Promise.all(capture.recordings.map((recording) => this.finish(kind, recording)));
     writeFileSync(
       `${capture.profilePath}.workers.json`,
       JSON.stringify({
@@ -278,11 +297,13 @@ export class GatewayBenchWorkerProfiler {
         sampleIntervalMs: 100,
         sampleClock: "performance.now",
         cpuCounters: "cumulative-microseconds",
-        workers: capture.recordings.map(({ pending: _pending, target, ...row }) => ({
-          inspectorWorkerId: target.inspectorWorkerId,
-          title: target.title,
-          ...row,
-        })),
+        workers: capture.recordings.map(
+          ({ pending: _pending, stopping: _stopping, target, ...row }) => ({
+            inspectorWorkerId: target.inspectorWorkerId,
+            title: target.title,
+            ...row,
+          }),
+        ),
         samples: capture.samples,
       }),
       { mode: 0o600 },
