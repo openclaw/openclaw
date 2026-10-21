@@ -11,6 +11,7 @@ import {
   resolveMobileReleaseRef,
 } from "../../scripts/mobile-release-ref.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { commit, git as repoGit, initGit, write } from "./mobile-release-git.test-support.js";
 
 const SCRIPT_PATH = path.join(process.cwd(), "scripts", "mobile-release-ref.ts");
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
@@ -23,7 +24,7 @@ function run(command: string, args: string[], cwd: string): string {
   });
 }
 
-const git = (cwd: string, args: string[]) => run("git", args, cwd);
+const git = (cwd: string, args: string[]) => repoGit(cwd, ...args);
 function cli(...args: string[]) {
   return run(process.execPath, ["--import", "tsx", SCRIPT_PATH, ...args], process.cwd());
 }
@@ -40,10 +41,8 @@ function recordOptions(root: string, sha = "HEAD", build = "8") {
   ]);
 }
 function commitReadme(root: string, contents: string) {
-  writeFileSync(path.join(root, "README.md"), `${contents}\n`, "utf8");
-  git(root, ["add", "README.md"]);
-  git(root, ["commit", "-m", contents]);
-  return git(root, ["rev-parse", "HEAD"]).trim();
+  write(root, "README.md", `${contents}\n`);
+  return commit(root, contents, "README.md");
 }
 function recording(
   options: ReturnType<typeof parseArgs>,
@@ -61,9 +60,8 @@ function createFixtureRepo(tempDirs = tempRoots): { remote: string; root: string
   const remote = path.join(root, "remote.git");
   const checkout = path.join(root, "checkout");
   git(root, ["init", "--bare", remote]);
-  git(root, ["clone", remote, checkout]);
-  git(checkout, ["config", "user.email", "release@example.com"]);
-  git(checkout, ["config", "user.name", "Release Test"]);
+  initGit(checkout, { name: "Release Test", email: "release@example.com" });
+  git(checkout, ["remote", "add", "origin", remote]);
   const sha = commitReadme(checkout, "release");
   git(checkout, ["push", "origin", "HEAD:main"]);
   return { remote: "origin", root: checkout, sha };
@@ -87,33 +85,26 @@ describe("mobile-release-ref", () => {
     afterEach(() => vi.restoreAllMocks());
 
     it.each([
-      "Unable to determine if workflow can be created or updated due to timeout; `workflows` scope may be required.",
-      "fatal: unable to access remote: The requested URL returned error: 503",
-      "fatal: unable to access remote: Recv failure: Connection reset by peer",
-    ])("retries a transient push failure and records the original source: %s", (stderr) => {
-      let pushes = 0;
+      [
+        "push",
+        "Unable to determine if workflow can be created or updated due to timeout; `workflows` scope may be required.",
+      ],
+      ["push", "fatal: unable to access remote: The requested URL returned error: 503"],
+      ["push", "fatal: unable to access remote: Recv failure: Connection reset by peer"],
+      ["ls-remote", "fatal: Could not resolve host: github.com"],
+    ])("retries transient %s failure and records the original source: %s", (operation, stderr) => {
+      let attempts = 0;
       const result = recording(options, (args, forward) => {
-        if (args[0] === "push" && ++pushes === 1) {
+        if (args[0] === operation && ++attempts === 1) {
           throw gitFailure(stderr);
         }
         return forward();
       })();
       expect(result).toMatchObject({ sha: fixture.sha, status: "created" });
       expect(resolveMobileReleaseRef(options).sha).toBe(fixture.sha);
-      expect(pushes).toBe(2);
-      expect(Atomics.wait).toHaveBeenCalledTimes(1);
-    });
-
-    it("retries a failed preflight read before creating a release ref", () => {
-      let reads = 0;
-      const result = recording(options, (args, forward) => {
-        if (args[0] === "ls-remote" && ++reads === 1) {
-          throw gitFailure("fatal: Could not resolve host: github.com", "Git lookup failed");
-        }
-        return forward();
-      })();
-      expect(result).toMatchObject({ sha: fixture.sha, status: "created" });
-      expect(resolveMobileReleaseRef(options).sha).toBe(fixture.sha);
+      if (operation === "push") {
+        expect(attempts).toBe(2);
+      }
       expect(Atomics.wait).toHaveBeenCalledTimes(1);
     });
 
@@ -223,17 +214,6 @@ describe("mobile-release-ref", () => {
     );
   });
 
-  it("parses Android record command identities", () => {
-    const identity = { platform: "android", version: "2026.6.10" };
-    const versionCode = "2026061008";
-    const args = flags({ ...identity, "version-code": versionCode, sha: "HEAD" });
-    expect(parseArgs(["record", "--", ...args])).toMatchObject({
-      command: "record",
-      ...identity,
-      versionCode,
-    });
-  });
-
   it("preserves flag ordering and fails before treating a missing value as help", () => {
     expect(
       parseArgs(["resolve", "--platform", "android", "--", "--platform", "ios"]),
@@ -254,12 +234,16 @@ describe("mobile-release-ref", () => {
     expect(recordMobileReleaseRef(iosOptions).status).toBe("already-recorded");
     expect(resolveMobileReleaseRef(iosOptions)).toMatchObject(recorded);
 
-    const androidOptions = {
-      ...iosOptions,
-      build: null,
-      platform: "android" as const,
-      versionCode: "2026061008",
-    };
+    const identity = { platform: "android", version: "2026.6.10" };
+    const versionCode = "2026061008";
+    const args = flags({
+      ...identity,
+      "version-code": versionCode,
+      sha: "HEAD",
+      root: fixture.root,
+    });
+    const androidOptions = parseArgs(["record", "--", ...args]);
+    expect(androidOptions).toMatchObject({ command: "record", ...identity, versionCode });
     expect(recordMobileReleaseRef(androidOptions).ref).toBe(
       "refs/openclaw/mobile-releases/android/2026.6.10-2026061008",
     );

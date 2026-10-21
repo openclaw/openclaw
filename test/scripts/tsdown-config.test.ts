@@ -4,7 +4,9 @@ import fs from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { build } from "tsdown";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
+import { build, type TsdownPluginOption } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectRootPackageExcludedExtensionDirs,
@@ -14,7 +16,10 @@ import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
 } from "../../scripts/lib/package-dist-imports.mjs";
-import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
+import {
+  publicPluginSdkEntrypoints,
+  buildPluginSdkPackageExports,
+} from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
@@ -28,8 +33,13 @@ import {
   WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS,
   WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
 } from "../../src/shared/worker-bundle-hash.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import buildConfigs from "../../tsdown.config.ts";
+import buildConfigs, {
+  createStateSchemaInlinePlugin,
+  STATE_SCHEMA_INLINE_PLUGIN_NAME,
+} from "../../tsdown.config.ts";
+import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -1515,5 +1525,321 @@ console.log("relocated session card renders with bundled fonts");
     for (const entry of nodePackageConfigs) {
       expect(entry.outExtensions?.(context)).toEqual({ js: ".js", dts: ".d.ts" });
     }
+  });
+});
+
+const extensionContext = {
+  format: "es",
+  options: {},
+  pkgType: "module",
+} as Parameters<OutExtensions>[0];
+function entrySources(config: TsdownConfig): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(config.entry ?? {}).map(([name, source]) => {
+      if (typeof source !== "string") {
+        throw new Error(`Expected one source for ${name}`);
+      }
+      return [name, source];
+    }),
+  );
+}
+const entryKeys = (config: TsdownConfig) => Object.keys(entrySources(config));
+function requireStandaloneRuntimeGraph(entry: string) {
+  const graphs = configs.filter(
+    (config) =>
+      !(typeof config.dts === "object" && config.dts.emitDtsOnly) &&
+      entryKeys(config).includes(entry),
+  );
+  expect(graphs).toHaveLength(1);
+  return expectDefined(graphs[0], `${entry} standalone graph`);
+}
+const requireNativeHookRelayGraph = () => requireStandaloneRuntimeGraph("native-hook-relay/entry");
+const requireUnifiedDistGraph = () => requireStandaloneRuntimeGraph("plugins/runtime/index");
+const bundledEntry = (pluginId: string) => `${bundledPluginRoot(pluginId)}/index`;
+async function resolvePluginNames(plugins: TsdownPluginOption): Promise<string[]> {
+  const resolved = await plugins;
+  if (!resolved) {
+    return [];
+  }
+  if (Array.isArray(resolved)) {
+    return (await Promise.all(resolved.map(resolvePluginNames))).flat();
+  }
+  if (!("name" in resolved)) {
+    throw new Error("expected a named plugin in build config assertions");
+  }
+  return [resolved.name];
+}
+async function runtimeInputOptions(config: TsdownConfig) {
+  if (typeof config.inputOptions !== "function") {
+    throw new Error("Expected runtime input options");
+  }
+  return config.inputOptions({}, "es", { cjsDts: false });
+}
+
+describe("tsdown runtime graphs", () => {
+  it.each(["0", "1"])(
+    "emits QA transport facades only for private QA builds (%s)",
+    async (mode) => {
+      vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", mode);
+      const { default: selectedConfigs } = await importFreshModule<
+        typeof import("../../tsdown.config.ts")
+      >(import.meta.url, `../../tsdown.config.ts?private-qa=${mode}`);
+      const runtimeEntries = selectedConfigs
+        .filter((config) => !(typeof config.dts === "object" && config.dts.emitDtsOnly))
+        .flatMap((config) => Object.entries(entrySources(config)));
+      const packageExports = buildPluginSdkPackageExports();
+      for (const subpath of ["qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"]) {
+        const matches = runtimeEntries.filter(([name]) => name === `plugin-sdk/${subpath}`);
+        expect(matches).toEqual(
+          mode === "1" ? [[`plugin-sdk/${subpath}`, `src/plugin-sdk/${subpath}.ts`]] : [],
+        );
+        expect(Object.hasOwn(packageExports, `./plugin-sdk/${subpath}`)).toBe(false);
+      }
+    },
+  );
+
+  it("inlines canonical state schema bytes", () => {
+    const rootDir = process.cwd();
+    const modulePath = path.resolve(rootDir, "src/state/openclaw-state-schema.ts");
+    const schemaPath = path.resolve(rootDir, "src/state/openclaw-state-schema.sql");
+    const watchedPaths: string[] = [];
+    const plugin = createStateSchemaInlinePlugin(rootDir);
+    let cacheKeyGenerator: ((context: { id: string }) => string | undefined) | undefined;
+    plugin.configureVitest({
+      defineCacheKeyGenerator: (generator) => {
+        cacheKeyGenerator = generator;
+      },
+    });
+    const result = plugin.load.call(
+      { addWatchFile: (filePath: string) => watchedPaths.push(filePath) },
+      modulePath,
+    );
+    const canonicalSql = fs.readFileSync(schemaPath, "utf8");
+
+    expect(result).not.toBeNull();
+    const match = result?.code.match(/^export const OPENCLAW_STATE_SCHEMA_SQL = (.*);\n$/su);
+    expect(match?.[1]).toBeDefined();
+    expect(JSON.parse(match?.[1] ?? "null")).toBe(canonicalSql);
+    expect(OPENCLAW_STATE_SCHEMA_SQL).toBe(canonicalSql);
+    expect(watchedPaths).toEqual([schemaPath]);
+    expect(cacheKeyGenerator?.({ id: modulePath })).toBe(canonicalSql);
+    expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, "src/index.ts") })).toBeUndefined();
+  });
+
+  it("installs schema inlining only on executable runtime graphs", async () => {
+    const unifiedGraph = requireUnifiedDistGraph();
+    const workerGraph = configs.find(
+      (config) => entrySources(config)["worker/worker"] === "src/worker/worker-deploy-entry.ts",
+    );
+    const executableGraphs = new Set([
+      ...configs.filter((config) =>
+        entryKeys(config).includes("worker/gateway-state-owner-heartbeat.worker"),
+      ),
+      unifiedGraph,
+      expectDefined(workerGraph, "deploy worker graph"),
+      requireStandaloneRuntimeGraph("worker/client-credential.worker"),
+      requireStandaloneRuntimeGraph("worker/code-mode-node.worker"),
+      requireStandaloneRuntimeGraph("worker/file-tool-planning.worker"),
+      requireStandaloneRuntimeGraph("worker/file-tool-read.worker"),
+      requireStandaloneRuntimeGraph("worker/gateway-state-owner-heartbeat.worker"),
+      requireStandaloneRuntimeGraph("worker/image-processor.worker"),
+      requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
+      requireStandaloneRuntimeGraph("worker/sqlite-source-revision.worker"),
+      requireStandaloneRuntimeGraph("worker/openclaw-state-read.worker"),
+      requireStandaloneRuntimeGraph("worker/worker-native-lifecycle.worker"),
+      requireStandaloneRuntimeGraph("managed-handoff-runtime"),
+      requireStandaloneRuntimeGraph("package-update-activation-recovery"),
+      requireNativeHookRelayGraph(),
+      requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),
+      requireStandaloneRuntimeGraph("infra/sqlite-source-revision.worker"),
+      requireStandaloneRuntimeGraph("state/openclaw-state-read.worker"),
+      requireStandaloneRuntimeGraph("agents/harness/native-hook-relay-client.worker"),
+      requireStandaloneRuntimeGraph("process/spawn-broker/worker"),
+      requireStandaloneRuntimeGraph("plugins/plugin-generation-preparation.worker"),
+      requireStandaloneRuntimeGraph("state/openclaw-state-lease-heartbeat.worker"),
+      requireStandaloneRuntimeGraph("infra/gateway-state-owner-heartbeat.worker"),
+      requireStandaloneRuntimeGraph("process/supervisor/service-child-relay"),
+      requireStandaloneRuntimeGraph("process/supervisor/service-child-group-anchor"),
+      requireStandaloneRuntimeGraph("tooling/managed-memory-launcher"),
+    ]);
+
+    for (const config of configs) {
+      const inlinePlugins = (await resolvePluginNames(config.plugins)).filter(
+        (name) => name === STATE_SCHEMA_INLINE_PLUGIN_NAME,
+      );
+      expect(inlinePlugins, entryKeys(config).join(", ")).toHaveLength(
+        executableGraphs.has(config) ? 1 : 0,
+      );
+    }
+  });
+
+  it("isolates relay startup from shared runtime chunks while retaining lazy fallback", async () => {
+    const relay = requireNativeHookRelayGraph();
+    expect(entrySources(relay)).toEqual({
+      "native-hook-relay/entry": "src/cli/native-hook-relay-entry.ts",
+    });
+    expect(relay).not.toBe(requireUnifiedDistGraph());
+    expect(relay.dts).toBe(false);
+    expect(relay.outputOptions?.codeSplitting).not.toBe(false);
+    expect(relay.outputOptions?.chunkFileNames).toBe("native-hook-relay/[name]-[hash].mjs");
+    // Only the shared graph may publish the global plugin ownership manifest.
+    expect(await resolvePluginNames(relay.plugins)).not.toContain(
+      "openclaw:runtime-dependency-ownership",
+    );
+  });
+
+  it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    const keys = entryKeys(distGraph);
+    for (const entry of [
+      "acp/control-plane/manager",
+      "agents/auth-profiles.runtime",
+      "agents/model-catalog.runtime",
+      "agents/models-config.runtime",
+      "cli/gateway-lifecycle.runtime",
+      "config/sessions/session-accessor.sqlite-archive.worker",
+      "plugin-sdk/sqlite-runtime",
+      "state/openclaw-database-verify.worker",
+      "plugins/memory-state",
+      "subagent-registry.runtime",
+      "link-understanding/apply.runtime",
+      "media-understanding/apply.runtime",
+      "index",
+      "commands/status.summary.runtime",
+      "docker-healthcheck",
+      "provider-dispatcher.runtime",
+      "plugins/hook-runner-global",
+      "plugins/provider-discovery.runtime",
+      "plugins/provider-runtime.runtime",
+      "plugins/runtime/index",
+      "plugins/synthetic-auth.runtime",
+      "web-fetch/runtime",
+      "mcp/openclaw-tools-serve",
+      "mcp/plugin-tools-serve",
+      bundledEntry("active-memory"),
+      "bundled/boot-md/handler",
+    ]) {
+      expect(keys).toContain(entry);
+    }
+  });
+
+  it.each([
+    "plugins/plugin-generation-preparation.worker",
+    "infra/sqlite-readonly-location.worker",
+    "infra/sqlite-source-revision.worker",
+    "agents/harness/native-hook-relay-client.worker",
+    "process/spawn-broker/worker",
+    "state/openclaw-state-lease-heartbeat.worker",
+  ])("emits %s once without sealing its package loaders", (entry) => {
+    const child = requireStandaloneRuntimeGraph(entry);
+    expect(entrySources(child)).toEqual({ [entry]: path.resolve(`src/${entry}.ts`) });
+    expect(child.outputOptions).toMatchObject({
+      codeSplitting:
+        entry === "infra/sqlite-readonly-location.worker" ||
+        entry === "plugins/plugin-generation-preparation.worker",
+    });
+    if (entry === "plugins/plugin-generation-preparation.worker") {
+      expect(child.outputOptions?.chunkFileNames).toBe(
+        "plugins/plugin-preparation-[name]-[hash].mjs",
+      );
+    }
+    expect(child.outExtensions?.(extensionContext).js).toBe(".js");
+    expect(child.define?.SEALED_RUNTIME_BUILD).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "config/sessions/session-transcript-reconcile",
+      "src/config/sessions/session-transcript-reconcile.ts",
+    ],
+    [
+      "telegram-ingress-worker.runtime",
+      "extensions/telegram/src/telegram-ingress-worker.runtime.ts",
+    ],
+  ])("keeps %s behind its stable root dist entry", (entry, source) => {
+    expect(entrySources(requireUnifiedDistGraph())[entry]).toBe(source);
+  });
+
+  it("emits the dist modules referenced by every Docker client", () => {
+    const emittedPaths = new Set(
+      configs
+        .filter((config) => !(typeof config.dts === "object" && config.dts.emitDtsOnly))
+        .flatMap((config) =>
+          entryKeys(config).map((entry) =>
+            path.resolve(
+              config.outDir ?? "dist",
+              `${entry}${config.outExtensions?.(extensionContext).js ?? ".js"}`,
+            ),
+          ),
+        ),
+    );
+    const clients = ["test/e2e", "scripts/e2e"].flatMap((root) => {
+      const clientRoot = new URL(`../../${root}/`, import.meta.url);
+      return fs
+        .readdirSync(clientRoot, { recursive: true, encoding: "utf8" })
+        .filter((file) => file.endsWith("-docker-client.ts"))
+        .map((file) => new URL(file, clientRoot));
+    });
+    expect(clients.length).toBeGreaterThan(0);
+    for (const clientUrl of clients) {
+      const runtimeSource = stripNodeTypeScriptTypes(fs.readFileSync(clientUrl, "utf8"));
+      // Include literal paths assigned to variables used by dynamic imports, but not erased types.
+      for (const match of runtimeSource.matchAll(
+        /["'`]((?:\.{1,2}\/)+dist\/[^"'`\s]+\.[cm]?js)["'`]/gu,
+      )) {
+        const specifier = expectDefined(match[1], "Docker dist module path");
+        expect(emittedPaths, `${fileURLToPath(clientUrl)}: ${specifier}`).toContain(
+          fileURLToPath(new URL(specifier, clientUrl)),
+        );
+      }
+    }
+  });
+
+  it("bundles SDK-owned helpers while retaining native package ownership", async () => {
+    for (const [graph, bundleFsSafe] of [
+      [requireUnifiedDistGraph(), false],
+      [requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"), true],
+    ] as const) {
+      const alwaysBundle = graph.deps?.alwaysBundle;
+      const external = (await runtimeInputOptions(graph))?.external;
+      if (typeof alwaysBundle !== "function" || typeof external !== "function") {
+        throw new Error("expected runtime graph dependency predicates");
+      }
+
+      const shouldBundle = (id: string) => alwaysBundle(id, undefined);
+      expect(shouldBundle("@openclaw/fs-safe/path")).toBe(bundleFsSafe);
+      expect(external("@openclaw/fs-safe/path", undefined, false)).toBe(!bundleFsSafe);
+      for (const specifier of ["@openclaw/proc-safe/windows-job"]) {
+        expect(shouldBundle(specifier.split("/").slice(0, 2).join("/"))).toBe(false);
+        expect(shouldBundle(specifier)).toBe(false);
+        expect(external(specifier, undefined, false)).toBe(true);
+      }
+      expect(shouldBundle("openclaw/plugin-sdk/ssrf-runtime-internal")).toBe(true);
+      expect(shouldBundle("openclaw/plugin-sdk/ssrf-runtime")).toBe(false);
+      expect(shouldBundle("zod")).toBe(true);
+      expect(shouldBundle("zod/v4/core")).toBe(true);
+      for (const id of ["typebox", "typebox/schema", "typebox/format", "typebox/system"]) {
+        expect(shouldBundle(id)).toBe(false);
+        expect(external(id, undefined, false)).toBe(true);
+      }
+      expect(shouldBundle("not-a-runtime-dependency")).toBe(false);
+    }
+  });
+
+  it("suppresses unresolved imports from extension source", async () => {
+    const configured = (await runtimeInputOptions(requireUnifiedDistGraph()))?.onLog;
+    const handled: unknown[] = [];
+
+    configured?.(
+      "warn",
+      {
+        code: "UNRESOLVED_IMPORT",
+        message: "Could not resolve '@azure/identity' in extensions/msteams/src/sdk.ts",
+      },
+      (_level, log) => handled.push(log),
+    );
+
+    expect(handled).toStrictEqual([]);
   });
 });
