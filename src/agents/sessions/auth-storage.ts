@@ -8,7 +8,7 @@
 
 import fs from "node:fs";
 import { dirname } from "node:path";
-import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/runtime";
+import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/env-api-keys";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OAuthLoginCallbacks, OAuthProviderId } from "../../llm/utils/oauth/types.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
