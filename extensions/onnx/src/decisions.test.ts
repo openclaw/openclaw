@@ -16,10 +16,7 @@ const classify = vi.fn<InferenceWorkerClient["classify"]>();
 const warn = vi.fn();
 const provider = createOnnxProvider({ classify }, warn);
 const prepared = createPreparedOnnxProvider({ classify }, warn);
-beforeEach(() => {
-  classify.mockReset();
-  warn.mockReset();
-});
+beforeEach(() => vi.resetAllMocks());
 
 const preparedContext = (): DecisionProviderContextV2 => ({
   ...context(),
@@ -70,9 +67,8 @@ it("keeps per-model limits and canonical billing facts during V1 catalog enrichm
     NonNullable<DecisionProviderContextV2["model"]["inference"]>["decision"]
   >;
   const entry = (id: string, decision: Decision) => ({
-    provider: "onnx",
+    ...preparedContext().model,
     id,
-    name: id,
     inference: { chat: false as const, decision },
   });
   const native = entry("pinned", {
@@ -114,18 +110,14 @@ const batch: DecisionBatch = {
   questions: {
     topic: { type: "choice", criteria: { holiday: "travel", finance: null } },
     rating: { type: "score", criteria: ["negative", "neutral", "positive"] },
-    mentioned: {
-      type: "boolean",
-      criteria: { true: "A holiday is mentioned", false: "No holiday is mentioned" },
-    },
+    mentioned: { type: "boolean", criteria: { true: "holiday", false: "no holiday" } },
   },
 };
 
-const preparedBatch = () => decisionBatchV1ToV2(batch)!;
 it.each(["list", "reasoning", "bare Boolean"] as const)(
   "rejects %s before dispatch",
   async (kind) => {
-    const input = preparedBatch();
+    const input = decisionBatchV1ToV2(batch)!;
     const result =
       kind === "bare Boolean"
         ? await provider.evaluate(
@@ -163,25 +155,19 @@ it("preserves arbitrary question and label keys without prototype assignment", a
   });
 });
 
-it("keeps caller cancellation distinct from model unavailability", async () => {
+it.each(["canceled", "model-missing"] as const)("handles %s distinctly", async (failure) => {
   const controller = new AbortController();
   classify.mockImplementation(async () => {
-    controller.abort(new Error("caller cancelled"));
-    throw new OnnxWorkerError("runtime");
+    if (failure === "canceled") {
+      controller.abort(new Error("caller cancelled"));
+    }
+    throw new OnnxWorkerError(failure === "canceled" ? "runtime" : failure);
   });
-  await expect(
-    provider.evaluate(batch, {
-      ...context(),
-      signal: controller.signal,
-    }),
-  ).rejects.toThrow("caller cancelled");
-});
-
-it("reports missing artifacts with an actionable setup message", async () => {
-  classify.mockRejectedValue(new OnnxWorkerError("model-missing"));
-  await expect(provider.evaluate(batch, context())).resolves.toEqual({
-    status: "unavailable",
-    reason: "transport",
-  });
-  expect(warn).toHaveBeenCalledWith(expect.stringContaining(`openclaw onnx verify ${model}`));
+  const outcome = provider.evaluate(batch, { ...context(), signal: controller.signal });
+  if (failure === "canceled") {
+    await expect(outcome).rejects.toThrow("caller cancelled");
+  } else {
+    await expect(outcome).resolves.toEqual({ status: "unavailable", reason: "transport" });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`openclaw onnx verify ${model}`));
+  }
 });
