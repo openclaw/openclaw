@@ -56,6 +56,7 @@ type CurrentConversationBindingPublication = Extract<
   Parameters<Parameters<typeof publication.subscribeFacts>[0]>[0],
   { receipt: unknown }
 >;
+const service = getSessionBindingService();
 
 aroundEach(async (runTest) => {
   try {
@@ -105,7 +106,7 @@ function bindSession(
   targetSessionKey: string,
   metadata?: SessionBindingRecord["metadata"],
 ) {
-  return getSessionBindingService().bind({
+  return service.bind({
     conversation,
     targetSessionKey,
     targetKind: "session",
@@ -166,22 +167,16 @@ it.each(["missing", "unsupported", "disabled"] as const)(
         accountId: "default",
         conversationId: "higher-priority-child",
       };
-      const registry = (supported: boolean, eligibility?: () => boolean) =>
-        createTestRegistry([
-          {
-            pluginId: conversation.channel,
-            source: "test",
-            plugin: {
-              id: conversation.channel,
-              meta: { aliases: [] },
-              conversationBindings: {
-                supportsCurrentConversationBinding: supported,
-                ...(eligibility ? { isCurrentConversationBindingSupported: eligibility } : {}),
-              },
-            },
+      const registry = (supported: boolean, eligibility?: () => boolean) => {
+        const plugin = {
+          id: conversation.channel,
+          conversationBindings: {
+            supportsCurrentConversationBinding: supported,
+            ...(eligibility ? { isCurrentConversationBindingSupported: eligibility } : {}),
           },
-        ]);
-      const service = getSessionBindingService();
+        };
+        return createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]);
+      };
       setActivePluginRegistry(registry(true));
       const bound = await bindSession(conversation, "agent:main:child");
       expect(await readGenericSelection([conversation])).toEqual([bound]);
@@ -402,7 +397,6 @@ it.each([
 ] as const)(
   "rolls back $operation when authority expires at $stage",
   async ({ operation, stage }) => {
-    const service = getSessionBindingService();
     const conversation = internalConversation("guarded");
     const original = await bindSession(conversation, "agent:main:original");
     const row = bindingRows();
@@ -465,7 +459,6 @@ it("keeps account touch bytes identical and rejects a manager shadowed by anothe
     manager.touchConversation("thread", at);
     const expected = row.get(original.bindingId);
     seed(original);
-    const service = getSessionBindingService();
     await service.touchAsync(original.bindingId, at, ref);
     expect(row.get(original.bindingId)).toEqual(expected);
 
@@ -594,7 +587,6 @@ it.each(["replaced", "removed", "expired", "malformed"] as const)(
 
 it("binds, refreshes and removes generic and account-owned rows without caller-thread SQL", async () => {
   const manager = createManager(managerOptions());
-  const service = getSessionBindingService();
   openOpenClawStateDatabase();
   const hostSql = observeHostDataSql();
   onTestFinished(() => hostSql.restore());
@@ -645,7 +637,6 @@ it("binds, refreshes and removes generic and account-owned rows without caller-t
 it.each(["bind", "unbind"] as const)(
   "preserves a replacement row when a prepared %s reaches the worker",
   async (mutation) => {
-    const service = getSessionBindingService();
     const conversation = internalConversation("replaced");
     const original = await bindSession(conversation, "agent:main:original");
     const replacement = await bindSession(conversation, "agent:main:replacement");

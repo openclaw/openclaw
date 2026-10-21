@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelDirectoryEntry } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -91,9 +91,7 @@ function resolve(input: string, params: ResolutionOverrides = {}) {
 
 function expectFailure(result: Awaited<ReturnType<typeof resolve>>) {
   expect(result.ok).toBe(false);
-  if (result.ok) {
-    throw new Error("expected failed target resolution");
-  }
+  assert(!result.ok, "expected failed target resolution");
   return result;
 }
 
@@ -117,15 +115,10 @@ function reservedPlugin(messaging: ChannelPlugin["messaging"] = {}) {
   });
 }
 
-async function expectOkResolution(
-  input: string,
-  params: ResolutionOverrides = {},
-): Promise<Extract<Awaited<ReturnType<typeof resolveMessagingTarget>>, { ok: true }>> {
+async function expectOkResolution(input: string, params: ResolutionOverrides = {}) {
   const result = await resolve(input, params);
   expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error("expected successful target resolution");
-  }
+  assert(result.ok, "expected successful target resolution");
   return result;
 }
 

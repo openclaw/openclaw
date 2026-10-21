@@ -1,6 +1,6 @@
-import { aroundEach, assert, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { aroundEach, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -8,7 +8,6 @@ import {
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import * as admission from "../sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../sqlite-worker-owner-probe.test-support.js";
 import {
@@ -23,20 +22,8 @@ import {
 import { inspectSessionBindingByConversation } from "./session-binding-service.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
 
-type CurrentConversationBindingDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "current_conversation_bindings"
->;
-
-function expectSessionBinding(
-  bound: SessionBindingRecord | null | undefined,
-): SessionBindingRecord {
-  assert(bound, "Expected current-conversation binding");
-  return bound;
-}
-
-function persistedFields(record: SessionBindingRecord, updatedAt = Date.now()) {
-  return {
+function writePersisted(record: SessionBindingRecord, mode: "insert" | "replace") {
+  const fields: Record<string, string | number | null> = {
     binding_id: record.bindingId,
     target_session_key: record.targetSessionKey,
     target_kind: record.targetKind,
@@ -45,8 +32,26 @@ function persistedFields(record: SessionBindingRecord, updatedAt = Date.now()) {
     expires_at: record.expiresAt ?? null,
     metadata_json: record.metadata ? JSON.stringify(record.metadata) : null,
     record_json: JSON.stringify(record),
-    updated_at: updatedAt,
+    updated_at: mode === "insert" ? record.boundAt : Date.now(),
   };
+  if (mode === "insert") {
+    Object.assign(fields, {
+      channel: record.conversation.channel,
+      account_id: record.conversation.accountId,
+      conversation_kind: "current",
+      parent_conversation_id: record.conversation.parentConversationId ?? null,
+      conversation_id: record.conversation.conversationId,
+    });
+  }
+  const keys = Object.keys(fields);
+  const key = buildConversationKey(record.conversation);
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const query =
+      mode === "insert"
+        ? `INSERT INTO current_conversation_bindings (${keys.join(",")},binding_key) VALUES (${keys.map(() => "?").join(",")},?)`
+        : `UPDATE current_conversation_bindings SET ${keys.map((name) => `${name} = ?`).join(",")} WHERE binding_key = ?`;
+    db.prepare(query).run(...Object.values(fields), key);
+  });
 }
 
 function buildConversationKey(ref: SessionBindingRecord["conversation"]): string {
@@ -56,34 +61,11 @@ function buildConversationKey(ref: SessionBindingRecord["conversation"]): string
 }
 
 function seedPersisted(record: SessionBindingRecord): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      bindingDb.insertInto("current_conversation_bindings").values({
-        binding_key: buildConversationKey(record.conversation),
-        ...persistedFields(record, record.boundAt),
-        channel: record.conversation.channel,
-        account_id: record.conversation.accountId,
-        conversation_kind: "current",
-        parent_conversation_id: record.conversation.parentConversationId ?? null,
-        conversation_id: record.conversation.conversationId,
-      }),
-    );
-  });
+  writePersisted(record, "insert");
 }
 
 function replacePersisted(record: SessionBindingRecord): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      bindingDb
-        .updateTable("current_conversation_bindings")
-        .set(persistedFields(record))
-        .where("binding_key", "=", buildConversationKey(record.conversation)),
-    );
-  });
+  writePersisted(record, "replace");
 }
 
 function readPersisted(conversationId: string): SessionBindingRecord | null {
@@ -94,19 +76,16 @@ function readPersisted(conversationId: string): SessionBindingRecord | null {
 }
 
 function setBindingRegistry(ids = ["workspace", "forum"], policy?: () => boolean): void {
+  const conversationBindings = {
+    supportsCurrentConversationBinding: true,
+    isCurrentConversationBindingSupported: policy,
+  };
   setActivePluginRegistry(
     createTestRegistry(
       ids.map((id) => ({
         pluginId: id,
         source: "test",
-        plugin: {
-          id,
-          meta: { aliases: [] },
-          conversationBindings: {
-            supportsCurrentConversationBinding: true,
-            isCurrentConversationBindingSupported: policy,
-          },
-        },
+        plugin: { id, conversationBindings },
       })),
     ),
   );
@@ -170,7 +149,7 @@ async function bindWorkspace(
     metadata?: Record<string, unknown>;
   } = {},
 ): Promise<SessionBindingRecord> {
-  return expectSessionBinding(
+  return expectDefined(
     await bindGeneric({
       ...options,
       targetSessionKey: options.targetSessionKey ?? "agent:main:bound",
@@ -336,12 +315,8 @@ it.each(["rebind", "delete"] as const)(
           replacePersisted(latest);
         } else {
           runOpenClawStateWriteTransaction(({ db }) => {
-            const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
-            executeSqliteQuerySync(
-              db,
-              bindingDb
-                .deleteFrom("current_conversation_bindings")
-                .where("binding_key", "=", buildConversationKey(initial.conversation)),
+            db.prepare("DELETE FROM current_conversation_bindings WHERE binding_key = ?").run(
+              buildConversationKey(initial.conversation),
             );
           });
         }
@@ -398,7 +373,7 @@ it.each(["resolve", "touch", "unbind"] as const)(
     );
     seedPersisted(legacy);
     const canonicalId = "generic:forum\u241fdefault\u241f\u241f6098642967";
-    const resolved = expectSessionBinding(
+    const resolved = expectDefined(
       operation === "resolve"
         ? resolveGeneric(forumConversation)
         : listBySession(targetSessionKey)[0],

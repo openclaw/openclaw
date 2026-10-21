@@ -104,18 +104,11 @@ describe("source delivery plan", () => {
   ] as const)(
     "uses %s metadata for prefixed target ids",
     (comparison, channel, targetTo, deliveryTo, expected) => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: channel,
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({ id: channel, label: channel }),
-              messaging: comparison ? { targetIdComparison: comparison } : {},
-            },
-          },
-        ]),
-      );
+      const plugin = {
+        ...createChannelTestPluginBase({ id: channel, label: channel }),
+        messaging: comparison ? { targetIdComparison: comparison } : {},
+      };
+      setActivePluginRegistry(createTestRegistry([{ pluginId: channel, source: "test", plugin }]));
 
       expect(
         deliveryOutcome({ provider: channel, to: targetTo }, { channel, to: deliveryTo })
