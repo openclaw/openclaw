@@ -8,6 +8,13 @@ import { CHAT_AUDIO_WAVEFORM_MAX_BYTES } from "./chat-audio-waveform.ts";
 
 type ChatAudioPlayer = HTMLElementTagNameMap["openclaw-chat-audio-player"];
 
+const card = (player: ChatAudioPlayer, suffix = "") =>
+  player.querySelector<HTMLElement>(`.chat-assistant-attachment-card${suffix}`);
+async function update(player: ChatAudioPlayer, props: Partial<ChatAudioPlayer>) {
+  Object.assign(player, props);
+  await player.updateComplete;
+}
+
 function setMediaNumber(
   media: HTMLMediaElement,
   property: "currentTime" | "duration",
