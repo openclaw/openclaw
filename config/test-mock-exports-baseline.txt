@@ -7702,7 +7702,6 @@
 ["test/scripts/print-cli-backend-live-metadata.test.ts","../../src/plugins/setup-registry.js","243b3a7e933dbd93f7c3eb902f10b227fb5a78b549460e3ede0492d8d605d91d",1]
 ["test/scripts/process-fixture-cleanup.test.ts","../../scripts/lib/vitest-build-prerequisites.mts","d28424e0bb96a76380930a9e9cc8f9a0749ebf9c946c44543239786ce5c3d67b",1]
 ["test/scripts/process-fixture-cleanup.test.ts","../../scripts/profile-extension-memory.mts","df3208e76fa47dd90936ee7a11c5e84502ecdfd8507d9200734d91909b867eec",1]
-["test/scripts/qa-e2e.test.ts","../../extensions/qa-lab/api.js","936efa13e8d1d6b989b5cdbc8f7850a65a44e0ca179b6e3fe6ec8a6a2449a1ac",1]
 ["test/scripts/qa-lab-up.test.ts","../../extensions/qa-lab/src/cli.runtime.ts","497239bf7b1f97026743900b4d591cddbac5957ef1c8e1b3d9434a7e5d4bf217",1]
 ["test/scripts/realtime-talk-live-smoke.test.ts","../../extensions/google/realtime-voice-provider.ts","1b0d99e100c6a198d8ab42985b8ad7424c7aded6864c08c29e5818df37ed1a9f",1]
 ["test/scripts/realtime-talk-live-smoke.test.ts","../../extensions/openai/realtime-voice-provider.ts","56558f9d0216c069404ca8189f68e80857e5dba319125b220e5cc0978112f162",1]
