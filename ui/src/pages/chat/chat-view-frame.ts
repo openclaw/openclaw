@@ -24,13 +24,13 @@ import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPlacementStartupNoticeProps } from "./chat-view-notices.tsx";
-import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
+import type { AsyncQuestionPresentation } from "./components/chat-async-question.types.ts";
 import {
   createChatAttachmentDropHandlers,
   stagedAttachmentBytes,
 } from "./components/chat-attachments.ts";
 import { resolveChatCommentAnchor } from "./components/chat-comment-anchor.ts";
-import { getChatComposerState, isChatRunWorking } from "./components/chat-composer-state.ts";
+import { isChatRunWorking } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
@@ -137,6 +137,7 @@ const placementQueues = new WeakMap<
 export function createChatViewFrame(
   props: ChatProps,
   focusComposer: (replacement?: boolean) => void,
+  asyncQuestions: AsyncQuestionPresentation,
 ) {
   // The request session hosts the card; only sourceSessionKey names the requester.
   const approvalSourceSessionKey = props.inlineApproval?.sourceSessionKey;
@@ -192,20 +193,6 @@ export function createChatViewFrame(
   };
   const canCompose = props.canSend;
   const questionState = getTranscriptState(props.paneId);
-  const asyncQuestions = createAsyncQuestionPresentation(questionState, {
-    ...props,
-    // Question publications can precede the pane's next queue props frame.
-    queue: props.getQueue?.() ?? props.queue,
-    onReopen: (itemId, scope) => {
-      const composer = getChatComposerState(props.paneId);
-      composer.restoreComposerFocus ||= composer.questionTakeoverActive;
-      composer.questionTakeoverActive = false;
-      composer.updatePresentation((draft) => {
-        draft.activeQuestionKey = JSON.stringify([scope, itemId]);
-        draft.questionCollapsed = false;
-      });
-    },
-  });
   const openImage = props.onOpenImage
     ? (item: ImageLightboxItem, requestVersion?: number) =>
         requestVersion === undefined

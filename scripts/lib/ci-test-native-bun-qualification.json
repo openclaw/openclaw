@@ -305,7 +305,6 @@
     "src/shared/text/final-tags.test.ts": "8b2d5281b40b173f983f2b5be0909d6bad4f096b7c62ac82f43ef5117d4fa4c2",
     "src/shared/text/formatted-reasoning-message.test.ts": "5abb1908a60a452ea2b6b43a323cb72f84be9f4da3933130fef8288c4afeecdb",
     "src/shared/text/join-segments.test.ts": "ba846b34c346268964ae89bb8251a049d5bf8024dbadb89705b6a2ae2aca5771",
-    "src/shared/text/message-id-hints.test.ts": "5e7401a5a3963ef241d0af4cee3d1b6be71b75a552828de2d7a6309d65c184d0",
     "src/shared/text/strip-markdown.test.ts": "83639671837f7899554bbc1dfd901fd47644715bfdbdb7be71da418bd70b1748",
     "src/shared/text/tool-call-shaped-text.test.ts": "0ce85e801647c5ec06516a4c4b3adb3beb52dca26b0928cd8234f8cb83099bf4",
     "src/shared/thread-binding-lifecycle.test.ts": "b5ceaa3e93809a3f239ccf000f4f9fd02d688c144ec3466d730ffc263075945e",

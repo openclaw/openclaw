@@ -271,6 +271,10 @@ catalog-confirmed public check and plugin IDs are included; unknown IDs and code
 remain complete locally and are redacted publicly. Older runs cannot recover facts that their updater did not record. Existing history
 and report size limits still apply.
 
+When shared-state migration finds invalid client socket material, the report
+preserves that classified cause while redacting the database path and private
+exception details. A private path containing spaces does not hide the cause.
+
 Failed updates always retain a reason code and a failure fact, including failures
 before the first command runs. Git failures use codes such as `fetch-failed`,
 `git-root-unresolved`, `unsupported_git_channel`, and

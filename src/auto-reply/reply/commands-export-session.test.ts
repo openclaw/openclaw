@@ -1,8 +1,10 @@
 // Tests session and trajectory export command packaging, filesystem writes, and approval routing.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateExportHtmlVendorAssets } from "../../../scripts/runtime-postbuild.mts";
-import { FsSafeError } from "../../infra/fs-safe.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildCommandTextFromArgs, findCommandByNativeName } from "../commands-registry.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import { commandFixture } from "./commands-handler-fixture.test-support.js";
@@ -17,8 +19,6 @@ const hoisted = await vi.hoisted(async () => {
     ...createExportCommandSessionMocks(vi),
     promptBundle,
     resolveCommandsSystemPromptBundleMock: vi.fn(async () => promptBundle),
-    writeSessionExportFileMock:
-      vi.fn<typeof import("./commands-export-session-file.js").writeSessionExportFile>(),
     migrateSessionEntriesMock: vi.fn((_entries: unknown[]) => undefined),
     readAcpSessionMetaForEntryAsyncMock: vi.fn<
       (params: { sessionKey: string; entry?: { sessionId?: string } }) => Promise<unknown>
@@ -29,6 +29,7 @@ const hoisted = await vi.hoisted(async () => {
   };
 });
 const generatedVendorAssets = generateExportHtmlVendorAssets();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // mock-isolation: Export fixtures supply ACP metadata without opening a real session database.
 vi.mock("../../acp/runtime/session-meta-readonly.js", () => ({
@@ -60,10 +61,6 @@ vi.mock("./commands-system-prompt.js", () => ({
   resolveCommandsSystemPromptBundle: hoisted.resolveCommandsSystemPromptBundleMock,
 }));
 
-vi.mock("./commands-export-session-file.js", () => ({
-  writeSessionExportFile: hoisted.writeSessionExportFileMock,
-}));
-
 vi.mock("../../agents/sessions/session-manager.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/sessions/session-manager.js")>();
   return {
@@ -91,13 +88,15 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
-function makeParams() {
-  return commandFixture("/export-session", { ctx: { SessionKey: "agent:main:slash-session" } });
+function makeParams(workspaceDir = tempDirs.make("openclaw-session-export-")) {
+  return commandFixture("/export-session session.html", {
+    workspaceDir,
+    ctx: { SessionKey: "agent:main:slash-session" },
+  });
 }
 
-function writtenHtml(): string {
-  return expectDefined(hoisted.writeSessionExportFileMock.mock.calls[0], "export write")[0]
-    .contents;
+async function writtenHtml(params: { workspaceDir: string }): Promise<string> {
+  return await fs.readFile(path.join(params.workspaceDir, "session.html"), "utf-8");
 }
 
 function sessionDataFromHtml(html: string): Record<string, unknown> {
@@ -142,10 +141,6 @@ describe("buildExportSessionReply", () => {
       },
     });
     hoisted.resolveCommandsSystemPromptBundleMock.mockResolvedValue(hoisted.promptBundle);
-    hoisted.writeSessionExportFileMock.mockResolvedValue({
-      absolutePath: "/tmp/workspace/openclaw-session.html",
-      displayPath: "openclaw-session.html",
-    });
     hoisted.readAcpSessionMetaForEntryAsyncMock.mockResolvedValue(undefined);
     hoisted.loadTranscriptEventsMock.mockImplementation(
       async () => hoisted.sessionTranscriptEvents,
@@ -166,9 +161,12 @@ describe("buildExportSessionReply", () => {
         values: { path: outputPath },
       });
 
-      await buildExportSessionReply(params);
+      const reply = await buildExportSessionReply(params);
 
-      expect(hoisted.writeSessionExportFileMock.mock.calls[0]?.[0].requestedPath).toBe(outputPath);
+      expect(reply.text).toContain(`📄 File: ${outputPath}`);
+      expect(await fs.readFile(path.join(params.workspaceDir, outputPath), "utf-8")).toContain(
+        'id="session-data"',
+      );
     },
   );
 
@@ -196,9 +194,10 @@ describe("buildExportSessionReply", () => {
     ];
     hoisted.sessionTranscriptEvents = entries;
 
-    await buildExportSessionReply(makeParams());
+    const params = makeParams();
+    await buildExportSessionReply(params);
 
-    const html = writtenHtml();
+    const html = await writtenHtml(params);
     expect(html).not.toContain("{{CSS}}");
     expect(html).not.toContain("{{JS}}");
     expect(html).not.toContain("{{SESSION_DATA}}");
@@ -217,18 +216,6 @@ describe("buildExportSessionReply", () => {
         }),
       ).toString("base64"),
     );
-  });
-
-  it("turns an unsafe output path into a bounded user-facing error", async () => {
-    const params = makeParams();
-    params.command.commandBodyNormalized = "/export-session ../outside.html";
-    hoisted.writeSessionExportFileMock.mockRejectedValueOnce(
-      new FsSafeError("outside-workspace", "file is outside workspace root"),
-    );
-
-    await expect(buildExportSessionReply(params)).resolves.toEqual({
-      text: "❌ Output path must be a regular file inside the workspace.",
-    });
   });
 
   it("preserves replacement text with dollar sequences", async () => {
@@ -250,9 +237,10 @@ describe("buildExportSessionReply", () => {
       "const highlightMarker = '$&$1';",
     );
 
-    await buildExportSessionReply(makeParams());
+    const params = makeParams();
+    await buildExportSessionReply(params);
 
-    const html = writtenHtml();
+    const html = await writtenHtml(params);
     expect(html).toContain("$&$1");
     expect(html).toContain("const marker = '$&$1';");
     expect(html).toContain("const markedMarker = '$&$1';");
@@ -326,8 +314,9 @@ describe("buildExportSessionReply", () => {
           ),
         );
       }
-      const reply = await buildExportSessionReply(makeParams());
-      const warning = sessionDataFromHtml(writtenHtml()).warning;
+      const params = makeParams();
+      const reply = await buildExportSessionReply(params);
+      const warning = sessionDataFromHtml(await writtenHtml(params)).warning;
       if (kind === "cli" || kind === "stored-acp") {
         expect(reply.text).toContain("backend runtime");
         expect(warning).toContain("backend runtime");
@@ -352,7 +341,139 @@ describe("buildExportSessionReply", () => {
       }
     },
   );
+
+  describe("filesystem boundary", () => {
+    beforeEach(() => {
+      hoisted.exportHtmlTemplateContents.set(
+        "template.html",
+        [
+          '<style data-openclaw-export-placeholder="CSS"></style>',
+          '<script id="session-data" data-openclaw-export-placeholder="SESSION_DATA"></script>',
+          '<script data-openclaw-export-placeholder="MARKED_JS"></script>',
+          '<script data-openclaw-export-placeholder="HIGHLIGHT_JS"></script>',
+          '<script data-openclaw-export-placeholder="JS"></script>',
+        ].join(""),
+      );
+      hoisted.exportHtmlTemplateContents.set("template.css", "new export");
+      hoisted.exportHtmlTemplateContents.set("template.js", "");
+      hoisted.exportHtmlTemplateContents.set("vendor/marked.min.js", "");
+      hoisted.exportHtmlTemplateContents.set("vendor/highlight.min.js", "");
+    });
+
+    it.each([
+      ["relative", "exports/session.html"],
+      ["absolute", null],
+    ])("writes an explicit %s path inside the workspace", async (_label, requestedPath) => {
+      const params = makeParams();
+      const targetPath = requestedPath ?? path.join(params.workspaceDir, "exports", "session.html");
+      params.command.commandBodyNormalized = `/export-session ${targetPath}`;
+
+      const reply = await buildExportSessionReply(params);
+      const absolutePath = path.join(
+        await fs.realpath(params.workspaceDir),
+        "exports",
+        "session.html",
+      );
+
+      expect(reply.text).toContain(`📄 File: ${path.join("exports", "session.html")}`);
+      expect(await fs.readFile(absolutePath, "utf-8")).toContain("<style>new export</style>");
+      if (process.platform !== "win32") {
+        expect((await fs.stat(absolutePath)).mode & 0o777).toBe(0o600);
+      }
+    });
+
+    it("preserves explicit overwrite behavior for an in-workspace regular file", async () => {
+      const params = makeParams();
+      const targetPath = path.join(params.workspaceDir, "session.html");
+      await fs.writeFile(targetPath, "old export", "utf-8");
+      if (process.platform !== "win32") {
+        await fs.chmod(targetPath, 0o644);
+      }
+
+      await buildExportSessionReply(params);
+
+      const html = await writtenHtml(params);
+      expect(html).toContain("<style>new export</style>");
+      expect(html).not.toContain("old export");
+      if (process.platform !== "win32") {
+        expect((await fs.stat(targetPath)).mode & 0o777).toBe(0o600);
+      }
+    });
+
+    it.each(["absolute", "traversal"] as const)(
+      "refuses an %s escape with a bounded error and no outside write",
+      async (kind) => {
+        const parentDir = tempDirs.make("openclaw-session-export-escape-");
+        const workspaceDir = path.join(parentDir, "workspace");
+        await fs.mkdir(workspaceDir);
+        const params = makeParams(workspaceDir);
+        const outsidePath = path.join(parentDir, "outside.html");
+        params.command.commandBodyNormalized = `/export-session ${kind === "absolute" ? outsidePath : "../outside.html"}`;
+
+        await expect(buildExportSessionReply(params)).resolves.toEqual({
+          text: "❌ Output path must be a regular file inside the workspace.",
+        });
+        await expect(fs.stat(outsidePath)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+
+    it.runIf(process.platform !== "win32")(
+      "accepts an absolute path written through a symlinked workspace root",
+      async () => {
+        const workspaceDir = tempDirs.make("openclaw-session-export-");
+        const aliasParent = tempDirs.make("openclaw-session-export-alias-");
+        const workspaceAlias = path.join(aliasParent, "workspace");
+        await fs.symlink(workspaceDir, workspaceAlias, "dir");
+        const params = makeParams(workspaceAlias);
+        params.command.commandBodyNormalized = `/export-session ${path.join(workspaceAlias, "exports", "session.html")}`;
+
+        const reply = await buildExportSessionReply(params);
+        const absolutePath = path.join(await fs.realpath(workspaceDir), "exports", "session.html");
+
+        expect(reply.text).toContain(`📄 File: ${path.join("exports", "session.html")}`);
+        expect(await fs.readFile(absolutePath, "utf-8")).toContain("<style>new export</style>");
+      },
+    );
+
+    it.runIf(process.platform !== "win32")(
+      "rejects a symlink target without changing the linked file",
+      async () => {
+        const params = makeParams();
+        const outsideDir = tempDirs.make("openclaw-session-export-outside-");
+        const outsidePath = path.join(outsideDir, "outside.html");
+        await fs.writeFile(outsidePath, "outside", "utf-8");
+        await fs.symlink(outsidePath, path.join(params.workspaceDir, "session.html"));
+
+        await expect(buildExportSessionReply(params)).resolves.toEqual({
+          text: "❌ Output path must be a regular file inside the workspace.",
+        });
+        expect(await fs.readFile(outsidePath, "utf-8")).toBe("outside");
+      },
+    );
+
+    it("suffixes a colliding generated filename instead of overwriting", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-05-16T00:00:00Z"));
+      try {
+        const params = makeParams();
+        params.command.commandBodyNormalized = "/export-session";
+        const basename = "openclaw-session-session--2026-05-16T00-00-00";
+        await fs.writeFile(path.join(params.workspaceDir, `${basename}.html`), "existing", "utf-8");
+
+        const reply = await buildExportSessionReply(params);
+
+        expect(reply.text).toContain(`📄 File: ${basename}-2.html`);
+        expect(await fs.readFile(path.join(params.workspaceDir, `${basename}.html`), "utf-8")).toBe(
+          "existing",
+        );
+        expect(
+          await fs.readFile(path.join(params.workspaceDir, `${basename}-2.html`), "utf-8"),
+        ).toContain("<style>new export</style>");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
 
-await import("./commands-export-session-file.test-support.js");
 await import("./commands-export-trajectory.test-support.js");

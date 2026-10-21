@@ -1,16 +1,17 @@
-import { createHash } from "node:crypto";
+import { createHash, hash } from "node:crypto";
 import { serializeModelRequestBody } from "@openclaw/ai/internal/model-request-body";
 import { sha256Hex, sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export type ProviderPromptTask = { payload: unknown; encode: boolean };
 
-type ProviderPromptItemFingerprint = { digest: string; fields?: Record<string, string> };
+type ProviderPromptItemFingerprint = { digest: string; fields: Record<string, string> };
 
 export type ProviderPromptCachePrefix = {
   system: string;
   tools: string;
-  messages: ProviderPromptItemFingerprint[];
+  messageDigests: string;
+  messageFields: Record<string, string>[];
   messageField?: "input" | "messages";
   messageCount: number;
   tail?: string;
@@ -70,10 +71,10 @@ const PARAMETER_FIELDS = new Set([
 
 function fingerprintItem(
   value: unknown,
-  allowedFields?: Set<string>,
+  allowedFields: Set<string>,
 ): ProviderPromptItemFingerprint {
-  if (!allowedFields || !isRecord(value)) {
-    return { digest: sha256Hex(JSON.stringify(value)), ...(allowedFields ? { fields: {} } : {}) };
+  if (!isRecord(value)) {
+    return { digest: hash("sha256", JSON.stringify(value), "latin1"), fields: {} };
   }
   const digest = createHash("sha256").update("{");
   let other: ReturnType<typeof createHash> | undefined;
@@ -94,7 +95,7 @@ function fingerprintItem(
   if (other) {
     fields.other = other.digest("hex");
   }
-  return { digest: digest.update("}").digest("hex"), fields };
+  return { digest: digest.update("}").digest("latin1"), fields };
 }
 
 function fingerprintSerializedPrompt(payload: unknown): ProviderPromptCachePrefix | undefined {
@@ -113,17 +114,24 @@ function fingerprintSerializedPrompt(payload: unknown): ProviderPromptCachePrefi
     messages = parameters.messages;
     delete parameters.messages;
   }
+  const messageFields: Record<string, string>[] = [];
+  // One flat string retains the full ordered hashes without per-message objects.
+  const messageDigests = messages
+    .slice(0, MAX_MESSAGE_FINGERPRINTS)
+    .map((message, index) => {
+      if (index >= MAX_MESSAGE_FIELD_FINGERPRINTS) {
+        return hash("sha256", JSON.stringify(message), "latin1");
+      }
+      const fingerprint = fingerprintItem(message, MESSAGE_FIELDS);
+      messageFields.push(fingerprint.fields);
+      return fingerprint.digest;
+    })
+    .join("");
   return {
     system: sha256Hex(JSON.stringify({ instructions, system })),
     tools: sha256Hex(JSON.stringify({ tools })),
-    messages: messages
-      .slice(0, MAX_MESSAGE_FINGERPRINTS)
-      .map((message, index) =>
-        fingerprintItem(
-          message,
-          index < MAX_MESSAGE_FIELD_FINGERPRINTS ? MESSAGE_FIELDS : undefined,
-        ),
-      ),
+    messageDigests,
+    messageFields,
     messageField,
     messageCount: messages.length,
     ...(messages.length > MAX_MESSAGE_FINGERPRINTS

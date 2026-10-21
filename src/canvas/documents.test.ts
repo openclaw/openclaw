@@ -11,6 +11,7 @@ import {
 } from "./documents.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
 
 function resolveCanvasDocumentDir(stateDir: string, documentId: string): string {
   return path.join(resolveCanvasDocumentsDir(stateDir), documentId);
@@ -21,6 +22,7 @@ function createHtmlDocument(
   html: string,
   options: Pick<Parameters<typeof createCanvasDocument>[0], "id" | "title" | "cspSandbox"> = {},
 ) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   return createCanvasDocument({ html, ...options }, { stateDir });
 }
 
@@ -37,7 +39,7 @@ describe("canvas documents", () => {
       await rename(original, outside);
       await symlink(outside, original, target === "document" ? "dir" : "file");
 
-      await expect(readCanvasDocumentHtmlSource(document.id, { stateDir })).rejects.toMatchObject({
+      await expect(readCanvasDocumentHtmlSource(document.id)).rejects.toMatchObject({
         code: target === "document" ? "outside-workspace" : "symlink",
       });
     },
@@ -52,7 +54,7 @@ describe("canvas documents", () => {
         path.join(resolveCanvasDocumentDir(stateDir, document.id), target),
         path.join(stateDir, `alias-${target}`),
       );
-      await expect(readCanvasDocumentHtmlSource(document.id, { stateDir })).rejects.toMatchObject({
+      await expect(readCanvasDocumentHtmlSource(document.id)).rejects.toMatchObject({
         code: "hardlink",
       });
     },
@@ -60,13 +62,13 @@ describe("canvas documents", () => {
 
   it("bounds HTML reads by bytes while independently allowing the manifest", async () => {
     const stateDir = tempDirs.make("openclaw-canvas-bounded-");
-    const document = await createHtmlDocument(stateDir, "éééé");
-    await expect(
-      readCanvasDocumentHtmlSource(document.id, { stateDir, maxBytes: 7 }),
-    ).rejects.toMatchObject({ code: "too-large" });
-    await expect(
-      readCanvasDocumentHtmlSource(document.id, { stateDir, maxBytes: 8 }),
-    ).resolves.toEqual({ html: "éééé" });
+    const html = "é".repeat(5 * 1024 * 1024);
+    const document = await createHtmlDocument(stateDir, `${html}é`);
+    await expect(readCanvasDocumentHtmlSource(document.id)).rejects.toMatchObject({
+      code: "too-large",
+    });
+    await createHtmlDocument(stateDir, html, { id: document.id });
+    await expect(readCanvasDocumentHtmlSource(document.id)).resolves.toEqual({ html });
   });
 
   it("rejects oversized manifests before parsing them", async () => {
@@ -80,7 +82,7 @@ describe("canvas documents", () => {
       manifestPath,
       JSON.stringify({ ...document, title: "x".repeat(2 * 1024 * 1024) }),
     );
-    await expect(readCanvasDocumentHtmlSource(document.id, { stateDir })).rejects.toMatchObject({
+    await expect(readCanvasDocumentHtmlSource(document.id)).rejects.toMatchObject({
       code: "too-large",
     });
   });
@@ -101,7 +103,7 @@ describe("canvas documents", () => {
     expect(indexHtml).toContain("<style>.demo{color:red}</style>");
     expect(document.title).toBe("Preview");
     expect(document.entryUrl).toBe(`/__openclaw__/canvas/documents/${document.id}/index.html`);
-    await expect(readCanvasDocumentHtmlSource(document.id, { stateDir })).resolves.toEqual({
+    await expect(readCanvasDocumentHtmlSource(document.id)).resolves.toEqual({
       html: indexHtml,
     });
   });
@@ -112,7 +114,7 @@ describe("canvas documents", () => {
       cspSandbox: "scripts",
     });
 
-    await expect(readCanvasDocumentHtmlSource(document.id, { stateDir })).resolves.toEqual({
+    await expect(readCanvasDocumentHtmlSource(document.id)).resolves.toEqual({
       html: "<script>ready()</script>",
       cspSandbox: "scripts",
     });
@@ -141,7 +143,7 @@ describe("canvas documents", () => {
     const remove = vi.spyOn(fs, "rm").mockRejectedValueOnce(failure);
     try {
       await expect(createHtmlDocument(stateDir, "<div>second</div>", { id })).rejects.toBe(failure);
-      await expect(readCanvasDocumentHtmlSource(id, { stateDir })).resolves.toEqual({
+      await expect(readCanvasDocumentHtmlSource(id)).resolves.toEqual({
         html: "<div>first</div>",
       });
     } finally {
@@ -151,10 +153,10 @@ describe("canvas documents", () => {
 
   it("rejects traversal and malformed encoded hosted paths", async () => {
     const stateDir = tempDirs.make("openclaw-canvas-documents-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     expect(
       resolveCanvasHttpPathToLocalPath(
         "/__openclaw__/canvas/documents/../collection.media/index.html",
-        { stateDir },
       ),
     ).toBeNull();
 
@@ -162,15 +164,11 @@ describe("canvas documents", () => {
     await mkdir(documentDir, { recursive: true });
     await writeFile(path.join(documentDir, "%E0%A4%A.html"), "literal-percent-name", "utf8");
     expect(
-      resolveCanvasHttpPathToLocalPath(
-        "/__openclaw__/canvas/documents/cv_malformed/%E0%A4%A.html",
-        { stateDir },
-      ),
+      resolveCanvasHttpPathToLocalPath("/__openclaw__/canvas/documents/cv_malformed/%E0%A4%A.html"),
     ).toBeNull();
     expect(
       resolveCanvasHttpPathToLocalPath(
         "/__openclaw__/canvas/documents/cv_malformed/%25E0%25A4%25A.html",
-        { stateDir },
       ),
     ).toBe(path.join(documentDir, "%E0%A4%A.html"));
   });

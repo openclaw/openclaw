@@ -766,7 +766,7 @@ describe("legacy migrate x_search auth", () => {
     });
   });
 
-  it("detects and repairs retired xAI model-only tool config without plugin discovery", () => {
+  it("moves legacy xAI search config without replacing model selections", () => {
     const raw = {
       tools: {
         web: {
@@ -775,26 +775,18 @@ describe("legacy migrate x_search auth", () => {
         },
       },
     };
-
-    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(
-      expect.arrayContaining(["tools.web.search", "tools.web.x_search.model"]),
-    );
-
     const res = migrateLegacyConfigForTest(raw);
 
     expect(res.config?.plugins?.entries?.xai).toEqual({
       enabled: true,
-      config: { webSearch: { model: "grok-4.3" } },
+      config: { webSearch: { model: "grok-4-1-fast" } },
     });
     expect((res.config?.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
-      model: "grok-4.3",
+      model: "grok-4-1-fast-non-reasoning",
     });
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        'Updated tools.web.search.grok.model from "grok-4-1-fast" to "grok-4.3".',
-        'Updated tools.web.x_search.model from "grok-4-1-fast-non-reasoning" to "grok-4.3".',
-      ]),
-    );
+    expect(res.changes).toEqual([
+      "Moved tools.web.search.grok → plugins.entries.xai.config.webSearch.",
+    ]);
   });
 });
 
@@ -1064,7 +1056,7 @@ describe("legacy model compat migrate", () => {
     );
     expect(res.config?.models?.providers?.google?.models?.[0]?.id).toBe("gemini-3.1-pro-preview");
     expect(res.config?.models?.providers?.myproxy?.models?.[0]?.id).toBe(canonical);
-    expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-5.5");
+    expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-4o");
   });
 
   it("canonicalizes persisted OpenAI GPT-5.6 aliases without affecting GitHub Copilot", () => {
@@ -1133,22 +1125,22 @@ describe("legacy model compat migrate", () => {
     );
   });
 
-  it("deep-merges colliding retired model refs and reports only unequal fields", () => {
+  it("deep-merges colliding model spellings and reports only unequal fields", () => {
     const res = migrateLegacyConfigForTest(
       modelMapConfig({
-        "openai/gpt-4o": {
+        "openai/gpt-5.6": {
           params: {
             reasoning: { effort: "high", budget: 100 },
             tags: ["stable"],
-            fallbacks: ["openai/gpt-4"],
+            fallbacks: ["openai/GPT-5.6"],
           },
           streaming: false,
         },
-        "openai/gpt-4": {
+        "openai/GPT-5.6": {
           params: {
             reasoning: { effort: "low", summary: "auto" },
             tags: ["stable"],
-            fallbacks: ["openai/gpt-5.5"],
+            fallbacks: ["openai/gpt-5.6-sol"],
           },
           alias: "legacy-four",
         },
@@ -1156,26 +1148,26 @@ describe("legacy model compat migrate", () => {
     );
 
     expect(res.config?.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.5": {
+      "openai/gpt-5.6-sol": {
         params: {
           reasoning: { effort: "high", budget: 100, summary: "auto" },
           tags: ["stable"],
-          fallbacks: ["openai/gpt-5.5"],
+          fallbacks: ["openai/gpt-5.6-sol"],
         },
         streaming: false,
         alias: "legacy-four",
       },
     });
     expect(res.changes.filter((change) => change.includes("Merged"))).toEqual([
-      'Merged config.agents.defaults.models key "openai/gpt-4" into "openai/gpt-5.5"; kept existing values for conflicting fields: params.reasoning.effort.',
+      'Merged config.agents.defaults.models key "openai/GPT-5.6" into "openai/gpt-5.6-sol"; kept existing values for conflicting fields: params.reasoning.effort.',
     ]);
   });
 
   it("filters blocked keys recursively from both model collision sides", () => {
     const raw =
-      '{"agents":{"defaults":{"models":{"openai/gpt-5.5":{"__proto__":{"polluted":true},"alias":"canonical-five","params":{"nested":{"__proto__":{"polluted":true},"model":"openai/gpt-4o"}}},"openai/gpt-4":{"alias":"legacy-four","__proto__":{"polluted":true},"streaming":false,"params":{"nested":{"__proto__":{"polluted":true},"added":true}}}}}}}';
+      '{"agents":{"defaults":{"models":{"openai/gpt-5.6-sol":{"__proto__":{"polluted":true},"alias":"canonical-five","params":{"nested":{"__proto__":{"polluted":true},"model":"openai/gpt-5.6"}}},"openai/GPT-5.6":{"alias":"legacy-four","__proto__":{"polluted":true},"streaming":false,"params":{"nested":{"__proto__":{"polluted":true},"added":true}}}}}}}';
     const res = migrateLegacyConfigForTest(JSON.parse(raw));
-    const merged = res.config?.agents?.defaults?.models?.["openai/gpt-5.5"] as Record<
+    const merged = res.config?.agents?.defaults?.models?.["openai/gpt-5.6-sol"] as Record<
       string,
       unknown
     >;
@@ -1190,14 +1182,14 @@ describe("legacy model compat migrate", () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     expect(merged).toEqual({
       alias: "canonical-five",
-      params: { nested: { model: "openai/gpt-5.5", added: true } },
+      params: { nested: { model: "openai/gpt-5.6-sol", added: true } },
       streaming: false,
     });
   });
 
   it("does not invoke prototype setters when copying the rewritten config root", () => {
     const raw = JSON.parse(
-      '{"__proto__":{"polluted":true},"agents":{"defaults":{"model":"openai/gpt-4"}}}',
+      '{"__proto__":{"polluted":true},"agents":{"defaults":{"model":"openai/GPT-5.6"}}}',
     ) as Record<string, unknown>;
     const res = migrateLegacyConfigForTest(raw);
     const config = res.config as unknown as Record<string, unknown>;
@@ -1205,22 +1197,22 @@ describe("legacy model compat migrate", () => {
     expect(Object.getPrototypeOf(config)).toBe(Object.prototype);
     expect(Object.hasOwn(config, "__proto__")).toBe(true);
     expect(config.polluted).toBeUndefined();
-    expect(res.config?.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(res.config?.agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
   });
 
   it("reports malformed scalar collisions without claiming equal values conflict", () => {
     const res = migrateLegacyConfigForTest(
       modelMapConfig({
-        "openai/gpt-5.5": false,
-        "openai/gpt-4": true,
-        "openai/gpt-4o": false,
+        "openai/gpt-5.6-sol": false,
+        "openai/GPT-5.6": true,
+        "openai/gpt-5.6": false,
       }),
     );
 
-    expect(res.config?.agents?.defaults?.models?.["openai/gpt-5.5"]).toBe(false);
+    expect(res.config?.agents?.defaults?.models?.["openai/gpt-5.6-sol"]).toBe(false);
     expect(res.changes.filter((change) => change.includes("Merged"))).toEqual([
-      'Merged config.agents.defaults.models key "openai/gpt-4" into "openai/gpt-5.5"; kept existing values for conflicting fields: value.',
-      'Merged config.agents.defaults.models key "openai/gpt-4o" into "openai/gpt-5.5".',
+      'Merged config.agents.defaults.models key "openai/GPT-5.6" into "openai/gpt-5.6-sol"; kept existing values for conflicting fields: value.',
+      'Merged config.agents.defaults.models key "openai/gpt-5.6" into "openai/gpt-5.6-sol".',
     ]);
   });
 

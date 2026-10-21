@@ -597,7 +597,7 @@ extensions/qa-lab/src/bus-server.ts	3
 extensions/qa-lab/src/bus-state.ts	1
 extensions/qa-lab/src/character-eval.ts	2
 extensions/qa-lab/src/ci-smoke-plan.ts	1
-extensions/qa-lab/src/cli.runtime.ts	4
+extensions/qa-lab/src/cli.runtime.ts	2
 extensions/qa-lab/src/codex-plugin.fixture.ts	2
 extensions/qa-lab/src/crabline-transport.ts	4
 extensions/qa-lab/src/cron-run-wait.ts	1
@@ -1703,7 +1703,6 @@ src/config/sessions/skill-prompt-blobs.ts	5
 src/config/sessions/store-entry-shape.ts	1
 src/config/sessions/transcript-assistant-message.ts	2
 src/config/sessions/transcript-replay.ts	1
-src/config/sessions/transcript-stream.ts	1
 src/config/sessions/transcript-tree.ts	3
 src/config/sessions/transcript.ts	8
 src/config/sessions/types.ts	1

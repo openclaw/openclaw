@@ -1,25 +1,21 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { i18n } from "../../i18n/index.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
+import { expect, it, vi } from "vitest";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
-  createTerminalController,
-  createTestTerminalPanel,
-  defineTestTerminalPanelElement,
-  terminalOpenResult,
-  type CreateGhosttyTerminalMock,
-} from "./terminal-panel.test-support.ts";
+  eventGateway,
+  panelFixture,
+  panelButton,
+  togglePanel,
+  queueCatalog,
+} from "./terminal-panel-lifecycle.test-support.ts";
+import { terminalOpenResult } from "./terminal-panel.test-support.ts";
 
-const createTerminal: CreateGhosttyTerminalMock = vi.fn();
-const tag = defineTestTerminalPanelElement(createTerminal);
-const terminals: ReturnType<typeof createTerminalController>[] = [];
+const { create: createTerminal, terminals, mount: mountFixture } = panelFixture(true);
 
 function gatewayFixture() {
   let nextId = 0;
-  const listeners = new Set<Parameters<TerminalGatewayClient["addEventListener"]>[0]>();
-  const request = vi.fn(async (method: string, params?: unknown) => {
+  return eventGateway((method, params) => {
     if (method === "terminal.open") {
       return terminalOpenResult(`session-${++nextId}`);
     }
@@ -29,67 +25,18 @@ function gatewayFixture() {
     }
     return method === "terminal.list" ? { sessions: [] } : { ok: true };
   });
-  const client: TerminalGatewayClient = {
-    request: request as TerminalGatewayClient["request"],
-    forceReconnect: vi.fn(),
-    addEventListener: (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
-  return {
-    client,
-    request,
-    emit: (event: string, payload: unknown) => {
-      for (const listener of listeners) {
-        listener({ event, payload });
-      }
-    },
-  };
 }
 
 async function mount(client: TerminalGatewayClient, embedded = true) {
-  const panel = createTestTerminalPanel(tag);
-  panel.embedded = embedded;
-  panel.client = client;
-  panel.available = true;
-  document.body.append(panel);
-  if (!panel.terminalPanelOpen) {
-    panel.toggle();
-  }
+  const panel = mountFixture({ embedded, client });
   await panel.updateComplete;
   await vi.waitFor(() => expect(panel.hostedTabs).toHaveLength(1));
-  await vi.waitFor(() =>
-    expect(panel.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(false),
-  );
+  await vi.waitFor(() => expect(panelButton(panel)?.disabled).toBe(false));
   return panel;
 }
 
-beforeAll(async () => {
-  await import("@openclaw/libterminal/browser");
-});
-beforeEach(async () => {
-  vi.useFakeTimers();
-  vi.stubGlobal("localStorage", createStorageMock());
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  await i18n.setLocale("en");
-  terminals.length = 0;
-  createTerminal.mockImplementation(async () => {
-    const terminal = createTerminalController();
-    terminals.push(terminal);
-    return terminal;
-  });
-});
-afterEach(async () => {
-  document.body.replaceChildren();
-  await Promise.resolve();
-  createTerminal.mockReset();
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
-});
-
 function dockButton(panel: HTMLElement) {
-  const button = panel.querySelector<HTMLButtonElement>('[aria-label="Dock to bottom"]');
+  const button = panelButton(panel, '[aria-label="Dock to bottom"]');
   expect(button).not.toBeNull();
   return button!;
 }
@@ -106,11 +53,7 @@ it("keeps a destination's live PTY beside its detached diagnostic view", async (
   const diagnostic = terminals[0]!;
   const diagnosticHost = createTerminal.mock.calls[0]![0].parent;
   const target = await mount(gateway.client, false);
-  target.handleToggleRequest(
-    new CustomEvent("openclaw:terminal-toggle", {
-      detail: { open: true, terminalSessionId: "session-1" },
-    }),
-  );
+  togglePanel(target, { open: true, terminalSessionId: "session-1" });
   await vi.waitFor(() => expect(target.hostedTabs).toHaveLength(2));
   await vi.waitFor(() =>
     expect(target.hostedTabs.every((tab) => tab.className === "is-live")).toBe(true),
@@ -130,15 +73,9 @@ it("keeps a destination's live PTY beside its detached diagnostic view", async (
   expect(target.activeHostedTabId).toBe(diagnosticTab?.id);
   expect(live.dispose).not.toHaveBeenCalled();
   expect(diagnostic.dispose).not.toHaveBeenCalled();
-  target.handleToggleRequest(
-    new CustomEvent("openclaw:terminal-toggle", {
-      detail: { open: true, terminalSessionId: "session-1" },
-    }),
-  );
+  togglePanel(target, { open: true, terminalSessionId: "session-1" });
   await vi.waitFor(() => expect(target.activeHostedTabId).toBe(liveId));
-  expect(
-    gateway.request.mock.calls.filter(([method]) => method === "terminal.attach"),
-  ).toHaveLength(1);
+  expect(gateway.calls("terminal.attach")).toHaveLength(1);
 });
 
 it("disposes an explicitly cancelled diagnostic handoff without a dead attach", async () => {
@@ -152,20 +89,11 @@ it("disposes an explicitly cancelled diagnostic handoff without a dead attach", 
   expect(diagnostic.dispose).not.toHaveBeenCalled();
   panel.closeTerminalPanel();
   expect(diagnostic.dispose).toHaveBeenCalledOnce();
-  expect(gateway.request.mock.calls.some(([method]) => method === "terminal.attach")).toBe(false);
+  expect(gateway.calls("terminal.attach")).toEqual([]);
 });
 
 it("keeps catalog first-output readiness at its source until output arrives", async () => {
-  sessionStorage.setItem(
-    "openclaw.terminal.actions.v1",
-    JSON.stringify([
-      {
-        kind: "catalog",
-        agentId: "ops",
-        catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "waiting" },
-      },
-    ]),
-  );
+  queueCatalog({ catalogId: "codex", hostId: "gateway:local", threadId: "waiting" });
   const gateway = gatewayFixture();
   const panel = await mount(gateway.client);
   const terminal = terminals[0]!;
@@ -183,5 +111,5 @@ it("keeps catalog first-output readiness at its source until output arrives", as
   expect(panel.hostedTabs[0]?.className).toBe("is-live");
   expect(panel.querySelector(".tp-error")).toBeNull();
   expect(terminal.dispose).not.toHaveBeenCalled();
-  expect(gateway.request.mock.calls.some(([method]) => method === "terminal.close")).toBe(false);
+  expect(gateway.calls("terminal.close")).toEqual([]);
 });

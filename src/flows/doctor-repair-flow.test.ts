@@ -28,7 +28,7 @@ function warningFinding(checkId: string): HealthFinding {
 }
 
 function successfullyRepairedCheck(): DoctorHealthCheck {
-  return normalizeHealthCheck({
+  return {
     id: "test/repaired-first",
     kind: "core",
     description: "repairs before the unresolved check",
@@ -40,10 +40,10 @@ function successfullyRepairedCheck(): DoctorHealthCheck {
     async repair(checkContext) {
       return {
         config: { ...checkContext.cfg, gateway: { ...checkContext.cfg.gateway, mode: "local" } },
-        changes: ["Set gateway.mode to local."],
+        changes: [`Set gateway.mode to local for ${this.id}.`],
       };
     },
-  });
+  };
 }
 
 describe("runDoctorHealthRepairs", () => {
@@ -83,7 +83,7 @@ describe("runDoctorHealthRepairs", () => {
   });
 
   it.each(["skipped", "throws", "unavailable", "validation-failed"] as const)(
-    "preserves unresolved split findings after a successful sibling repair (%s)",
+    "preserves unresolved split findings after a receiver-bound sibling repair (%s)",
     async (outcome) => {
       const unresolvedId = `test/split-${outcome}`;
       const unresolvedCheck = normalizeHealthCheck({
@@ -116,6 +116,7 @@ describe("runDoctorHealthRepairs", () => {
       });
 
       expect(result.config.gateway?.mode).toBe("local");
+      expect(result.changes).toContain("Set gateway.mode to local for test/repaired-first.");
       expect(result.findings.map((finding) => finding.checkId)).toEqual([
         "test/repaired-first",
         unresolvedId,

@@ -100,6 +100,44 @@ the next pair, and compare each pair's candidate-minus-baseline difference.
 Build and seed outside the measurement CPU allocation. Keep every root and
 temporary directory inside the task-owned sandbox and remove them after use.
 
+## Startup with interrupted subagent runs
+
+The `interruptedRegistry` case starts a real Gateway against 86 retained runs:
+78 completed rows and eight unfinished rows across eight synthetic child agents.
+Four unfinished rows remain `running`, and four are already `interrupted` with
+aborted session state. All rows retain completion expectations and requester-turn
+claims, including the delivered, cleanup-complete rows: all 86 are activation
+obligations, not cold history. They share eight requester cohorts; the unfinished
+rows share two of those cohorts, four per requester. The seed command
+commits the fixture in a child writer, then sends that writer `SIGKILL` while its
+SQLite handles remain open. This preserves actual unclean-close/WAL residue;
+the run/session records are synthetic, not captured from a predecessor Gateway
+or model execution. No models, credentials, or external channels are used.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
+  --case interruptedRegistry --fixture-root /path/to/new-fixture --seed-only
+node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
+  --case interruptedRegistry --fixture-root /path/to/new-fixture \
+  --runs 1 --warmup 0 --timeout-ms 90000 --output /path/to/result.json
+```
+
+The output includes spawn-to-`/readyz`, spawn-to-Gateway-ready, all activation
+trace spans, per-run recovery times, and database bytes. The driver waits for all
+eight recovery events and verifies exactly one event per unfinished run, eight
+durable terminal error outcomes, all 86 retained rows, and unchanged execution
+outcomes for the 78 completed rows after shutdown. Requester claim metadata may
+change during settlement. The synthetic rows have no saved operator source, so
+this proves orphan and missing-source settlement; it does not exercise successful
+operator authority restoration, resuming a model, or external delivery.
+Activation subspans can overlap or sum concurrent groups, so compare the outer
+activation elapsed time separately from the component totals.
+
+Prepare fresh roots sequentially for each side of every pair; recovery mutates
+the fixture. Use the same `--start-at <epoch-ms>` for concurrent A/B starts under
+the benchmark host's exclusive measurement lock, and swap the assigned CPU
+halves for the next pair. Build and seed outside the measurement allocation.
+
 ## Startup with one checking agent
 
 The startup benchmark has an opt-in `slowAgentDatabase` case. Prepare each side
@@ -832,6 +870,13 @@ as the Gateway and uses V8's count-only object query; it retains no instance
 references. Bundled entries are rejected because their constructor identity
 differs. Counts cover the main isolate only, and the queries force additional
 collections, so omit the census from latency/GC acceptance runs.
+Add `--entry src/entry.ts --fingerprint-retention` to attribute retained prompt-cache
+diagnostics after the measured reopen. It waits one more idle interval, collects
+garbage, verifies that no session runtime objects remain reachable, then reports heap, external,
+and array-buffer deltas after clearing the diagnostic owner. This preserves the
+diagnostic baseline throughout the measured reopen and keeps attribution's extra
+collections outside latency and GC windows. External memory includes array buffers;
+do not add those two deltas together.
 Add `--heap-snapshot` in a separate diagnostic pass for `initial.heapsnapshot`,
 `post-work.heapsnapshot`, `post-idle.heapsnapshot`, and `post-reopen.heapsnapshot`
 to count retained managers, sessions, agents, and their transcript retainers.

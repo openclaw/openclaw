@@ -2,12 +2,7 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { danger } from "../globals.js";
-import {
-  type GmailRunOptions,
-  type GmailSetupOptions,
-  runGmailService,
-  runGmailSetup,
-} from "../hooks/gmail-ops.js";
+import { type GmailRunOptions, runGmailService, runGmailSetup } from "../hooks/gmail-ops.js";
 import {
   DEFAULT_GMAIL_LABEL,
   DEFAULT_GMAIL_MAX_BYTES,
@@ -93,7 +88,20 @@ export function registerWebhooksCli(program: Command) {
     .option("--json", "Output JSON summary", false)
     .action(async (opts) => {
       try {
-        await runGmailSetup(parseGmailSetupOptions(opts));
+        const account = normalizeOptionalString(opts.account) ?? "";
+        if (!account) {
+          throw new Error(
+            `--account is required. Example: ${formatCliCommand("openclaw webhooks gmail setup --account default")}.`,
+          );
+        }
+        const common = parseGmailCommonOptions(opts);
+        await runGmailSetup({
+          account,
+          project: normalizeOptionalString(opts.project),
+          ...common,
+          pushEndpoint: normalizeOptionalString(opts.pushEndpoint),
+          json: Boolean(opts.json),
+        });
       } catch (err) {
         if (opts.json) {
           throw new Error(formatErrorMessage(err), { cause: err });
@@ -111,37 +119,16 @@ export function registerWebhooksCli(program: Command) {
       .option("--topic <topic>", "Pub/Sub topic path (projects/.../topics/..)"),
   ).action(async (opts) => {
     try {
-      await runGmailService(parseGmailRunOptions(opts));
+      const common = parseGmailCommonOptions(opts);
+      await runGmailService({
+        account: normalizeOptionalString(opts.account),
+        ...common,
+      });
     } catch (err) {
       defaultRuntime.error(danger(formatErrorMessage(err)));
       defaultRuntime.exit(1);
     }
   });
-}
-
-function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions {
-  const account = normalizeOptionalString(raw.account) ?? "";
-  if (!account) {
-    throw new Error(
-      `--account is required. Example: ${formatCliCommand("openclaw webhooks gmail setup --account default")}.`,
-    );
-  }
-  const common = parseGmailCommonOptions(raw);
-  return {
-    account,
-    project: normalizeOptionalString(raw.project),
-    ...common,
-    pushEndpoint: normalizeOptionalString(raw.pushEndpoint),
-    json: Boolean(raw.json),
-  };
-}
-
-function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
-  const common = parseGmailCommonOptions(raw);
-  return {
-    account: normalizeOptionalString(raw.account),
-    ...common,
-  };
 }
 
 function parseGmailCommonOptions(raw: Record<string, unknown>): Omit<GmailRunOptions, "account"> {

@@ -42,6 +42,8 @@ function notificationFixture(surface: "web" | "native") {
     webPush: {
       snapshot: {
         supported: true,
+        canManage: true,
+        canReadPreferences: true,
         permission: "default",
         subscription: "unknown",
         loading: false,

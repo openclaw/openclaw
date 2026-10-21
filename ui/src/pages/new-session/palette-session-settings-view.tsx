@@ -8,6 +8,7 @@ import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.t
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { resolvePaletteSessionSettings, type SettingsOptions } from "./palette-session-settings.ts";
+import { repositoryIssueText } from "./submit-gates.ts";
 import { AgentSelect, RequiredSessionPlacement } from "./target-controls-view.tsx";
 
 type SettingsProjection = ReturnType<typeof resolvePaletteSessionSettings>;
@@ -359,7 +360,8 @@ export function PaletteSessionSettingsView(properties: {
                   place().remotePlacement
                     ? t("newSession.checkoutRemoteLocked")
                     : !place().worktreeAvailable()
-                      ? t("newSession.gitCheckUnavailable")
+                      ? (repositoryIssueText(place().repository) ??
+                        t("newSession.gitCheckUnavailable"))
                       : undefined
                 }
                 disabled={view().locked || place().remotePlacement}

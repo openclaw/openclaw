@@ -250,6 +250,7 @@ export async function createNativeRuntime(
           stop: options?.stop,
           serviceTier: options?.serviceTier,
           cacheRetention: options?.cacheRetention,
+          promptCacheTtl: options?.promptCacheTtl,
           timeoutMs: options?.timeoutMs,
           maxRetryDelayMs: options?.maxRetryDelayMs,
           onActiveResponse: options?.onActiveResponse,

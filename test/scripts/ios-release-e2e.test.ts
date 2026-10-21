@@ -658,9 +658,11 @@ describe("release qualification workflow authority", () => {
     { flow: "qualification", enabled: false },
     { flow: "screenshots", enabled: true },
     { flow: "screenshots", enabled: false },
+    { flow: "screenshots", enabled: false, startupProbe: true },
   ])(
     "runs $flow with optional resource diagnostics=$enabled without masking failure",
-    ({ flow, enabled }) => {
+    ({ flow, enabled, startupProbe = false }) => {
+      const diagnostics = enabled || startupProbe;
       const selected = flow === "qualification" ? workflow : release;
       expect(selected.on.workflow_dispatch.inputs.resource_diagnostics).toMatchObject({
         type: "boolean",
@@ -695,6 +697,9 @@ fs.writeFileSync(process.env.FIXTURE_RECORD, JSON.stringify({
   args: process.argv.slice(2),
   diagnostics: process.env.OPENCLAW_IOS_RESOURCE_DIAGNOSTICS,
   snapshots: process.env.OPENCLAW_SNAPSHOT_DIAGNOSTICS,
+  startupProbe: process.env.OPENCLAW_SNAPSHOT_STARTUP_PROBE,
+  deviceFamily: process.env.OPENCLAW_SNAPSHOT_DEVICE_FAMILY,
+  skipWatch: process.env.OPENCLAW_SNAPSHOT_SKIP_WATCH,
   phasePath: process.env.OPENCLAW_IOS_RESOURCE_PHASE_PATH,
 }));
 process.exitCode = 23;
@@ -710,7 +715,7 @@ process.exitCode = 23;
             ? String(
                 evaluateWorkflow(value, {
                   eventName: "workflow_dispatch",
-                  inputs: { resource_diagnostics: enabled },
+                  inputs: { resource_diagnostics: enabled, startup_probe: startupProbe },
                   steps: { simslim: { outputs: { binary: "" } } },
                 }),
               )
@@ -740,9 +745,9 @@ process.exitCode = 23;
       });
       expect(execution.status, execution.stderr).toBe(23);
       const observed = JSON.parse(readFileSync(record, "utf8"));
-      expect(observed.diagnostics).toBe(enabled ? "1" : "0");
-      expect(Boolean(observed.phasePath)).toBe(enabled);
-      expect(readdirSync(root).includes("ios-resource-timeline.jsonl")).toBe(enabled);
+      expect(observed.diagnostics).toBe(diagnostics ? "1" : "0");
+      expect(Boolean(observed.phasePath)).toBe(diagnostics);
+      expect(readdirSync(root).includes("ios-resource-timeline.jsonl")).toBe(diagnostics);
       expect(observed.args).toEqual(
         flow === "qualification"
           ? [
@@ -759,6 +764,9 @@ process.exitCode = 23;
       );
       if (flow === "screenshots") {
         expect(observed.snapshots).toBe("1");
+        expect(observed.startupProbe).toBe(startupProbe ? "1" : "0");
+        expect(observed.deviceFamily).toBe(startupProbe ? "iphone" : "");
+        expect(observed.skipWatch).toBe(startupProbe ? "1" : "0");
       }
     },
   );

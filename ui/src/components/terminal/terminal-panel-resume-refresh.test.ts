@@ -2,50 +2,37 @@
 
 import type { TerminalAttachResult } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { refreshControlUiServiceWorker } from "../../app/sw-refresh.runtime.ts";
-import { i18n } from "../../i18n/index.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import {
-  createTerminalController,
-  createTestTerminalPanel,
-  defineTestTerminalPanelElement,
-  terminalOpenResult,
-  type CreateGhosttyTerminalMock,
-} from "./terminal-panel.test-support.ts";
+import { panelFixture, togglePanel } from "./terminal-panel-lifecycle.test-support.ts";
+import { createTerminalController, terminalOpenResult } from "./terminal-panel.test-support.ts";
 
 vi.mock("../../app/sw-refresh.runtime.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../app/sw-refresh.runtime.ts")>()),
   refreshControlUiServiceWorker: vi.fn(),
 }));
 
-const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
-const elementName = defineTestTerminalPanelElement(createGhosttyTerminalMock);
+const fixture = panelFixture(
+  false,
+  () => {
+    vi.restoreAllMocks();
+    vi.mocked(refreshControlUiServiceWorker).mockReset();
+  },
+  false,
+);
+const createGhosttyTerminalMock = fixture.create;
 
-beforeAll(async () => {
-  await import("@openclaw/libterminal/browser");
-});
+function mount(request: ReturnType<typeof createGatewayRequestMock>) {
+  return fixture.mount({ client: createTestGatewayClient(request) });
+}
 
-beforeEach(async () => {
-  vi.stubGlobal("localStorage", createStorageMock());
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  await i18n.setLocale("en");
-});
-
-afterEach(async () => {
-  document.body.replaceChildren();
-  await Promise.resolve();
-  vi.restoreAllMocks();
-  createGhosttyTerminalMock.mockReset();
-  vi.mocked(refreshControlUiServiceWorker).mockReset();
-  vi.unstubAllGlobals();
-});
+const savedIds = () => sessionStorage.getItem("openclaw.terminal.sessions.v1");
 
 it("settles availability changes while offline without repeatedly suspending the terminal", async () => {
   const terminal = createTerminalController();
@@ -53,14 +40,8 @@ it("settles availability changes while offline without repeatedly suspending the
   const request = createGatewayRequestMock((method) =>
     method === "terminal.open" ? terminalOpenResult("retained") : { ok: true },
   );
-  const panel = createTestTerminalPanel(elementName);
-  panel.client = createTestGatewayClient(request);
-  panel.available = true;
-  document.body.append(panel);
-  panel.toggle();
-  await waitForFast(() =>
-    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["retained"]'),
-  );
+  const panel = mount(request);
+  await waitForFast(() => expect(savedIds()).toBe('["retained"]'));
   panel.gatewayConnected = false;
   await panel.updateComplete;
   await waitForFast(() => expect(terminal.setReadOnly).toHaveBeenCalledWith(true));
@@ -75,8 +56,7 @@ it("settles availability changes while offline without repeatedly suspending the
     await vi.dynamicImportSettled();
     await panel.updateComplete;
     expect(terminal.dispose).toHaveBeenCalledOnce();
-    expect(panel.hostedTabs).toEqual([]);
-    expect(panel.terminalPanelOpen).toBe(available);
+    expect(panel).toMatchObject({ hostedTabs: [], terminalPanelOpen: available });
     expect(panel.querySelector(".tp") !== null).toBe(available);
     expect(request).not.toHaveBeenCalled();
   }
@@ -100,23 +80,15 @@ it("holds retained PTYs and queued actions behind the same-client reconnect refr
     }
     return { ok: true };
   });
-  const panel = createTestTerminalPanel(elementName);
-  panel.client = createTestGatewayClient(request);
-  panel.available = true;
-  document.body.append(panel);
-  panel.toggle();
-  await waitForFast(() =>
-    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["retained"]'),
-  );
+  const panel = mount(request);
+  await waitForFast(() => expect(savedIds()).toBe('["retained"]'));
   const tabId = panel.hostedTabs[0]!.id;
   const terminalHost = createGhosttyTerminalMock.mock.calls[0]![0].parent;
 
   panel.gatewayConnected = false;
   await panel.updateComplete;
   await waitForFast(() => expect(terminal.setReadOnly).toHaveBeenCalledWith(true));
-  panel.handleToggleRequest(
-    new CustomEvent("openclaw:terminal-toggle", { detail: { open: true, newSession: true } }),
-  );
+  togglePanel(panel, { open: true, newSession: true });
   await panel.updateComplete;
   expect(opened).toBe(1);
 
@@ -136,7 +108,7 @@ it("holds retained PTYs and queued actions behind the same-client reconnect refr
   expect(terminal.setReadOnly).toHaveBeenLastCalledWith(true);
   reattach.resolve({ ...terminalOpenResult("retained"), buffer: "", seq: 0 });
   await waitForFast(() => {
-    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["retained","queued"]');
+    expect(savedIds()).toBe('["retained","queued"]');
     expect(terminal.setReadOnly).toHaveBeenLastCalledWith(false);
   });
   expect(request.mock.calls.filter(([method]) => method === "terminal.attach")).toHaveLength(1);
@@ -169,17 +141,13 @@ it("exits a confirmed missing retained PTY without leaving its surviving tab rea
     }
     return { ok: true };
   });
-  const panel = createTestTerminalPanel(elementName);
-  panel.client = createTestGatewayClient(request);
-  panel.available = true;
-  document.body.append(panel);
-  panel.toggle();
+  const panel = mount(request);
   await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
   panel.querySelector<HTMLButtonElement>('[aria-label="New terminal session"]')!.click();
   await panel.updateComplete;
   await waitForFast(() => expect(panel.hostedTabs[1]?.className).toBe("is-live"));
   const tabIds = panel.hostedTabs.map((tab) => tab.id);
-  expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["expired","survivor"]');
+  expect(savedIds()).toBe('["expired","survivor"]');
 
   panel.gatewayConnected = false;
   await panel.updateComplete;
@@ -197,6 +165,6 @@ it("exits a confirmed missing retained PTY without leaving its surviving tab rea
   expect(panel.hostedTabs.map((tab) => tab.id)).toEqual(tabIds);
   expect(expiredTerminal.dispose).not.toHaveBeenCalled();
   expect(survivingTerminal.dispose).not.toHaveBeenCalled();
-  expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe('["survivor"]');
+  expect(savedIds()).toBe('["survivor"]');
   expect(panel.querySelector(".tp-error")).toBeNull();
 });
