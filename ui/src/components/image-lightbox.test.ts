@@ -324,8 +324,12 @@ it.each([false, true])(
     await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(toast.active).toBe(!removed);
-    expect(toast.toast?.message ?? null).toBe(
-      removed ? null : "Could not download this image. Try again.",
+    expect(toast.toast).toEqual(
+      removed
+        ? null
+        : expect.objectContaining({
+            message: "Could not download this image. Try again.",
+          }),
     );
   },
 );
