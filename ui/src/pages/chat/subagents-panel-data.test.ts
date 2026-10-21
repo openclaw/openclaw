@@ -73,12 +73,14 @@ function page(
   return { ...sessionsResult(rows, 1), hasMore: false, nextOffset: null, ...extra };
 }
 
-function history(row: GatewaySessionRow, calls = 0): ChatHistoryResult {
-  const messages = Array.from({ length: calls }, (_, index) => ({
-    role: "assistant",
-    runId: "run-1",
-    content: [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: {} }],
-  }));
+function history(row: GatewaySessionRow, calls: number | unknown[] = 0): ChatHistoryResult {
+  const messages = Array.isArray(calls)
+    ? calls
+    : Array.from({ length: calls }, (_, index) => ({
+        role: "assistant",
+        runId: "run-1",
+        content: [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: {} }],
+      }));
   return { sessionId: row.sessionId, messages, hasMore: false, totalMessages: messages.length };
 }
 
@@ -363,17 +365,12 @@ describe("Subagents panel data ownership", () => {
       phase: "end",
       status: "failed",
     });
-    const messages = [
-      { role: "assistant", runId: "previous-run", content: [], activity: [previous] },
-    ];
     const f = rowFixture(
       () => row,
-      () => ({
-        sessionId: row.sessionId,
-        messages,
-        hasMore: false,
-        totalMessages: messages.length,
-      }),
+      () =>
+        history(row, [
+          { role: "assistant", runId: "previous-run", content: [], activity: [previous] },
+        ]),
     );
     const publish = (runId: string, data: Record<string, unknown>) =>
       f.publish(row, data, { runId });
