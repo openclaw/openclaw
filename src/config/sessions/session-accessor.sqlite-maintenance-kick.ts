@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -12,6 +13,7 @@ import {
 import { observeSessionControllerProtectionReleases } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-database-admission-error.js";
 import { captureAgentDatabaseAdmission } from "../../state/agent-database-admission.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -370,7 +372,7 @@ function retireMaintenanceOwner(databasePath: string, owner: SessionEntryMainten
   void owner.retirement.catch((error: unknown) =>
     getChildLogger({ subsystem: "session-sqlite" }).warn(
       "SQLite automatic maintenance could not retire",
-      { error, path: databasePath },
+      { error: formatErrorMessage(error, { includeCode: true }), path: databasePath },
     ),
   );
 }
@@ -677,6 +679,8 @@ async function runPendingMaintenance(
       return;
     }
   } catch (error) {
+    const log = getChildLogger({ subsystem: "session-sqlite" });
+    const details = { error: formatErrorMessage(error, { includeCode: true }), path: databasePath };
     owner.noCandidates = false;
     if (planningChanged && isCurrent()) {
       if (finalized && owner.generation !== generation) {
@@ -689,24 +693,22 @@ async function runPendingMaintenance(
       owner.running = false;
       owner.retryDelayMs = MAINTENANCE_WRITE_QUIET_MS;
       if (owner.rejections >= MAX_MAINTENANCE_REJECTIONS) {
-        getChildLogger({ subsystem: "session-sqlite" }).warn(
-          "SQLite automatic session maintenance paused after repeated input changes",
-          { error, path: databasePath, rejections: owner.rejections },
-        );
+        log.warn("SQLite automatic session maintenance paused after repeated input changes", {
+          ...details,
+          rejections: owner.rejections,
+        });
       } else {
         scheduleMaintenanceAfterWriteQuiet(databasePath, owner);
       }
       return;
     }
-    // Drain cancels discretionary work; independent failures stay visible.
+    // Retirement can refuse the next worker admission; independent failures stay visible.
     if (
       !isGatewayRestartDrainError(error) &&
-      !(planningChanged && getGatewayRestartDrainSignal().aborted)
+      !(planningChanged && getGatewayRestartDrainSignal().aborted) &&
+      !(owner.retirement && error instanceof AgentDatabaseExecutionAdmissionClosedError)
     ) {
-      getChildLogger({ subsystem: "session-sqlite" }).warn(
-        "SQLite automatic session maintenance failed",
-        { error, path: databasePath },
-      );
+      log.warn("SQLite automatic session maintenance failed", details);
     }
   } finally {
     preservation?.dispose();
@@ -720,16 +722,14 @@ async function runPendingMaintenance(
   const fact = owner.ageFact;
   if (fact && hasCurrentNoCandidates()) {
     owner.activeSessionKeys.clear();
-    scheduleMaintenanceAt(databasePath, owner, Math.min(fact.next.at, fact.recheckAt));
+    nextMaintenanceAt = Math.min(fact.next.at, fact.recheckAt);
+  } else if (owner.generation !== generation || owner.ageChanges.size > 0) {
+    scheduleMaintenanceAfterWriteQuiet(databasePath, owner);
     return;
   }
-  if (owner.generation === generation && owner.ageChanges.size === 0) {
-    if (nextMaintenanceAt === undefined) {
-      retireMaintenanceOwner(databasePath, owner);
-      return;
-    }
+  if (nextMaintenanceAt === undefined) {
+    retireMaintenanceOwner(databasePath, owner);
+  } else {
     scheduleMaintenanceAt(databasePath, owner, nextMaintenanceAt);
-    return;
   }
-  scheduleMaintenanceAfterWriteQuiet(databasePath, owner);
 }

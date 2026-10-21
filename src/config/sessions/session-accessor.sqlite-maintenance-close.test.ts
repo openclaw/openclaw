@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import * as logging from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-database-admission-error.js";
 import * as databaseResources from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -13,6 +15,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
+import { observeNextPeriodicMaintenance } from "./session-accessor.sqlite-maintenance.test-support.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
@@ -150,6 +153,81 @@ it.for([false, true])(
         releaseAck.resolve();
         releaseFinalizer.resolve();
         await Promise.allSettled([nativeClosing, finalization]);
+      }
+    });
+  },
+);
+
+it.for([
+  "retired admission",
+  "live admission",
+  "retired plain error",
+  "retired I/O error",
+] as const)(
+  "reports automatic maintenance failures accurately for %s",
+  async (scenario, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = { agentId: "main", env: state.env };
+      const database = openOpenClawAgentDatabase(scope);
+      const request = {
+        activeSessionKey: "agent:main:maintenance-close",
+        archiveDirectory: state.sessionsDir(),
+        maintenanceConfig: resolveMaintenanceConfigFromInput({ mode: "enforce" }),
+        scope,
+        storePath: database.path,
+      };
+      const execution = databaseExecution.captureOpenClawAgentDatabaseExecution(scope);
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const message = "Agent database execution admission is closed";
+      const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
+      vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
+      const warn = vi.spyOn(logger, "warn");
+      vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementationOnce(async () => {
+        entered.resolve();
+        await resume.promise;
+        if (scenario === "retired admission") {
+          // Exercise the actual refusal producer after physical close revoked its owner.
+          execution.assertCurrent();
+          throw new Error("Retired execution admitted maintenance");
+        }
+        if (scenario === "live admission") {
+          throw new AgentDatabaseExecutionAdmissionClosedError(message);
+        }
+        if (scenario === "retired plain error") {
+          throw new Error(message);
+        }
+        throw new Error("maintenance write failed", {
+          cause: Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" }),
+        });
+      });
+      const scheduled = observeNextPeriodicMaintenance();
+      let closing: Promise<boolean> | undefined;
+      try {
+        maintenanceKick.kickSessionEntryMaintenanceAfterWrite(request);
+        await withinTest(entered.promise, signal);
+        if (scenario !== "live admission") {
+          closing = closeOpenClawAgentDatabaseByPathAsync(database.path);
+        }
+        resume.resolve();
+        await withinTest(closing ?? scheduled(signal), signal);
+        if (scenario === "retired admission") {
+          expect(warn).not.toHaveBeenCalled();
+        } else {
+          expect(warn).toHaveBeenCalledExactlyOnceWith(
+            "SQLite automatic session maintenance failed",
+            {
+              error:
+                scenario === "retired I/O error"
+                  ? "maintenance write failed | disk I/O error | SQLITE_IOERR"
+                  : message,
+              path: database.path,
+            },
+          );
+        }
+      } finally {
+        resume.resolve();
+        await Promise.allSettled([closing, execution.release()]);
       }
     });
   },
