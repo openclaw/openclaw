@@ -18,11 +18,7 @@ import {
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { writeFixtureReply } from "./gateway-recovery.test-support.js";
-import {
-  closeNativeProvider,
-  createNativeProvider,
-  listenNativeProvider,
-} from "./native-provider-proof-fixture.js";
+import { startMemoryProofProvider } from "./memory-product-proof.test-support.js";
 
 // #143381: each isolated heartbeat leaked its fresh session's MCP stdio child.
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
@@ -80,50 +76,14 @@ async function startMockProvider() {
     responseGate = createDeferred();
     return responseEntered.promise;
   };
-  const server = createNativeProvider(
-    async (request, response, body) => {
-      const json = (data: unknown) => {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify(data));
-      };
-      if (request.method === "GET" && request.url === "/v1/models") {
-        json({ data: [{ id: "gpt-5.6-luna", object: "model" }] });
-        return;
-      }
-      if (request.method === "POST" && request.url === "/v1/embeddings") {
-        const inputs = JSON.parse(body) as { input?: string | string[] };
-        const texts = Array.isArray(inputs.input) ? inputs.input : [inputs.input ?? ""];
-        json({
-          object: "list",
-          model: "text-embedding-3-small",
-          data: texts.map((_text, index) => ({
-            object: "embedding",
-            index,
-            embedding: Array.from({ length: 64 }, (_slot, dimension) => (dimension === 0 ? 1 : 0)),
-          })),
-          usage: { prompt_tokens: 1, total_tokens: 1 },
-        });
-        return;
-      }
-      if (request.method !== "POST" || request.url !== "/v1/responses") {
-        response.writeHead(404).end();
-        return;
-      }
-      responsesRequests += 1;
-      responseEntered.resolve();
-      await responseGate.promise;
-      writeTextResponse(response, RESPONSE_TEXT);
-    },
-    (error, response) => {
-      if (!response.headersSent) {
-        response.writeHead(500);
-      }
-      response.end(error instanceof Error ? error.message : String(error));
-    },
-  );
-  const baseUrl = await listenNativeProvider(server);
+  const provider = await startMemoryProofProvider(async (response) => {
+    responsesRequests += 1;
+    responseEntered.resolve();
+    await responseGate.promise;
+    writeTextResponse(response, RESPONSE_TEXT);
+  });
   return {
-    baseUrl,
+    ...provider,
     get responsesRequests() {
       return responsesRequests;
     },
@@ -131,7 +91,7 @@ async function startMockProvider() {
     releaseResponse: () => responseGate.resolve(),
     stop: async () => {
       responseGate.resolve();
-      await closeNativeProvider(server);
+      await provider.stop();
     },
   };
 }

@@ -230,29 +230,14 @@ describe("conversation route ownership clean-machine proof", () => {
       const siblingAllowedText = `ownership-proof-sibling-${randomUUID()}`;
       await send(sibling.agentId, siblingConversationRef, siblingAllowedText);
 
-      const verdict = {
-        ok: true,
-        siblingAccountHiddenFromPrimaryAgent: findConversation(primaryList, sibling) === undefined,
-        primaryAccountHiddenFromSiblingAgent: findConversation(siblingList, primary) === undefined,
-        initialOwnerDeliveredExactlyOnce:
-          outboundCount(state, primary.accountId, initialAllowedText) === 1,
-        staleSendDeniedWithoutProviderIo:
-          staleSendDenied && outboundCount(state, primary.accountId, staleSendText) === 0,
-        staleTurnDeniedWithoutProviderIo:
-          staleTurnDenied && outboundCount(state, primary.accountId, staleTurnText) === 0,
-        siblingOwnerDeliveredExactlyOnce:
-          outboundCount(state, sibling.accountId, siblingAllowedText) === 1,
-      };
-      expect(verdict).toEqual({
-        ok: true,
-        siblingAccountHiddenFromPrimaryAgent: true,
-        primaryAccountHiddenFromSiblingAgent: true,
-        initialOwnerDeliveredExactlyOnce: true,
-        staleSendDeniedWithoutProviderIo: true,
-        staleTurnDeniedWithoutProviderIo: true,
-        siblingOwnerDeliveredExactlyOnce: true,
-      });
-      console.log(`CONVERSATION_ROUTE_OWNERSHIP_PROOF=${JSON.stringify(verdict)}`);
+      expect(findConversation(primaryList, sibling)).toBeUndefined();
+      expect(findConversation(siblingList, primary)).toBeUndefined();
+      expect(outboundCount(state, primary.accountId, initialAllowedText)).toBe(1);
+      expect(staleSendDenied).toBe(true);
+      expect(outboundCount(state, primary.accountId, staleSendText)).toBe(0);
+      expect(staleTurnDenied).toBe(true);
+      expect(outboundCount(state, primary.accountId, staleTurnText)).toBe(0);
+      expect(outboundCount(state, sibling.accountId, siblingAllowedText)).toBe(1);
     },
   );
 });

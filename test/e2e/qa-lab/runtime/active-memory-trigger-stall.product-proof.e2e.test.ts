@@ -8,8 +8,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import { listenLoopback, writeFixtureReply } from "./gateway-recovery.test-support.js";
-import { closeNativeProvider, createNativeProvider } from "./native-provider-proof-fixture.js";
+import { writeFixtureReply } from "./gateway-recovery.test-support.js";
+import { startMemoryProofProvider } from "./memory-product-proof.test-support.js";
 
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const RESPONSE_MARKER = "ACTIVE_MEMORY_TRIGGER_STALL_PROOF_OK";
@@ -89,39 +89,8 @@ function writeToolCallResponse(
 
 async function startMockProvider() {
   const requests: ModelRequest[] = [];
-  const server = createNativeProvider(
-    async (request, response, body) => {
-      if (request.method === "GET" && request.url === "/v1/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ data: [{ id: "gpt-5.6-luna", object: "model" }] }));
-        return;
-      }
-      if (request.method === "POST" && request.url === "/v1/embeddings") {
-        const inputs = JSON.parse(body) as { input?: string | string[] };
-        const texts = Array.isArray(inputs.input) ? inputs.input : [inputs.input ?? ""];
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
-            object: "list",
-            model: "text-embedding-3-small",
-            data: texts.map((text, index) => ({
-              object: "embedding",
-              index,
-              // Separate the seeded decision from default workspace templates.
-              // Identical vectors let unrelated templates fill the result window.
-              embedding: Array.from({ length: 64 }, (_, dimension) =>
-                dimension === (text.toLowerCase().includes("deploy") ? 0 : 1) ? 1 : 0,
-              ),
-            })),
-            usage: { prompt_tokens: 1, total_tokens: 1 },
-          }),
-        );
-        return;
-      }
-      if (request.method !== "POST" || request.url !== "/v1/responses") {
-        response.writeHead(404).end();
-        return;
-      }
+  const provider = await startMemoryProofProvider(
+    (response, body) => {
       const payload = JSON.parse(body) as { input?: Array<{ type?: string; output?: unknown }> };
       if (!body.includes(RECALL_PROMPT_SIGNATURE)) {
         requests.push({ kind: "chat", injected: body.includes(RECALL_SUMMARY) });
@@ -152,19 +121,10 @@ async function startMockProvider() {
       requests.push({ kind: "recall-tool", injected: false });
       writeToolCallResponse(response, "memory_search", { query: "deploy window decision" });
     },
-    (error, response) => {
-      if (!response.headersSent) {
-        response.writeHead(500);
-      }
-      response.end(error instanceof Error ? error.message : String(error));
-    },
+    // Separate the seeded decision from default templates in the result window.
+    (text) => (text.toLowerCase().includes("deploy") ? 0 : 1),
   );
-  const baseUrl = await listenLoopback(server, "mock provider did not bind a loopback port");
-  return {
-    baseUrl,
-    requests,
-    stop: () => closeNativeProvider(server),
-  };
+  return { ...provider, requests };
 }
 
 type GatewayLogSource = { workspaceDir: string; tempRoot: string };
@@ -230,7 +190,7 @@ describe.runIf(process.env.OPENCLAW_ACTIVE_MEMORY_TRIGGER_STALL_PROOF === "1")(
             cwd: process.cwd(),
             usePackagedPlugins: true,
           },
-          providerBaseUrl: `${provider.baseUrl}/v1`,
+          providerBaseUrl: provider.baseUrl,
           providerMode: "mock-openai",
           primaryModel: MODEL_REF,
           alternateModel: MODEL_REF,

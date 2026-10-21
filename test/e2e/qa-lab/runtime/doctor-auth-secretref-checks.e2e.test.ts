@@ -6,73 +6,70 @@ import { stripAnsiSequences } from "../../../../packages/terminal-core/src/ansi.
 import { createConfigIO } from "../../../../src/config/io.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { withSecureTestNodeCommand } from "../../../../src/secrets/test-node-command.test-support.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../helpers/openclaw-test-instance.js";
+import { createOpenClawTestInstance } from "../../../helpers/openclaw-test-instance.js";
 
-let instance: OpenClawTestInstance | undefined;
 type GatewayToken = NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>["token"];
 const DOCTOR_CLI_TIMEOUT_MS = 120_000;
 const DOCTOR_CLI_CALL_COUNT = 6;
 // Entry-point preparation can precede the first CLI timeout; reserve one more
 // command budget for instance and config setup across the scenario.
 const DOCTOR_SCENARIO_TIMEOUT_MS = DOCTOR_CLI_TIMEOUT_MS * (DOCTOR_CLI_CALL_COUNT + 2);
-
+let cleanup: (() => Promise<void>) | undefined;
 afterEach(async () => {
-  await instance?.cleanup();
-  instance = undefined;
+  await cleanup?.();
+  cleanup = undefined;
 });
 
-async function doctor(...flags: string[]): Promise<string> {
-  if (!instance) {
-    throw new Error("Doctor test instance is not initialized");
-  }
-  const result = await instance.cli(
-    ["doctor", "--non-interactive", "--no-workspace-suggestions", ...flags],
-    { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
-  );
-  expect(result.code).toBe(0);
-  return `${result.stdout}\n${result.stderr}`;
-}
-
-function normalized(output: string): string {
-  return stripAnsiSequences(output).replaceAll("│", " ").replace(/\s+/g, " ").trim();
-}
-
-async function readToken(configPath: string) {
-  const config: OpenClawConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
-  return config.gateway?.auth?.token;
-}
-
-async function writeConfig(config: OpenClawConfig): Promise<void> {
-  const activeInstance = instance;
-  if (!activeInstance) {
-    throw new Error("Doctor test instance is not initialized");
-  }
-  const io = createConfigIO({
-    env: activeInstance.env,
-    configPath: activeInstance.configPath,
-    homedir: () => activeInstance.homeDir,
+async function createDoctorFixture() {
+  const instance = await createOpenClawTestInstance({
+    name: "qa-doctor-auth-secretref",
+    reserveIdlePort: false,
   });
-  // Keep Doctor-authored fields so the next scenario is not a config-clobber recovery.
-  await io.writeConfigFile({ ...(await io.readSourceConfigBestEffort()), ...config });
-}
+  cleanup = () => instance.cleanup();
+  async function doctor(...flags: string[]): Promise<string> {
+    const result = await instance.cli(
+      ["doctor", "--non-interactive", "--no-workspace-suggestions", ...flags],
+      { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
+    );
+    expect(result.code).toBe(0);
+    return `${result.stdout}\n${result.stderr}`;
+  }
 
-function localGatewayConfig(
-  token?: GatewayToken,
-  providers?: NonNullable<OpenClawConfig["secrets"]>["providers"],
-): OpenClawConfig {
-  return {
-    gateway: {
-      mode: "local",
-      port: instance?.port,
-      bind: "loopback",
-      auth: { mode: "token", ...(token === undefined ? {} : { token }) },
-      controlUi: { enabled: false },
-    },
-    ...(providers ? { secrets: { providers } } : {}),
-  };
+  function normalized(output: string): string {
+    return stripAnsiSequences(output).replaceAll("│", " ").replace(/\s+/g, " ").trim();
+  }
+
+  async function readToken() {
+    const config: OpenClawConfig = JSON.parse(await fs.readFile(instance.configPath, "utf8"));
+    return config.gateway?.auth?.token;
+  }
+
+  async function writeConfig(config: OpenClawConfig): Promise<void> {
+    const io = createConfigIO({
+      env: instance.env,
+      configPath: instance.configPath,
+      homedir: () => instance.homeDir,
+    });
+    // Keep Doctor-authored fields so the next scenario is not a config-clobber recovery.
+    await io.writeConfigFile({ ...(await io.readSourceConfigBestEffort()), ...config });
+  }
+
+  function localGatewayConfig(
+    token?: GatewayToken,
+    providers?: NonNullable<OpenClawConfig["secrets"]>["providers"],
+  ): OpenClawConfig {
+    return {
+      gateway: {
+        mode: "local",
+        port: instance.port,
+        bind: "loopback",
+        auth: { mode: "token", ...(token === undefined ? {} : { token }) },
+        controlUi: { enabled: false },
+      },
+      ...(providers ? { secrets: { providers } } : {}),
+    };
+  }
+  return { instance, doctor, normalized, readToken, writeConfig, localGatewayConfig };
 }
 
 // Windows ACL failure diagnostics are owned by focused resolver and Doctor
@@ -82,10 +79,8 @@ describe.skipIf(process.platform === "win32")("doctor auth and SecretRef product
     "preserves SecretRef ownership while proving resolution, fallback, exec gating, and token generation",
     { timeout: DOCTOR_SCENARIO_TIMEOUT_MS },
     async () => {
-      instance = await createOpenClawTestInstance({
-        name: "qa-doctor-auth-secretref",
-        reserveIdlePort: false,
-      });
+      const { instance, doctor, normalized, readToken, writeConfig, localGatewayConfig } =
+        await createDoctorFixture();
 
       const resolvedValue = "qa-resolved-gateway-value";
       instance.env.QA_DOCTOR_GATEWAY_TOKEN = resolvedValue;
@@ -114,7 +109,7 @@ describe.skipIf(process.platform === "win32")("doctor auth and SecretRef product
         "Doctor will not overwrite gateway.auth.token with a plaintext value.",
       );
       expect(unresolvedOutput).not.toContain("qa-ambient-token-must-not-win");
-      expect(await readToken(instance.configPath)).toEqual(unresolvedRef);
+      expect(await readToken()).toEqual(unresolvedRef);
 
       const filePath = path.join(instance.stateDir, "doctor-file-secretref.json");
       const fileSecret = "qa-file-token";
@@ -164,7 +159,7 @@ describe.skipIf(process.platform === "win32")("doctor auth and SecretRef product
       delete instance.env.OPENCLAW_GATEWAY_TOKEN;
       await writeConfig(localGatewayConfig());
       await doctor("--repair", "--yes", "--generate-gateway-token");
-      const token = await readToken(instance.configPath);
+      const token = await readToken();
       expect(typeof token).toBe("string");
       expect(token).toEqual(expect.stringMatching(/^.{21,}$/u));
     },
