@@ -33,14 +33,6 @@ export function writeFiles(cwd: string, files: Record<string, string> | readonly
 
 export const testConfig = (name: string) => `test/vitest/vitest.${name}.config.ts`;
 
-export const boundaryShard = {
-  checkName: "checks-node-changed-boundary",
-  configs: [testConfig("boundary")],
-  requiresDist: false,
-  runner: "blacksmith-8vcpu-ubuntu-2404",
-  shardName: "changed-boundary",
-};
-
 export function fullOwnerPlan(runnerBackend?: string, changedPaths?: string[]) {
   return createNodeTestShardBundles({
     compactMode: "pull-request",

@@ -16,6 +16,7 @@ import { VERSION } from "../../version.js";
 import { formatUpdateOneLiner, resolveUpdateAvailability } from "../status.update.js";
 
 export { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
+export { redactStatusSecrets } from "../status-redaction.js";
 
 type StatusOverviewRow = {
   Item: string;
@@ -316,18 +317,4 @@ export function buildGatewayStatusJsonPayload(
     error: params.gatewayProbe?.error ?? null,
     authWarning: params.gatewayProbeAuthWarning ?? null,
   };
-}
-
-export function redactStatusSecrets(text: string): string {
-  if (!text) {
-    return text;
-  }
-  let out = text;
-  out = out.replace(
-    /(["']?\b(?:access[_-]?token|refresh[_-]?token|token|password|secret|api[_-]?key)\b["']?\s*[:=]\s*)(?:Bearer\s+[^\s]+|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+)/gi,
-    "$1***",
-  );
-  out = out.replace(/\bBearer\s+[^\s]+/gi, "Bearer ***");
-  out = out.replace(/\bsk-[A-Za-z0-9]{10,}\b/g, "sk-***");
-  return out;
 }
