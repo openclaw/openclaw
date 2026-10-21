@@ -1,6 +1,34 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import {
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
+
+export function stageGuardPolicy(root: string, policy: string, script: string) {
+  for (const source of [
+    "scripts/github/security-review.mjs",
+    "scripts/github/security-sensitive-guard.mjs",
+    "scripts/github/dependency-guard.mjs",
+    "scripts/github/security-review-policy.mjs",
+    "scripts/github/security-review-rollout.mjs",
+    "scripts/github/guard-review.mjs",
+    "scripts/github/guard-shared.mjs",
+    "scripts/lib/bounded-response.mjs",
+  ]) {
+    const target = join(root, source);
+    mkdirSync(dirname(target), { recursive: true });
+    copyFileSync(source, target);
+  }
+  mkdirSync(join(root, ".github"));
+  writeFileSync(join(root, ".github/security-review-policy.yml"), policy);
+  symlinkSync(resolve("node_modules"), join(root, "node_modules"), "junction");
+  return realpathSync(join(root, `scripts/github/${script}.mjs`));
+}
 
 type GuardRequest = {
   method: string;
