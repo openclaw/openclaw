@@ -3,8 +3,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resolveConfiguredLiveProviderModels } from "../media-generation/live-test-helpers.js";
 export { resolveLiveAuthStore as resolveLiveVideoAuthStore } from "../media-generation/live-test-helpers.js";
 
-// Default provider/model matrix for video live tests. Env/config filters can
-// override this without editing the live test source.
+// Env/config filters can override this default live-test matrix.
 export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   alibaba: "alibaba/wan2.6-t2v",
   byteplus: "byteplus/seedance-1-0-lite-t2v-250428",
@@ -25,42 +24,35 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
 };
 
 const REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS = new Set(["alibaba", "google", "qwen", "xai"]);
-const BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS = new Set(["vydra"]);
 const TOGETHER_BUFFER_BACKED_IMAGE_TO_VIDEO_MODEL = "Wan-AI/wan2.7-i2v";
 
-// Keep live-test resolution conservative and provider-specific so broad smoke
-// lanes do not spend extra time or hit unsupported defaults.
-export function resolveLiveVideoResolution(params: {
+type LiveVideoModel = {
   providerId: string;
   modelRef: string;
-}): "480P" | "540P" | "720P" | "768P" | "1080P" {
+};
+
+// Conservative resolutions avoid unsupported defaults and costly smoke lanes.
+export function resolveLiveVideoResolution(
+  params: LiveVideoModel,
+): "480P" | "540P" | "720P" | "768P" | "1080P" {
   const providerId = normalizeLowercaseStringOrEmpty(params.providerId);
-  if (providerId === "minimax") {
+  if (
+    providerId === "minimax" ||
+    (providerId === "novita" && params.modelRef.includes("minimax-hailuo-"))
+  ) {
     return "768P";
   }
-  if (providerId === "novita") {
-    return params.modelRef.includes("minimax-hailuo-") ? "768P" : "720P";
-  }
-  if (providerId === "openrouter") {
+  if (["novita", "openrouter", "alibaba", "qwen"].includes(providerId)) {
     return "720P";
   }
-  if (providerId === "pixverse") {
-    return "540P";
-  }
-  if (providerId === "alibaba" || providerId === "qwen") {
-    return "720P";
-  }
-  return "480P";
+  return providerId === "pixverse" ? "540P" : "480P";
 }
 
 export function resolveConfiguredLiveVideoModels(cfg: OpenClawConfig): Map<string, string> {
   return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.mediaModels?.video);
 }
 
-export function canRunBufferBackedVideoToVideoLiveLane(params: {
-  providerId: string;
-  modelRef: string;
-}): boolean {
+export function canRunBufferBackedVideoToVideoLiveLane(params: LiveVideoModel): boolean {
   const providerId = normalizeLowercaseStringOrEmpty(params.providerId);
   // Some providers only accept remote URL references in live video-to-video
   // lanes; skip buffer-backed coverage for those providers.
@@ -68,10 +60,7 @@ export function canRunBufferBackedVideoToVideoLiveLane(params: {
     return false;
   }
   if (providerId !== "runway") {
-    if (providerId === "fal") {
-      return params.modelRef.includes("reference-to-video");
-    }
-    return true;
+    return providerId !== "fal" || params.modelRef.includes("reference-to-video");
   }
   const slash = params.modelRef.indexOf("/");
   const model =
@@ -81,12 +70,9 @@ export function canRunBufferBackedVideoToVideoLiveLane(params: {
   return model === "gen4_aleph";
 }
 
-export function canRunBufferBackedImageToVideoLiveLane(params: {
-  providerId: string;
-  modelRef: string;
-}): boolean {
+export function canRunBufferBackedImageToVideoLiveLane(params: LiveVideoModel): boolean {
   const providerId = normalizeLowercaseStringOrEmpty(params.providerId);
-  if (BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS.has(providerId)) {
+  if (providerId === "vydra") {
     return false;
   }
   if (providerId === "alibaba" || providerId === "qwen") {
