@@ -642,6 +642,33 @@ describe("web_fetch extraction fallbacks", () => {
     expect(message).toContain("Oops");
   });
 
+  it("extracts HTML bodies when content-type is missing", async () => {
+    const html =
+      '<!DOCTYPE html><html><head><title>Docs</title><script>track()</script></head><body><p>Visible docs</p><div hidden>secret instructions</div></body></html>';
+    installMockFetch(async (input) => errorHtmlResponse(html, 200, resolveRequestUrl(input), null));
+
+    const { details } = await fetchPage("untyped", undefined, { extractMode: "text" });
+
+    expect(details.extractor).toBe("raw-html");
+    expect(details.contentType).toBe("text/html");
+    expect(details.text).toContain("Visible docs");
+    expect(details.text).not.toContain("<html");
+    expect(details.text).not.toContain("track()");
+    expect(details.text).not.toContain("secret instructions");
+  });
+
+  it("keeps untyped non-HTML bodies raw", async () => {
+    installMockFetch(async (input) =>
+      errorHtmlResponse("plain <b>notes</b>", 200, resolveRequestUrl(input), null),
+    );
+
+    const { details } = await fetchPage("untyped-text");
+
+    expect(details.extractor).toBe("raw");
+    expect(details.contentType).toBe("application/octet-stream");
+    expect(details.text).toContain("plain <b>notes</b>");
+  });
+
   it("surfaces provider fallback errors when direct fetch throws", async () => {
     installMockFetch(() => Promise.reject(new Error("network down")));
     mockProvider(async () => {

@@ -691,11 +691,12 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
       throw new Error(`Web fetch failed (${res.status}): ${wrappedDetail.text}`);
     }
 
-    const contentType = res.headers.get("content-type") ?? "application/octet-stream";
-    const normalizedContentType = normalizeContentType(contentType) ?? "application/octet-stream";
     const bodyResult = await readResponseText(res, { maxBytes: params.maxResponseBytes });
     throwIfFetchAborted(params.signal);
     const body = bodyResult.text;
+    const normalizedContentType =
+      normalizeContentType(res.headers.get("content-type")) ??
+      (looksLikeHtml(body) ? "text/html" : "application/octet-stream");
     const responseTruncatedWarning = bodyResult.truncated
       ? `Response body incomplete after ${bodyResult.bytesRead} bytes.`
       : undefined;
