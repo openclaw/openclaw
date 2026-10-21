@@ -239,14 +239,18 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.stderr).toContain("[release-preflight] FAILED (exit 1)");
   });
 
-  it("rejects unknown arguments before running release checks", () => {
-    const result = runPreflight(["--fiix"]);
-
+  it.each([
+    ["--fiix", "Unknown release preflight argument: --fiix"],
+    ["--jobs 0", "Invalid release preflight jobs value: 0; expected 1 through 16."],
+  ])("rejects invalid arguments before running checks: %s", (args, error) => {
+    const result = runPreflight(args.split(" "));
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Unknown release preflight argument: --fiix");
-    expect(result.stderr).toContain(
-      "Usage: node scripts/release-preflight.mjs [--check|--fix] [--scope name] [--jobs count]",
-    );
+    expect(result.stderr).toContain(error);
+    if (args === "--fiix") {
+      expect(result.stderr).toContain(
+        "Usage: node scripts/release-preflight.mjs [--check|--fix] [--scope name] [--jobs count]",
+      );
+    }
     expect(result.stdout).toBe("");
   });
 
@@ -386,15 +390,6 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.stdout).not.toContain("macOS app version metadata");
   });
 
-  it("rejects invalid concurrency before running commands", () => {
-    const result = runPreflight(["--jobs", "0"]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "Invalid release preflight jobs value: 0; expected 1 through 16.",
-    );
-  });
-
   it.each([1, 2, 3])("uses bounded parallelism for independent checks with jobs=%i", (jobs) => {
     const fakePnpm = makeFakePnpm();
     const root = makeReleaseFixture();
@@ -450,21 +445,28 @@ process.once("exit", () => {
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(commands.toSorted());
   });
 
-  it("reports stale macOS version and build metadata after running all checks", () => {
-    const fakePnpm = makeFakePnpm();
-    const root = makeReleaseFixture(STALE_METADATA);
-    const result = runPreflight(["--check"], fakePnpm, {}, root);
+  it.each(["--check", "--fix"])(
+    "reports stale macOS metadata without modifying it in %s",
+    (mode) => {
+      const fakePnpm = makeFakePnpm();
+      const root = makeReleaseFixture(STALE_METADATA);
+      const before = readFileSync(plistPath(root), "utf8");
+      const result = runPreflight([mode], fakePnpm, {}, root);
 
-    expect(result.status).toBe(1);
-    expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(CHECK_COMMANDS.toSorted());
-    expect(result.stderr).toContain(
-      'CFBundleShortVersionString is "2026.6.10"; expected "2026.7.1" from package.json base version',
-    );
-    expect(result.stderr).toContain(
-      'CFBundleVersion is "2026061000"; expected "2026070100" for 2026.7.1',
-    );
-    expect(result.stderr).toContain("Correct manual version metadata first.");
-  });
+      expect(result.status).toBe(1);
+      expect(readFileSync(plistPath(root), "utf8")).toBe(before);
+      expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
+        [...(mode === "--fix" ? FIX_COMMANDS : []), ...CHECK_COMMANDS].toSorted(),
+      );
+      expect(result.stderr).toContain(
+        'CFBundleShortVersionString is "2026.6.10"; expected "2026.7.1" from package.json base version',
+      );
+      expect(result.stderr).toContain(
+        'CFBundleVersion is "2026061000"; expected "2026070100" for 2026.7.1',
+      );
+      expect(result.stderr).toContain("Correct manual version metadata first.");
+    },
+  );
 
   it("fails closed when required macOS plist values are missing", () => {
     const fakePnpm = makeFakePnpm();
@@ -481,19 +483,6 @@ process.once("exit", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
       "Info.plist must contain exactly one string value for CFBundleVersion; found 0",
-    );
-  });
-
-  it("keeps manual macOS metadata untouched in refresh mode", () => {
-    const fakePnpm = makeFakePnpm();
-    const root = makeReleaseFixture(STALE_METADATA);
-    const before = readFileSync(plistPath(root), "utf8");
-    const result = runPreflight(["--fix"], fakePnpm, {}, root);
-
-    expect(result.status).toBe(1);
-    expect(readFileSync(plistPath(root), "utf8")).toBe(before);
-    expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
-      [...FIX_COMMANDS, ...CHECK_COMMANDS].toSorted(),
     );
   });
 });

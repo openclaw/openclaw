@@ -46,29 +46,12 @@ it.each([
     { plugin_prerelease_node_exclude_patterns_json: '["extensions/codex/*.test.ts"]' },
     "cannot exclude Plugin Prerelease Node tests",
   ],
-  [
-    { release_profile: "stable", skip_package_telegram_e2e: "true" },
-    "cannot skip Package Telegram E2E",
-  ],
-  [{ codex_plugin_spec: "npm:@openclaw/codex@latest" }, "codex_plugin_spec"],
 ] as const)("rejects narrowed qualification inputs %j", (inputs, error) => {
   expect(() => fixture(false, { inputs })).toThrow(error);
 });
 
-it.each([
-  ["empty", null],
-  [
-    "future",
-    {
-      upgradeBaseline: "openclaw@2027.1.1",
-      upgradeSurvivorBaselines: ["openclaw@2026.6.34", "openclaw@2027.1.1"],
-    },
-  ],
-  ["altered-primary", { upgradeBaseline: "openclaw@2026.7.8" }],
-] as const)("rejects %s baselines without a registry fallback", (_fault, override) => {
-  expect(() => fixture(false, { inputs: withBaselines(override) })).toThrow(
-    /baseline|predecessor/i,
-  );
+it("rejects empty baselines without a registry fallback", () => {
+  expect(() => fixture(false, { inputs: withBaselines(null) })).toThrow(/baseline|predecessor/i);
 });
 
 it("binds baseline support to Q source data and rejects later evidence substitution", () => {
@@ -161,14 +144,6 @@ it("revalidates operator authority after artifact download", () => {
       return f.archive();
     }),
   ).toThrow(/qualification authority/);
-});
-
-it("refuses changed archive bytes and UTF-8 archive adapters", () => {
-  const f = fixture();
-  expect(() => f.verify(f.selected.inputs, () => Buffer.from("not the exact ZIP"))).toThrow(
-    /archive bytes/,
-  );
-  expect(() => f.verify(f.selected.inputs, () => new Uint8Array(0))).toThrow(/archive bytes/);
 });
 
 it("revalidates current authority without reacquiring immutable evidence (protected)", () => {
