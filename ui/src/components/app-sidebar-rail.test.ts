@@ -54,15 +54,13 @@ async function fixture(properties: Partial<Sidebar> = {}, agents?: typeof TWO_AG
   };
   Object.assign(sidebar, properties);
   await sidebar.updateComplete;
+  const publishRows = (rows: GatewaySessionRow[]) =>
+    sessions.publishList({ agentId: "main", result: { ...result, sessions: rows } });
   const publish = (patch: Partial<GatewaySessionRow>, key = "agent:main:mine") =>
-    sessions.publishList({
-      agentId: "main",
-      result: {
-        ...result,
-        sessions: result.sessions.map((row) => (row.key === key ? { ...row, ...patch } : row)),
-      },
-    });
-  return { ...mounted, sessions, gateway, result, publish, dom: domProbe(sidebar) };
+    publishRows(result.sessions.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+  const append = (patch: Partial<GatewaySessionRow>) =>
+    publishRows([...result.sessions, { ...result.sessions[1]!, ...patch }]);
+  return { ...mounted, sessions, gateway, result, publish, append, dom: domProbe(sidebar) };
 }
 
 type Sidebar = Awaited<ReturnType<typeof mountSidebar>>["sidebar"];
@@ -613,7 +611,7 @@ describe("personal navigation rail", () => {
   it("resolves an unloaded pinned session once and uses its real label, icon, and navigation", async () => {
     const {
       sidebar,
-      sessions,
+      append,
       result,
       key,
       pending,
@@ -644,22 +642,13 @@ describe("personal navigation rail", () => {
     await seed(sidebar, [cached]);
     expect(loaded.getAttribute("aria-label")).toBe("Release notes");
     // Once the authoritative row loads, it wins over the scoped descriptor snapshot.
-    sessions.publishList({
-      agentId: "main",
-      result: {
-        ...result,
-        sessions: [
-          ...result.sessions,
-          { ...result.sessions[1]!, key, label: "Current title", icon: "🚀" },
-        ],
-      },
-    });
+    append({ key, label: "Current title", icon: "🚀" });
     await settleLitElement(sidebar);
     expect(link(sidebar, `session:${key}`).getAttribute("aria-label")).toBe("Current title");
   });
 
   it("retires cached pin descriptors when the source changes without reading pins", async () => {
-    const { sidebar, sessions, gateway, result, context, provider } = await fixture();
+    const { sidebar, sessions, gateway, result, context, provider, dom } = await fixture();
     const key = "agent:other:unloaded";
     const read = vi
       .spyOn(sessions.sessions, "describe")
@@ -667,7 +656,7 @@ describe("personal navigation rail", () => {
       .mockResolvedValueOnce({ session: { ...result.sessions[1]!, key, label: "Fresh source" } });
     sidebar.sidebarEntries = [`session:${key}`];
     await settleLitElement(sidebar);
-    expect(sidebar.querySelector('.sidebar-rail a[aria-label="Old source"]')).not.toBeNull();
+    expect(dom.query('.sidebar-rail a[aria-label="Old source"]')).not.toBeNull();
 
     sidebar.sidebarEntries = [];
     await sidebar.updateComplete;
@@ -680,8 +669,8 @@ describe("personal navigation rail", () => {
     await settleLitElement(sidebar);
 
     expect(read).toHaveBeenCalledTimes(2);
-    expect(sidebar.querySelector('.sidebar-rail a[aria-label="Fresh source"]')).not.toBeNull();
-    expect(sidebar.querySelector('.sidebar-rail a[aria-label="Old source"]')).toBeNull();
+    expect(dom.query('.sidebar-rail a[aria-label="Fresh source"]')).not.toBeNull();
+    expect(dom.query('.sidebar-rail a[aria-label="Old source"]')).toBeNull();
   });
 
   it("retains a lookup across a synchronous host move within the same connection", async () => {
@@ -726,7 +715,7 @@ describe("personal navigation rail", () => {
   });
 
   it("uses rows loaded during bootstrap instead of describing queued pins", async () => {
-    const { sidebar, sessions, result, dom } = await fixture();
+    const { sidebar, sessions, result, dom, append } = await fixture();
     const loadedKey = "agent:main:loaded-during-bootstrap";
     const outsideKey = "agent:other:outside-window";
     const bootstrap = sidebar.sessionDataContext!.connectionBootstrap;
@@ -738,16 +727,7 @@ describe("personal navigation rail", () => {
     await sidebar.updateComplete;
     expect(read).not.toHaveBeenCalled();
 
-    sessions.publishList({
-      agentId: "main",
-      result: {
-        ...result,
-        sessions: [
-          ...result.sessions,
-          { ...result.sessions[1]!, key: loadedKey, label: "Live row", boardFace: "dashboard" },
-        ],
-      },
-    });
+    append({ key: loadedKey, label: "Live row", boardFace: "dashboard" });
     await sidebar.updateComplete;
     bootstrap.setForegroundRoute(null);
     await bootstrap.run({}, async () => {});
