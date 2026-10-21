@@ -17,8 +17,8 @@ function render(messages: unknown[]) {
   });
 }
 
-function element<T extends Element = HTMLElement>(root: ParentNode, selector: string): T {
-  return html.requireElement(root.querySelector<T>(selector), `missing ${selector}`);
+function element(root: ParentNode, selector: string): Element {
+  return html.requireElement(root.querySelector(selector), `missing ${selector}`);
 }
 
 function tool(name: string, args: Record<string, unknown>, id = name) {
@@ -110,7 +110,10 @@ it("restores all tree rows when Escape clears a search", async () => {
   ]);
   const treeIds = () =>
     Array.from(document.querySelectorAll(".tree-node"), (node) => node.getAttribute("data-id"));
-  const search = element<HTMLInputElement>(document, "#tree-search");
+  const search = html.requireElement(
+    document.querySelector<HTMLInputElement>("#tree-search"),
+    "search input missing",
+  );
   expect(treeIds()).toEqual(["0", "1", "2"]);
   search.value = "search-me";
   const input = document.createEvent("Event");
