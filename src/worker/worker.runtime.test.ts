@@ -200,9 +200,6 @@ const toolCall = (
 ): ToolCallPlan => ({ toolName, toolCallId, args });
 const TOOL_PLANS = {
   "read-image": toolCall("read", "read-attachment", { path: "attachment.png" }),
-  "session-tool": toolCall("sessions_spawn", "nested-session-spawn-call", {
-    task: "start a nested cloud child",
-  }),
   computer: toolCall("computer", "worker-screenshot", { action: "screenshot" }),
 };
 type InferencePlan =
@@ -213,7 +210,6 @@ type InferencePlan =
   | "background-tool"
   | "process-poll"
   | "process-kill"
-  | "session-tool"
   | "computer"
   | "hold"
   | "fence"
@@ -595,7 +591,7 @@ class FakeWorkerGateway {
       this.sendToolCallTurn(output, plan);
       return;
     }
-    if (plan === "read-image" || plan === "session-tool" || plan === "computer") {
+    if (plan === "read-image" || plan === "computer") {
       return this.sendToolCallTurn(output, TOOL_PLANS[plan]);
     }
     if (plan === "hold") {

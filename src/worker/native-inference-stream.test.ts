@@ -84,11 +84,6 @@ function toolEnd(
   return { type: "toolcall_end", contentIndex, toolCall: call, partial };
 }
 
-function finish(source: ReturnType<typeof createAssistantMessageEventStream>) {
-  source.end();
-  return collect(createNativeInferenceStreamGuard(native())(() => source));
-}
-
 function terminal(final: AssistantMessage): AssistantMessageEvent {
   return { type: "done", reason: "stop", message: final };
 }
@@ -269,16 +264,16 @@ it("discards an undecodable raw preview when the tool call ends", async () => {
   expect(result.message).toEqual(message([call]));
 });
 it("coalesces cumulative held tool previews before applying the byte limit", async () => {
-  const source = createAssistantMessageEventStream();
   const largeText = "ordinary".repeat(140_000);
   const partial = message([{ type: "text", text: largeText }, tool()]);
-  source.push({ type: "start", partial });
-  for (let index = 0; index < 25; index += 1) {
-    source.push(toolDelta(index === 0 ? '{"value":"' : "x", partial, 1));
-  }
   const final = message([{ type: "text", text: largeText }]);
-  source.push(terminal(final));
-  const result = await finish(source);
+  const result = await scenario([
+    { type: "start", partial },
+    ...Array.from({ length: 25 }, (_, index) =>
+      toolDelta(index === 0 ? '{"value":"' : "x", partial, 1),
+    ),
+    terminal(final),
+  ]);
   expect(result.message).toEqual(final);
   expect(result.events.filter((event) => event.type === "toolcall_delta")).toEqual([]);
 });
@@ -304,47 +299,44 @@ it.each([false, true])(
 it.each(["id", "name"] as const)(
   "rejects a complete credential in tool-call %s metadata",
   async (field) => {
-    const source = createAssistantMessageEventStream();
     const call = tool({}, { name: "read", [field]: secret });
     const final = message([call]);
-    source.push(toolEnd(call, 0, final));
-    source.push(terminal(final));
-    const result = await finish(source);
+    const result = await scenario([toolEnd(call, 0, final), terminal(final)]);
     expect(result.message.stopReason).toBe("error");
     expect(JSON.stringify(result)).not.toContain(secret);
   },
 );
 
 it("holds incomplete prefixes across tool blocks before any generated tool can escape", async () => {
-  const source = createAssistantMessageEventStream();
   const call = tool({ nested: [secretPrefix] }, { async: true });
   const partial = message([call]);
-  source.push({ type: "start", partial: message([]) });
-  source.push(toolEnd(call, 0, partial));
   const final = message([call, { type: "text", text: secretSuffix }]);
-  source.push({ type: "text_start", contentIndex: 1, partial: final });
-  source.push(terminal(final));
-  const result = await finish(source);
+  const result = await scenario([
+    { type: "start", partial: message([]) },
+    toolEnd(call, 0, partial),
+    { type: "text_start", contentIndex: 1, partial: final },
+    terminal(final),
+  ]);
   expectBlocked(result, secretPrefix, secretSuffix);
 });
 it("keeps text-prefix continuity across an intervening tool block", async () => {
-  const source = createAssistantMessageEventStream();
   const call = tool({}, { name: "read" });
-  source.push({ type: "start", partial: message([{ type: "text", text: secretPrefix }]) });
   const partial = message([{ type: "text", text: secretPrefix }, call]);
-  source.push(toolEnd(call, 1, partial));
   const final = message([...partial.content, { type: "text", text: secretSuffix }]);
-  source.push(terminal(final));
-  const result = await finish(source);
+  const result = await scenario([
+    { type: "start", partial: message([{ type: "text", text: secretPrefix }]) },
+    toolEnd(call, 1, partial),
+    terminal(final),
+  ]);
   expectBlocked(result, secretPrefix, secretSuffix);
 });
 it("blocks a complete credential split across consecutive snapshot-free text deltas", async () => {
-  const source = createAssistantMessageEventStream();
-  source.push({ type: "start", partial: message([]) });
-  source.push({ type: "text_delta", contentIndex: 0, delta: secret.slice(0, 12) });
-  source.push({ type: "text_delta", contentIndex: 0, delta: secret.slice(12) });
-  source.push(terminal(message([{ type: "text", text: secret }])));
-  const result = await finish(source);
+  const result = await scenario([
+    { type: "start", partial: message([]) },
+    { type: "text_delta", contentIndex: 0, delta: secretPrefix },
+    { type: "text_delta", contentIndex: 0, delta: secretSuffix },
+    terminal(message([{ type: "text", text: secret }])),
+  ]);
   expectBlocked(result, secret.slice(0, 12), secret.slice(12));
   expect(result.events.filter((event) => event.type === "text_delta")).toEqual([]);
 });

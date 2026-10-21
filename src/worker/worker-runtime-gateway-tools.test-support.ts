@@ -21,14 +21,14 @@ import {
 } from "./worker-process-protocol.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
 
+type ToolCall = { toolName: string; toolCallId: string; args: Record<string, unknown> };
+const toolCall = (toolName: string, toolCallId: string, args: ToolCall["args"]): ToolCall => ({
+  toolName,
+  toolCallId,
+  args,
+});
 type WorkerGatewayToolFixture = {
-  setup: (options?: {
-    inferencePlans: Array<
-      | "session-tool"
-      | "text"
-      | { args: Record<string, unknown>; toolCallId: string; toolName: string }
-    >;
-  }) => Promise<{
+  setup: (options?: { inferencePlans: Array<"text" | ToolCall> }) => Promise<{
     gateway: {
       inferenceRequests: WorkerInferenceStartParams[];
       gatewayToolRequests: WorkerGatewayToolInvokeParams[];
@@ -51,21 +51,13 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
       const { gateway, launch } = await setup({
         inferencePlans: [
           codeMode
-            ? {
-                toolName: "exec",
-                toolCallId: "gateway-fetch",
-                args: {
-                  title: "Fetch the fixture page",
-                  code: `return await web_fetch(${JSON.stringify(args)})`,
-                },
-              }
+            ? toolCall("exec", "gateway-fetch", {
+                title: "Fetch the fixture page",
+                code: `return await web_fetch(${JSON.stringify(args)})`,
+              })
             : mode === "directory"
-              ? {
-                  toolName: "dispatch_action",
-                  toolCallId: "gateway-fetch",
-                  args: { id: "web_fetch", args },
-                }
-              : { toolName: "web_fetch", toolCallId: "gateway-fetch", args },
+              ? toolCall("dispatch_action", "gateway-fetch", { id: "web_fetch", args })
+              : toolCall("web_fetch", "gateway-fetch", args),
           "text",
         ],
       });
@@ -122,21 +114,9 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
   it("allows a contained write after exec refusal and still refuses a later workspace escape", async () => {
     const { gateway, workspaceDir, launch } = await setup({
       inferencePlans: [
-        {
-          toolName: "exec",
-          toolCallId: "refused-exec",
-          args: { command: "printf forbidden > exec.txt" },
-        },
-        {
-          toolName: "write",
-          toolCallId: "allowed-write",
-          args: { path: "allowed.txt", content: "authorized" },
-        },
-        {
-          toolName: "write",
-          toolCallId: "outside-write",
-          args: { path: "../outside.txt", content: "forbidden" },
-        },
+        toolCall("exec", "refused-exec", { command: "printf forbidden > exec.txt" }),
+        toolCall("write", "allowed-write", { path: "allowed.txt", content: "authorized" }),
+        toolCall("write", "outside-write", { path: "../outside.txt", content: "forbidden" }),
         "text",
       ],
     });
@@ -280,6 +260,17 @@ export function registerWorkerGatewayToolRpcTests({ setup }: WorkerGatewayToolFi
           toolCallId: call.toolCallId,
           arguments: call.args,
         });
+        const toolResult = gateway.transcriptRequests
+          .flatMap((request) => request.messages)
+          .find(
+            (message) => message.role === "toolResult" && message.toolCallId === call.toolCallId,
+          );
+        expect(toolResult).toMatchObject({ toolName: call.toolName });
+        if (call.toolName === "presence") {
+          expect(toolResult).toMatchObject({
+            details: { status: "ok", people: [{ name: "Ada" }] },
+          });
+        }
         if (result.result.status !== "completed") {
           throw new Error("Expected a completed warm worker turn");
         }
@@ -295,51 +286,5 @@ export function registerWorkerGatewayToolRpcTests({ setup }: WorkerGatewayToolFi
       input.end();
       await command;
     }
-  });
-
-  it("runs an authorized nested-session tool through the generic Gateway transport", async () => {
-    const { gateway, launch } = await setup({ inferencePlans: ["session-tool", "text"] });
-    launch.assignment.toolAuthority.allowedToolNames = ["sessions_spawn"];
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.gatewayToolRequests).toEqual([
-      {
-        generation: "runtime-surface",
-        toolId: "sessions_spawn",
-        toolCallId: "nested-session-spawn-call",
-        arguments: { task: "start a nested cloud child" },
-      },
-    ]);
-    expect(gateway.inferenceRequests).toHaveLength(2);
-    expect(
-      gateway.transcriptRequests.flatMap((request) =>
-        request.messages.flatMap((message) =>
-          message.role === "toolResult" ? [message.toolName] : [],
-        ),
-      ),
-    ).toContain("sessions_spawn");
-  });
-
-  it("returns Gateway presence to an authorized worker model through the generic Gateway transport", async () => {
-    const args = { action: "person", person: "me", include: ["devices"] };
-    const { gateway, launch } = await setup({
-      inferencePlans: [{ toolName: "presence", toolCallId: "presence-read", args }, "text"],
-    });
-    launch.assignment.toolAuthority.allowedToolNames = ["presence"];
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-    expect(gateway.gatewayToolRequests).toEqual([
-      {
-        generation: "runtime-surface",
-        toolId: "presence",
-        toolCallId: "presence-read",
-        arguments: args,
-      },
-    ]);
-    const result = gateway.transcriptRequests
-      .flatMap((request) => request.messages)
-      .find((message) => message.role === "toolResult" && message.toolName === "presence");
-    expect(result).toMatchObject({ details: { status: "ok", people: [{ name: "Ada" }] } });
   });
 }
