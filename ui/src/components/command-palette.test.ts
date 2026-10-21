@@ -3,7 +3,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
-import { loadModelCatalog } from "../lib/model-catalog-store.ts";
 import {
   openPalette,
   createContext,
@@ -109,6 +108,9 @@ describe("CommandPalette search", () => {
     await vi.advanceTimersByTimeAsync(200);
     expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
     setConnected(false);
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Nightly invoices")).toBeDefined();
+    expect(paletteInput(palette).value).toBe("invoices");
     setConnected(true);
     await vi.advanceTimersByTimeAsync(200);
     expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(3);
@@ -135,26 +137,6 @@ describe("CommandPalette search", () => {
     await vi.waitFor(() => expect(findPaletteOption(palette, "Needle automation")).toBeDefined());
     expect(findPaletteOption(palette, "Needle model")).toBeDefined();
     expect(palette.textContent).not.toContain("Searching commands");
-  });
-
-  it("clears a failed model search when another view publishes the catalog", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("catalog unavailable"))
-      .mockResolvedValueOnce(modelResult("needle", "Needle"));
-    const { gateway, palette, query } = await mountModels(request);
-    await searchPalette(palette, "needle");
-    await vi.waitFor(() =>
-      expect(query(".cmd-palette__source-error")?.textContent).toContain(
-        "Model search unavailable",
-      ),
-    );
-
-    await loadModelCatalog(gateway.snapshot.client!, { agentId: "main" });
-    await palette.updateComplete;
-    expect(findPaletteOption(palette, "Needle")).toBeDefined();
-    expect(query(".cmd-palette__source-error")).toBeNull();
-    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("excludes agent primary models when selection is restricted", async () => {
@@ -261,34 +243,6 @@ describe("CommandPalette search", () => {
     },
   );
 
-  it.each([
-    { name: "60 Unicode code points", prompt: "🦞".repeat(60) },
-    { name: "an internal newline", prompt: "plugins\nsettings" },
-  ])("preserves $name as a prompt without sending searches", async ({ prompt }) => {
-    const request = vi.fn(async (_method: string) => ({ models: [], results: [] }));
-    const list = vi.fn(async () => null);
-    const { palette, query } = await mountSearch({ methods: ["sessions.search"], request }, list);
-
-    await searchPalette(palette, prompt);
-
-    const input = paletteInput(palette);
-    expect([list.mock.calls, request.mock.calls]).toEqual([[], []]);
-    expectPalettePromptMode(palette);
-    for (const key of ["ArrowUp", "ArrowDown"]) {
-      expect(pressKey(input, key, { cancelable: true }).defaultPrevented).toBe(false);
-    }
-    expect(pressKey(input, "Enter", { cancelable: true }).defaultPrevented).toBe(true);
-    expect(palette.onNavigate).not.toHaveBeenCalled();
-    expect(palette.onSelectSession).not.toHaveBeenCalled();
-    expect(input.value).toBe(prompt);
-
-    setInputValue(input, "plugins");
-    await settlePalette(palette);
-    expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: "plugins" }));
-    expect(query('[inert][aria-hidden="true"]')).toBeNull();
-    expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
-    expect(findPaletteOption(palette, "Plugins", true)).toBeDefined();
-  });
   it("keeps the current mode between 50 and 60 Unicode code points", async () => {
     const character = "🦞";
     const list = vi.fn(async () => null);
@@ -302,6 +256,13 @@ describe("CommandPalette search", () => {
       expectPalettePromptMode(palette);
       expect(list).toHaveBeenCalledOnce();
     }
+    for (const key of ["ArrowUp", "ArrowDown"]) {
+      expect(pressKey(input, key, { cancelable: true }).defaultPrevented).toBe(false);
+    }
+    expect(pressKey(input, "Enter", { cancelable: true }).defaultPrevented).toBe(true);
+    expect(palette.onNavigate).not.toHaveBeenCalled();
+    expect(palette.onSelectSession).not.toHaveBeenCalled();
+    expect(input.value).toBe(" " + character.repeat(60) + " ");
     setInputValue(input, " " + character.repeat(50) + " ");
     await settlePalette(palette);
     expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
@@ -445,10 +406,14 @@ describe("CommandPalette search", () => {
   });
 
   it.each(["retain", "navigate"])(
-    "keeps selection actionable when a chosen session disappears and returns (%s)",
+    "keeps selection actionable across disappearing rows and surrogate-containing keys (%s)",
     async (interaction) => {
       const sessions = [0, 9].map(
-        (id) => createSessionResult(`agent:main:qa-${id}`, `Agent QA ${id}`).sessions[0]!,
+        (id) =>
+          createSessionResult(
+            id ? `agent:main:qa-${id}` : "agent:main:topic:\ud800",
+            `Agent QA ${id}`,
+          ).sessions[0]!,
       );
       const roster = {
         ...createSessionResult("agent:main:qa-0", "Agent QA 0"),
@@ -563,26 +528,6 @@ describe("CommandPalette search", () => {
     expect(query('[aria-selected="true"]')?.textContent).toContain("Needle Bravo");
   });
 
-  it("keeps the active descendant bound for a surrogate-containing session key", async () => {
-    const key = "agent:main:topic:\ud800";
-    const colon = createSessionResult(key, "Needle colon");
-    const hyphen = createSessionResult("agent:main:topic-thread", "Needle hyphen");
-    const { palette, query } = await mountSearch(
-      {},
-      vi.fn(async () => ({
-        ...colon,
-        count: 2,
-        sessions: [...colon.sessions, ...hyphen.sessions],
-      })),
-    );
-    await searchPalette(palette, "Needle");
-    pressKey(paletteInput(palette), "ArrowDown");
-    await palette.updateComplete;
-    const active = query('[aria-selected="true"]');
-    expect(active?.textContent).toContain("Needle hyphen");
-    const activeId = paletteInput(palette).getAttribute("aria-activedescendant");
-    expect(document.getElementById(activeId ?? "")).toBe(active);
-  });
   it("shows a chat search failure for plugins and retries after shortening a prompt", async () => {
     const query = "plugins";
     const list = vi

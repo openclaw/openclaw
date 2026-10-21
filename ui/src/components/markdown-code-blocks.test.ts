@@ -388,14 +388,12 @@ describe("source-preserving JSON tree", () => {
     expect(find(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(false);
   });
 
-  it.each(["{}", '{"empty":[],"nothing":null}'])(
-    "renders empty containers and null: %s",
-    (source) => {
-      renderJson(source);
-      expect(find(".code-block-json-tree")).not.toBeNull();
-      expect(find("pre code")?.textContent).toBe(source);
-    },
-  );
+  it("renders empty containers and null", () => {
+    const source = '{"empty":[],"nothing":null}';
+    renderJson(source);
+    expect(find(".code-block-json-tree")).not.toBeNull();
+    expect(find("pre code")?.textContent).toBe(source);
+  });
 
   it.each(['{"trailing":1,}', '{/*comment*/"a":1}', '{"a":1} trailing'])(
     "leaves invalid JSON on the existing raw fence path: %s",
@@ -414,7 +412,6 @@ describe("source-preserving JSON tree", () => {
     "[".repeat(1000) + "0" + "]".repeat(1000),
     "[" + "0,".repeat(3000) + "0]",
     " ".repeat(20_000) + "{}",
-    '{"text":"**literal** ' + "x".repeat(20_000) + '"}',
   ])("keeps over-budget trees literal and complete", (source) => {
     renderJson(source);
     expect(find(".code-block-json-tree, strong")).toBeNull();

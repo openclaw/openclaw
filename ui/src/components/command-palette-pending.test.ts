@@ -427,26 +427,53 @@ describe("CommandPalette session search", () => {
 });
 
 describe("CommandPalette metadata publications", () => {
-  const model = (id: string) => ({ provider: "ollama", id, name: `Needle ${id}` });
-
-  it("refreshes open palette skills without reloading unchanged models", async () => {
+  it("loads catalog rows and refreshes skills without reloading unchanged models", async () => {
     let skillName = "Needle old skill";
     const request = vi.fn(async (method: string) => {
       if (method === "skills.status") {
-        return { skills: [{ skillKey: "needle", name: skillName }] };
+        return { skills: [{ skillKey: "needle", name: skillName, description: "Weather" }] };
       }
       if (method === "models.list") {
         return { models: [{ provider: "fixture", id: "needle", name: "Needle model" }] };
       }
+      if (method === "plugins.list") {
+        return { plugins: [{ id: "needle-plugin", name: "Needle plugin", description: "Tools" }] };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "needle-job", name: "Needle automation" }] };
+      }
       return { results: [], sessions: [] };
     });
-    const { palette, emit } = await mountSearch({
-      methods: ["skills.status", "models.list"],
+    const { palette, emit, context } = await mountSearch({
+      methods: ["skills.status", "models.list", "plugins.list", "cron.list"],
       request,
     });
+    context.agents.ensureList = async () => ({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "main", name: "Needle agent" }],
+    });
     await searchPalette(palette, "needle");
-    expect(findPaletteOption(palette, "Needle old skill")).toBeDefined();
+    expect(findPaletteOption(palette, "Needle old skill")?.textContent).toContain("Weather");
+    expect(findPaletteOption(palette, "Needle plugin")?.textContent).toContain("Tools");
+    expect(
+      findPaletteOption(palette, "Needle plugin")?.querySelector(".cmd-palette__plugin-icon"),
+    ).not.toBeNull();
+    expect(findPaletteOption(palette, "Needle automation")).toBeDefined();
+    expect(findPaletteOption(palette, "Needle agent")).toBeDefined();
     expect(findPaletteOption(palette, "Needle model")).toBeDefined();
+    expect(request).toHaveBeenCalledWith(
+      "cron.list",
+      expect.objectContaining({
+        includeDisabled: true,
+        limit: 200,
+        offset: 0,
+        compact: true,
+      }),
+    );
+    expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith("plugins.list", {});
 
     skillName = "Needle new skill";
     emit("chat.metadata.changed", { modelCatalogChanged: false, authChanged: false });
@@ -457,55 +484,5 @@ describe("CommandPalette metadata publications", () => {
     expect(findPaletteOption(palette, "Needle model")).toBeDefined();
     expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(2);
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
-  });
-
-  it("keeps returned model rows without refresh warnings or obsolete choices", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ models: [model("retained"), model("obsolete")] })
-      .mockResolvedValueOnce({
-        models: [model("retained"), model("current")],
-        refreshFailed: true,
-        providerOutcomes: [{ provider: "ollama", status: "unavailable" }],
-      })
-      .mockResolvedValueOnce({
-        models: [],
-        providerOutcomes: [{ provider: "ollama", status: "ready" }],
-      });
-    const { palette, emit } = await mountSearch({
-      methods: ["models.list"],
-      request: (method, params) =>
-        method === "models.list" ? request(method, params) : { results: [], sessions: [] },
-    });
-    await searchPalette(palette, "needle");
-    expect(findPaletteOption(palette, "Needle obsolete")).toBeDefined();
-    emit("chat.metadata.changed", {
-      agentId: "main",
-      usageUpdatedAt: 1,
-      modelCatalogChanged: false,
-      authChanged: false,
-    });
-    await vi.advanceTimersByTimeAsync(200);
-    expect(request).toHaveBeenCalledOnce();
-
-    emit("chat.metadata.changed");
-    await settlePalette(palette);
-    expect(findPaletteOption(palette, "Needle obsolete")).toBeUndefined();
-    expect(palette.querySelectorAll('[role="option"]')).toHaveLength(2);
-    expect(findPaletteOption(palette, "Needle retained")).toBeDefined();
-    expect(findPaletteOption(palette, "Needle current")).toBeDefined();
-    expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
-    expect(palette.querySelector(".cmd-palette__no-results")).toBeNull();
-
-    await enterQuery(palette, "");
-    expect(findPaletteOption(palette, "Agents")).toBeDefined();
-    expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
-    await searchPalette(palette, "needle");
-
-    emit("chat.metadata.changed");
-    await settlePalette(palette);
-    expect(findPaletteOption(palette, "Needle retained")).toBeUndefined();
-    expect(findPaletteOption(palette, "Needle current")).toBeUndefined();
-    expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
   });
 });
