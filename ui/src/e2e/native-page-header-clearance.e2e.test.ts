@@ -317,7 +317,7 @@ suite.define(() => {
       await page
         .locator(".shell-chrome-controls button, .shell-chrome-controls a")
         .evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))),
-    ).toEqual(["Expand sidebar", "Open command palette"]);
+    ).toEqual(["Expand sidebar", "Command palette"]);
     expect(controls.y + controls.height).toBeGreaterThan(52);
     const header = page.locator(".content .content-header").first();
     await expectAligned(header.locator(".page-title"), 25, "y");

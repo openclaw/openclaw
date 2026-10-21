@@ -62,17 +62,25 @@ async function mountNavigation(
   return { ...mounted, setSessionKey, onNavigate };
 }
 
-it("follows the deployment flag without using the old invitation dismissal", async () => {
-  const { sidebar, context, find } = await mountAgentSidebar(undefined, null);
+it("honors deployment policy and existing Community dismissals", async () => {
   localStorage.setItem("openclaw:control-ui:community-invite:v2", "dismissed");
+  const { sidebar, context, find } = await mountAgentSidebar(undefined, null);
   const fetch = vi.spyOn(globalThis, "fetch");
   try {
     for (const enabled of [true, false]) {
       fetch.mockResolvedValue(Response.json({ serverVersion: "test", communityInvite: enabled }));
       await context.config.refresh();
       await sidebar.updateComplete;
-      expect(Boolean(find(".sidebar-community__entry"))).toBe(enabled);
+      expect(find(".community-invite-card")).toBeNull();
     }
+    localStorage.removeItem("openclaw:control-ui:community-invite:v2");
+    fetch.mockResolvedValue(Response.json({ serverVersion: "test", communityInvite: true }));
+    await context.config.refresh();
+    await sidebar.updateComplete;
+    expect(find(".community-invite-card")).not.toBeNull();
+    find<HTMLButtonElement>(".invite__close")!.click();
+    await sidebar.updateComplete;
+    expect(find(".community-invite-card")).toBeNull();
   } finally {
     fetch.mockRestore();
     localStorage.removeItem("openclaw:control-ui:community-invite:v2");
