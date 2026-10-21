@@ -354,6 +354,9 @@ Normal navigation keeps the tab available in either access mode.
 In-flight CDP cache, extra-header, and service-worker bypass settings also survive
 allowed navigation. Pausing access, removing a selected tab from the OpenClaw
 group, or detaching its debugger still rejects in-flight command results.
+Document-sensitive reads still reject results from a replaced page. The relay
+reports that the document changed; inspect the current page before retrying
+instead of changing tab permissions.
 Existing blank tabs, manually grouped blanks, and other `about:` pages remain
 unavailable. Navigating away, replacing the tab, or restarting or reconnecting
 the extension ends the initial blank admission. Returning to `about:blank`

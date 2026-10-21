@@ -121,14 +121,40 @@ it("rejects a cache-setting receipt after debugger detach", async () => {
   expect(response.result).toBeUndefined();
 });
 
-it.each(["Network.getResponseBody", "Fetch.getResponseBody"])(
-  "rejects document-sensitive %s after an allowed document commit",
-  async (method) => {
-    const harness = await setup("selected");
-    const response = await dispatch(harness, method, { requestId: "synthetic" }, () =>
-      commitDocument(harness),
+describe.each(["all", "selected"] as const)("document invalidation in %s mode", (mode) => {
+  it.each(["Network.getResponseBody", "Fetch.getResponseBody"])(
+    "rejects document-sensitive %s with a document-change diagnostic",
+    async (method) => {
+      const harness = await setup(mode);
+      const response = await dispatch(harness, method, { requestId: "synthetic" }, () =>
+        commitDocument(harness),
+      );
+      expect(response).toMatchObject({
+        type: "error",
+        message:
+          "tab 7 document changed while the command was in flight; inspect the current page before retrying",
+      });
+      expect(response.result).toBeUndefined();
+    },
+  );
+
+  it("reports genuine revocation even when the document also changed", async () => {
+    const harness = await setup(mode);
+    const response = await dispatch(
+      harness,
+      "Network.getResponseBody",
+      { requestId: "synthetic" },
+      async () => {
+        commitDocument(harness);
+        await sendRuntimeMessage(harness, {
+          type: "toggleTabAccess",
+          tabId: 7,
+          accessMode: mode,
+          grant: false,
+        });
+      },
     );
-    expect(response).toMatchObject({ type: "error", message: "tab 7 access was revoked" });
+    expect(response).toMatchObject({ type: "error", message: "Debugger attachment retired" });
     expect(response.result).toBeUndefined();
-  },
-);
+  });
+});
