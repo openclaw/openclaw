@@ -162,6 +162,37 @@ fs.renameSync(pidPath + ".tmp", pidPath);
 `;
 }
 
+function writeProcessTreeFixture(dir: string, onSignal: string) {
+  const childPidPath = path.join(dir, "child.pid");
+  const descendantPidPath = path.join(dir, "descendant.pid");
+  const childPath = writeFixture(
+    dir,
+    "child.mjs",
+    `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
+${onSignal}
+setInterval(() => {}, 1_000);
+const descendant = spawn(process.execPath, [
+  "-e",
+  ${JSON.stringify(`
+const fs = require("node:fs");
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1000);
+${publishReadyPidScript(1)}
+process.send("ready");
+`)},
+  process.argv[3],
+], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+descendant.once("message", () => sendReceipt(process.argv[3], "ready"));
+${publishReadyPidScript(2)}
+sendReceipt(process.argv[2], "ready");
+`,
+  );
+  return { childPath, childPidPath, descendantPidPath };
+}
+
 // PID records are committed before receipts. A completed operation can beat the side channel.
 async function fixturePidBeforeSettlement(file: string, operation: PromiseLike<unknown>) {
   await Promise.race([
@@ -1161,34 +1192,10 @@ if (mode === "waiter") {
     "times out and kills managed command descendants",
     joinedTest(async ({ signal }) => {
       const dir = createTempDir("openclaw-managed-timeout-");
-      const childPidPath = path.join(dir, "child.pid");
-      const descendantPidPath = path.join(dir, "descendant.pid");
       const signalPath = path.join(dir, "signal.txt");
-      const childPath = writeFixture(
+      const { childPath, childPidPath, descendantPidPath } = writeProcessTreeFixture(
         dir,
-        "child.mjs",
-        `
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-${fixtureReceiptClientSource(receipts.endpoint)}
-
-process.on("SIGTERM", () => fs.writeFileSync(process.argv[4], "SIGTERM\\n"));
-setInterval(() => {}, 1_000);
-const descendant = spawn(process.execPath, [
-  "-e",
-  ${JSON.stringify(`
-const fs = require("node:fs");
-process.on("SIGTERM", () => {});
-setInterval(() => {}, 1000);
-${publishReadyPidScript(1)}
-process.send("ready");
-`)},
-  process.argv[3],
-], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
-descendant.once("message", () => sendReceipt(process.argv[3], "ready"));
-${publishReadyPidScript(2)}
-sendReceipt(process.argv[2], "ready");
-`,
+        `process.on("SIGTERM", () => fs.writeFileSync(process.argv[4], "SIGTERM\\n"));`,
       );
 
       let childClosed: Promise<unknown> | undefined;
@@ -2249,37 +2256,12 @@ child.once("message", () => ${typeof exit === "string" ? `process.kill(process.p
     "kills managed child process group descendants when the runner is terminated",
     joinedTest(async ({ signal }) => {
       const dir = createTempDir("openclaw-managed-child-");
-      const childPidPath = path.join(dir, "child.pid");
-      const descendantPidPath = path.join(dir, "descendant.pid");
       const helperUrl = managedModuleUrl;
-
-      const childPath = writeFixture(
+      const { childPath, childPidPath, descendantPidPath } = writeProcessTreeFixture(
         dir,
-        "child.mjs",
-        `
-	import { spawn } from "node:child_process";
-	import fs from "node:fs";
-${fixtureReceiptClientSource(receipts.endpoint)}
-
-	const descendant = spawn(process.execPath, [
-	  "-e",
-	  ${JSON.stringify(`
-const fs = require("node:fs");
-process.on("SIGTERM", () => {});
-setInterval(() => {}, 1000);
-${publishReadyPidScript(1)}
-process.send("ready");
-`)},
-	  process.argv[3],
-	], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
-  descendant.once("message", () => sendReceipt(process.argv[3], "ready"));
-	for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
-	  process.on(signal, () => process.exit(0));
-	}
-setInterval(() => {}, 1_000);
-${publishReadyPidScript(2)}
-sendReceipt(process.argv[2], "ready");
-`,
+        `for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
+  process.on(signal, () => process.exit(0));
+}`,
       );
       const runnerPath = writeFixture(
         dir,
