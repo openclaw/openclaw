@@ -160,6 +160,7 @@
 ["extensions/browser/src/browser/server-context.chrome-test-harness.ts","./chrome.diagnostics.js","58eb72e77fd8eb2c29ebc1ddc123a1c570d633c4865c09a28112d4ead682dd67",1]
 ["extensions/browser/src/browser/server-context.chrome-test-harness.ts","./chrome.js","2d964c10a89d5f78612106d27d4ce8d4d6b7d14502e7427b3e3bc8abf96a473b",1]
 ["extensions/browser/src/browser/server-context.existing-session.test.ts","./chrome-mcp.js","986056d7a33c2047871c546c8fa7c22f2ab605ce4569ba262c0000a1424ca7bc",1]
+["extensions/browser/src/browser/server-context.extension-readiness.test.ts","./extension-relay.runtime.js","0bb05d173f8123a3c6070559760499fa0d396887801fdf2eb96f3f9bbd55ef7f",1]
 ["extensions/browser/src/browser/server-context.hot-reload-defaults.test.ts","./config-refresh-source.js","b748ff587ae80b19238b82e9961158ec48ee81c3b8a0401de2563163091b8c6c",1]
 ["extensions/browser/src/browser/server-context.hot-reload-defaults.test.ts","./pw-ai-module.js","154f082f8fc9bb59607397f383fa9bbba837ed7b3f2ffddbddf393dd9b8e2373",1]
 ["extensions/browser/src/browser/server-context.hot-reload-profiles.test.ts","./config-refresh-source.js","9d9990a7395e4ab0fc65afcb1e60995521ba9788f0344d9c41f9a10f3b33e38b",1]

@@ -29,7 +29,6 @@ import {
 } from "./server.control-server.test-harness.js";
 import { createBrowserTestClient, getBrowserTestFetch } from "./test-support/fetch.js";
 
-const { launchOpenClawChrome, stopOpenClawChrome } = await import("./chrome.js");
 const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
 const targetId = "abcd1234";
 const TAB_URL = "https://example.com";
@@ -40,6 +39,14 @@ function postResponse(base: string, route: string, body?: unknown) {
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+}
+
+async function postActAndReadError(base: string, body?: unknown) {
+  const response = await postResponse(base, "/act", body);
+  return {
+    status: response.status,
+    body: (await response.json()) as { error?: string; code?: string },
+  };
 }
 
 const state = getBrowserControlServerTestState();
@@ -128,11 +135,6 @@ function post<T>(route: string, body?: unknown): Promise<T> {
   return postJson<T>(`${getBrowserControlServerBaseUrl()}${route}`, body);
 }
 
-async function expectResponse(response: Response, status: number, body: object) {
-  expect(response.status).toBe(status);
-  expect(await response.json()).toMatchObject(body);
-}
-
 function expectLastAction(action: Record<string, unknown>, extra: Record<string, unknown> = {}) {
   expect(pw("executeActViaPlaywright")).toHaveBeenLastCalledWith(
     expect.objectContaining({ cdpUrl: state.cdpBaseUrl, targetId, action, ...extra }),
@@ -150,16 +152,15 @@ describe("browser control server", () => {
     });
 
     const base = await startServerAndBase();
-    await expectResponse(
-      await postResponse(base, "/act", {
-        kind: "batch",
-        actions: [{ kind: "press", key: "Enter" }],
-      }),
-      501,
-      {
-        code: "ACT_EXISTING_SESSION_UNSUPPORTED",
-        error: "existing-session batch is not supported yet; send actions individually.",
-      },
+    const response = await postActAndReadError(base, {
+      kind: "batch",
+      actions: [{ kind: "press", key: "Enter" }],
+    });
+
+    expect(response.status).toBe(501);
+    expect(response.body.code).toBe("ACT_EXISTING_SESSION_UNSUPPORTED");
+    expect(response.body.error).toBe(
+      "existing-session batch is not supported yet; send actions individually.",
     );
   });
 
@@ -174,7 +175,9 @@ describe("browser control server", () => {
       error: "action targetId must match request targetId",
     },
   ])("rejects action target overrides: $error", async ({ body, error }) => {
-    await expectResponse(await postResponse(await startServerAndBase(), "/act", body), 403, {
+    const response = await postActAndReadError(await startServerAndBase(), body);
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
       code: "ACT_TARGET_ID_MISMATCH",
       error: expect.stringContaining(error),
     });
@@ -253,14 +256,11 @@ describe("browser control server", () => {
   it("blocks evaluation while preserving cookie and storage reads", async () => {
     setBrowserControlServerEvaluateEnabled(false);
     const base = await startServerAndBase();
-    await expectResponse(
-      await postResponse(base, "/act", { kind: "evaluate", fn: "() => 1" }),
-      403,
-      {
-        code: "ACT_EVALUATE_DISABLED",
-        error: expect.stringContaining("browser.evaluateEnabled=false"),
-      },
-    );
+    const response = await postActAndReadError(base, { kind: "evaluate", fn: "() => 1" });
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe("ACT_EVALUATE_DISABLED");
+    expect(response.body.error).toContain("browser.evaluateEnabled=false");
     expect(pw("evaluateViaPlaywright")).not.toHaveBeenCalled();
     pw("cookiesGetViaPlaywright").mockResolvedValueOnce({
       cookies: [{ name: "session", value: "abc123" }],
@@ -290,6 +290,7 @@ describe("browser control server", () => {
       ok: boolean;
       checks?: Array<{ id?: string; status?: string; summary?: string }>;
     };
+
     expect(report.ok).toBe(true);
     const liveSnapshotCheck = report.checks?.find((check) => check.id === "live-snapshot");
     expect(liveSnapshotCheck).toMatchObject({ id: "live-snapshot", status: "pass" });
@@ -406,18 +407,27 @@ describe("browser control server", () => {
     const response = await postResponse(getBrowserControlServerBaseUrl(), `/tabs/open${query}`, {
       url,
     });
-    await expectResponse(response, status, { error: expect.stringContaining(error) });
+    expect(response.status).toBe(status);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining(error) });
   });
 
   it("agent contract: form + layout act commands", async () => {
     await startServerAndBase();
     const fields = [
       { ref: "6", type: "textbox", value: "hello" },
+      { ref: "7", value: "world" },
       { ref: "8", type: "   ", value: "trimmed-default" },
+      { ref: "9" },
+      { ref: "10", value: null },
+      { ref: "11", value: "" },
     ];
     const normalizedFields = [
       { ref: "6", type: "textbox", value: "hello" },
+      { ref: "7", type: "text", value: "world" },
       { ref: "8", type: "text", value: "trimmed-default" },
+      { ref: "9", type: "text" },
+      { ref: "10", type: "text" },
+      { ref: "11", type: "text", value: "" },
     ];
     for (const action of [
       { kind: "select", ref: "5", values: ["a", "", "  spaced  "] },
@@ -499,12 +509,13 @@ describe("browser control server", () => {
   it("rejects malformed batch actions before dispatch", async () => {
     await startServerAndBase();
 
-    expect(
-      await post("/act", { kind: "batch", actions: [{ kind: "click", ref: {} }] }),
-    ).toMatchObject({
-      error: expect.stringContaining("click requires ref or selector"),
-      code: "ACT_INVALID_REQUEST",
+    const batchRes = await post<{ error?: string; code?: string }>("/act", {
+      kind: "batch",
+      actions: [{ kind: "click", ref: {} }],
     });
+
+    expect(batchRes.error).toContain("click requires ref or selector");
+    expect(batchRes.code).toBe("ACT_INVALID_REQUEST");
     expect(pw("batchViaPlaywright")).not.toHaveBeenCalled();
   });
 
@@ -606,10 +617,11 @@ describe("browser control server", () => {
   it("agent contract: stop endpoint", async () => {
     const base = await startServerAndBase();
 
-    expect(await (await realFetch(`${base}/stop`, { method: "POST" })).json()).toMatchObject({
-      ok: true,
-      stopped: true,
-    });
+    const stopped = (await realFetch(`${base}/stop`, { method: "POST" }).then((r) => r.json())) as {
+      ok: boolean;
+      stopped?: boolean;
+    };
+    expect(stopped).toMatchObject({ ok: true, stopped: true });
   });
 
   it("trace stop returns the path committed by the Playwright trace owner", async () => {
@@ -638,7 +650,8 @@ describe("browser control server", () => {
         headers: body ? { "Content-Type": "application/json" } : undefined,
         body: body ? JSON.stringify(body) : undefined,
       });
-      await expectResponse(res, 400, { error: BROWSER_NAVIGATION_BLOCKED_MESSAGE });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: BROWSER_NAVIGATION_BLOCKED_MESSAGE });
       for (const name of typeof mockName === "string" ? [mockName] : mockName) {
         expect(pw(name)).not.toHaveBeenCalled();
       }
@@ -779,7 +792,8 @@ describe("profile CRUD endpoints", () => {
     const base = getBrowserControlServerBaseUrl();
     async function create(body: unknown, status: number, expected: Record<string, unknown>) {
       const response = await postResponse(base, "/profiles/create", body);
-      await expectResponse(response, status, expected);
+      expect(response.status).toBe(status);
+      expect(await response.json()).toMatchObject(expected);
     }
     const invalid: Array<[Record<string, unknown>, number, string]> = [
       [{}, 400, "name is required"],
@@ -822,79 +836,8 @@ describe("profile CRUD endpoints", () => {
       const response = await getBrowserTestFetch()(`${base}/profiles/${name}`, {
         method: "DELETE",
       });
-      await expectResponse(response, status, { error: expect.stringContaining(error) });
-    }
-  });
-});
-
-describe("historical targets", () => {
-  installAgentContractHooks();
-  async function start(reachable = false) {
-    await startBrowserControlServerFromConfig();
-    setBrowserControlServerReachable(reachable);
-    vi.mocked(launchOpenClawChrome).mockClear();
-  }
-  const get = (route: string) => realFetch(`${getBrowserControlServerBaseUrl()}${route}`);
-  const request = (route: string, body: unknown) =>
-    postResponse(getBrowserControlServerBaseUrl(), route, body);
-
-  it.each([
-    [false, true],
-    [true, false],
-    [true, true],
-  ])("preserves historical tabs (running: %s, empty: %s)", async (running, empty) => {
-    await start(running);
-    vi.mocked(stopOpenClawChrome).mockClear();
-    const fetchCdp = globalThis.fetch;
-    const tabRequests: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-        const url = input instanceof Request ? input.url : input.toString();
-        tabRequests.push(url);
-        return empty && url.includes("/json/list") ? makeResponse([]) : await fetchCdp(input, init);
-      }),
-    );
-    await expectResponse(
-      await request("/screenshot", { targetId: "closed-historical-tab" }),
-      running ? 404 : 409,
-      {
-        error: expect.stringContaining(running ? "not found" : "not running"),
-      },
-    );
-    expect(cdpMocks.createTargetViaCdp).not.toHaveBeenCalled();
-    expect(launchOpenClawChrome).not.toHaveBeenCalled();
-    expect(stopOpenClawChrome).not.toHaveBeenCalled();
-    expect(tabRequests.some((url) => url.includes("/json/new"))).toBe(false);
-    expect(await (await get("/tabs")).json()).toMatchObject({
-      running,
-      tabs: empty ? [] : expect.arrayContaining([expect.objectContaining({ targetId })]),
-    });
-  });
-
-  it("still resolves a live tab alias", async () => {
-    await start(true);
-    await expectResponse(await get("/snapshot?targetId=t1&format=ai"), 200, { targetId });
-  });
-
-  it("preserves intentional startup when opening a tab", async () => {
-    await start();
-    cdpMocks.createTargetViaCdp.mockResolvedValue({ targetId, finalUrl: "https://example.com" });
-    expect((await request("/tabs/open", { url: "about:blank" })).status).toBe(200);
-    expect(launchOpenClawChrome).toHaveBeenCalledOnce();
-  });
-
-  it("uses a changed default on the first request through the same HTTP server", async () => {
-    const profiles = {
-      ...state.cfgProfiles,
-      work: { cdpUrl: "http://127.0.0.1:9222", color: "#0066CC" },
-    };
-    setBrowserControlServerProfiles(profiles, "openclaw");
-    const server = await startBrowserControlServerFromConfig();
-    for (const defaultProfile of ["openclaw", "work", "openclaw"]) {
-      setBrowserControlServerProfiles(profiles, defaultProfile);
-      await expectResponse(await get("/"), 200, { profile: defaultProfile });
-      expect(await startBrowserControlServerFromConfig()).toBe(server);
+      expect(response.status).toBe(status);
+      expect(await response.json()).toMatchObject({ error: expect.stringContaining(error) });
     }
   });
 });

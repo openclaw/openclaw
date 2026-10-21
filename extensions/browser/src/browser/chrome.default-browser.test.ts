@@ -152,22 +152,43 @@ describe("browser default executable detection", () => {
     xdg: "XDG_CACHE_HOME",
   };
   type CacheEnv = Record<string, string>;
-  it.each<[string, CacheEnv, ("arm64" | "x64")?]>([
-    ["/tmp/xdg-cache/ms-playwright", { xdg: "/tmp/xdg-cache" }, "arm64"],
-    ["/Users/test/.cache/ms-playwright", { xdg: "" }],
-    ["/tmp/install/browsers", { direct: "browsers", cwd: "/tmp/install" }],
-    ["/tmp/runtime/browsers", { direct: "browsers" }],
-    ["/tmp/npm-cache", { npm: "/tmp/npm-cache" }],
-    ["/tmp/package-cache", { package: "/tmp/package-cache" }],
-    ["/tmp/direct-cache", { direct: "/tmp/direct-cache", npm: "/tmp/ignored" }],
-    ["/tmp/npm-cache", { npm: "/tmp/npm-cache", package: "/tmp/ignored" }],
-    ["/Users/test/.cache/ms-playwright", { direct: "", npm: "/tmp/ignored" }],
-    ["/tmp/npm-install/browsers", { direct: "browsers", npmCwd: "/tmp/npm-install" }],
-    ["/tmp/package-install/browsers", { direct: "browsers", packageCwd: "/tmp/package-install" }],
-    ["/tmp/runtime/browsers", { direct: "browsers", cwd: "", npmCwd: "/tmp/ignored" }],
-    ["/tmp/install/cache/ms-playwright", { xdg: "cache", cwd: "/tmp/install" }],
-    ["/tmp/install/ browsers ", { direct: " browsers ", cwd: "/tmp/install" }],
+  it.each<[string, string, CacheEnv, ("arm64" | "x64")?]>([
+    ["XDG ARM64", "/tmp/xdg-cache/ms-playwright", { xdg: "/tmp/xdg-cache" }, "arm64"],
+    ["empty XDG", "/Users/test/.cache/ms-playwright", { xdg: "" }],
+    ["relative install root", "/tmp/install/browsers", { direct: "browsers", cwd: "/tmp/install" }],
+    ["relative working directory", "/tmp/runtime/browsers", { direct: "browsers" }],
+    ["npm cache", "/tmp/npm-cache", { npm: "/tmp/npm-cache" }],
+    ["package cache", "/tmp/package-cache", { package: "/tmp/package-cache" }],
     [
+      "direct cache precedence",
+      "/tmp/direct-cache",
+      { direct: "/tmp/direct-cache", npm: "/tmp/ignored" },
+    ],
+    ["npm cache precedence", "/tmp/npm-cache", { npm: "/tmp/npm-cache", package: "/tmp/ignored" }],
+    ["empty direct cache", "/Users/test/.cache/ms-playwright", { direct: "", npm: "/tmp/ignored" }],
+    [
+      "npm install root",
+      "/tmp/npm-install/browsers",
+      { direct: "browsers", npmCwd: "/tmp/npm-install" },
+    ],
+    [
+      "package install root",
+      "/tmp/package-install/browsers",
+      { direct: "browsers", packageCwd: "/tmp/package-install" },
+    ],
+    [
+      "empty direct install root",
+      "/tmp/runtime/browsers",
+      { direct: "browsers", cwd: "", npmCwd: "/tmp/ignored" },
+    ],
+    [
+      "relative XDG install root",
+      "/tmp/install/cache/ms-playwright",
+      { xdg: "cache", cwd: "/tmp/install" },
+    ],
+    ["cache path spaces", "/tmp/install/ browsers ", { direct: " browsers ", cwd: "/tmp/install" }],
+    [
+      "hermetic install",
       path.join(
         path.dirname(fileURLToPath(import.meta.resolve("playwright-core/package.json"))),
         ".local-browsers",
@@ -175,8 +196,8 @@ describe("browser default executable detection", () => {
       { direct: "0" },
     ],
   ])(
-    "discovers Playwright Chromium under %s for environment %j",
-    (browserCache, environment, arch = "x64") => {
+    "discovers Playwright Chromium in the %s cache layout",
+    (_name, browserCache, environment, arch = "x64") => {
       for (const [name, variable] of Object.entries(cacheEnvNames)) {
         vi.stubEnv(variable, environment[name]);
       }

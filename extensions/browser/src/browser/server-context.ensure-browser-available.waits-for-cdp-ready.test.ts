@@ -1,13 +1,10 @@
 import { setImmediate } from "node:timers/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
 import { PROFILE_ATTACH_RETRY_TIMEOUT_MS } from "./cdp-timeouts.js";
 import type { RunningChrome } from "./chrome.js";
 import * as chromeModule from "./chrome.js";
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
-import { ExtensionRelayBridge } from "./extension-relay/relay-bridge.js";
-import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
 import { createProfileAvailability } from "./server-context.availability.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { beginProfileTransition, getProfileLifecycle } from "./server-context.lifecycle.js";
@@ -16,22 +13,7 @@ import {
   makeBrowserServerState,
   mockLaunchedChrome,
 } from "./server-context.test-harness.js";
-import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
-
-const relayMocks = vi.hoisted(() => ({
-  ensureExtensionRelayForProfile: vi.fn(),
-}));
-
-vi.mock("./extension-relay.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./extension-relay.runtime.js")>();
-  return {
-    ...actual,
-    getExtensionRelayModule: async () => ({
-      ensureExtensionRelayForProfile: relayMocks.ensureExtensionRelayForProfile,
-      EXTENSION_PAIRING_HINT: "Pair the browser extension.",
-    }),
-  };
-});
+import type { ProfileRuntimeState } from "./server-context.types.js";
 
 const chrome = {
   launch: vi.mocked(chromeModule.launchOpenClawChrome),
@@ -548,123 +530,5 @@ describe("external browser mode availability", () => {
     });
     await rejected;
     expect(runtime.externalBrowserMode).toBeUndefined();
-  });
-});
-
-function createExtensionProfile() {
-  const profile = makeBrowserProfile({
-    name: "chrome",
-    cdpPort: 18799,
-    cdpUrl: "http://127.0.0.1:18799",
-    driver: "extension",
-    attachOnly: true,
-  });
-  const state = makeBrowserServerState({
-    profile,
-    resolvedOverrides: { extensionRelayPorts: { chrome: 18799 } },
-  });
-  const bridge = new ExtensionRelayBridge();
-  const relay = {
-    ownership: "owned",
-    port: 18799,
-    token: "relay-test-key",
-    allowLegacyAuth: true,
-    internalToken: "relay-test-internal-key",
-    bridge,
-    close: async () => bridge.dispose(),
-  } satisfies ExtensionRelayHandle;
-  relayMocks.ensureExtensionRelayForProfile.mockImplementation(
-    async (current: BrowserServerState) => {
-      current.extensionRelays ??= new Map();
-      current.extensionRelays.set("chrome", relay);
-      return relay;
-    },
-  );
-  const socket = { send: vi.fn(), close: vi.fn() };
-  const extension = bridge.attachExtensionSocket(socket);
-  return {
-    profile: createBrowserRouteContext({ getState: () => state }).forProfile("chrome"),
-    state,
-    relay,
-    connect: () =>
-      extension.onMessage(
-        JSON.stringify({
-          type: "hello",
-          userAgent: "browser-test",
-          browserVersion: "Chrome/test",
-          extensionVersion: "2",
-          tabs: [],
-        }),
-      ),
-    dispose: () => bridge.dispose(),
-  };
-}
-
-describe("extension profile readiness", () => {
-  it("keeps the actionable pairing error when no extension connects", async () => {
-    vi.useFakeTimers();
-    vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(false);
-
-    const browser = createExtensionProfile();
-    const unavailable = browser.profile.ensureBrowserAvailable().catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(8_500);
-
-    expect((await unavailable) as Error).toHaveProperty(
-      "message",
-      expect.stringContaining("Pair the browser extension."),
-    );
-    expect(chromeModule.isChromeReachable).not.toHaveBeenCalled();
-    browser.dispose();
-  });
-
-  it("keeps a sibling attachment wait alive when one request is cancelled", async () => {
-    vi.useFakeTimers();
-    vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(true);
-    const controller = new AbortController();
-    const browser = createExtensionProfile();
-    const cancelled = browser.profile
-      .ensureBrowserAvailable({ signal: controller.signal })
-      .catch((error: unknown) => error);
-    const sibling = browser.profile.ensureBrowserAvailable();
-    await vi.advanceTimersByTimeAsync(100);
-
-    controller.abort(new Error("first browser request cancelled"));
-    expect((await cancelled) as Error).toHaveProperty("message", "first browser request cancelled");
-    const runtime = expectDefined(browser.state.profiles.get("chrome"), "extension runtime");
-    const lifecycle = getProfileLifecycle(runtime);
-    expect(lifecycle.leases.size).toBe(1);
-    expect(browser.state.extensionRelays?.get("chrome")).toBe(browser.relay);
-    browser.connect();
-    await expect(sibling).resolves.toBeUndefined();
-    expect([lifecycle.starts.size, lifecycle.leases.size]).toEqual([0, 0]);
-    expect(browser.relay.bridge.extensionConnected).toBe(true);
-    browser.dispose();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("does not accept readiness from a relay replaced while its request was waiting", async () => {
-    vi.useFakeTimers();
-    vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(true);
-    const browser = createExtensionProfile();
-    const replacement = {
-      ...browser.relay,
-      internalToken: "replacement-relay-test-key",
-      bridge: new ExtensionRelayBridge(),
-    } satisfies ExtensionRelayHandle;
-    setTimeout(() => {
-      browser.state.extensionRelays?.set("chrome", replacement);
-      browser.connect();
-    }, 100);
-
-    const unavailable = browser.profile.ensureBrowserAvailable().catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(200);
-
-    expect((await unavailable) as Error).toHaveProperty(
-      "message",
-      expect.stringContaining("Pair the browser extension."),
-    );
-    expect(chromeModule.isChromeReachable).not.toHaveBeenCalled();
-    browser.dispose();
-    replacement.bridge.dispose();
   });
 });
