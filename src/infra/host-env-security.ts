@@ -62,6 +62,27 @@ function isGatewayCredentialEnvVarName(key: string): boolean {
   return false;
 }
 
+/**
+ * Re-apply the currently published Gateway credential names to an env prepared earlier. A
+ * prepared env can outlive a reload (an exec waiting for approval), so launch drops every
+ * active name still carrying the Gateway's own value; a value the request supplied stays.
+ */
+export function omitGatewayCredentialEnv<T extends Record<string, string | undefined>>(env: T): T {
+  if (gatewayCredentialEnvKeysByOwner.size === 0) {
+    return env;
+  }
+  let result = env;
+  for (const [key, value] of Object.entries(env)) {
+    if (isGatewayCredentialEnvVarName(key) && value !== undefined && value === process.env[key]) {
+      if (result === env) {
+        result = { ...env };
+      }
+      delete result[key];
+    }
+  }
+  return result;
+}
+
 /** Run a bounded operation without forwarding selected inherited env vars to host exec. */
 export function withHostExecInheritedEnvOmitted<T>(keys: Iterable<string>, run: () => T): T {
   const normalized = new Set(scopedBlockedInheritedEnvKeys.getStore() ?? []);

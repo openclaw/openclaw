@@ -60,9 +60,11 @@ service can have different environments.
 
 When `hooks.token` is a whole `${NAME}` reference, the Gateway keeps `NAME` out
 of the environment that agent `exec` commands, CLI backends and other host exec
-children inherit. A command can still set its own value for that name. Child
-processes started outside host exec, such as plugin daemons, MCP servers and
-ACP harnesses, are not covered by this rule.
+children inherit. The name active at launch is withheld, so an `exec` prepared
+before a reload of `hooks.token` still drops the newly referenced name when it
+starts. A command can still set its own value for that name. Child processes
+started outside host exec, such as plugin daemons, MCP servers and ACP
+harnesses, are not covered by this rule.
 
 `hooks.token` should be distinct from active Gateway shared-secret auth
 (`gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` /
