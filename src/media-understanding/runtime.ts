@@ -271,18 +271,21 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
     await cache.cleanup();
   }
   params.signal?.throwIfAborted();
-  const normalizedImage = await normalizeImageDescriptionInput({
-    buffer: image.buffer,
-    fileName: image.fileName,
-    mime: image.mime,
-    maxBytes: MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
-  });
-  params.signal?.throwIfAborted();
-  return {
-    buffer: normalizedImage.buffer,
-    fileName: image.fileName,
-    mime: normalizedImage.mime,
-  };
+  try {
+    const normalizedImage = await normalizeImageDescriptionInput({
+      buffer: image.buffer,
+      fileName: image.fileName,
+      mime: image.mime,
+      maxBytes: MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
+    });
+    return {
+      buffer: normalizedImage.buffer,
+      fileName: image.fileName,
+      mime: normalizedImage.mime,
+    };
+  } finally {
+    params.signal?.throwIfAborted();
+  }
 }
 
 export async function describePreparedImageWithModel(params: DescribePreparedImageWithModelParams) {
@@ -296,33 +299,35 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
     (params.agentId
       ? resolveAgentDir(params.cfg, params.agentId)
       : resolveDefaultAgentDir(params.cfg));
-  const image = await optimizeImageDescriptionInput({
-    ...params.image,
-    maxBytes: MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
-    agentDir,
-    workspaceDir: params.workspaceDir,
-  });
-  params.signal?.throwIfAborted();
-  const result = await describeImage({
-    buffer: image.buffer,
-    fileName: image.fileName ?? params.image.fileName,
-    mime: image.mime,
-    provider: params.provider,
-    model: params.model,
-    prompt: params.prompt,
-    maxTokens: params.maxTokens,
-    timeoutMs,
-    cfg: params.cfg,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    agentDir,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
-  params.signal?.throwIfAborted();
-  return result;
+  try {
+    const image = await optimizeImageDescriptionInput({
+      ...params.image,
+      maxBytes: MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      agentDir,
+      workspaceDir: params.workspaceDir,
+    });
+    params.signal?.throwIfAborted();
+    return await describeImage({
+      buffer: image.buffer,
+      fileName: image.fileName ?? params.image.fileName,
+      mime: image.mime,
+      provider: params.provider,
+      model: params.model,
+      prompt: params.prompt,
+      maxTokens: params.maxTokens,
+      timeoutMs,
+      cfg: params.cfg,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      agentDir,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+  } finally {
+    params.signal?.throwIfAborted();
+  }
 }
 
 /** Describes one image with an explicit provider/model, bypassing configured media model selection. */
@@ -348,24 +353,26 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
   if (!provider?.extractStructured) {
     throw new Error(`Provider does not support structured extraction: ${params.provider}`);
   }
-  const result = await provider.extractStructured({
-    input: params.input,
-    instructions: params.instructions,
-    schemaName: params.schemaName,
-    jsonSchema: params.jsonSchema,
-    jsonMode: params.jsonMode,
-    provider: params.provider,
-    model: params.model,
-    profile: params.profile,
-    preferredProfile: params.preferredProfile,
-    authStore: params.authStore,
-    timeoutMs,
-    cfg: params.cfg,
-    agentDir: params.agentDir ?? "",
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
-  params.signal?.throwIfAborted();
-  return result;
+  try {
+    return await provider.extractStructured({
+      input: params.input,
+      instructions: params.instructions,
+      schemaName: params.schemaName,
+      jsonSchema: params.jsonSchema,
+      jsonMode: params.jsonMode,
+      provider: params.provider,
+      model: params.model,
+      profile: params.profile,
+      preferredProfile: params.preferredProfile,
+      authStore: params.authStore,
+      timeoutMs,
+      cfg: params.cfg,
+      agentDir: params.agentDir ?? "",
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+  } finally {
+    params.signal?.throwIfAborted();
+  }
 }
 
 export async function describeVideoFile(

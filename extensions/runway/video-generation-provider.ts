@@ -297,6 +297,8 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
               : { ...deadline, label: `Runway video generation task ${taskId}` },
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           fetchFn,
+          allowPrivateNetwork,
+          dispatcherPolicy,
           maxAttempts: MAX_POLL_ATTEMPTS,
           pollIntervalMs: POLL_INTERVAL_MS,
           requestFailedMessage: "Runway video status request failed",

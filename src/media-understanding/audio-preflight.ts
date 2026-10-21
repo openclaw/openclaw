@@ -5,6 +5,7 @@ import { formatAudioTranscripts } from "../../packages/media-understanding-commo
 import type { RuntimeMsgContext as MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { normalizeMediaFacts } from "../media/media-facts.js";
 import { isAudioAttachment } from "./attachments.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -47,6 +48,19 @@ export async function transcribeAudioAttachments(
 }
 
 async function transcribeAudio(
+  params: AudioPreflightParams,
+  firstOnly: boolean,
+): Promise<string | undefined> {
+  // Release the caller on Stop while the worker retains its cache until the
+  // provider exits, even when that provider ignores the cancellation signal.
+  return await racePromiseWithAbortSignal(
+    () => transcribeAudioWork(params, firstOnly),
+    params.signal,
+    (signal) => signal.reason,
+  );
+}
+
+async function transcribeAudioWork(
   params: AudioPreflightParams,
   firstOnly: boolean,
 ): Promise<string | undefined> {

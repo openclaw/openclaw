@@ -1,7 +1,6 @@
 import {
   skippedLiveTestStatus,
   type CodexComputerUseLiveTestStatus,
-  type CodexComputerUseRepairStatus,
 } from "./computer-use-readiness.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
 
@@ -16,12 +15,6 @@ export type CodexComputerUseStatusReason =
   | "check_failed"
   | "auto_install_blocked";
 
-type CodexComputerUseStatusSection<Status extends string> = {
-  status: Status;
-  ok: boolean;
-  message: string;
-};
-
 export type CodexComputerUseStatus = {
   enabled: boolean;
   ready: boolean;
@@ -32,19 +25,16 @@ export type CodexComputerUseStatus = {
   pluginName: string;
   mcpServerName: string;
   marketplaceName?: string;
-  marketplacePath?: string;
   tools: string[];
-  installation: CodexComputerUseStatusSection<
+  installation:
     | "disabled"
     | "marketplace_missing"
     | "not_installed"
     | "unchecked"
     | "installed_disabled"
-    | "installed"
-  >;
-  exposure: CodexComputerUseStatusSection<"skipped" | "missing" | "available">;
+    | "installed";
+  exposure: "skipped" | "missing" | "available";
   liveTest: CodexComputerUseLiveTestStatus;
-  repair?: CodexComputerUseRepairStatus;
   warnings: string[];
   message: string;
 };
@@ -65,26 +55,15 @@ export function unavailableStatus(
     pluginName: config.pluginName,
     mcpServerName: config.mcpServerName,
     ...(!disabled && config.marketplaceName ? { marketplaceName: config.marketplaceName } : {}),
-    ...(!disabled && config.marketplacePath ? { marketplacePath: config.marketplacePath } : {}),
     tools: [],
-    installation: {
-      status: disabled
-        ? "disabled"
-        : reason === "plugin_disabled"
-          ? "unchecked"
-          : reason === "marketplace_missing"
-            ? "marketplace_missing"
-            : "not_installed",
-      ok: false,
-      message,
-    },
-    exposure: {
-      status: "skipped",
-      ok: false,
-      message: disabled
-        ? "MCP exposure was not checked because Computer Use is disabled."
-        : "MCP exposure was not checked because Computer Use installation is not ready.",
-    },
+    installation: disabled
+      ? "disabled"
+      : reason === "plugin_disabled"
+        ? "unchecked"
+        : reason === "marketplace_missing"
+          ? "marketplace_missing"
+          : "not_installed",
+    exposure: "skipped",
     liveTest: skippedLiveTestStatus(
       config,
       disabled

@@ -209,7 +209,10 @@ it("keeps a stalled inner document mounted, offers retry, and accepts only the c
       ([data]) => data.method === "ui/notifications/sandbox-resource-ready",
     )![0].params.renderId;
   const oldRender = renderId();
+  expect(frame.style.opacity).toBe("");
+  expect(frame.hasAttribute("inert")).toBe(true);
   await vi.advanceTimersByTimeAsync(30_000);
+  expect(frame.style.opacity).toBe("0");
   expect(root.querySelector("iframe")).toBe(frame);
   expect(root.querySelector('[role="alert"]')).toBeNull();
   const retry = root.querySelector<HTMLButtonElement>('[role="status"] button');
@@ -225,6 +228,7 @@ it("keeps a stalled inner document mounted, offers retry, and accepts only the c
   await vi.advanceTimersByTimeAsync(40);
   expect(root.querySelector("iframe")).toBe(frame);
   expect(frame.style.opacity).toBe("");
+  expect(frame.hasAttribute("inert")).toBe(false);
   expect(root.querySelector('[role="status"] button')).toBeNull();
 });
 

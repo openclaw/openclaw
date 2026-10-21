@@ -45,6 +45,19 @@ using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
 
+Candidate pnpm installs use a project-local virtual dependency graph while
+reusing the configured package store. This also applies when pnpm uses hoisted
+links: pnpm 12 can otherwise materialize unpatched package bytes from a global
+graph despite recording a patch hash. After source exposure changes dependency
+topology, the updater refreshes bundled plugin links before final candidate
+validation. The refresh links the packages it finds in each plugin's
+`node_modules`. A link whose target is missing produces a warning and is skipped
+when the plugin declares that package optional; any other broken link or
+filesystem error stops preflight. The refresh does not check for dependencies
+that were never installed.
+These preparation changes require the installed updater to contain the fix;
+staging a newer candidate cannot change an older updater's initial install.
+
 Managed update helpers route diagnostic logs to stderr so debug logging cannot
 interrupt their control handshake. This applies to the installed updater; a newer
 candidate cannot change an older updater's pre-activation handshake.
@@ -163,6 +176,11 @@ that stale local file from restored shared state instead of merging it. PostgreS
 installations use an engine-aware driver with local-family capture support, so
 rollback restores the shared and local stores together. See
 [credential migration and recovery](/reference/database-schemas/versioning#local-client-credentials).
+
+Updates started by 2026.10.4 keep the client credential store's independent
+schema out of the older updater's agent-schema check. Credential-aware updaters
+verify that store against its own schema, and both paths retain its backup and
+recovery coverage.
 
 Independent native credential sources remain unchanged during import and remain
 readable by the previous app after rollback. Reusing the same source preserves
@@ -1330,6 +1348,14 @@ run, phase, driver PID, host, start and last-activity ages, and observed livenes
 Wait for that update to finish, or stop the named driver on its host and rerun
 repair after it exits. See [Update repair](/cli/update/repair-and-recovery#update-repair)
 for maintenance and recovery behavior.
+
+An empty update history does not mean the installation is free. If
+`openclaw update` reports that another update executor owns the installation and
+names cancelled update custody, an earlier cancelled updater exited without
+releasing it. Run `openclaw update repair`; it settles that custody once the
+updater and its descendants are proven gone, and otherwise reports the blocker,
+exits with code 2, and leaves the next update blocked. See
+[Update repair](/cli/update/repair-and-recovery#update-repair).
 
 OpenClaw 2026.9.2 does not reject a new CLI update because an older running row
 exists: its [admission path](https://github.com/openclaw/openclaw/blob/v2026.9.2/src/cli/update-cli/update-command-run.ts#L77)

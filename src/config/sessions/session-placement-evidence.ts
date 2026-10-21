@@ -34,7 +34,7 @@ export type PlacementSessionIdentityProbe = {
 /** Memory evidence is read once after durable discovery, without opening or acquiring an owner. */
 export async function readPlacementSessionIdentityEvidence(
   cfg: OpenClawConfig,
-  input: readonly PlacementSessionIdentityProbe[],
+  probes: readonly PlacementSessionIdentityProbe[],
   signal?: AbortSignal,
 ): Promise<SessionIdentityEvidenceResult[]> {
   signal?.throwIfAborted();
@@ -45,7 +45,6 @@ export async function readPlacementSessionIdentityEvidence(
       : process.env,
   );
   const env = { ...capturedEnv, OPENCLAW_STATE_DIR: resolveStateDir(capturedEnv) };
-  const probes = input.map((probe) => ({ ...probe }));
   const results: SessionIdentityEvidenceResult[] = probes.map(() => ({ status: "absent" }));
   const incognito = probes.flatMap((probe, index) =>
     isIncognitoSessionKey(probe.sessionKey) ? [{ probe, index }] : [],

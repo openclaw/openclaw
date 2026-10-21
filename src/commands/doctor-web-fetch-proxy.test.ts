@@ -1,5 +1,9 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { Socket } from "node:net";
+import tls from "node:tls";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as noteRuntime from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as serviceRuntime from "../daemon/service.js";
 import { fetchWithRuntimeDispatcher } from "../infra/net/runtime-fetch.js";
 import { noteWebFetchProxyDiagnostic } from "./doctor-web-fetch-proxy.js";
 
@@ -10,14 +14,31 @@ const proxyUrl = "http://private-proxy.example:8080/proxy-value-marker";
 const proxyEnv = { HTTPS_PROXY: proxyUrl };
 const webFetchDisabled = { web: { fetch: { enabled: false } } };
 type Options = Parameters<typeof noteWebFetchProxyDiagnostic>[0];
+const resolveService = serviceRuntime.resolveGatewayService;
+
+function mockDirectConnectivity(outcome: "reachable" | "unreachable") {
+  vi.spyOn(tls, "connect").mockImplementation(() => {
+    const socket = new tls.TLSSocket(new Socket());
+    queueMicrotask(() => socket.emit(outcome === "reachable" ? "secureConnect" : "timeout"));
+    return socket;
+  });
+}
 
 beforeEach(() => {
   noteFn.mockReset();
   service.readCommand.mockReset().mockResolvedValue(null);
   vi.mocked(fetchWithRuntimeDispatcher).mockReset();
+  vi.spyOn(noteRuntime, "note").mockImplementation(noteFn);
+  vi.spyOn(serviceRuntime, "resolveGatewayService").mockImplementation(() => ({
+    ...resolveService(),
+    readCommand: service.readCommand,
+  }));
+  mockDirectConnectivity("reachable");
 });
+afterEach(() => vi.restoreAllMocks());
+
 async function diagnose(options: Partial<Options> = {}) {
-  await noteWebFetchProxyDiagnostic({ cfg: {}, env: {}, service, ...options, noteFn });
+  await noteWebFetchProxyDiagnostic({ cfg: {}, env: {}, ...options });
   return noteFn.mock.calls[0]?.[0] ?? null;
 }
 function expectNote(title: string, ...fragments: string[]) {
@@ -26,6 +47,30 @@ function expectNote(title: string, ...fragments: string[]) {
     expect(noteFn.mock.calls[0]?.[0]).toContain(fragment);
   }
 }
+
+it.each([
+  ["secureConnect", "timeout", "succeeded"],
+  ["timeout", "secureConnect", "failed"],
+  ["error", "secureConnect", "failed"],
+] as const)("reports the first TLS outcome (%s before %s)", async (first, second, outcome) => {
+  const socket = new tls.TLSSocket(new Socket());
+  const connect = vi.spyOn(tls, "connect").mockImplementation(() => {
+    queueMicrotask(() => {
+      socket.emit(first, new Error("synthetic TLS failure"));
+      socket.emit(second);
+    });
+    return socket;
+  });
+  try {
+    await diagnose({ env: proxyEnv });
+    expectNote("Web fetch proxy", `Direct TLS connectivity to docs.openclaw.ai:443 ${outcome}.`);
+    expect(socket.destroyed).toBe(true);
+  } finally {
+    socket.destroy();
+    connect.mockRestore();
+  }
+});
+
 it.each([
   ["service", {}, proxyEnv, "unreachable", ["installed Gateway service: HTTPS_PROXY"]],
   ["process", { http_proxy: proxyUrl }, undefined, "reachable", ["doctor process: http_proxy"]],
@@ -47,10 +92,8 @@ it.each([
   "reports %s proxy routing without exposing values",
   async (source, env, serviceEnv, connectivity, sources) => {
     service.readCommand.mockResolvedValue(serviceEnv ? { environment: serviceEnv } : null);
-    const diagnostic = await diagnose({
-      env,
-      probeDirectConnectivity: async () => connectivity,
-    });
+    mockDirectConnectivity(connectivity);
+    const diagnostic = await diagnose({ env });
     expectNote(
       "Web fetch proxy",
       "web_fetch",
@@ -79,17 +122,15 @@ it.each<[string, OpenClawConfig, boolean]>([
   ["web_fetch is disabled", { tools: webFetchDisabled }, true],
   ["Gateway mode is remote", { gateway: { mode: "remote" } }, true],
 ])("does nothing when %s", async (_name, cfg, proxy) => {
-  const probe = vi.fn(async () => "unreachable" as const);
   await diagnose({
     cfg,
     env: proxy ? {} : { ALL_PROXY: "socks5://proxy.example:1080" },
-    probeDirectConnectivity: probe,
   });
   expect(noteFn).not.toHaveBeenCalled();
   if (proxy) {
     expect(service.readCommand).not.toHaveBeenCalled();
   }
-  expect(probe).not.toHaveBeenCalled();
+  expect(tls.connect).not.toHaveBeenCalled();
 });
 
 const managedProxyUrl = "http://proxy.example.test:8080";

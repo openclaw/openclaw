@@ -22,6 +22,10 @@ export function buildPublicSessionMediaBaseUrl(basePath: string, token: string):
   return `${basePath}/share/session/media?token=${encodeURIComponent(token)}`;
 }
 
+export function buildPublicSessionWidgetUrl(basePath: string, widgetToken: string): string {
+  return `${basePath}/share/session/media?widget=${encodeURIComponent(widgetToken)}`;
+}
+
 export function buildPublicSessionMediaUrl(baseUrl: string, entryId: string, attachmentId: string) {
   return `${baseUrl}&entry=${encodeURIComponent(entryId)}&attachment=${encodeURIComponent(attachmentId)}`;
 }

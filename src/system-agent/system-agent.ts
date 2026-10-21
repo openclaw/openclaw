@@ -1,7 +1,6 @@
 import { stdin as defaultStdin, stdout as defaultStdout } from "node:process";
 import { withProgress } from "../cli/progress.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import type { SystemAgentAssistantPlanner } from "./assistant.js";
 import { resolveSystemAgentOperation } from "./dialogue.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import {
@@ -12,7 +11,6 @@ import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
   parseSystemAgentOperation,
-  type SystemAgentCommandDeps,
   type SystemAgentOperation,
 } from "./operations.js";
 import { formatSystemAgentOverview, loadSystemAgentOverview } from "./overview.js";
@@ -37,9 +35,6 @@ export type RunSystemAgentOptions = {
   setupWorkspace?: string;
   setupAgentName?: string;
   onReady?: () => void;
-  deps?: SystemAgentCommandDeps;
-  loadOverview?: typeof loadSystemAgentOverview;
-  planWithAssistant?: SystemAgentAssistantPlanner;
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
   runInteractiveTui?: SystemAgentInteractiveRunner;
@@ -75,13 +70,6 @@ async function runOneShot(
   }
   await executeSystemAgentOperation(operation, runtime, {
     approved,
-    deps:
-      opts.deps || opts.loadOverview
-        ? {
-            ...opts.deps,
-            ...(opts.loadOverview ? { loadOverview: opts.loadOverview } : {}),
-          }
-        : undefined,
   });
 }
 
@@ -147,7 +135,7 @@ async function runBoundSystemAgent(
 ): Promise<void> {
   await requireSystemAgentInferenceRoute(boundOpts.verifiedInference, "conversation");
   if (boundOpts.json) {
-    const overview = await (boundOpts.loadOverview ?? loadSystemAgentOverview)();
+    const overview = await loadSystemAgentOverview();
     writeRuntimeJson(runtime, overview);
     return;
   }
@@ -167,7 +155,7 @@ async function runBoundSystemAgent(
         delayMs: 0,
         fallback: "none",
       },
-      async () => await (boundOpts.loadOverview ?? loadSystemAgentOverview)(),
+      async () => await loadSystemAgentOverview(),
     );
     runtime.log(formatSystemAgentOverview(overview));
     runtime.log("");
@@ -180,7 +168,7 @@ async function runBoundSystemAgent(
   }
 
   if (boundOpts.interactive === false) {
-    const overview = await (boundOpts.loadOverview ?? loadSystemAgentOverview)();
+    const overview = await loadSystemAgentOverview();
     runtime.log(formatSystemAgentOverview(overview));
     return;
   }

@@ -1,5 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  attributeDelegatedSessionCreator,
+  buildSessionCreationStamp,
+  inheritSessionGitContributorProfileIds,
+} from "../../../config/sessions/session-entry-provenance.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { listSessionBindingsBySessionAsync } from "../../../infra/outbound/session-binding-service.js";
 import {
@@ -140,4 +146,28 @@ export function shouldStreamAcpSpawnToParent(params: {
     params.requester.heartbeatRelayRouteUsable;
 
   return params.streamToParentRequested || implicitStreamToParent;
+}
+
+/** Build immutable creator facts from the requester captured before spawn awaits. */
+export function buildAcpSpawnCreationStamp(params: {
+  cfg: OpenClawConfig;
+  parentEntry?: SessionEntry;
+  requesterAgentId: string;
+  requesterSessionKey: string;
+  creatorProfileId?: string;
+  gitContributorProfileId?: string;
+}) {
+  return buildSessionCreationStamp({
+    via: "spawn",
+    actor: attributeDelegatedSessionCreator(
+      { type: "agent", id: params.requesterAgentId },
+      params.creatorProfileId,
+    ),
+    inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(params.parentEntry, {
+      config: params.cfg,
+      agentId: params.requesterAgentId,
+      sessionKey: params.requesterSessionKey,
+      requesterProfileId: params.gitContributorProfileId,
+    }),
+  });
 }

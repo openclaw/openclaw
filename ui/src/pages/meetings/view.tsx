@@ -2,6 +2,7 @@ import type { TranscriptSessionSummary } from "@openclaw/gateway-protocol";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { For, Show, createMemo, onSettled } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerMeetingsEnglish } from "../../i18n/locales/en-meetings.ts";
@@ -560,40 +561,40 @@ export function TranscriptsView(props: TranscriptsViewProps) {
   const captureTarget = SETTINGS_SEARCH_TARGETS.meetingCapture;
   return (
     <section class="transcripts-workspace">
-      <header class="content-header content-header--page">
-        <div>
-          <h1 class="page-title">{t("tabs.meetings")}</h1>
-          <p class="page-sub">{t("subtitles.meetings")}</p>
-        </div>
-        <div class="transcripts-actions">
-          <a
-            class="btn"
-            href={
-              pathForRoute(captureTarget.routeId, props.basePath) +
-              captureTarget.search +
-              captureTarget.hash
-            }
-            onClick={(event) => {
-              if (!shouldHandleNavigationClick(event)) {
-                return;
+      <HubPageHeader
+        active="meetings"
+        docsUrl="https://docs.openclaw.ai/cli/transcripts"
+        actions={
+          <div class="transcripts-actions">
+            <a
+              class="btn"
+              href={
+                pathForRoute(captureTarget.routeId, props.basePath) +
+                captureTarget.search +
+                captureTarget.hash
               }
-              event.preventDefault();
-              props.onOpenCaptureSettings();
-            }}
-          >
-            <Icon name="settings" />
-            {t("meetingCapture.title")}
-          </a>
-          <button
-            class="btn"
-            disabled={!props.connected || !props.allowed || props.listLoading}
-            onClick={() => props.onRefresh()}
-          >
-            <Icon name="refresh" />
-            {t("common.refresh")}
-          </button>
-        </div>
-      </header>
+              onClick={(event) => {
+                if (!shouldHandleNavigationClick(event)) {
+                  return;
+                }
+                event.preventDefault();
+                props.onOpenCaptureSettings();
+              }}
+            >
+              <Icon name="settings" />
+              {t("meetingCapture.title")}
+            </a>
+            <button
+              class="btn"
+              disabled={!props.connected || !props.allowed || props.listLoading}
+              onClick={() => props.onRefresh()}
+            >
+              <Icon name="refresh" />
+              {t("common.refresh")}
+            </button>
+          </div>
+        }
+      />
       {!props.connected ? (
         <div class="transcripts-notice" role="status">
           {t("transcripts.disconnected")}

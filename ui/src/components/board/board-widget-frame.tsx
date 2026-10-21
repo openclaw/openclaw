@@ -148,6 +148,8 @@ class BoardWidgetTicketRefresh {
 export type BoardWidgetFrameOwner = ReturnType<typeof createBoardWidgetFrame>;
 export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
   const changes = new EventStream<void>();
+  let initialTheme = document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
+  let sandboxRequestUrl = "";
   let frameError = "";
   let frameElement: HTMLIFrameElement | undefined;
   let releaseTheme: (() => void) | undefined;
@@ -162,7 +164,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
   let sandboxOrigin = "";
   let sandboxHost: BoardWidgetSandboxHost | null = null;
   let contentVisible = false;
-  let revealFrame = 0;
+  let initialPaint = true;
   const confirmation = createMcpAppConfirm();
   const ticketRefresh = new BoardWidgetTicketRefresh(
     () => host.widget()?.viewTicket,
@@ -266,33 +268,13 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
     confirmation.cancel();
     waiting = false;
     renderStalled = false;
-    resetPresentation();
+    contentVisible = false;
+    initialPaint = false;
     frameProbeGeneration += 1;
     frameFailureKey = "";
     frameRefreshAttempts = 0;
     setError("", notify);
     sandboxHost?.reset();
-  }
-
-  function resetPresentation(): void {
-    window.cancelAnimationFrame(revealFrame);
-    revealFrame = 0;
-    contentVisible = false;
-  }
-
-  function revealContent(): void {
-    if (contentVisible || revealFrame) {
-      return;
-    }
-    // Apply the reported height before revealing the cross-origin frame; its
-    // compositor needs a paint opportunity at the final size to avoid a white flash.
-    revealFrame = window.requestAnimationFrame(() => {
-      revealFrame = window.requestAnimationFrame(() => {
-        revealFrame = 0;
-        contentVisible = true;
-        changes.emit();
-      });
-    });
   }
 
   function resolveSandboxFrameUrl(widget: BoardWidget): string | undefined {
@@ -305,15 +287,26 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
     ) {
       return undefined;
     }
-    const url = resolveSandboxHostUrl(
-      widget.sandboxUrl,
-      widget.sandboxPort,
-      widget.sandboxOrigin,
-      gatewayUrl,
-      window.location.origin,
+    const url = new URL(
+      resolveSandboxHostUrl(
+        widget.sandboxUrl,
+        widget.sandboxPort,
+        widget.sandboxOrigin,
+        gatewayUrl,
+        window.location.origin,
+      ),
     );
-    sandboxOrigin = new URL(url).origin;
-    return url;
+    if (url.href !== sandboxRequestUrl) {
+      sandboxRequestUrl = url.href;
+      initialTheme = document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
+      if (frameElement) {
+        frameElement.style.colorScheme = initialTheme;
+      }
+    }
+    // Keep the seed stable until navigation; theme messages update the mounted shell.
+    url.hash = `theme=${initialTheme}`;
+    sandboxOrigin = url.origin;
+    return url.href;
   }
 
   function sandboxHostOptions(
@@ -376,7 +369,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
       onPending: () => waitForConnection(),
       onLoaded: () => {
         waiting = false;
-        resetPresentation();
+        contentVisible = false;
         frameFailureKey = "";
         frameRefreshAttempts = 0;
         setError("", false);
@@ -390,10 +383,13 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
         waiting = false;
         renderStalled = false;
         setError("");
-        revealContent();
+        initialPaint = false;
+        contentVisible = true;
+        changes.emit();
       },
       onError: (error) => {
         if (error instanceof WidgetRenderTimeoutError) {
+          initialPaint = false;
           renderStalled = true;
           changes.emit();
           return;
@@ -472,7 +468,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
       releaseTheme?.();
       releaseTheme = undefined;
       frameProbeGeneration += 1;
-      resetPresentation();
+      contentVisible = false;
       stopWork();
       stopMessages?.();
       stopMessages = undefined;
@@ -613,6 +609,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
     bindFrame(frame: HTMLIFrameElement) {
       releaseTheme?.();
       releaseTheme = undefined;
+      frame.style.colorScheme = initialTheme;
       frameElement = frame;
     },
     prepareView(value: BoardWidget) {
@@ -630,6 +627,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
         src,
         sandboxSrc,
         visible: contentVisible,
+        painting: initialPaint && !waiting && !renderStalled,
         waiting,
         stalled: renderStalled,
         covered: host.loadingCovered?.(),
@@ -718,7 +716,7 @@ export function BoardWidgetFrame(props: {
           ref={(frame) => props.state().bindFrame(frame)}
           class="board-widget__frame"
           allow="fullscreen"
-          style={{ opacity: view().visible ? undefined : 0 }}
+          style={{ opacity: view().visible || view().painting ? undefined : 0 }}
           inert={!view().visible}
           sandbox="allow-scripts allow-same-origin allow-forms"
           referrerpolicy="origin"

@@ -1,4 +1,3 @@
-import { etc } from "@noble/ed25519";
 import {
   ConnectErrorDetailCodes,
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
@@ -50,6 +49,7 @@ import {
 } from "./gateway-connect-errors.ts";
 import {
   buildBrowserGatewayConnectPlan,
+  deriveLegacyV4RecoveryScope,
   CONTROL_UI_OPERATOR_ROLE,
   CONTROL_UI_OPERATOR_SCOPES,
   type ConnectPlan,
@@ -125,20 +125,9 @@ function toGatewayErrorInfo(error: GatewayRequestError): ErrorShape {
   return { code, message, details, retryable, retryAfterMs };
 }
 
-async function deriveLegacyV4RecoveryScope(material: string | undefined): Promise<string> {
-  if (!material || typeof crypto === "undefined" || !crypto.subtle) {
-    return "";
-  }
-  try {
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material));
-    return etc.bytesToHex(new Uint8Array(digest));
-  } catch {
-    return "";
-  }
-}
-
 export class GatewayBrowserClient {
   private readonly client: GatewayProtocolClient<ConnectPlan>;
+  private readonly initialConnectDispatch = Promise.withResolvers<void>();
   private readonly chatEvents = new GatewayChatEvents((reason) => this.forceReconnect(reason));
   private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
@@ -219,6 +208,7 @@ export class GatewayBrowserClient {
       onConnectFailure: (error, context) => this.handleConnectFailure(error, context.plan),
       resolveClose: (context) => this.resolveClose(context),
       onClose: (context, decision) => {
+        this.initialConnectDispatch.resolve();
         this.catalogRetryAbort.abort();
         this.connectionHello = null;
         this.nativeAuthAbort?.abort();
@@ -280,6 +270,11 @@ export class GatewayBrowserClient {
         this.lastInboundActivityAtMs = Date.now();
       },
       onRequestTiming: (timing) => this.opts.onRequestTiming?.(timing),
+      onTiming: ({ phase }) => {
+        if (phase === "request-sent") {
+          this.initialConnectDispatch.resolve();
+        }
+      },
       onCallbackError: (label, error) => console.error(`[gateway] ${label} handler error:`, error),
       handshake: { mode: "require-challenge", timeoutMs: DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS },
       reconnect: { initialMs: 800, multiplier: 1.7, maxMs: 15_000 },
@@ -303,6 +298,7 @@ export class GatewayBrowserClient {
   }
 
   stop() {
+    this.initialConnectDispatch.resolve();
     this.catalogRetryAbort.abort();
     this.connectionHello = null;
     this.nativeAuthAbort?.abort();
@@ -320,6 +316,11 @@ export class GatewayBrowserClient {
 
   get connected() {
     return this.client.connected;
+  }
+
+  /** Cached views can mount during the first handshake's network wait. */
+  get initialConnectSent(): Promise<void> {
+    return this.initialConnectDispatch.promise;
   }
 
   get auth() {
@@ -739,6 +740,7 @@ export class GatewayBrowserClient {
   }
 
   private handleSocketFactoryError(error: Error): void {
+    this.initialConnectDispatch.resolve();
     const formatted = formatBrowserWebSocketConstructorError(error, this.opts.url);
     this.pendingDeviceTokenRetry = false;
     try {

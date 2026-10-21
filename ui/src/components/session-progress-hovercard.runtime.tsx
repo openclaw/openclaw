@@ -229,7 +229,7 @@ function createSessionProgressHovercard(
     const artifactKey = activeArtifactKey();
     const session = activeSession;
     if (target instanceof HTMLAnchorElement && target.dataset.sessionKey === sessionKey) {
-      void sessionLinkTitler.decorate(target, true);
+      void sessionLinkTitler.decorate(target);
     }
     if (
       session?.sessionKey !== sessionKey ||

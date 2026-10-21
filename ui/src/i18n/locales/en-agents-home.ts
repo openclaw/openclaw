@@ -98,7 +98,7 @@ const enAgentsHome = {
     details: "View security report",
   },
   clawsDraft: {
-    title: "Create a Claw",
+    title: "Create Claw",
     railHint: "Turn this agent into a shareable Claw",
     reviewTitle: "Review your Claw",
     intro: "Choose what to include. The archive below is rebuilt before publication.",
@@ -130,7 +130,7 @@ const enAgentsHome = {
     retryReview: "Retry review",
     reopen: "Review Claw package",
     openingChat: "Opening the agent’s main chat…",
-    sendFailed: "The main chat did not accept the Create a Claw message.",
+    sendFailed: "The main chat did not accept the Create Claw message.",
   },
 } satisfies TranslationMap;
 

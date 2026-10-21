@@ -685,7 +685,7 @@ describe("chat header session menu", () => {
     expect(stopWorker).not.toHaveBeenCalled();
     if (compact) {
       expect(initialLabels).toEqual([
-        "Open command palette",
+        "Command palette",
         "View",
         "Pin session",
         "Rename…",

@@ -346,6 +346,9 @@ async function main() {
       target: "es2022",
       write: false,
       minifySyntax: true,
+      // Remove esbuild's physical input-path banners before canonical formatting.
+      // The TypeBox license is retained explicitly below.
+      minifyWhitespace: true,
       legalComments: "none",
     });
     const outputFile = result.outputFiles[0];

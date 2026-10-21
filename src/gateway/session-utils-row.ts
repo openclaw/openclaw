@@ -25,6 +25,7 @@ import {
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import {
+  resolveSessionCreatorActor,
   sessionCreatorProfileId,
   MAX_SESSION_PARTICIPANTS,
 } from "../config/sessions/session-entry-provenance.js";
@@ -383,7 +384,7 @@ function projectSessionRowProfiles(
   );
   return {
     createdActor: projectSessionActor(
-      entry?.createdActor,
+      resolveSessionCreatorActor(entry?.createdActor),
       userProfileIdentityById,
       cfg,
       Boolean(sessionCreatorProfileId(entry?.createdActor)),

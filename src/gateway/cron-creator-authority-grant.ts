@@ -68,6 +68,7 @@ type CronCreatorAuthorityGrantEntry = {
   scope: CronCreatorAuthorityRunScope;
   runtimeAuthority?: CronRuntimeAuthority;
   capturesRuntimeAuthority: boolean;
+  creatorProfileId?: string;
   isCurrent?: () => boolean;
   operationSignal?: AbortSignal;
   onOperationAbort?: () => void;
@@ -142,6 +143,7 @@ export function mintCronCreatorAuthorityGrant(
   management?: CronManagementBinding,
   capture: "runtime" | "requester" = "runtime",
   isCurrent?: () => boolean,
+  creatorProfileId?: string,
 ): CronCreatorAuthorityGrant {
   if (
     !scope.active ||
@@ -190,6 +192,7 @@ export function mintCronCreatorAuthorityGrant(
   const entry: CronCreatorAuthorityGrantEntry = {
     scope,
     capturesRuntimeAuthority: capture === "runtime",
+    ...(creatorProfileId ? { creatorProfileId } : {}),
     ...(isCurrent ? { isCurrent } : {}),
     operationSignal,
     ...(normalizedRuntimeAuthority ? { runtimeAuthority: normalizedRuntimeAuthority } : {}),
@@ -213,6 +216,8 @@ export function resolveCronCreatorAuthorityGrantProvenance(
 ):
   | {
       capturesRuntimeAuthority: boolean;
+      /** Host-captured causal human; never permission or model input. */
+      creatorProfileId?: string;
       callerOrigin?: CronScheduledToolCallerOrigin;
       channelRequester?: CronAuthenticatedChannelRequester;
     }
@@ -238,6 +243,7 @@ export function resolveCronCreatorAuthorityGrantProvenance(
   const channelRequester = channelRequestersByScope.get(scope);
   return {
     capturesRuntimeAuthority: entry.capturesRuntimeAuthority,
+    ...(entry.creatorProfileId ? { creatorProfileId: entry.creatorProfileId } : {}),
     ...(scope.callerOrigin.kind === "local" ? { callerOrigin: { kind: "local" as const } } : {}),
     ...(channelRequester ? { channelRequester: { ...channelRequester } } : {}),
   };

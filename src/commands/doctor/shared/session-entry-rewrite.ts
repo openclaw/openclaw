@@ -331,9 +331,6 @@ export function rewriteDoctorSessionEntries(
             }
             nextEntry = stripRuntimeOnlySessionSkillsFields(transformedEntry);
             ({ entryJson, snapshots } = splitSessionEntrySnapshots(nextEntry));
-            if (!parseSqliteSessionEntryRecord({ ...row, entry_json: entryJson })) {
-              continue;
-            }
             entryValid = 1;
             if (previousStatus !== nextEntry.status) {
               runOutcome = nextEntry;

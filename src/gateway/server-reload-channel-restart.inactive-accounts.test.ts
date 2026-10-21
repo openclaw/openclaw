@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,31 +12,26 @@ import {
 } from "./server-channels.test-support.js";
 import { restartGatewayChannels } from "./server-reload-channel-restart.js";
 
-describe("hot channel restart with inactive account SecretRefs", () => {
-  beforeEach(() => resetGatewayWorkAdmission());
-  afterEach(() => resetGatewayWorkAdmission());
+beforeEach(resetGatewayWorkAdmission);
+afterEach(resetGatewayWorkAdmission);
 
-  it.each([
-    { name: "disabled idle", initiallyRunning: false, disabled: true },
-    { name: "newly disabled running", initiallyRunning: true, disabled: true },
-    { name: "enabled unresolved", initiallyRunning: false, disabled: false },
-  ])("preserves lifecycle and credential policy for a $name account", async (scenario) => {
+it.each([
+  { name: "disabled idle", initiallyRunning: false, disabled: true },
+  { name: "newly disabled running", initiallyRunning: true, disabled: true },
+  { name: "enabled unresolved", initiallyRunning: false, disabled: false },
+])(
+  "preserves lifecycle and credential policy for a $name account",
+  async ({ initiallyRunning, disabled }) => {
     const unresolvedRef = { source: "file", provider: "local", id: "/audit-token" } as const;
-    let config: OpenClawConfig = {
-      channels: {
-        telegram: {
-          accounts: {
-            default: { botToken: "test-default-token" },
-            audit: {
-              enabled: scenario.initiallyRunning,
-              botToken: scenario.initiallyRunning ? "test-audit-token" : unresolvedRef,
-            },
-          },
-        },
-      },
+    const accountConfig = (enabled: boolean, resolved = false): OpenClawConfig => {
+      const accounts = {
+        default: { botToken: "test-default-token" },
+        audit: { enabled, botToken: resolved ? "test-audit-token" : unresolvedRef },
+      };
+      return { channels: { telegram: { accounts } } };
     };
-    const firstStart = createDeferred();
-    const restarted = createDeferred();
+    let config = accountConfig(initiallyRunning, initiallyRunning);
+    const [firstStart, restarted] = [createDeferred(), createDeferred()] as const;
     const started: string[] = [];
     const stopped: string[] = [];
     const registry = createTestChannelRegistry(
@@ -55,11 +50,9 @@ describe("hot channel restart with inactive account SecretRefs", () => {
         startAccount: async ({ accountId, abortSignal }) => {
           started.push(accountId);
           if (accountId === "default") {
-            if (started.filter((id) => id === "default").length === 1) {
-              firstStart.resolve();
-            } else {
-              restarted.resolve();
-            }
+            const signal =
+              started.filter((id) => id === "default").length === 1 ? firstStart : restarted;
+            signal.resolve();
           }
           await waitForAbort(abortSignal);
         },
@@ -78,16 +71,7 @@ describe("hot channel restart with inactive account SecretRefs", () => {
     try {
       await manager.startChannels();
       await firstStart.promise;
-      config = {
-        channels: {
-          telegram: {
-            accounts: {
-              default: { botToken: "test-default-token" },
-              audit: { enabled: !scenario.disabled, botToken: unresolvedRef },
-            },
-          },
-        },
-      };
+      config = accountConfig(!disabled);
       await restartGatewayChannels({
         params: { ...manager, getPluginRegistry: () => registry, logChannels },
         nextConfig: config,
@@ -100,7 +84,7 @@ describe("hot channel restart with inactive account SecretRefs", () => {
         channelReloadTargets: () => new Set(["telegram"]),
         scheduleRecoveryRestart,
       });
-      if (scenario.disabled) {
+      if (disabled) {
         expect(scheduleRecoveryRestart).not.toHaveBeenCalled();
         expect(logChannels.error).not.toHaveBeenCalled();
         await restarted.promise;
@@ -111,12 +95,10 @@ describe("hot channel restart with inactive account SecretRefs", () => {
           expect.stringContaining('unresolved SecretRef "file:local:/audit-token"'),
         );
       }
-      expect(stopped.toSorted()).toEqual(
-        scenario.initiallyRunning ? ["audit", "default"] : ["default"],
-      );
+      expect(stopped.toSorted()).toEqual(initiallyRunning ? ["audit", "default"] : ["default"]);
     } finally {
       config = { channels: { telegram: { enabled: false } } };
       await manager.stopChannel("telegram");
     }
-  });
-});
+  },
+);

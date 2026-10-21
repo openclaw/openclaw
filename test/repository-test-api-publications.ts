@@ -16,9 +16,6 @@ const publications: Record<string, string | symbol> = {
   ),
   "src/agents/auth-profiles/usage.ts": Symbol.for("openclaw.authProfileUsageTestApi"),
   "src/agents/bash-process-registry.ts": Symbol.for("openclaw.bashProcessRegistryTestApi"),
-  "src/agents/embedded-agent-runner/context-engine-maintenance.ts": Symbol.for(
-    "openclaw.contextEngineMaintenanceTestApi",
-  ),
   "src/agents/mcp-ui-resource.ts": Symbol.for("openclaw.mcpUiResourceTestApi"),
   "src/agents/prepared-model-runtime.ts": Symbol.for("openclaw.preparedModelRuntimeTestApi"),
   "src/agents/session-suspension.ts": Symbol.for("openclaw.sessionSuspensionTestApi"),
@@ -57,7 +54,6 @@ const publications: Record<string, string | symbol> = {
   "src/infra/exec-approvals-store.ts": Symbol.for("openclaw.execApprovalsStoreTestApi"),
   "src/logging/diagnostic-run-activity.ts": Symbol.for("openclaw.diagnosticRunActivityTestApi"),
   "src/logging/secret-redaction-registry.ts": Symbol.for("openclaw.secretRedactionRegistryTestApi"),
-  "src/media/playback-transcode.ts": Symbol.for("openclaw.playbackTranscodeTestApi"),
   "src/node-host/plugin-node-host.ts": Symbol.for("openclaw.nodeHostPluginTestApi"),
   "src/plugins/memory-runtime.ts": Symbol.for("openclaw.memoryRuntimeTestApi"),
   "src/sessions/session-controller.stop.ts": Symbol.for("openclaw.sessionControllerTestApi"),

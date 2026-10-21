@@ -29,7 +29,6 @@ const htmlSummary = {
   dataImages: 0,
   cidImages: 0,
   srcHosts: [],
-  attachmentTags: 0,
   attachmentIds: [],
 };
 

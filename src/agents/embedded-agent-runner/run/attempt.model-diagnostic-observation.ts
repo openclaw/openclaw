@@ -36,6 +36,7 @@ type ModelCallObservationState = {
   terminalReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
   timeToFirstByteMs?: number;
   providerProcessingMs?: number;
+  reasoningSuppressed?: boolean;
   modelContent?: DiagnosticModelCallContent;
   outputMessages?: unknown[];
   usage?: ModelCallUsage;
@@ -177,6 +178,12 @@ function observeModelCallTerminalMessage(state: ModelCallObservationState, value
   let rawUsage: unknown;
   try {
     rawUsage = value.usage;
+    state.reasoningSuppressed ||=
+      value.role === "assistant" &&
+      Array.isArray(value.diagnostics) &&
+      value.diagnostics.some(
+        (entry: unknown) => isRecord(entry) && entry.type === "reasoning_suppressed",
+      );
     const timing = Array.isArray(value.diagnostics)
       ? value.diagnostics.findLast(
           (entry: unknown) => isRecord(entry) && entry.type === "provider_timing",

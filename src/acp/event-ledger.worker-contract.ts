@@ -2,10 +2,10 @@ import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import type {
   AcpEventLedger,
   AcpEventLedgerReplay,
-  AcpMutableLedgerState,
+  normalizeAcpLedgerOptions,
 } from "./event-ledger.types.js";
 
-export type AcpReplayLimits = Omit<AcpMutableLedgerState, "now">;
+export type AcpReplayLimits = ReturnType<typeof normalizeAcpLedgerOptions>;
 export type AcpReplayStartInput = {
   session: Parameters<AcpEventLedger["startSession"]>[0];
   limits: AcpReplayLimits;

@@ -101,10 +101,7 @@ function defaultPortForProtocol(protocol: string): number {
   return 0;
 }
 
-async function probeTcpReachability(
-  rawUrl: string,
-  timeoutMs = 700,
-): Promise<QaStartupProbeStatus> {
+async function probeTcpReachability(rawUrl: string): Promise<QaStartupProbeStatus> {
   const parsed = URL.parse(rawUrl);
   if (!parsed) {
     return {
@@ -131,9 +128,7 @@ async function probeTcpReachability(
         socket.destroy();
         reject(error);
       };
-      socket.setTimeout(timeoutMs, () => {
-        socket.destroy(new Error("timeout"));
-      });
+      socket.setTimeout(700);
       socket.once("connect", () => {
         socket.end();
         resolve();

@@ -5,6 +5,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { terminalSession } from "./workspace-terminal.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "workspace panel startup" });
 const panels = [
@@ -55,13 +56,7 @@ suite.define(() => {
               scripts.add(request.url());
             }
           });
-          const terminalSession = {
-            agentId: "main",
-            confined: false,
-            cwd: "/workspace",
-            sessionId: "startup-terminal",
-            shell: "/bin/bash",
-          };
+          const session = terminalSession("startup-terminal");
           const gateway = await installMockGateway(page, {
             terminalEnabled: true,
             featureMethods: [
@@ -74,9 +69,8 @@ suite.define(() => {
             ],
             methodResponses: {
               "terminal.list": { sessions: [] },
-              "terminal.open": terminalSession,
+              "terminal.open": session,
               "environments.list": { environments: [] },
-              "openclaw.chat.history": { turns: [] },
             },
           });
           await page.goto(`${suite.server.baseUrl}new`);
@@ -91,37 +85,27 @@ suite.define(() => {
           expect(await definitions()).toEqual([]);
           if (panel.name === "terminal") {
             const reads = await page.evaluate(() =>
-              Object.fromEntries(
-                ["terminal", "browser", "custodian"].map((kind) => {
-                  const key = `openclaw.${kind}.panel.v1`;
-                  return [key, performance.getEntriesByName(`panel-layout-read:${key}`).length];
-                }),
+              ["terminal", "browser", "custodian"].map(
+                (kind) =>
+                  performance.getEntriesByName(`panel-layout-read:openclaw.${kind}.panel.v1`)
+                    .length,
               ),
             );
-            expect(reads).toEqual({
-              "openclaw.terminal.panel.v1": 1,
-              "openclaw.browser.panel.v1": 1,
-              "openclaw.custodian.panel.v1": 1,
-            });
+            expect(reads).toEqual([1, 1, 1]);
             const sources = (
               await Promise.all(
                 [...scripts].map(async (url) => {
                   const response = await page.request.get(`${url}.map`);
-                  if (!response.headers()["content-type"]?.includes("json")) {
-                    return [];
-                  }
-                  return ((await response.json()) as { sources: string[] }).sources;
+                  return response.headers()["content-type"]?.includes("json")
+                    ? ((await response.json()) as { sources: string[] }).sources
+                    : [];
                 }),
               )
             ).flat();
             expect(sources.some((source) => source.endsWith("/app/app-host.tsx"))).toBe(true);
-            expect(
-              sources.filter((source) =>
-                /components\/(terminal\/terminal-panel\.ts|browser\/browser-panel\.ts|desktop\/desktop-panel\.ts|assistant-panel-content\.ts)$|pages\/(chat\/chat-page|debug\/debug-overlay-content)\.ts$/.test(
-                  source,
-                ),
-              ),
-            ).toEqual([]);
+            const deferredSource =
+              /components\/(terminal\/terminal-panel\.ts|browser\/browser-panel\.ts|desktop\/desktop-panel\.ts|assistant-panel-content\.ts)$|pages\/(chat\/chat-page|debug\/debug-overlay-content)\.ts$/;
+            expect(sources.filter((source) => deferredSource.test(source))).toEqual([]);
           }
           if (panel.name === "terminal") {
             await page.keyboard.press("Control+Backquote");
@@ -138,42 +122,44 @@ suite.define(() => {
               panel.name,
             );
           }
-          await page.locator(panel.tag).locator(panel.selector).waitFor();
+          const root = page.locator(panel.tag);
+          const content = root.locator(panel.selector);
+          await content.waitFor();
           const deferredTag =
             panel.name === "custodian" ? "openclaw-assistant-panel-content" : panel.tag;
           await page.locator(deferredTag).waitFor({ state: "attached" });
           expect(await definitions()).toEqual([deferredTag]);
           if (panel.name === "terminal") {
             // Reload an adopted PTY, and keep the mock Gateway's live inventory across reload.
-            await page.locator(panel.tag).locator(".tabstrip-tab.is-live").waitFor();
+            await root.locator(".tabstrip-tab.is-live").waitFor();
             await gateway.setMethodResponse("terminal.list", {
-              sessions: [{ ...terminalSession, attached: false, owner: "conn", createdAtMs: 1 }],
+              sessions: [{ ...session, attached: false, owner: "conn", createdAtMs: 1 }],
             });
             await gateway.setMethodResponse("terminal.attach", {
-              ...terminalSession,
+              ...session,
               buffer: "",
               seq: 0,
             });
           }
           await page.reload();
-          await page.locator(panel.tag).locator(panel.selector).waitFor();
+          await content.waitFor();
           await page.locator(deferredTag).waitFor({ state: "attached" });
           expect(await definitions()).toEqual([deferredTag]);
           if (panel.name === "terminal") {
             const attached = await gateway.waitForRequest("terminal.attach");
-            expect(attached.params).toEqual({ sessionId: terminalSession.sessionId });
+            expect(attached.params).toEqual({ sessionId: session.sessionId });
             expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
-            const terminal = page.locator(panel.tag).locator(".tp-host");
+            const terminal = root.locator(".tp-host");
             await terminal.locator("canvas").waitFor();
             await terminal.click();
             await page.keyboard.type("x");
             await gateway.waitForRequest("terminal.input");
             const inputs = await gateway.getRequests("terminal.input");
             await page.keyboard.press("Control+Backquote");
-            await page.locator(panel.tag).locator(panel.selector).waitFor({ state: "hidden" });
+            await content.waitFor({ state: "hidden" });
             expect(await gateway.getRequests("terminal.input")).toEqual(inputs);
             await page.keyboard.press("Control+Backquote");
-            await page.locator(panel.tag).locator(panel.selector).waitFor();
+            await content.waitFor();
           }
         },
       );

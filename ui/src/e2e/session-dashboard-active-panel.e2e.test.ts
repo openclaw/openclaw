@@ -28,7 +28,7 @@ suite.define(() => {
     { main: "Dashboard", side: "Side chat", view: "split" },
     { main: "Dashboard", side: "Files", view: "split" },
     { main: "Chat", side: "Files", view: "closed side" },
-    { main: "Chat", side: "Files", view: "focused Chat" },
+    { main: "Chat", side: "Files", view: "focused Files" },
   ])(
     "retains $main main and $side in $view after dashboard reload",
     async ({ main, side, view }) => {
@@ -82,18 +82,25 @@ suite.define(() => {
         }
         if (view === "closed side") {
           await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
-        } else if (view === "focused Chat") {
+        } else if (view === "focused Files") {
           await selectChatLayoutAction(page, "Focus");
         }
 
         await page.reload();
-        await mainPanel.waitFor();
+        if (view === "focused Files") {
+          await page.locator('[data-panel-slot="workspace"][data-region="side"]').waitFor();
+          await mainPanel.waitFor({ state: "attached" });
+          await expect.poll(() => mainPanel.isVisible()).toBe(false);
+        } else {
+          await mainPanel.waitFor();
+        }
         if (view === "closed side") {
           await expect.poll(() => page.locator(".sidebar-region--open").count()).toBe(0);
           await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
-        } else if (view === "focused Chat") {
+        } else if (view === "focused Files") {
           await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
           await selectChatLayoutAction(page, "Restore split");
+          await mainPanel.waitFor();
         }
         await selectedTab.waitFor();
         await expect.poll(() => selectedTab.getAttribute("aria-selected")).toBe("true");

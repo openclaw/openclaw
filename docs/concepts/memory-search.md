@@ -75,7 +75,11 @@ explicitly:
 
 `provider` can also reference a custom `models.providers.<id>` entry (for
 example `ollama-5080`), as long as that entry sets `api` to `"ollama"` or
-another provider id with a memory embedding adapter.
+another provider id with a memory embedding adapter. Entries using
+`api: "openai-completions"`, `api: "openai-responses"`, or a `baseUrl` without an
+explicit API use the generic OpenAI-compatible bridge. For ClawRouter, see
+[Text embeddings for memory](/providers/clawrouter#text-embeddings-for-memory)
+for the `/v1` base URL, explicit router credential binding, and qualified model id.
 
 For local embeddings with no API key, install and configure the official
 llama.cpp provider, then set `provider: "local"`:

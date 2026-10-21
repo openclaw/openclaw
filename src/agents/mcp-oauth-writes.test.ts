@@ -89,7 +89,6 @@ it("persists SDK callbacks and pending state across close without parent SQL or 
         expect(await readMcpOAuthStore(identity.storeKey, context)).toEqual({
           credentialState: "cleared",
         });
-        // Empty-prefix cleanup still obtains its own transaction and commit admission.
         await deleteMcpOAuthPendingAuthorizationsByPrefix(
           requesterMcpOAuthStoreKeyPrefix(identity.serverName, identity.serverUrl),
           context,
@@ -119,31 +118,30 @@ it("preserves transaction and commit authority when publishing credential writes
         tokens: { access_token: "fixture-access", token_type: "Bearer" },
         tokenExpiresAt: undefined,
       };
-      const beforeCommit = vi.fn();
-      await expect(
-        mutateMcpOAuthStore(options, mutation, {
+      for (const blocked of [true, false]) {
+        const events: string[] = [];
+        const writing = mutateMcpOAuthStore(options, mutation, {
           assertCurrent() {},
           beforeTransaction() {
-            throw new Error("fixture transaction authority retired");
+            events.push("transaction");
+            if (blocked) {
+              throw new Error("fixture transaction authority retired");
+            }
           },
-          beforeCommit,
-        }),
-      ).rejects.toThrow("fixture transaction authority retired");
-      expect(beforeCommit).not.toHaveBeenCalled();
-      expect((await readMcpOAuthStore(identity.storeKey, context)).tokens).toBeUndefined();
-
-      let prepared = false;
-      await mutateMcpOAuthStore(options, mutation, {
-        assertCurrent() {},
-        beforeTransaction() {
-          prepared = true;
-        },
-        beforeCommit() {
-          expect(prepared).toBe(true);
-        },
-      });
-      expect(prepared).toBe(true);
-      expect((await readMcpOAuthStore(identity.storeKey, context)).tokens).toEqual(mutation.tokens);
+          beforeCommit() {
+            events.push("commit");
+          },
+        });
+        if (blocked) {
+          await expect(writing).rejects.toThrow("fixture transaction authority retired");
+        } else {
+          await writing;
+        }
+        expect(events).toEqual(blocked ? ["transaction"] : ["transaction", "commit"]);
+        expect((await readMcpOAuthStore(identity.storeKey, context)).tokens).toEqual(
+          blocked ? undefined : mutation.tokens,
+        );
+      }
     });
   });
 });

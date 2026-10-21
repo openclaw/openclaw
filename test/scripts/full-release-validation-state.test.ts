@@ -377,6 +377,99 @@ describe("full release execution plan", () => {
     expect(missing.stderr).toContain("source admission contract missing");
   });
 
+  it("recovers an unsealed plan only from authenticated attempt-one preparation inputs", () => {
+    const root = tempDirs.make("release-preseal-recovery-");
+    const output = join(root, "full-release-execution-plan.json");
+    const frozenInputs = planInput();
+    const recovered = runCollector("plan", {
+      FULL_RELEASE_EXECUTION_PLAN_PATH: output,
+      FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify(frozenInputs),
+      FULL_RELEASE_PRESEAL_RECOVERY: "true",
+      FULL_RELEASE_PREPARATION_SOURCE_ATTEMPT: "1",
+      GITHUB_RUN_ATTEMPT: "2",
+      RERUN_GROUP: frozenInputs.rerunGroup,
+    });
+    expect(recovered.status, recovered.stderr).toBe(0);
+    const recoveredPlan = validateReleaseExecutionPlanArtifact(
+      JSON.parse(readFileSync(output, "utf8")),
+    );
+    expect(recoveredPlan).toMatchObject({
+      parentRunAttempt: 1,
+      sealParentRunAttempt: 2,
+    });
+
+    const wrongSource = runCollector("plan", {
+      FULL_RELEASE_EXECUTION_PLAN_PATH: join(root, "wrong-source.json"),
+      FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify(frozenInputs),
+      FULL_RELEASE_PRESEAL_RECOVERY: "true",
+      FULL_RELEASE_PREPARATION_SOURCE_ATTEMPT: "2",
+      GITHUB_RUN_ATTEMPT: "3",
+      RERUN_GROUP: frozenInputs.rerunGroup,
+    });
+    expect(wrongSource.status).toBe(2);
+    expect(wrongSource.stderr).toContain(
+      "pre-seal recovery requires authenticated attempt-one preparation",
+    );
+
+    const forged = { ...recoveredPlan, sealParentRunAttempt: 1 };
+    forged.sha256 = releaseExecutionPlanSha256(forged);
+    expect(() => validateReleaseExecutionPlanArtifact(forged)).toThrow(
+      "release execution plan artifact binding is invalid",
+    );
+  });
+
+  it("restores publication admission from the attempt-one preparation checkpoint", () => {
+    const root = tempDirs.make("release-preseal-publication-");
+    const record = registryRecord();
+    const inputsPath = join(root, "plan-inputs.json");
+    writeFileSync(
+      inputsPath,
+      JSON.stringify(
+        planInput({
+          sourceAdmissionContract: record.sourceAdmissionContract,
+          sourceAdmission: record.sourceAdmission,
+        }),
+      ),
+    );
+    writeFileSync(join(root, "publication-admission.json"), JSON.stringify(record));
+    writeFileSync(
+      join(root, "publication-source-request.json"),
+      JSON.stringify({ ...record.sourceAdmission, runAttempt: 2 }),
+    );
+    const restored = runCollector("restore-publication", {
+      FULL_RELEASE_EXECUTION_PLAN_PATH: join(root, "missing-plan.json"),
+      FULL_RELEASE_PLAN_INPUTS_PATH: inputsPath,
+      GITHUB_RUN_ATTEMPT: "2",
+      RUNNER_TEMP: root,
+    });
+    expect(restored.status, restored.stderr).toBe(0);
+    expect(
+      JSON.parse(readFileSync(join(root, "publication-source-admission.json"), "utf8")),
+    ).toEqual(record.sourceAdmission);
+    expect(JSON.parse(readFileSync(join(root, "publication-admission.json"), "utf8"))).toEqual(
+      record,
+    );
+
+    const wrongAttempt = structuredClone(record);
+    wrongAttempt.sourceAdmission.runAttempt = 3;
+    for (const [label, changed] of [
+      ["producer", registryRecord(sourceFact({ runId: "999" }))],
+      ["attempt", wrongAttempt],
+    ] as const) {
+      writeFileSync(join(root, "publication-admission.json"), JSON.stringify(changed));
+      const rejected = runCollector("restore-publication", {
+        FULL_RELEASE_EXECUTION_PLAN_PATH: join(root, `missing-plan-${label}.json`),
+        FULL_RELEASE_PLAN_INPUTS_PATH: inputsPath,
+        GITHUB_RUN_ATTEMPT: "2",
+        RUNNER_TEMP: root,
+      });
+      expect(rejected.status).toBe(2);
+      expect(rejected.stderr).toContain(
+        label === "producer" ? "parentRunId mismatch" : "source admission digest mismatch",
+      );
+    }
+  });
+
   const betaCoverage = {
     coveragePolicy: "npm-beta-v1",
     releaseProfile: "beta",

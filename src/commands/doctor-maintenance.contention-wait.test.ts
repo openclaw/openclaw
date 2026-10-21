@@ -49,19 +49,13 @@ function holdState(role: GatewayLockRole, update: boolean, pid = process.ppid) {
       stateDir,
     },
   });
-  return { databasePath, holder, before: fs.readFileSync(databasePath) };
-}
-
-/** The published driver recorded this update's rehearsal Doctor before activation. */
-function recordRehearsalDoctor(durationMs: number) {
-  const { runId } = createUpdateRun({ trigger: "cli" });
-  recordUpdateRunStep(runId, {
-    step: "candidate-doctor",
-    status: "completed",
-    startedAtMs: 1_000,
-    endedAtMs: 1_000 + durationMs,
-  });
-  closeOpenClawStateDatabaseForTest();
+  return {
+    databasePath,
+    holder,
+    before: fs.readFileSync(databasePath),
+    startDoctor,
+    [Symbol.dispose]: () => holder.release(),
+  };
 }
 
 /** `startMs` is how long this Doctor process ran before entering maintenance. */
@@ -72,21 +66,18 @@ function startDoctor(startMs = 0) {
   const firstLog = createDeferredCore();
   const log = vi.fn((..._args: unknown[]) => firstLog.resolve());
   let settled = false;
-  // Published drivers can run the activation Doctor without an update authority callback.
   const result = beginDoctorMaintenance({
     options: { repair: true, nonInteractive: true },
     root: null,
     runtime: { log, error: vi.fn(), exit: vi.fn() },
-  }).then(
-    (maintenance) => {
+  })
+    .then(
+      (maintenance) => ({ maintenance }),
+      (error: unknown) => ({ error }),
+    )
+    .finally(() => {
       settled = true;
-      return { maintenance };
-    },
-    (error: unknown) => {
-      settled = true;
-      return { error };
-    },
-  );
+    });
   const advanceTo = async (ms: number) => {
     clock.ms = ms;
     await vi.advanceTimersToNextTimerAsync();
@@ -97,44 +88,54 @@ function startDoctor(startMs = 0) {
 }
 
 it("waits for a transient OpenClaw command to release state before update Doctor maintenance", async () => {
-  const { databasePath, holder, before } = holdState("agent-embedded", true);
-  const doctor = startDoctor();
-  try {
-    await doctor.firstWait;
-    expect(doctor.log).toHaveBeenCalledWith(
-      `Waiting up to 1200 s for the OpenClaw agent-embedded process ${process.ppid} to release ${databasePath} before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
-    );
-    await doctor.advanceTo(45_000);
-    expect(doctor.log).toHaveBeenCalledWith(
-      `Still waiting for the OpenClaw agent-embedded process ${process.ppid} to release ${databasePath} (45 s of 1200 s).`,
-    );
-    // Waiting holds no lock and writes nothing; the holder can finish and release.
-    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1_000);
-    expect(doctor.isSettled()).toBe(false);
-    expect(fs.readFileSync(databasePath)).toEqual(before);
-    holder.release();
-    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 500);
-    const completed = await doctor.result;
-    expect(completed).toHaveProperty("maintenance");
-    expect(doctor.log).toHaveBeenCalledWith(
-      "State ownership released after 1200 s; continuing Doctor maintenance.",
-    );
-    await ("maintenance" in completed ? completed.maintenance?.finish({}) : undefined);
-  } finally {
-    holder.release();
-  }
+  using state = holdState("agent-embedded", true);
+  const { databasePath, holder, before } = state;
+  const doctor = state.startDoctor();
+  await doctor.firstWait;
+  expect(doctor.log).toHaveBeenCalledWith(
+    `Waiting up to 1200 s for the OpenClaw agent-embedded process ${process.ppid} to release ${databasePath} before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
+  );
+  await doctor.advanceTo(45_000);
+  expect(doctor.log).toHaveBeenCalledWith(
+    `Still waiting for the OpenClaw agent-embedded process ${process.ppid} to release ${databasePath} (45 s of 1200 s).`,
+  );
+  // Waiting holds no lock and writes nothing; the holder can finish and release.
+  await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1_000);
+  expect(doctor.isSettled()).toBe(false);
+  expect(fs.readFileSync(databasePath)).toEqual(before);
+  holder.release();
+  await doctor.advanceTo(FALLBACK_DEADLINE_MS - 500);
+  const completed = await doctor.result;
+  expect(completed).toHaveProperty("maintenance");
+  expect(doctor.log).toHaveBeenCalledWith(
+    "State ownership released after 1200 s; continuing Doctor maintenance.",
+  );
+  await ("maintenance" in completed ? completed.maintenance?.finish({}) : undefined);
 });
 
-it("fails update Doctor admission at the wait deadline, naming the holder and next step", async () => {
-  const { holder } = holdState("agent-embedded", true);
-  // Time Doctor spent before maintenance comes out of the same step allowance.
-  const doctor = startDoctor(100_000);
-  try {
+it.each([
+  ["elapsed startup time", 100_000, 0, FALLBACK_DEADLINE_MS, 1100],
+  ["twice the rehearsal reserved for Doctor", 0, 400_000, 1_000_000, 1000],
+] as const)(
+  "enforces the wait deadline with %s",
+  async (_name, startMs, rehearsalMs, deadline, seconds) => {
+    using state = holdState("agent-embedded", true);
+    if (rehearsalMs) {
+      const { runId } = createUpdateRun({ trigger: "cli" });
+      recordUpdateRunStep(runId, {
+        step: "candidate-doctor",
+        status: "completed",
+        startedAtMs: 1_000,
+        endedAtMs: 1_000 + rehearsalMs,
+      });
+      closeOpenClawStateDatabaseForTest();
+    }
+    const doctor = state.startDoctor(startMs);
     await doctor.firstWait;
-    expect(doctor.log).toHaveBeenCalledWith(expect.stringContaining("Waiting up to 1100 s"));
-    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1);
+    expect(doctor.log).toHaveBeenCalledWith(expect.stringContaining(`Waiting up to ${seconds} s`));
+    await doctor.advanceTo(deadline - 1);
     expect(doctor.isSettled()).toBe(false);
-    await doctor.advanceTo(FALLBACK_DEADLINE_MS);
+    await doctor.advanceTo(deadline);
     const completed = await doctor.result;
     const error = "error" in completed ? completed.error : undefined;
     expect(error).toBeInstanceOf(DoctorMaintenanceRefusalError);
@@ -146,60 +147,24 @@ it("fails update Doctor admission at the wait deadline, naming the holder and ne
     const message = (error as Error).message;
     expect(message).toContain("Doctor could not enter maintenance.");
     expect(message).toContain(
-      `Doctor waited 1100 s for the OpenClaw agent-embedded process ${process.ppid} to finish;`,
+      `Doctor waited ${seconds} s for the OpenClaw agent-embedded process ${process.ppid} to finish;`,
     );
     expect(message).toContain(`The holder ${process.ppid} is alive on this host, stop it first.`);
     expect(message).toContain("then run openclaw doctor --fix from an independent shell.");
-  } finally {
-    holder.release();
-  }
-});
-
-it("keeps twice this update's rehearsal Doctor time for Doctor's own work", async () => {
-  const { holder } = holdState("agent-embedded", true);
-  // A slow host: 30 min less 2 x 400 s leaves 1000 s for waiting.
-  recordRehearsalDoctor(400_000);
-  const doctor = startDoctor();
-  try {
-    await doctor.firstWait;
-    expect(doctor.log).toHaveBeenCalledWith(expect.stringContaining("Waiting up to 1000 s"));
-    await doctor.advanceTo(999_999);
-    expect(doctor.isSettled()).toBe(false);
-    await doctor.advanceTo(1_000_000);
-    expect(await doctor.result).toMatchObject({
-      error: expect.objectContaining({ message: expect.stringContaining("Doctor waited 1000 s") }),
-    });
-  } finally {
-    holder.release();
-  }
-});
+  },
+);
 
 it.each([
-  { name: "manual doctor --fix with a transient holder", role: "agent-embedded", update: false },
-  { name: "update Doctor with a Gateway holder", role: "gateway", update: true },
+  ["manual doctor --fix with a transient holder", "agent-embedded", false, process.ppid],
+  ["update Doctor with a Gateway holder", "gateway", true, process.ppid],
   // This process's own owner cannot release while Doctor waits on it.
-  {
-    name: "update Doctor with its own process's owner",
-    role: "sqlite-maintenance",
-    update: true,
-    own: true,
-  },
-] as const)("keeps immediate contention failure for $name", async (fixture) => {
-  const { holder } = holdState(
-    fixture.role,
-    fixture.update,
-    "own" in fixture ? process.pid : undefined,
-  );
-  const doctor = startDoctor();
-  try {
-    const completed = await doctor.result;
-    expect(completed).toMatchObject({
-      error: expect.objectContaining({
-        message: expect.stringContaining("OpenClaw state database is busy at"),
-      }),
-    });
-    expect(doctor.log).not.toHaveBeenCalledWith(expect.stringContaining("Waiting up to"));
-  } finally {
-    holder.release();
-  }
+  ["update Doctor with its own process's owner", "sqlite-maintenance", true, process.pid],
+] as const)("keeps immediate contention failure for %s", async (_name, role, update, pid) => {
+  using state = holdState(role, update, pid);
+  const doctor = state.startDoctor();
+  const completed = await doctor.result;
+  expect(completed).toMatchObject({
+    error: { message: expect.stringContaining("OpenClaw state database is busy at") },
+  });
+  expect(doctor.log).not.toHaveBeenCalledWith(expect.stringContaining("Waiting up to"));
 });

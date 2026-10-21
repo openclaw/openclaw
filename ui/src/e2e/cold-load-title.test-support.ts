@@ -16,6 +16,9 @@ type TitleOwner = {
 
 type ColdLoadTitleTrace = {
   mark(phase: string): void;
+  holdCacheRead(): void;
+  releaseCacheRead(): void;
+  cacheReadPending: boolean;
   read(): {
     attribution: string;
     events: Array<Record<string, unknown>>;
@@ -40,6 +43,9 @@ export function installColdLoadTitleTrace(input: { sessionKey: string; expectedT
   let lastResolution: Record<string, unknown> | undefined;
   let firstLostTitleWrite: Record<string, unknown> | undefined;
   let expectedTitleSeen = false;
+  let cacheReadGate: Promise<void> | undefined;
+  let releaseCacheRead: (() => void) | undefined;
+  let cacheReadPending = false;
   const record = (kind: string, value: Record<string, unknown>): Record<string, unknown> => {
     const event = { sequence: ++sequence, atMs: performance.now(), phase, kind, ...value };
     if (events.length === 96) {
@@ -142,7 +148,14 @@ export function installColdLoadTitleTrace(input: { sessionKey: string; expectedT
           preserve(store, "read");
           const originalRead = store.read.bind(store);
           store.read = function (cacheKey) {
-            const reading = originalRead.call(this, cacheKey);
+            const reading = originalRead.call(this, cacheKey).then(async (snapshot) => {
+              if (cacheReadGate) {
+                cacheReadPending = true;
+                await cacheReadGate;
+                cacheReadPending = false;
+              }
+              return snapshot;
+            });
             void reading.then(
               (snapshot) => record("cache-read", { metadata: row(snapshot?.transcriptMetadata) }),
               () => record("cache-read-error", {}),
@@ -233,6 +246,18 @@ export function installColdLoadTitleTrace(input: { sessionKey: string; expectedT
   observer.observe(document, { subtree: true, childList: true, characterData: true });
   restores.push(() => observer.disconnect());
   window.coldLoadTitleTrace = {
+    holdCacheRead() {
+      cacheReadGate = new Promise<void>((resolve) => {
+        releaseCacheRead = resolve;
+      });
+    },
+    releaseCacheRead() {
+      releaseCacheRead?.();
+      cacheReadGate = undefined;
+    },
+    get cacheReadPending() {
+      return cacheReadPending;
+    },
     mark(next) {
       phase = next;
       record("phase", {});

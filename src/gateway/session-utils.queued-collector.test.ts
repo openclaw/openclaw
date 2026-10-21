@@ -22,7 +22,6 @@ import {
   releaseSwarmRun,
   reserveSwarmRun,
 } from "../agents/subagents/swarm/swarm-scheduler.js";
-import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -442,7 +441,15 @@ describe("queued collector session projection", () => {
       expect(isSubagentRunQueued(current)).toBe(true);
       expect((await exactChild())?.hasActiveSubagentRun).toBe(true);
       expect((await exactParent())?.hasActiveSubagentRun).toBe(true);
-      schedulerTesting.reset();
+      const currentReservation = expectDefined(
+        holdQueuedSwarmRun(entry.runId),
+        "current reservation",
+      );
+      try {
+        expect(currentReservation.withdraw()).toBe(true);
+      } finally {
+        await currentReservation.release();
+      }
       expect(isSubagentRunQueued(current)).toBe(false);
       expect((await exactChild())?.hasActiveSubagentRun).toBe(false);
       expect((await exactParent())?.hasActiveSubagentRun).not.toBe(true);

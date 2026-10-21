@@ -1,4 +1,3 @@
-// Build info tests cover canonical package provenance generation.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,11 +12,20 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 describe("write-build-info", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  function createPackage(version = "2026.7.10"): string {
+  function createPackage(): string {
     const rootDir = tempDirs.make("openclaw-build-info-");
-    fs.writeFileSync(path.join(rootDir, "package.json"), `${JSON.stringify({ version })}\n`);
+    fs.writeFileSync(path.join(rootDir, "package.json"), '{"version":"2026.7.10"}\n');
     return rootDir;
   }
+  const resolve = (options: Parameters<typeof resolveBuildInfo>[0]) =>
+    resolveBuildInfo({
+      rootDir: createPackage(),
+      now: () => new Date("2026-07-10T01:02:03.000Z"),
+      ...options,
+    });
+  const unavailableGit = () => {
+    throw new Error("git unavailable");
+  };
 
   it("normalizes explicit release provenance and writes the shared manifest", () => {
     const rootDir = createPackage();
@@ -45,25 +53,12 @@ describe("write-build-info", () => {
   });
 
   it("uses null when Git metadata is unavailable", () => {
-    const rootDir = createPackage();
-
-    expect(
-      resolveBuildInfo({
-        rootDir,
-        env: {},
-        execFileSync: () => {
-          throw new Error("git unavailable");
-        },
-        now: () => new Date("2026-07-10T01:02:03.000Z"),
-      }).commit,
-    ).toBeNull();
+    expect(resolve({ env: {}, execFileSync: unavailableGit }).commit).toBeNull();
   });
 
   it("shares explicit release artifact identity with the Control UI", () => {
-    const rootDir = createPackage();
     expect(
-      resolveBuildInfo({
-        rootDir,
+      resolve({
         env: {
           GIT_COMMIT: "a".repeat(40),
           OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T01:02:03.000Z",
@@ -74,64 +69,28 @@ describe("write-build-info", () => {
   });
 
   it("preserves GIT_COMMIT then GIT_SHA explicit input precedence", () => {
-    const rootDir = createPackage();
     const fallbackSha = "1234567890abcdef1234567890abcdef12345678";
 
-    expect(
-      resolveBuildInfo({
-        rootDir,
-        env: { GIT_SHA: fallbackSha },
-        now: () => new Date("2026-07-10T01:02:03.000Z"),
-      }).commit,
-    ).toBe(fallbackSha);
-    expect(() =>
-      resolveBuildInfo({
-        rootDir,
-        env: { GIT_COMMIT: "bad", GIT_SHA: fallbackSha },
-      }),
-    ).toThrow("GIT_COMMIT must be a full 40-character Git commit SHA.");
+    expect(resolve({ env: { GIT_SHA: fallbackSha } }).commit).toBe(fallbackSha);
+    expect(() => resolve({ env: { GIT_COMMIT: "bad", GIT_SHA: fallbackSha } })).toThrow(
+      "GIT_COMMIT must be a full 40-character Git commit SHA.",
+    );
   });
 
   it("uses checked-out Git instead of unverified GitHub workflow context", () => {
-    const rootDir = createPackage();
     const checkedOutCommit = "b".repeat(40);
     const execFileSync = vi.fn(() => checkedOutCommit);
-
-    expect(
-      resolveBuildInfo({
-        rootDir,
-        env: { GITHUB_SHA: "a".repeat(40) },
-        execFileSync,
-        now: () => new Date("2026-07-10T01:02:03.000Z"),
-      }).commit,
-    ).toBe(checkedOutCommit);
+    const env = { GITHUB_SHA: "a".repeat(40) };
+    expect(resolve({ env, execFileSync }).commit).toBe(checkedOutCommit);
     expect(execFileSync).toHaveBeenCalledOnce();
-    expect(
-      resolveBuildInfo({
-        rootDir,
-        env: { GITHUB_SHA: "a".repeat(40) },
-        execFileSync: () => {
-          throw new Error("git unavailable");
-        },
-        now: () => new Date("2026-07-10T01:02:03.000Z"),
-      }).commit,
-    ).toBe("a".repeat(40));
-    expect(() =>
-      resolveBuildInfo({
-        rootDir,
-        env: { GITHUB_SHA: "bad" },
-        execFileSync: () => {
-          throw new Error("git unavailable");
-        },
-      }),
-    ).toThrow("GITHUB_SHA must be a full 40-character Git commit SHA.");
+    expect(resolve({ env, execFileSync: unavailableGit }).commit).toBe(env.GITHUB_SHA);
+    expect(() => resolve({ env: { GITHUB_SHA: "bad" }, execFileSync: unavailableGit })).toThrow(
+      "GITHUB_SHA must be a full 40-character Git commit SHA.",
+    );
   });
 
-  it("rejects abbreviated or malformed explicit commits", () => {
-    expect(() => normalizeBuildCommit("abc1234")).toThrow(
-      "GIT_COMMIT must be a full 40-character Git commit SHA.",
-    );
-    expect(() => normalizeBuildCommit("g".repeat(40))).toThrow(
+  it.each(["abc1234", "g".repeat(40)])("rejects malformed explicit commit %s", (commit) => {
+    expect(() => normalizeBuildCommit(commit)).toThrow(
       "GIT_COMMIT must be a full 40-character Git commit SHA.",
     );
   });

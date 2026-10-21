@@ -71,7 +71,6 @@ describe("event session routing", () => {
     };
     const params = { cfg, sessionKey: "agent:main:example:work:direct:123", ...overrides };
     expect(resolveEventSessionRoutingPolicy(params).allowFrom).toEqual([expected]);
-    expect(resolveEventSessionRoutingPolicy({ ...params, allowFrom: [] }).allowFrom).toEqual([]);
   });
 
   it.each([

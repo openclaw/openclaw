@@ -369,7 +369,7 @@ async function* resolveAutoAudioEntries(
     }
   }
   assertMediaExecutionCurrent(params.execution);
-  const localAudio = await inspectLocalAudioSelection({ language: params.language });
+  const localAudio = await inspectLocalAudioSelection(params.language);
   assertMediaExecutionCurrent(params.execution);
   for (const entry of localAudio.entries) {
     assertMediaExecutionCurrent(params.execution);

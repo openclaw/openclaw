@@ -1,6 +1,7 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createFeishuClient } from "./client.js";
+import { extractFeishuApiErrorMeta } from "./comment-shared.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 export type FeishuPermissionError = {
@@ -31,25 +32,6 @@ const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
 const SENDER_NAME_NEGATIVE_TTL_MS = 30 * 60 * 1000;
 const SENDER_NAME_CACHE_MAX_SIZE = 500;
 const senderNameCache = new Map<string, SenderNameCacheEntry>();
-
-function extractFeishuApiError(err: unknown): FeishuApiError | null {
-  if (!err || typeof err !== "object") {
-    return null;
-  }
-  const axiosErr = err as { response?: { data?: unknown } };
-  const data = axiosErr.response?.data;
-  if (!data || typeof data !== "object") {
-    return null;
-  }
-  const feishuErr = data as { code?: unknown; msg?: unknown };
-  if (typeof feishuErr.code !== "number") {
-    return null;
-  }
-  return {
-    code: feishuErr.code,
-    message: typeof feishuErr.msg === "string" ? feishuErr.msg : "",
-  };
-}
 
 function extractPermissionError(feishuErr: FeishuApiError | null): FeishuPermissionError | null {
   if (feishuErr?.code !== 99991672) {
@@ -122,7 +104,8 @@ export async function resolveFeishuSenderName(params: {
     }
     return {};
   } catch (err) {
-    const feishuErr = extractFeishuApiError(err);
+    const { feishuCode: code, feishuMsg: message = "" } = extractFeishuApiErrorMeta(err);
+    const feishuErr = typeof code === "number" ? { code, message } : null;
     const permErr = extractPermissionError(feishuErr);
     if (permErr) {
       if (normalizeLowercaseStringOrEmpty(permErr.message).includes(STALE_CONTACT_SCOPE)) {

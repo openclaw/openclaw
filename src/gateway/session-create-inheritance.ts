@@ -6,6 +6,7 @@ import {
 import { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import {
+  attributeDelegatedSessionCreator,
   inheritSessionCreationPolicy,
   inheritSessionGitContributorProfileIds,
   inheritSpawnSessionOwner,
@@ -137,10 +138,20 @@ export function resolveSessionCreateInheritance(params: {
     Date.now(),
     resolveResidentProfileId,
   );
+  const policy = inheritSessionCreationPolicy(params.parent.entry, params.request.creation.actor);
   return {
     creation: {
       ...params.request.creation,
-      ...inheritSessionCreationPolicy(params.parent.entry, params.request.creation.actor),
+      ...policy,
+      actor: attributeDelegatedSessionCreator(
+        policy.actor,
+        params.request.creation.actor?.delegatedBy?.type === "human"
+          ? params.request.creation.actor.delegatedBy.id
+          : undefined,
+        params.request.creation.actor?.type === "agent"
+          ? params.request.creation.actor.id
+          : undefined,
+      ),
       inheritedGitContributorProfileIds: params.parent.target
         ? inheritSessionGitContributorProfileIds(params.parent.entry, {
             config: params.request.cfg,

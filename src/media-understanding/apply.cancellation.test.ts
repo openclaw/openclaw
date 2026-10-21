@@ -2,12 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { applyMediaUnderstanding } from "./apply.js";
 import { MediaAttachmentCache } from "./attachments.cache.js";
+import { transcribeAudioAttachments, transcribeFirstAudio } from "./audio-preflight.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -38,7 +43,7 @@ async function audioContext() {
     RawBody: "original message",
     Provider: "telegram",
     From: "synthetic-chat",
-    media: [{ path: audio, contentType: "audio/wav" }],
+    media: [{ path: audio, contentType: "audio/wav", workspaceDir }],
   };
   const cfg: OpenClawConfig = {
     tools: {
@@ -145,41 +150,49 @@ it.each([
   },
 );
 
-it("settles Stop promptly but retains the cache until an uncooperative provider exits", async ({
-  signal,
-}) => {
-  const params = await audioContext();
-  const before = structuredClone(params.ctx);
-  const started = createDeferred();
-  const provider = createDeferred<{ text: string }>();
-  const controller = new AbortController();
-  const reason = new DOMException("Turn stopped", "AbortError");
-  const { cleanup, finished } = observeCleanup();
-  const running = applyMediaUnderstanding({
-    ...params,
-    signal: controller.signal,
-    providers: {
-      "first-media": audioProvider("first-media", async () => {
-        started.resolve();
-        return await provider.promise;
-      }),
-    },
-  });
-  const settled = running.catch((error: unknown) => error);
-  try {
-    await withinTest(started.promise, signal);
-    controller.abort(reason);
-    expect(await withinTest(settled, signal)).toBe(reason);
-    expect(cleanup).not.toHaveBeenCalled();
+it.for([
+  { name: "media understanding", run: applyMediaUnderstanding },
+  { name: "first audio preflight", run: transcribeFirstAudio },
+  { name: "all audio preflight", run: transcribeAudioAttachments },
+])(
+  "$name settles Stop promptly but retains the cache until the provider exits",
+  async ({ run }, { signal }) => {
+    const params = await audioContext();
+    const before = structuredClone(params.ctx);
+    const started = createDeferred();
+    const provider = createDeferred<{ text: string }>();
+    const controller = new AbortController();
+    const reason = new DOMException("Turn stopped", "AbortError");
+    const { cleanup, finished } = observeCleanup();
+    const running = run({
+      ...params,
+      signal: controller.signal,
+      providers: {
+        "first-media": audioProvider("first-media", async () => {
+          started.resolve();
+          return await provider.promise;
+        }),
+      },
+    });
+    const settled = running.catch((error: unknown) => error);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(started.promise, running, "transcription provider did not start"),
+        signal,
+      );
+      controller.abort(reason);
+      expect(await withinTest(settled, signal)).toBe(reason);
+      expect(cleanup).not.toHaveBeenCalled();
+      expect(params.ctx).toEqual(before);
+    } finally {
+      provider.resolve({ text: "late transcript" });
+      await finished;
+    }
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(send).not.toHaveBeenCalled();
     expect(params.ctx).toEqual(before);
-  } finally {
-    provider.resolve({ text: "late transcript" });
-    await finished;
-  }
-  expect(cleanup).toHaveBeenCalledOnce();
-  expect(send).not.toHaveBeenCalled();
-  expect(params.ctx).toEqual(before);
-});
+  },
+);
 
 it("does not publish an already completed transcript when document extraction is cancelled", async () => {
   const params = await audioContext();

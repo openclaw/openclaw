@@ -61,7 +61,7 @@ export type WhatsAppQaMessageScenarioContext = {
   targetKind: "dm" | "group";
 };
 
-type WhatsAppQaResolvedScenarioTarget =
+export type WhatsAppQaResolvedScenarioTarget =
   | {
       target: "dm";
     }

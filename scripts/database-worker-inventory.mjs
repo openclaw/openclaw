@@ -130,6 +130,14 @@ const reviewed = new Map([
     },
   ],
   [
+    "src/infra/update-managed-service-handoff-cancellation.ts",
+    {
+      tier: "T3",
+      evidence:
+        "readCancelledUpdateFamily is called only by reclamation.ts prepareCancelledCustodyRepair, reached through the lease store's prepareRepair from the `openclaw update repair` CLI (update-repair-command.ts).",
+    },
+  ],
+  [
     "src/infra/update-managed-service-handoff-database.ts",
     {
       tier: "T2",
@@ -856,6 +864,28 @@ const reviewedOperations = new Map([
         operations: ["prepareSessionEntryMaintenanceInDatabase.readInputs"],
         evidence:
           "Preparation is called only by maintenance-transaction worker prepare/read and inline maintenance. The captured apply remains in the execution-worker maintenance owner or runs immediately in inline lifecycle/replacement/purge/reclamation commits; their native branches require maintenance custody. Both readInputs calls therefore retain the same worker/maintenance ownership.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-entry-write.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["writeArchivedSessionEntries.flush"],
+        evidence:
+          "Only maintenance-store calls the archive batch writer. Its captured apply runs in execution-worker maintenance or immediate inline lifecycle/replacement/purge/reclamation commits whose native branches require maintenance custody. Ordinary entry writes retain their existing mixed ownership.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-transcript-context-versions.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["readTranscriptContextVersionsInTransaction"],
+        evidence:
+          "Only maintenance-store calls the batch version reader, during worker preparation and captured apply or immediate inline maintenance. Native lifecycle/replacement/purge/reclamation commits require maintenance custody, matching maintenance-store readInputs ownership.",
       },
     ],
   ],
@@ -2131,7 +2161,7 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: ["clearSessionCollaborationForKey", "readSessionNodeArtifactTables"],
         evidence:
-          "Collaboration clear runs only when entry-store.ts replaces a canonical sessionId. Those writes use reset/replacement/message-cut/fork/recovery workers or Doctor; native transcript/compaction compatibility preserves identity. Catalog fallback additionally serves repair/copy/delete/fingerprint kernels already classified as maintenance; admitted schema facts bypass it for normal handles.",
+          "Collaboration clear runs only when entry-write.ts replaces a canonical sessionId. Those writes use reset/replacement/message-cut/fork/recovery workers or Doctor; native transcript/compaction compatibility preserves identity. Archive batching retains the same sessionId and cannot enter this branch. Catalog fallback additionally serves repair/copy/delete/fingerprint kernels already classified as maintenance; admitted schema facts bypass it for normal handles.",
       },
       {
         tier: "T2",
@@ -2278,7 +2308,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["recordMemorySessionTombstonesInDatabase", "readMemorySessionTombstones"],
         evidence:
-          "memory-entry-origins.worker.ts -> memory-forget-kernel.ts owns tombstone writes; manager-publication.worker.ts owns every hasMemorySessionTombstone call, including the session.current predicate retained under workspace custody for shadow publication.",
+          "memory-entry-origins.worker.ts -> memory-forget-kernel.ts owns tombstone writes; origin reads and publication workers consume live tombstones. Direct source/cache publication checks the live owner, while private shadow cutover rejects a changed published revision; no per-session shadow preflight remains.",
       },
     ],
   ],

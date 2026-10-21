@@ -158,7 +158,6 @@ it("does not settle or retry a partially sent media batch", async () => {
     delivered: false,
     terminal: true,
     disposition: "permanent_failure",
-    missingMediaUrls: [image],
   });
   expect(sendMessage).toHaveBeenCalledOnce();
   expect(onDeliveryResult).not.toHaveBeenCalled();

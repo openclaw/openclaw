@@ -117,56 +117,40 @@ function readVideoReferenceInputs(
   return { inputs, roles };
 }
 
+function videoReferenceProperties(
+  kind: keyof typeof MAX_REFERENCE_INPUTS,
+  inputDescription: string,
+  rolesDescription: string,
+): Record<string, TSchema> {
+  const input = kind === "audio" ? "audioRef" : kind;
+  return {
+    [input]: Type.Optional(Type.String({ description: inputDescription })),
+    [`${input}s`]: Type.Optional(
+      Type.Array(Type.String(), {
+        description: `Reference ${kind}s; max ${MAX_REFERENCE_INPUTS[kind]}.`,
+      }),
+    ),
+    [`${kind}Roles`]: Type.Optional(Type.Array(Type.String(), { description: rolesDescription })),
+  };
+}
+
 const VideoGenerateToolProperties = {
   action: Type.Optional(Type.String({ description: MEDIA_GENERATE_DESCRIPTIONS.action })),
   prompt: Type.Optional(Type.String({ description: "Video prompt." })),
-  image: Type.Optional(
-    Type.String({
-      description: "One reference image path/URL.",
-    }),
+  ...videoReferenceProperties(
+    "image",
+    "One reference image path/URL.",
+    "`image` + `images` roles by index. Values: first_frame, last_frame, reference_image; empty string leaves unset.",
   ),
-  images: Type.Optional(
-    Type.Array(Type.String(), {
-      description: `Reference images; max ${MAX_REFERENCE_INPUTS.image}.`,
-    }),
+  ...videoReferenceProperties(
+    "video",
+    "One reference video path/URL.",
+    "`video` + `videos` roles by index. Value: reference_video; empty string leaves unset.",
   ),
-  imageRoles: Type.Optional(
-    Type.Array(Type.String(), {
-      description:
-        "`image` + `images` roles by index. Values: first_frame, last_frame, reference_image; empty string leaves unset.",
-    }),
-  ),
-  video: Type.Optional(
-    Type.String({
-      description: "One reference video path/URL.",
-    }),
-  ),
-  videos: Type.Optional(
-    Type.Array(Type.String(), {
-      description: `Reference videos; max ${MAX_REFERENCE_INPUTS.video}.`,
-    }),
-  ),
-  videoRoles: Type.Optional(
-    Type.Array(Type.String(), {
-      description:
-        "`video` + `videos` roles by index. Value: reference_video; empty string leaves unset.",
-    }),
-  ),
-  audioRef: Type.Optional(
-    Type.String({
-      description: "One reference audio path/URL, e.g. music.",
-    }),
-  ),
-  audioRefs: Type.Optional(
-    Type.Array(Type.String(), {
-      description: `Reference audios; max ${MAX_REFERENCE_INPUTS.audio}.`,
-    }),
-  ),
-  audioRoles: Type.Optional(
-    Type.Array(Type.String(), {
-      description:
-        "`audioRef` + `audioRefs` roles by index. Value: reference_audio; empty string leaves unset.",
-    }),
+  ...videoReferenceProperties(
+    "audio",
+    "One reference audio path/URL, e.g. music.",
+    "`audioRef` + `audioRefs` roles by index. Value: reference_audio; empty string leaves unset.",
   ),
   model: Type.Optional(
     Type.String({ description: "Provider/model override, e.g. qwen/wan2.6-t2v." }),

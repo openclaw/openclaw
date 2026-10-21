@@ -29,6 +29,8 @@ vi.mock("@modelcontextprotocol/server/stdio", () => ({
 
 vi.mock("@modelcontextprotocol/server", () => ({
   McpServer: class MockMcpServer {
+    registerTool() {}
+
     server = {
       setNotificationHandler: vi.fn(),
     };
@@ -72,11 +74,6 @@ vi.mock("./channel-bridge.js", () => ({
       return bridgeState.handleClaudePermissionRequest(payload);
     }
   },
-}));
-
-vi.mock("./channel-tools.js", () => ({
-  getChannelMcpCapabilities: vi.fn(() => undefined),
-  registerChannelMcpTools: vi.fn(),
 }));
 
 async function waitForTransport(): Promise<{ onclose?: (() => void) | undefined }> {
