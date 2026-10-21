@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
 import { join } from "node:path";
+import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -863,12 +866,12 @@ describe("monitorTlonProvider shutdown", () => {
   });
 
   it("streams deeply nested poison and capped messages over real HTTP SSE through production handlers and recovers on the next messages", async () => {
-    const tempDirs = useAutoCleanupTempDirTracker(() => {});
-    const stateDir = tempDirs.make("tlon-live-stream-");
+    const createdDir = await fs.mkdtemp(path.join(os.tmpdir(), "tlon-live-stream-"));
+    const stateDir = await fs.realpath(createdDir);
     const controller = new AbortController();
     const ackedEventIds: number[] = [];
     const subscriptionsByApp = new Map<string, number>();
-    let sseStream: ServerResponse | null = null;
+    let stream: ServerResponse | undefined;
     const streamOpened = Promise.withResolvers<ServerResponse>();
     const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
 
@@ -920,7 +923,6 @@ describe("monitorTlonProvider shutdown", () => {
           "Content-Type": "text/event-stream",
         });
         res.write(": connected\n\n");
-        sseStream = res;
         streamOpened.resolve(res);
         return;
       }
@@ -985,7 +987,7 @@ describe("monitorTlonProvider shutdown", () => {
     });
 
     try {
-      const stream = await streamOpened.promise;
+      stream = await streamOpened.promise;
       await vi.waitFor(() => {
         expect(subscriptionsByApp.get("channels")).toBeTypeOf("number");
         expect(subscriptionsByApp.get("chat")).toBeTypeOf("number");
@@ -1064,13 +1066,16 @@ describe("monitorTlonProvider shutdown", () => {
       await realUrbitFixture.ingress?.waitForIdle();
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
 
-      const builtMessages = inboundRuntimeMock.buildContext.mock.calls.map(
-        ([arg]: [{ messageId: string; message: { rawBody: string; commandBody: string } }]) => ({
+      const builtMessages = inboundRuntimeMock.buildContext.mock.calls.map((call) => {
+        const [arg] = call as [
+          { messageId: string; message: { rawBody: string; commandBody: string } },
+        ];
+        return {
           messageId: arg.messageId,
           rawBody: arg.message.rawBody,
           commandBody: arg.message.commandBody,
-        }),
-      );
+        };
+      });
       expect(builtMessages).toEqual([
         {
           messageId: "msg-deep-group-2k",
@@ -1098,11 +1103,11 @@ describe("monitorTlonProvider shutdown", () => {
       );
     } finally {
       controller.abort();
-      sseStream?.end();
+      stream?.end();
       await monitor.catch(() => undefined);
       await scheduler.stop();
       closeOpenClawStateDatabaseForTest();
-      tempDirs.cleanup();
+      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 });

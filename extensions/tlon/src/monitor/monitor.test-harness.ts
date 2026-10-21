@@ -97,7 +97,8 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   saveRemoteMedia: saveRemoteMediaMock,
 }));
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   getTlonRuntime: () => ({
     state: {
       openChannelIngressQueue: () => realUrbitFixture.openChannelIngressQueue?.(),
