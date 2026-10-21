@@ -2,6 +2,7 @@ import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-r
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, expect, it, vi } from "vitest";
+import plugin from "./index.js";
 import type { GeolocationDatabase } from "./src/database-store.js";
 
 const { loadDatabase } = vi.hoisted(() => ({
@@ -11,9 +12,8 @@ vi.mock("./src/database-store.js", () => ({
   createGeolocationDatabaseStore: () => ({ load: loadDatabase }),
 }));
 
-import plugin from "./index.js";
-
 const respond = vi.fn();
+const method = "geolocation.lookup";
 
 function lookup(
   params: Record<string, unknown>,
@@ -21,14 +21,12 @@ function lookup(
 ) {
   const registerGatewayMethod = vi.fn<OpenClawPluginApi["registerGatewayMethod"]>();
   plugin.register(createTestPluginApi({ registerGatewayMethod }));
-  const handler = registerGatewayMethod.mock.calls.find(
-    ([name]) => name === "geolocation.lookup",
-  )?.[1];
+  const handler = registerGatewayMethod.mock.calls.find(([name]) => name === method)?.[1];
   if (!handler) {
     throw new Error("geolocation.lookup was not registered");
   }
   return handler({
-    req: { type: "req", id: "lookup", method: "geolocation.lookup" },
+    req: { type: "req", id: "lookup", method },
     params,
     respond,
     client: null,
@@ -44,30 +42,18 @@ beforeEach(() => {
 });
 
 it("returns one coarse answer per IP with database attribution", async () => {
-  loadDatabase.mockResolvedValue({
-    lookup: (ip) =>
-      ip === "8.8.8.8"
-        ? {
-            city: { geoname_id: 1, names: { en: "Mountain View" } },
-            country: { geoname_id: 2, iso_code: "US", names: { en: "United States" } },
-          }
-        : null,
-  });
-  await lookup({
-    ips: ["8.8.8.8", "100.64.0.1", "203.0.113.1", "8.8.8.8"],
-  });
+  const place = { city: "Mountain View", country: "United States", countryCode: "US" };
+  const record = {
+    city: { geoname_id: 1, names: { en: place.city } },
+    country: { geoname_id: 2, iso_code: place.countryCode, names: { en: place.country } },
+  };
+  loadDatabase.mockResolvedValue({ lookup: (ip) => (ip === "8.8.8.8" ? record : null) });
+  await lookup({ ips: ["8.8.8.8", "100.64.0.1", "203.0.113.1", "8.8.8.8"] });
 
   const attribution = { text: "IP Geolocation by DB-IP", url: "https://db-ip.com" };
   expect(respond).toHaveBeenCalledWith(true, {
     results: [
-      {
-        ip: "8.8.8.8",
-        status: "found",
-        city: "Mountain View",
-        country: "United States",
-        countryCode: "US",
-        attribution,
-      },
+      { ip: "8.8.8.8", status: "found", ...place, attribution },
       { ip: "100.64.0.1", status: "not-found", attribution },
       { ip: "203.0.113.1", status: "not-found", attribution },
     ],
@@ -95,11 +81,9 @@ it.each([
 ])("rejects $name without loading the database", async ({ params }) => {
   await lookup(params);
 
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "INVALID_REQUEST" }),
-  );
+  expect(respond.mock.calls).toEqual([
+    [false, undefined, expect.objectContaining({ code: "INVALID_REQUEST" })],
+  ]);
   expect(loadDatabase).not.toHaveBeenCalled();
 });
 
