@@ -107,6 +107,63 @@ function retryOrUploadStatus(retryStarted: Promise<void>, upload: Promise<unknow
 }
 
 describe("node workspace transfer service", () => {
+  it("retains tracked build-cache inputs while excluding generated worktree includes", async () => {
+    const root = tempDirs.make("node-workspace-transfer-build-cache-");
+    const localPath = path.join(root, "workspace");
+    const authored = ".artifacts/build-all-cache/authored.txt";
+    const generated = ".artifacts/build-all-cache/generated/output.js";
+    await Promise.all([
+      fs.mkdir(path.dirname(path.join(localPath, authored)), { recursive: true }),
+      fs.mkdir(path.dirname(path.join(localPath, generated)), { recursive: true }),
+    ]);
+    await Promise.all([
+      fs.writeFile(path.join(localPath, authored), "original input\n"),
+      fs.writeFile(path.join(localPath, "source.ts"), "source\n"),
+      fs.writeFile(path.join(localPath, ".gitignore"), ".artifacts/build-all-cache/generated/\n"),
+      fs.writeFile(path.join(localPath, ".worktreeinclude"), "*.js\n"),
+    ]);
+    const git = async (...args: string[]) => {
+      const result = await runCommandWithTimeout(["git", "-C", localPath, ...args], {
+        timeoutMs: 10_000,
+      });
+      expect(result.code, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    await git("init", "--quiet");
+    await git("config", "user.name", "Workspace Transfer Test");
+    await git("config", "user.email", "workspace-transfer@example.invalid");
+    await git("add", ".");
+    await git("commit", "--quiet", "-m", "base");
+    const commit = await git("rev-parse", "HEAD");
+    await fs.writeFile(path.join(localPath, generated), "disposable cache\n");
+    await fs.chmod(path.join(localPath, generated), 0);
+
+    const service = createNodeWorkspaceTransferService({
+      getOwner: () => transferOwner("session-build-cache", 1, Date.now() + 60_000),
+      temporaryRoot: path.join(root, "transfer-tmp"),
+    });
+    try {
+      const prepared = await service.prepareSync({
+        environmentId: "environment-build-cache",
+        ownerEpoch: 1,
+        sessionId: "session-build-cache",
+        localPath,
+        isAuthorized: () => true,
+      });
+      expect(prepared.snapshot.manifest.baseCommit).toBe(commit);
+      expect(prepared.snapshot.manifest.entries.map((entry) => entry.path)).toEqual(
+        expect.arrayContaining([authored, "source.ts"]),
+      );
+      expect(prepared.snapshot.manifest.entries.some((entry) => entry.path === generated)).toBe(
+        false,
+      );
+      expect(prepared.snapshot.manifest.buildCacheInputs).toContain(authored);
+    } finally {
+      await fs.chmod(path.join(localPath, generated), 0o644);
+      await service.closeAll();
+    }
+  });
+
   it("keeps a plain workspace transferable after durable result staging initializes Git", async () => {
     const root = tempDirs.make("node-workspace-transfer-unborn-git-");
     const localPath = path.join(root, "workspace");

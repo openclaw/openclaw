@@ -194,6 +194,7 @@ function validateAndProjectEntries(
   const eligible = projectWorkspaceEntries(
     rawEntries,
     (entryPath) => retained.has(entryPath) || isStagedInputPath(entryPath, stagedInputs),
+    buildCacheInputs !== undefined,
   );
   return {
     entries: eligible.filter((entry) => entry.type !== "directory"),
@@ -217,6 +218,7 @@ export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManife
   const entries = projectWorkspaceEntries(
     rawEntries,
     (entryPath) => retained.has(entryPath) || isStagedInputPath(entryPath, stagedInputs),
+    manifest.buildCacheInputs !== undefined,
   );
   if (entries.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
     throw new Error("Worker workspace manifest has too many entries");

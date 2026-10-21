@@ -74,7 +74,7 @@ describe("worker workspace manifest parsing", () => {
     ).toEqual(expected);
   });
 
-  it("applies the shared build-cache policy with trusted input context", () => {
+  it("applies the build-cache policy only with trusted input context", () => {
     const authored = ".artifacts/build-all-cache/authored.txt";
     const generated = ".artifacts/build-cache-inputs/compile.json";
     const value = {
@@ -93,7 +93,7 @@ describe("worker workspace manifest parsing", () => {
     const raw = JSON.stringify(value);
     const ref = `sha256:${createHash("sha256").update(raw).digest("hex")}`;
     const ordinary = parseWorkerWorkspaceManifest(raw, ref);
-    expect(ordinary.entries.map((entry) => entry.path)).toEqual(["file"]);
+    expect(ordinary.entries.map((entry) => entry.path)).toEqual([authored, generated, "file"]);
     expect(ordinary.buildCacheInputs).toBeUndefined();
     const local = parseWorkerWorkspaceManifest(raw, ref, [authored]);
     expect(local.entries.map((entry) => entry.path)).toEqual([authored, "file"]);

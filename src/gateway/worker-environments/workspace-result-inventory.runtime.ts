@@ -114,6 +114,7 @@ export async function loadStagedWorkerWorkspace(
       isDerivedWorkspacePath(
         entryPath,
         retained.has(entryPath) || isStagedInputPath(entryPath, stagedInputs),
+        buildCacheInputs !== undefined,
       )
     ) {
       continue;

@@ -19,7 +19,6 @@ const BUILD_CACHE_ROOT_PATHS = [
   ".artifacts/build-cache-inputs",
 ] as const;
 const DERIVED_WORKSPACE_ROOT_PATHS = [
-  ...BUILD_CACHE_ROOT_PATHS,
   ".cache/vitest",
   ".cache/bun-transpiler",
   ".cache/openclaw/bun",
@@ -76,13 +75,14 @@ function isRuntimeOwnedWorkspacePath(relativePath) {
     (root) => relativePath === root || relativePath.startsWith(root + "/"),
   );
 }
-function isDerivedWorkspacePath(relativePath, retainedInput = false) {
+function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuildCaches = false) {
   if (isRuntimeOwnedWorkspacePath(relativePath)) {
     return true;
   }
   if (retainedInput) {
     return false;
   }
+  if (excludeBuildCaches && isBuildCacheWorkspacePath(relativePath)) return true;
   if (DERIVED_WORKSPACE_ROOT_PATHS.some(
     (root) => relativePath === root || relativePath.startsWith(root + "/"),
   )) {
@@ -98,7 +98,7 @@ function isDerivedWorkspacePath(relativePath, retainedInput = false) {
       DERIVED_WORKSPACE_FILE_SUFFIXES.some((suffix) => segment.endsWith(suffix)),
   );
 }
-function projectWorkspaceEntries(entries, isRetainedInput) {
+function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = false) {
   const nonemptyDirectories = new Set();
   const retainedParents = new Set();
   const parent = (entryPath) => entryPath.slice(0, Math.max(0, entryPath.lastIndexOf("/")));
@@ -109,7 +109,7 @@ function projectWorkspaceEntries(entries, isRetainedInput) {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (
-      isDerivedWorkspacePath(entry.path, isRetainedInput(entry.path)) ||
+      isDerivedWorkspacePath(entry.path, isRetainedInput(entry.path), excludeBuildCaches) ||
       (entry.type === "directory" && nonemptyDirectories.has(entry.path) && !retainedParents.has(entry.path))
     ) continue;
     eligible.push(entry);
@@ -124,12 +124,17 @@ export const {
   projectWorkspaceEntries,
   buildCacheInputPaths,
 }: {
-  isDerivedWorkspacePath: (relativePath: string, retainedInput?: boolean) => boolean;
+  isDerivedWorkspacePath: (
+    relativePath: string,
+    retainedInput?: boolean,
+    excludeBuildCaches?: boolean,
+  ) => boolean;
   isRuntimeOwnedWorkspacePath: (relativePath: string) => boolean;
   buildCacheInputPaths: (paths?: Iterable<string>) => Set<string>;
   projectWorkspaceEntries: <T extends { path: string; type: string }>(
     entries: readonly T[],
     isRetainedInput: (relativePath: string) => boolean,
+    excludeBuildCaches?: boolean,
   ) => T[];
 } = compileFunction(
   `${WORKSPACE_PATH_EXCLUSIONS_JS}\nreturn { isDerivedWorkspacePath, isRuntimeOwnedWorkspacePath, projectWorkspaceEntries, buildCacheInputPaths };`,

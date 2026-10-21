@@ -44,6 +44,7 @@ type WorkspaceRecoveryContext = {
   root: string;
   journal: WorkerWorkspaceReconciliationJournal;
   filteredBaseTree: boolean;
+  excludeBuildCaches: boolean;
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>;
   assertCurrent?: () => void;
 };
@@ -310,12 +311,14 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
             entryPath,
             params.isRetainedInput,
             { paths, directories },
+            params.excludeBuildCaches,
           ))) ||
           (await directoryContainsOnlyWorkspaceEntries(
             params.root,
             entryPath,
             params.isRetainedInput,
             undefined,
+            params.excludeBuildCaches,
           )));
       if (!isJournalDirectory) {
         throw workspaceRecoveryConflict(entryPath);
@@ -376,6 +379,7 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
         entry.path,
         params.isRetainedInput,
         { paths: basePaths, directories: baseDirectories },
+        params.excludeBuildCaches,
       ))
     ) {
       continue;
@@ -398,6 +402,7 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
           entryPath,
           params.isRetainedInput,
           undefined,
+          params.excludeBuildCaches,
         ))
       )
     ) {
@@ -426,6 +431,7 @@ async function assertWorkspaceRecoveryDirectoriesRecoverable(
           entryPath,
           params.isRetainedInput,
           { paths: appliedEntryPaths, directories: appliedDirectories },
+          params.excludeBuildCaches,
         ))
       ) {
         throw workspaceRecoveryConflict(entryPath);
@@ -536,6 +542,7 @@ export async function recoverWorkerWorkspaceReconciliation(params: {
     journal,
     isRetainedInput,
     filteredBaseTree: journal.baseEntries.length !== params.journal.baseEntries.length,
+    excludeBuildCaches: params.buildCacheInputs !== undefined,
     assertCurrent: params.assertCurrent,
   };
   try {
@@ -551,6 +558,7 @@ export async function recoverWorkerWorkspaceReconciliation(params: {
     journal.baseEntries,
     isRetainedInput,
     params.assertCurrent,
+    params.buildCacheInputs !== undefined,
   );
   await applyWorkspacePatch({ root, patch: recoveryPatch, assertCurrent: params.assertCurrent });
   await restoreWorkspaceJournalDirectories(recovery);

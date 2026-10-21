@@ -92,17 +92,21 @@ reconcile, including nested paths and explicit staged inputs; an ignore
 rule alone does not make a file disposable. Source changes cannot remove a
 runtime-owned lock subtree by replacing its parent directory.
 
-Workspace capture, transfer, manifest projection, and recovery also exclude
-disposable `.artifacts/build-all-cache/` build snapshots and
-`.artifacts/build-cache-inputs/` temporary receipts. Local managed guest workspaces
-preserve original inputs admitted from the host source or its Git index even within
-those roots. Guest Git metadata cannot admit generated files as original inputs.
-The same input custody applies during capture, synchronization and recovery without
-changing saved manifest bytes. Other `.artifacts/` files still reconcile, including
-ordinary reports and nested fixtures. Older archives can lack the original index
-membership of saved files. Exact cache-root paths in the owned archive remain
-restored inputs; new generated paths under the same directories are still excluded.
-An ambiguous older cache file may therefore remain preserved.
+Workspace capture with a trusted source inventory also excludes disposable
+`.artifacts/build-all-cache/` build snapshots and `.artifacts/build-cache-inputs/`
+temporary receipts. Local managed guest workspaces use inputs admitted by the host
+source or host Git index. Git-backed remote captures and native-node transfers use
+their source Git inventory. A managed base refresh uses the selected commit trees.
+Guest Git metadata in a local managed workspace cannot admit generated files as
+original inputs. Input custody keeps the existing capture, synchronization and
+recovery contracts without changing saved manifest bytes. Captures without a
+trusted source inventory keep their previous behavior.
+
+Other `.artifacts/` files still reconcile, including ordinary reports and nested
+fixtures. Older archives can lack the original index membership of saved files.
+Exact cache-root paths in the owned archive remain restored inputs; new generated
+paths under the same directories are still excluded. An ambiguous older cache file
+may therefore remain preserved.
 
 If you are a guest, you can ask the agent:
 

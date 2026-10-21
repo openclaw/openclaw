@@ -36,6 +36,10 @@ const packageCaches = [
 const workerPackage = ".artifacts/vitest-workers/run-cache-0/package.json";
 const lock = ".artifacts/dist-artifacts.lock/owner.json";
 const stagedRoot = stagedInputDirectory("a".repeat(64));
+const authoredBuildCacheInputs = [
+  ".artifacts/build-all-cache/authored.txt",
+  ".artifacts/build-cache-inputs/authored.json",
+];
 const userFiles = {
   ".gitignore": ".artifacts/\n.cache/\n.local/\n",
   ".local/share/pnpm/store-notes.md": "user notes\n",
@@ -44,6 +48,8 @@ const userFiles = {
   [`${stagedRoot}/.gitignore`]: STAGED_INPUT_GITIGNORE,
   [`${stagedRoot}/.local/share/pnpm/store/input.txt`]: "staged input\n",
   ".artifacts/report.md": "user report\n",
+  [authoredBuildCacheInputs[0]!]: "original input\n",
+  [authoredBuildCacheInputs[1]!]: "original input\n",
   ".artifacts/vitest-worker-cache-notes.md": "user notes\n",
   ".artifacts/vitest-shard-timings.json-notes": "user notes\n",
   "fixtures/.artifacts/vitest-worker-cache/input.js": "nested user fixture\n",
@@ -78,7 +84,20 @@ it("excludes only generated runtime roots from capture and transfer", async () =
   for (const name of packageCaches) {
     await fs.truncate(path.join(workspace, name), MAX_RECONCILIATION_FILE_BYTES + 1);
   }
-  const local = await readActualWorkspaceManifestImpl({ root: workspace, baseCommit: null });
+  const initialized = await runCommandWithTimeout(["git", "-C", workspace, "init", "--quiet"], {
+    timeoutMs: 10_000,
+  });
+  expect(initialized.code, initialized.stderr).toBe(0);
+  const tracked = await runCommandWithTimeout(
+    ["git", "-C", workspace, "add", "--force", "--", ...authoredBuildCacheInputs],
+    { timeoutMs: 10_000 },
+  );
+  expect(tracked.code, tracked.stderr).toBe(0);
+  const local = await readActualWorkspaceManifestImpl({
+    root: workspace,
+    baseCommit: null,
+    buildCacheInputs: authoredBuildCacheInputs,
+  });
   const result = parseChangedWorkspaceResult(
     { version: 1, baseCommit: null, entries: [] },
     local.manifest,
@@ -132,7 +151,10 @@ it("excludes only generated runtime roots from capture and transfer", async () =
       { timeoutMs: 10_000 },
     );
     expect(transfer.code, transfer.stderr).toBe(0);
-    for (const name of [cache, lock, workerPackage, ...packageCaches]) {
+    const globallyDerivedCaches = packageCaches.filter(
+      (name) => !name.startsWith(".artifacts/build-"),
+    );
+    for (const name of [cache, lock, workerPackage, ...globallyDerivedCaches]) {
       await expect(fs.stat(path.join(target, name))).rejects.toMatchObject({ code: "ENOENT" });
     }
     for (const [name, content] of Object.entries(userFiles)) {
@@ -147,6 +169,10 @@ it.skipIf(process.platform === "win32")(
     const { workspace, runManifest, manifestRoot } = await createScriptWorkspace(
       tempDirs.make("workspace-unreadable-build-caches-"),
     );
+    const initialized = await runCommandWithTimeout(["git", "-C", workspace, "init", "--quiet"], {
+      timeoutMs: 10_000,
+    });
+    expect(initialized.code, initialized.stderr).toBe(0);
     const buildCaches = [
       ".artifacts/build-all-cache/compile/outputs/dist/output.js",
       ".artifacts/build-cache-inputs/compile.json",
@@ -165,7 +191,11 @@ it.skipIf(process.platform === "win32")(
       await fs.chmod(path.join(workspace, name), 0);
     }
     try {
-      const local = await readActualWorkspaceManifestImpl({ root: workspace, baseCommit: null });
+      const local = await readActualWorkspaceManifestImpl({
+        root: workspace,
+        baseCommit: null,
+        buildCacheInputs: [],
+      });
       expect(local.manifest.entries.map((entry) => entry.path).toSorted()).toEqual(
         Object.keys(useful).toSorted(),
       );
@@ -183,7 +213,11 @@ it.skipIf(process.platform === "win32")(
 
       await fs.chmod(path.join(workspace, ".artifacts/report.md"), 0);
       await expect(
-        readActualWorkspaceManifestImpl({ root: workspace, baseCommit: null }),
+        readActualWorkspaceManifestImpl({
+          root: workspace,
+          baseCommit: null,
+          buildCacheInputs: [],
+        }),
       ).rejects.toThrow("EACCES");
       const failed = await runManifest(["", "all"]);
       expect(failed.code).not.toBe(0);
@@ -200,6 +234,10 @@ it("omits cache-only ancestry from remote capture while retaining empty director
   const { workspace, runManifest, manifestRoot } = await createScriptWorkspace(
     tempDirs.make("workspace-cache-only-capture-"),
   );
+  const initialized = await runCommandWithTimeout(["git", "-C", workspace, "init", "--quiet"], {
+    timeoutMs: 10_000,
+  });
+  expect(initialized.code, initialized.stderr).toBe(0);
   await writeWorkspaceFiles(
     workspace,
     Object.fromEntries([cache, workerPackage, ...packageCaches].map((name) => [name, "cache"])),
@@ -216,7 +254,11 @@ it("omits cache-only ancestry from remote capture while retaining empty director
     const raw: { entries: Array<{ path: string; type: string }> } = JSON.parse(
       await fs.readFile(path.join(manifestRoot, `${remote.stdout.trim().slice(7)}.json`), "utf8"),
     );
-    const local = await readActualWorkspaceManifestImpl({ root: workspace, baseCommit: null });
+    const local = await readActualWorkspaceManifestImpl({
+      root: workspace,
+      baseCommit: null,
+      buildCacheInputs: [],
+    });
     expect(
       raw.entries.filter((entry) => entry.type === "directory").map((entry) => entry.path),
     ).toEqual(local.manifest.directories);

@@ -127,6 +127,20 @@ function readHashMemo() {
 }
 const hashMemo = readHashMemo();
 ${REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS}
+let retainedBuildCacheInputs = new Set();
+let excludeBuildCaches = false;
+function rememberBuildCacheInputs(paths) {
+  retainedBuildCacheInputs = buildCacheInputPaths([
+    ...retainedBuildCacheInputs,
+    ...paths,
+  ]);
+}
+function isRetainedWorkspaceInput(relative) {
+  return isStagedInput(relative) || retainedBuildCacheInputs.has(relative);
+}
+function isExcludedWorkspacePath(relative) {
+  return isDerivedWorkspacePath(relative, isRetainedWorkspaceInput(relative), excludeBuildCaches);
+}
 function recordEntry(relative, entry) {
   assertManifestCurrent();
   if (entriesByPath.has(relative)) return;
@@ -158,7 +172,7 @@ function addEntry(relative) {
   ) {
     fail("unsafe worker workspace path: " + relative);
   }
-  if (isDerivedWorkspacePath(relative, isStagedInput(relative))) return;
+  if (isExcludedWorkspacePath(relative)) return;
   if (entriesByPath.has(relative)) return;
   const absolute = path.join(root, relative);
   let stats;
@@ -191,7 +205,7 @@ function recordNode(relative, absolute, stats) {
   }
 }
 function addWithParents(relative) {
-  if (isDerivedWorkspacePath(relative, isStagedInput(relative))) return;
+  if (isExcludedWorkspacePath(relative)) return;
   const segments = relative.split("/");
   for (let index = 1; index < segments.length; index += 1) {
     addEntry(segments.slice(0, index).join("/"));
@@ -210,7 +224,7 @@ function walk(relativeDirectory) {
       if (!entry) break;
       const relative = relativeDirectory ? relativeDirectory + "/" + entry.name : entry.name;
       if (!relativeDirectory && entry.name === ".git") continue;
-      if (isDerivedWorkspacePath(relative, isStagedInput(relative))) {
+      if (isExcludedWorkspacePath(relative)) {
         hasDerivedEntry = true;
         continue;
       }
@@ -237,13 +251,16 @@ function walk(relativeDirectory) {
   }
   return hasIncludedEntry || !hasDerivedEntry;
 }
-async function nulPaths(args) {
-  const value = await readManifestGit(root, ["ls-files", "-z", ...args], MAX_WORKSPACE_INVENTORY_PATH_BYTES);
+async function nulPathsFrom(args) {
+  const value = await readManifestGit(root, args, MAX_WORKSPACE_INVENTORY_PATH_BYTES);
   const paths = value.toString("utf8").split("\0").filter(Boolean);
   if (paths.length > MAX_WORKSPACE_GIT_CANDIDATES) {
     fail("worker workspace has too many Git path candidates");
   }
   return paths;
+}
+async function nulPaths(args) {
+  return await nulPathsFrom(["ls-files", "-z", ...args]);
 }
 function readPriorManifestEntries(manifestRoot, digest) {
   if (!/^[a-f0-9]{64}$/.test(digest)) fail("invalid prior workspace manifest digest");
@@ -305,11 +322,31 @@ async function eligiblePaths() {
     for (const entry of priorEntries) {
       if (!entry || typeof entry.path !== "string") fail("invalid prior workspace manifest entry");
     }
-    for (const entry of projectWorkspaceEntries(priorEntries.toSorted(compareManifestPaths), isStagedInput)) {
+    rememberBuildCacheInputs(priorEntries.map((entry) => entry.path));
+    for (const entry of projectWorkspaceEntries(
+      priorEntries.toSorted(compareManifestPaths),
+      isRetainedWorkspaceInput,
+      excludeBuildCaches,
+    )) {
       addSelected(entry.path);
     }
   }
-  return [...selected].filter((relative) => !isDerivedWorkspacePath(relative, isStagedInput(relative))).sort();
+  return [...selected].filter((relative) => !isExcludedWorkspacePath(relative)).sort();
+}
+async function initializeRetainedBuildCacheInputs() {
+  if (!fs.existsSync(path.join(root, ".git"))) return;
+  excludeBuildCaches = true;
+  let paths;
+  if (requestedBaseCommit && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(requestedBaseCommit)) {
+    try {
+      paths = await nulPathsFrom(["ls-tree", "-r", "-z", "--name-only", requestedBaseCommit]);
+    } catch {
+      // A caller can retain an authenticated manifest for a base object this shallow
+      // worker copy does not have. Its current index still identifies tracked inputs.
+    }
+  }
+  paths ??= await nulPaths(["--full-name", "--cached"]);
+  rememberBuildCacheInputs(paths);
 }
 function assertSerializedManifestBudget(baseCommit, entries) {
   let bytes = Buffer.byteLength(JSON.stringify({ version: 1, baseCommit, entries: [] }));
@@ -467,6 +504,8 @@ async function main() {
     process.stdout.write("sha256:" + resolveManifest(manifestRoot, requestedManifestDigest) + "\n");
     return;
   }
+  await initializeRetainedBuildCacheInputs();
+  assertManifestCurrent();
   if (eligibleOnly) {
     for (const relative of await eligiblePaths()) addWithParents(relative);
   } else {

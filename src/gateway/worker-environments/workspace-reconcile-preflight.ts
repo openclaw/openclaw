@@ -34,6 +34,7 @@ async function localWorkspaceDescendantPaths(
   entryPaths: readonly string[],
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
   nonDirectoryReplacements: ReadonlySet<string>,
+  excludeBuildCaches: boolean,
 ): Promise<string[]> {
   const paths: string[] = [];
   const pending = [...entryPaths];
@@ -63,7 +64,7 @@ async function localWorkspaceDescendantPaths(
         }
         continue;
       }
-      if (isDerivedWorkspacePath(childPath, await isRetainedInput(childPath))) {
+      if (isDerivedWorkspacePath(childPath, await isRetainedInput(childPath), excludeBuildCaches)) {
         continue;
       }
       paths.push(childPath);
@@ -79,6 +80,8 @@ async function localWorkspaceDescendantPaths(
 export async function preflightWorkspaceApplyImpl(
   params: Omit<WorkspaceManifestValueInputs["workspace.reconcile.preflight"], "hashes">,
 ): Promise<WorkspaceManifestValueOutputs["workspace.reconcile.preflight"]["value"]> {
+  const excludeBuildCaches =
+    params.base.buildCacheInputs !== undefined || params.current.buildCacheInputs !== undefined;
   const staged = createStagedInputPathMatcher(await openFsSafeRoot(params.root));
   const retained = buildCacheInputPaths([
     ...(params.base.buildCacheInputs ?? []),
@@ -118,6 +121,7 @@ export async function preflightWorkspaceApplyImpl(
     localStructuralRoots,
     isRetainedInput,
     new Set(structuralRoots.filter((entryPath) => currentNodes.has(entryPath))),
+    excludeBuildCaches,
   );
   const paths = [...new Set([...changed, ...localStructuralPaths])].toSorted();
   const applyPaths = new Set<string>();
@@ -196,6 +200,7 @@ export async function preflightWorkspaceApplyImpl(
           entryPath,
           isRetainedInput,
           undefined,
+          excludeBuildCaches,
         ))
       ) {
         local = undefined;

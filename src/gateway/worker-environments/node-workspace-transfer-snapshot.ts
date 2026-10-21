@@ -2,6 +2,10 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "../../infra/fs-safe.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import {
+  MAX_WORKSPACE_GIT_CANDIDATES,
+  MAX_WORKSPACE_INVENTORY_PATH_BYTES,
+} from "./workspace-inventory-limits.js";
 import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { probeWorkspaceGitMode } from "./workspace-sync-helpers.js";
@@ -11,6 +15,35 @@ import {
 } from "./workspace-sync-inventory.js";
 
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
+
+async function readTrackedWorkspacePaths(
+  root: string,
+  signal: AbortSignal | undefined,
+): Promise<string[]> {
+  const result = await runCommandWithTimeout(
+    ["git", "-C", root, "ls-files", "--full-name", "--cached", "-z"],
+    {
+      timeoutMs: TRANSFER_TIMEOUT_MS,
+      maxOutputBytes: MAX_WORKSPACE_INVENTORY_PATH_BYTES,
+      baseEnv: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "" },
+      signal,
+    },
+  );
+  if (result.termination !== "exit" || result.code !== 0) {
+    throw new Error(
+      (result.stderr || result.stdout || "Worker workspace Git inventory failed").trim(),
+    );
+  }
+  const paths = result.stdout.split("\0").filter(Boolean);
+  if (
+    paths.length > MAX_WORKSPACE_GIT_CANDIDATES ||
+    paths.reduce((bytes, entryPath) => bytes + Buffer.byteLength(entryPath) + 1, 0) >
+      MAX_WORKSPACE_INVENTORY_PATH_BYTES
+  ) {
+    throw new Error("Worker workspace Git path candidates exceed their byte limit");
+  }
+  return paths;
+}
 
 export type NodeWorkspaceTransferSnapshot = Awaited<ReturnType<typeof captureWorkspaceSnapshot>> & {
   root: string;
@@ -37,6 +70,7 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
   });
   let baseCommit: string | null = null;
   let includePaths: ReadonlySet<string> | undefined;
+  let buildCacheInputs: ReadonlySet<string> | undefined;
   if (git.mode === "git") {
     const gitRoot = await fsp.realpath(git.gitRoot);
     if (gitRoot !== root) {
@@ -60,11 +94,13 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
       }
     }
     includePaths = manifestPaths;
+    buildCacheInputs = new Set(await readTrackedWorkspacePaths(root, params.signal));
   }
   const actual = await captureWorkspaceSnapshot({
     root,
     baseCommit,
     includePaths,
+    buildCacheInputs,
     signal: params.signal,
   });
   return {

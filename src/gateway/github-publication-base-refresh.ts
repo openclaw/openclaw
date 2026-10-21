@@ -31,6 +31,7 @@ import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
 } from "./worker-environments/workspace-manifest.js";
+import { buildCacheInputPaths } from "./worker-environments/workspace-path-exclusions.js";
 import { localWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
 import {
   deleteStagedWorkerWorkspaceResult,
@@ -303,7 +304,16 @@ export async function refreshManagedWorkspaceBase(params: {
                   signal: new AbortController().signal,
                   assertCurrent: check,
                 });
-                snapshots.push(await captureWorkspaceSnapshot({ root: destination, baseCommit }));
+                const trackedPaths = (await git(["ls-tree", "-r", "-z", "--name-only", commit!]))
+                  .split("\0")
+                  .filter(Boolean);
+                snapshots.push(
+                  await captureWorkspaceSnapshot({
+                    root: destination,
+                    baseCommit,
+                    buildCacheInputs: new Set(buildCacheInputPaths(trackedPaths)),
+                  }),
+                );
               }
               const buildCacheInputs = await state.buildCacheInputs();
               const accepted = parseWorkerWorkspaceManifest(

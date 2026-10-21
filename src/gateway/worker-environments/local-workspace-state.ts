@@ -133,13 +133,11 @@ export function projectionOperations(
       preparedInputPaths = paths;
       const retained = buildCacheInputPaths(paths);
       if (owner.worktree.snapshotRef && selected.baseline_json && selected.baseline_ref) {
-        parseWorkerWorkspaceManifest(selected.baseline_json, selected.baseline_ref);
-        // Projection intentionally hides build roots without admission context. Read the
-        // already-validated raw paths so legacy archive inputs still trigger restoration.
-        const baselineEntries = JSON.parse(selected.baseline_json) as {
-          entries: Array<{ path: string }>;
-        };
-        const prior = buildCacheInputPaths(baselineEntries.entries.map((entry) => entry.path));
+        const baseline = parseWorkerWorkspaceManifest(
+          selected.baseline_json,
+          selected.baseline_ref,
+        );
+        const prior = buildCacheInputPaths(baseline.entries.map((entry) => entry.path));
         if ([...prior].some((entryPath) => !retained.has(entryPath))) {
           const archived = await requireGitBuffer(
             owner.worktree.repoRoot,
