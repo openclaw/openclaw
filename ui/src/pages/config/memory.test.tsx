@@ -16,10 +16,10 @@ const addonLabels = [
   ["memory-wiki", "Memory wiki", "Wiki pages", "disabled"],
 ] as const;
 const emptyOutcomes = () => ({
-  busy: new Set<string>(),
-  errors: new Map<string, string>(),
-  notices: new Map<string, { message: string }>(),
-  refreshWarnings: new Map<string, string>(),
+  busy: {},
+  errors: {},
+  notices: {},
+  refreshWarnings: {},
 });
 
 function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps {
