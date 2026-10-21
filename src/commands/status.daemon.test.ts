@@ -23,46 +23,38 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+function mockGateway(overrides: Parameters<typeof createMockGatewayService>[0]) {
+  mocks.resolveGatewayService.mockReturnValue(createMockGatewayService(overrides));
+}
+
 it("includes suspicious systemd cgroup hygiene in the service runtime summary", async () => {
-  mocks.resolveGatewayService.mockReturnValue(
-    createMockGatewayService({
-      isLoaded: async () => true,
-      readRuntime: async () => ({
-        status: "running",
-        pid: 1234,
-        systemd: {
-          unit: "openclaw-gateway.service",
-          killMode: "process",
-          tasksCurrent: 807,
-          memoryCurrent: 11_918_534_246,
-        },
-      }),
-    }),
-  );
+  const systemd = {
+    unit: "openclaw-gateway.service",
+    killMode: "process",
+    tasksCurrent: 807,
+    memoryCurrent: 11_918_534_246,
+  };
+  mockGateway({
+    isLoaded: async () => true,
+    readRuntime: async () => ({ status: "running", pid: 1234, systemd }),
+  });
   const [summary] = await resolveStatusServiceSummaries();
   expect(summary.loaded).toBe(true);
   expect(summary.runtimeShort).toBe(
     "running (pid 1234, cgroup hygiene: KillMode=process, tasks=807, memory=11.1GiB)",
   );
-  expect(summary.runtime?.systemd).toEqual({
-    unit: "openclaw-gateway.service",
-    killMode: "process",
-    tasksCurrent: 807,
-    memoryCurrent: 11_918_534_246,
-  });
+  expect(summary.runtime?.systemd).toEqual(systemd);
 });
 
 it("keeps gateway status readable for unsupported service adapters", async () => {
   const detail = "Gateway service install not supported on aix";
-  mocks.resolveGatewayService.mockReturnValue(
-    createMockGatewayService({
-      label: "Gateway service",
-      isLoaded: async () => {
-        throw new Error(detail);
-      },
-      readRuntime: async () => ({ status: "unknown", detail }),
-    }),
-  );
+  mockGateway({
+    label: "Gateway service",
+    isLoaded: async () => {
+      throw new Error(detail);
+    },
+    readRuntime: async () => ({ status: "unknown", detail }),
+  });
   const [summary] = await resolveStatusServiceSummaries();
   expect(summary).toMatchObject({ label: "Gateway service", installed: false, loaded: null });
   expect(summary.runtimeShort).toBe("unknown (Gateway service install not supported on aix)");
@@ -73,18 +65,13 @@ it.each(["stopped", "running"] as const)(
   async (status) => {
     const message =
       "Service is masked. Run systemctl --user unmask openclaw-gateway.service, then retry.";
-    mocks.resolveGatewayService.mockReturnValue(
-      createMockGatewayService({
-        label: "systemd",
-        loadedText: "enabled",
-        notLoadedText: "disabled",
-        readRuntime: async () => ({
-          status,
-          detail: message,
-          systemd: { scope: "user", startRefusal: { reason: "masked", message } },
-        }),
+    mockGateway({
+      readRuntime: async () => ({
+        status,
+        detail: message,
+        systemd: { scope: "user", startRefusal: { reason: "masked", message } },
       }),
-    );
+    });
 
     const [summary] = await resolveStatusServiceSummaries();
     const output = getStatusOverviewRowValue("Gateway service", { gatewayService: summary });

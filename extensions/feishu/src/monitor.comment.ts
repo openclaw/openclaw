@@ -12,7 +12,7 @@ import { raceWithTimeoutAndAbort, waitForAbortableDelay } from "./async.js";
 import { createFeishuClient } from "./client.js";
 import {
   encodeQuery,
-  extractFeishuApiErrorMeta,
+  formatFeishuApiError,
   parseCommentContentElements,
   type FeishuDriveCommentCard,
   type FeishuDriveCommentReply,
@@ -295,16 +295,9 @@ async function fetchDriveCommentPages<T extends DriveCommentPageTarget>(
         : `${commentsUrl}/${encodeURIComponent(params.commentId)}/replies`;
     const query = {
       file_type: params.fileType,
-      ...(params.kind === "whole-comments"
-        ? {
-            is_whole: "true",
-            page_size: String(FEISHU_COMMENT_PAGE_SIZE),
-            page_token: pageToken,
-          }
-        : {
-            page_token: pageToken,
-            page_size: String(FEISHU_COMMENT_PAGE_SIZE),
-          }),
+      ...(params.kind === "whole-comments" ? { is_whole: "true" } : {}),
+      page_size: String(FEISHU_COMMENT_PAGE_SIZE),
+      page_token: pageToken,
       user_id_type: "open_id",
     };
     const response = await requestFeishuOpenApi<
@@ -341,23 +334,6 @@ async function requestFeishuOpenApi<T>(params: {
   logger?: (message: string) => void;
   errorLabel: string;
 }): Promise<T | null> {
-  const formatErrorDetails = (error: unknown): string => {
-    if (!isRecord(error)) {
-      return typeof error === "string" ? error : JSON.stringify(error);
-    }
-    const meta = extractFeishuApiErrorMeta(error);
-    return JSON.stringify({
-      message: meta.message,
-      code: meta.code,
-      method: readString(meta.config?.method),
-      url: readString(meta.config?.url),
-      http_status: meta.httpStatus,
-      feishu_code: meta.feishuCode,
-      feishu_msg: meta.feishuMsg,
-      feishu_log_id: meta.feishuLogId,
-    });
-  };
-
   const result = await raceWithTimeoutAndAbort(
     params.client.request<T>({
       method: params.method,
@@ -369,7 +345,7 @@ async function requestFeishuOpenApi<T>(params: {
   )
     .then((resolved) => (resolved.status === "resolved" ? resolved.value : null))
     .catch((error: unknown) => {
-      params.logger?.(`${params.errorLabel}: ${formatErrorDetails(error)}`);
+      params.logger?.(`${params.errorLabel}: ${formatFeishuApiError(error)}`);
       return null;
     });
   if (!result) {

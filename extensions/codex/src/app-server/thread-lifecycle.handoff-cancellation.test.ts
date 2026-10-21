@@ -37,7 +37,7 @@ function createHandoffFixture(label: string) {
       clientId: successor.client.getInstanceId(),
       ownerClientId: old.client.getInstanceId(),
       threadId,
-      lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+      lifecycleTiming: createCodexThreadLifecycleTimingTracker(false),
       signal,
     });
   return {

@@ -38,7 +38,7 @@ const failedContext = {
   runAttempt: 2,
   failed: true,
 };
-type WorkflowContext = Parameters<typeof evaluateWorkflowExpression>[1];
+type WorkflowContext = NonNullable<Parameters<typeof evaluateWorkflowExpression>[1]>;
 function expectAdmission(
   expression: unknown,
   admitted: WorkflowContext,
@@ -422,6 +422,57 @@ ${ciStep("macos-swift", "Clean OpenClawKit build scratch").run}
     },
   );
 
+  it.each([
+    { build: "success", expected: false },
+    { build: "failure", expected: true },
+    { build: "skipped", expected: true },
+    { build: "success", historical: true, expected: true },
+    { build: "success", frozen: true, expected: true },
+    { build: "failure", phase: "smoke", expected: true },
+    { build: "failure", phase: "release", expected: false },
+    { build: "failure", tools: "failure", expected: false },
+    { build: "failure", cancelled: true, expected: false },
+    { producer: "watch-rust-toolchain", expected: true },
+    { producer: "ios-configure", expected: true },
+    { producer: "ios-simulator", expected: true },
+  ] as const)("iOS preserves Swift check coverage for %j", (row) => {
+    const steps: NonNullable<WorkflowContext["steps"]> = Object.fromEntries(
+      ["ios-swift-tools", "watch-rust-toolchain", "ios-configure", "ios-simulator"].map((id) => [
+        id,
+        { outputs: {}, outcome: "success" },
+      ]),
+    );
+    if (row.producer) {
+      steps[row.producer] = { outputs: {}, outcome: "failure" };
+    }
+    if (row.tools) {
+      steps["ios-swift-tools"] = { outputs: {}, outcome: row.tools };
+    }
+    const context = {
+      ...failedContext,
+      cancelled: row.cancelled ?? false,
+      matrix: { phase: row.phase ?? "tests" },
+      env: {
+        HISTORICAL_TARGET: String(row.historical ?? false),
+        IOS_FROZEN_TARGET: String(row.frozen ?? false),
+      },
+      steps,
+    };
+    // A failed prerequisite skips the app build, but must still admit both checks.
+    const build = row.build ?? "skipped";
+    if (row.producer) {
+      expect(evaluateWorkflowExpression(ciStep("ios-build", "Build iOS app").if, context)).toBe(
+        false,
+      );
+    }
+    expect(
+      evaluateWorkflowExpression(ciStep("ios-build", "Swift lint").if, {
+        ...context,
+        steps: { ...steps, "ios-app-build": { outputs: {}, outcome: build } },
+      }),
+    ).toBe(row.expected);
+  });
+
   it("iOS runs the Access proof and Watch UI tests after lifecycle tests fail", () => {
     const root = fixture();
     const result = run(
@@ -485,7 +536,6 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
     ["macos-swift", "Swabble tests", "select-xcode", "packages"],
     ["ios-build", "Test Watch RTC engine", "watch-rust-toolchain", "tests"],
     ["ios-build", "Install iOS Swift tooling", "node-env", "tests"],
-    ["ios-build", "Swift lint", "ios-swift-tools", "tests"],
     ["ios-build", "Configure iOS build and report simulator selection", "node-env", "tests"],
     ["ios-build", "Prepare iOS simulator", "ios-configure", "tests"],
     ["ios-build", "Build iOS app", "ios-swift-tools", "tests"],

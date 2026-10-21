@@ -10,7 +10,10 @@ import type { Message, TextContent } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { transformTransportMessages } from "../transport-message-transform.js";
 import { log } from "./logger.js";
 import {
   completePromptCacheObservation,
@@ -36,6 +39,56 @@ describe("prompt cache history fingerprints", () => {
     vi.mocked(crypto.hash).mockClear();
   });
   afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    ["model context", "openai-responses"],
+    ["model context", "anthropic-messages"],
+    ["transport", "openai-responses"],
+    ["transport", "anthropic-messages"],
+  ] as const)("keeps repaired %s history stable for %s", async (route, api) => {
+    await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const model = makeProviderModelFixture({
+        api,
+        provider: api === "openai-responses" ? "openai" : "anthropic",
+        id: "test-model",
+        baseUrl: "https://example.test",
+      });
+      const source: Message[] = [
+        makeAgentAssistantMessage({
+          api,
+          provider: model.provider,
+          content: [{ type: "toolCall", id: "missing", name: "read", arguments: {} }],
+          stopReason: "toolUse",
+          timestamp: 7,
+        }),
+      ];
+      const replay = () =>
+        route === "model context"
+          ? convertToLlm(sanitizeToolUseResultPairingForModel(source, api === "openai-responses"))
+          : transformTransportMessages(source, model);
+      const observer = createPromptCacheRequestObserver(
+        { sessionId: scopedKey(`${route}:${api}`), streamStrategy: "test" },
+        () => {},
+      );
+      const first = replay();
+      await observer.onModelRequest(model, { messages: first });
+      observer.onModelUsage({
+        contextUsage: { state: "available", promptTokens: 200, totalTokens: 250 },
+      });
+      clock.mockReturnValue(2_000);
+      source.push({ role: "user", content: "Continue", timestamp: 8 });
+      const next = replay();
+      expect(await observer.onModelRequest(model, { messages: next })).toMatchObject({
+        requestIndex: 2,
+        prefixUnchanged: true,
+        changes: null,
+      });
+      expect(next.slice(0, first.length)).toEqual(first);
+      expect(observer.getContextUsage()).toMatchObject({ requestIndex: 1, contextTokens: 250 });
+      expect(source.map(({ role }) => role)).toEqual(["assistant", "user"]);
+    });
+  });
 
   it("keeps a two-turn tool loop append-only with bounded block hashing", async () => {
     await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {

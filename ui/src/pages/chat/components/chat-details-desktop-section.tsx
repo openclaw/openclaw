@@ -50,8 +50,9 @@ export function createDetailsDesktopReveal(
       if (expanded === previous[0] && !(animation && expanded)) {
         return undefined;
       }
-      // Read the in-flight geometry before cancelling its animation.
-      const from = body.getBoundingClientRect().height;
+      // Closed details still reports its hidden body's intrinsic height.
+      // Read visible in-flight geometry only while the native disclosure is open.
+      const from = disclosure.open ? body.getBoundingClientRect().height : 0;
       // Native details must expose its content before measuring the opening destination.
       if (expanded) {
         disclosure.open = true;

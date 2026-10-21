@@ -3,6 +3,7 @@ import type { SessionProcessSummary } from "../../../../../packages/gateway-prot
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -369,17 +370,22 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
           <Show
             when={selectedRow()}
             fallback={
-              <div class="chat-processes__empty" role="status">
-                {t(
-                  data().loading
-                    ? "common.loading"
-                    : data().hasResult
-                      ? data().truncated
-                        ? "chat.processesPanel.omitted"
-                        : "chat.processesPanel.expired"
-                      : "chat.processesPanel.disconnected",
-                )}
-              </div>
+              <Show
+                when={data().loading}
+                fallback={
+                  <div class="chat-processes__empty" role="status">
+                    {t(
+                      data().hasResult
+                        ? data().truncated
+                          ? "chat.processesPanel.omitted"
+                          : "chat.processesPanel.expired"
+                        : "chat.processesPanel.disconnected",
+                    )}
+                  </div>
+                }
+              >
+                <PanelLoadingSkeleton variant="terminal" label={t("common.loading")} compact />
+              </Show>
             }
           >
             {(row) => (
@@ -429,13 +435,16 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
               <Show
                 when={data().hasResult && !data().error && !data().loading}
                 fallback={
-                  <div class="chat-processes__empty" role="status">
-                    {data().loading
-                      ? t("common.loading")
-                      : !data().error
-                        ? t("chat.processesPanel.disconnected")
-                        : null}
-                  </div>
+                  <Show
+                    when={data().loading}
+                    fallback={
+                      <div class="chat-processes__empty" role="status">
+                        {!data().error ? t("chat.processesPanel.disconnected") : null}
+                      </div>
+                    }
+                  >
+                    <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+                  </Show>
                 }
               >
                 <PanelEmptyState

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -7,13 +6,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MAX_WORKSPACE_MANIFEST_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
-import { serializeWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
-import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
+import {
+  closeServer,
+  manifestFixture,
+  transferFixture as workspaceFixture,
+} from "./node-worker-transfer-client.fixture.test-support.js";
 import { listen } from "./node-worker-transfer-client.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const rawManifest = serializeWorkerWorkspaceManifest({ version: 1, baseCommit: null, entries: [] });
-const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+const { rawManifest, manifestRef } = manifestFixture();
+const overflow = () => Buffer.alloc(MAX_WORKSPACE_MANIFEST_BYTES + 1);
 
 function oversizedGzipHeader() {
   const compressed = gzipSync(rawManifest);
@@ -29,7 +31,8 @@ function oversizedGzipHeader() {
 
 async function transferFixture(send: (res: ServerResponse) => void, signal?: AbortSignal) {
   const root = tempDirs.make("node-worker-transfer-encoding-");
-  const workspaceDir = path.join(root, "workspace");
+  const fixture = workspaceFixture(root, "environment");
+  const { workspaceDir } = fixture;
   await fs.mkdir(workspaceDir);
   await fs.writeFile(path.join(workspaceDir, "sentinel.txt"), "existing workspace");
   let acceptEncoding: string | undefined;
@@ -39,95 +42,49 @@ async function transferFixture(send: (res: ServerResponse) => void, signal?: Abo
   });
   const gatewayUrl = await listen(server);
   return {
+    [Symbol.asyncDispose]: () => closeServer(server),
     workspaceDir,
     acceptEncoding: () => acceptEncoding,
-    run: () =>
-      runNodeWorkerWorkspaceTransfer({
-        gatewayUrl,
-        environmentId: "environment",
-        workspaceDir,
-        manifestHome: root,
-        transfer: { direction: "download", token: "test-token", manifestRef },
-        signal,
-      }),
-    close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    },
+    run: () => fixture.download(gatewayUrl, manifestRef, { signal }),
   };
 }
 
 describe("workspace manifest HTTP encoding", () => {
   it("downloads gzip manifests and verifies decoded content", async () => {
-    const fixture = await transferFixture((res) => {
+    await using fixture = await transferFixture((res) => {
       res.writeHead(200, { "content-encoding": "gzip" });
       res.end(gzipSync(rawManifest));
     });
-    try {
-      await expect(fixture.run()).resolves.toBe(manifestRef);
-      expect(fixture.acceptEncoding()).toBe("gzip");
-      expect(await fs.readdir(fixture.workspaceDir)).not.toContain("sentinel.txt");
-    } finally {
-      await fixture.close();
-    }
+    await expect(fixture.run()).resolves.toBe(manifestRef);
+    expect(fixture.acceptEncoding()).toBe("gzip");
+    expect(await fs.readdir(fixture.workspaceDir)).not.toContain("sentinel.txt");
   });
 
-  it.each([
-    {
-      name: "unknown encoding",
-      encoding: "br",
-      body: () => Buffer.from(rawManifest),
-      reason: /encoding/,
-    },
-    {
-      name: "decoded digest mismatch",
-      encoding: "gzip",
-      body: () => gzipSync(`${rawManifest} `),
-      reason: /digest/,
-    },
-    {
-      name: "decoded overflow",
-      encoding: "gzip",
-      body: () => gzipSync(Buffer.alloc(MAX_WORKSPACE_MANIFEST_BYTES + 1)),
-      reason: /byte limit/,
-    },
-    {
-      name: "encoded gzip overflow",
-      encoding: "gzip",
-      body: oversizedGzipHeader,
-      reason: /byte limit/,
-    },
-    {
-      name: "identity overflow",
-      encoding: "identity",
-      body: () => Buffer.alloc(MAX_WORKSPACE_MANIFEST_BYTES + 1),
-      reason: /byte limit/,
-    },
-  ])("rejects $name before changing the workspace", async ({ encoding, body, reason }) => {
+  it.each<[string, string, () => Buffer, RegExp]>([
+    ["unknown encoding", "br", () => Buffer.from(rawManifest), /encoding/],
+    ["decoded digest mismatch", "gzip", () => gzipSync(`${rawManifest} `), /digest/],
+    ["decoded overflow", "gzip", () => gzipSync(overflow()), /byte limit/],
+    ["encoded gzip overflow", "gzip", oversizedGzipHeader, /byte limit/],
+    ["identity overflow", "identity", overflow, /byte limit/],
+  ])("rejects %s before changing the workspace", async (_name, encoding, body, reason) => {
     const payload = body();
-    const fixture = await transferFixture((res) =>
+    await using fixture = await transferFixture((res) =>
       res.writeHead(200, { "content-encoding": encoding }).end(payload),
     );
-    try {
-      await expect(fixture.run()).rejects.toMatchObject({
-        cause: { message: expect.stringMatching(reason) },
-      });
-      expect(await fs.readFile(path.join(fixture.workspaceDir, "sentinel.txt"), "utf8")).toBe(
-        "existing workspace",
-      );
-      expect(await fs.readdir(path.dirname(fixture.workspaceDir))).toEqual(["workspace"]);
-    } finally {
-      await fixture.close();
-    }
+    await expect(fixture.run()).rejects.toMatchObject({
+      cause: { message: expect.stringMatching(reason) },
+    });
+    expect(await fs.readFile(path.join(fixture.workspaceDir, "sentinel.txt"), "utf8")).toBe(
+      "existing workspace",
+    );
+    expect(await fs.readdir(path.dirname(fixture.workspaceDir))).toEqual(["workspace"]);
   });
 
   it("cancels an unfinished gzip response and closes the transport without changing the workspace", async () => {
     const controller = new AbortController();
     const sent = createDeferred();
     const closed = createDeferred();
-    const fixture = await transferFixture((res) => {
+    await using fixture = await transferFixture((res) => {
       res.on("close", () => closed.resolve());
       res.writeHead(200, { "content-encoding": "gzip" });
       res.write(gzipSync(rawManifest).subarray(0, 12), () => sent.resolve());
@@ -143,7 +100,6 @@ describe("workspace manifest HTTP encoding", () => {
       );
     } finally {
       controller.abort();
-      await fixture.close();
     }
   });
 });

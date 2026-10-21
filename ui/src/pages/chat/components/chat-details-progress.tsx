@@ -12,6 +12,7 @@ import {
 } from "../../../components/session-progress-card.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
@@ -31,9 +32,11 @@ export function ChatDetailsProgress(props: Props) {
         when={props.props?.progressCard}
         fallback={
           props.props?.progressCardInitialLoading && (
-            <div class="chat-details__muted" role="status">
-              {t("sessionProgressCard.widgetLoading")}
-            </div>
+            <PanelLoadingSkeleton
+              variant="document"
+              label={t("sessionProgressCard.widgetLoading")}
+              compact
+            />
           )
         }
       >
@@ -128,15 +131,24 @@ export function MobileTaskProgressContent(props: MobileTaskProgressProps) {
               </div>
             }
           >
-            <div class="chat-details__muted" role="status">
-              {t(
-                props.error === "access-denied"
-                  ? "sessionProgressCard.widgetAccessDenied"
-                  : props.error
-                    ? "sessionProgressCard.widgetUnavailable"
-                    : "sessionProgressCard.widgetLoading",
-              )}
-            </div>
+            <Show
+              when={props.error}
+              fallback={
+                <PanelLoadingSkeleton
+                  variant="document"
+                  label={t("sessionProgressCard.widgetLoading")}
+                  compact
+                />
+              }
+            >
+              <div class="chat-details__muted" role="status">
+                {t(
+                  props.error === "access-denied"
+                    ? "sessionProgressCard.widgetAccessDenied"
+                    : "sessionProgressCard.widgetUnavailable",
+                )}
+              </div>
+            </Show>
           </Show>
         }
       >

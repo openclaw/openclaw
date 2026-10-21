@@ -3,6 +3,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
+import type { StoredConversationReference as Reference } from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
@@ -20,8 +21,20 @@ function createStore() {
   return createMSTeamsConversationStoreState();
 }
 
+function reference(id: string, user: Reference["user"], conversationType?: string): Reference {
+  return {
+    conversation: { id, ...(conversationType ? { conversationType } : {}) },
+    channelId: "msteams",
+    serviceUrl: "https://service.example.com",
+    user,
+  };
+}
+
 describe("msteams conversation store ('state')", () => {
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
   beforeEach(() => {
     resetPluginStateStoreForTests();
     setMSTeamsRuntime(msteamsRuntimeStub);
@@ -30,111 +43,60 @@ describe("msteams conversation store ('state')", () => {
   it("normalizes conversation ids consistently", async () => {
     const store = createStore();
 
-    await store.upsert("conv-norm;messageid=123", {
-      conversation: { id: "conv-norm" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-      user: { id: "u1" },
-    });
+    const ref = reference("conv-norm", { id: "u1" });
+    await store.upsert("conv-norm;messageid=123", ref);
 
     const normalized = await store.get("conv-norm");
-    expect(normalized).toEqual({
-      conversation: { id: "conv-norm" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-      user: { id: "u1" },
-      lastSeenAt: normalized?.lastSeenAt,
-    });
-    expect(typeof normalized?.lastSeenAt).toBe("string");
+    expect(normalized).toEqual({ ...ref, lastSeenAt: expect.any(String) });
     await expect(store.remove("conv-norm")).resolves.toBe(true);
     await expect(store.get("conv-norm;messageid=123")).resolves.toBeNull();
   });
 
   it("upserts, lists, removes, and resolves users by both AAD and Bot Framework ids", async () => {
     const store = createStore();
-    const first = {
-      conversation: { id: "conv-a" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-      user: { id: "user-a", aadObjectId: "aad-a", name: "Alice" },
-    };
-    const second = {
-      ...first,
-      conversation: { id: "conv-b" },
-      user: { id: "user-b", aadObjectId: "aad-b", name: "Bob" },
-    };
+    const first = reference("conv-a", { id: "user-a", aadObjectId: "aad-a", name: "Alice" });
+    const second = reference("conv-b", { id: "user-b", aadObjectId: "aad-b", name: "Bob" });
     const firstTime = "2026-03-25T20:00:00.000Z";
     const secondTime = "2026-03-25T20:00:30.000Z";
-    const firstEntry = {
-      conversationId: "conv-a",
-      reference: { ...first, lastSeenAt: firstTime },
-    };
-    const secondEntry = {
-      conversationId: "conv-b",
-      reference: { ...second, lastSeenAt: secondTime },
-    };
+    const stamped = (conversationId: string, ref: Reference, lastSeenAt: string) => ({
+      conversationId,
+      reference: { ...ref, lastSeenAt },
+    });
+    const firstEntry = stamped("conv-a", first, firstTime);
+    const secondEntry = stamped("conv-b", second, secondTime);
 
     vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date(firstTime));
-      await store.upsert("conv-a", first);
-      vi.setSystemTime(new Date(secondTime));
-      await store.upsert("conv-b", second);
+    vi.setSystemTime(new Date(firstTime));
+    await store.upsert("conv-a", first);
+    vi.setSystemTime(new Date(secondTime));
+    await store.upsert("conv-b", second);
 
-      await expect(store.get("conv-a")).resolves.toEqual(firstEntry.reference);
-      await expect(store.list()).resolves.toEqual([firstEntry, secondEntry]);
-      await expect(store.findPreferredDmByUserId("  aad-b  ")).resolves.toEqual(secondEntry);
-      await expect(store.findPreferredDmByUserId("user-a")).resolves.toEqual(firstEntry);
-      await expect(store.findPreferredDmByUserId("   ")).resolves.toBeNull();
-      await expect(store.remove("conv-a")).resolves.toBe(true);
-      await expect(store.get("conv-a")).resolves.toBeNull();
-      await expect(store.remove("missing")).resolves.toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(store.get("conv-a")).resolves.toEqual(firstEntry.reference);
+    await expect(store.list()).resolves.toEqual([firstEntry, secondEntry]);
+    await expect(store.findPreferredDmByUserId("  aad-b  ")).resolves.toEqual(secondEntry);
+    await expect(store.findPreferredDmByUserId("user-a")).resolves.toEqual(firstEntry);
+    await expect(store.findPreferredDmByUserId("   ")).resolves.toBeNull();
+    await expect(store.remove("conv-a")).resolves.toBe(true);
+    await expect(store.get("conv-a")).resolves.toBeNull();
+    await expect(store.remove("missing")).resolves.toBe(false);
   });
 
   it("prefers the freshest personal conversation for repeated upserts of the same user", async () => {
     const store = createStore();
-
+    const shared = (id: string, suffix: string, name: string, type = "personal") =>
+      reference(id, { id: `user-shared-${suffix}`, aadObjectId: "aad-shared", name }, type);
+    const newest = shared("dm-new", "new", "New DM");
     vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-03-25T20:00:00.000Z"));
-      await store.upsert("dm-old", {
-        conversation: { id: "dm-old", conversationType: "personal" },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
-        user: { id: "user-shared-old", aadObjectId: "aad-shared", name: "Old DM" },
-      });
+    vi.setSystemTime(new Date("2026-03-25T20:00:00.000Z"));
+    await store.upsert("dm-old", shared("dm-old", "old", "Old DM"));
+    vi.setSystemTime(new Date("2026-03-25T20:00:10.000Z"));
+    await store.upsert("group-shared", shared("group-shared", "group", "Group", "groupChat"));
+    vi.setSystemTime(new Date("2026-03-25T20:00:20.000Z"));
+    await store.upsert("dm-new", newest);
 
-      vi.setSystemTime(new Date("2026-03-25T20:00:10.000Z"));
-      await store.upsert("group-shared", {
-        conversation: { id: "group-shared", conversationType: "groupChat" },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
-        user: { id: "user-shared-group", aadObjectId: "aad-shared", name: "Group" },
-      });
-
-      vi.setSystemTime(new Date("2026-03-25T20:00:20.000Z"));
-      await store.upsert("dm-new", {
-        conversation: { id: "dm-new", conversationType: "personal" },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
-        user: { id: "user-shared-new", aadObjectId: "aad-shared", name: "New DM" },
-      });
-
-      await expect(store.findPreferredDmByUserId("aad-shared")).resolves.toEqual({
-        conversationId: "dm-new",
-        reference: {
-          conversation: { id: "dm-new", conversationType: "personal" },
-          channelId: "msteams",
-          serviceUrl: "https://service.example.com",
-          user: { id: "user-shared-new", aadObjectId: "aad-shared", name: "New DM" },
-          lastSeenAt: "2026-03-25T20:00:20.000Z",
-        },
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(store.findPreferredDmByUserId("aad-shared")).resolves.toEqual({
+      conversationId: "dm-new",
+      reference: { ...newest, lastSeenAt: "2026-03-25T20:00:20.000Z" },
+    });
   });
 });

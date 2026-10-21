@@ -1,5 +1,6 @@
 {
   "id": "clawrouter",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "categories": [
     "models"
   ],
@@ -14,12 +15,17 @@
     "clawrouter"
   ],
   "contracts": {
+    "imageGenerationProviders": ["clawrouter"],
+    "speechProviders": ["clawrouter"],
     "usageProviders": [
       "clawrouter"
     ],
     "decisionProviders": [
       "clawrouter"
     ]
+  },
+  "imageGenerationProviderMetadata": {
+    "clawrouter": { "authSignals": [{ "provider": "clawrouter" }] }
   },
   "setup": {
     "providers": [
@@ -71,6 +77,9 @@
           {
             "id": "openai/gpt-6-luna",
             "name": "GPT-6 Luna via ClawRouter",
+            "compat": {
+              "codeMode": "capable"
+            },
             "inference": {
               "chat": false,
               "decision": {

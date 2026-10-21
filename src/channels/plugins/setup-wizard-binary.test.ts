@@ -2,7 +2,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createCliPathTextInput,
-  createDelegatedSetupWizardStatusResolvers,
   createDelegatedTextInputShouldPrompt,
   createDetectedBinaryStatus,
 } from "./setup-wizard-binary.js";
@@ -83,29 +82,6 @@ describe("createCliPathTextInput", () => {
     ).toBe("imsg");
     expect(textInput.helpTitle).toBe("iMessage");
     expect(textInput.helpLines).toEqual(["help"]);
-  });
-});
-
-describe("createDelegatedSetupWizardStatusResolvers", () => {
-  it("forwards optional status resolvers to the loaded wizard", async () => {
-    const loadWizard = vi.fn(async (): Promise<ChannelSetupWizard> => ({
-      channel: "demo",
-      status: {
-        configuredLabel: "configured",
-        unconfiguredLabel: "needs setup",
-        resolveConfigured: () => true,
-        resolveStatusLines: async () => ["line"],
-        resolveSelectionHint: async () => "hint",
-        resolveQuickstartScore: async () => 7,
-      },
-      credentials: [],
-    }));
-
-    const status = createDelegatedSetupWizardStatusResolvers(loadWizard);
-
-    expect(await status.resolveStatusLines?.({ cfg: {}, configured: true })).toEqual(["line"]);
-    expect(await status.resolveSelectionHint?.({ cfg: {}, configured: true })).toBe("hint");
-    expect(await status.resolveQuickstartScore?.({ cfg: {}, configured: true })).toBe(7);
   });
 });
 

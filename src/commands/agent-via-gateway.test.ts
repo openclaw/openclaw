@@ -15,6 +15,7 @@ import { formatCliFailureLines, formatCliJsonFailure } from "../cli/failure-outp
 import type { OpenClawConfig } from "../config/config.js";
 import * as embeddedStateLock from "../infra/embedded-state-lock.js";
 import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-support.js";
+import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
 import {
   acquireGatewayLock,
   GatewayLockError,
@@ -498,9 +499,8 @@ it.each([false, true])("reads a UTF-8 message file (symlink chain=%s)", async (s
 });
 
 it("refuses --local before embedded startup when a live Gateway owns the state directory", async () => {
-  const lockOptions = createLocalGatewayLockOptions(testStore.dir, {
-    readProcessStartTime: () => 123_456,
-  });
+  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockReturnValue(123_456);
+  const lockOptions = createLocalGatewayLockOptions(testStore.dir);
   useLocalGatewayLockOptions(lockOptions);
   const gatewayLock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
   expect(gatewayLock).not.toBeNull();

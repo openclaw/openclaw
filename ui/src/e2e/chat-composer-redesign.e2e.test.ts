@@ -650,6 +650,11 @@ suite.define(() => {
       expect(activeMobileStopBox?.width).toBeCloseTo(32, 2);
       expect(activeMobileStopBox?.height).toBeCloseTo(32, 2);
       expect(await composerShell.locator(".agent-chat__composer-run-status").count()).toBe(0);
+      // Escape dismisses an active tooltip before it reaches the composer.
+      await page.mouse.move(0, 0);
+      await polledCount(page.locator("openclaw-tooltip[open]")).toBe(0);
+      await polledVisible(stop).toBe(true);
+      await polledFocus(textarea).toBe(true);
       await textarea.press("Escape");
       const abortRequest = await gateway.waitForRequest("chat.abort");
       expect(abortRequest.params).toMatchObject({

@@ -16,7 +16,7 @@ import {
 } from "../agents/harness/host-private-capabilities.js";
 import { compileStructuredInputForm } from "../agents/harness/structured-input.js";
 import { bindMcpClientElicitation } from "../agents/mcp-client-elicitation.js";
-import { buildMcpClientCapabilities } from "../agents/mcp-metadata.js";
+import { prepareMcpCaps } from "../agents/mcp-metadata.js";
 import { toLegacyMcpCallToolResult } from "../agents/mcp-sdk-compatibility.js";
 import {
   getMcpAppViewLease,
@@ -397,13 +397,16 @@ describe("registered MCP form resource route", () => {
       }),
     );
     options.context.getGatewayMethodRegistry = () => registry;
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client(
       { name: "form-host", version: "1" },
-      { capabilities: buildMcpClientCapabilities(true), versionNegotiation: { mode: "legacy" } },
+      {
+        capabilities: prepareMcpCaps({ transport: clientTransport }, undefined, true),
+        versionNegotiation: { mode: "legacy" },
+      },
     );
     const server = new Server({ name: "origin", version: "1" }, { capabilities: { tools: {} } });
     const call = bindMcpClientElicitation(client);
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
     vi.spyOn(f.runtime, "callTool").mockImplementation(async () =>
       toLegacyMcpCallToolResult(

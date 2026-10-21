@@ -327,7 +327,6 @@ function createQaSuiteScenarioStepRunner(
   scenario: QaSeedScenarioWithSource,
   vars: Record<string, unknown>,
   deadline: ReturnType<typeof createQaScenarioDeadline>,
-  runScenario: QaSuiteScenarioDepsParams["runScenario"],
 ): QaSuiteScenarioDepsParams["runScenario"] {
   const prepareFlow = env.transport.prepareFlow;
   const execution = scenario.execution;
@@ -378,14 +377,16 @@ function createQaSuiteScenarioStepRunner(
             ...scenarioSteps,
           ]
         : scenarioSteps;
-    const result = await runScenario(name, preparedSteps);
+    const result = await runQaSuiteScenarioSteps(name, preparedSteps);
     return result.status === "fail"
       ? appendGatewayLogSentinelEvidence(result, env.gateway, gatewayLogMark)
       : result;
   };
 }
 
-export async function runQaSuiteScenarioDefinition(params: QaSuiteScenarioFlowApiParams) {
+export async function runQaSuiteScenarioDefinition(
+  params: Omit<QaSuiteScenarioFlowApiParams, "runScenario">,
+) {
   if (params.scenario.execution.kind !== "flow") {
     throw new Error(`scenario is not a flow: ${params.scenario.id}`);
   }
@@ -401,13 +402,7 @@ export async function runQaSuiteScenarioDefinition(params: QaSuiteScenarioFlowAp
     const { api, cleanupApi } = createQaSuiteScenarioFlowApi({
       ...params,
       signal: deadline.signal,
-      runScenario: createQaSuiteScenarioStepRunner(
-        params.env,
-        params.scenario,
-        vars,
-        deadline,
-        params.runScenario,
-      ),
+      runScenario: createQaSuiteScenarioStepRunner(params.env, params.scenario, vars, deadline),
     });
     return await runScenarioFlow({
       api,

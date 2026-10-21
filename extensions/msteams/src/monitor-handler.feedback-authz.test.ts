@@ -145,6 +145,26 @@ describe("msteams feedback invoke authz", () => {
   });
 
   it.each([
+    ["19:channel@thread.tacv2;messageid=root", "nested"],
+    ["19:channel@thread.tacv2", "root"],
+  ])("records channel feedback in its message thread: %s", async (conversationId, replyToId) => {
+    const context = createFeedbackInvokeContext({ conversationId, conversationType: "channel" });
+    context.activity.replyToId = replyToId;
+    await runMSTeamsFeedbackInvokeHandler(
+      context,
+      createDeps({ channels: { msteams: { groupPolicy: "open" } } }),
+    );
+    expect(channelInboundMockState.recordChannelFeedbackEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "msteams:channel:19:channel@thread.tacv2:thread:root",
+        event: expect.objectContaining({
+          sessionKey: "msteams:channel:19:channel@thread.tacv2:thread:root",
+        }),
+      }),
+    );
+  });
+
+  it.each([
     {
       reason: "personal scope contradicts team metadata",
       cfg: dmConfig(),

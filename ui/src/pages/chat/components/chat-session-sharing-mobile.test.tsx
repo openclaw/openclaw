@@ -193,3 +193,35 @@ it("keeps Public confirmed until its owner publishes and preserves membership fo
   permission.click();
   expect(member).toHaveBeenCalledTimes(1);
 });
+
+it("replaces initial permission loading with people and retains them through refresh and failure", () => {
+  const initial = prepared();
+  const [source, setSource] = createSignal(prepared({ state: { loading: true } }));
+  const view = mountSolid(() => {
+    const adapter = createChatSessionSharingMobileAdapter(source, {
+      onOpenSharing: vi.fn(),
+      onOpenAccess: vi.fn(),
+      onApplied: vi.fn(),
+      accessTarget: () => undefined,
+    });
+    return <ChatSessionSharingMobile {...adapter.sharing} />;
+  });
+  expect(view.getByRole("status", { name: "Loading…" }).getAttribute("aria-busy")).toBe("true");
+  expect(view.queryByRole("checkbox", { name: /^Pat Member,/ })).toBeNull();
+  setSource(initial);
+  flush();
+  const person = view.getByRole("checkbox", { name: /^Pat Member,/ });
+  expect(view.queryByRole("status", { name: "Loading…" })).toBeNull();
+  setSource({ ...initial, state: { ...initial.state!, loading: true } });
+  flush();
+  expect(view.getByRole("checkbox", { name: /^Pat Member,/ })).toBe(person);
+  expect(person.getAttribute("aria-disabled")).toBe("true");
+  expect(view.queryByRole("status", { name: "Loading…" })).toBeNull();
+  setSource({
+    ...initial,
+    state: { ...initial.state!, loading: false, error: "Permission refresh failed" },
+  });
+  flush();
+  expect(view.getByRole("alert").textContent).toContain("Permission refresh failed");
+  expect(view.getByRole("checkbox", { name: /^Pat Member,/ })).toBe(person);
+});

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHook } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
+import { registerHooks } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -11,15 +12,28 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./config.js";
 import { describePeriod } from "./periods.js";
 import {
-  createReportRunFixtureFetch,
   fixtureChannels,
   fixtureDay,
   fixturePeople,
 } from "./report-run.benchmark-fixtures.test-support.js";
 import { TeamReportsRunner } from "./run-worker.js";
-import { createReportSources, generateReportPeriods } from "./run.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore } from "./store.js";
+
+globalThis.fetch = async () => {
+  throw new Error("Benchmark attempted a real network request");
+};
+const fixtureHttp = registerHooks({
+  resolve(specifier, context, nextResolve) {
+    return specifier === "openclaw/plugin-sdk/ssrf-runtime"
+      ? {
+          url: new URL("./report-run.benchmark-fixtures.test-support.ts", import.meta.url).href,
+          shortCircuit: true,
+        }
+      : nextResolve(specifier, context);
+  },
+});
+const { generateReportPeriods } = await import("./run.js");
 
 const directory = await mkdtemp(path.join(os.tmpdir(), "team-reports-benchmark-"));
 const store = await createTeamReportsStore({
@@ -86,13 +100,14 @@ try {
     resolved,
     store,
     periods,
-    sources: (runtime) => createReportSources(runtime, true),
     llm: {
       complete: async () => {
         throw new Error("Benchmark must not invoke a model");
       },
     },
-    runtime: { logger, fetchImpl: createReportRunFixtureFetch() },
+    runtime: {
+      logger,
+    },
     onRoster: () => {},
   };
   const statuses = runner
@@ -144,4 +159,5 @@ try {
   await runner?.close();
   await store.close();
   await rm(directory, { recursive: true, force: true });
+  fixtureHttp.deregister();
 }

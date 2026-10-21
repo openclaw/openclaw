@@ -147,7 +147,7 @@ it("does not report unknown or failed mobile queries as empty and preserves the 
   const view = mountSolid(() => createComponent(ChatSessionVersionsMobile, merge(props)));
   onTestFinished(view.unmount);
   flush();
-  expect(view.container.textContent).toContain("Loading");
+  expect(view.getByRole("status", { name: "Loading…" }).getAttribute("aria-busy")).toBe("true");
   expect(view.container.textContent).not.toContain("No earlier versions");
   setProps((value) => ({
     ...value,

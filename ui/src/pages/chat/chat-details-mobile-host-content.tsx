@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { ControlUiSessionPullRequestSnapshot } from "../../../../src/gateway/control-ui-contract.js";
+import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -534,7 +535,11 @@ function MobileHostContent(
                 >
                   <Show when={page().kind === "people"}>
                     <Show when={props.bindings?.peopleMentions?.status === "loading"}>
-                      <p role="status">{t("common.loading")}</p>
+                      <PanelLoadingSkeleton
+                        variant="file-list"
+                        label={t("common.loading")}
+                        compact
+                      />
                     </Show>
                     <Show
                       when={["error", "unavailable", "insert-rejected"].includes(

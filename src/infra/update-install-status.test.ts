@@ -93,7 +93,6 @@ it.each(["recover", "exhaust", "abort"] as const)(
         firstProbe.resolve();
       }
       return {
-        pid: 1,
         code: timeout ? null : 0,
         stdout: ownership ? root : "",
         stderr: "",
@@ -137,15 +136,6 @@ it("initializes an immutable package directory without invoking Git", async () =
   const root = dirs.make("openclaw-update-package-");
   await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw"}');
   mocks.root.mockResolvedValue(root);
-  mocks.git.mockResolvedValue({
-    code: 128,
-    stdout: "",
-    stderr: "not a git repository",
-    signal: null,
-    killed: false,
-    termination: "exit",
-    timeoutMs: 2_500,
-  });
   const { status } = await resolveStartupInstallStatus(false, new AbortController().signal);
   expect(status.installKind).toBe("package");
   expect(mocks.git).not.toHaveBeenCalled();

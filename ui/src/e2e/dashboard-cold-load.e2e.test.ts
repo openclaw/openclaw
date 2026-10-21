@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { isChatHistoryState } from "../lib/protocol-validators.generated/history-state.js";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
@@ -10,7 +11,10 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Dashboard deep-link first paint" });
 const sessionKey = "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef";
@@ -22,6 +26,8 @@ suite.define(() => {
   it.each(["mission-control-1234567890ab4def8234567890abcdef", "mission-control"])(
     "restores /dashboard/main/%s before hello",
     async (reference) => {
+      const delayTranscriptValidation =
+        reference === "mission-control-1234567890ab4def8234567890abcdef";
       await suite.withPage(
         {
           viewport: { width: 1440, height: 900 },
@@ -83,6 +89,20 @@ suite.define(() => {
             sessions: [row, { ...row, key: otherSessionKey, label: "Other mission" }],
             historyMessages: [{ role: "assistant", content: "Synthetic mission briefing." }],
             methodResponses: {
+              ...(delayTranscriptValidation
+                ? {
+                    "chat.startup": {
+                      sessionId: row.sessionId,
+                      sessionInfo: { key: sessionKey, sessionId: row.sessionId, kind: "direct" },
+                      messages: [{ role: "assistant", content: "Synthetic mission briefing." }],
+                      stateRevision: {
+                        sessionInfo: "mission-session-v1",
+                        commands: "mission-commands-v1",
+                      },
+                      metadata: { commands: [], models: [] },
+                    },
+                  }
+                : {}),
               "agents.list": {
                 defaultId: "main",
                 mainKey: "main",
@@ -120,7 +140,11 @@ suite.define(() => {
             await expect
               .poll(() =>
                 page.evaluate(
-                  async ({ expectedSessionKey, revision: expectedRevision }) => {
+                  async ({
+                    expectedSessionKey,
+                    revision: expectedRevision,
+                    requireHistoryState,
+                  }) => {
                     if (
                       !Object.keys(localStorage).some((key) =>
                         key.startsWith("openclaw.control.bootRecord.v1:"),
@@ -162,6 +186,10 @@ suite.define(() => {
                               record.snapshot === null ||
                               !("messages" in record.snapshot) ||
                               !Array.isArray(record.snapshot.messages) ||
+                              (requireHistoryState &&
+                                (!("historyState" in record.snapshot) ||
+                                  typeof record.snapshot.historyState !== "object" ||
+                                  record.snapshot.historyState === null)) ||
                               !("board" in record.snapshot) ||
                               typeof record.snapshot.board !== "object" ||
                               record.snapshot.board === null ||
@@ -188,12 +216,40 @@ suite.define(() => {
                       });
                     });
                   },
-                  { expectedSessionKey: sessionKey, revision },
+                  {
+                    expectedSessionKey: sessionKey,
+                    revision,
+                    requireHistoryState: delayTranscriptValidation,
+                  },
                 ),
               )
               .toBe(true);
           };
           await waitForSnapshot(1);
+          if (delayTranscriptValidation) {
+            const savedHistory = await page.evaluate(async (expectedSessionKey) => {
+              const open = indexedDB.open("openclaw-chat-snapshots");
+              return await new Promise<unknown>((resolve, reject) => {
+                open.addEventListener("error", () =>
+                  reject(open.error ?? new Error("Boot snapshot open failed")),
+                );
+                open.addEventListener("success", () => {
+                  const db = open.result;
+                  const transaction = db.transaction("snapshots", "readonly");
+                  const snapshots = transaction.objectStore("snapshots").getAll();
+                  transaction.addEventListener("complete", () => {
+                    db.close();
+                    resolve(
+                      snapshots.result.find((record) =>
+                        record.sessionKey.endsWith(`\u0000${expectedSessionKey}`),
+                      )?.snapshot.historyState,
+                    );
+                  });
+                });
+              });
+            }, sessionKey);
+            expect(isChatHistoryState(savedHistory)).toBe(true);
+          }
           await page.addInitScript(() => {
             const frames: Array<{
               title: string;
@@ -233,12 +289,22 @@ suite.define(() => {
             await configRelease.promise;
             await route.fallback();
           });
+          const historyValidator = delayTranscriptValidation
+            ? await holdModuleResponse(page, /\/assets\/history-state-[^/]+\.js(?:\?.*)?$/u)
+            : undefined;
           reloading = true;
           try {
             await page.goto(`${suite.server.baseUrl}dashboard/main/${reference}`, {
               waitUntil: "domcontentloaded",
             });
             await gateway.waitForRequest("connect");
+            if (historyValidator) {
+              await historyValidator.request;
+              // A cached dashboard does not depend on transcript receipt validation.
+              await page.locator(".board-widget__frame").waitFor({ state: "attached" });
+              historyValidator.release();
+              await page.getByText("Synthetic mission briefing.", { exact: true }).waitFor();
+            }
             const skeleton = page.locator("[data-panel-skeleton=board]");
             await skeleton.waitFor();
             await page.screenshot({ path: path.join(suite.artifactDir, "before-hello.png") });
@@ -250,14 +316,17 @@ suite.define(() => {
             console.log("Dashboard reload first painted frame", JSON.stringify(frames[0]));
             expect(frames.length).toBeGreaterThan(0);
             for (const frame of frames) {
-              expect(frame).toEqual({
+              const { transcript, ...layout } = frame;
+              expect(layout).toEqual({
                 title,
                 welcome: false,
                 board: true,
                 boardRegion: "main",
-                transcript: true,
                 transcriptRegion: "side",
               });
+              if (!delayTranscriptValidation) {
+                expect(transcript).toBe(true);
+              }
             }
             expect(await gateway.getRequests("board.get")).toHaveLength(0);
             const frame = page.locator(".board-widget__frame");
@@ -375,6 +444,7 @@ suite.define(() => {
               await frame.waitFor({ state: "detached" });
             }
           } finally {
+            historyValidator?.release();
             documentRelease.resolve();
             configRelease.resolve();
           }

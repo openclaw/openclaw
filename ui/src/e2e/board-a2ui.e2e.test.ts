@@ -764,10 +764,8 @@ suite.define(() => {
         .toBe(true);
       const widgetFrame = outerFrame!.childFrames()[0]!;
       await widgetFrame.getByText("A2UI board widget").waitFor();
-      await expect
-        .poll(() => outer.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("1");
-      expect(await outer.getAttribute("inert")).toBeNull();
+      await expect.poll(() => outer.getAttribute("inert")).toBeNull();
+      expect(await outer.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
       if (rejectsAction) {
         await applyMessages(widgetFrame, [
           updateComponents("v0.9", [refreshButton({ diagnostic: "x".repeat(8193) })]),

@@ -1,17 +1,9 @@
-import {
-  existsSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  symlinkSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import * as fs from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
-import { validReview } from "./pr-review-artifact-fixture.js";
+import { reviewWithFinding } from "./pr-correction-preparation.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
@@ -28,6 +20,17 @@ describePosix("fresh incoming review after a published correction's baseline ref
   const oid = (name: string) => git("hash-object", "--no-filters", f.local(name));
   const read = (name: string) => f.readLocal(name);
   const write = (name: string, value: string | Buffer) => f.writeLocal(name, value);
+  const json = (name: string) => JSON.parse(read(name).toString());
+  const absent = (name: string) => expect(fs.existsSync(f.local(name))).toBe(false);
+  const withFile = (path: string, bytes: string | Buffer, check: () => void) => {
+    const previous = fs.readFileSync(path);
+    try {
+      fs.writeFileSync(path, bytes);
+      check();
+    } finally {
+      fs.writeFileSync(path, previous);
+    }
+  };
   const retained = () => {
     expect(git("rev-parse", "HEAD")).toBe(head);
     expect(git("write-tree")).toBe(tree);
@@ -48,14 +51,14 @@ describePosix("fresh incoming review after a published correction's baseline ref
     f.pass("prepare-baseline-refresh", f.manifest(baseline));
     head = git("rev-parse", "HEAD");
     tree = git("rev-parse", "HEAD^{tree}");
-    lineage = JSON.parse(read("prepare-baseline.json").toString()).archive;
-    expect(existsSync(f.local("correction-incoming-review.json"))).toBe(false);
+    lineage = json("prepare-baseline.json").archive;
+    absent("correction-incoming-review.json");
     original = f.snapshot(["pr-meta.json", "pr-meta.env", "review.json"]);
   });
 
   it("refuses failed metadata retention before replacing either active identity file", () => {
     const cp = join(f.root, "bin/cp");
-    writeFileSync(
+    fs.writeFileSync(
       cp,
       '#!/bin/sh\ncase "$*" in *review-evidence*) echo "fixture retention failed" >&2; exit 73;; esac\nexec /bin/cp "$@"\n',
       { mode: 0o755 },
@@ -66,7 +69,7 @@ describePosix("fresh incoming review after a published correction's baseline ref
       expect(result.stdout + result.stderr).toContain("fixture retention failed");
       f.expectSnapshot(original);
     } finally {
-      unlinkSync(cp);
+      fs.unlinkSync(cp);
       git("switch", "-q", "pr-42-prep");
     }
     retained();
@@ -74,27 +77,20 @@ describePosix("fresh incoming review after a published correction's baseline ref
 
   it("retains exact prior identity through the ordinary fresh hosted review flow", () => {
     f.pass("review-init");
-    const archives = readdirSync(f.local("")).filter((name) => name.startsWith("review-evidence."));
+    const archives = fs
+      .readdirSync(f.local(""))
+      .filter((name) => name.startsWith("review-evidence."));
     expect(
       archives.some((archive) =>
         Object.entries(original).every(([name, bytes]) => {
           const path = f.local(`${archive}/${name}`);
-          return existsSync(path) && readFileSync(path).equals(bytes);
+          return fs.existsSync(path) && fs.readFileSync(path).equals(bytes);
         }),
       ),
     ).toBe(true);
     f.pass("review-checkout-pr");
     f.pass("review-artifacts-init");
-    const review = validReview(incoming);
-    review.recommendation = "NEEDS WORK";
-    review.issueValidation.status = "valid";
-    review.findings.push({
-      id: "I2",
-      severity: "IMPORTANT",
-      title: "Current main conflicts with the published correction",
-      area: f.product[0]!,
-      fix: "Resolve the baseline conflict canonically",
-    });
+    const review = reviewWithFinding(incoming, f.product[0]!, "I2");
     write("review.json", JSON.stringify(review));
     f.pass("review-validate-artifacts");
     git("switch", "-q", "pr-42-prep");
@@ -118,44 +114,35 @@ describePosix("fresh incoming review after a published correction's baseline ref
       "prepare-push-result.env",
     ]) {
       const path = join(historical, name);
-      const bytes = readFileSync(path);
-      try {
-        writeFileSync(path, Buffer.concat([bytes, Buffer.from("\n")]));
+      withFile(path, Buffer.concat([fs.readFileSync(path), Buffer.from("\n")]), () => {
         expect(reject()).toContain("Retained publication lineage changed");
         f.expectSnapshot(active);
-      } finally {
-        writeFileSync(path, bytes);
-      }
+      });
     }
     const elsewhere = `${historical}-elsewhere`;
-    renameSync(historical, elsewhere);
+    fs.renameSync(historical, elsewhere);
     try {
-      symlinkSync(elsewhere, historical);
+      fs.symlinkSync(elsewhere, historical);
       expect(reject()).toContain("Invalid retained proof directory");
       f.expectSnapshot(active);
     } finally {
-      unlinkSync(historical);
-      renameSync(elsewhere, historical);
+      fs.unlinkSync(historical);
+      fs.renameSync(elsewhere, historical);
     }
-    const binding = read("prepare-baseline.json");
-    write(
-      "prepare-baseline.json",
+    withFile(
+      f.local("prepare-baseline.json"),
       JSON.stringify({
-        ...JSON.parse(binding.toString()),
+        ...json("prepare-baseline.json"),
         archive: ".local/prep-evidence.foreign",
       }),
+      () => expect(reject()).toContain("Retained baseline binding differs"),
     );
-    try {
-      expect(reject()).toContain("Retained baseline binding differs");
-    } finally {
-      write("prepare-baseline.json", binding);
-    }
     f.expectSnapshot(active);
   });
 
   it("rechecks historical lineage after the live read and replays only the same current snapshot", () => {
     const hook = f.local("lineage-io.mjs");
-    writeFileSync(
+    fs.writeFileSync(
       hook,
       `
 import fs from 'node:fs';
@@ -178,25 +165,22 @@ if (process.argv[1]?.endsWith('/correction-continuation.mjs') && process.argv[2]
     );
     const extra = { NODE_OPTIONS: `--import=${hook}`, FIXTURE_LINEAGE: join(f.worktree, lineage) };
     const contextPath = join(f.worktree, lineage, "prep-context.env");
-    const context = readFileSync(contextPath);
-    try {
+    withFile(contextPath, fs.readFileSync(contextPath), () => {
       expect(reject({ ...extra, FIXTURE_EFFECT: "lineage-drift" })).toContain(
         "Retained publication lineage changed",
       );
-      expect(existsSync(f.local("review-transition.json"))).toBe(false);
-    } finally {
-      writeFileSync(contextPath, context);
-    }
+      absent("review-transition.json");
+    });
     const fresh = f.snapshot(["pr-meta.json", "pr-meta.env", "review.json"]);
     expect(reject({ ...extra, FIXTURE_EFFECT: "partial" })).toContain(
       "fixture interrupted retirement",
     );
     const journal = read("review-transition.json");
-    const request = JSON.parse(journal.toString()).continuation;
+    const request = json("review-transition.json").continuation;
     expect(request.archive).not.toBe(lineage);
     expect(request.lineage.archive).toBe(lineage);
-    expect(existsSync(join(f.worktree, request.archive, "prepare-baseline.json"))).toBe(true);
-    expect(existsSync(f.local("prepare-baseline.json"))).toBe(false);
+    expect(fs.existsSync(join(f.worktree, request.archive, "prepare-baseline.json"))).toBe(true);
+    absent("prepare-baseline.json");
     const changed = args.map((value, i) =>
       args[i - 1] === "--expected-tree" ? "a".repeat(40) : value,
     );
@@ -205,12 +189,12 @@ if (process.argv[1]?.endsWith('/correction-continuation.mjs') && process.argv[2]
     f.pass("prepare-correction-continue", args);
     retained();
     f.expectSnapshot(fresh);
-    expect(existsSync(f.local("review-transition.json"))).toBe(false);
+    absent("review-transition.json");
     expect(read("prep-context.env").toString()).toContain(`PR_HEAD_SHA_BEFORE='${incoming}'`);
     expect(read("prep-context.env").toString()).not.toContain("PREP_BASELINE_REFRESH");
     expect(f.run("prepare-push").status).not.toBe(0);
     f.pass("prepare-correction-review-init");
-    const candidate = JSON.parse(read("correction-review.json").toString());
+    const candidate = json("correction-review.json");
     expect(candidate.pr.headSha).toBe(head);
     expect(candidate.recommendation).not.toBe("READY FOR /prepare-pr");
     expect(candidate.correction.resolvedFindings.map((item: { id: string }) => item.id)).toEqual([

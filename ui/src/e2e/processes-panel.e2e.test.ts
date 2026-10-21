@@ -18,6 +18,14 @@ suite.define(() => {
           : {}),
       },
       async ({ page }) => {
+        const screenshot = async (name: string) => {
+          if (capture) {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(suite.artifactDir, name),
+            });
+          }
+        };
         const key = "agent:main:process-review";
         const process = {
           processId: "build-process",
@@ -78,12 +86,7 @@ suite.define(() => {
         }
         const choices = pane.locator(".side-panel-launcher").getByRole("button");
         await choices.first().waitFor();
-        if (capture) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, "processes-before.png"),
-          });
-        }
+        await screenshot("processes-before.png");
         expect(await choices.allTextContents()).toEqual(
           expect.arrayContaining([expect.stringContaining("Processes")]),
         );
@@ -95,12 +98,7 @@ suite.define(() => {
         const finishedToggle = panel.getByRole("button", { name: /^Finished\s*1$/ });
         const finishedRow = panel.getByRole("button", { name: finishedProcess.name, exact: true });
         await finishedToggle.waitFor();
-        if (capture) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, "finished-default.png"),
-          });
-        }
+        await screenshot("finished-default.png");
         expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
         expect(await finishedRow.count()).toBe(0);
         await finishedToggle.click();
@@ -126,12 +124,7 @@ suite.define(() => {
           pane.locator(".side-panel__header .tabstrip-tab").filter({ hasText: label }).click();
         await selectTab("Processes");
         await panel.getByText(updatedTail, { exact: true }).waitFor();
-        if (capture) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, "processes-after.png"),
-          });
-        }
+        await screenshot("processes-after.png");
         await gateway.deferNext("sessions.processes.stop");
         await panel.getByRole("button", { name: "Stop " + process.name, exact: true }).click();
         const stop = await gateway.waitForRequest("sessions.processes.stop");

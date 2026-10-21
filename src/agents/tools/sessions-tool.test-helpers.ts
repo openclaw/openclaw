@@ -30,7 +30,7 @@ function resolvedFixture(escaped = false) {
 export const adversarialResolved = resolvedFixture();
 export const escapeHeavyResolved = resolvedFixture(true);
 
-export const expectedResolvedOmission = { reason: "response_budget_exceeded" } as const;
+const expectedResolvedOmission = { reason: "response_budget_exceeded" } as const;
 
 type Acknowledgement = { content: Array<{ type: string; text?: string }>; details: unknown };
 

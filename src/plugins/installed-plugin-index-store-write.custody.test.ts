@@ -6,15 +6,15 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
 import {
-  refreshPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndex,
+  refreshPersistedInstalledPluginIndex as refreshIndex,
+  writePersistedInstalledPluginIndex as writeIndex,
 } from "./installed-plugin-index-store-write.js";
-import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
+import { readPersistedInstalledPluginIndexSync as readIndex } from "./installed-plugin-index-store.js";
 import {
   runOutsidePluginLifecycleLease,
   withPluginLifecycleLease,
 } from "./plugin-lifecycle-lease.js";
-import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
+import { refreshPluginRegistryAfterConfigMutation as refreshConfig } from "./registry-refresh.js";
 import { createInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -60,17 +60,16 @@ it.each(["manual", "committed-config", "committed-config-default"] as const)(
       },
     };
     const warn = vi.fn();
+    const write = (installRecords: typeof latestRecords | Record<string, never>) =>
+      writeIndex(createInstalledPluginIndex({ installRecords, plugins: [] }), { env });
     let refreshing: Promise<unknown> | undefined;
     try {
       await withPluginLifecycleLease({ env }, async () => {
-        await writePersistedInstalledPluginIndex(
-          createInstalledPluginIndex({ installRecords: {}, plugins: [] }),
-          { env },
-        );
+        await write({});
         refreshing = runOutsidePluginLifecycleLease(async () =>
           entry === "manual"
-            ? refreshPersistedInstalledPluginIndex({ env, reason: "manual", candidates: [] })
-            : refreshPluginRegistryAfterConfigMutation({
+            ? refreshIndex({ env, reason: "manual", candidates: [] })
+            : refreshConfig({
                 env,
                 configPath,
                 reason: "source-changed",
@@ -85,14 +84,11 @@ it.each(["manual", "committed-config", "committed-config-default"] as const)(
             refreshing.then(() => "committed"),
           ]),
         ).toBe("held");
-        await writePersistedInstalledPluginIndex(
-          createInstalledPluginIndex({ installRecords: latestRecords, plugins: [] }),
-          { env },
-        );
+        await write(latestRecords);
       });
       await refreshing;
       expect(warn).not.toHaveBeenCalled();
-      expect(readPersistedInstalledPluginIndexSync({ env })).toMatchObject({
+      expect(readIndex({ env })).toMatchObject({
         installRecords: latestRecords,
         refreshReason: entry === "manual" ? "manual" : "source-changed",
       });
