@@ -31,13 +31,7 @@ vi.mock("../../commands/migrate/apply.js", () => ({
 }));
 
 import { migrationsHandlers } from "./migrations.js";
-
-type RespondCall = [
-  boolean,
-  unknown?,
-  { code: number; message: string }?,
-  Record<string, unknown>?,
-];
+import type { RespondFn } from "./types.js";
 
 function createConfig() {
   return {
@@ -102,33 +96,6 @@ function provider(plan = memoryPlan()): MigrationProviderPlugin {
   };
 }
 
-function invoke(method: keyof typeof migrationsHandlers, params: Record<string, unknown>) {
-  const respond = vi.fn();
-  const requestParams =
-    method === "migrations.memory.apply" && !("idempotencyKey" in params)
-      ? { idempotencyKey: "memory-import-test", ...params }
-      : params;
-  return {
-    respond,
-    run: async () =>
-      await expectDefined(
-        migrationsHandlers[method],
-        `${method} handler test invariant`,
-      )({
-        params: requestParams,
-        respond: respond as never,
-        context: { getRuntimeConfig: () => config, dedupe } as never,
-        client: null,
-        req: { type: "req", id: "req-1", method },
-        isWebchatConnect: () => false,
-      }),
-  };
-}
-
-function firstCall(respond: ReturnType<typeof vi.fn>): RespondCall {
-  return expectDefined(respond.mock.calls[0], "expected gateway response") as RespondCall;
-}
-
 async function loadPlanFingerprint(overwrite = false): Promise<string> {
   const [ok, rawResult] = await response("migrations.memory.plan", {
     agentId: "research",
@@ -157,9 +124,22 @@ async function response(
   method: keyof typeof migrationsHandlers,
   params: Record<string, unknown> = { agentId: "research" },
 ) {
-  const request = invoke(method, params);
-  await request.run();
-  return firstCall(request.respond);
+  const respond = vi.fn<RespondFn>();
+  await expectDefined(
+    migrationsHandlers[method],
+    `${method} handler test invariant`,
+  )({
+    params:
+      method === "migrations.memory.apply"
+        ? { idempotencyKey: "memory-import-test", ...params }
+        : params,
+    respond,
+    context: { getRuntimeConfig: () => config, dedupe } as never,
+    client: null,
+    req: { type: "req", id: "req-1", method },
+    isWebchatConnect: () => false,
+  });
+  return expectDefined(respond.mock.calls[0], "expected gateway response");
 }
 
 async function expectRejectedApply(planFingerprint: string, message: string, overrides = {}) {
