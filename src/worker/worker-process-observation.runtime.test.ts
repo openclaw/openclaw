@@ -37,11 +37,17 @@ it.each([true, false])(
       ...testWorkerDescriptor(process.cwd()),
       connectionEndpoint: TEST_WORKER_ENDPOINT,
     };
-    const record = createProcessSessionFixture({ id: "retained-build", backgrounded: true });
-    record.scopeKey = "worker:" + descriptor.admission.sessionId;
-    record.agentId = descriptor.assignment.agentId;
+    const { sessionId, environmentId, ownerEpoch } = descriptor.admission;
+    const processFixture = (id: string, ownerSession = sessionId) => {
+      const process = Object.assign(createProcessSessionFixture({ id, backgrounded: true }), {
+        scopeKey: `worker:${ownerSession}`,
+        agentId: descriptor.assignment.agentId,
+      });
+      addSession(process);
+      return process;
+    };
+    const record = processFixture("retained-build");
     record.processActivity = { resultSettled: false, lastOutputAtMs: record.startedAt };
-    addSession(record);
     appendOutput(record, "stdout", "Build is running\n");
     vi.mocked(runWorkerDescriptor).mockResolvedValue({
       status: "completed",
@@ -69,17 +75,12 @@ it.each([true, false])(
       return result.promise;
     };
     const running = runWorkerCommand({ input, output, managed: true });
-    const binding = {
-      type: "process",
-      environmentId: descriptor.admission.environmentId,
-      sessionId: descriptor.admission.sessionId,
-      ownerEpoch: descriptor.admission.ownerEpoch,
-    };
+    const binding = { type: "process", environmentId, sessionId, ownerEpoch };
     const observe = (
       requestId: string,
       operation: WorkerProcessOperation,
-      ownerEpoch = binding.ownerEpoch,
-    ) => request(requestId, { ...binding, requestId, operation, ownerEpoch });
+      epoch = binding.ownerEpoch,
+    ) => request(requestId, { ...binding, requestId, operation, ownerEpoch: epoch });
     const expectChanges = async (count: number) => {
       await vi.advanceTimersByTimeAsync(5_000);
       expect(changes).toHaveLength(processChanges ? count : 0);
@@ -97,19 +98,15 @@ it.each([true, false])(
       expect(list).toMatchObject({
         type: "process-result",
         result: {
-          sessionId: descriptor.admission.sessionId,
+          sessionId,
           processes: [{ processId: record.id, tail: "Build is running\n" }],
         },
       });
       if (list.type !== "process-result" || !list.result || !("processes" in list.result)) {
         throw new Error("Expected process list");
       }
-      const row = list.result.processes[0]!;
-      const stop: WorkerProcessOperation = {
-        action: "stop",
-        processId: row.processId,
-        instanceId: row.instanceId,
-      };
+      const { processId, instanceId } = list.result.processes[0]!;
+      const stop: WorkerProcessOperation = { action: "stop", processId, instanceId };
       expect(await observe("stale", stop, binding.ownerEpoch + 1)).toMatchObject({
         error: expect.stringContaining("owner changed"),
       });
@@ -125,10 +122,7 @@ it.each([true, false])(
       });
       appendOutput(record, "stdout", "Build output after the turn\n");
       await expectChanges(2);
-      const other = createProcessSessionFixture({ id: "another-owner", backgrounded: true });
-      other.scopeKey = "worker:another-session";
-      other.agentId = record.agentId;
-      addSession(other);
+      const other = processFixture("another-owner", "another-session");
       appendOutput(other, "stdout", "Unrelated output\n");
       await expectChanges(2);
       appendOutput(record, "stdout", "Build progressed after the turn\n");

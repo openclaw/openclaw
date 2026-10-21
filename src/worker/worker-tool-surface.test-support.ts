@@ -26,36 +26,56 @@ import { createWorkerComputerTool } from "./computer-runtime.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { createWorkerPlacementTools } from "./worker-placement-tools.js";
 
-export function createWorkerToolSurfaceForTest(params: {
+type WorkerToolFixture = {
   assignment: WorkerLaunchDescriptor["assignment"];
   config?: OpenClawConfig;
   sessionId: string;
-}): WorkerToolSurface {
+  runId?: string;
+};
+
+export function prepareWorkerPlacementForTest(params: WorkerToolFixture) {
   const { assignment, config, sessionId } = params;
+  const { agentId, permissionMode, workspaceDir: cwd } = assignment;
   const policy = prepareCoreToolPolicy({
     config,
-    agentId: assignment.agentId,
+    agentId,
     modelProvider: assignment.modelRef.provider,
     modelId: assignment.modelRef.model,
-    sessionPermissionPolicy: assignment.permissionMode
-      ? { mode: assignment.permissionMode, root: assignment.workspaceDir }
-      : undefined,
+    sessionPermissionPolicy: permissionMode ? { mode: permissionMode, root: cwd } : undefined,
   });
-  const definitions = new Map(
-    createWorkerPlacementTools({
-      policy,
-      cwd: assignment.workspaceDir,
-      containmentRoot: assignment.workerContainmentRoot ?? assignment.workspaceDir,
-      execAuthority: assignment.toolAuthority.exec,
-      permissionMode: assignment.permissionMode,
-      agentId: assignment.agentId,
-      sessionKey: `worker:${sessionId}`,
-      sessionId,
-      runId: assignment.runId,
-    }).map((tool) => [tool.name, projectAgentToolDefinition(tool)]),
-  );
+  const tools = createWorkerPlacementTools({
+    policy,
+    cwd,
+    containmentRoot: assignment.workerContainmentRoot ?? cwd,
+    execAuthority: assignment.toolAuthority.exec,
+    permissionMode,
+    agentId,
+    sessionKey: `worker:${sessionId}`,
+    sessionId,
+    runId: params.runId ?? assignment.runId,
+  });
+  return { policy, tools };
+}
+
+export function createWorkerToolSurfaceForTest(params: WorkerToolFixture): WorkerToolSurface {
+  const { assignment } = params;
+  const { policy, tools } = prepareWorkerPlacementForTest(params);
+  type SurfaceTool = WorkerToolSurface["tools"][number];
+  const entries = new Map<string, SurfaceTool>();
+  const add = (
+    definition: SurfaceTool["definition"],
+    execution: SurfaceTool["execution"] = "placement",
+    replay?: true,
+  ) =>
+    entries.set(definition.name, {
+      id: definition.name,
+      definition,
+      execution,
+      ...(replay ? { replay } : {}),
+    });
+  tools.forEach((tool) => add(projectAgentToolDefinition(tool)));
   if (assignment.browser) {
-    definitions.set("browser", {
+    add({
       name: "browser",
       label: "Browser",
       description: "Control the attached worker browser.",
@@ -64,8 +84,7 @@ export function createWorkerToolSurfaceForTest(params: {
     });
   }
   if (assignment.computer) {
-    definitions.set(
-      "computer",
+    add(
       projectAgentToolDefinition(
         createWorkerComputerTool({
           descriptor: assignment.computer,
@@ -85,34 +104,20 @@ export function createWorkerToolSurfaceForTest(params: {
     ["presence", PresenceQueryParamsSchema, PRESENCE_TOOL_DESCRIPTION],
   ] as const;
   for (const [name, parameters, description] of gatewayDefinitions) {
-    definitions.set(name, {
-      name,
-      label: name,
-      description,
-      parameters,
-      executionMode: undefined,
-    });
+    const definition = { name, label: name, description, parameters, executionMode: undefined };
+    add(
+      definition,
+      "gateway",
+      name === "sessions_spawn" || name === "sessions_send" ? true : undefined,
+    );
   }
   const surface = {
     generation: "runtime-surface",
     presentation: createToolSurfacePresentationForTest(),
     policy,
     tools: assignment.toolAuthority.allowedToolNames.flatMap((name) => {
-      const definition = definitions.get(name);
-      if (!definition) {
-        return [];
-      }
-      const gatewayTool = gatewayDefinitions.some(([toolName]) => toolName === name);
-      return [
-        {
-          id: name,
-          definition,
-          execution: gatewayTool ? "gateway" : "placement",
-          ...(name === "sessions_spawn" || name === "sessions_send"
-            ? { replay: true as const }
-            : {}),
-        },
-      ];
+      const entry = entries.get(name);
+      return entry ? [entry] : [];
     }),
   };
   if (!Value.Check(WorkerToolSurfaceSchema, surface)) {

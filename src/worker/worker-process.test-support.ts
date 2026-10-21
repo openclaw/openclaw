@@ -23,18 +23,13 @@ export type WorkerProcessTestExit = { code: number | null; stdout: string; stder
 /** Real worker commands own process-local state and event registries, apart from their Gateway. */
 export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => string) {
   const children: Array<(signal: AbortSignal) => Promise<void>> = [];
-  let lastPid: number | undefined;
-  const launch = async ({
-    descriptor,
-    startup,
-    signal,
-    diagnostics,
-  }: {
+  const launch = async (options: {
     descriptor: WorkerLaunchDescriptor;
     startup?: NativeInferenceStartup;
     signal: AbortSignal;
     diagnostics?: () => Record<string, unknown>;
   }) => {
+    const { descriptor, startup, signal, diagnostics } = options;
     const sdkHost = createCompiledSdkHost(
       [
         workerBackgroundExecEntrypoints.providerModelMetadata,
@@ -88,23 +83,23 @@ export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => 
         stdio,
       },
     );
-    lastPid = child.pid;
     const { stdin, stdout: childOutput, stderr: childError } = child;
     if (!stdin || !childOutput || !childError) {
       child.kill("SIGKILL");
       throw new Error("Native worker fixture requires all three control/output pipes");
     }
-    let stdout = "";
-    let stderr = "";
-    childOutput.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    childError.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
+    const output = { stdout: "", stderr: "" };
+    for (const [name, stream] of [
+      ["stdout", childOutput],
+      ["stderr", childError],
+    ] as const) {
+      stream.on("data", (chunk: Buffer) => {
+        output[name] += chunk.toString();
+      });
+    }
     const exited = new Promise<WorkerProcessTestExit>((resolve, reject) => {
       child.once("error", reject);
-      child.once("close", (code) => resolve({ code, stdout, stderr }));
+      child.once("close", (code) => resolve({ code, ...output }));
     });
     // A spawn failure must remain observed even when a provider-readiness assertion fails first.
     void exited.catch(() => undefined);
@@ -126,24 +121,20 @@ export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => 
     send({ type: "turn", turnId, descriptor });
     return {
       child,
-      exited,
-      close,
       cancel: () => send({ type: "cancel", turnId }),
       finish: async () => {
         try {
           return await withinTest(exited, signal);
         } catch (error) {
-          throw new Error(
-            JSON.stringify({ error: String(error), stdout, stderr, ...diagnostics?.() }),
-            { cause: error },
-          );
+          throw new Error(JSON.stringify({ error: String(error), ...output, ...diagnostics?.() }), {
+            cause: error,
+          });
         }
       },
     };
   };
   return {
     launch,
-    lastPid: () => lastPid,
     close: async (signal: AbortSignal) => {
       const settled = await Promise.allSettled(children.splice(0).map((close) => close(signal)));
       const errors = settled.flatMap((result) =>
