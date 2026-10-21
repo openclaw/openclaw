@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { exactBoardWidgetHeightPx, FINE_POINTER_QUERY } from "../../lib/board/grid.ts";
-// Register the custom element used by mount().
 import "./board-view.ts";
 import {
   boardWidget,
@@ -40,15 +39,11 @@ describe("board widget sizing", () => {
   });
 
   it("lets a dashboard document fit tall HTML content without an inner scroll viewport", async () => {
+    const mediaQuery = window.matchMedia(FINE_POINTER_QUERY);
     vi.spyOn(window, "matchMedia").mockImplementation((media) => ({
+      ...mediaQuery,
       media,
       matches: media === FINE_POINTER_QUERY,
-      onchange: null,
-      addListener() {},
-      removeListener() {},
-      addEventListener() {},
-      removeEventListener() {},
-      dispatchEvent: () => true,
     }));
     const view = await mount();
     view.fitAutoContent = true;
@@ -82,7 +77,6 @@ describe("board widget sizing", () => {
       expect(cell?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.disabled).toBe(false),
     );
 
-    // An auto widget pins to its current effective height.
     await openBoardMenu(view);
     view.querySelector<HTMLButtonElement>('[data-value="height:auto"]')!.click();
     await vi.waitFor(() => expect(applyOps).toHaveBeenLastCalledWith([resizeOp(6, 4, "fixed")]));

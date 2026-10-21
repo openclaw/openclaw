@@ -1,5 +1,5 @@
 import { flush } from "solid-js";
-import { expect, onTestFinished, vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardSnapshot, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardViewCallbacks } from "../../lib/board/view-types.ts";
@@ -15,7 +15,6 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
-type OpenClawBoardWidgetCell = HTMLElementTagNameMap["openclaw-board-widget-cell"];
 
 export async function openBoardMenu(
   root: ParentNode,
@@ -69,7 +68,7 @@ export function gatewayContext(client: { request: GatewayRequestHandler } | null
   return { basePath, gateway } as unknown as ApplicationContext;
 }
 
-export async function settleCells(view: OpenClawBoardView): Promise<OpenClawBoardWidgetCell[]> {
+export async function settleCells(view: OpenClawBoardView) {
   flush();
   await view.updateComplete;
   const cells = [...view.querySelectorAll("openclaw-board-widget-cell")];
@@ -80,15 +79,12 @@ export async function settleCells(view: OpenClawBoardView): Promise<OpenClawBoar
 }
 
 export async function mount(
-  options: {
-    snapshot?: BoardSnapshot;
-    activeTabId?: string;
-    callbacks?: BoardViewCallbacks;
-    widgetFrameUrl?: (name: string, revision: number) => string;
-    context?: ApplicationContext;
-    canMutate?: boolean;
-    canGrant?: boolean;
-  } = {},
+  options: Partial<
+    Pick<
+      OpenClawBoardView,
+      "snapshot" | "activeTabId" | "callbacks" | "widgetFrameUrl" | "canMutate" | "canGrant"
+    >
+  > & { context?: ApplicationContext } = {},
 ): Promise<OpenClawBoardView> {
   const view = document.createElement("openclaw-board-view");
   view.snapshot = options.snapshot ?? snapshot();
@@ -101,8 +97,7 @@ export async function mount(
   if (root !== view) {
     root.append(view);
   }
-  const mounted = mountSolid(() => root);
-  onTestFinished(() => mounted.unmount());
+  mountSolid(() => root);
   await settleCells(view);
   return view;
 }
