@@ -625,10 +625,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     result: { payloads: [{ text }], deliveryStatus: sentDeliveryStatus },
   });
   const missingResult = { delivered: false, path: "direct", reason: "visible_reply_missing" };
+  const completionCase = (
+    name: string,
+    route: DeliveryCase["route"],
+    fields: Omit<DeliveryCase, "name" | "route">,
+  ): DeliveryCase => ({ name, route, ...fields });
   it.each<DeliveryCase>([
-    {
-      name: "defers completion while sessions_yield owns the active requester",
-      route: "thread",
+    completionCase("yield custody", "thread", {
       response: {},
       params: {
         sessionId: "requester-session-1",
@@ -644,10 +647,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         disposition: "intentional_non_delivery",
       },
       gatewayCalls: 0,
-    },
-    {
-      name: "delivers the child result when requester synthesis omits it",
-      route: "discord",
+    }),
+    completionCase("omitted synthesis result", "discord", {
       response: { result: { payloads: [{ text: "TG88042_NO_REOUTPUT" }] } },
       params: {
         internalEvents: identifiedCompletion({ result: "The child found the root cause." }),
@@ -659,10 +660,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         content: "The child found the root cause.",
         idempotencyKey: "announce-dm-fallback-empty:text-direct",
       },
-    },
-    {
-      name: "uses the caller owner for a bare requester key",
-      route: "discord",
+    }),
+    completionCase("bare requester owner", "discord", {
       params: {
         requesterSessionKey: "global",
         requesterAgentId: "research",
@@ -676,10 +675,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         agentId: "research",
         mirror: expect.objectContaining({ sessionKey: "global", agentId: "research" }),
       },
-    },
-    {
-      name: "delivers unprefixed direct targets recognized by the channel grammar",
-      route: "channel",
+    }),
+    completionCase("channel-grammar direct target", "channel", {
       setup: () => registerDirectTargetTestChannel("qa-channel"),
       params: {
         sessionId: "requester-session-qa",
@@ -694,16 +691,12 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         content: "child completion output",
         idempotencyKey: "announce-qa-fallback-empty:text-direct",
       },
-    },
-    {
-      name: "does not raw-send channel completions just because the requester key is direct",
-      route: "channel",
+    }),
+    completionCase("channel target with a direct key", "channel", {
       params: { requesterSessionKey: "agent:main:discord:dm:U123" },
       expected: missingResult,
-    },
-    {
-      name: "reports requester-agent delivery failure even when output stayed visible",
-      route: "thread",
+    }),
+    completionCase("visible but failed delivery", "thread", {
       response: responseWithResult({
         payloads: [{ text: "Tests passed and the PR is ready for review." }],
         deliveryStatus: {
@@ -712,10 +705,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         },
       }),
       expected: { delivered: false, path: "direct", error: "Slack send failed: channel not found" },
-    },
-    {
-      name: "does not credit stale thread completions after no-visible-payload suppression",
-      route: "thread",
+    }),
+    completionCase("active suppressed completion", "thread", {
       response: responseWithResult({
         payloads: [],
         deliveryStatus: {
@@ -727,10 +718,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       params: { isActive: true },
       expected: missingResult,
       gatewayCalls: 1,
-    },
-    {
-      name: "keeps typed missing output retryable without completion steering",
-      route: "discord",
+    }),
+    completionCase("typed missing child output", "discord", {
       params: {
         isActive: true,
         sourceSessionKey: "agent:worker:subagent:empty-success",
@@ -743,10 +732,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         }),
       },
       expected: { ...missingVisibleCompletion, terminal: undefined },
-    },
-    {
-      name: "does not restart a requester after timeout",
-      route: "telegram",
+    }),
+    completionCase("abandoned requester", "telegram", {
       response: deliveredPayload("child completion output"),
       params: { requesterAbandonment: "timeout", isActive: false },
       expected: {
@@ -756,10 +743,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         error: "requester session abandoned after timeout",
       },
       gatewayCalls: 0,
-    },
-    {
-      name: "delivers Telegram forum-topic completions through the parent handoff",
-      route: "telegram",
+    }),
+    completionCase("Telegram forum topic", "telegram", {
       response: deliveredPayload("The delegated task is complete."),
       params: {
         requesterSessionKey: "agent:main:telegram:group:-1003871627242:topic:6823",
@@ -783,10 +768,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         to: "telegram:-1003871627242",
         threadId: "6823",
       },
-    },
-    {
-      name: "fails configured channel completion when the parent skips the required message tool",
-      route: "channel",
+    }),
+    completionCase("required message tool missing", "channel", {
       response: deliveredPayload("The subagent is done."),
       params: { sourceTool: "subagent_announce", runtimeConfig: messageToolConfig },
       expected: {
@@ -797,10 +780,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         disposition: "permanent_failure",
       },
       gatewayCalls: 1,
-    },
-    {
-      name: "records a committed direct completion when the announce turn ends incomplete",
-      route: "discord",
+    }),
+    completionCase("committed tool final after error", "discord", {
       response: responseWithResult({
         payloads: [],
         deliveryStatus: { status: "failed", errorMessage: "Agent couldn't generate a response." },
@@ -820,13 +801,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         sourceTool: "subagent_announce",
         internalEvents: identifiedCompletion({ result: "(no output)", noVisibleResult: true }),
       },
-    },
-    {
-      name: "uses the external requester route when completion origin is internal",
-      route: "channel",
+    }),
+    completionCase("internal completion origin", "channel", {
       response: deliveredPayload("child completion output"),
       params: { completionDirectOrigin: { channel: "webchat" } },
-    },
+    }),
   ])("$name", async ({ route, response, params, expected, sent, gateway, gatewayCalls, setup }) => {
     setup?.();
     const callGateway = createGatewayMock(response ?? { result: { payloads: [] } });

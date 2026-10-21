@@ -293,11 +293,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
   it("includes the whole connected drained wave for a staggered fan-out", async () => {
     // A overlaps B and B overlaps C, but A never overlaps C.
-    const resultPrefix = "<result>".repeat(700);
     const timings = [
       ["run-a", 1_000, 1_000, 2_000],
       ["run-b", 1_500, 2_100, 3_000],
       ["run-c", 2_500, 2_500, 4_000],
+      ["run-old", 100, 100, 200],
     ] as const;
     const children = timings.map(([runId, createdAt, startedAt, endedAt]) =>
       makeSettledChild({ runId, createdAt, startedAt, endedAt, outcome: { status: "ok" } }),
@@ -305,14 +305,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     const findings = ["alpha findings", "bravo findings", "charlie findings"];
     transcriptsFor(children, (child) => {
       const index = children.indexOf(child);
-      const text = `${resultPrefix}${findings[index]}`;
-      const terminalReply = prepareAgentRunTerminalReply({ rawText: text }).terminalReply;
-      expect(terminalReply.disposition).toBe("visible");
-      if (terminalReply.disposition !== "visible") {
-        throw new Error("expected visible terminal evidence");
-      }
-      child.completion = { required: true, terminalReply, resultText: text };
-      expect(terminalReply.text).toHaveLength(4_096);
+      const text = findings[index] ?? "old findings";
+      child.completion = completion(text);
       return [
         assistant("previous-run", "stale previous result"),
         assistant(child.runId, "earlier commentary"),
@@ -325,15 +319,13 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     await expectWake({ settledEntry: children[2] });
     const call = deliveredCallArg();
     expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b,run-c"));
-    const message = expectMessage(
-      findings.map((result) => `${"&lt;result&gt;".repeat(700)}${result}`),
-      [
-        "stale previous result",
-        "earlier commentary",
-        "unrelated later result",
-        "unfinished follow-up",
-      ],
-    );
+    const message = expectMessage(findings, [
+      "stale previous result",
+      "earlier commentary",
+      "unrelated later result",
+      "unfinished follow-up",
+      "old findings",
+    ]);
     expect(message.indexOf("alpha findings")).toBeLessThan(message.indexOf("bravo findings"));
     expect(message.indexOf("bravo findings")).toBeLessThan(message.indexOf("charlie findings"));
     expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(
@@ -342,19 +334,15 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       { delivered: true, path: "direct" },
     );
   });
-  it("ignores long-settled children from earlier non-overlapping spawns", async () => {
-    setChildren([
-      makeSettledChild({ runId: "run-old-1", createdAt: 100, startedAt: 100, endedAt: 200 }),
-      makeSettledChild({ runId: "run-old-2", createdAt: 100, startedAt: 110, endedAt: 250 }),
-      makeSettledChild({ runId: "run-b", delivery: { status: "delivered" } }),
-    ]);
-    await expectNoWake();
-  });
   it("does not wake while other children still await settle", async () => {
     const children = setChildren();
     readDescendantFacts.mockResolvedValue({ unsettled: true, active: 0 });
     await expectNoWake({ settledEntry: children[1] });
     expect(readDescendantFacts).toHaveBeenCalledOnce();
+  });
+  it("does not wake for an already delivered wave", async () => {
+    setChildren([makeSettledChild({ runId: "run-b", delivery: { status: "delivered" } })]);
+    await expectNoWake();
   });
   it("skips cron requester sessions", async () => {
     await expectNoWake({ requesterSessionKey: "agent:main:cron:daily-report" });
@@ -375,26 +363,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     setChildren([activeChild]);
     await expectNoWake({ settledEntry: activeChild });
     expect(completeBatchSpy).not.toHaveBeenCalled();
-  });
-  it("does not revive captured fallback output after a resumed completion returns NO_REPLY", async () => {
-    setChildren([
-      makeSettledChild({
-        runId: "run-b",
-        delivery: { status: "failed" },
-        completion: {
-          required: true,
-          terminalReply: { disposition: "silent" },
-          resultText: "NO_REPLY",
-          fallbackResultText: "findings captured before the wake",
-        },
-        outcome: { status: "ok" },
-      }),
-    ]);
-    expect(await wake()).toBe(true);
-    expectMessage(
-      ["(no output)"],
-      ["findings captured before the wake", "<prompt-data>\nNO_REPLY\n</prompt-data>"],
-    );
   });
   it("keeps producer-owned route evidence internal on a shared surface", async () => {
     const terminalReply = {

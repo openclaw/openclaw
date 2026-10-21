@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import * as announceDelivery from "./subagent-announce-delivery.js";
-import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type Runtime = typeof import("./subagent-announce.runtime.js");
 type SessionEntry = Awaited<ReturnType<Runtime["readSubagentSessionEntry"]>>;
@@ -34,31 +33,12 @@ const subagentRegistryRuntimeMock = vi.hoisted(() => ({
   resolveRequesterForChildSession: vi.fn(() => null),
 }));
 
-vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./subagent-announce.runtime.js")>()),
-  callSubagentLifecycleGateway: (request: unknown) => callGatewayMock(request),
-  dispatchGatewayMethodInProcess: (
-    method: string,
-    params: Record<string, unknown>,
-    options?: { timeoutMs?: number },
-  ) => callGatewayMock({ method, params, timeoutMs: options?.timeoutMs }),
-  getRuntimeConfig: () => mockConfig,
-  readSessionMessagesAsync: vi.fn(async () => []),
-  readSubagentSessionEntry: (storePath: string, sessionKey: string) =>
-    readEntry(storePath, sessionKey),
-  resolveSessionStorePathCore: () => "/tmp/sessions.json",
+vi.mock("./subagent-announce-delivery.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-announce-delivery.runtime.js")>()),
+  getGlobalHookRunner: () => ({ hasHooks: () => false }),
+  resolveBoundDeliveryDestination: async () => null,
+  resolveConversationIdFromTargets: () => "",
 }));
-
-vi.mock("./subagent-announce-delivery.runtime.js", () =>
-  createSubagentAnnounceDeliveryRuntimeMock({
-    callGateway: (request: unknown) => callGatewayMock(request),
-    getRuntimeConfig: () => mockConfig,
-    loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
-    resolveMainSessionKey: () => "agent:main:main",
-    resolveSessionStorePathCore: () => "/tmp/sessions.json",
-    isSessionRunActive: () => false,
-  }),
-);
 
 // mock-isolation: Announce orchestration uses scripted Gateway outcomes and requester records instead of the delivery runtime.
 vi.mock("./subagent-announce-delivery.js", () => ({

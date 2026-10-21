@@ -115,9 +115,6 @@ function getAgentCallContext(call = getAgentCall()): string {
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => visibleAgentResponse());
 const sendSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
-const resolveAgentIdFromSessionKeySpy = vi.spyOn(configSessions, "resolveAgentIdFromSessionKey");
-const resolveStorePathSpy = vi.spyOn(configSessions, "resolveSessionStorePathCore");
-const resolveMainSessionKeySpy = vi.spyOn(configSessions, "resolveMainSessionKey");
 const callGatewaySpy = vi.spyOn(gatewayCall, "callGateway");
 const getGlobalHookRunnerSpy = vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner");
 const isEmbeddedAgentRunActiveSpy = vi.spyOn(sessionQueries, "isSessionRunActive");
@@ -193,7 +190,11 @@ function completedAnnounceRun(
   transcriptEvents = [assistantEvent(runId, text)];
   return child;
 }
-const sessionConfig = { mainKey: "main", scope: "per-sender" } as const;
+const sessionConfig = {
+  mainKey: "main",
+  scope: "per-sender",
+  store: "/tmp/sessions.json",
+} as const;
 let configOverride: OpenClawConfig = { session: sessionConfig };
 const defaultOutcomeAnnounce = {
   childRunId: "run-default",
@@ -493,13 +494,9 @@ describe("subagent announce formatting", () => {
   beforeEach(() => {
     subagentRuns.clear();
     vi.useRealTimers();
-    agentSpy
-      .mockReset()
-      .mockImplementation(async (_req: AgentCallRequest) => visibleAgentResponse());
-    sendSpy
-      .mockClear()
-      .mockImplementation(async (_req: AgentCallRequest) => ({ runId: "send-main", status: "ok" }));
-    sessionsDeleteSpy.mockClear().mockImplementation((_req: AgentCallRequest) => undefined);
+    agentSpy.mockReset();
+    sendSpy.mockClear();
+    sessionsDeleteSpy.mockClear();
     callGatewaySpy.mockReset().mockImplementation(async (req: unknown) => {
       const typed = req as { method?: string; params?: { message?: string; sessionKey?: string } };
       if (typed.method === "agent") {
@@ -534,9 +531,6 @@ describe("subagent announce formatting", () => {
       readSubagentSessionEntry: (_storePath, sessionKey) => readSessionFixture(sessionKey),
       resolveSessionStorePathCore: () => "/tmp/sessions.json",
     });
-    resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
-    resolveStorePathSpy.mockReset().mockImplementation(() => "/tmp/sessions.json");
-    resolveMainSessionKeySpy.mockReset().mockImplementation(() => requesterKey);
     getGlobalHookRunnerSpy
       .mockReset()
       .mockImplementation(
@@ -792,39 +786,33 @@ describe("subagent announce formatting", () => {
     },
   );
 
-  it.each([
-    {
-      name: "transient channel-unavailable",
-      outcome: "retryable",
-      origin: { channel: "whatsapp", to: "+15550000000", accountId: "default" },
-      error: new Error("Error: No active WhatsApp Web listener (account: default)"),
-      required: true,
-      reply: "final answer",
-    },
-    {
-      name: "permanent channel error",
-      outcome: "permanent_failure",
-      origin: { channel: "telegram", to: "telegram:1234" },
-      error: new Error("unsupported channel: telegram"),
-      required: true,
-      reply: "final answer",
-    },
-    {
-      name: "fallback cooldown exhaustion",
-      outcome: "retryable",
-      origin: { channel: "discord", to: "channel:C123", accountId: "default" },
-      error: new FailoverError(
+  it.each<[string, AnnounceParams["requesterOrigin"], Error, string, boolean?, string?]>([
+    [
+      "transient channel-unavailable",
+      { channel: "whatsapp", to: "+15550000000", accountId: "default" },
+      new Error("Error: No active WhatsApp Web listener (account: default)"),
+      "retryable",
+    ],
+    [
+      "permanent channel error",
+      { channel: "telegram", to: "telegram:1234" },
+      new Error("unsupported channel: telegram"),
+      "permanent_failure",
+    ],
+    [
+      "fallback cooldown exhaustion",
+      { channel: "discord", to: "channel:C123", accountId: "default" },
+      new FailoverError(
         "All models failed (1): anthropic/claude-opus-4-7: Provider anthropic is in cooldown (all profiles unavailable) (overloaded)",
-        {
-          reason: "overloaded",
-        },
+        { reason: "overloaded" },
       ),
-      required: false,
-      reply: "worker result",
-    },
+      "retryable",
+      false,
+      "worker result",
+    ],
   ])(
-    "reports $name after one attempt",
-    async ({ name, outcome, origin, error, required, reply }) => {
+    "reports %s after one attempt",
+    async (name, origin, error, outcome, required = true, reply = "final answer") => {
       agentSpy.mockRejectedValueOnce(error);
       expect(
         await announceCompletion({
@@ -950,30 +938,20 @@ describe("subagent announce formatting", () => {
     },
   );
 
-  it.each([
-    {
-      name: "discards a stale session thread",
-      requesterThreadId: undefined,
-      sessionMeta: { lastChannel: "discord", lastTo: "channel:stale", lastThreadId: 42 },
-      expectedThreadId: undefined,
-    },
-    {
-      name: "uses the requester thread",
-      requesterThreadId: 99,
-      sessionMeta: {},
-      expectedThreadId: "99",
-    },
-  ])("manual completion $name", async ({ requesterThreadId, sessionMeta, expectedThreadId }) => {
+  it.each<[string, number | undefined, SessionEntryFixture, string | undefined]>([
+    [
+      "discards a stale session thread",
+      undefined,
+      { lastChannel: "discord", lastTo: "channel:stale", lastThreadId: 42 },
+      undefined,
+    ],
+    ["uses the requester thread", 99, {}, "99"],
+  ])("manual completion %s", async (_name, requesterThreadId, sessionMeta, expectedThreadId) => {
     setCompletionSessions("child-session-thread", "requester-session-thread", sessionMeta);
 
     await deliverCompletion({
       childRunId: "run-completion-thread",
-      requesterOrigin: {
-        channel: "discord",
-        to: "channel:12345",
-        accountId: "acct-1",
-        threadId: requesterThreadId,
-      },
+      requesterOrigin: { ...discordOrigin, threadId: requesterThreadId },
     });
     expect(getAgentCall().params).toMatchObject({
       channel: "discord",
@@ -1022,12 +1000,7 @@ describe("subagent announce formatting", () => {
     ["no override", undefined, undefined],
     ["internal override", undefined, { channel: "webchat", to: "conversation:123" }],
   ] as const)("uses requester or hook target: %s", async (_name, threadId, origin) => {
-    const requesterOrigin = {
-      channel: "discord",
-      to: "channel:12345",
-      accountId: "acct-1",
-      ...(threadId ? { threadId } : {}),
-    };
+    const requesterOrigin = { ...discordOrigin, ...(threadId ? { threadId } : {}) };
     const childRunId = "run-hook-target";
     hasDeliveryTarget = true;
     deliveryTarget.mockResolvedValueOnce(origin ? { origin } : undefined);
