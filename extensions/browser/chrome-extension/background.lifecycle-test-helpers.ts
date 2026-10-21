@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, vi, type Mock } from "vitest";
 import type { ExtensionRelayBridge } from "../src/browser/extension-relay/relay-bridge.js";
-import { FakeSocket } from "../src/browser/extension-relay/relay-bridge.test-support.js";
+import { createRelayClient } from "../src/browser/extension-relay/relay-runtime.test-support.js";
 import {
   loadBackground,
   loadRelayCommandHarness,
@@ -17,11 +17,10 @@ export function deferredScope() {
     deferred: <T>(fallback: T) => {
       const pending = createDeferred<T>();
       const resolve = (value = fallback) => {
-        releases.delete(release);
+        releases.delete(resolve);
         pending.resolve(value);
       };
-      const release = () => resolve();
-      releases.add(release);
+      releases.add(resolve);
       return { promise: pending.promise, resolve };
     },
     releaseAll: () => releases.forEach((release) => release()),
@@ -29,16 +28,9 @@ export function deferredScope() {
 }
 
 export type CdpFrame = {
-  id?: number;
-  method?: string;
   result?: Record<string, unknown>;
   error?: { message: string };
-  params?: {
-    sessionId?: string;
-    requestId?: string;
-    targetId?: string;
-    targetInfo?: { targetId?: string };
-  };
+  params?: { requestId?: string; targetId?: string };
 };
 export function connectExtension(
   bridge: ExtensionRelayBridge,
@@ -58,42 +50,23 @@ export function connectExtension(
   extension.onMessage(JSON.stringify(hello));
 }
 export function connectCdpClient(bridge: ExtensionRelayBridge) {
-  const socket = new FakeSocket();
-  const handlers = bridge.attachCdpClientSocket(socket);
-  const frames = () => socket.frames() as CdpFrame[];
-  let id = 0;
-  const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string) => {
-    const requestId = ++id;
-    handlers.onMessage(JSON.stringify({ id: requestId, method, params, sessionId }));
-    return requestId;
-  };
-  const response = (requestId: number) =>
-    vi.waitFor(() => {
-      const frame = frames().find((entry) => entry.id === requestId);
-      assert(frame, `missing CDP reply ${requestId}`);
-      return frame;
-    });
+  const client = createRelayClient(bridge, undefined, vi.waitFor);
+  const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string) =>
+    client.send(method, sessionId, params);
+  const response = async (id: number) => (await client.response(id)) as CdpFrame;
   const request = async (...args: Parameters<typeof send>) => await response(send(...args));
-  const events = (method: string) => frames().filter((frame) => frame.method === method);
   return {
-    frames,
     send,
     response,
     request,
-    close: handlers.onClose,
-    events,
+    close: client.close,
+    events: (method: string) => client.frames(method) as CdpFrame[],
     async requestResult(...args: Parameters<typeof send>) {
       const frame = await request(...args);
       expect(frame).not.toHaveProperty("error");
       return frame.result;
     },
-    root(targetId: string) {
-      const session = events("Target.attachedToTarget").find(
-        (frame) => frame.params?.targetInfo?.targetId === targetId,
-      )?.params?.sessionId;
-      assert(typeof session === "string");
-      return session;
-    },
+    root: client.child,
   };
 }
 

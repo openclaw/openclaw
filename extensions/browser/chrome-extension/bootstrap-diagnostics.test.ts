@@ -37,12 +37,9 @@ function observerFixture(sink = () => true) {
 it("projects only fixed names and ordinals while forwarding exact bytes", () => {
   const { output, diagnostic, bridge, original, receive, send, callbacks, respond } =
     observerFixture();
-  const command = JSON.stringify({
-    id: 42,
-    method: "Page.navigate",
-    sessionId: "private-session",
-    params: { url: "https://private.invalid", headers: { authorization: "private-credential" } },
-  });
+  const command =
+    `{"id":42,"method":"Page.navigate","sessionId":"private-session",` +
+    `"params":{"url":"https://private.invalid","headers":{"authorization":"private-credential"}}}`;
   callbacks.onMessage(command);
   const response = JSON.stringify({ id: 42, error: { message: "private-error" } });
   respond(response);
@@ -77,7 +74,6 @@ it("caps flood output but retains the action outcome and teardown", async () => 
   expect(printed).toContain('"phase":"navigate.status","value":500');
   expect(printed).toContain('"phase":"relay.closed","value":true');
   expect(printed).not.toContain('"dropped":0');
-  diagnostic.dispose();
 });
 
 it("preserves a transport exception and ignores a diagnostic sink exception", () => {
@@ -90,5 +86,4 @@ it("preserves a transport exception and ignores a diagnostic sink exception", ()
   });
   expect(() => callbacks.onMessage("malformed")).toThrow(failure);
   expect(() => diagnostic.flush()).not.toThrow();
-  diagnostic.dispose();
 });
