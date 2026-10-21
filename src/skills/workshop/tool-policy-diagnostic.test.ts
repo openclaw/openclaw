@@ -20,19 +20,10 @@ function withModel(config: OpenClawConfig): OpenClawConfig {
 }
 
 function detect(config: OpenClawConfig, workshopEnabled = true) {
-  const agents = config.agents;
-  const hasRoster = Boolean(agents && "entries" in agents);
   return detectSkillWorkshopToolPolicyDiagnostic({
-    config: {
-      ...config,
-      agents: hasRoster ? agents : { ...agents, entries: { main: {} } },
-    },
+    config: { ...config, agents: { entries: { main: {} }, ...config.agents } },
     workshopEnabled,
   });
-}
-
-function expectPolicy(config: OpenClawConfig, source: string, fix: string) {
-  expect(detect(config)).toMatchObject({ source, fix });
 }
 
 describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
@@ -83,48 +74,44 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
     expect(detect({ tools: { profile: "messaging" } }, false)).toBeNull();
   });
 
-  it("names agent-scoped profile and allowlist sources", () => {
-    expectPolicy(
+  it.each([
+    [
       agentTools({ profile: "messaging" }),
       "agents.entries.main.tools.profile",
       'Add agents.entries.main.tools.alsoAllow: ["skill_workshop"].',
-    );
-    expectPolicy(
+    ],
+    [
       agentTools({ allow: ["read"] }),
       "agents.entries.main.tools.allow",
       'Add "skill_workshop" to agents.entries.main.tools.allow.',
-    );
-  });
-
-  it("targets the effective agent-scoped profile grant owner", () => {
-    expectPolicy(
+    ],
+    [
       {
         tools: { profile: "messaging" },
         ...agentTools({ alsoAllow: ["read"] }),
       },
       "tools.profile",
       'Add agents.entries.main.tools.alsoAllow: ["skill_workshop"].',
-    );
-  });
-
-  it("targets the effective agent-scoped provider profile grant owner", () => {
-    expectPolicy(
+    ],
+    [
       withModel({
         ...agentTools(byProvider({ alsoAllow: ["read"] })),
         tools: byProvider({ profile: "messaging" }),
       }),
       'tools.byProvider["openai"].profile',
       'Add agents.entries.main.tools.byProvider["openai"].alsoAllow: ["skill_workshop"].',
-    );
-  });
-
-  it("names the matching agent provider allowlist source", () => {
-    expectPolicy(
+    ],
+    [
       withModel(agentTools(byProvider({ allow: ["read"] }))),
       'agents.entries.main.tools.byProvider["openai"].allow',
       'Add "skill_workshop" to agents.entries.main.tools.byProvider["openai"].allow.',
-    );
-  });
+    ],
+  ] satisfies [OpenClawConfig, string, string][])(
+    "targets %s with source %s",
+    (config, source, fix) => {
+      expect(detect(config)).toMatchObject({ source, fix });
+    },
+  );
 
   it.each([
     { tools: { deny: ["skill_workshop"] } },
