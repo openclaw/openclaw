@@ -9,6 +9,30 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+export const securityReviewHead = "a".repeat(40);
+export const securityReviewRollout = {
+  number: 152415,
+  state: "closed",
+  merged: true,
+  merged_at: "2025-12-01T00:00:00Z",
+  merge_commit_sha: "c".repeat(40),
+  base: { ref: "main", repo: { full_name: "openclaw/openclaw" } },
+};
+const guardPull = {
+  number: 7,
+  state: "open",
+  draft: false,
+  created_at: "2026-01-01T00:00:00Z",
+  user: { id: 1, login: "contributor", type: "User" },
+  changed_files: 1,
+  head: { sha: securityReviewHead, ref: "change", repo: { id: 2 } },
+  base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
+};
+export const makeSecurityReviewPull = (patch: Partial<typeof guardPull> = {}) => ({
+  ...guardPull,
+  ...patch,
+});
+
 export function stageGuardPolicy(root: string, policy: string, script: string) {
   for (const source of [
     "scripts/github/security-review.mjs",

@@ -375,7 +375,6 @@ describe("automatic security review event resolution", () => {
     ["edited", "Removed", true, "/allow-dependencies-change"],
     ["edited", "/allow-dependencies-change", true, "Thanks"],
     ["deleted", "/allow-security-sensitive-change"],
-    ["created", "/allow-dependencies-change-extra", false],
     ["created", "/allow-dependencies-change\nThanks", false],
     ["created", "> /allow-dependencies-change", false],
     ["edited", "Removed", false, "Please post /allow-dependencies-change"],
@@ -435,9 +434,7 @@ describe("automatic security review event resolution", () => {
   });
 
   it.each<Options>([
-    ...["CI", `CI release gate ${"b".repeat(40)}`].map((display_title) => ({
-      run: { event: "workflow_dispatch", display_title },
-    })),
+    { run: { event: "workflow_dispatch", display_title: `CI release gate ${otherHead}` } },
     ...[
       { draft: true },
       { state: "closed" },

@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as npm from "../../scripts/npm-prepared-bundle.mjs";
 import { validatePreflightManifest } from "../../scripts/release-candidate-checklist.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureGit } from "./release-publish.test-support.js";
 
 // Only the default root pack reaches pnpm; git and tar fixtures keep the real binaries.
 const pnpmPack = vi.hoisted(() => ({
@@ -48,14 +49,6 @@ const workflowPath = ".github/workflows/full-release-validation.yml";
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const json = (value: unknown) => `${JSON.stringify(value)}\n`;
 const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
-const gitIdentity = [
-  "-c",
-  "user.name=Release fixture",
-  "-c",
-  "user.email=release-fixture@example.invalid",
-  "-c",
-  "commit.gpgsign=false",
-];
 
 async function artifactFixture(
   id: string,
@@ -157,11 +150,7 @@ function packageSourceFixture(
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, typeof contents === "string" ? contents : JSON.stringify(contents));
   };
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", sourceDir, ...gitIdentity, ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
+  const git = fixtureGit(sourceDir, "Release fixture", "release-fixture@example.invalid");
   git("init", "--quiet");
   write("package.json", {
     name: "openclaw",
@@ -612,48 +601,7 @@ it.each([false, true])(
   },
 );
 
-it("seals sanitized declarations under the hoisted linker after root prepack", () => {
-  const { runRootPack: _runRootPack, runPack, ...fixture } = packageSourceFixture("2026.8.33");
-  const distRoot = join(fixture.sourceDir, "dist");
-  mkdirSync(distRoot);
-  const steps: string[] = [];
-  const sanitizeRootDeclarations = vi.fn((_root: string) => steps.push("sanitize"));
-  const refreshRootDistInventory = vi.fn((_root: string) => steps.push("inventory"));
-  pnpmPack.impl = runPack;
-  pnpmPack.observer = (args) => {
-    steps.push(args.includes("pack") ? "pack" : String(args.at(-1)));
-  };
-  expect(
-    npm.prepareNpmPackageBundle({
-      ...fixture,
-      sanitizeRootDeclarations,
-      refreshRootDistInventory,
-    }).packageVersion,
-  ).toBe("2026.8.33");
-
-  expect(sanitizeRootDeclarations.mock.calls).toEqual([[distRoot]]);
-  expect(refreshRootDistInventory.mock.calls).toEqual([[fixture.sourceDir]]);
-  expect(steps).toEqual(["prepack", "sanitize", "inventory", "pack", "postpack"]);
-  expect(pnpmPack.calls).toEqual(
-    [
-      ["run", "prepack"],
-      [
-        "pack",
-        "--config.ignore-scripts=true",
-        "--config.node-linker=hoisted",
-        "--pack-destination",
-        fixture.outputDir,
-      ],
-      ["run", "--if-present", "postpack"],
-    ].map((args) => ({
-      args,
-      cwd: fixture.sourceDir,
-      env: expect.objectContaining({ OPENCLAW_PREPACK_PREPARED: "1" }),
-    })),
-  );
-});
-
-it("does not load the declaration parser from the frozen candidate", () => {
+it("sanitizes with trusted tooling before inventory and hoisted packing", () => {
   const { runRootPack: _runRootPack, runPack, ...fixture } = packageSourceFixture("2026.8.33");
   const marker = join(fixture.sourceDir, "candidate-typescript-loaded");
   const distRoot = join(fixture.sourceDir, "dist");
@@ -671,8 +619,36 @@ it("does not load the declaration parser from the frozen candidate", () => {
     ].join("\n"),
   );
   writeFileSync(join(distRoot, "chunk.d.ts"), "export { __exportAll as helper };\n");
+  const steps: string[] = [];
   pnpmPack.impl = runPack;
-  npm.prepareNpmPackageBundle({ ...fixture, refreshRootDistInventory: vi.fn() });
+  pnpmPack.observer = (args) => steps.push(args.includes("pack") ? "pack" : String(args.at(-1)));
+  const refreshRootDistInventory = vi.fn((root: string) => {
+    expect(root).toBe(fixture.sourceDir);
+    expect(readFileSync(join(distRoot, "chunk.d.ts"), "utf8")).toBe("export { };\n");
+    steps.push("inventory");
+  });
+  expect(npm.prepareNpmPackageBundle({ ...fixture, refreshRootDistInventory }).packageVersion).toBe(
+    "2026.8.33",
+  );
+  expect(refreshRootDistInventory).toHaveBeenCalledTimes(1);
+  expect(steps).toEqual(["prepack", "inventory", "pack", "postpack"]);
+  expect(pnpmPack.calls).toEqual(
+    [
+      ["run", "prepack"],
+      [
+        "pack",
+        "--config.ignore-scripts=true",
+        "--config.node-linker=hoisted",
+        "--pack-destination",
+        fixture.outputDir,
+      ],
+      ["run", "--if-present", "postpack"],
+    ].map((args) => ({
+      args,
+      cwd: fixture.sourceDir,
+      env: expect.objectContaining({ OPENCLAW_PREPACK_PREPARED: "1" }),
+    })),
+  );
 
   expect(existsSync(marker)).toBe(false);
   expect(readFileSync(join(distRoot, "chunk.d.ts"), "utf8")).toBe("export { };\n");
