@@ -7,11 +7,14 @@ import {
 } from "./test/sqlite-store.js";
 import { createWorkboardTools } from "./tools.js";
 
+const barrier = () => ({ entered: createDeferred<void>(), resume: createDeferred<void>() });
+const expectClosed = (work: Promise<unknown>) =>
+  expect(work).rejects.toThrow("workboard store is closed.");
+
 describe("Workboard store lifetime", () => {
   it("joins queued mutations before closing and rejects new work", async () => {
-    const entered = createDeferred<void>();
-    const resume = createDeferred<void>();
-    let closes = 0;
+    const { entered, resume } = barrier();
+    const close = vi.fn();
     const {
       store,
       stores: { cards: persistence },
@@ -20,9 +23,7 @@ describe("Workboard store lifetime", () => {
         entered.resolve();
         await resume.promise;
       },
-      onStoreClose: () => {
-        closes += 1;
-      },
+      onStoreClose: close,
     });
     const first = store.create({ title: "First" });
     await entered.promise;
@@ -30,23 +31,22 @@ describe("Workboard store lifetime", () => {
     const closing = store.close();
     try {
       expect(store.close()).toBe(closing);
-      await expect(store.create({ title: "Late" })).rejects.toThrow("workboard store is closed.");
-      expect(closes).toBe(0);
+      await expectClosed(store.create({ title: "Late" }));
+      expect(close).not.toHaveBeenCalled();
       resume.resolve();
       await expect(first).resolves.toMatchObject({ title: "First" });
       await expect(queued).resolves.toMatchObject({ title: "Queued" });
       await closing;
-      expect(closes).toBe(1);
+      expect(close).toHaveBeenCalledOnce();
       expect(await persistence.entries()).toHaveLength(2);
-      await expect(store.list()).rejects.toThrow("workboard store is closed.");
+      await expectClosed(store.list());
     } finally {
       resume.resolve();
     }
   });
 
   it("keeps a whole admitted tool call alive across its reads", async () => {
-    const entered = createDeferred<void>();
-    const resume = createDeferred<void>();
+    const { entered, resume } = barrier();
     let pause = false;
     const store = createWorkboardSqliteTestStore({
       beforeCardLookup: async () => {
@@ -74,9 +74,7 @@ describe("Workboard store lifetime", () => {
       },
     });
     await closing;
-    await expect(tool.execute("late", { id: card.id })).rejects.toThrow(
-      "workboard store is closed.",
-    );
+    await expectClosed(tool.execute("late", { id: card.id }));
   });
 
   it("does not let another store or a detached continuation revive a closed owner", async () => {
@@ -87,13 +85,11 @@ describe("Workboard store lifetime", () => {
       detached: resume.promise.then(() => first.create({ title: "Detached" })),
     }));
     await first.close();
-    const rejected = expect(detached).rejects.toThrow("workboard store is closed.");
+    const rejected = expectClosed(detached);
     resume.resolve();
     await rejected;
     await second.runOperation(async () => {
-      await expect(first.create({ title: "Wrong owner" })).rejects.toThrow(
-        "workboard store is closed.",
-      );
+      await expectClosed(first.create({ title: "Wrong owner" }));
       await expect(second.create({ title: "Own store" })).resolves.toMatchObject({
         title: "Own store",
       });
@@ -102,23 +98,14 @@ describe("Workboard store lifetime", () => {
   });
 
   it("joins a stopped background sweep without reviving its lifecycle generation", async () => {
-    const entered = createDeferred<void>();
-    const resume = createDeferred<void>();
-    let closes = 0;
+    const { entered, resume } = barrier();
+    const close = vi.fn();
     const {
       store,
       stores: { cards: persistence },
-    } = createWorkboardSqliteTestHarness({
-      onStoreClose: () => {
-        closes += 1;
-      },
-    });
+    } = createWorkboardSqliteTestHarness({ onStoreClose: close });
     const sessionKey = "agent:main:background-sweep";
-    const card = await store.create({
-      title: "Running session",
-      status: "running",
-      sessionKey,
-    });
+    const card = await store.create({ title: "Running session", status: "running", sessionKey });
     const service = createWorkboardLifecycleService({
       store,
       readSessions: async () => {
@@ -142,10 +129,10 @@ describe("Workboard store lifetime", () => {
       await entered.promise;
       await service.stop?.(context);
       const closing = store.close();
-      expect(closes).toBe(0);
+      expect(close).not.toHaveBeenCalled();
       resume.resolve();
       await closing;
-      expect(closes).toBe(1);
+      expect(close).toHaveBeenCalledOnce();
       expect(await persistence.lookup(card.id)).toMatchObject({ card: { status: "running" } });
       expect(context.logger.warn).not.toHaveBeenCalled();
     } finally {
@@ -169,13 +156,13 @@ describe("Workboard store lifetime", () => {
     firstClose.reject(failure);
     await rejected;
     expect(closePersistence).toHaveBeenCalledOnce();
-    await expect(store.list()).rejects.toThrow("workboard store is closed.");
+    await expectClosed(store.list());
 
     const retry = store.close();
     expect(store.close()).toBe(retry);
     await retry;
     await store.close();
     expect(closePersistence).toHaveBeenCalledTimes(2);
-    await expect(store.list()).rejects.toThrow("workboard store is closed.");
+    await expectClosed(store.list());
   });
 });

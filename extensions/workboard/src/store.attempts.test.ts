@@ -2,6 +2,26 @@ import { describe, expect, it } from "vitest";
 import { syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
+type Store = ReturnType<typeof createWorkboardSqliteTestStore>;
+type Prepared = Awaited<ReturnType<Store["prepareExecutionLaunch"]>>;
+function accept(store: Store, prepared: Prepared, sessionKey: string, runId: string) {
+  return store.acceptExecutionLaunch(prepared.card.id, {
+    expectedLaunch: prepared.launch,
+    expectedSessionKey: prepared.launch.requestedSessionKey,
+    expectedRunId: prepared.launch.provisionalRunId,
+    sessionKey,
+    runId,
+    execution: { ...prepared.card.execution!, sessionKey, runId },
+    acceptedAt: prepared.launch.preparedAt + 1,
+  });
+}
+function end(store: Store, targetSessionKey: string, runId: string, endedAt: number) {
+  return syncWorkboardSubagentEnded({
+    store,
+    event: { targetSessionKey, runId, endedAt, outcome: "ok" },
+  });
+}
+
 async function createBlockedManagedCard() {
   const store = createWorkboardSqliteTestStore();
   const card = await store.create({ title: "Retry unfinished work", status: "ready" });
@@ -13,15 +33,7 @@ async function createBlockedManagedCard() {
   });
   const sessionKey = "agent:main:subagent:workboard-default-requeue";
   const runId = "old-run";
-  await store.acceptExecutionLaunch(card.id, {
-    expectedLaunch: prepared.launch,
-    expectedSessionKey: prepared.launch.requestedSessionKey,
-    expectedRunId: prepared.launch.provisionalRunId,
-    sessionKey,
-    runId,
-    execution: { ...prepared.card.execution!, sessionKey, runId },
-    acceptedAt: prepared.launch.preparedAt + 1,
-  });
+  await accept(store, prepared, sessionKey, runId);
   const blocked = await store.block(card.id, {
     ownerId: "workboard-dispatcher",
     token: claim.token,
@@ -61,20 +73,15 @@ describe("Workboard shared-session attempts", () => {
       const attempts = [];
       for (const card of cards) {
         const persisted = await store.get(card.id);
-        expect(persisted).toMatchObject({
-          status: "review",
-          metadata: {
-            attempts: [
-              expect.objectContaining({
-                id: expect.any(String),
-                status: "succeeded",
-                sessionKey,
-                ...(runId ? { runId } : {}),
-              }),
-            ],
-          },
-        });
-        expect(persisted?.metadata?.attempts).toHaveLength(1);
+        expect(persisted?.status).toBe("review");
+        expect(persisted?.metadata?.attempts).toEqual([
+          expect.objectContaining({
+            id: expect.any(String),
+            status: "succeeded",
+            sessionKey,
+            ...(runId ? { runId } : {}),
+          }),
+        ]);
         attempts.push(persisted?.metadata?.attempts?.[0]?.id);
       }
       expect(new Set(attempts).size).toBe(2);
@@ -85,17 +92,7 @@ describe("Workboard shared-session attempts", () => {
     await store.unblock(card.id);
     const requeued = await store.promote(card.id);
 
-    const updated = await syncWorkboardSubagentEnded({
-      store,
-      event: {
-        targetSessionKey: sessionKey,
-        runId,
-        endedAt: requeued.updatedAt + 1,
-        outcome: "ok",
-      },
-    });
-
-    expect(updated).toBe(0);
+    await expect(end(store, sessionKey, runId, requeued.updatedAt + 1)).resolves.toBe(0);
     // Recovery sweeps have session identity but no run ID.
     await expect(
       store.syncLifecycle(card.id, {
@@ -127,37 +124,12 @@ describe("Workboard shared-session attempts", () => {
       scope: { ownerId: "workboard-dispatcher", token: retryClaim.token },
     });
     // A pending retry still carries a provisional run ID; the old hook must not adopt it.
-    await expect(
-      syncWorkboardSubagentEnded({
-        store,
-        event: {
-          targetSessionKey: sessionKey,
-          runId,
-          endedAt: retry.card.updatedAt + 1,
-          outcome: "ok",
-        },
-      }),
-    ).resolves.toBe(0);
+    await expect(end(store, sessionKey, runId, retry.card.updatedAt + 1)).resolves.toBe(0);
     await expect(store.get(card.id)).resolves.toEqual(retry.card);
-    await store.acceptExecutionLaunch(card.id, {
-      expectedLaunch: retry.launch,
-      expectedSessionKey: retry.launch.requestedSessionKey,
-      expectedRunId: retry.launch.provisionalRunId,
-      sessionKey,
-      runId: "retry-run",
-      execution: { ...retry.card.execution!, sessionKey, runId: "retry-run" },
-      acceptedAt: retry.launch.preparedAt + 1,
-    });
-    const retryEnd = await syncWorkboardSubagentEnded({
-      store,
-      event: {
-        targetSessionKey: sessionKey,
-        runId: "retry-run",
-        endedAt: (await store.get(card.id))!.updatedAt + 1,
-        outcome: "ok",
-      },
-    });
-    expect(retryEnd).toBe(1);
+    await accept(store, retry, sessionKey, "retry-run");
+    await expect(
+      end(store, sessionKey, "retry-run", (await store.get(card.id))!.updatedAt + 1),
+    ).resolves.toBe(1);
     await expect(store.get(card.id)).resolves.toMatchObject({
       status: "review",
       metadata: {
@@ -173,14 +145,13 @@ describe("Workboard shared-session attempts", () => {
     const { store, blocked } = await createBlockedManagedCard();
     const sessionKey = "agent:main:replacement-session";
     const linked = await store.update(blocked.id, { sessionKey, status: "todo" });
-    const now = linked.updatedAt + 1;
     await expect(
       store.syncLifecycle(blocked.id, {
         targetStatus: "review",
         executionStatus: "review",
-        sourceUpdatedAt: now,
+        sourceUpdatedAt: linked.updatedAt + 1,
         stale: undefined,
-        now,
+        now: linked.updatedAt + 1,
         association: { expectedSessionKey: sessionKey, expectedRunId: linked.runId, sessionKey },
       }),
     ).resolves.toBe(true);

@@ -4,9 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 import { sqliteOnly as test } from "./test/sqlite-only.js";
 import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
 
+function setup() {
+  const harness = createWorkboardSqliteTestHarness();
+  const list = async (input?: Parameters<typeof harness.store.listNotificationSubscriptions>[0]) =>
+    (await harness.store.listNotificationSubscriptions(input)).subscriptions;
+  return { ...harness, list };
+}
+
 describe("Workboard scoped subscription listing", () => {
   it("returns only scoped subscriptions from persistence without dropping cursor fields", async () => {
-    const { store, stores } = createWorkboardSqliteTestHarness();
+    const { stores, list } = setup();
     const subscriptions: WorkboardNotificationSubscription[] = [
       {
         id: "c",
@@ -29,79 +36,62 @@ describe("Workboard scoped subscription listing", () => {
     }
     const entries = stores.subscriptions.entries.bind(stores.subscriptions);
     let returnedRows = 0;
-    const reads = vi.spyOn(stores.subscriptions, "entries").mockImplementation(async (...args) => {
+    using reads = vi.spyOn(stores.subscriptions, "entries").mockImplementation(async (...args) => {
       const rows = await entries(...args);
       returnedRows += rows.length;
       return rows;
     });
-    try {
-      for (const [input, expectedIds] of [
-        [{ boardId: " ALPHA " }, ["a", "c"]],
-        [{ cardId: " card " }, ["b", "c"]],
-        [{ boardId: "alpha", cardId: "card" }, ["c"]],
-        [{ boardId: "alpha", cardId: "other" }, []],
-        [{ boardId: "missing" }, []],
-        [{ boardId: " ", cardId: " " }, ["a", "b", "c", "d"]],
-        [{}, ["a", "b", "c", "d"]],
-      ] as const) {
-        returnedRows = 0;
-        reads.mockClear();
-        const result = await store.listNotificationSubscriptions(input);
-        expect(result.subscriptions).toEqual(
-          expectedIds.map((id) => subscriptions.find((subscription) => subscription.id === id)),
-        );
-        expect(reads).toHaveBeenCalled();
-        expect(returnedRows, JSON.stringify(input)).toBeLessThanOrEqual(expectedIds.length);
-      }
-    } finally {
-      reads.mockRestore();
+    for (const [input, expectedIds] of [
+      [{ boardId: " ALPHA " }, ["a", "c"]],
+      [{ cardId: " card " }, ["b", "c"]],
+      [{ boardId: "alpha", cardId: "card" }, ["c"]],
+      [{ boardId: "alpha", cardId: "other" }, []],
+      [{ boardId: "missing" }, []],
+      [{ boardId: " ", cardId: " " }, ["a", "b", "c", "d"]],
+      [{}, ["a", "b", "c", "d"]],
+    ] as const) {
+      returnedRows = 0;
+      reads.mockClear();
+      expect(await list(input)).toEqual(
+        expectedIds.map((id) => subscriptions.find((subscription) => subscription.id === id)),
+      );
+      expect(reads).toHaveBeenCalled();
+      expect(returnedRows, JSON.stringify(input)).toBeLessThanOrEqual(expectedIds.length);
     }
   });
 
   // Stores a NUL-containing text key, unsupported by PostgreSQL text.
   test("keeps exact card matching and refreshes between calls", async () => {
-    const { store } = createWorkboardSqliteTestHarness();
+    const { store, list } = setup();
     const lower = await store.subscribeNotifications({ cardId: "card" });
     await store.subscribeNotifications({ cardId: "Card" });
     const nul = await store.subscribeNotifications({ cardId: "card\0tail" });
     const replacement = await store.subscribeNotifications({ cardId: "\ufffd" });
-    expect((await store.listNotificationSubscriptions({ cardId: "card" })).subscriptions).toEqual([
-      lower,
-    ]);
-    expect(
-      (await store.listNotificationSubscriptions({ cardId: "card\0tail" })).subscriptions,
-    ).toEqual([nul]);
-    expect((await store.listNotificationSubscriptions({ cardId: "\ud800" })).subscriptions).toEqual(
-      [],
-    );
-    expect((await store.listNotificationSubscriptions({ cardId: "\ufffd" })).subscriptions).toEqual(
-      [replacement],
-    );
+    expect(await list({ cardId: "card" })).toEqual([lower]);
+    expect(await list({ cardId: "card\0tail" })).toEqual([nul]);
+    expect(await list({ cardId: "\ud800" })).toEqual([]);
+    expect(await list({ cardId: "\ufffd" })).toEqual([replacement]);
     await store.deleteNotificationSubscription(lower.id);
-    expect((await store.listNotificationSubscriptions({ cardId: "card" })).subscriptions).toEqual(
-      [],
-    );
+    expect(await list({ cardId: "card" })).toEqual([]);
   });
 
   // Injects malformed subscriptions through a native SQLite file handle.
   test("validates selected and unscoped rows while excluding unrelated malformed subscriptions", async () => {
-    const { store, dbPath } = createWorkboardSqliteTestHarness();
+    const { store, dbPath, list } = setup();
     const selected = await store.subscribeNotifications({ boardId: "alpha", cardId: "card" });
     const unrelated = await store.subscribeNotifications({ boardId: "beta", cardId: "other" });
     using db = new DatabaseSync(dbPath);
     db.prepare(
       "UPDATE workboard_notification_subscriptions SET event_kinds_json = ? WHERE id = ?",
     ).run("{", unrelated.id);
-    expect((await store.listNotificationSubscriptions({ boardId: "alpha" })).subscriptions).toEqual(
-      [selected],
-    );
-    await expect(store.listNotificationSubscriptions({ boardId: "beta" })).rejects.toThrow();
-    await expect(store.listNotificationSubscriptions()).rejects.toThrow();
+    expect(await list({ boardId: "alpha" })).toEqual([selected]);
+    await expect(list({ boardId: "beta" })).rejects.toThrow();
+    await expect(list()).rejects.toThrow();
   });
 
   // Injects and inspects malformed subscriptions through a native SQLite file handle.
   test("deletes board notification subscriptions with empty board metadata", async () => {
-    const { store, dbPath } = createWorkboardSqliteTestHarness();
+    const { store, dbPath, list } = setup();
     await store.upsertBoard({ id: "ops", name: "Ops" });
     await store.subscribeNotifications({
       boardId: "ops",
@@ -113,9 +103,7 @@ describe("Workboard scoped subscription listing", () => {
     const card = await store.create({ title: "Still on board", boardId: "ops" });
     await store.archive(card.id, true);
     await expect(store.deleteBoard("ops")).rejects.toThrow("board still has cards");
-    await expect(store.listNotificationSubscriptions({ boardId: "ops" })).resolves.toMatchObject({
-      subscriptions: [expect.objectContaining({ boardId: "ops" })],
-    });
+    await expect(list({ boardId: "ops" })).resolves.toMatchObject([{ boardId: "ops" }]);
     await store.delete(card.id);
     await store.create({ title: "Other board card", boardId: "product" });
     const unrelated = await store.subscribeNotifications({
@@ -133,9 +121,7 @@ describe("Workboard scoped subscription listing", () => {
     expect(unrelatedBefore).toMatchObject({ id: unrelated.id, event_kinds_json: "{" });
 
     await expect(store.deleteBoard("ops")).resolves.toEqual({ deleted: true });
-    await expect(store.listNotificationSubscriptions({ boardId: "ops" })).resolves.toEqual({
-      subscriptions: [],
-    });
+    await expect(list({ boardId: "ops" })).resolves.toEqual([]);
     expect(readUnrelated.get(unrelated.id)).toEqual(unrelatedBefore);
   });
 });

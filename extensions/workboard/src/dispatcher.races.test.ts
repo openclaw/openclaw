@@ -5,19 +5,28 @@ import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
+function setup() {
+  const store = createWorkboardSqliteTestStore();
+  const create = (input: Omit<Parameters<typeof store.create>[0], "title">) =>
+    store.create({
+      title: "Dispatch",
+      status: "ready",
+      workspaceAccess: { unrestricted: true },
+      ...input,
+    });
+  const dispatch = (params: Omit<Parameters<typeof dispatchAndStartWorkboardCards>[0], "store">) =>
+    dispatchAndStartWorkboardCards({ store, ...params });
+  return { store, create, dispatch };
+}
+
 describe("Workboard dispatcher lifecycle races", () => {
   it.each([
     { name: "archived", archive: true },
     { name: "completed", status: "done" as const },
     { name: "moved to another board", boardId: "product" },
   ])("does not start a card $name during dispatch preflight", async (transition) => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
-      title: "Concurrent dispatch transition",
-      status: "ready",
-      boardId: "ops",
-      workspaceAccess: { unrestricted: true },
-    });
+    const { store, create, dispatch } = setup();
+    const card = await create({ boardId: "ops" });
     const originalClaim = store.claim.bind(store);
     vi.spyOn(store, "claim").mockImplementationOnce(async (id, input, options) => {
       if ("archive" in transition) {
@@ -31,20 +40,16 @@ describe("Workboard dispatcher lifecycle races", () => {
     });
     const run = vi.fn();
 
-    const result = await dispatchAndStartWorkboardCards({
-      store,
+    const result = await dispatch({
       subagent: { run },
       options: { maxStarts: 1, boardId: "ops", workspaceAccess: { unrestricted: true } },
     });
 
     expect(run).not.toHaveBeenCalled();
-    expect(result.started).toEqual([]);
-    expect(result.startFailures).toEqual([
-      expect.objectContaining({
-        cardId: card.id,
-        error: expect.stringMatching(/archived|authority/),
-      }),
-    ]);
+    expect(result).toMatchObject({
+      started: [],
+      startFailures: [{ cardId: card.id, error: expect.stringMatching(/archived|authority/) }],
+    });
     const current = await store.get(card.id);
     expect(current?.metadata?.claim).toBeUndefined();
     if ("archive" in transition) {
@@ -57,28 +62,10 @@ describe("Workboard dispatcher lifecycle races", () => {
   });
 
   it("does not spend worker attempts on cards that change before they can be claimed", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const first = await store.create({
-      title: "First stale dispatch",
-      status: "ready",
-      priority: "urgent",
-      agentId: "first-worker",
-      workspaceAccess: { unrestricted: true },
-    });
-    const second = await store.create({
-      title: "Second stale dispatch",
-      status: "ready",
-      priority: "high",
-      agentId: "second-worker",
-      workspaceAccess: { unrestricted: true },
-    });
-    const healthy = await store.create({
-      title: "Healthy dispatch",
-      status: "ready",
-      priority: "normal",
-      agentId: "healthy-worker",
-      workspaceAccess: { unrestricted: true },
-    });
+    const { store, create, dispatch } = setup();
+    const first = await create({ priority: "urgent", agentId: "first-worker" });
+    const second = await create({ priority: "high", agentId: "second-worker" });
+    const healthy = await create({ priority: "normal", agentId: "healthy-worker" });
     const originalClaim = store.claim.bind(store);
     const staleCardIds = new Set([first.id, second.id]);
     vi.spyOn(store, "claim").mockImplementation(async (id, input, options) => {
@@ -89,16 +76,13 @@ describe("Workboard dispatcher lifecycle races", () => {
     });
     const run = vi.fn().mockResolvedValue({ runId: "healthy-run" });
 
-    const result = await dispatchAndStartWorkboardCards({
-      store,
+    const result = await dispatch({
       subagent: { run },
       options: { maxStarts: 1, workspaceAccess: { unrestricted: true } },
     });
 
     expect(result.startFailures.map((failure) => failure.cardId)).toEqual([first.id, second.id]);
-    expect(result.started).toEqual([
-      expect.objectContaining({ cardId: healthy.id, runId: "healthy-run" }),
-    ]);
+    expect(result.started).toMatchObject([{ cardId: healthy.id, runId: "healthy-run" }]);
     expect(run).toHaveBeenCalledOnce();
     await expect(store.get(healthy.id)).resolves.toMatchObject({ status: "running" });
     for (const cardId of [first.id, second.id]) {
@@ -110,17 +94,13 @@ describe("Workboard dispatcher lifecycle races", () => {
 
   it("retains a managed worktree when pre-start lossless cleanup declines", async () => {
     const managedPath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-retained-"));
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
-      title: "Retain failed worker checkout",
-      status: "ready",
+    const { store, create, dispatch } = setup();
+    const card = await create({
       workspace: { kind: "worktree", path: "/repo", branch: "main" },
-      workspaceAccess: { unrestricted: true },
     });
     const removeIfLossless = vi.fn().mockResolvedValue(false);
     try {
-      const result = await dispatchAndStartWorkboardCards({
-        store,
+      const result = await dispatch({
         subagent: { run: vi.fn().mockRejectedValue(new Error("model unavailable")) },
         worktrees: {
           resolveCheckoutRoot: vi.fn().mockResolvedValue(undefined),
@@ -135,21 +115,16 @@ describe("Workboard dispatcher lifecycle races", () => {
         options: { now: 10, maxStarts: 1, materializeWorktree: true },
       });
 
-      expect(result.startFailures).toEqual([
-        expect.objectContaining({ cardId: card.id, error: "model unavailable" }),
-      ]);
+      expect(result.startFailures).toMatchObject([{ cardId: card.id, error: "model unavailable" }]);
       expect(removeIfLossless).toHaveBeenCalledOnce();
       const blocked = await store.get(card.id);
-      expect(blocked).toMatchObject({
-        status: "blocked",
-        metadata: {
-          automation: {
-            workspace: { kind: "worktree", path: managedPath, sourcePath: "/repo" },
-          },
-        },
+      expect(blocked?.status).toBe("blocked");
+      expect(blocked?.metadata?.automation?.workspace).toMatchObject({
+        kind: "worktree",
+        path: managedPath,
+        sourcePath: "/repo",
       });
-      expect(blocked?.execution).toBeUndefined();
-      expect(blocked?.runId).toBeUndefined();
+      expect([blocked?.execution, blocked?.runId]).toEqual([undefined, undefined]);
     } finally {
       fs.rmSync(managedPath, { recursive: true, force: true });
     }
