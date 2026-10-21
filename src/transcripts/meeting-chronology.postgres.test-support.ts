@@ -35,46 +35,39 @@ export type ChronologyProof = {
 async function runChronologyHost(input: { path: string; connection: string }): Promise<void> {
   assert.equal(threadId, 0);
   const anchor = openNodeSqliteDatabase(input.path);
-  let worker: Worker | undefined;
-  try {
-    admitSqliteSchema(anchor);
-    setEnvironmentData("openclaw.test.state.connection", input.connection);
-    const url = new URL(import.meta.url);
-    worker = new Worker(url, {
-      execArgv: resolveRuntimeWorkerThreadExecArgv(url),
-      workerData: {
-        path: input.path,
-        admissions: captureSqliteDatabaseAdmissions(undefined, { location: input.path }),
-      },
-    });
-    worker.on("message", (message: ChronologyProof | { error: string } | { namespace: string }) => {
-      process.send?.(message);
-    });
-    const [code] = await once(worker, "exit");
-    if (code !== 0) {
-      throw new Error(`Meeting chronology worker exited ${code}`);
-    }
-  } finally {
-    try {
-      await worker?.terminate();
-    } finally {
-      try {
-        anchor.close();
-      } finally {
-        retireSqliteDatabaseAdmissionForPath(input.path);
-      }
-    }
-  }
+  await using cleanup = new AsyncDisposableStack();
+  cleanup.defer(() => retireSqliteDatabaseAdmissionForPath(input.path));
+  cleanup.defer(() => anchor.close());
+  admitSqliteSchema(anchor);
+  setEnvironmentData("openclaw.test.state.connection", input.connection);
+  const url = new URL(import.meta.url);
+  const worker = new Worker(url, {
+    execArgv: resolveRuntimeWorkerThreadExecArgv(url),
+    workerData: {
+      path: input.path,
+      admissions: captureSqliteDatabaseAdmissions(undefined, { location: input.path }),
+    },
+  });
+  cleanup.defer(async () => {
+    await worker.terminate();
+  });
+  worker.on("message", (message: ChronologyProof | { error: string } | { namespace: string }) => {
+    process.send?.(message);
+  });
+  const [code] = await once(worker, "exit");
+  assert.equal(code, 0, `Meeting chronology worker exited ${code}`);
 }
 
 const input: { path: string; admissions: SqliteDatabaseAdmissions } = workerData;
 if (parentPort) {
   const port = parentPort;
+  using cleanup = new DisposableStack();
+  cleanup.defer(() => port.close());
+  cleanup.defer(() => openClawStateDatabaseCache.closeOpenClawStateDatabaseForTest());
   try {
     installSqliteDatabaseAdmissions(input.admissions);
     const options = { path: input.path };
-    const database = openOpenClawStateDatabase(options);
-    const postgresDb = database.db;
+    const { db: postgresDb } = openOpenClawStateDatabase(options);
     assert(isPostgresSqlConnection(postgresDb));
     const facts = getPostgresPhysicalFacts(postgresDb);
     assert(facts);
@@ -134,11 +127,7 @@ if (parentPort) {
       const result = queryTranscriptReadEntries(postgresDb, params);
       return { selectors: result.entries.map((entry) => entry.selector), hasMore: result.hasMore };
     };
-    const after = (fixture: (typeof fixtures)[number]) => ({
-      sessionId: fixture[1],
-      startedAt: fixture[2],
-    });
-    const proof: ChronologyProof = {
+    port.postMessage({
       threadId,
       list: page({ limit: 20 }).selectors,
       filtered: page({
@@ -146,25 +135,15 @@ if (parentPort) {
         startedBefore: "2024-01-02T00:00:00Z",
       }).selectors,
       invalidFilter: page({ startedAfter: "garbage" }).selectors,
-      pages: [
-        page({ limit: 2 }),
-        page({ limit: 2, after: after(fixtures[2]) }),
-        page({ limit: 2, after: after(fixtures[3]) }),
-        page({ limit: 2, after: after(fixtures[5]) }),
-      ],
+      pages: [undefined, fixtures[2], fixtures[3], fixtures[5]].map((cursor) =>
+        page({ limit: 2, after: cursor && { sessionId: cursor[1], startedAt: cursor[2] } }),
+      ),
       retainedInstant: postgresDb
         .prepare("SELECT started_at_ms FROM meeting_transcript_sessions WHERE selector = ?")
         .get("tie-a-iso")?.started_at_ms,
-    };
-    port.postMessage(proof);
+    } satisfies ChronologyProof);
   } catch (error) {
     port.postMessage({ error: error instanceof Error ? error.stack : String(error) });
-  } finally {
-    try {
-      openClawStateDatabaseCache.closeOpenClawStateDatabaseForTest();
-    } finally {
-      port.close();
-    }
   }
 } else if (process.send) {
   process.once("message", (message: { path: string; connection: string }) => {
