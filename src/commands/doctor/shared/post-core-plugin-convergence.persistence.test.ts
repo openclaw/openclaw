@@ -248,6 +248,27 @@ it("keeps restored indexed packages usable under a fresh owner after marker comp
   expect(log.warn).not.toHaveBeenCalled();
 });
 
+it("preserves the repair index when cancelled", async ({ state }) => {
+  const cfg = { plugins: { enabled: false } };
+  const previous: Record<string, PluginInstallRecord> = { previous: { source: "archive" } };
+  const next: Record<string, PluginInstallRecord> = { next: { source: "archive" } };
+  await seedInstalledPluginIndex(previous, { config: cfg, env: state.env });
+  const controller = new AbortController();
+  const refusal = new Error("initiating operation cancelled during repair");
+  await withPluginLifecycleLease({ env: state.env }, async () => {
+    const params = {
+      cfg,
+      env: state.env,
+      baselineRecords: next,
+      beforePersistentEffect: () => controller.signal.throwIfAborted(),
+    };
+    const repair = repairMissingConfiguredPluginInstalls(params);
+    controller.abort(refusal);
+    await expect(repair).rejects.toBe(refusal);
+  });
+  expect(await readRecords({ env: state.env })).toEqual(previous);
+});
+
 it("retains an initiating-owner read failure across install error normalization", async ({
   state,
 }) => {
