@@ -62,6 +62,7 @@ const gatewayPasswordJsonKey = ["gateway", "Password"].join("");
 const runtime = {
   ...createTestRuntime(),
   writeJson: vi.fn(),
+  writeStdout: vi.fn(),
 };
 
 function mockGateway(gateway: OpenClawConfig["gateway"]) {

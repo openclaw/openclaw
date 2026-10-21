@@ -3,16 +3,12 @@ import { expect, it } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { readAcpSessionEntry } from "../runtime/session-meta.js";
+import { readAcpSessionEntry, upsertAcpSessionMeta } from "../runtime/session-meta.js";
 import {
   readDurableAcpSignals,
   withAcpCancellationFixture,
 } from "./manager.cancel-session.worker.test-support.js";
-import {
-  createGate,
-  replaceRuntime,
-  startTurn,
-} from "./manager.cancellation-locator.test-support.js";
+import { createGate, startTurn } from "./manager.cancellation-locator.test-support.js";
 import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 
 it.each(["owner", "lifecycle"] as const)(
@@ -52,11 +48,20 @@ it.each(["owner", "lifecycle"] as const)(
           updatedAt: 200,
           spawnedBy: replacement === "owner" ? "agent:other:parent" : "agent:main:main",
         });
-        await replaceRuntime(f, {
-          lastActivityAt: 200,
-          identity: createIdentityFromStatus({
-            status: { agentSessionId: "successor-agent" },
-            now: 200,
+        await upsertAcpSessionMeta({
+          ...f.target,
+          skipMaintenance: true,
+          mutate: () => ({
+            backend: "cancellation-proof",
+            agent: "main",
+            runtimeSessionName: "successor-runtime",
+            mode: "persistent",
+            state: "running",
+            lastActivityAt: 200,
+            identity: createIdentityFromStatus({
+              status: { agentSessionId: "successor-agent" },
+              now: 200,
+            }),
           }),
         });
         sql = observeHostDataSql();

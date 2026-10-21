@@ -65,7 +65,7 @@ describe("Tencent config compatibility", () => {
       const config = {
         agents: { defaults: { model: primary, models: { [HY3]: {} } } },
       } as OpenClawConfig;
-      const result = migrateTencentTokenHubModelDefaults(config);
+      const result = migrateDefaults(config);
 
       expect(result.config.agents?.defaults?.model).toBe(primary);
       expect(result.config.agents?.defaults?.models).toEqual(DEFAULT_MODELS);

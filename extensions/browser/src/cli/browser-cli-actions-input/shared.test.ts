@@ -42,6 +42,7 @@ it("preserves valid stdin Unicode split across chunks", async () => {
   iterator.mockImplementationOnce(async function* () {
     yield bytes.subarray(0, split);
     yield bytes.subarray(split);
+    return undefined;
   });
   try {
     expect(await readActionsPayload({ actionsFile: "-" })).toBe(text);
