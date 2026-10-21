@@ -1181,8 +1181,7 @@
 }
 
 .code-block-chevron,
-.code-block-wrap__enable,
-.code-block-wrap__disable {
+.code-block-wrap__icon {
   display: block;
   width: 16px;
   height: 16px;
@@ -1215,21 +1214,8 @@
   display: inline-flex;
 }
 
-.code-block-wrap__enable {
+.code-block-wrap__icon {
   --code-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18M3 12h15a3 3 0 1 1 0 6h-4m2-2-2 2 2 2M3 18h7'/%3E%3C/svg%3E");
-}
-
-.code-block-wrap__disable {
-  --code-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14m-4-4 4 4-4 4'/%3E%3C/svg%3E");
-  display: none;
-}
-
-.code-block-wrapper.is-wrapped .code-block-wrap__enable {
-  display: none;
-}
-
-.code-block-wrapper.is-wrapped .code-block-wrap__disable {
-  display: block;
 }
 
 .code-block-wrapper.is-wrapped .code-block-viewport :where(pre code),
@@ -1426,4 +1412,9 @@
 /* Contain the preview's reserved toolbar space within its message block. */
 .chat-bubble > .chat-tool-card__widget-host {
   display: flow-root;
+}
+
+/* Sticky insets start inside the transcript's top padding. */
+.chat-thread .code-block-wrapper--long :is(.code-block-copy, .code-block-wrap) {
+  top: calc(4px - var(--chat-thread-padding-top));
 }
