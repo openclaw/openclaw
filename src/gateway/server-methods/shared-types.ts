@@ -74,7 +74,7 @@ import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { ConnectionSessionRows } from "../session-ancestor-references.js";
 import type { SessionMutationTarget } from "../session-mutation-authorization-error.js";
 import type { SessionObserverService } from "../session-observer-contract.js";
-import type { SessionSharingTarget } from "../session-sharing-policy.js";
+import type { SessionSharingTarget } from "../session-sharing-target.types.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
 import type {
