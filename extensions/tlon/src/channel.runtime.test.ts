@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./urbit/auth.js";
 import { urbitFetch } from "./urbit/fetch.js";
 
+// mock-isolation: Supply login outcomes without creating real Urbit sessions.
 vi.mock("./urbit/auth.js", () => ({ authenticate: vi.fn() }));
 
+// mock-isolation: Inspect runtime requests without making network calls.
 vi.mock("./urbit/fetch.js", () => ({ urbitFetch: vi.fn() }));
 
 import { probeTlonAccount, tlonRuntimeOutbound } from "./channel.runtime.js";

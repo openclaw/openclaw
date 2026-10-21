@@ -1,15 +1,15 @@
 import { expect, it } from "vitest";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { openSidebarPages } from "../../e2e/sidebar-customization.test-support.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import type { ControlUiSessionFixture } from "../../test-helpers/control-ui-session-fixtures.ts";
 import { assertSessionSectionCountAlignment } from "../../test-helpers/control-ui-session-section-layout.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import { button, createWorkboardProof } from "./workboard.e2e.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Workboard sidebar layout" });
 
-function session(id: string, overrides: Partial<GatewaySessionRow> = {}) {
+function session(id: string, overrides: Partial<ControlUiSessionFixture> = {}) {
   return {
     key: `agent:main:sidebar-${id}`,
     kind: "direct",

@@ -16,7 +16,9 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   resolveNodeIdFromList: vi.fn(),
 }));
 
+// mock-isolation: File-write fixtures must not read the operator's media store.
 vi.mock("openclaw/plugin-sdk/media-store", () => ({ readMediaBuffer: vi.fn() }));
+// mock-isolation: Record audit calls without opening the durable audit database.
 vi.mock("../shared/audit.js", () => ({ appendFileTransferAudit: vi.fn() }));
 
 function execute(input: { contentBase64?: string; sourceMediaId?: string }) {

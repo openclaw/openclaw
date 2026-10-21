@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../runtime-api.js";
 
 const mocks = vi.hoisted(() => ({ sendText: vi.fn(), sendMedia: vi.fn() }));
 
+// mock-isolation: Record adapter routing without loading Urbit network state.
 vi.mock("./channel.runtime.js", () => ({
   tlonRuntimeOutbound: mocks,
 }));

@@ -37,10 +37,12 @@ const eventMetric = (unit: string, values: Record<string, number>) => [
 const presencePoints = (value: number) =>
   ["delta", "reset", "legacy"].map((mode) => [{ "openclaw.gateway.ws.mode": mode }, value]);
 const sessionPoints = (value: number) =>
-  [
-    ["sessions.changed", "agent.run.started"],
-    ["session.message", "assistant"],
-  ].flatMap(([event, reason]) =>
+  (
+    [
+      ["sessions.changed", "agent.run.started"],
+      ["session.message", "assistant"],
+    ] as const
+  ).flatMap(([event, reason]) =>
     ["subscribed", "roster"].map((delivery) => [
       eventAttrs(event, {
         "openclaw.gateway.ws.reason": reason,

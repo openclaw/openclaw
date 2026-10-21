@@ -44,9 +44,22 @@ afterAll(() => {
   vi.resetModules();
 });
 
-function createTarBuffer(files: Record<string, string | Buffer>): Buffer {
-  const entries = Object.entries(files).map(([name, contents]) => ({ path: name, contents }));
-  return createRawTarBuffer(entries);
+async function createTarBuffer(files: Record<string, string | Buffer>): Promise<Buffer> {
+  const sourceDir = path.join(tmpRoot, `source-${randomUUID()}`);
+  await fs.mkdir(sourceDir, { recursive: true });
+  for (const [name, contents] of Object.entries(files)) {
+    const filename = path.join(sourceDir, name);
+    await fs.mkdir(path.dirname(filename), { recursive: true });
+    await fs.writeFile(filename, contents);
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of tar.c(
+    { cwd: sourceDir, gzip: true, portable: true },
+    Object.keys(files),
+  )) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
 }
 
 type RawTarEntry = {

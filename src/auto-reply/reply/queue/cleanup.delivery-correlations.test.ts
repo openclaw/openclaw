@@ -78,6 +78,9 @@ it.each(["final", "retry", "source-owned", true, false] as const)(
     } else {
       queue.enqueue(run, false, "none");
       const finish = expectDefined(run.deliveryCorrelations?.[0]?.begin(), "correlation receipt");
+      if (typeof finish !== "function") {
+        throw new Error("Expected correlation settlement callback");
+      }
       finish(outcome === "final" ? delivered : undefined);
       if (outcome === "source-owned") {
         completeFollowupRunLifecycle(run, "consumed");

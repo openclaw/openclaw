@@ -15,6 +15,7 @@ const { dispatchMock, recordMock, receiptMock, typingMock } = vi.hoisted(() => (
   typingMock: vi.fn(),
 }));
 
+// mock-isolation: Control-lane scheduling must not send live Signal messages or receipts.
 vi.mock("../send.js", () => ({
   sendMessageSignal: vi.fn(),
   sendTypingSignal: typingMock,
@@ -158,7 +159,11 @@ function signalText(message: string, timestamp: number, sourceNumber?: string) {
 }
 
 function dispatchedCommandBody(index: number): string | undefined {
-  return dispatchMock.mock.calls[index][0].ctx.CommandBody;
+  const call = dispatchMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected dispatch call ${index}`);
+  }
+  return call[0].ctx.CommandBody;
 }
 
 function expectDispatch(index: number, body: string) {
