@@ -9,6 +9,22 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
 
+const finalUrl = "https://example.com/~/channel/1701";
+const fetchOptions = { baseUrl: "https://example.com", path: "/~/channel/1701" };
+function mockResponse(response: Response, release = vi.fn(async () => {}), refresh?: () => void) {
+  const guarded = { response, finalUrl, release, refreshTimeout: refresh };
+  vi.mocked(fetchWithSsrFGuard).mockResolvedValue(guarded);
+  return release;
+}
+async function expectReleased(response: Response) {
+  const release = mockResponse(response);
+  const guarded = await urbitFetch(fetchOptions);
+  await expect(guarded.release()).resolves.toBeUndefined();
+  expect(release).toHaveBeenCalledOnce();
+}
+const streamResponse = (source: UnderlyingSource<Uint8Array>) =>
+  new Response(new ReadableStream(source));
+
 describe("urbitFetch guarded response ownership", () => {
   beforeEach(() => {
     vi.mocked(fetchWithSsrFGuard).mockReset();
@@ -16,34 +32,26 @@ describe("urbitFetch guarded response ownership", () => {
 
   it("keeps responses alive until release and preserves guarded metadata", async () => {
     const events: string[] = [];
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        cancel() {
-          events.push("cancel");
-        },
-      }),
-    );
+    const response = streamResponse({
+      cancel() {
+        events.push("cancel");
+      },
+    });
     const release = vi.fn(async () => {
       events.push("release");
     });
     const refreshTimeout = vi.fn();
     const controller = new AbortController();
-    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
-      response,
-      finalUrl: "https://example.com/~/channel/1701",
-      release,
-      refreshTimeout,
-    });
+    mockResponse(response, release, refreshTimeout);
 
     const guarded = await urbitFetch({
-      baseUrl: "https://example.com",
-      path: "/~/channel/1701",
+      ...fetchOptions,
       signal: controller.signal,
       ssrfPolicy: { allowPrivateNetwork: true },
     });
 
     expect(guarded.response).toBe(response);
-    expect(guarded.finalUrl).toBe("https://example.com/~/channel/1701");
+    expect(guarded.finalUrl).toBe(finalUrl);
     expect(guarded.refreshTimeout).toBe(refreshTimeout);
     expect(events).toEqual([]);
     expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
@@ -66,17 +74,8 @@ describe("urbitFetch guarded response ownership", () => {
       throw new Error("expected a response body");
     }
     const cancel = vi.spyOn(body, "cancel");
-    const release = vi.fn(async () => {});
-    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
-      response,
-      finalUrl: "https://example.com/~/scry/chat.json",
-      release,
-    });
-
-    const guarded = await urbitFetch({
-      baseUrl: "https://example.com",
-      path: "/~/scry/chat.json",
-    });
+    const release = mockResponse(response);
+    const guarded = await urbitFetch(fetchOptions);
     await expect(guarded.response.text()).resolves.toBe("finished");
     await guarded.release();
 
@@ -85,43 +84,18 @@ describe("urbitFetch guarded response ownership", () => {
   });
 
   it("releases a successful response without a body", async () => {
-    const response = new Response(null, { status: 204 });
-    const release = vi.fn(async () => {});
-    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
-      response,
-      finalUrl: "https://example.com/~/channel/1701",
-      release,
-    });
-
-    const guarded = await urbitFetch({
-      baseUrl: "https://example.com",
-      path: "/~/channel/1701",
-    });
-
-    await expect(guarded.release()).resolves.toBeUndefined();
-    expect(release).toHaveBeenCalledOnce();
+    await expectReleased(new Response(null, { status: 204 }));
   });
 
   it("releases promptly when a retained response clone keeps cancellation pending", async () => {
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("still streaming"));
-        },
-      }),
-    );
+    const response = streamResponse({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("still streaming"));
+      },
+    });
     const clone = response.clone();
-    const release = vi.fn(async () => {});
-    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
-      response,
-      finalUrl: "https://example.com/~/channel/1701",
-      release,
-    });
-
-    const guarded = await urbitFetch({
-      baseUrl: "https://example.com",
-      path: "/~/channel/1701",
-    });
+    const release = mockResponse(response);
+    const guarded = await urbitFetch(fetchOptions);
     const releasing = guarded.release();
 
     try {
@@ -133,26 +107,12 @@ describe("urbitFetch guarded response ownership", () => {
   });
 
   it("still releases when response cancellation rejects", async () => {
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
+    await expectReleased(
+      streamResponse({
         cancel() {
           throw new Error("cancel failed");
         },
       }),
     );
-    const release = vi.fn(async () => {});
-    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
-      response,
-      finalUrl: "https://example.com/~/channel/1701",
-      release,
-    });
-
-    const guarded = await urbitFetch({
-      baseUrl: "https://example.com",
-      path: "/~/channel/1701",
-    });
-
-    await expect(guarded.release()).resolves.toBeUndefined();
-    expect(release).toHaveBeenCalledOnce();
   });
 });

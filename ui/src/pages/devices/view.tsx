@@ -81,7 +81,7 @@ function Bindings(props: BindingState) {
             <button
               class="btn"
               disabled={!props.connected || props.configLoading}
-              onClick={props.onLoadConfig}
+              onClick={() => props.onLoadConfig()}
             >
               {props.configLoading ? t("common.loading") : t("common.loadConfig")}
             </button>

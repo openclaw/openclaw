@@ -268,13 +268,23 @@ it("replaces the People activation owner while retaining the mobile host content
 });
 
 it("routes current mobile PRs to Checks and rejects hidden or superseded navigation", async () => {
-  const request = pullRequest({ title: "Current PR", headSha: "a".repeat(40) });
+  const request = pullRequest({
+    title: "Current PR",
+    headSha: "a".repeat(40),
+    additions: 1234,
+    deletions: 2000,
+  });
   const value = details({ pullRequests: [request], pullRequestsSessionId: "session-current" });
   const { view, element, navigate, show } = await mountMobileHost(value);
   try {
     const rootRow = view.container.querySelector<HTMLButtonElement>(
       '[data-details-page="root"] .chat-pr-mobile__row',
     )!;
+    expect(rootRow.querySelector(".chat-pr__additions")?.textContent).toBe("+1,234");
+    expect(rootRow.querySelector(".chat-pr__deletions")?.textContent).toBe("−2,000");
+    expect(rootRow.querySelector(".chat-pr-mobile__row-meta")?.textContent).toContain(
+      "+1,234 −2,000",
+    );
     rootRow.click();
     expect(navigate).toHaveBeenCalledOnce();
     const destination = navigate.mock.calls[0]![0];
@@ -284,6 +294,9 @@ it("routes current mobile PRs to Checks and rejects hidden or superseded navigat
     });
     expect(destination.backTo).toEqual({ area: "details" });
     await show(destination);
+    expect(view.container.querySelector(".chat-pr-mobile__diff")?.textContent).toContain(
+      "+1,234−2,000",
+    );
 
     rootRow.click();
     expect(navigate).toHaveBeenCalledOnce();

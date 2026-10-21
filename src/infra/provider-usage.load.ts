@@ -7,8 +7,9 @@ import {
 } from "../plugins/provider-runtime.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { formatErrorMessage } from "./errors.js";
-import { resolveFetch } from "./fetch.js";
+import { wrapFetchWithAbortSignal } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
+import { fetchWithRuntimeDispatcherOrMockedGlobal } from "./net/runtime-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
   PROVIDER_USAGE_TIMEOUT_MS,
@@ -71,11 +72,9 @@ export async function loadProviderUsageSummary(
     };
   }
   const fetchFn = opts.fetch
-    ? resolveFetch(opts.fetch)
-    : (resolveProxyFetchFromEnv(env) ?? resolveFetch());
-  if (!fetchFn) {
-    throw new Error("fetch is not available");
-  }
+    ? wrapFetchWithAbortSignal(opts.fetch)
+    : (resolveProxyFetchFromEnv(env) ??
+      wrapFetchWithAbortSignal(fetchWithRuntimeDispatcherOrMockedGlobal));
   let authStore: Promise<AuthProfileStore> | undefined;
   const getAuthStore = () =>
     opts.authStore ??

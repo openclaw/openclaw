@@ -61,7 +61,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
   switch (controlUiBootManifestKey(id)) {
     case "node_modules/@solidjs/signals/dist/prod/core/action.js":
     case "node_modules/@solidjs/signals/dist/dev/core/action.js":
-      // Solid's shared runtime imports actions; keep the first lazy action user out of boot.
+    case "node_modules/@solidjs/signals/dist/prod/core/verdict.js":
+    case "node_modules/@solidjs/signals/dist/prod/core/lanes.js":
+      // Solid's eager initializers must not pull the route boot groups into startup.
       return "solid-actions-runtime";
     case "ui/src/lib/device-pair-setup.ts":
       // Pairing loads on interaction; the earlier boot capture must not pull it into either route.

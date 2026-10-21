@@ -14,10 +14,15 @@ import { resolveNextcloudTalkAccount } from "./accounts.js";
 import type { CoreConfig, NextcloudTalkRoomConfig } from "./types.js";
 
 export function normalizeNextcloudTalkAllowEntry(raw: string): string {
-  return raw
+  const normalized = raw
     .trim()
     .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
+    .trim()
     .toLowerCase();
+  // Keep typed actors (including users/*) intact; only bare IDs acquire the user kind.
+  return normalized && normalized !== "*" && !normalized.includes("/")
+    ? `users/${normalized}`
+    : normalized;
 }
 
 export function normalizeNextcloudTalkAllowlist(
