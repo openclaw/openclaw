@@ -4279,7 +4279,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "extensions/codex/src/app-server/transport-startup.test.ts",
   "extensions/codex/src/app-server/transport.process.test.ts",
   "extensions/codex/src/node-exec-server.readiness.test.ts",
-  "extensions/codex/src/session-catalog-adoption-recovery.test.ts",
   "extensions/codex/src/session-catalog-cold-native.test.ts",
   "extensions/codex/src/session-catalog-fallback-request.test.ts",
   "extensions/codex/src/session-catalog-native-performance.test.ts",
