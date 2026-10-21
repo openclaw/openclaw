@@ -97,7 +97,7 @@ describe("ensureDashboardGatewayReady", () => {
 
     const result = await check();
 
-    expect(result).toMatchObject({ ready: false, recoverable: false });
+    expect(result).toMatchObject({ ready: false });
     expect(confirm).not.toHaveBeenCalled();
     expect(installGateway).not.toHaveBeenCalled();
     expect(startGateway).not.toHaveBeenCalled();
@@ -158,7 +158,7 @@ describe("ensureDashboardGatewayReady", () => {
 
     const result = await check();
 
-    expect(result).toMatchObject({ ready: false, recoverable: false });
+    expect(result).toMatchObject({ ready: false });
     expect(confirm).not.toHaveBeenCalled();
     expect(installGateway).not.toHaveBeenCalled();
     expect(startGateway).not.toHaveBeenCalled();

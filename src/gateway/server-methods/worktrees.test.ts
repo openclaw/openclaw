@@ -207,13 +207,12 @@ it("returns queued, running and completed GC receipts", async () => {
   const clock = createGatewaySchedulerClock();
   const scheduler = createTestGatewayScheduler(clock.clock);
   const sweep = createDeferred<ManagedWorktreeGcResult>();
-  const runGc = vi.fn(() => sweep.promise);
+  const runGc = vi.spyOn(managedWorktrees, "gc").mockReturnValue(sweep.promise);
   const config = {};
   const context = { getRuntimeConfig: () => config };
   const maintenance = startWorktreeMaintenance({
     scheduler,
     getRuntimeConfig: context.getRuntimeConfig,
-    runGc,
     onComplete: vi.fn(),
     onError: vi.fn(),
   });
@@ -260,6 +259,7 @@ it("returns queued, running and completed GC receipts", async () => {
     await running;
     await maintenance.stop();
     await scheduler.stop();
+    runGc.mockRestore();
   }
 });
 

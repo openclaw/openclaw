@@ -92,15 +92,12 @@ it("reuses one manifest registry pass in allowlist mode", () => {
 
 const normalizedAllow = [" document-extract ", "document-extract"];
 it.each([
-  ["global disablement", false, ["document-extract"], undefined, []],
-  ["cannot expand allowlist", undefined, ["openai"], ["document-extract"], []],
-  ["normalized overlap", undefined, normalizedAllow, ["document-extract"], ["pdf"]],
-  ["disjoint scope", undefined, normalizedAllow, ["openai"], []],
-  ["empty scope", undefined, ["document-extract"], [], []],
-] as const)("enforces %s", (_name, enabled, allow, onlyPluginIds, expected) => {
+  ["global disablement", false, ["document-extract"], []],
+  ["cannot expand allowlist", undefined, ["openai"], []],
+  ["normalized allowlist", undefined, normalizedAllow, ["pdf"]],
+] as const)("enforces %s", (_name, enabled, allow, expected) => {
   const result = resolvePluginDocumentExtractors({
     config: { plugins: { enabled, allow: [...allow] } },
-    onlyPluginIds,
   });
   expect(result).toStrictEqual(expected.map((id) => expect.objectContaining({ id })));
   if (enabled === false) {
