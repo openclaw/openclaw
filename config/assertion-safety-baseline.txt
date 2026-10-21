@@ -131,7 +131,6 @@ extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
 extensions/codex/src/app-server/transcript-mirror.ts	1
 extensions/codex/src/app-server/transport-stdio.ts	1
 extensions/codex/src/command-rpc.ts	1
-extensions/codex/src/conversation-control.ts	1
 extensions/codex/src/migration/apply.ts	2
 extensions/codex/src/migration/auth.ts	3
 extensions/codex/src/migration/plan.ts	4
