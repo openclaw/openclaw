@@ -1,4 +1,4 @@
-import { createComponent, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   clearLazyShellAction,
@@ -124,15 +124,15 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
   onSettled(() => {
     synchronizers.set(host, synchronize);
     synchronize();
-  });
-  onCleanup(() => {
-    synchronizers.delete(host);
-    stopKeydown?.();
-    disposed = true;
-    cancel();
-    if (!host.isConnected) {
-      close();
-    }
+    return () => {
+      synchronizers.delete(host);
+      stopKeydown?.();
+      disposed = true;
+      cancel();
+      if (!host.isConnected) {
+        close();
+      }
+    };
   });
   return (
     <Show when={props.mode !== "closed"}>
@@ -166,18 +166,14 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
                 </Show>
               }
             >
-              {(component) => (
+              {(OverlayContent) => (
                 <Show when={props.contentKey + 1} keyed>
-                  {(_contentKey) =>
-                    createComponent(component, {
-                      get context() {
-                        return props.context ?? inherited;
-                      },
-                      get minimized() {
-                        return props.mode === "minimized";
-                      },
-                    })
-                  }
+                  {(_contentKey) => (
+                    <OverlayContent
+                      context={props.context ?? inherited}
+                      minimized={props.mode === "minimized"}
+                    />
+                  )}
                 </Show>
               )}
             </Show>

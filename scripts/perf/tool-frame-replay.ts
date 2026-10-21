@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
+import type { IncomingMessage } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
@@ -9,6 +10,8 @@ import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-
 import { createGatewayBroadcaster } from "../../src/gateway/server-broadcast.js";
 import { createSessionMessageSubscriberRegistry } from "../../src/gateway/server-chat-state.js";
 import { GatewayClientRegistry } from "../../src/gateway/server/client-registry.js";
+import { installGatewayDeflateCodec } from "../../src/gateway/server/ws-compression.js";
+import { createGatewayWebSocketTransport } from "../../src/gateway/server/ws-transport.js";
 import type { GatewayWsClient } from "../../src/gateway/server/ws-types.js";
 
 // Synthetic cumulative snapshots, replayed through the production delivery owner
@@ -132,11 +135,15 @@ for (let index = 0; index < clientCount; index += 1) {
     }
   });
   await once(peer, "open");
-  const [socket] = (await accepted) as [WebSocket];
+  const [socket, request] = (await accepted) as [WebSocket, IncomingMessage];
   const connId = `replay-${index}`;
   const client: GatewayWsClient = {
     connId,
-    socket,
+    socket: createGatewayWebSocketTransport(
+      socket,
+      request.socket,
+      installGatewayDeflateCodec(socket),
+    ),
     usesSharedGatewayAuth: false,
     connect: {
       minProtocol: 3,

@@ -104,12 +104,10 @@ describe("pnpm image archive consumer", () => {
       );
       expect(preparation.run).toContain('echo "COREPACK_HOME=$COREPACK_HOME" >> "$GITHUB_ENV"');
     }
-    const hydration = workflow.jobs.hydrate.steps;
-    expect(hydration.find((step: { name: string }) => step.name === "Setup Node.js").run).toContain(
-      'openclaw_ensure_node "24.x"',
-    );
     expect(
-      hydration.find((step: { run?: string }) => step.run?.includes("install_args=")).run,
+      workflow.jobs.hydrate.steps.find((step: { run?: string }) =>
+        step.run?.includes("install_args="),
+      ).run,
     ).toContain("--frozen-lockfile");
   });
 

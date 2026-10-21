@@ -6,11 +6,8 @@ import { loadSettings, settingsKeyForGateway } from "../app/settings.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import { resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet-contract.ts";
-import {
-  canonicalLobsterLook,
-  createLobsterPetLook,
-  renderLobsterSvg,
-} from "./lobster-pet-look.ts";
+import { canonicalLobsterLook, createLobsterPetLook } from "./lobster-pet-identity.ts";
+import { renderLobsterSvg } from "./lobster-pet-look.tsx";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 import {
   LOBSTER_BOTTLE_FORTUNES,

@@ -445,6 +445,24 @@ describe("Picker", () => {
     expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("cancels an armed submenu hover timer when its owner unmounts", async () => {
+    const p = await mount({ variant: "submenu" });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      expect(vi.getTimerCount()).toBe(0);
+      p.trigger.parentElement!.dispatchEvent(
+        new PointerEvent("pointerenter", { pointerType: "mouse" }),
+      );
+      expect(vi.getTimerCount()).toBe(1);
+      expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
+      cleanupSolid();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      cleanupSolid();
+      vi.useRealTimers();
+    }
+  });
+
   it("retains label styles, tooltips, and open effects", async () => {
     const onOpen = vi.fn();
     const p = await mount({

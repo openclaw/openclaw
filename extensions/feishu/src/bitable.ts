@@ -1,5 +1,6 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { Type, type Static, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
@@ -15,6 +16,40 @@ function ensureLarkSuccess(res: { code?: number; msg?: string }, api: string): v
   if (res.code !== 0) {
     throw new Error(`[${api}] code=${res.code ?? -1} message=${res.msg ?? "unknown error"}`);
   }
+}
+
+const MAX_BITABLE_METADATA_PAGES = 100;
+
+async function listBitableMetadata<T>(
+  listPage: (params: { page_size: number; page_token?: string }) => Promise<{
+    code?: number;
+    msg?: string;
+    data?: { items?: T[]; has_more?: boolean; page_token?: string };
+  }>,
+  api: string,
+): Promise<T[]> {
+  const items: T[] = [];
+  const seenTokens = new Set<string>();
+  let pageToken: string | undefined;
+  for (let page = 0; page < MAX_BITABLE_METADATA_PAGES; page += 1) {
+    const res = await listPage({ page_size: 100, ...(pageToken && { page_token: pageToken }) });
+    ensureLarkSuccess(res, api);
+    items.push(...(res.data?.items ?? []));
+    if (!res.data?.has_more) {
+      return items;
+    }
+    // Cursors are opaque: reject blanks without changing the value sent back to Feishu.
+    const nextToken = res.data.page_token;
+    if (!nextToken?.trim()) {
+      throw new Error(`${api} returned a missing page token`);
+    }
+    if (seenTokens.has(nextToken)) {
+      throw new Error(`${api} returned a repeated page token`);
+    }
+    seenTokens.add(nextToken);
+    pageToken = nextToken;
+  }
+  throw new Error(`${api} pagination exceeded ${MAX_BITABLE_METADATA_PAGES} pages`);
 }
 
 const FIELD_TYPE_NAMES: Record<number, string> = {
@@ -85,15 +120,17 @@ async function getBitableMeta(client: Lark.Client, url: string) {
   ensureLarkSuccess(res, "bitable.app.get");
 
   let tables: { table_id: string; name: string }[] = [];
+  let tablesError: string | undefined;
   if (!parsed.tableId) {
-    const tablesRes = await client.bitable.appTable.list({
-      path: { app_token: appToken },
-    });
-    if (tablesRes.code === 0) {
-      tables = (tablesRes.data?.items ?? []).map((t) => ({
-        table_id: t.table_id!,
-        name: t.name!,
-      }));
+    try {
+      tables = (
+        await listBitableMetadata(
+          (params) => client.bitable.appTable.list({ path: { app_token: appToken }, params }),
+          "bitable.appTable.list",
+        )
+      ).map((table) => ({ table_id: table.table_id!, name: table.name! }));
+    } catch (error) {
+      tablesError = formatErrorMessage(error);
     }
   }
 
@@ -103,9 +140,12 @@ async function getBitableMeta(client: Lark.Client, url: string) {
     name: res.data?.app?.name,
     url_type: parsed.isWiki ? "wiki" : "base",
     ...(tables.length > 0 && { tables }),
+    ...(tablesError && { tables_error: tablesError }),
     hint: parsed.tableId
       ? `Use app_token="${appToken}" and table_id="${parsed.tableId}" for other bitable tools`
-      : `Use app_token="${appToken}" for other bitable tools. Select a table_id from the tables list.`,
+      : tablesError
+        ? `Application lookup succeeded, but table discovery failed. Retry discovery or use a known table_id with app_token="${appToken}".`
+        : `Use app_token="${appToken}" for other bitable tools. Select a table_id from the tables list.`,
   };
 }
 
@@ -392,12 +432,11 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     parameters: ListFieldsSchema,
     async execute({ params, client }) {
       const { app_token, table_id } = params;
-      const res = await client.bitable.appTableField.list({
-        path: { app_token, table_id },
-      });
-      ensureLarkSuccess(res, "bitable.appTableField.list");
-
-      const fields = res.data?.items ?? [];
+      const fields = await listBitableMetadata(
+        (pageParams) =>
+          client.bitable.appTableField.list({ path: { app_token, table_id }, params: pageParams }),
+        "bitable.appTableField.list",
+      );
       return {
         fields: fields.map((f) => ({
           field_id: f.field_id,

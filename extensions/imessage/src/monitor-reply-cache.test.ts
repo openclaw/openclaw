@@ -56,9 +56,7 @@ afterEach(() => {
 
 describe("imessage short message id resolution", () => {
   it("requires chat scope when a privileged short id is unknown", async () => {
-    await expect(cache.resolve("9999", { requireKnownShortId: true })).rejects.toThrow(
-      "requires a chat scope",
-    );
+    await expect(cache.resolve("9999")).rejects.toThrow("requires a chat scope");
   });
 
   it("rejects short ids from another chat", async () => {
@@ -66,7 +64,6 @@ describe("imessage short message id resolution", () => {
 
     await expect(
       cache.resolve("1", {
-        requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;other" },
       }),
     ).rejects.toThrow("MessageSidFull from another chat is rejected");
@@ -75,7 +72,6 @@ describe("imessage short message id resolution", () => {
   it("recommends the full id when a short id has expired in the current chat", async () => {
     await expect(
       cache.resolve("9999", {
-        requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;chat0000" },
       }),
     ).rejects.toThrow("is no longer available. Use MessageSidFull");
@@ -118,7 +114,6 @@ describe("requireFromMe (edit / unsend authorization)", () => {
 
     await expect(
       cache.resolve(entry.shortId, {
-        requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;chatA" },
         requireFromMe: true,
       }),
@@ -130,7 +125,6 @@ describe("requireFromMe (edit / unsend authorization)", () => {
 
     expect(
       await cache.resolve(entry.shortId, {
-        requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;chatA" },
         requireFromMe: true,
       }),
@@ -230,7 +224,6 @@ describe("SQLite reply-cache hydration", () => {
     for (const entry of [...entries, issued]) {
       expect(
         await cache.resolve(entry.shortId, {
-          requireKnownShortId: true,
           chatContext: { chatId: context.chatId },
         }),
       ).toBe(entry.messageId);

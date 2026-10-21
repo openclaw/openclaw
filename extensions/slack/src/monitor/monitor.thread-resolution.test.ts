@@ -8,10 +8,8 @@ import {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
-import {
-  createSlackThreadTsResolver,
-  isTransientSlackThreadLookupError,
-} from "./thread-resolution.js";
+import { createSlackThreadTsResolver } from "./thread-resolution.js";
+import { isTransientSlackApiError } from "./transient-api-error.js";
 
 const ambiguous = { _ambiguousThreadReply: true };
 const resolved = { thread_ts: "9" };
@@ -88,7 +86,7 @@ describe("createSlackThreadTsResolver", () => {
     expect(error.original.message).toMatch(
       /^A rate limit was exceeded \(url: .+, retry-after: 0\)$/,
     );
-    expect(isTransientSlackThreadLookupError(error)).toBe(true);
+    expect(isTransientSlackApiError(error)).toBe(true);
     expect(fetch).toHaveBeenCalledOnce();
   });
 
@@ -98,8 +96,27 @@ describe("createSlackThreadTsResolver", () => {
       .users.info({ user: "U1" })
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(WebAPIPlatformError);
-    expect(isTransientSlackThreadLookupError(error)).toBe(true);
+    expect(isTransientSlackApiError(error)).toBe(true);
     expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("retries a malformed Retry-After response without caching a missing thread", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("rate limited", { status: 429 }))
+      .mockResolvedValueOnce(Response.json({ ok: true, messages: [{ ts: "1", thread_ts: "9" }] }));
+    const resolver = createSlackThreadTsResolver({ client: createWebClient(fetch) });
+    const request = {
+      message: { type: "message" as const, channel: "C1", parent_user_id: "U2", ts: "1" },
+      source: "message" as const,
+      turnAdoptionLifecycle: createDurableTurnLifecycle(),
+    };
+
+    await expect(resolver.resolve(request)).rejects.toThrow(
+      /^Retry header did not contain a valid timeout \(url: .+, retry-after header: null\)$/,
+    );
+    await expect(resolver.resolve(request)).resolves.toMatchObject(resolved);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it("hands a Slack rate-limit error to durable ingress without poisoning the cache", async () => {

@@ -1,7 +1,9 @@
 import { createServer, type ServerResponse } from "node:http";
+import { text as readBody } from "node:stream/consumers";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { respondJson } from "../../../helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
@@ -127,28 +129,16 @@ async function startStreamingProvider() {
   const server = createServer((request, response) => {
     void (async () => {
       if (request.method === "GET" && request.url === "/v1/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
-            data: [{ id: "gpt-5.6-luna", object: "model" }],
-          }),
-        );
+        respondJson(response, { data: [{ id: "gpt-5.6-luna", object: "model" }] });
         return;
       }
       if (request.method === "POST" && request.url === "/v1/responses") {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
-        providerRequests.push(
-          JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
-        );
+        providerRequests.push(JSON.parse(await readBody(request)) as Record<string, unknown>);
         await writeStreamingResponse(response, deltasSent, firstDeltaObserved, terminalRelease);
         return;
       }
       transportRequests.push(`${request.method ?? "UNKNOWN"} ${request.url ?? ""}`);
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end("{}");
+      respondJson(response, {});
     })().catch((error: unknown) => {
       response.writeHead(500).end(error instanceof Error ? error.message : String(error));
     });
@@ -200,6 +190,19 @@ describe("agent session streaming", () => {
       });
 
       const gatewayEvents: GatewayEvent[] = [];
+      const agentEvents = () =>
+        gatewayEvents
+          .map(asAgentEvent)
+          .filter((event): event is AgentEvent => event?.runId === IDEMPOTENCY_KEY);
+      const chatEvents = () =>
+        gatewayEvents.map(asChatEvent).filter((event) => event?.runId === IDEMPOTENCY_KEY);
+      const terminalEvents = () =>
+        agentEvents().filter(
+          (event) =>
+            event.stream === "lifecycle" && ["end", "error"].includes(event.data?.phase ?? ""),
+        );
+      const waitFor = (assertion: () => void) =>
+        vi.waitFor(assertion, { interval: 20, timeout: REQUEST_TIMEOUT_MS });
       const client = await connectOperator(gateway, "Session streaming QA operator", {
         onEvent: (event) => gatewayEvents.push(event),
       });
@@ -216,35 +219,23 @@ describe("agent session streaming", () => {
         runId: IDEMPOTENCY_KEY,
       });
 
-      await vi.waitFor(
-        () => {
-          expect(
-            gatewayEvents
-              .map(asAgentEvent)
-              .some(
-                (event) =>
-                  event?.runId === IDEMPOTENCY_KEY &&
-                  event.stream === "assistant" &&
-                  event.data?.delta === STREAM_DELTAS[0],
-              ),
-          ).toBe(true);
-        },
-        { interval: 20, timeout: REQUEST_TIMEOUT_MS },
+      await waitFor(() =>
+        expect(
+          agentEvents().some(
+            (event) => event.stream === "assistant" && event.data?.delta === STREAM_DELTAS[0],
+          ),
+        ).toBe(true),
       );
       provider.releaseRemainingDeltas();
       await provider.deltasSent;
-      await vi.waitFor(
-        () => {
-          expect(provider.isTerminalReleased()).toBe(false);
-          const streamedChatText = gatewayEvents
-            .map(asChatEvent)
-            .filter((event) => event?.runId === IDEMPOTENCY_KEY && event.state === "delta")
-            .map((event) => event?.deltaText ?? "")
-            .join("");
-          expect(streamedChatText).toBe(TERMINAL_TEXT);
-        },
-        { interval: 20, timeout: REQUEST_TIMEOUT_MS },
-      );
+      await waitFor(() => {
+        expect(provider.isTerminalReleased()).toBe(false);
+        const streamedChatText = chatEvents()
+          .filter((event) => event?.state === "delta")
+          .map((event) => event?.deltaText ?? "")
+          .join("");
+        expect(streamedChatText).toBe(TERMINAL_TEXT);
+      });
       provider.releaseTerminal();
 
       const terminal = await client.request<AgentResult>(
@@ -257,26 +248,9 @@ describe("agent session streaming", () => {
         runId: IDEMPOTENCY_KEY,
       });
 
-      await vi.waitFor(
-        () => {
-          const runEvents = gatewayEvents
-            .map(asAgentEvent)
-            .filter((event): event is AgentEvent => event?.runId === IDEMPOTENCY_KEY);
-          expect(
-            runEvents.filter(
-              (event) =>
-                event.stream === "lifecycle" &&
-                (event.data?.phase === "end" || event.data?.phase === "error"),
-            ),
-          ).toHaveLength(1);
-        },
-        { interval: 20, timeout: REQUEST_TIMEOUT_MS },
-      );
+      await waitFor(() => expect(terminalEvents()).toHaveLength(1));
 
-      const runEvents = gatewayEvents
-        .map(asAgentEvent)
-        .filter((event): event is AgentEvent => event?.runId === IDEMPOTENCY_KEY);
-      const assistantDeltas = runEvents.filter(
+      const assistantDeltas = agentEvents().filter(
         (event) => event.stream === "assistant" && typeof event.data?.delta === "string",
       );
       expect(assistantDeltas.length).toBeGreaterThanOrEqual(2);
@@ -292,32 +266,20 @@ describe("agent session streaming", () => {
       expect(deltaSeqs).toEqual(deltaSeqs.toSorted((left, right) => left - right));
       expect(new Set(deltaSeqs).size).toBe(deltaSeqs.length);
 
-      const terminalEvents = runEvents.filter(
-        (event) =>
-          event.stream === "lifecycle" &&
-          (event.data?.phase === "end" || event.data?.phase === "error"),
-      );
-      expect(terminalEvents).toHaveLength(1);
-      expect(terminalEvents[0]).toMatchObject({
+      const terminalAtCompletion = terminalEvents();
+      expect(terminalAtCompletion).toHaveLength(1);
+      expect(terminalAtCompletion[0]).toMatchObject({
         runId: accepted.runId,
         sessionKey: SESSION_KEY,
         stream: "lifecycle",
         data: { phase: "end" },
       });
-      expect(terminalEvents[0]?.seq).toBeGreaterThan(deltaSeqs.at(-1) ?? 0);
+      expect(terminalAtCompletion[0]?.seq).toBeGreaterThan(deltaSeqs.at(-1) ?? 0);
 
-      await vi.waitFor(
-        () => {
-          const runChatEvents = gatewayEvents
-            .map(asChatEvent)
-            .filter((event) => event?.runId === IDEMPOTENCY_KEY);
-          expect(runChatEvents.filter((event) => event?.state === "final")).toHaveLength(1);
-        },
-        { interval: 20, timeout: REQUEST_TIMEOUT_MS },
+      await waitFor(() =>
+        expect(chatEvents().filter((event) => event?.state === "final")).toHaveLength(1),
       );
-      const runChatEventsAtTerminal = gatewayEvents
-        .map(asChatEvent)
-        .filter((event) => event?.runId === IDEMPOTENCY_KEY);
+      const runChatEventsAtTerminal = chatEvents();
       const finalIndex = runChatEventsAtTerminal.findIndex((event) => event?.state === "final");
       expect(finalIndex).toBeGreaterThan(-1);
       expect(
@@ -325,9 +287,7 @@ describe("agent session streaming", () => {
       ).toBe(false);
       await delay(250);
       expect(
-        gatewayEvents
-          .map(asChatEvent)
-          .filter((event) => event?.runId === IDEMPOTENCY_KEY)
+        chatEvents()
           .slice(finalIndex + 1)
           .some((event) => event?.state === "delta"),
       ).toBe(false);

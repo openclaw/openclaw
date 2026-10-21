@@ -36,7 +36,7 @@ import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
-import type { ChatActivityPillsProps } from "./chat-activity-pills.tsx";
+import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
 import type {
@@ -110,8 +110,10 @@ export type ChatSessionProgressProps = {
 export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
   getTranscriptElement?: () => HTMLElement | null;
+  getScrollToLatestElement?: () => HTMLButtonElement | null;
   onComposerShellRef?: (element: HTMLElement) => void | (() => void);
   onComposerFloatRef?: (element: HTMLElement) => void | (() => void);
+  onActivityPillsLayout?: ChatActivityPillsProps["onLayout"];
   /** Native merged chrome, supplied by the pane owner; never inferred from pane width. */
   mobileComposer?: boolean;
   /** Observed keyboard visibility from the shell viewport owner, when available. */

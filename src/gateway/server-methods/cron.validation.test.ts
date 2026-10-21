@@ -1846,6 +1846,7 @@ describe("cron method validation", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const context = createCronContext();
+    context.cron.getJob.mockImplementation((id) => cron.getJob(id));
     context.cron.readJob.mockImplementation((id) => cron.readJob(id));
     context.cron.updateWithPrecondition.mockImplementation((...args) =>
       cron.updateWithPrecondition(...args),
@@ -1939,6 +1940,7 @@ describe("cron method validation", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const context = createCronContext();
+    context.cron.getJob.mockImplementation((id) => cron.getJob(id));
     context.cron.readJob.mockImplementation((id) => cron.readJob(id));
     context.cron.updateWithPrecondition.mockImplementation((...args) =>
       cron.updateWithPrecondition(...args),

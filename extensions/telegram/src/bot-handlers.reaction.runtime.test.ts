@@ -16,7 +16,7 @@ import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramEventBindings } from "./bot-handlers.event-bindings.js";
 import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
-import { createTelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
+import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { makeTelegramConfig } from "./bot.config.test-support.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
@@ -47,7 +47,7 @@ vi.mock("./sent-message-cache.js", async (importOriginal) => ({
 }));
 const runtimeLog = vi.fn();
 const resolveCachedMessageThreadSpec = vi.fn<
-  ReturnType<typeof createTelegramMessagePipeline>["resolveCachedMessageThreadSpec"]
+  TelegramMessagePipeline["resolveCachedMessageThreadSpec"]
 >(async () => undefined);
 
 function buildTelegramConfig({
@@ -100,8 +100,9 @@ function registerHandler(
   createTelegramEventBindings({
     params,
     message: {
-      ...createTelegramMessagePipeline(params),
       resolveCachedMessageThreadSpec,
+      processMessageWithReplyChain:
+        vi.fn<TelegramMessagePipeline["processMessageWithReplyChain"]>(),
     },
     authorization: createTelegramHandlerAuthorization(params),
   }).registerReaction();
@@ -245,6 +246,38 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
       await handler(privateReaction({ oldReaction: [FIRE_EMOJI], newReaction }));
     }
     expect(peekSystemEventEntries("agent:main:main")).toEqual([]);
+  });
+
+  it("delivers distinct custom reactions to the recovered topic owner", async () => {
+    resolveCachedMessageThreadSpec.mockResolvedValue({ scope: "forum", id: FORUM_TOPIC_ID });
+    enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
+    const handler = registerHandler(
+      buildTelegramConfig({ topics: { [FORUM_TOPIC_ID]: { agentId: "topicbot" } } }),
+    );
+    const context = forumReactionContext();
+    const custom = { type: "custom_emoji", custom_emoji_id: "5368324170671202286" };
+    const update = {
+      ...context,
+      messageReaction: {
+        ...context.messageReaction,
+        old_reaction: [],
+        new_reaction: [custom, { type: "paid" }],
+      },
+    };
+    await handler(update);
+    await handler(update);
+    await handler({
+      ...update,
+      messageReaction: { ...update.messageReaction, old_reaction: [custom] },
+    });
+    expect(peekSystemEventEntries("agent:topicbot:telegram:group:-1005678:topic:77")).toEqual([
+      expect.objectContaining({
+        text: "Telegram reaction added: custom emoji 5368324170671202286 by Bob (@bob_user) on msg 100",
+        contextKey: "telegram:reaction:add:-1005678:100:10:custom_emoji:5368324170671202286",
+      }),
+    ]);
+    expect(peekSystemEventEntries("agent:main:telegram:group:-1005678:topic:77")).toEqual([]);
+    expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a reaction on the runtime-bound global owner's queue", async () => {

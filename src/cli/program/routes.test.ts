@@ -46,6 +46,10 @@ describe("program routes", () => {
     expect(ensureCliExecutionBootstrap).not.toHaveBeenCalled();
   }
 
+  async function expectRouted(args: string) {
+    await expect(tryRouteCli(routeArgv(args))).resolves.toBe(true);
+  }
+
   it("returns false for plugins list route with unsupported arguments", async () => {
     await expectRunFalse(routeArgv("plugins list --wat"));
   });
@@ -55,9 +59,7 @@ describe("program routes", () => {
   });
 
   it("routes local runtime intent with config and plugin startup disabled", async () => {
-    await expect(
-      tryRouteCli(routeArgv("gateway status --runtime-intent-only --json")),
-    ).resolves.toBe(true);
+    await expectRouted("gateway status --runtime-intent-only --json");
     expect(runDaemonStatusMock).toHaveBeenCalledWith(
       expect.objectContaining({ runtimeIntentOnly: true, json: true }),
     );
@@ -69,51 +71,27 @@ describe("program routes", () => {
   });
 
   it("routes status --json through the lean JSON command", async () => {
-    await expect(
-      tryRouteCli(routeArgv("status --json --deep --usage --agent beta --timeout 5000")),
-    ).resolves.toBe(true);
+    await expectRouted("status --json --deep --usage --agent beta --timeout 5000");
     expect(statusJsonCommandMock).toHaveBeenCalledWith(
       { deep: true, all: false, usage: true, agent: "beta", timeoutMs: 5000 },
       defaultRuntime,
     );
   });
 
-  it.each([["separate empty value", ["node", "openclaw", "sessions", "--store", ""]]])(
-    "falls back to Commander for a sessions --store $0",
-    async (_name, argv) => {
-      await expectRunFalse(argv);
-    },
-  );
+  it("falls back to Commander for a sessions --store separate empty value", async () => {
+    await expectRunFalse([...routeArgv("sessions --store"), ""]);
+  });
 
-  it.each([["argument terminator", ["models", "--", "--status-json"]]])(
-    "leaves models parent %s to Commander",
-    async (_name, args) => {
-      await expectRunFalse(["node", "openclaw", ...args]);
-      expect(modelsStatusCommandMock).not.toHaveBeenCalled();
-    },
-  );
+  it("leaves models parent argument terminator to Commander", async () => {
+    await expectRunFalse(routeArgv("models -- --status-json"));
+    expect(modelsStatusCommandMock).not.toHaveBeenCalled();
+  });
 
   it("accepts negative-number probe profile values", async () => {
-    await expect(
-      tryRouteCli([
-        "node",
-        "openclaw",
-        "models",
-        "status",
-        "--probe-provider",
-        "openai",
-        "--probe-timeout",
-        "5000",
-        "--probe-concurrency",
-        "2",
-        "--probe-max-tokens",
-        "64",
-        "--probe-profile",
-        "-1",
-        "--agent",
-        "default",
-      ]),
-    ).resolves.toBe(true);
+    await expectRouted(
+      "models status --probe-provider openai --probe-timeout 5000 --probe-concurrency 2 " +
+        "--probe-max-tokens 64 --probe-profile -1 --agent default",
+    );
     expect(modelsStatusCommandMock).toHaveBeenCalledWith(
       {
         probeProvider: "openai",

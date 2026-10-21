@@ -1,6 +1,4 @@
-// Tlon outbound sanitization is proven at the Urbit HTTP poke boundary so the
-// shared delivery hook, target routing, Markdown rendering, and media captions
-// cannot drift apart unnoticed.
+// Prove sanitization through the delivery hook and actual Urbit HTTP pokes.
 import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
@@ -9,7 +7,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { tlonPlugin } from "./channel.js";
 
@@ -39,140 +37,109 @@ async function readBody(request: http.IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-describe("tlon outbound assistant-visible sanitization", () => {
-  let server: http.Server;
-  let baseUrl: string;
-  const pokes: CapturedPoke[] = [];
+let server: http.Server;
+let baseUrl: string;
+const pokes: CapturedPoke[] = [];
 
-  beforeEach(async () => {
-    pokes.length = 0;
-    uploadImageFromUrl.mockClear();
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "tlon", plugin: tlonPlugin, source: "test" }]),
-    );
-    server = http.createServer((request, response) => {
-      void (async () => {
-        const body = await readBody(request);
-        if (request.method === "POST" && request.url === "/~/login") {
-          expect(body).toBe("password=test-code");
-          response.writeHead(200, {
-            Connection: "close",
-            "Set-Cookie": "urbauth-~zod=test-cookie; Path=/; HttpOnly",
-          });
-          response.end("ok");
-          return;
-        }
-        if (request.method === "PUT" && request.url?.startsWith("/~/channel/")) {
-          expect(request.headers.cookie).toBe("urbauth-~zod=test-cookie");
-          const payload = JSON.parse(body) as CapturedPoke[];
-          expect(payload).toHaveLength(1);
-          pokes.push(expectDefined(payload[0], "Urbit HTTP poke"));
-          response.writeHead(204, { Connection: "close" });
-          response.end();
-          return;
-        }
-        response.writeHead(404, { Connection: "close" });
-        response.end();
-      })().catch((error: unknown) => {
-        response.writeHead(500, { Connection: "close" });
-        response.end(String(error));
-      });
-    });
-    baseUrl = `http://127.0.0.1:${await listen(server)}`;
-  });
-
-  afterEach(async () => {
-    resetPluginRuntimeStateForTest();
-    vi.restoreAllMocks();
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
+beforeEach(async () => {
+  pokes.length = 0;
+  uploadImageFromUrl.mockClear();
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "tlon", plugin: tlonPlugin, source: "test" }]),
+  );
+  server = http.createServer((request, response) => {
+    void (async () => {
+      const body = await readBody(request);
+      if (request.method === "POST" && request.url === "/~/login") {
+        expect(body).toBe("password=test-code");
+        response.writeHead(200, {
+          Connection: "close",
+          "Set-Cookie": "urbauth-~zod=test-cookie; Path=/; HttpOnly",
+        });
+        response.end("ok");
+        return;
+      }
+      if (request.method === "PUT" && request.url?.startsWith("/~/channel/")) {
+        expect(request.headers.cookie).toBe("urbauth-~zod=test-cookie");
+        const payload = JSON.parse(body) as CapturedPoke[];
+        expect(payload).toHaveLength(1);
+        pokes.push(expectDefined(payload[0], "Urbit HTTP poke"));
+        response.writeHead(204, { Connection: "close" }).end();
+        return;
+      }
+      response.writeHead(404, { Connection: "close" }).end();
+    })().catch((error: unknown) => {
+      response.writeHead(500, { Connection: "close" }).end(String(error));
     });
   });
+  baseUrl = `http://127.0.0.1:${await listen(server)}`;
+});
 
-  it("sanitizes DM, group, and media-caption text before the Urbit poke", async () => {
-    const cfg = {
-      channels: {
-        tlon: {
-          ship: "~zod",
-          code: "test-code",
-          url: baseUrl,
-          mediaMaxMb: 1,
-          network: { dangerouslyAllowPrivateNetwork: true },
-        },
+afterEach(async () => {
+  resetPluginRuntimeStateForTest();
+  vi.restoreAllMocks();
+  server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+});
+
+it("sanitizes DM, group, and media-caption text before the Urbit poke", async () => {
+  const cfg = {
+    channels: {
+      tlon: {
+        ship: "~zod",
+        code: "test-code",
+        url: baseUrl,
+        mediaMaxMb: 1,
+        network: { dangerouslyAllowPrivateNetwork: true },
       },
-    } as OpenClawConfig;
+    },
+  } as OpenClawConfig;
 
-    await sendDurableMessageBatch({
+  const send = (to: string, text: string, mediaUrl?: string) =>
+    sendDurableMessageBatch({
       cfg,
       channel: "tlon",
-      to: "~sampel-palnet",
-      payloads: [
-        {
-          text: [
-            "**Done.**",
-            "⚠️ 🛠️ `search private repos (agent)` failed",
-            "",
-            "```text",
-            "⚠️ 🛠️ `documented example (agent)` failed",
-            "```",
-          ].join("\n"),
-        },
-      ],
+      to,
+      payloads: [{ text, ...(mediaUrl ? { mediaUrl } : {}) }],
       skipQueue: true,
     });
+  await send(
+    "~sampel-palnet",
+    "**Done.**\n⚠️ 🛠️ `search private repos (agent)` failed\n\n```text\n⚠️ 🛠️ `documented example (agent)` failed\n```",
+  );
+  await send(
+    "chat/~host-ship/general",
+    '## Report\n<tool_call>{"name":"private_exec"}</tool_call>\nAll good.',
+  );
+  await send(
+    "~sampel-palnet",
+    "**Caption.**\n⚠️ 🛠️ `read private file (agent)` failed",
+    "https://source.example/image.png",
+  );
+  expect(uploadImageFromUrl).toHaveBeenCalledWith(
+    "https://source.example/image.png",
+    expect.objectContaining({ shipUrl: baseUrl, shipName: "~zod" }),
+    1024 * 1024,
+  );
 
-    await sendDurableMessageBatch({
-      cfg,
-      channel: "tlon",
-      to: "chat/~host-ship/general",
-      payloads: [
-        {
-          text: '## Report\n<tool_call>{"name":"private_exec"}</tool_call>\nAll good.',
-        },
-      ],
-      skipQueue: true,
-    });
+  expect(pokes.map(({ app, mark }) => ({ app, mark }))).toEqual([
+    { app: "chat", mark: "chat-dm-action" },
+    { app: "channels", mark: "channel-action-1" },
+    { app: "chat", mark: "chat-dm-action" },
+  ]);
 
-    await sendDurableMessageBatch({
-      cfg,
-      channel: "tlon",
-      to: "~sampel-palnet",
-      payloads: [
-        {
-          text: "**Caption.**\n⚠️ 🛠️ `read private file (agent)` failed",
-          mediaUrl: "https://source.example/image.png",
-        },
-      ],
-      skipQueue: true,
-    });
-    expect(uploadImageFromUrl).toHaveBeenCalledWith(
-      "https://source.example/image.png",
-      expect.objectContaining({ shipUrl: baseUrl, shipName: "~zod" }),
-      1024 * 1024,
-    );
-
-    expect(pokes).toHaveLength(3);
-    expect(pokes.map(({ app, mark }) => ({ app, mark }))).toEqual([
-      { app: "chat", mark: "chat-dm-action" },
-      { app: "channels", mark: "channel-action-1" },
-      { app: "chat", mark: "chat-dm-action" },
-    ]);
-
-    const dmJson = JSON.stringify(expectDefined(pokes[0], "DM poke").json);
-    expect(dmJson).toContain('"bold":["Done."]');
-    expect(dmJson).not.toContain("search private repos");
-    expect(dmJson).toContain("documented example (agent)");
-
-    const groupJson = JSON.stringify(expectDefined(pokes[1], "group poke").json);
-    expect(groupJson).toContain('"tag":"h2"');
-    expect(groupJson).toContain("All good.");
-    expect(groupJson).not.toContain("tool_call");
-    expect(groupJson).not.toContain("private_exec");
-
-    const mediaJson = JSON.stringify(expectDefined(pokes[2], "media poke").json);
-    expect(mediaJson).toContain('"bold":["Caption."]');
-    expect(mediaJson).toContain('"src":"https://media.example/image.png"');
-    expect(mediaJson).not.toContain("read private file");
-  });
+  const expectText = (index: number, included: string[], excluded: string[]) => {
+    const json = JSON.stringify(expectDefined(pokes[index], `poke ${index}`).json);
+    included.forEach((text) => expect(json).toContain(text));
+    excluded.forEach((text) => expect(json).not.toContain(text));
+  };
+  expectText(0, ['"bold":["Done."]', "documented example (agent)"], ["search private repos"]);
+  expectText(1, ['"tag":"h2"', "All good."], ["tool_call", "private_exec"]);
+  expectText(
+    2,
+    ['"bold":["Caption."]', '"src":"https://media.example/image.png"'],
+    ["read private file"],
+  );
 });

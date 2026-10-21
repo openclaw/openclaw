@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import type * as AgentRuntime from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -32,7 +30,7 @@ import {
   readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   apiCalls,
   chat,
@@ -45,7 +43,10 @@ import {
   photo,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
 import { resetTelegramClientOptionsCacheForTests } from "./send.js";
-import { resolveTelegramTestUpload } from "./send.telegram-http.test-support.js";
+import {
+  resolveTelegramTestUpload,
+  useTelegramHttpFixture,
+} from "./send.telegram-http.test-support.js";
 
 const { loadPreparedModelCatalog } = vi.hoisted(() => ({
   loadPreparedModelCatalog: vi.fn<typeof AgentRuntime.loadPreparedModelCatalog>(),
@@ -319,86 +320,49 @@ describe("Telegram native argument menus", () => {
 });
 
 describe("Telegram registered plugin delivery", () => {
-  type ApiRequest = { method: string; payload: Record<string, unknown> };
-  const requests: ApiRequest[] = [];
-  let apiRoot: string;
+  const http = useTelegramHttpFixture();
   let nextMessageId = 700;
   let rejectEdit = false;
   let previousRegistry = getActivePluginRegistry();
   let registry = createEmptyPluginRegistry();
-  let server: Server;
   const mediaDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  beforeAll(async () => {
-    server = createServer((request, response) => {
-      void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
-        const body = Buffer.concat(chunks);
-        const contentType = request.headers["content-type"] ?? "";
-        const payload: Record<string, unknown> = contentType.includes("multipart/form-data")
-          ? Object.fromEntries(
-              await new Response(body, { headers: { "content-type": contentType } }).formData(),
-            )
-          : JSON.parse(body.toString("utf8"));
-        const method = request.url?.split("/").at(-1) ?? "";
-        requests.push({ method, payload });
-        response.setHeader("content-type", "application/json");
-        response.setHeader("connection", "close");
-        if (method === "editMessageText" && rejectEdit) {
-          response.statusCode = 400;
-          response.end(
-            JSON.stringify({
-              ok: false,
-              error_code: 400,
-              description: "Bad Request: message to edit not found",
-            }),
-          );
-          return;
-        }
-        const result =
-          method === "getChat"
-            ? { ...groupChat, id: Number(payload.chat_id) }
-            : [
-                  "deleteMessage",
-                  "setMessageReaction",
-                  "sendChatAction",
-                  "answerCallbackQuery",
-                  "setMyCommands",
-                  "deleteMyCommands",
-                ].includes(method)
-              ? true
-              : {
-                  message_id: method.startsWith("edit")
-                    ? Number(payload.message_id)
-                    : ++nextMessageId,
-                  date: 1736380800,
-                  chat: Number(payload.chat_id) === groupChat.id ? groupChat : chat,
-                  ...(payload.message_thread_id === undefined
-                    ? {}
-                    : { message_thread_id: Number(payload.message_thread_id) }),
-                };
-        response.end(JSON.stringify({ ok: true, result }));
-      })().catch((error: unknown) => {
-        response.destroy(error instanceof Error ? error : new Error(String(error)));
-      });
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  });
-
-  afterAll(async () => {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  });
-
   beforeEach(() => {
-    requests.length = 0;
+    http.handleRequest = (method, _payload, response) => {
+      response.setHeader("connection", "close");
+      if (method === "editMessageText" && rejectEdit) {
+        response.statusCode = 400;
+        response.end(
+          JSON.stringify({
+            ok: false,
+            error_code: 400,
+            description: "Bad Request: message to edit not found",
+          }),
+        );
+        return true;
+      }
+      return false;
+    };
+    http.responseFor = (method, payload) =>
+      method === "getChat"
+        ? { ...groupChat, id: Number(payload.chat_id) }
+        : [
+              "deleteMessage",
+              "setMessageReaction",
+              "sendChatAction",
+              "answerCallbackQuery",
+              "setMyCommands",
+              "deleteMyCommands",
+            ].includes(method)
+          ? true
+          : {
+              message_id: method.startsWith("edit") ? Number(payload.message_id) : ++nextMessageId,
+              date: 1736380800,
+              chat: Number(payload.chat_id) === groupChat.id ? groupChat : chat,
+              ...(payload.message_thread_id === undefined
+                ? {}
+                : { message_thread_id: Number(payload.message_thread_id) }),
+            };
     nextMessageId = 700;
     rejectEdit = false;
     previousRegistry = getActivePluginRegistry();
@@ -418,7 +382,11 @@ describe("Telegram registered plugin delivery", () => {
 
   function pluginConfig(telegram: TelegramAccountConfig = {}): OpenClawConfig {
     const cfg = commandConfig();
-    Object.assign(cfg.channels!.telegram!, { apiRoot }, telegram);
+    Object.assign(
+      cfg.channels!.telegram!,
+      { apiRoot: http.cfg.channels.telegram.apiRoot },
+      telegram,
+    );
     return cfg;
   }
 
@@ -440,10 +408,12 @@ describe("Telegram registered plugin delivery", () => {
   }
 
   function effects() {
-    return requests.filter(
-      ({ method }) =>
-        !["sendChatAction", "getChat", "setMyCommands", "deleteMyCommands"].includes(method),
-    );
+    return http.requests
+      .map(({ method, fields }) => ({ method, payload: fields }))
+      .filter(
+        ({ method }) =>
+          !["sendChatAction", "getChat", "setMyCommands", "deleteMyCommands"].includes(method),
+      );
   }
 
   function expectMethods(...methods: string[]) {
@@ -531,13 +501,13 @@ describe("Telegram registered plugin delivery", () => {
     const upload = resolveTelegramTestUpload(payload, "document");
     expect(await upload.text()).toBe(content);
     expect(payload.message_thread_id).toBe("77");
-    const previousRequests = requests.length;
+    const previousRequests = http.requests.length;
     mediaUrl = forbidden;
     await expect(
       bot.handleUpdate({ update_id: 3211, message: groupCommand("/plug", 77) }),
     ).rejects.toThrow(/not under an allowed directory/);
     expect(
-      requests.slice(previousRequests).filter(({ method }) => method === "sendDocument"),
+      http.requests.slice(previousRequests).filter(({ method }) => method === "sendDocument"),
     ).toEqual([]);
   });
 

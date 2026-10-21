@@ -183,6 +183,7 @@ describe("CLI execution cancellation", () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       context.backendResolved.parseJsonlEvent = (line) => {
         if (JSON.parse(line).type === "parser-failure") {
+          controller.abort();
           throw new Error("Unrelated parser failure");
         }
         return null;

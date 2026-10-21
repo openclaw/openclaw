@@ -1,16 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createRoot, onSettled, runWithOwner, Show } from "solid-js";
-import type {
-  FsListDirResult,
-  WorktreeRepositoryStatus,
-  WorktreesBranchesResult,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { createMemo, onSettled, Show } from "solid-js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
-import { t } from "../lib/reactive/i18n.ts";
 import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
@@ -74,25 +68,35 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   override readonly sessionOrganizer = new SessionOrganizer(this, () => this.invalidate());
   // Native sidebar custody outlives provider/view roots.
-  private readonly menuRoot = runWithOwner(null, () =>
-    createRoot((dispose) => ({
-      menus: createSidebarMenus({
-        host: this,
-        element: this.hostElement,
-        commit: () => {
-          this.invalidate();
-          return this.updateComplete;
-        },
-      }),
-      dispose,
-    })),
-  );
-  override readonly sidebarMenus = this.menuRoot.menus;
-  readonly disposeMenus = this.menuRoot.dispose;
+  override readonly sidebarMenus = createSidebarMenus({
+    host: this,
+    element: this.hostElement,
+    commit: () => {
+      this.invalidate();
+      return this.updateComplete;
+    },
+  });
+  readonly disposeMenus = this.sidebarMenus.dispose;
   readonly people = new SidebarPeoplePreferences(() => this.invalidate());
   peopleView?: ReturnType<typeof createSidebarPeople>;
   // A connected host retains its pending boot read when Solid recreates the view.
   readonly snapshot = createSidebarSnapshot(this);
+
+  override shouldPublishSessionData(): boolean {
+    this.snapshot.synchronize();
+    return (
+      !this.sidebarSnapshot &&
+      this.sessionProjection.shouldPublishSessionData(this, {
+        sections: () =>
+          this.zonedVisibleSections(this.selectedAgentSessionRows(this.getSessionNavigationState()))
+            .sections,
+        tree: () => this.visibleSessionTreeInOrder(),
+        catalogs: () => this.sidebarSessionCatalogs(),
+        catalogRows: this.catalogLiveRows,
+        ownerOptions: () => this.ownerOptions,
+      })
+    );
+  }
 
   restoreSidebarSnapshot(model: SidebarSnapshotModel): void {
     this.sidebarSnapshot = model;
@@ -113,6 +117,13 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     const snapshot = this.sidebarSnapshot;
     if (snapshot) {
       this.pinnedSessions.seed(snapshot.pinnedSessions);
+      // Newer pagination choices override the saved view, independently per mode.
+      const limits = snapshot.sections.map(({ id, visibleLimit }) => [id, visibleLimit] as const);
+      this.sessionData.visibleSessionLimits = new Map([
+        ...limits,
+        ...this.sessionData.visibleSessionLimits,
+      ]);
+      this.rosterVisibleSessionLimits = new Map([...limits, ...this.rosterVisibleSessionLimits]);
     }
     this.sidebarPluginSnapshot =
       snapshot && this.context.plugins.registryStatus !== "complete"
@@ -144,47 +155,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     );
   }
 
-  sessionGroupDefaults(name: string) {
-    if (this.context.sessions.groupsStatus() !== "ready") {
-      return null;
-    }
-    const group = this.context.sessions.state.groupSettings.find((entry) => entry.name === name);
-    return group ? { cwd: group.cwd ?? "", worktree: group.worktree === true } : null;
-  }
-
-  async listSessionGroupFolders(path?: string): Promise<FsListDirResult> {
-    const sessions = this.context.sessions;
-    const scope = sessions.captureConnectionScope();
-    if (!scope) {
-      throw new Error(t("sessionsView.groupDefaultsStale"));
-    }
-    const result = await scope.client.request<FsListDirResult>("fs.listDir", path ? { path } : {});
-    if (this.context.sessions !== sessions || !sessions.isConnectionScopeCurrent(scope)) {
-      throw new Error(t("sessionsView.groupDefaultsStale"));
-    }
-    return result;
-  }
-
-  async inspectSessionGroupRepository(path?: string): Promise<WorktreeRepositoryStatus> {
-    const requestedPath = path?.trim() || this.activeChipAgent().agent?.workspace?.trim();
-    if (!requestedPath) {
-      return "unavailable";
-    }
-    const sessions = this.context.sessions;
-    const scope = sessions.captureConnectionScope();
-    if (!scope) {
-      throw new Error(t("sessionsView.groupDefaultsStale"));
-    }
-    const result = await scope.client.request<WorktreesBranchesResult>("worktrees.branches", {
-      repoRoot: requestedPath,
-      includeRepositoryStatus: true,
-    });
-    if (this.context.sessions !== sessions || !sessions.isConnectionScopeCurrent(scope)) {
-      throw new Error(t("sessionsView.groupDefaultsStale"));
-    }
-    return result.repositoryStatus === "git" || result.repositoryStatus === "not_git"
-      ? result.repositoryStatus
-      : "unavailable";
+  sessionGroupWorkspace(): string | undefined {
+    return this.activeChipAgent().agent?.workspace;
   }
 
   // Token suppression and schema validation stay behind the live-activity boundary.

@@ -1,4 +1,3 @@
-// Line tests cover carousel text fallback across both delivery paths.
 import { describe, expect, it } from "vitest";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import {
@@ -38,32 +37,33 @@ function createOutboundRuntime() {
   const { runtime, mocks } = createRuntime();
   mocks.buildTemplateMessageFromPayload.mockImplementation(buildTemplate);
   mocks.resolveTextChunkLimit.mockReturnValue(5000);
-  const { pushMessageLine, pushMessagesLine, pushTemplateMessage } = mocks;
+  setLineRuntime(runtime);
+  return mocks;
+}
 
-  return { runtime, pushMessageLine, pushMessagesLine, pushTemplateMessage };
+function sendCarousel(to: string, text = "", quickReplies?: string[], replyToId?: string) {
+  return lineOutboundAdapter.sendPayload!({
+    to,
+    text,
+    payload: { text, channelData: { line: { ...lineData, quickReplies } } },
+    replyToId,
+    accountId: "default",
+    cfg: { channels: { line: {} } },
+  });
+}
+
+function recordQuote(chatId: string, messageId: string, quoteToken?: string) {
+  recordLineQuoteToken({ accountId: "default", chatId, messageId, quoteToken });
 }
 
 describe("LINE carousel fallback delivery", () => {
   it.each(["", "After"])(
     "quotes the direct carousel fallback once when the following text is %j",
     async (text) => {
-      const { runtime, pushMessageLine, pushTemplateMessage } = createOutboundRuntime();
-      setLineRuntime(runtime);
-      recordLineQuoteToken({
-        accountId: "default",
-        chatId: "Ucarousel",
-        messageId: "m-carousel",
-        quoteToken: "q-carousel",
-      });
+      const { pushMessageLine, pushTemplateMessage } = createOutboundRuntime();
+      recordQuote("Ucarousel", "m-carousel", "q-carousel");
 
-      await lineOutboundAdapter.sendPayload!({
-        to: "line:user:Ucarousel",
-        text,
-        payload: { text, channelData: { line: lineData } },
-        replyToId: "m-carousel",
-        accountId: "default",
-        cfg: { channels: { line: {} } },
-      });
+      await sendCarousel("line:user:Ucarousel", text, undefined, "m-carousel");
 
       expect(pushTemplateMessage).not.toHaveBeenCalled();
       expect(pushMessageLine).toHaveBeenNthCalledWith(
@@ -84,57 +84,31 @@ describe("LINE carousel fallback delivery", () => {
     },
   );
 
-  it("quotes the carousel fallback once with inline quick replies", async () => {
-    const { runtime, pushMessagesLine, pushMessageLine, pushTemplateMessage } =
-      createOutboundRuntime();
-    setLineRuntime(runtime);
-    recordLineQuoteToken({
-      accountId: "default",
-      chatId: "Ucarousel-quick",
-      messageId: "m-carousel-quick",
-      quoteToken: "q-carousel-quick",
-    });
+  it.each([undefined, "q-carousel-quick"])(
+    "keeps quick replies inline with quote %j",
+    async (quoteToken) => {
+      const { pushMessagesLine, pushMessageLine, pushTemplateMessage } = createOutboundRuntime();
+      const to = `line:user:Ucarousel-${quoteToken ?? "unquoted"}`;
+      recordQuote(to, "m-carousel-quick", quoteToken);
 
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:Ucarousel-quick",
-      text: "",
-      payload: { channelData: { line: { ...lineData, quickReplies: ["Continue"] } } },
-      replyToId: "m-carousel-quick",
-      accountId: "default",
-      cfg: { channels: { line: {} } },
-    });
+      await sendCarousel(to, "", ["Continue"], quoteToken ? "m-carousel-quick" : undefined);
 
-    expect(pushTemplateMessage).not.toHaveBeenCalled();
-    expect(pushMessageLine).not.toHaveBeenCalled();
-    expect(pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
-      "line:user:Ucarousel-quick",
-      [
-        {
-          type: "text",
-          text: fallbackText,
-          quickReply: createQuickReply("Continue"),
-          quoteToken: "q-carousel-quick",
-        },
-      ],
-      expect.any(Object),
-    );
-  });
-
-  it("sends direct fallback before the ordinary text without calling template delivery", async () => {
-    const { runtime, pushMessageLine, pushTemplateMessage } = createOutboundRuntime();
-    setLineRuntime(runtime);
-
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:1",
-      text: "After",
-      payload: { text: "After", channelData: { line: lineData } },
-      accountId: "default",
-      cfg: { channels: { line: {} } },
-    });
-
-    expect(pushTemplateMessage).not.toHaveBeenCalled();
-    expect(pushMessageLine.mock.calls.map((call) => call[1])).toEqual([fallbackText, "After"]);
-  });
+      expect(pushTemplateMessage).not.toHaveBeenCalled();
+      expect(pushMessageLine).not.toHaveBeenCalled();
+      expect(pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+        to,
+        [
+          {
+            type: "text",
+            text: fallbackText,
+            quickReply: createQuickReply("Continue"),
+            ...(quoteToken ? { quoteToken } : {}),
+          },
+        ],
+        expect.any(Object),
+      );
+    },
+  );
 
   it("keeps the auto-reply fallback and ordinary text in the same reply", async () => {
     const { replyMessageLine } = createDeps({ buildTemplateMessageFromPayload });
@@ -152,29 +126,6 @@ describe("LINE carousel fallback delivery", () => {
         { type: "text", text: fallbackText },
       ],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
-    );
-  });
-
-  it("keeps quick replies inline on a direct textual fallback", async () => {
-    const { runtime, pushMessagesLine, pushTemplateMessage } = createOutboundRuntime();
-    setLineRuntime(runtime);
-
-    await lineOutboundAdapter.sendPayload!({
-      to: "line:user:1",
-      text: "",
-      payload: {
-        text: "",
-        channelData: { line: { ...lineData, quickReplies: ["Continue"] } },
-      },
-      accountId: "default",
-      cfg: { channels: { line: {} } },
-    });
-
-    expect(pushTemplateMessage).not.toHaveBeenCalled();
-    expect(pushMessagesLine).toHaveBeenCalledWith(
-      "line:user:1",
-      [{ type: "text", text: fallbackText, quickReply: createQuickReply("Continue") }],
-      expect.any(Object),
     );
   });
 });

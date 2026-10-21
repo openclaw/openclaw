@@ -58,18 +58,6 @@ async function withAcmeSpeechProvider(run: () => Promise<void>) {
   );
 }
 
-async function expectSynthesisFailure(
-  result: Awaited<ReturnType<typeof synthesizeSpeechMock>>,
-  reason: string,
-) {
-  await withAcmeSpeechProvider(async () => {
-    synthesizeSpeechMock.mockResolvedValue(result);
-    const res = await invokeTalkSpeakDirect({ text: "Hello from talk mode." });
-    expect(res?.ok).toBe(false);
-    expect(res?.error?.details).toEqual({ reason, fallbackEligible: false });
-  });
-}
-
 function expectSingleSynthesizeSpeechCall() {
   expect(synthesizeSpeechMock).toHaveBeenCalledTimes(1);
   const params = synthesizeSpeechMock.mock.calls.at(0)?.[0];
@@ -185,11 +173,15 @@ describe("gateway talk runtime", () => {
     });
   });
 
-  it("returns synthesis_failed details when the provider rejects synthesis", async () => {
-    await expectSynthesisFailure({ success: false, error: "provider failed" }, "synthesis_failed");
-  });
-
-  it("rejects empty audio results as invalid_audio_result", async () => {
-    await expectSynthesisFailure(audioResult(Buffer.alloc(0)), "invalid_audio_result");
+  it.each([
+    { result: { success: false as const, error: "provider failed" }, reason: "synthesis_failed" },
+    { result: audioResult(Buffer.alloc(0)), reason: "invalid_audio_result" },
+  ])("rejects synthesis with $reason", async ({ result, reason }) => {
+    await withAcmeSpeechProvider(async () => {
+      synthesizeSpeechMock.mockResolvedValue(result);
+      const res = await invokeTalkSpeakDirect({ text: "Hello from talk mode." });
+      expect(res?.ok).toBe(false);
+      expect(res?.error?.details).toEqual({ reason, fallbackEligible: false });
+    });
   });
 });

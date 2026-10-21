@@ -2,61 +2,34 @@ import { describe, expect, it } from "vitest";
 import {
   parseRetryAfterErrorSeconds,
   parseRetryAfterHeadersSeconds,
-  parseRetryAfterHttpDateMs,
+  parseRetryAfterHttpDateMs as parseDate,
 } from "./retry-after.js";
 
 const EXAMPLE_TIMESTAMP = Date.UTC(1994, 10, 6, 8, 49, 37);
+const quotaHeaders = (dimension: string, remaining: string, reset: string) => ({
+  [`x-ratelimit-remaining-${dimension}`]: remaining,
+  [`x-ratelimit-reset-${dimension}`]: reset,
+});
 
 describe("retry header floors", () => {
-  it.each([
-    { headers: { "retry-after": "7", "retry-after-ms": "335" }, expected: 7 },
-    { headers: { "Retry-After": 7, "retry-after-ms": 8500 }, expected: 8.5 },
-    { headers: { "retry-after": "7", "retry-after-ms": "invalid" }, expected: 7 },
-    { headers: { "retry-after": "7", "retry-after-ms": "0" }, expected: 7 },
-    {
-      headers: { "retry-after": "Sun, 06 Nov 1994 08:49:37 GMT", "retry-after-ms": "335" },
-      expected: 7,
-    },
-    { headers: { "retry-after": "9007199254740993", "retry-after-ms": "335" }, expected: Infinity },
-    { headers: { "retry-after-ms": "9007199254740993" }, expected: Infinity },
-    { headers: { "retry-after": "120 seconds", "retry-after-ms": "90000ms" }, expected: undefined },
-    {
-      headers: { "x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-tokens": "1m2.5s" },
-      expected: 62.5,
-    },
-    {
-      headers: { "x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "250ms" },
-      expected: 0.25,
-    },
-    {
-      headers: {
-        "x-ratelimit-remaining-project-tokens": "0",
-        "x-ratelimit-reset-project-tokens": "2s",
-      },
-      expected: 2,
-    },
-    {
-      headers: { "x-ratelimit-remaining-tokens": "1", "x-ratelimit-reset-tokens": "1m" },
-      expected: undefined,
-    },
-    { headers: { "x-ratelimit-reset-tokens": "1m" }, expected: undefined },
-    {
-      headers: { "x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-tokens": "tomorrow" },
-      expected: undefined,
-    },
-    {
-      headers: {
-        "retry-after": "7",
-        "x-ratelimit-remaining-tokens": "0",
-        "x-ratelimit-reset-tokens": "9s",
-      },
-      expected: 9,
-    },
-  ])("keeps the greatest valid native and record floor: $headers", ({ headers, expected }) => {
-    const native = new Headers();
-    for (const [key, value] of Object.entries(headers)) {
-      native.set(key, String(value));
-    }
+  it.each<[Record<string, string | number>, number | undefined]>([
+    [{ "retry-after": "7", "retry-after-ms": "335" }, 7],
+    [{ "Retry-After": 7, "retry-after-ms": 8500 }, 8.5],
+    [{ "retry-after": "7", "retry-after-ms": "invalid" }, 7],
+    [{ "retry-after": "7", "retry-after-ms": "0" }, 7],
+    [{ "retry-after": "Sun, 06 Nov 1994 08:49:37 GMT", "retry-after-ms": "335" }, 7],
+    [{ "retry-after": "9007199254740993", "retry-after-ms": "335" }, Infinity],
+    [{ "retry-after-ms": "9007199254740993" }, Infinity],
+    [{ "retry-after": "120 seconds", "retry-after-ms": "90000ms" }, undefined],
+    [quotaHeaders("tokens", "0", "1m2.5s"), 62.5],
+    [quotaHeaders("requests", "0", "250ms"), 0.25],
+    [quotaHeaders("project-tokens", "0", "2s"), 2],
+    [quotaHeaders("tokens", "1", "1m"), undefined],
+    [{ "x-ratelimit-reset-tokens": "1m" }, undefined],
+    [quotaHeaders("tokens", "0", "tomorrow"), undefined],
+    [{ "retry-after": "7", ...quotaHeaders("tokens", "0", "9s") }, 9],
+  ])("keeps the greatest valid native and record floor: %j", (headers, expected) => {
+    const native = new Headers(Object.entries(headers).map(([key, value]) => [key, String(value)]));
     for (const source of [headers, native]) {
       expect(parseRetryAfterHeadersSeconds(source, EXAMPLE_TIMESTAMP - 7000, 429)).toBe(expected);
     }
@@ -64,14 +37,7 @@ describe("retry header floors", () => {
 
   it.each([undefined, 200, 503])("does not infer a quota wait from HTTP %s", (status) => {
     expect(
-      parseRetryAfterHeadersSeconds(
-        {
-          "x-ratelimit-remaining-tokens": "0",
-          "x-ratelimit-reset-tokens": "1m",
-        },
-        EXAMPLE_TIMESTAMP,
-        status,
-      ),
+      parseRetryAfterHeadersSeconds(quotaHeaders("tokens", "0", "1m"), EXAMPLE_TIMESTAMP, status),
     ).toBeUndefined();
   });
 
@@ -137,7 +103,7 @@ describe("parseRetryAfterHttpDateMs", () => {
     ["asctime single-digit day", "Sun Nov  6 08:49:37 1994"],
     ["asctime two-digit day", "Sun Nov 06 08:49:37 1994"],
   ])("parses %s", (_label, value) => {
-    expect(parseRetryAfterHttpDateMs(value, Date.UTC(1994, 0, 1))).toBe(EXAMPLE_TIMESTAMP);
+    expect(parseDate(value, Date.UTC(1994, 0, 1))).toBe(EXAMPLE_TIMESTAMP);
   });
 
   it.each([
@@ -145,33 +111,9 @@ describe("parseRetryAfterHttpDateMs", () => {
     "Sunday, 31-Feb-27 00:00:00 GMT",
     "Sun Feb 31 00:00:00 2027",
     "Thu, 29 Feb 2027 00:00:00 GMT",
-  ])("rejects an invalid calendar date: %s", (value) => {
-    expect(parseRetryAfterHttpDateMs(value)).toBeUndefined();
-  });
-
-  it.each([
     "Mon, 06 Nov 1994 08:49:37 GMT",
     "Monday, 06-Nov-94 08:49:37 GMT",
     "Mon Nov  6 08:49:37 1994",
-  ])("rejects a weekday that does not match the date: %s", (value) => {
-    expect(parseRetryAfterHttpDateMs(value, Date.UTC(1994, 0, 1))).toBeUndefined();
-  });
-
-  it("accepts the HTTP-date leap-second range", () => {
-    expect(parseRetryAfterHttpDateMs("Sat, 31 Dec 2016 23:59:60 GMT")).toBe(Date.UTC(2017, 0, 1));
-  });
-
-  it("uses the RFC 850 rolling 50-year rule before validating the weekday", () => {
-    const now = Date.UTC(2026, 10, 6);
-    expect(parseRetryAfterHttpDateMs("Sunday, 06-Nov-50 00:00:00 GMT", now)).toBe(
-      Date.UTC(2050, 10, 6),
-    );
-    expect(parseRetryAfterHttpDateMs("Sunday, 06-Nov-77 00:00:00 GMT", now)).toBe(
-      Date.UTC(1977, 10, 6),
-    );
-  });
-
-  it.each([
     "sun, 06 Nov 1994 08:49:37 GMT",
     "Sun, 06 Nov 1899 08:49:37 GMT",
     "Sun, 06 Nov 1994 24:00:00 GMT",
@@ -179,7 +121,17 @@ describe("parseRetryAfterHttpDateMs", () => {
     "Sun, 06 Nov 1994 08:49:61 GMT",
     "Sun, 6 Nov 1994 08:49:37 GMT",
     "Sun Nov 6 08:49:37 1994",
-  ])("rejects a value outside the HTTP-date grammar: %s", (value) => {
-    expect(parseRetryAfterHttpDateMs(value)).toBeUndefined();
+  ])("rejects invalid HTTP-date calendar, weekday or grammar: %s", (value) => {
+    expect(parseDate(value, Date.UTC(2026, 10, 6))).toBeUndefined();
+  });
+
+  it("accepts the HTTP-date leap-second range", () => {
+    expect(parseDate("Sat, 31 Dec 2016 23:59:60 GMT")).toBe(Date.UTC(2017, 0, 1));
+  });
+
+  it("uses the RFC 850 rolling 50-year rule before validating the weekday", () => {
+    const now = Date.UTC(2026, 10, 6);
+    expect(parseDate("Sunday, 06-Nov-50 00:00:00 GMT", now)).toBe(Date.UTC(2050, 10, 6));
+    expect(parseDate("Sunday, 06-Nov-77 00:00:00 GMT", now)).toBe(Date.UTC(1977, 10, 6));
   });
 });

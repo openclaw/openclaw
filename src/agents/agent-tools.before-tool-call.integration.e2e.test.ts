@@ -1051,17 +1051,17 @@ describe("before_tool_call hook deduplication (#15502)", () => {
 
   it("isolates terminal presentation arguments while using the final middleware result", async () => {
     const onToolOutcome = vi.fn();
-    let executedParams: { request: { url: string } } | undefined;
+    const execute = vi.fn(async (_id: string, params: { request: { url: string } }) => {
+      params.request.url = "https://executed.example";
+      return { content: [], details: { status: 200 } };
+    });
     const sourceTool = setToolTerminalPresentation(
       asAgentTool({
         name: "web_fetch",
         description: "fetch",
         parameters: {},
         resultContentSource: "network",
-        execute: vi.fn(async (_id, params: { request: { url: string } }) => {
-          executedParams = params;
-          return { content: [], details: { status: 200 } };
-        }),
+        execute,
       }),
       (params, result) => {
         const url = (params as { request: { url: string } }).request.url;
@@ -1090,11 +1090,11 @@ describe("before_tool_call hook deduplication (#15502)", () => {
       expect.objectContaining({
         toolName: "web_fetch",
         resultContentSource: "network",
-        terminalPresentation: "Fetched https://example.com with status 200",
+        terminalPresentation: "Fetched https://executed.example with status 200",
       }),
     );
 
-    expectDefined(executedParams, "executed formatter arguments").request.url =
+    expectDefined(execute.mock.calls[0], "executed formatter arguments")[1].request.url =
       "https://changed.example";
     finalizeToolTerminalPresentation({
       toolCallId: "call-terminal-presentation",
@@ -1105,7 +1105,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     expect(onToolOutcome).toHaveBeenLastCalledWith(
       expect.objectContaining({
         presentationOnly: true,
-        terminalPresentation: "Fetched https://example.com with status 201",
+        terminalPresentation: "Fetched https://executed.example with status 201",
       }),
     );
   });

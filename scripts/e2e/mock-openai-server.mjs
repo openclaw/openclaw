@@ -908,9 +908,8 @@ const server = http.createServer((req, res) => {
     }
 
     if (route === "chatCompletions") {
-      // Progress-draft proof needs assistant content followed by a tool call in
-      // one streamed turn: the completions transport tags that leading text as
-      // commentary, which channels render as the draft status headline.
+      // This unphased completions fixture proves tool progress and finalization.
+      // Commentary proof uses the Responses fixture's explicit commentary phase.
       if (!selectedResponse && bodyText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
         const messages = Array.isArray(body.messages) ? body.messages : [];
         const toolTurnDone = hasCurrentTurnToolOutput(messages);

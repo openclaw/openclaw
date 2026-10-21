@@ -12,6 +12,7 @@ import { getSessionRepositoryWorkspaceStore } from "../../state/session-reposito
 import * as availability from "../github-publication-availability.js";
 import { prepareGitHubPublicationTarget } from "../github-publication-target.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import * as sessionStoreWorker from "../session-utils-store-worker.js";
 import {
   publisher,
   receipt,
@@ -136,6 +137,10 @@ describe("registered guest publication target discovery", () => {
           }
           try {
             const lookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
+            const sessionReads = vi.spyOn(
+              sessionStoreWorker,
+              "loadGatewaySessionEntryReadOnlyInWorker",
+            );
             const responses = await Promise.all(
               keys.map((key) => fixture.invoke("sessions.github.options", { sessionKey: key })),
             );
@@ -143,6 +148,7 @@ describe("registered guest publication target discovery", () => {
               expect(response).toHaveBeenCalledWith(true, sharedOptions);
             }
             expect(lookup).toHaveBeenCalledOnce();
+            expect(sessionReads).toHaveBeenCalledTimes(keys.length);
 
             // A revised registry identity cannot borrow the previous repository's positive facts.
             await updateRegistryWorktree(process.env, `${worktree.id}-1`, {
@@ -267,7 +273,7 @@ describe("registered guest publication target discovery", () => {
     },
   );
 
-  it.each(["connection", "worktree"] as const)(
+  it.each(["connection", "worktree", "session worktree"] as const)(
     "rejects a changed %s during repository discovery",
     async (change) => {
       await withWorktree(async (fixture, worktree) => {
@@ -288,6 +294,8 @@ describe("registered guest publication target discovery", () => {
           );
           if (change === "connection") {
             fixture.disconnect();
+          } else if (change === "session worktree") {
+            await upsertSessionEntryCore({ agentId: "main", sessionKey }, { worktree: undefined });
           } else {
             await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
           }

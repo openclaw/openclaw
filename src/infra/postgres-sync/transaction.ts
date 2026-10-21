@@ -2,7 +2,6 @@ import { assertSyncTransactionResult, sqlPublicationAnchor } from "../sql-connec
 import type { PostgresSqlConnection } from "../sql-connection.js";
 import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
 import { beginPostgresReadSnapshotScope } from "../sqlite-schema-facts.js";
-import { deferSqliteWorkerCommitReceipt } from "../sqlite-worker-operation-admission.js";
 import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
 
 function assertPostgresOperationCurrent(): void {
@@ -37,22 +36,11 @@ export function runPostgresTransactionSync<T>(
       if (readOnly && !nested) {
         closeReadScope = beginPostgresReadSnapshotScope(db);
       }
-      const mutationRevision = db.mutationRevision;
       const result = operation();
       assertSyncTransactionResult(result);
       if (nested) {
         db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
       } else {
-        const scope = currentSqliteWorkerOperationAdmission.getStore();
-        if (
-          !readOnly &&
-          scope?.active &&
-          db.mutationRevision !== mutationRevision &&
-          !scope.owner.pendingReceipts?.has(anchor)
-        ) {
-          // A domain's staged receipt already settles this commit with its typed facts.
-          deferSqliteWorkerCommitReceipt(anchor, {});
-        }
         const commit = () => {
           assertPostgresOperationCurrent();
           // End read snapshots without publishing the connection's COMMIT write receipt.

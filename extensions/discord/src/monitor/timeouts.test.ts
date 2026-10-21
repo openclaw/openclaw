@@ -1,4 +1,3 @@
-// Discord tests cover timeouts plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mergeAbortSignals } from "../../api.js";
@@ -104,10 +103,7 @@ describe("discord monitor timeouts", () => {
             );
           });
         },
-      }).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+      }).catch((error: unknown) => error);
 
       await vi.advanceTimersByTimeAsync(100);
 

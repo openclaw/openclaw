@@ -84,7 +84,6 @@ it("preserves auth facts through first-file session admission after empty startu
   await prepareSharedAuthStoreOwnership();
   const prepared = prepareSecretsRuntimeFastPathSnapshot({
     config: { agents: { entries: { main: { agentDir } } }, plugins: { enabled: false } },
-    agentDirs: [agentDir],
   });
   expect(prepared).not.toBeNull();
   activateSecretsRuntimeSnapshot(prepared!.snapshot);

@@ -26,7 +26,7 @@ type ContributionsElement = HTMLElementTagNameMap["openclaw-plugin-contributions
 const sessionKey = "agent:main:main";
 const cleanups: (() => void)[] = [];
 
-it("renders customization inline and retains pending reload state", async () => {
+it("renders customization inline and recovers reload controls after failure or success", async () => {
   const listeners = new Set<() => void>();
   const replacement = {
     key: "fixture/composer",
@@ -35,6 +35,7 @@ it("renders customization inline and retains pending reload state", async () => 
   };
   let selected: typeof replacement | undefined;
   const pendingReload = createDeferred();
+  const retryReload = createDeferred();
   const diagnostics: PluginControlUiDiagnostic[] = [
     {
       pluginId: "custom-review",
@@ -129,11 +130,22 @@ it("renders customization inline and retains pending reload state", async () => 
       ),
     );
     expect(button(t("pluginUi.reload")).disabled).toBe(false);
+    expect(manager.querySelector("select")).toBe(select);
+
+    plugins.reload.mockReturnValueOnce(retryReload.promise);
+    button(t("pluginUi.reload")).click();
+    await vi.waitFor(() => expect(button(t("pluginUi.reload")).disabled).toBe(true));
+    expect(manager.querySelector('[role="alert"]')).toBeNull();
+    retryReload.resolve();
+    await vi.waitFor(() => expect(button(t("pluginUi.reload")).disabled).toBe(false));
+    expect(manager.querySelector('[role="alert"]')).toBeNull();
+
     button(t("common.retry")).click();
     expect(plugins.refresh).toHaveBeenCalledOnce();
     expect(manager.querySelector("openclaw-modal-dialog")).toBeNull();
   } finally {
     pendingReload.resolve();
+    retryReload.resolve();
   }
 });
 
@@ -256,6 +268,61 @@ async function mountActions(
 }
 
 describe("native plugin session actions", () => {
+  it("shows a concurrent action failure after a later invocation succeeds", async () => {
+    const { element, run } = await mountActions();
+    const failed = createDeferred();
+    const succeeded = createDeferred();
+    const button = element.querySelector<HTMLButtonElement>("button")!;
+    try {
+      run.mockReturnValueOnce(failed.promise).mockReturnValueOnce(succeeded.promise);
+      button.click();
+      button.click();
+      succeeded.resolve();
+      await succeeded.promise;
+      failed.reject(new Error("Synthetic concurrent action failure"));
+      await vi.waitFor(() =>
+        expect(element.querySelector('[role="alert"]')?.textContent).toBe(
+          "Synthetic concurrent action failure",
+        ),
+      );
+      expect(element.querySelector("button")).toBe(button);
+    } finally {
+      failed.resolve();
+      succeeded.resolve();
+    }
+  });
+
+  it("clears action failures on retry without replacing its controls", async () => {
+    const { element, run } = await mountActions();
+    const failed = createDeferred();
+    const retry = createDeferred();
+    const button = element.querySelector<HTMLButtonElement>("button")!;
+    try {
+      run.mockReturnValueOnce(failed.promise);
+      button.click();
+      failed.reject(new Error("Synthetic action failure"));
+      await vi.waitFor(() =>
+        expect(element.querySelector('[role="alert"]')?.textContent).toBe(
+          "Synthetic action failure",
+        ),
+      );
+      expect(element.querySelector("button")).toBe(button);
+
+      run.mockReturnValueOnce(retry.promise);
+      button.click();
+      await vi.waitFor(() => expect(element.querySelector('[role="alert"]')).toBeNull());
+      expect(element.querySelector("button")).toBe(button);
+      retry.resolve();
+      await retry.promise;
+      await element.updateComplete;
+      expect(element.querySelector('[role="alert"]')).toBeNull();
+      expect(element.querySelector("button")).toBe(button);
+    } finally {
+      failed.resolve();
+      retry.resolve();
+    }
+  });
+
   it("replaces placement subscriptions and resumes current session presentation", async () => {
     const { element, sessions } = await mountActions();
     expect(element.querySelector("button")?.textContent).toBe("Review Ready");

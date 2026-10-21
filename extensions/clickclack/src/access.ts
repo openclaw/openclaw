@@ -350,6 +350,7 @@ export async function resolveClickClackInboundAccess(params: {
       ? {
           cfg,
           modeWhenAccessGroupsOff: "configured",
+          hasControlCommand: runtime.channel.text.hasControlCommand(params.message.body, cfg),
         }
       : false,
   });
@@ -435,7 +436,7 @@ export async function resolveClickClackInboundAccess(params: {
           }),
         hasControlCommand:
           shouldCheckCommand &&
-          runtime.channel.commands.shouldComputeCommandAuthorized(params.message.body, currentCfg),
+          runtime.channel.text.hasControlCommand(params.message.body, currentCfg),
         commandAuthorized: resolved.commandAccess.authorized,
       },
     }).shouldSkip;

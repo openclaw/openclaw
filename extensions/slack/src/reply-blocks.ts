@@ -41,7 +41,7 @@ import { SLACK_BUTTON_ACTION_IDS, SLACK_SELECT_ACTION_IDS } from "./reply-action
 
 export type SlackReplyBlockSegment =
   | { kind: "blocks"; blocks: SlackBlock[] }
-  | { kind: "text"; text: string; mrkdwn: false };
+  | { kind: "text"; text: string };
 
 export type SlackReplyBlockResolution = {
   authoredTextPlacement: SlackAuthoredTextPlacement;
@@ -316,7 +316,7 @@ function appendTextSegment(segments: SlackReplyBlockSegment[], text: string): vo
     last.text = `${last.text}\n\n${trimmed}`;
     return;
   }
-  segments.push({ kind: "text", text: trimmed, mrkdwn: false });
+  segments.push({ kind: "text", text: trimmed });
 }
 
 function appendBlockSegment(

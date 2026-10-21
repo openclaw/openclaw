@@ -5,6 +5,11 @@ import type { ModelsListResult } from "../../../packages/gateway-protocol/src/sc
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 import {
+  catalogReply,
+  catalogSessionRpc,
+  expectAssistantReply,
+} from "./models-catalog-fixture.test-support.js";
+import {
   closeModelsEndpoint,
   createModelsTestState,
   listenModelsEndpoint,
@@ -102,20 +107,7 @@ async function withDispatchLifecycle(
       requests.push(recorded);
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.end(
-        `data: ${JSON.stringify({
-          id: "chatcmpl-lifecycle",
-          object: "chat.completion.chunk",
-          created: 0,
-          model: recorded.body.model,
-          choices: [
-            {
-              index: 0,
-              delta: { role: "assistant", content: "LIFECYCLE_DISPATCH_REPLY" },
-              finish_reason: "stop",
-            },
-          ],
-          usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
-        })}\n\ndata: [DONE]\n\n`,
+        catalogReply("chatcmpl-lifecycle", recorded.body.model, "LIFECYCLE_DISPATCH_REPLY"),
       );
     })();
     pending.push(work);
@@ -189,7 +181,6 @@ async function withDispatchLifecycle(
       agents: {
         defaults: {
           skipBootstrap: true,
-          heartbeat: { every: "0m" },
           modelPolicy: { allow: ["opencode/*"] },
         },
       },
@@ -253,37 +244,21 @@ async function withDispatchLifecycle(
             })
           : readModels(false, view),
       send: async (model, name) => {
-        const session = await active.client.request<{ key: string }>("sessions.create", {
-          agentId: "main",
-          key: `agent:main:${name}`,
+        const rpc = catalogSessionRpc(active.client);
+        const session = await rpc.create(`opencode/${model}`, `agent:main:${name}`, {
           label: name,
-          model: `opencode/${model}`,
         });
-        const started = await active.client.request<{ runId: string; status: string }>(
-          "chat.send",
-          {
-            sessionKey: session.key,
-            message: "Reply with the lifecycle dispatch marker.",
-            idempotencyKey: name,
-          },
+        const started = await rpc.send(
+          session.key,
+          "Reply with the lifecycle dispatch marker.",
+          name,
         );
         expect(started.status).toBe("started");
-        const completed = await active.client.request<{ status: string; error?: string }>(
-          "agent.wait",
-          { runId: started.runId, timeoutMs: 30_000 },
-          { timeoutMs: 35_000 },
-        );
+        const completed = await rpc.wait(started.runId);
         if (completed.status === "ok") {
-          const history = await active.client.request<{ messages: unknown[] }>("chat.history", {
-            sessionKey: session.key,
-          });
-          expect(history.messages).toContainEqual(
-            expect.objectContaining({
-              role: "assistant",
-              content: expect.arrayContaining([
-                expect.objectContaining({ type: "text", text: "LIFECYCLE_DISPATCH_REPLY" }),
-              ]),
-            }),
+          expectAssistantReply(
+            (await rpc.history(session.key)).messages,
+            "LIFECYCLE_DISPATCH_REPLY",
           );
         }
         return completed;

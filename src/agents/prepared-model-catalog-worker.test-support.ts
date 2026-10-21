@@ -24,6 +24,7 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { formatModelCatalogAuthLabel } from "./model-catalog-auth-labels.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
+import { catalogAgentFacts } from "./prepared-model-catalog-worker.shared.test-support.js";
 import * as catalogRuntime from "./prepared-model-catalog.js";
 import {
   getPreparedModelFullCatalogAuth,
@@ -38,7 +39,6 @@ import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
 import {
   refreshNativeCatalogDuringBoundedRead,
   seedFixturePluginModelCatalog,
@@ -146,19 +146,7 @@ export function makeCatalogAgentFacts(
   input: PreparedModelRuntimeInput & { env: NodeJS.ProcessEnv },
   overrides: Partial<Omit<PreparedModelRuntimeAgentFacts, "input" | "env">> = {},
 ): PreparedModelRuntimeAgentFacts {
-  return {
-    input,
-    env: input.env,
-    authStore: { version: 1, profiles: {} },
-    credentials: {},
-    templateAuthStorage: AuthStorage.inMemory({}),
-    providerIds: [PROVIDER_ID],
-    configuredModelRefs: [],
-    configuredRuntimeModels: [],
-    runtimeCapabilityModels: [],
-    configuredGeneratedCatalogPluginIds: [],
-    ...overrides,
-  };
+  return catalogAgentFacts(input, input.env, { providerIds: [PROVIDER_ID], ...overrides });
 }
 
 export function writeUnrelatedFixturePlugin(

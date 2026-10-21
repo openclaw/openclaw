@@ -441,10 +441,10 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
               {props.model.configError}
               <button
                 class="btn btn--sm"
-                onClick={
-                  props.model.configValue && props.model.configSchema
-                    ? props.model.onConfigWriteRetry
-                    : props.model.onConfigReadRetry
+                onClick={() =>
+                  props.model?.configValue && props.model.configSchema
+                    ? props.model.onConfigWriteRetry()
+                    : props.model?.onConfigReadRetry()
                 }
               >
                 {t("common.retry")}
