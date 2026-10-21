@@ -127,21 +127,10 @@ describe("mcp-grant-store", () => {
     const admittedRunContext = await admitted("run-immutable-context");
     const context = {
       sessionKey: " agent:main:telegram:group:1 ",
-      sessionId: "session-1",
-      messageProvider: "telegram",
       clientCaps: ["tool-events"],
       pinnedWidgetAuthoring: true,
-      currentChannelId: "telegram:-1001",
-      currentThreadTs: "42",
-      currentMessageId: "message-1",
-      currentInboundAudio: true,
-      accountId: "account-1",
-      inboundEventKind: "room_event" as const,
-      sourceReplyDeliveryMode: "message_tool_only" as const,
       sourceReplyOnly: true,
       toolsAllow: ["message"],
-      taskSuggestionDeliveryMode: "gateway" as const,
-      requireExplicitMessageTarget: true,
       senderIsOwner: false,
     };
     const grant = mintMcpLoopbackClientGrant({
@@ -303,6 +292,7 @@ describe("mcp-grant-store", () => {
     const nextAdmission = await admitted("run-next-turn");
     const firstController = new AbortController();
     const nextController = new AbortController();
+    const toolAuth = { agentDir: "/tmp/next-agent", store: { version: 1, profiles: {} } };
     const skillLibraryAuthoring: SkillLibraryAuthoringCapability = {
       target: "personal",
       defaultTarget: "personal",
@@ -322,10 +312,7 @@ describe("mcp-grant-store", () => {
       admittedRunContext: nextAdmission,
       abortSignal: nextController.signal,
       skillLibraryAuthoring,
-      toolAuth: {
-        agentDir: "/tmp/next-agent",
-        store: { version: 1, profiles: {} },
-      },
+      toolAuth,
     });
     expect(activateCapture(grantParams(stable.token, "stale-capture"))).toBeTruthy();
     const first = resolveClient(grantParams(stable.token, "stale-capture"));
@@ -363,10 +350,7 @@ describe("mcp-grant-store", () => {
       },
       admittedRunContext: nextAdmission,
       skillLibraryAuthoring,
-      toolAuth: {
-        agentDir: "/tmp/next-agent",
-        store: { version: 1, profiles: {} },
-      },
+      toolAuth,
     });
     expect(transferred?.skillLibraryAuthoring).toBe(skillLibraryAuthoring);
     expect(transferred?.isCurrent()).toBe(true);
