@@ -3,6 +3,10 @@ import { createServer, ServerResponse, type IncomingMessage } from "node:http";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
@@ -104,15 +108,9 @@ describe("readJsonBodyOrError", () => {
       setDefaultSecurityHeaders(res);
       tasks.push(readJsonBodyOrError(req, res, 1024));
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing listener");
-    }
+    const origin = await listenLoopback(server);
     try {
-      const response = await fetch(`http://127.0.0.1:${address.port}/`, {
+      const response = await fetch(origin, {
         method: "POST",
         body: "x".repeat(2048),
       });
@@ -133,10 +131,7 @@ describe("readJsonBodyOrError", () => {
       }
     } finally {
       stop();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeHttpServer(server);
       await Promise.all(tasks);
     }
   });

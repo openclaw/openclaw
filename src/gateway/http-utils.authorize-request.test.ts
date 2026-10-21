@@ -123,6 +123,23 @@ const authorize = (
     ...params,
   });
 
+function runtimeConfig(global: boolean, gateway?: ReturnType<typeof getRuntimeConfig>["gateway"]) {
+  let current = getRuntimeConfig();
+  if (gateway) {
+    current = { ...current, gateway: { ...current.gateway, ...gateway } };
+  }
+  const read = () => current;
+  if (global) {
+    vi.mocked(getRuntimeConfig).mockImplementation(read);
+  }
+  return {
+    read,
+    update(patch: ReturnType<typeof getRuntimeConfig>["gateway"]) {
+      current = { ...current, gateway: { ...current.gateway, ...patch } };
+    },
+  };
+}
+
 describe("authorizeGatewayHttpRequestOrReply", () => {
   beforeEach(() => {
     vi.mocked(authorizeHttpGatewayConnect).mockReset();
@@ -148,13 +165,8 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
     "keeps trusted-proxy overrides current with runtime proxies $trustedProxies",
     async ({ trustedProxies }) => {
       mockAuth({ ok: true, method: "trusted-proxy", user: "operator" });
-      const originalConfig = getRuntimeConfig();
-      let currentConfig = {
-        ...originalConfig,
-        gateway: { ...originalConfig.gateway, trustedProxies },
-      };
+      const config = runtimeConfig(true, { trustedProxies });
       const { res } = makeMockHttpResponse();
-      vi.mocked(getRuntimeConfig).mockImplementation(() => currentConfig);
       try {
         const admitted = await authorize({
           req: createReq({ authorization: "Bearer upstream-idp-token" }),
@@ -168,10 +180,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
         });
         expect(admitted?.hasCurrentClientAuthority()).toBe(true);
         await expect(admitted?.revalidate()).resolves.toBeUndefined();
-        currentConfig = {
-          ...currentConfig,
-          gateway: { ...currentConfig.gateway, trustedProxies: ["198.51.100.1"] },
-        };
+        config.update({ trustedProxies: ["198.51.100.1"] });
         expect(admitted?.hasCurrentClientAuthority()).toBe(false);
         await expect(admitted?.revalidate()).rejects.toThrow("Unauthorized");
       } finally {
@@ -201,29 +210,17 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       const started = createDeferred();
       const release = createDeferred();
       const response = { destroyed: false };
-      const originalConfig = getRuntimeConfig();
-      let currentConfig =
-        configSource === "gateway"
-          ? {
-              ...originalConfig,
-              gateway: { ...originalConfig.gateway, trustedProxies: ["127.0.0.1"] },
-            }
-          : originalConfig;
-      const setCurrentConfig = (config: ReturnType<typeof getRuntimeConfig>) => {
-        currentConfig = config;
-        if (configSource === "global") {
-          vi.mocked(getRuntimeConfig).mockReturnValue(config);
-        }
-      };
-      const updateGateway = (gateway: ReturnType<typeof getRuntimeConfig>["gateway"]) =>
-        setCurrentConfig({ ...currentConfig, gateway: { ...currentConfig.gateway, ...gateway } });
+      const config = runtimeConfig(
+        configSource === "global",
+        configSource === "gateway" ? { trustedProxies: ["127.0.0.1"] } : undefined,
+      );
       const changeOrigins = () =>
-        updateGateway({
+        config.update({
           controlUi: { allowedOrigins: ["https://changed.example.test"] },
         });
       const changeIdentityScopes = (email: string) =>
-        updateGateway({
-          auth: { ...currentConfig.gateway?.auth, identityScopes: { [email]: ["operator.admin"] } },
+        config.update({
+          auth: { ...config.read().gateway?.auth, identityScopes: { [email]: ["operator.admin"] } },
         });
       vi.mocked(authorizeHttpGatewayConnect).mockImplementationOnce(async () => {
         if (outcome === "stale-at-entry") {
@@ -242,7 +239,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       let completed = false;
       const pending = authorize({
         ...(configSource === "gateway"
-          ? { cfg: currentConfig, getRuntimeConfig: () => currentConfig }
+          ? { cfg: config.read(), getRuntimeConfig: config.read }
           : {}),
         res: response as ServerResponse,
       }).then((result) => {
@@ -271,7 +268,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
         }
         const cookieGeneration = resolveControlUiPluginAuthCookieGeneration(
           "shared-auth",
-          currentConfig,
+          config.read(),
         );
         if (outcome === "identity-grants") {
           changeIdentityScopes("other@example.test");
@@ -281,7 +278,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
         if (outcome === "completed" || outcome === "identity-grants") {
           expect(result?.authenticatedUserProfile?.profileId).toBe("profile-guest");
           if (outcome === "identity-grants") {
-            expect(resolveControlUiPluginAuthCookieGeneration("shared-auth", currentConfig)).toBe(
+            expect(resolveControlUiPluginAuthCookieGeneration("shared-auth", config.read())).toBe(
               cookieGeneration,
             );
             changeIdentityScopes("guest@example.test");

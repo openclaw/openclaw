@@ -3,6 +3,10 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createGatewayByteStream,
@@ -166,17 +170,11 @@ describe("Gateway byte response descriptor lifecycle", () => {
         );
         response.once("close", resolveResponseClose);
       });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected test HTTP server to bind to a TCP port");
-      }
+      const origin = await listenLoopback(server);
 
       try {
         await new Promise<void>((resolve, reject) => {
-          const request = http.get({ host: "127.0.0.1", port: address.port }, (response) => {
+          const request = http.get(origin, (response) => {
             response.once("data", () => {
               if (reason === "client disconnect") {
                 response.destroy();
@@ -199,10 +197,7 @@ describe("Gateway byte response descriptor lifecycle", () => {
         const streamedFile = createReadStream.mock.results[0]?.value;
         expect(streamedFile).toMatchObject({ destroyed: true, readableEnded: false });
       } finally {
-        server.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
+        await closeHttpServer(server);
         await cleanup();
       }
     },

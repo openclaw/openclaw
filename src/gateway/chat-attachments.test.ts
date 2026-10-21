@@ -238,86 +238,64 @@ describe("composer attachment origin", () => {
 });
 
 describe("persistInboundImagesForTranscript", () => {
-  it.each([
-    { storage: "inline", suppliedDimensions: {} },
-    { storage: "offloaded", suppliedDimensions: { width: 999, height: 777 } },
-  ])(
-    "retains byte-derived dimensions in $storage upload transcript facts",
-    async ({ storage, suppliedDimensions }) => {
-      const png = createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 });
-      const bytes = storage === "offloaded" ? Buffer.concat([png, Buffer.alloc(2_000_000)]) : png;
-      const parsed = await parseRpc("Inspect this", [
-        pngAttachment({
-          fileName: "upload.png",
-          content: bytes.toString("base64"),
-          ...suppliedDimensions,
-        }),
-      ]);
+  it.each(["inline", "offloaded", "rotated", "unreadable"] as const)(
+    "persists byte-authoritative dimensions for %s images",
+    async (kind) => {
+      let bytes = createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 });
+      if (kind === "offloaded") {
+        bytes = Buffer.concat([bytes, Buffer.alloc(2_000_000)]);
+      } else if (kind === "unreadable") {
+        bytes = Buffer.from("89504e470d0a1a0a0000000000000000", "hex");
+      } else if (kind === "rotated") {
+        const jpeg = await resizeToJpeg({
+          buffer: bytes,
+          maxSide: 32,
+          quality: 92,
+          withoutEnlargement: true,
+        });
+        const orientation = Buffer.from(
+          "ffe1002245786966000049492a0008000000010012010300010000000600000000000000",
+          "hex",
+        );
+        bytes = Buffer.concat([jpeg.subarray(0, 2), orientation, jpeg.subarray(2)]);
+      }
+      const mimeType = kind === "rotated" ? "image/jpeg" : "image/png";
+      const fileName = kind === "rotated" ? "portrait.jpg" : "upload.png";
+      const supplied = kind === "rotated" ? { width: 32, height: 16 } : { width: 999, height: 777 };
+      const parsed = await parseMessageWithAttachments(
+        "Inspect",
+        normalizeRpcAttachmentsToChatAttachments([
+          pngAttachment({
+            fileName,
+            mimeType,
+            content: bytes.toString("base64"),
+            ...(kind === "inline" ? {} : supplied),
+          }),
+        ]),
+        { supportsImages: kind !== "unreadable" },
+      );
+      const storage = kind === "offloaded" || kind === "unreadable" ? "offloaded" : "inline";
       expect(parsed.imageOrder).toEqual([storage]);
-      expect(storage === "inline" ? parsed.images[0] : parsed.offloadedRefs[0]).toMatchObject({
-        width: 32,
-        height: 16,
-      });
+      const parsedImage = storage === "inline" ? parsed.images[0] : parsed.offloadedRefs[0];
+      const dimensions =
+        kind === "unreadable" ? [undefined, undefined] : kind === "rotated" ? [16, 32] : [32, 16];
+      expect(parsedImage?.mimeType).toBe(mimeType);
+      expect([parsedImage?.width, parsedImage?.height]).toEqual(dimensions);
       const persisted = await persist(parsed);
+      const fact = persisted.entries[0]?.fact;
+      expect([fact?.width, fact?.height]).toEqual(dimensions);
       const message = buildPersistedUserTurnMessage({
-        text: "Inspect this",
+        text: "Inspect",
         media: persisted.entries.map((entry) => entry.fact),
       });
-      expect(message).toMatchObject({
-        __openclaw: {
-          media: [{ kind: "image", fileName: "upload.png", width: 32, height: 16 }],
-        },
-      });
-      expect(readPersistedMediaFacts(message)?.[0]).toMatchObject({ width: 32, height: 16 });
+      expect(message).toMatchObject({ __openclaw: { media: [{ kind: "image", fileName }] } });
+      const recovered = readPersistedMediaFacts(message)?.[0];
+      expect([recovered?.width, recovered?.height]).toEqual(dimensions);
+      if (kind === "rotated") {
+        expect(saveMediaBufferMock.mock.calls[0]?.[0]).toEqual(bytes);
+      }
     },
   );
-
-  it("persists displayed JPEG axes after EXIF rotation rather than caller dimensions", async () => {
-    const jpeg = await resizeToJpeg({
-      buffer: createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 }),
-      maxSide: 32,
-      quality: 92,
-      withoutEnlargement: true,
-    });
-    const orientation = Buffer.from(
-      "ffe1002245786966000049492a0008000000010012010300010000000600000000000000",
-      "hex",
-    );
-    const bytes = Buffer.concat([jpeg.subarray(0, 2), orientation, jpeg.subarray(2)]);
-    const parsed = await parseMessageWithAttachments("Portrait", [
-      pngAttachment({
-        fileName: "portrait.jpg",
-        mimeType: "image/jpeg",
-        content: bytes.toString("base64"),
-        width: 32,
-        height: 16,
-      }),
-    ]);
-    const persisted = await persist(parsed);
-    expect(parsed.images[0]).toMatchObject({ width: 16, height: 32 });
-    expect(persisted.entries[0]?.fact).toMatchObject({ width: 16, height: 32 });
-    expect(saveMediaBufferMock.mock.calls[0]?.[0]).toEqual(bytes);
-  });
-
-  it("leaves unreadable image dimensions unknown instead of persisting caller guesses", async () => {
-    const parsed = await parseMessageWithAttachments(
-      "Inspect",
-      [
-        pngAttachment({
-          content: Buffer.from("89504e470d0a1a0a0000000000000000", "hex").toString("base64"),
-          width: 999,
-          height: 777,
-        }),
-      ],
-      { supportsImages: false },
-    );
-    const persisted = await persist(parsed);
-    expect(parsed.offloadedRefs[0]?.mimeType).toBe("image/png");
-    expect(parsed.offloadedRefs[0]?.width).toBeUndefined();
-    expect(parsed.offloadedRefs[0]?.height).toBeUndefined();
-    expect(persisted.entries[0]?.fact.width).toBeUndefined();
-    expect(persisted.entries[0]?.fact.height).toBeUndefined();
-  });
 
   it("does not turn a rejected upload commit into a best-effort omission after policy re-enables", async () => {
     const denied = new SessionMutationAuthorizationChangedError({

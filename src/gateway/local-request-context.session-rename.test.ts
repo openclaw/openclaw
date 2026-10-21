@@ -16,6 +16,7 @@ import {
   withSessionToolsFixture,
   sessionToolsEntry,
   sessionToolsTranscript,
+  seedSessionToolsEntry,
 } from "./local-request-context.session-tools.test-support.js";
 import { roleClient } from "./session-sharing.test-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
@@ -167,17 +168,12 @@ describe("guest session rename through the agent catalog", () => {
       cfg.gateway!.roles!.definitions.view!.sandbox = "required";
       const sessionKey = "agent:main:dashboard:sandbox-rename";
       const sessionId = "sandbox-rename-session";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId,
-          updatedAt: 1,
-          sandbox: "required",
-          visibility: "shared",
-          createdVia: "operator",
-          createdActor: { type: "human", source: "profile", id: profileId },
-        },
-      );
+      await seedSessionToolsEntry(sessionKey, sessionId, {
+        sandbox: "required",
+        visibility: "shared",
+        createdVia: "operator",
+        createdActor: { type: "human", source: "profile", id: profileId },
+      });
       const defaultsWithoutAdmission = resolveConversationCapabilityProfile({
         config: cfg,
         sessionKey,

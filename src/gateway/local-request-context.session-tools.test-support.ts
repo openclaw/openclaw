@@ -66,6 +66,13 @@ export const sessionToolsTranscript = (sessionKey: string, sessionId: string) =>
   loadTranscriptEvents({ agentId: "main", sessionKey, sessionId });
 let fixtureRun: Promise<void> | undefined;
 
+export const seedSessionToolsEntry = (
+  sessionKey: string,
+  sessionId: string,
+  entry: Parameters<typeof upsertSessionEntryCore>[1] = {},
+  agentId = "main",
+) => upsertSessionEntryCore({ agentId, sessionKey }, { sessionId, updatedAt: 1, ...entry });
+
 export async function seedSessionToolsFixtureSession({
   agentId = "main",
   sessionKey,
@@ -79,15 +86,15 @@ export async function seedSessionToolsFixtureSession({
   creatorId?: string;
   visibility?: "shared" | "draft";
 }) {
-  await upsertSessionEntryCore(
-    { agentId, sessionKey },
+  await seedSessionToolsEntry(
+    sessionKey,
+    sessionId,
     {
-      sessionId,
-      updatedAt: 1,
       visibility,
       createdVia: "operator",
       createdActor: { type: "human", source: "profile", id: creatorId },
     },
+    agentId,
   );
   return { sessionKey, sessionId };
 }

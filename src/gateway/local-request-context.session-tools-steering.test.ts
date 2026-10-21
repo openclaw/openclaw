@@ -13,7 +13,6 @@ import {
 import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
@@ -33,6 +32,7 @@ import {
   sessionToolsContext,
   sessionToolsStorePath,
   sessionToolsTranscript,
+  seedSessionToolsEntry,
 } from "./local-request-context.session-tools.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -70,23 +70,18 @@ describe("sessions_send steering custody", () => {
           [REQUESTER, "session-tools-requester-id"],
           [PARTICIPANT_SHARED, "participant-shared-id"],
         ] as const) {
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey },
-            {
-              sessionId,
-              updatedAt: 1,
-              visibility: "shared",
-              sandbox: "required",
-              createdActor: {
-                type: "human",
-                source: "profile",
-                id: sessionKey === REQUESTER || owned ? profileId : "another-person",
-              },
-              ...(sessionKey === PARTICIPANT_SHARED && targetKind.endsWith("child")
-                ? { spawnedBy: REQUESTER, parentSessionId: "session-tools-requester-id" }
-                : {}),
+          await seedSessionToolsEntry(sessionKey, sessionId, {
+            visibility: "shared",
+            sandbox: "required",
+            createdActor: {
+              type: "human",
+              source: "profile",
+              id: sessionKey === REQUESTER || owned ? profileId : "another-person",
             },
-          );
+            ...(sessionKey === PARTICIPANT_SHARED && targetKind.endsWith("child")
+              ? { spawnedBy: REQUESTER, parentSessionId: "session-tools-requester-id" }
+              : {}),
+          });
         }
         if (targetKind === "shared noncreator") {
           expect(

@@ -44,6 +44,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
+import { seedSessionToolsEntry } from "./local-request-context.session-tools.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
@@ -77,9 +78,7 @@ const withOperator = <T>(client: ReturnType<typeof roleClient>, run: () => T) =>
     ),
   );
 const seed = (sessionKey: string, sessionId: string, id: string) =>
-  upsertSessionEntryCore(session(sessionKey), {
-    sessionId,
-    updatedAt: 1,
+  seedSessionToolsEntry(sessionKey, sessionId, {
     createdActor: { type: "human", source: "profile", id },
   });
 let fixtureRun: Promise<void> | undefined;
@@ -97,15 +96,10 @@ function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
     };
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: TARGET },
-      {
-        sessionId: TARGET_ID,
-        updatedAt: 1,
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: "other-person" },
-      },
-    );
+    await seedSessionToolsEntry(TARGET, TARGET_ID, {
+      visibility: "shared",
+      createdActor: { type: "human", source: "profile", id: "other-person" },
+    });
     const resources = new LegacyPluginSdkResourceHost();
     try {
       await resources.run(() =>

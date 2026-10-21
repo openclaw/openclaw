@@ -181,35 +181,20 @@ describe("resolveTrustedHttpOperatorScopes", () => {
   );
 });
 
-it.each<
-  [
-    "token" | "trusted-proxy",
-    boolean,
-    Record<string, string>,
-    { allowed: boolean; missingScope?: string },
-  ]
->([
-  ["token", false, { authorization: "Bearer secret" }, { allowed: true }],
-  [
-    "trusted-proxy",
-    true,
-    { "x-openclaw-scopes": "operator.admin, operator.write" },
-    { allowed: true },
-  ],
-  [
-    "trusted-proxy",
-    true,
-    { "x-openclaw-scopes": "operator.write" },
-    { allowed: false, missingScope: "operator.admin" },
-  ],
-])(
-  "authorizes model overrides for %s with %j",
-  (authMethod, trustDeclaredOperatorScopes, headers, expected) => {
-    expect(
-      authorizeOpenAiCompatibleHttpModelOverride(
-        createReq({ ...headers, "x-openclaw-model": "openai/gpt-5.4" }),
-        { authMethod, trustDeclaredOperatorScopes },
-      ),
-    ).toEqual(expected);
-  },
-);
+it.each([
+  ["token", undefined, { allowed: true }],
+  ["trusted-proxy", "operator.admin, operator.write", { allowed: true }],
+  ["trusted-proxy", "operator.write", { allowed: false, missingScope: "operator.admin" }],
+] as const)("authorizes model overrides for %s with %j", (authMethod, scopes, expected) => {
+  expect(
+    authorizeOpenAiCompatibleHttpModelOverride(
+      createReq({
+        ...(scopes === undefined
+          ? { authorization: "Bearer secret" }
+          : { "x-openclaw-scopes": scopes }),
+        "x-openclaw-model": "openai/gpt-5.4",
+      }),
+      { authMethod, trustDeclaredOperatorScopes: authMethod === "trusted-proxy" },
+    ),
+  ).toEqual(expected);
+});
