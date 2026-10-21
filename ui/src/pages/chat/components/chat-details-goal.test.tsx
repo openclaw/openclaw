@@ -57,12 +57,14 @@ it("retains the objective while hidden and keeps recovery available after the go
     setRecovery({ pending: false, action: "clear", goalId: goal.id, onCheck });
     setPresented(true);
     flush();
-    expect(view.container.textContent).toContain("No goal");
-    view.getByRole("button", { name: "Check outcome" }).click();
+    expect(view.container.textContent).toContain("Removal not confirmed");
+    expect(view.container.querySelector("openclaw-panel-empty-state")).toBeNull();
+    expect(view.container.querySelector(".agent-chat__goal-detail-meta")).toBeNull();
+    view.getByRole("button", { name: "Retry removal" }).click();
     expect(onCheck).toHaveBeenCalledOnce();
     setRecovery({ pending: true, action: "clear", goalId: goal.id, onCheck });
     flush();
-    expect(view.getByRole("button", { name: "Check outcome" }).hasAttribute("disabled")).toBe(true);
+    expect(view.getByRole("button", { name: "Retry removal" }).hasAttribute("disabled")).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   } finally {
     view.unmount();

@@ -239,11 +239,11 @@
     grid-column: 4;
   }
 
-  .agent-chat__goal--resuming[data-expanded="false"] .agent-chat__goal-elapsed {
+  .agent-chat__goal--recovery[data-expanded="false"] .agent-chat__goal-elapsed {
     display: none;
   }
 
-  .agent-chat__goal--resuming[data-expanded="false"] .agent-chat__goal-label {
+  .agent-chat__goal--recovery[data-expanded="false"] .agent-chat__goal-label {
     grid-column: 2 / 4;
   }
 
@@ -260,6 +260,11 @@
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail,
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-detail-content {
     display: contents;
+  }
+
+  .agent-chat__goal[data-expanded="true"] .agent-chat__goal-recovery-detail {
+    grid-column: 1 / -1;
+    grid-row: 4;
   }
 
   .agent-chat__goal[data-expanded="true"] .agent-chat__goal-icon {
@@ -730,4 +735,158 @@
     animation: none;
     transition: none;
   }
+}
+
+.agent-chat__goal--recovery {
+  --chat-goal-status-color: var(--warn);
+}
+
+.agent-chat__goal-float .agent-chat__goal--recovery {
+  border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
+}
+
+.agent-chat__goal-recovery-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+  grid-column: 1 / -1;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.agent-chat__goal-recovery-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--warn);
+  font-size: 14px;
+}
+
+.agent-chat__goal-recovery-title strong {
+  font-weight: 600;
+}
+
+.agent-chat__goal-recovery-title > svg,
+.agent-chat__goal-recovery-title > .session-run-spinner {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+}
+
+.agent-chat__goal-offline {
+  margin: 8px 0 0;
+  color: var(--warn);
+  font-size: 13px;
+}
+
+.agent-chat__goal-recovery-objective {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-chat__goal-recovery-decision {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warn) 6%, transparent);
+}
+
+.agent-chat__goal-recovery-message {
+  flex: 1 1 200px;
+}
+
+.agent-chat__goal-recovery-decision p {
+  margin: 0;
+}
+
+.agent-chat__goal-recovery-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-chat__goal-recovery-action-row > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agent-chat__goal-recovery-action-row .btn {
+  color: var(--text-strong);
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+
+.agent-chat__goal--recovery .agent-chat__goal-detail-meta,
+.agent-chat__goal-recovery-detail .agent-chat__goal-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 0;
+}
+
+.agent-chat__goal-requested-objective {
+  white-space: pre-wrap;
+}
+
+.agent-chat__goal-requested-objective > span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agent-chat__goal-recovery-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  margin-top: 0;
+}
+
+.agent-chat__goal-recovery-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: var(--cursor-action);
+}
+.agent-chat__goal-recovery-error:hover {
+  color: var(--text);
+}
+.agent-chat__goal-recovery-error:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.agent-chat__goal-recovery-error svg {
+  width: 12px;
+  height: 12px;
+}
+.agent-chat__goal-recovery-error-body {
+  max-width: min(360px, calc(100vw - 48px));
+  max-height: min(240px, 45dvh);
+  overflow: auto;
+  padding: 12px;
+  color: var(--text);
+  font: 13px/1.5 var(--font-body);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.agent-chat__goal-objective-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
 }

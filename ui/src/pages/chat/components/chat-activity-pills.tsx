@@ -13,6 +13,7 @@ import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import type { ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
+import { goalRecoveryPresentation } from "../../../lib/chat/goal-recovery-presentation.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -43,6 +44,7 @@ export type ChatActivityPillsProps = {
     /** Confirmed direct execution, never queued/submitted/accepted Resume alone. */
     executionConfirmed: boolean;
     recovery?: ChatGoalRecovery;
+    connected?: boolean;
     /** Only an explicit user hide; completion, idle and approval do not set this. */
     hidden?: boolean;
     onOpen: OpenActivity;
@@ -137,15 +139,18 @@ function ActivityGlyph(props: { name: Glyph }) {
 function goalView(input: NonNullable<ChatActivityPillsProps["goal"]>): PillView {
   const goal = input.value;
   const recovery = input.recovery;
-  if (recovery?.goalId === goal.id && recovery.action === "resume" && !recovery.retired) {
+  if (recovery) {
     return recovery.pending
-      ? { label: t("chat.goals.resuming"), icon: "spinner" }
+      ? { label: goalRecoveryPresentation(recovery).title, icon: "spinner" }
       : {
-          label: t("chat.activityPills.goal.resumeUnconfirmed"),
+          label: goalRecoveryPresentation(recovery).title,
           icon: "alertTriangle",
           tone: "warn",
           attention: true,
         };
+  }
+  if (input.connected === false) {
+    return { label: t("chat.goals.offlineStatus"), icon: "alertTriangle", tone: "warn" };
   }
   switch (goal.status) {
     case "active":

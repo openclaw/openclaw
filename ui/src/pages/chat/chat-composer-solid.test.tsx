@@ -496,3 +496,33 @@ it("keeps a pending dictation send bound to the action that started it", async (
   expect(firstSend).toHaveBeenCalledOnce();
   expect(laterSend).not.toHaveBeenCalled();
 });
+
+it("keeps goal recovery reachable when its mobile entry is hidden", () => {
+  const goal = {
+    schemaVersion: 1,
+    id: "hidden-goal",
+    objective: "Review the deployment",
+    status: "paused",
+    createdAt: 1,
+    updatedAt: 2,
+    tokenStart: 0,
+    tokensUsed: 0,
+    continuationTurns: 0,
+  } as const;
+  const onCheck = vi.fn(async () => true);
+  const view = mountComposer({
+    connected: true,
+    mobileComposer: true,
+    selectedSession: { key: "agent:main:main", kind: "direct", goal },
+    goalRecovery: { pending: false, onCheck },
+    mobileActivityPills: {
+      presented: true,
+      approvalPending: false,
+      goal: { value: goal, executionConfirmed: false, hidden: true, onOpen: vi.fn() },
+    },
+  });
+  const recovery = view.query(".chat-composer-neighbor-card--warn")!;
+  expect(recovery.textContent).toContain("Goal update not confirmed");
+  recovery.querySelector<HTMLButtonElement>("button")!.click();
+  expect(onCheck).toHaveBeenCalledOnce();
+});

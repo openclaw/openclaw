@@ -62,10 +62,16 @@ function renderGoal(goal: Goal = {}, props: Parameters<typeof renderChat>[0] = {
 it.each([true, false])("renders goal details and gates actions when connected=%s", (connected) => {
   renderGoal({}, { connected });
   const goal = container.querySelector(".agent-chat__goal");
-  expect(goalPart("label")).toMatchObject({ textContent: "Pursuing goal" });
+  expect(goalPart("label")).toMatchObject({
+    textContent: connected ? "Pursuing goal" : "Goal status unavailable",
+  });
   expect(goalPart("objective")).toMatchObject({ textContent: objective });
   expect(goalPart("elapsed")).toMatchObject({ textContent: "15s" });
-  expect(goal?.getAttribute("aria-label")).toBe("Pursuing goal (12k/50k): Land the web goal UI");
+  expect(goal?.getAttribute("aria-label")).toBe(
+    connected
+      ? "Pursuing goal (12k/50k): Land the web goal UI"
+      : "Goal status unavailable: Land the web goal UI",
+  );
   expect(goal?.closest(".agent-chat__goal-float")).not.toBeNull();
   expect(goal?.closest(".agent-chat__composer-status-stack")).toBeNull();
   expect(button("Resume goal")).toBeNull();
@@ -76,6 +82,8 @@ it.each([true, false])("renders goal details and gates actions when connected=%s
     expect(onGoalAction).toHaveBeenNthCalledWith(2, "goal-1", "clear");
   } else {
     expect(button("Pause goal")).toBeNull();
+    expect(button("Clear goal")).toBeNull();
+    expect(onGoalAction).not.toHaveBeenCalled();
   }
   expect(goalPart("detail")?.getAttribute("aria-hidden")).toBe("true");
   const toggle = button("Show goal details");
@@ -86,6 +94,7 @@ it.each([true, false])("renders goal details and gates actions when connected=%s
   const detail = goalPart("detail");
   expect(detail?.getAttribute("aria-hidden")).toBe("false");
   expect(text("detail-objective")).toBe(objective);
+  expect(text("offline")).toBe(connected ? undefined : "Reconnect to manage goals.");
   expect(text("detail-note")).toBe("Waiting for CI");
   expect(
     Array.from(goalPart("detail-meta")?.querySelectorAll(":scope > span") ?? [], (element) =>

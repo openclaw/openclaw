@@ -390,6 +390,8 @@ describe("Goal control requests", () => {
       const submitted = mutateChatGoal(host, { action, goalId: goal.id });
       await vi.advanceTimersByTimeAsync(1_000);
       expect(await submitted).toBe(false);
+      expect(host.chatError).toBeNull();
+      expect(chatGoalRecovery(host)?.error).toBeDefined();
       const firstRequest = host.request.mock.calls.find(
         ([calledMethod]) => calledMethod === method,
       )?.[1];

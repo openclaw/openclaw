@@ -70,7 +70,13 @@ suite.define(() => {
         .toBe(true);
       expect(await gateway.getRequests(method)).toHaveLength(0);
       expect(await invalid.isVisible()).toBe(true);
-      expect(await exactButton(page, "Check outcome").count()).toBe(0);
+      expect(
+        await page
+          .locator(".agent-chat__goal-recovery-action-row button")
+          .filter({ visible: true })
+          .last()
+          .count(),
+      ).toBe(0);
 
       const corrected = "Verify only the sample deployment";
       await objective.fill(corrected);
@@ -159,7 +165,13 @@ suite.define(() => {
           ).toHaveLength(0);
           await page.reload();
           await original.waitFor();
-          expect(await exactButton(page, "Check outcome").count()).toBe(0);
+          expect(
+            await page
+              .locator(".agent-chat__goal-recovery-action-row button")
+              .filter({ visible: true })
+              .last()
+              .count(),
+          ).toBe(0);
           expect(await gateway.getRequests(method)).toHaveLength(0);
           return;
         }
@@ -202,14 +214,19 @@ suite.define(() => {
             message: "ACK still unavailable",
           });
         } else if (committed) {
-          await page.locator(`.agent-chat__goal--${committed.status}`).waitFor();
+          await expect
+            .poll(() => page.locator(".agent-chat__goal-label").textContent())
+            .toBe(action === "pause" ? "Pause not confirmed" : "Resume not confirmed");
         } else {
           await expect.poll(() => page.locator(".agent-chat__goal").count()).toBe(0);
         }
-        const checkOutcome = exactButton(
-          page,
-          action === "resume" ? "Retry resume" : "Check outcome",
-        );
+        if (committed) {
+          await exactButton(page, "Show goal details").click();
+        }
+        const checkOutcome = page
+          .locator(".agent-chat__goal-recovery-action-row button")
+          .filter({ visible: true })
+          .last();
         await expect.poll(() => checkOutcome.isEnabled()).toBe(true);
         expect(await gateway.getSocketCount()).toBe(sockets);
         expect(await gateway.getRequests(method)).toHaveLength(action === "resume" ? 2 : 1);
@@ -221,18 +238,31 @@ suite.define(() => {
           const mobileGoal = page.locator('.chat-mobile-details-page[data-details-page="goal"]');
           await mobileGoal.getByText(goal.objective, { exact: true }).waitFor();
           await mobileGoal.getByRole("button", { name: "Retry resume", exact: true }).waitFor();
+          const host = page.locator('.chat-mobile-host[data-mobile-page="goal"]');
+          expect(await host.getAttribute("data-presentation")).toBeNull();
+          await host
+            .locator("header")
+            .getByRole("button", { name: "Expand Side panel", exact: true })
+            .click();
+          await expect.poll(() => host.getAttribute("data-mode")).toBe("expanded");
+          await host
+            .locator("header")
+            .getByRole("button", { name: "Restore", exact: true })
+            .click();
+          await expect.poll(() => host.getAttribute("data-mode")).toBe("dock");
           expect(await checkOutcome.isVisible()).toBe(true);
           await closeChatDetails(page);
           await page.setViewportSize(viewport);
         }
         await page.reload();
+        if (committed) {
+          await exactButton(page, "Show goal details").click();
+        }
         await checkOutcome.waitFor();
         expect(await gateway.getRequests(method)).toHaveLength(0);
         expect(await original.count()).toBe(0);
         if (committed) {
-          await page
-            .locator(`.agent-chat__goal--${action === "resume" ? "resuming" : committed.status}`)
-            .waitFor();
+          await page.locator(".agent-chat__goal--recovery").waitFor();
         } else {
           expect(await page.locator(".agent-chat__goal").count()).toBe(0);
         }
@@ -295,10 +325,15 @@ suite.define(() => {
       await page.clock.fastForward(1_001);
       await gateway.waitForRequest(method, { after: beforeRetry });
       await gateway.rejectDeferred(method, unavailable);
-      const checkOutcome = exactButton(page, "Retry resume");
+      await exactButton(page, "Show goal details").click();
+      const checkOutcome = page
+        .locator(".agent-chat__goal-recovery-action-row button")
+        .filter({ visible: true })
+        .last();
       await checkOutcome.waitFor();
       await page.reload();
       await admitHistory();
+      await exactButton(page, "Show goal details").click();
       await checkOutcome.waitFor();
       await checkOutcome.click();
       const retried = await gateway.waitForRequest(method);
@@ -309,12 +344,19 @@ suite.define(() => {
       const automatic = await gateway.waitForRequest(method, { after: 1 });
       expect(automatic.params).toEqual(first.params);
       await gateway.rejectDeferred(method, unavailable);
+      const card = page.locator(".agent-chat__goal");
+      const cardHeight = (await card.boundingBox())!.height;
+      await page.getByRole("button", { name: "Technical details", exact: true }).click();
+      await page.getByRole("dialog", { name: "Technical details", exact: true }).waitFor();
       await page.getByText("Gateway response unavailable", { exact: false }).waitFor();
+      expect((await card.boundingBox())!.height).toBe(cardHeight);
+      await page.keyboard.press("Escape");
       expect(await checkOutcome.isEnabled()).toBe(true);
       expect(await gateway.getRequests(method)).toHaveLength(2);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await page.reload();
       await admitHistory();
+      await exactButton(page, "Show goal details").click();
       await checkOutcome.waitFor();
       expect(await gateway.getRequests(method)).toHaveLength(0);
     });

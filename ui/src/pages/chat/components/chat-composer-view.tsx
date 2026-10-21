@@ -74,14 +74,6 @@ export function renderChatComposerView(
     },
   );
 
-  const resumeRecovery = createMemo(() => {
-    const recovery = props.goalRecovery;
-    return recovery?.action === "resume" &&
-      !recovery.retired &&
-      recovery.goalId === props.selectedSession?.goal?.id
-      ? recovery
-      : undefined;
-  });
   const composerLeadControl = (
     <Show when={props.permissionPicker}>{(picker) => <ChatPermissionPicker {...picker()} />}</Show>
   );
@@ -285,7 +277,9 @@ export function renderChatComposerView(
             <ComposerQueue composer={props} showAbortableUi={context().showAbortableUi} />
           </Show>
           {renderChatGoalRecoverySolid(
-            resumeRecovery() ? undefined : props.goalRecovery,
+            props.selectedSession?.goal && !props.mobileActivityPills?.goal?.hidden
+              ? undefined
+              : props.goalRecovery,
             props.connected,
           )}
           <Show when={!props.mobileActivityPills?.goal && props.selectedSession?.goal} keyed>
@@ -293,7 +287,7 @@ export function renderChatComposerView(
               <div class="agent-chat__goal-float">
                 <ChatGoal
                   goal={goal}
-                  resumeRecovery={resumeRecovery()}
+                  recovery={props.goalRecovery}
                   connected={props.connected}
                   expanded={context().state.presentation.goalExpandedId === goal.id}
                   canAct={

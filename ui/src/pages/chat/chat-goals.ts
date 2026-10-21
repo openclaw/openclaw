@@ -54,6 +54,7 @@ type GoalOperation = {
   params?: GoalParams;
   retired?: "expired" | "invalid";
   pending: boolean;
+  error?: string;
 };
 
 class GoalOperationOwner {
@@ -97,6 +98,11 @@ class GoalOperationOwner {
 
   setPending(operation: GoalOperation, pending: boolean): void {
     operation.pending = pending;
+    this.publish();
+  }
+
+  setError(operation: GoalOperation, error: string | undefined): void {
+    operation.error = error;
     this.publish();
   }
 
@@ -240,6 +246,11 @@ export function chatGoalRecovery(host: ChatHost): ChatGoalRecovery | undefined {
     }
     return {
       pending: operation.pending,
+      error: operation.error,
+      requestedObjective:
+        operation.params && "objective" in operation.params
+          ? operation.params.objective
+          : undefined,
       goalId: operation.params?.goalId,
       action: operation.params
         ? "action" in operation.params
@@ -396,7 +407,7 @@ async function runGoalOperation(
       }
       if (outcome.status !== "refreshed") {
         if (outcome.status === "failed") {
-          setChatError(host, outcome.error);
+          operations.setError(recoveryOperation, outcome.error);
         }
         return false;
       }
@@ -427,7 +438,7 @@ async function runGoalOperation(
       return true;
     } catch (error) {
       if (targetIsCurrent()) {
-        setChatError(host, formatUiError(error));
+        operations.setError(operation, formatUiError(error));
       }
       return false;
     } finally {
@@ -443,7 +454,7 @@ async function runGoalOperation(
       (action.action === "edit" &&
         (!("objective" in params) || params.objective !== action.objective))
     ) {
-      return rejectGoalOperation(host, t("chat.goals.outcomeUnknown"));
+      return false;
     }
   }
   if (!operation) {
@@ -501,6 +512,7 @@ async function runGoalOperation(
       }
     }
   };
+  operations.setError(operation, undefined);
   operations.setPending(operation, true);
   setChatError(host, null);
   try {
@@ -599,12 +611,12 @@ async function runGoalOperation(
       }
     }
     if (targetIsCurrent()) {
-      setChatError(
-        host,
-        rejected
-          ? formatUiError(error)
-          : `${t("chat.goals.outcomeUnknown")} ${formatUiError(error)}`,
-      );
+      if (rejected && !operation.retired) {
+        setChatError(host, formatUiError(error));
+      } else {
+        // Recovery owns this uncertainty; a global chat error would announce it twice.
+        operations.setError(operation, formatUiError(error));
+      }
     }
     return false;
   } finally {

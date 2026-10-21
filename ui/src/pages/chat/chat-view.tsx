@@ -201,7 +201,12 @@ function ChatComposerView(input: ChatViewInput) {
         : undefined,
       goal:
         goal && destinations?.goal
-          ? { ...destinations.goal, value: goal, recovery: input.props.goalRecovery }
+          ? {
+              ...destinations.goal,
+              value: goal,
+              recovery: input.props.goalRecovery,
+              connected: input.props.connected,
+            }
           : undefined,
       // The pane's chat projection already applies the single Show in chat preference.
       progress:

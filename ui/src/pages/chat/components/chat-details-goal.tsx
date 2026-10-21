@@ -15,8 +15,7 @@ import {
   ChatGoalActions,
   ChatGoalBody,
   ChatGoalMetrics,
-  ChatGoalRecoveryAction,
-  ChatGoalRecoveryMessage,
+  ChatGoalRecoveryPanel,
   GoalIcon,
 } from "./chat-composer-goal.tsx";
 
@@ -141,14 +140,6 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
     props.canAct &&
     Boolean(props.sessionId) &&
     !props.recovery;
-  const resumeRecovery = () =>
-    props.goal &&
-    props.recovery?.action === "resume" &&
-    !props.recovery.retired &&
-    props.recovery.goalId === props.goal?.id
-      ? props.recovery
-      : undefined;
-
   const editGoal = async (goal: SessionGoal) => {
     if (editDialog || !canAct() || !props.onGoalSubmit) {
       return;
@@ -180,7 +171,13 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
         goalId: goal.id,
         objective,
       });
-      return saved ? null : (props.getGoalSubmitError?.() ?? t("chat.goals.editFailed"));
+      if (saved) {
+        return null;
+      }
+      // Keep the draft available without claiming that an unconfirmed write failed.
+      return props.recovery
+        ? t("chat.goals.outcomeUnknown")
+        : (props.getGoalSubmitError?.() ?? t("chat.goals.editFailed"));
     };
     try {
       await withPromiseModalHost<void>({ signal: controller.signal, value: undefined }, (modal) => {
@@ -201,7 +198,13 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
   };
 
   return (
-    <div class="chat-details-goal" aria-busy={props.recovery?.pending ? "true" : "false"}>
+    <div
+      class={[
+        "chat-details-goal",
+        { "chat-details-goal--compact": Boolean(props.recovery) || !props.connected },
+      ]}
+      aria-busy={props.recovery?.pending ? "true" : "false"}
+    >
       <Show when={props.presented && goalIdentity()} keyed>
         {(identity) => {
           onSettled(() => () => {
@@ -213,56 +216,57 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
         }}
       </Show>
       <div class="chat-details-goal__body" ref={[elementRef(props.onScrollPortRef)]}>
-        <Show when={props.recovery}>
-          <div class="chat-details-goal__recovery" role="status">
-            <ChatGoalRecoveryMessage recovery={props.recovery!} />
-          </div>
-        </Show>
         <Show
-          when={props.goal}
+          when={props.recovery}
           fallback={
-            <PanelEmptyState icon={<GoalIcon />} heading={t("chat.goals.empty")} description="" />
+            <Show
+              when={props.goal}
+              fallback={
+                <PanelEmptyState
+                  icon={<GoalIcon />}
+                  heading={t("chat.goals.empty")}
+                  description=""
+                />
+              }
+            >
+              <ChatGoalBody goal={props.goal!} offline={!props.connected} />
+              <Show when={!props.connected}>
+                <ChatGoalMetrics goal={props.goal!} />
+              </Show>
+            </Show>
           }
         >
-          <ChatGoalBody goal={props.goal!} resumeRecovery={resumeRecovery()} />
+          <ChatGoalRecoveryPanel
+            recovery={props.recovery!}
+            goal={props.goal}
+            connected={props.connected && props.presented}
+            presented={props.presented}
+          />
         </Show>
       </div>
-      <div class="chat-details-goal__tools">
-        <Show when={props.goal}>
-          <div class="chat-details-goal__capsule chat-details-goal__metrics">
-            <ChatGoalMetrics goal={props.goal!} live={props.presented} />
-          </div>
-        </Show>
-        <Show when={props.recovery || (props.goal && canAct() && props.onGoalAction)}>
-          <div class="chat-details-goal__capsule chat-details-goal__actions">
-            <Show when={resumeRecovery()?.pending}>
-              <span
-                class="chat-details-goal__pending"
-                role="status"
-                aria-label={t("chat.goals.resuming")}
-              >
-                <span class="session-run-spinner" aria-hidden="true" />
-              </span>
-            </Show>
-            <Show when={props.recovery && !resumeRecovery()}>
-              <ChatGoalRecoveryAction
-                recovery={props.recovery!}
-                connected={props.connected && props.presented}
-              />
-            </Show>
-            <Show when={props.goal}>
-              <ChatGoalActions
-                goal={props.goal!}
-                canAct={canAct()}
-                connected={props.connected && props.presented}
-                resumeRecovery={resumeRecovery()}
-                onGoalAction={props.onGoalAction}
-                onGoalEdit={props.onGoalSubmit ? (goal) => void editGoal(goal) : undefined}
-              />
-            </Show>
-          </div>
-        </Show>
-      </div>
+      <Show when={!props.recovery && props.connected}>
+        <div class="chat-details-goal__tools">
+          <Show when={props.goal}>
+            <div class="chat-details-goal__capsule chat-details-goal__metrics">
+              <ChatGoalMetrics goal={props.goal!} live={props.presented} />
+            </div>
+          </Show>
+          <Show when={props.goal && canAct() && props.onGoalAction}>
+            <div class="chat-details-goal__capsule chat-details-goal__actions">
+              <Show when={props.goal}>
+                <ChatGoalActions
+                  goal={props.goal!}
+                  canAct={canAct()}
+                  connected={props.connected && props.presented}
+                  recovery={props.recovery}
+                  onGoalAction={props.onGoalAction}
+                  onGoalEdit={props.onGoalSubmit ? (goal) => void editGoal(goal) : undefined}
+                />
+              </Show>
+            </div>
+          </Show>
+        </div>
+      </Show>
     </div>
   );
 }
