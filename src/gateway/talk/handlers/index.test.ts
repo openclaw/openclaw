@@ -3,11 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  clearTestEmbeddedRun as clearActiveEmbeddedRun,
-  registerTestEmbeddedRun as setActiveEmbeddedRun,
-  createEmbeddedRunHandle,
-} from "../../../agents/embedded-agent-runner/runs.test-support.js";
 import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { resolveCommandAuthorization } from "../../../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -2679,72 +2674,6 @@ describe("talk.client.toolCall handler", () => {
     expect(copiedClient.connect.caps).toEqual(["tool-events"]);
   });
 
-  it.each([false, true])(
-    "resolves a consult voice binding with existing record=%s",
-    async (existing) => {
-      if (existing) {
-        mocks.resolveOpenClientVoiceSessionId.mockReturnValueOnce("voice-test");
-      }
-
-      const respond = await invokeTalkHandler("talk.client.toolCall", {
-        params: {
-          sessionKey: "main",
-          callId: existing ? "call-legacy" : "call-unbound",
-          name: "openclaw_agent_consult",
-          args: { question: existing ? "Continue the call" : "Do something" },
-        },
-        client: existing
-          ? { connId: "conn-legacy" }
-          : {
-              connId: "conn-1",
-              connect: { scopes: ["operator.admin"], caps: ["tool-events", "task-suggestions"] },
-            },
-      });
-      const physicalSource = mockCallArg(mocks.assertClientVoiceSessionOpen, 0, 1);
-      expect(physicalSource).toMatchObject({
-        options: { agentId: "main" },
-        assertCurrent: expect.any(Function),
-      });
-      if (existing) {
-        expect(mocks.assertClientVoiceSessionOpen).toHaveBeenCalledWith(
-          {
-            agentId: "main",
-            sessionKey: "main",
-            voiceSessionId: "voice-test",
-          },
-          physicalSource,
-        );
-        expectRespondOk(respond, { runId: "run-voice-1" });
-      } else {
-        expect(mocks.createOrResumeClientVoiceSession).toHaveBeenCalledWith({
-          agentId: "main",
-          sessionKey: "main",
-          origin: "client",
-          physicalSource,
-          assertCurrent: expect.any(Function),
-          requester: expect.any(Function),
-          source: {
-            assertCurrent: expect.any(Function),
-            storePath: expect.any(String),
-          },
-        });
-        expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith(
-          expect.objectContaining({
-            voiceSessionId: "voice-test",
-            runId: "run-voice-1",
-            physicalSource,
-          }),
-        );
-        expect(mocks.chatSend.mock.calls[0]?.[0].client.connect).toMatchObject({
-          scopes: ["operator.admin"],
-          caps: ["tool-events"],
-        });
-        expect(mocks.chatSend).toHaveBeenCalledTimes(1);
-        expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
-      }
-    },
-  );
-
   it.each(["closed", "relay"] as const)(
     "keeps legacy consults usable after rejecting an explicit %s voice record",
     async (kind) => {
@@ -2866,51 +2795,6 @@ describe("talk.client.toolCall handler", () => {
 
     expectRespondOk(respond, { runId: "run-active" });
     finishRun?.();
-  });
-
-  it("links relay-owned agent consult runs so relay cancellation can abort them", async () => {
-    const target = await prepareTalkSessionTarget({}, "main");
-    rpcSourceTesting.set(
-      "run-voice-1",
-      createRpcSourceForTest(
-        {},
-        {
-          runId: "run-voice-1",
-          sessionId: "session-main",
-          sessionKey: target.canonicalKey,
-          agentId: target.agentId,
-          storeScope: target.storePath,
-        },
-      ),
-    );
-
-    const respond = await invokeTalkHandler("talk.client.toolCall", {
-      params: {
-        sessionKey: "main",
-        voiceSessionId: "relay-1",
-        relaySessionId: "relay-1",
-        callId: "call-1",
-        name: "openclaw_agent_consult",
-        args: { question: "What now?" },
-      },
-      context: {
-        getRuntimeConfig: () => ({}),
-        logGateway: { warn: vi.fn() },
-      },
-    });
-
-    expect(mocks.registerTalkRealtimeRelayAgentRun).toHaveBeenCalledWith({
-      relaySessionId: "relay-1",
-      connId: "conn-1",
-      sessionKey: "agent:main:main",
-      runId: "run-voice-1",
-      callId: "call-1",
-      transcriptSessionId: "session-main",
-      assertCurrent: expect.any(Function),
-      registerVoice: expect.any(Function),
-    });
-    expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledOnce();
-    expectRespondOk(respond, { runId: "run-voice-1" });
   });
 
   it.each([
@@ -3291,120 +3175,6 @@ describe("talk.client.create handler", () => {
       message:
         'Realtime provider "openai" does not support gateway-control-v1 with its configured authentication',
     });
-  });
-
-  it("binds GPT-Live delegations to the voice session and browser-owned steer lifecycle", async () => {
-    const started = createDeferred();
-    const release = createDeferred();
-    let releaseSource = () => {};
-    const config = realtimeConfig({ provider: "openai", model: "gpt-live-1" }) as OpenClawConfig;
-    const context = {
-      getRuntimeConfig: () => config,
-      logGateway: { warn: vi.fn() },
-    };
-    const createBrowserSession = createBrowserSessionMock();
-    mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
-      provider: createBrowserProvider(createBrowserSession),
-      providerConfig: { model: "gpt-live-1" },
-      capabilities: {
-        transports: ["webrtc"],
-        handlesAgentConsult: true,
-        supportsToolCalls: false,
-        supportsVideoFrames: false,
-      },
-    });
-    mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (rawParams?: unknown) => {
-      const params = rawParams as {
-        onRunStarted?: (params: {
-          runId: string;
-          sessionId: string;
-          timeoutMs: number;
-        }) => Promise<{ cleanup?: () => void } | void>;
-      };
-      const registration = await params.onRunStarted?.({
-        runId: "talk-realtime-consult:gpt-live",
-        sessionId: "session-main",
-        timeoutMs: 30_000,
-      });
-      const source = rpcSourceTesting.get("talk-realtime-consult:gpt-live")!;
-      releaseSource = await claimRpcSourceForTest(source);
-      const handle = createEmbeddedRunHandle({ runId: "talk-realtime-consult:gpt-live" });
-      const operation = source.input.claim?.operation;
-      setActiveEmbeddedRun("session-main", handle, "agent:main:main", undefined, "main", operation);
-      started.resolve();
-      try {
-        await release.promise;
-        return { text: "Done" };
-      } finally {
-        clearActiveEmbeddedRun("session-main", handle, "agent:main:main");
-        registration?.cleanup?.();
-      }
-    });
-
-    await invokeTalkHandler("talk.client.create", {
-      params: {
-        sessionKey: "main",
-        voiceSessionId: "voice-test",
-        model: "gpt-live-1",
-        capabilities: ["voice-transcript"],
-      },
-      context,
-    });
-    const createInput = mockCallArg(createBrowserSession) as Record<string, unknown>;
-    const providerConsult = createInput.runAgentConsult as ((params: {
-      prompt: string;
-    }) => Promise<{ text: string }>) & { claimAppend?: () => boolean };
-    const consult = providerConsult({ prompt: "Check the release" });
-    await started.promise;
-
-    const voiceWriter = expectRecordFields(
-      mockCallArg(mocks.createOrResumeClientVoiceSession, 0, 1),
-      { source: expect.any(Object) },
-    );
-    expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "main",
-      voiceSessionId: "voice-test",
-      runId: "talk-realtime-consult:gpt-live",
-      config,
-      assertCurrent: expect.any(Function),
-      physicalSource: voiceWriter.source,
-    });
-    const consultSource = rpcSourceTesting.get("talk-realtime-consult:gpt-live")!;
-
-    mocks.controlRealtimeVoiceAgentRun.mockResolvedValueOnce({
-      ok: true,
-      mode: "steer",
-      sessionKey: "main",
-      active: true,
-      queued: true,
-      target: "current",
-      message: "Got it.",
-      speak: true,
-      show: true,
-      suppress: false,
-    });
-
-    const steerRespond = await invokeTalkHandler("talk.client.steer", {
-      params: { sessionKey: "main", text: "Use the safer plan", mode: "steer" },
-      context,
-    });
-    expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      runTarget: expect.objectContaining({ runId: "talk-realtime-consult:gpt-live" }),
-      getToolAuthorityOverlay: expect.any(Function),
-      text: "Use the safer plan",
-      mode: "steer",
-      cancelRun: expect.any(Function),
-    });
-    expectRespondOk(steerRespond, { ok: true, mode: "steer" });
-
-    release.resolve();
-    await expect(consult).resolves.toEqual({ text: "Done" });
-    expect(providerConsult.claimAppend?.()).toBe(true);
-    releaseSource();
-    await consultSource.input.settlement.promise;
-    expect(rpcSourceTesting.has("talk-realtime-consult:gpt-live")).toBe(false);
   });
 
   it.each([

@@ -16,6 +16,7 @@ import {
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
@@ -94,6 +95,64 @@ let workerGrantReads: string[] = [];
 let sqlReads: ReturnType<typeof observeSqliteReadSql> | undefined;
 const authorizations: SessionMutationAuthorization[] = [];
 
+function consultContext(
+  config: OpenClawConfig = {
+    agents: { defaults: { workspace: path.join(tempDir, "workspace") } },
+  },
+) {
+  const context = createGatewayRequestContext(makeContextParams());
+  context.getRuntimeConfig = context.getCommittedRuntimeConfig = () => config;
+  return context;
+}
+
+async function authorizeConsult(
+  params: Record<string, unknown>,
+  context: GatewayRequestHandlerOptions["context"],
+  client: GatewayRequestHandlerOptions["client"] = null,
+  method = "talk.client.toolCall",
+) {
+  const authorized = await resolveSessionMutationAuthorizationAsync({
+    method,
+    requestParams: params,
+    context,
+    client,
+  });
+  if (authorized.authorization) {
+    authorizations.push(authorized.authorization);
+  }
+  expect(authorized.error).toBeNull();
+  return authorized;
+}
+
+function consultParams(callId: string) {
+  return {
+    sessionKey: scope.sessionKey,
+    voiceSessionId,
+    callId,
+    name: "openclaw_agent_consult",
+    args: { question: "Report the fixture status" },
+  };
+}
+
+function registerConsult(
+  sessionTarget: Awaited<ReturnType<typeof prepareTalkSessionTarget>>,
+  ownerConnId: string,
+) {
+  return registerChatAbortController({
+    target: captureSessionTarget({
+      storeScope: sessionTarget.storePath,
+      sessionKey: sessionTarget.canonicalKey,
+      agentId: sessionTarget.agentId,
+      incarnation: "original-consult-session",
+    }),
+    runId: "queued-consult",
+    sessionId: "original-consult-session",
+    sessionKey: scope.sessionKey,
+    ownerConnId,
+    timeoutMs: 60_000,
+  });
+}
+
 describe("voice consult registration authority", () => {
   const tempDirs = useAutoCleanupTempDirTracker((remove) =>
     afterEach(async () => {
@@ -159,9 +218,7 @@ describe("voice consult registration authority", () => {
         agents: { defaults: { workspace: path.join(tempDir, "workspace") } },
         session: { store: resolveOpenClawAgentSqlitePath({ agentId: scope.agentId }) },
       };
-      const context = createGatewayRequestContext(makeContextParams());
-      context.getRuntimeConfig = () => config;
-      context.getCommittedRuntimeConfig = () => config;
+      const context = consultContext(config);
       const client = { connId: `${origin}-${wait}-delegation-source` };
       const sessionTarget = await prepareTalkSessionTarget(config, scope.sessionKey);
       const created =
@@ -183,19 +240,7 @@ describe("voice consult registration authority", () => {
       const waiting = createDeferred();
       const resume = createDeferred();
       let pending: Promise<unknown> | undefined;
-      const registration = registerChatAbortController({
-        target: captureSessionTarget({
-          storeScope: sessionTarget.storePath,
-          sessionKey: sessionTarget.canonicalKey,
-          agentId: sessionTarget.agentId,
-          incarnation: "original-consult-session",
-        }),
-        runId: "queued-consult",
-        sessionId: "original-consult-session",
-        sessionKey: scope.sessionKey,
-        ownerConnId: client.connId,
-        timeoutMs: 60_000,
-      });
+      const registration = registerConsult(sessionTarget, client.connId);
       try {
         setTestEnvValue("OPENCLAW_STATE_DIR", successor);
         await voiceSessions.createOrResumeClientVoiceSession({
@@ -212,16 +257,7 @@ describe("voice consult registration authority", () => {
           name: "openclaw_agent_consult",
           args: { question: "Report fixture status" },
         };
-        const authorized = await resolveSessionMutationAuthorizationAsync({
-          method: "talk.client.toolCall",
-          requestParams: params,
-          context,
-          client: client as never,
-        });
-        if (authorized.authorization) {
-          authorizations.push(authorized.authorization);
-        }
-        expect(authorized.error).toBeNull();
+        const authorized = await authorizeConsult(params, context, client as never);
         if (wait === "preparation") {
           const lookup = voiceSessionReaders.resolveOpenClientVoiceSessionId;
           vi.spyOn(voiceSessionReaders, "resolveOpenClientVoiceSessionId").mockImplementationOnce(
@@ -305,19 +341,7 @@ describe("voice consult registration authority", () => {
       });
       const relay = relaySessions.get(created.relaySessionId)!;
       const runId = "queued-consult";
-      const registration = registerChatAbortController({
-        target: captureSessionTarget({
-          storeScope: sessionTarget.storePath,
-          sessionKey: sessionTarget.canonicalKey,
-          agentId: sessionTarget.agentId,
-          incarnation: "original-consult-session",
-        }),
-        runId,
-        sessionId: "original-consult-session",
-        sessionKey: scope.sessionKey,
-        ownerConnId: client.connId,
-        timeoutMs: 60_000,
-      });
+      const registration = registerConsult(sessionTarget, client.connId);
       const held = createDeferred();
       const resume = createDeferred();
       const register = voiceSessions.registerClientVoiceConsultRun;
@@ -337,15 +361,7 @@ describe("voice consult registration authority", () => {
         name: "openclaw_agent_consult",
         args: { question: "Report fixture status" },
       };
-      const authorized = await resolveSessionMutationAuthorizationAsync({
-        method: "talk.client.toolCall",
-        requestParams: params,
-        context,
-        client: client as never,
-      });
-      if (authorized.authorization) {
-        authorizations.push(authorized.authorization);
-      }
+      const authorized = await authorizeConsult(params, context, client as never);
       const respond = vi.fn();
       const pending = talkClientHandlers["talk.client.toolCall"]!({
         req: { type: "req", id: "replacement-registration", method: "talk.client.toolCall" },
@@ -408,27 +424,9 @@ describe("voice consult registration authority", () => {
       await cleanupSessionStateForTest({ stateDir: tempDir });
       closeOpenClawAgentDatabasesForTest(tempDir);
       workerGrantReads = [];
-      const config = { agents: { defaults: { workspace: path.join(tempDir, "workspace") } } };
-      const context = createGatewayRequestContext(makeContextParams());
-      context.getRuntimeConfig = () => config;
-      context.getCommittedRuntimeConfig = () => config;
-      const params = {
-        sessionKey: scope.sessionKey,
-        voiceSessionId,
-        callId: "cold-consult-call",
-        name: "openclaw_agent_consult",
-        args: { question: "Report the fixture status" },
-      };
-      const authorized = await resolveSessionMutationAuthorizationAsync({
-        method: "talk.client.toolCall",
-        requestParams: params,
-        context,
-        client: null,
-      });
-      if (authorized.authorization) {
-        authorizations.push(authorized.authorization);
-      }
-      expect(authorized.error).toBeNull();
+      const context = consultContext();
+      const params = consultParams("cold-consult-call");
+      const authorized = await authorizeConsult(params, context);
       expect(getOpenClawAgentDatabaseIfOpen(scope)).toBeUndefined();
       const targetPath = resolveOpenClawAgentSqlitePath(scope);
       const targetPaths = new Set([
@@ -494,27 +492,9 @@ describe("voice consult registration authority", () => {
   it.for(["current", "worker-current", "sdk", "session", "chat"] as const)(
     "publishes only a currently authorized queued consult (%s)",
     async (revoked, { signal }) => {
-      const config = { agents: { defaults: { workspace: path.join(tempDir, "workspace") } } };
-      const context = createGatewayRequestContext(makeContextParams());
-      context.getRuntimeConfig = () => config;
-      context.getCommittedRuntimeConfig = () => config;
-      const params = {
-        sessionKey: scope.sessionKey,
-        voiceSessionId,
-        callId: "queued-consult-call",
-        name: "openclaw_agent_consult",
-        args: { question: "Report the fixture status" },
-      };
-      const authorized = await resolveSessionMutationAuthorizationAsync({
-        method: "talk.client.toolCall",
-        requestParams: params,
-        context,
-        client: null,
-      });
-      if (authorized.authorization) {
-        authorizations.push(authorized.authorization);
-      }
-      expect(authorized.error).toBeNull();
+      const context = consultContext();
+      const params = consultParams("queued-consult-call");
+      const authorized = await authorizeConsult(params, context);
       const queued = createDeferred();
       const entered = createDeferred();
       const releaseQueue = createDeferred();
@@ -607,16 +587,12 @@ describe("voice consult registration authority", () => {
       { agentId: "main", sessionKey },
       { sessionId: "native-voice-source", updatedAt: 1, incognito: true },
     );
-    const authorization = await resolveSessionMutationAuthorizationAsync({
-      method: "talk.client.create",
-      requestParams: { sessionKey },
-      context: { getRuntimeConfig: () => ({}) } as GatewayRequestHandlerOptions["context"],
-      client: null,
-    });
-    if (authorization.authorization) {
-      authorizations.push(authorization.authorization);
-    }
-    expect(authorization.error).toBeNull();
+    const authorization = await authorizeConsult(
+      { sessionKey },
+      { getRuntimeConfig: () => ({}) } as GatewayRequestHandlerOptions["context"],
+      null,
+      "talk.client.create",
+    );
     const target = authorization.authorization?.talkSessionTarget;
     if (!target) {
       throw new Error("Expected a prepared incognito Talk source");
@@ -668,16 +644,12 @@ describe("voice consult registration authority", () => {
           { sessionId: "cold-native-source", updatedAt: 1, incognito: true },
         );
       }
-      const authorized = await resolveSessionMutationAuthorizationAsync({
-        method: "talk.client.create",
-        requestParams: { sessionKey: sourceKey },
-        context: { getRuntimeConfig: () => ({}) } as GatewayRequestHandlerOptions["context"],
-        client: null,
-      });
-      if (authorized.authorization) {
-        authorizations.push(authorized.authorization);
-      }
-      expect(authorized.error).toBeNull();
+      const authorized = await authorizeConsult(
+        { sessionKey: sourceKey },
+        { getRuntimeConfig: () => ({}) } as GatewayRequestHandlerOptions["context"],
+        null,
+        "talk.client.create",
+      );
       const target = {
         agentId: `cold-native-${kind}`,
         sessionKey: `agent:cold-native-${kind}:main`,
