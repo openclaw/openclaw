@@ -485,6 +485,15 @@ baseline spent 7m57s on them in a 21m48s job. Separating them gives app compilat
 and tests their own 30-minute budget without removing coverage or increasing
 test-process parallelism.
 
+Both phases start after preflight. App tests compile before waiting for the
+same-run Linux runtime artifact; package tests do not consume it.
+The Linux producer publishes the artifact before its remaining built-CLI checks,
+so native execution can proceed while those checks finish. The runtime's build
+identity must match the selected checkout SHA. A failed producer without an
+artifact fails the native wait, and the existing job deadline includes any wait.
+Failed-job reruns retain the successful producer’s artifact from its earlier attempt.
+The aggregate CI gate still requires the Linux checks and both native phases.
+
 Full nonpublishing manual validation also stages the exact candidate runtime and runs
 ordinary bundled recovery and relaunch through two fresh `.app` test-host processes.
 The existing launcher owns their private home, Keychain, selected service, and process

@@ -57,6 +57,9 @@ with a 30-minute job budget each. The conformance runner uses the shared weighte
 allocator and committed `config/postgres-conformance-timings.json` measurements;
 weights distribute work but never select the test inventory. Unknown targets receive
 a default weight. Inspect any assignment with `--shard 1/3 --list` (or `2/3`, `3/3`).
+Refresh weights from successful natural runs as the suite changes, using the median
+observed target duration so one slow run does not dictate the split. Rebalancing
+the existing three shards adds no jobs or per-job setup.
 The combined inventory matches the local full suite; a failure in one shard leaves
 the others running and fails the aggregate gate.
 

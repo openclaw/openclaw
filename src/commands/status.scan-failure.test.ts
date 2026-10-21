@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { statusJsonCommand } from "./status-json.js";
 import { statusCommand } from "./status.command.js";
@@ -48,17 +48,16 @@ vi.mock("../cli/daemon-cli/shared.js", async (importOriginal) => ({
 const installationDrift =
   "Gateway service targets a different OpenClaw install: /prefix-a/lib/node_modules/openclaw (2026.9.4); active CLI: /prefix-b/lib/node_modules/openclaw (2026.9.17). Run `openclaw doctor --fix` or `openclaw gateway install --force` from the active CLI.";
 
-describe.each([
-  { mode: "text", timeoutMs: undefined },
-  { mode: "fast JSON", timeoutMs: 2345 },
-  { mode: "all", timeoutMs: undefined },
-])("status scan failure ($mode)", ({ mode, timeoutMs }) => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.gateway.mockReset();
-  });
+beforeEach(() => vi.clearAllMocks());
 
-  async function runFailure(unavailable: boolean) {
+it.each(
+  ["text", "fast JSON", "all"].flatMap((mode) =>
+    [false, true].map((unavailable) => ({ mode, unavailable })),
+  ),
+)(
+  "preserves schema refusal ($mode, service inspection unavailable=$unavailable)",
+  async ({ mode, unavailable }) => {
+    const timeoutMs = mode === "fast JSON" ? 2345 : undefined;
     const original = new Error(
       "OpenClaw agent database /state/agents/main/agent.sqlite uses schema version 19; stop active agents and run openclaw doctor --fix to migrate session identities before using it.",
     );
@@ -87,16 +86,10 @@ describe.each([
     );
     expect(mocks.node).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
-    return runtime;
-  }
-
-  it("reports local installation drift without replacing the session schema refusal", async () => {
-    const runtime = await runFailure(false);
-    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(installationDrift);
-  });
-
-  it("preserves the original refusal when optional service inspection also fails", async () => {
-    const runtime = await runFailure(true);
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-});
+    if (unavailable) {
+      expect(runtime.error).not.toHaveBeenCalled();
+    } else {
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(installationDrift);
+    }
+  },
+);

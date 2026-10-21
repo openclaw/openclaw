@@ -97,6 +97,10 @@ export function renderChatComposerView(
       props.realtimeTalkVideoStream?.getVideoTracks?.()[0]?.getSettings?.().facingMode !==
       "environment",
   );
+  const canSwitchCamera = createMemo(
+    () =>
+      (props.realtimeTalkCameraDevices?.length ?? 0) >= 2 && Boolean(props.onSwitchRealtimeCamera),
+  );
   const slashMenuAnnouncementId = () => paneDomId(props.paneId, "slash-active-announcement");
   // Owner refreshes replace the banner and callback values, not the focused action's DOM.
   const disabledBanner = (
@@ -463,9 +467,7 @@ export function renderChatComposerView(
                     aria-label={t("chat.composer.cameraPreview")}
                     prop:srcObject={props.realtimeTalkVideoStream}
                   />
-                  {props.realtimeTalkCameraDevices &&
-                  props.realtimeTalkCameraDevices.length >= 2 &&
-                  props.onSwitchRealtimeCamera ? (
+                  {canSwitchCamera() ? (
                     <openclaw-tooltip
                       class="agent-chat__video-preview-switch-tooltip"
                       prop:content={t("chat.composer.switchCamera")}
@@ -475,7 +477,7 @@ export function renderChatComposerView(
                         class="agent-chat__video-preview-switch"
                         aria-label={t("chat.composer.switchCamera")}
                         disabled={props.realtimeTalkVideoPending}
-                        onClick={props.onSwitchRealtimeCamera}
+                        onClick={() => props.onSwitchRealtimeCamera?.()}
                       >
                         {<Icon name="switchCamera" />}
                       </button>

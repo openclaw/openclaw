@@ -85,6 +85,8 @@ function successfulNativeSetup() {
       "node-env",
       "macos-swift-tools",
       "macos-native-assets",
+      "swift-test-build",
+      "native-test-cli",
       "macos-node-assets",
       "macos-node-tooling",
       "ios-swift-tools",
@@ -2822,9 +2824,7 @@ describe("ci workflow guards", () => {
       expect(job.strategy["fail-fast"]).toBe(false);
       expect(job.strategy["max-parallel"]).toBe(2);
       expect(job["continue-on-error"]).not.toBe(true);
-      expect(job.needs).toEqual(
-        jobName === "macos-swift" ? ["preflight", "build-artifacts"] : ["preflight"],
-      );
+      expect(job.needs).toEqual(["preflight"]);
       const workloads =
         jobName === "macos-swift"
           ? {
@@ -2834,7 +2834,7 @@ describe("ci workflow guards", () => {
                 "Swift lint",
                 "Swift build (release)",
               ],
-              tests: ["Swift test"],
+              tests: ["Build Swift tests", "Swift test"],
               packages: [
                 "OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)",
                 "OpenClawKit tests",
@@ -2973,7 +2973,8 @@ describe("ci workflow guards", () => {
               matrix: { phase },
               steps: {
                 ...successfulNativeSetup(),
-                "swift-test": {
+                "swift-test": { outcome: "success", outputs: {} },
+                "swift-test-build": {
                   outcome: "success",
                   outputs: { "debug-tests-built": phase === "tests" ? "true" : "" },
                 },
@@ -3001,7 +3002,25 @@ describe("ci workflow guards", () => {
           eventName === "pull_request" && name === "OpenClawKit tests" ? [] : ["packages"],
         );
       }
+      expect(selectedPhases("Build Swift tests")).toEqual(["tests"]);
       expect(selectedPhases("Swift test")).toEqual(["tests"]);
+      expect(
+        selectedPhases("Swift test", {
+          steps: {
+            ...successfulNativeSetup(),
+            "swift-test-build": { outcome: "failure", outputs: {} },
+          },
+        }),
+      ).toEqual([]);
+      expect(
+        selectedPhases("Swift test", {
+          fileHashes: { "apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift": "present" },
+          steps: {
+            ...successfulNativeSetup(),
+            "native-test-cli": { outcome: "failure", outputs: {} },
+          },
+        }),
+      ).toEqual([]);
       expect(selectedPhases("Setup bundled recovery runtime build")).toEqual(
         full && !historical ? ["tests"] : [],
       );
@@ -3010,7 +3029,11 @@ describe("ci workflow guards", () => {
       );
       expect(
         selectedPhases("Setup bundled recovery runtime build", {
-          steps: { "swift-test": { outcome: "failure", outputs: { "debug-tests-built": "true" } } },
+          steps: {
+            ...successfulNativeSetup(),
+            "swift-test-build": { outcome: "success", outputs: { "debug-tests-built": "true" } },
+            "swift-test": { outcome: "failure", outputs: {} },
+          },
         }),
       ).toEqual([]);
       expect(
