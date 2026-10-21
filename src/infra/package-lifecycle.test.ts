@@ -22,7 +22,7 @@ function observeLifecycleContention() {
     contended.resolve();
     return alive;
   });
-  return async (contender: Promise<boolean>) => {
+  return async (contender: Promise<void>) => {
     await Promise.race([
       contended.promise,
       contender.then(() => {
@@ -58,7 +58,7 @@ describe("package lifecycle completion", () => {
         }
       });
 
-      const callers: Promise<boolean>[] = [];
+      const callers: Promise<void>[] = [];
       const startCaller = () => {
         const caller = completePendingPackageLifecycle({ packageRoot, runScript });
         void caller.catch(() => {});
@@ -72,10 +72,10 @@ describe("package lifecycle completion", () => {
         await waitForContention(startCaller());
         expect(calls).toEqual(["preinstall"]);
         releasePreinstall();
-        await expect(Promise.all(callers)).resolves.toEqual([true, false]);
+        await Promise.all(callers);
 
         void startCaller();
-        await expect(Promise.all(callers)).resolves.toEqual([true, false, false]);
+        await Promise.all(callers);
         expect(calls).toEqual(["preinstall", "postinstall"]);
       } finally {
         releasePreinstall();
@@ -151,7 +151,7 @@ describe("package lifecycle completion", () => {
         expect(returned).not.toHaveBeenCalled();
         expect(contenderScript).not.toHaveBeenCalled();
         releasePost.resolve();
-        await expect(Promise.all(completions)).resolves.toEqual([true, false]);
+        await Promise.all(completions);
       } finally {
         releasePre.resolve();
         releasePost.resolve();
@@ -175,7 +175,7 @@ describe("package lifecycle completion", () => {
       });
       const first = completePendingPackageLifecycle({ packageRoot, runScript, timeoutMs: 1000 });
       const completion = Promise.allSettled([first]);
-      let second: Promise<boolean> | undefined;
+      let second: Promise<void> | undefined;
       let clock: MockInstance<() => number> | undefined;
       try {
         await started;
@@ -188,8 +188,8 @@ describe("package lifecycle completion", () => {
         expect(runScript.mock.calls.map(([script]) => script.name)).toEqual(["preinstall"]);
         clock.mockRestore();
         release();
-        await expect(first).resolves.toBe(true);
-        await expect(second).resolves.toBe(false);
+        await first;
+        await second;
       } finally {
         clock?.mockRestore();
         release();
@@ -225,9 +225,7 @@ describe("package lifecycle completion", () => {
           interrupted = false;
           runScript.mockClear();
         }
-        await expect(completePendingPackageLifecycle({ packageRoot, runScript })).resolves.toBe(
-          true,
-        );
+        await completePendingPackageLifecycle({ packageRoot, runScript });
         expect(runScript.mock.calls.map(([script]) => script.name)).toEqual([
           "preinstall",
           "postinstall",

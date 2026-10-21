@@ -18,7 +18,7 @@ export function AgentReadNotice(props: { request: AgentRead; style?: { "margin-t
       {(request) => (
         <Errored
           fallback={(error) => (
-            <div class="callout danger" style={props.style}>
+            <div class="callout danger" role="alert" style={props.style}>
               {formatUiError(error())}
             </div>
           )}

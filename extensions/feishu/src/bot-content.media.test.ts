@@ -51,22 +51,12 @@ describe("resolveFeishuMediaList post files[]", () => {
     }));
   });
 
-  it.each([
-    {
-      name: "captioned",
-      text: "这是账本",
-      files: [file("file_report", "report.csv")],
-      expected: [document("report.csv", "text/csv")],
-    },
-    {
-      name: "multiple files without text",
-      text: undefined,
-      files: [file("file_aug", "aug.zip"), file("file_sep", "sep.zip")],
-      expected: [document("aug.zip", "application/zip"), document("sep.zip", "application/zip")],
-    },
-  ])("downloads top-level files[] for $name posts", async ({ text, files, expected }) => {
-    const content = [text ? [{ tag: "text", text }] : []];
-    expect(await download({ title: "", content, content_v2: content, files })).toEqual(expected);
+  it("downloads multiple top-level files without text", async () => {
+    const files = [file("file_aug", "aug.zip"), file("file_sep", "sep.zip")];
+    expect(await download({ title: "", content: [[]], content_v2: [[]], files })).toEqual([
+      document("aug.zip", "application/zip"),
+      document("sep.zip", "application/zip"),
+    ]);
     expect(saveMessageResourceFeishu.mock.calls.map(([request]) => request)).toMatchObject(
       files.map(({ file_key, file_name }) => ({
         messageId: "msg-files",

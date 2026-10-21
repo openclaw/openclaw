@@ -23,6 +23,7 @@ import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   seedDeferredPluginSessionSource,
   seedStaleDeferredPluginSessionImport,
+  addDeferredPluginSessions,
 } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { expectIssue, migrationManifest } from "./doctor-session-sqlite.fixtures.test-support.js";
 import { runDoctorSessionSqlite as doctor } from "./doctor-session-sqlite.js";
@@ -64,20 +65,7 @@ it.each([2, 32])(
   async (count) => {
     await withOpenClawTestState({ label: "stale-receipt-manifest-reads" }, async (state) => {
       const { cfg, storePath } = await seedDeferredPluginSessionSource(state);
-      const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
-      for (let index = 2; index < count; index++) {
-        const sessionId = `legacy-volume-${index}`;
-        entries[`agent:main:volume-${index}`] = {
-          sessionId,
-          sessionFile: `${sessionId}.jsonl`,
-          updatedAt: 20,
-        };
-        fs.writeFileSync(
-          path.join(path.dirname(storePath), `${sessionId}.jsonl`),
-          `${JSON.stringify({ type: "session", version: 3, id: sessionId })}\n`,
-        );
-      }
-      fs.writeFileSync(storePath, JSON.stringify(entries));
+      addDeferredPluginSessions(storePath, count);
       const options = { cfg, env: state.env, allAgents: true };
       expect((await doctor({ ...options, mode: "import" })).totals.importedEntries).toBe(count);
       await recordDeferredPluginMigrations({

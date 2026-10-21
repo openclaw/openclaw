@@ -19,6 +19,7 @@ import {
 } from "../agents/github-tool-identity.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { observeUserGitHubConnectionAuthority } from "../state/user-github-connection-events.js";
@@ -103,14 +104,7 @@ export function createPersonalGitHubOAuthLifecycle() {
     }
   >();
   const writes = new Set<Promise<unknown>>();
-  const retainWrite = <T>(work: Promise<T>): Promise<T> => {
-    writes.add(work);
-    void work.then(
-      () => writes.delete(work),
-      () => writes.delete(work),
-    );
-    return work;
-  };
+  const retainWrite = createPendingPromiseTracker(writes);
   const mutateUserGitHubConnection = (...args: Parameters<typeof mutateConnection>) =>
     retainWrite(mutateConnection(...args));
   const updateUserGitHubRefreshAsync = (...args: Parameters<typeof updateRefresh>) =>

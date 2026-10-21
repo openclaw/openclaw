@@ -9,6 +9,7 @@ import {
 } from "../../infra/sqlite-database-admission.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { preparePriorWorkspaceRewriteInTransaction } from "./session-accessor.sqlite-prior-workspace.js";
 import {
   readEventTimestamp,
   readTranscriptEventId,
@@ -31,6 +32,7 @@ import {
   SYNC_REBUILD_MAX_ROWS,
   type SessionTranscriptIndexProjection,
 } from "./session-transcript-index.js";
+import { hasTranscriptMessage } from "./session-transcript-projection-append.js";
 import { scheduleTranscriptProjectionReconcile } from "./session-transcript-reconcile.js";
 import {
   projectTranscriptRetainedDataSql,
@@ -401,6 +403,7 @@ export function replaceSqliteTranscriptSuffixInTransaction(
   if (plan.expectedRows.length === 0 && plan.next.length === 0) {
     return;
   }
+  const priorWorkspace = preparePriorWorkspaceRewriteInTransaction(database, resolved);
 
   const projectionIsHealthy =
     plan.incremental?.projectionWasHealthy ??
@@ -548,7 +551,19 @@ export function replaceSqliteTranscriptSuffixInTransaction(
 
   // Destructive suffix rewrites may reuse removed sequence positions. Rotate the raw and visible
   // cursor generation in the same transaction so a resumed reader cannot silently skip replacements.
-  rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
+  const generation = rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
+  priorWorkspace?.commit(generation, {
+    previous: plan.expectedRows.map((row) => ({
+      id: readTranscriptEventId(JSON.parse(row.eventJson)) ?? null,
+      seq: row.seq,
+    })),
+    next: insertEvents.map((event, index) => ({
+      id: readTranscriptEventId(event) ?? null,
+      seq: plan.startSeq + index,
+      message: hasTranscriptMessage(event),
+    })),
+    unchangedBeforeSeq: plan.startSeq,
+  });
   if (projectionIsHealthy) {
     replaceSessionTranscriptIndexSuffixInTransaction(database.db, resolved.sessionId, {
       unchangedBeforeSeq: plan.startSeq,

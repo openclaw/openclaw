@@ -336,7 +336,7 @@ export function Apps(props: AppsProps) {
   return (
     <div class="apps-page">
       <section class="apps-hero">
-        <h1 class="apps-hero__title">{t("appsPage.heroTitle")}</h1>
+        <h2 class="apps-hero__title">{t("appsPage.heroTitle")}</h2>
         <p class="apps-hero__tagline">{t("appsPage.heroTagline")}</p>
       </section>
       <For each={APP_SECTIONS}>

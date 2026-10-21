@@ -446,6 +446,8 @@ export class DraftPlaceBrowser {
       this.browserProjectPath === path &&
       client === this.gateway.client;
     this.browser.error = null;
+    // Retire the preceding directory error without hiding reads started during registration.
+    this.browser.readCompletion = null;
     this.callbacks.changed();
     try {
       const project = await client.request<ProjectsRegisterResult>("projects.register", { path });

@@ -91,14 +91,14 @@ export function createMSTeamsConversationStoreState(params?: {
     if (rows.length <= MSTEAMS_MAX_CONVERSATIONS) {
       return;
     }
-    const sorted = rows.toSorted((a, b) => {
+    rows.sort((a, b) => {
       const aTs = parseDateStringTimestampMs(a.value.lastSeenAt) ?? 0;
       const bTs = parseDateStringTimestampMs(b.value.lastSeenAt) ?? 0;
       const aId = getStoredConversationId(a.value) ?? a.key;
       const bId = getStoredConversationId(b.value) ?? b.key;
       return aTs - bTs || aId.localeCompare(bId);
     });
-    for (const row of sorted.slice(0, rows.length - MSTEAMS_MAX_CONVERSATIONS)) {
+    for (const row of rows.slice(0, rows.length - MSTEAMS_MAX_CONVERSATIONS)) {
       await conversationStore.delete(row.key);
     }
   };

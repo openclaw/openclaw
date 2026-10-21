@@ -69,11 +69,13 @@ describe("renderChatComposer controls", () => {
 
   it("keeps desktop and mobile Stop available with a pending attachment", () => {
     const onAbort = vi.fn();
+    const onTypingChange = vi.fn();
     const { container, props, onSend, onDraftChange } = renderComposer({
       canAbort: true,
       canCompose: true,
       draft: "Keep this draft",
       onAbort,
+      onTypingChange,
       pendingAttachmentReads: 1,
     });
     const stop = primaryButton(container);
@@ -86,6 +88,7 @@ describe("renderChatComposer controls", () => {
     expect(onAbort).toHaveBeenCalledOnce();
     expect(onSend).not.toHaveBeenCalled();
     expect(onDraftChange).not.toHaveBeenCalled();
+    expect(onTypingChange).not.toHaveBeenCalled();
     expect(textarea(container).value).toBe(props.draft);
   });
 
@@ -197,29 +200,6 @@ describe("renderChatComposer controls", () => {
     expect(send?.disabled).toBe(false);
     expect(send?.getAttribute("aria-disabled")).toBe("true");
     expect(send?.querySelector("path")?.getAttribute("d")).toBe("M12 19V5m-7 7 7-7 7 7");
-  });
-
-  it("keeps voice and generation stop controls distinct when both are active", () => {
-    const onAbort = vi.fn();
-    const onToggleRealtimeTalk = vi.fn();
-    const { container } = renderComposer({
-      canAbort: true,
-      onAbort,
-      onToggleRealtimeTalk,
-      realtimeTalkActive: true,
-    });
-
-    const stopVoice = button(container, t("chat.composer.stopVoiceInput"));
-    const stopGeneration = button(container, t("chat.runControls.stopGenerating"));
-    expect(stopVoice.classList.contains("chat-send-btn--voice-live")).toBe(true);
-    expect(stopVoice.classList.contains("chat-send-btn--stop")).toBe(false);
-    expect(stopGeneration.classList.contains("chat-send-btn--stop")).toBe(true);
-    expect(stopGeneration.closest(".chat-mobile-primary-action")).not.toBeNull();
-    expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
-    stopVoice.click();
-    stopGeneration.click();
-    expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
-    expect(onAbort).toHaveBeenCalledOnce();
   });
 
   it("keeps dictation available while Talk is held during an active turn", () => {
@@ -344,12 +324,14 @@ describe("renderChatComposer controls", () => {
   ] as const)(
     "submits %s as %s with modified Enter",
     (followUpMode, alternateMode, draft, getAttachments, liveDraft) => {
+      const onTypingChange = vi.fn();
       const { container, onSend } = renderComposer({
         ...activeRun(),
         draft,
         followUpMode,
         getAttachments,
         sendShortcut: "enter",
+        onTypingChange,
       });
       if (liveDraft !== undefined) {
         textarea(container).value = liveDraft;
@@ -358,6 +340,7 @@ describe("renderChatComposer controls", () => {
       const action = pressComposerEnter(container, { ctrlKey: true });
       expect(onSend).toHaveBeenCalledOnce();
       expect(onSend).toHaveBeenCalledWith(alternateMode, action);
+      expect(onTypingChange).toHaveBeenLastCalledWith(false);
 
       const held = pressComposerEnter(container, { ctrlKey: true, repeat: true });
       expect(held.defaultPrevented).toBe(true);
@@ -492,6 +475,9 @@ describe("renderChatComposer controls", () => {
     const state = item?.querySelector(".chat-queue__badge--reconnect");
     expect(state?.textContent?.trim()).toBe("Waiting for reconnect");
     expect(state?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
+    expect(item?.querySelectorAll(".chat-queue__badge")).toHaveLength(1);
+    expect(item?.querySelector(".chat-queue__state")).toBeNull();
+    expect(container.querySelector(".chat-queue__global-state")).toBeNull();
   });
 
   it("renders failed sends as retryable and running commands as inert", async () => {

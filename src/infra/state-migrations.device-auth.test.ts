@@ -15,11 +15,7 @@ import {
 } from "./kysely-sync.js";
 import { detectLegacyDeviceAuth, migrateLegacyDeviceAuth } from "./state-migrations.device-auth.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
-    cleanup();
-  });
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let stateDir: string;
 let env: NodeJS.ProcessEnv;
 let sourcePath: string;

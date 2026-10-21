@@ -1,6 +1,9 @@
 import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WebSearchTestResult } from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
+import type {
+  WebSearchStatusResult,
+  WebSearchTestResult,
+} from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
@@ -53,7 +56,9 @@ function schemaAt(path: string[], properties: NonNullable<JsonSchema["properties
   );
 }
 
-async function mount(options: { advanced?: boolean } = {}) {
+async function mount(
+  options: { advanced?: boolean; searchResponse?: Promise<WebSearchTestResult> } = {},
+) {
   const providerSchema = schemaAt(providerPath, {
     baseUrl: { type: "string", title: "Search endpoint" },
     apiKey: { type: "string", title: "Example API key" },
@@ -83,7 +88,8 @@ async function mount(options: { advanced?: boolean } = {}) {
   };
   const save = createDeferred<unknown>();
   const writeStarted = createDeferred<{ raw: string; baseHash: string }>();
-  const searchResponse = Promise.resolve(testResult);
+  const searchResponse = options.searchResponse ?? Promise.resolve(testResult);
+  let statusResponse: Promise<WebSearchStatusResult> | undefined;
   const responses: Record<string, (params: unknown) => Promise<unknown>> = {
     "config.get": async () => structuredClone(stored),
     "config.schema": async () => ({ schema, uiHints: {}, version: "test-1", generatedAt: "" }),
@@ -96,10 +102,11 @@ async function mount(options: { advanced?: boolean } = {}) {
       baseHash: stored.hash,
       credential: { kind: "literal" },
     }),
-    "webSearch.status": async () => ({
-      ...ready,
-      route: { ...ready.route, label: `Runtime ${stored.appliedConfigHash}` },
-    }),
+    "webSearch.status": async () =>
+      statusResponse ?? {
+        ...ready,
+        route: { ...ready.route, label: `Runtime ${stored.appliedConfigHash}` },
+      },
     "webSearch.test": () => searchResponse,
   };
   const fixture = await mountSearch({
@@ -144,6 +151,9 @@ async function mount(options: { advanced?: boolean } = {}) {
       stored = snapshot;
     },
     stored: () => stored,
+    setStatusResponse: (next: Promise<WebSearchStatusResult> | undefined) => {
+      statusResponse = next;
+    },
   };
 }
 
@@ -256,6 +266,68 @@ describe("Search configuration lifecycle", () => {
     expect(fixture.element.textContent).not.toContain(testResult.content);
     expect(fixture.testButton().disabled).toBe(true);
   });
+
+  it.each(["success", "request error"] as const)(
+    "retires pending health after an external unsaved draft before %s",
+    async (outcome) => {
+      const pending = createDeferred<WebSearchTestResult>();
+      const fixture = await mount({ searchResponse: pending.promise });
+      fixture.testButton().click();
+      try {
+        await waitForSolid(() => expect(fixture.input("Search query").disabled).toBe(true));
+        expect(fixture.calls("webSearch.test")).toHaveLength(1);
+        fixture.runtime.patchForm(endpointPath, "https://draft.example.test");
+        await waitForSolid(() =>
+          expect(fixture.statuses()).toContainEqual(expect.stringContaining("Not tested")),
+        );
+      } finally {
+        if (outcome === "success") {
+          pending.resolve(testResult);
+        } else {
+          pending.reject(new Error("Retired search request failed"));
+        }
+      }
+      await fixture.settle(true);
+      expect(fixture.element.textContent).not.toContain(testResult.content);
+      expect(fixture.element.textContent).not.toContain("Retired search request failed");
+      expect(fixture.statuses()).toContainEqual(expect.stringContaining("Not tested"));
+      expect(fixture.testButton().disabled).toBe(true);
+    },
+  );
+
+  it.each(["success", "request error"] as const)(
+    "reloads status after configuration advances before %s",
+    async (outcome) => {
+      const fixture = await mount();
+      const pending = createDeferred<WebSearchStatusResult>();
+      fixture.setStatusResponse(pending.promise);
+      fixture.click("Refresh search status");
+      await waitForSolid(() => expect(fixture.calls("webSearch.status")).toHaveLength(2));
+      fixture.setStatusResponse(undefined);
+      fixture.setStored({
+        ...fixture.stored(),
+        hash: "saved-2",
+        configRevisionHash: "revision-2",
+        appliedConfigHash: "revision-2",
+      });
+      try {
+        await fixture.runtime.refresh({ background: true });
+        expect(fixture.runtime.state.configSnapshot?.appliedConfigHash).toBe("revision-2");
+      } finally {
+        if (outcome === "success") {
+          pending.resolve({ ...ready, route: { ...ready.route, label: "Retired route" } });
+        } else {
+          pending.reject(new Error("Retired status failed"));
+        }
+      }
+      await fixture.settle();
+      await waitForSolid(() => expect(fixture.calls("webSearch.status")).toHaveLength(3));
+      expect(fixture.element.textContent).toContain("Runtime revision-2");
+      expect(fixture.element.textContent).not.toContain("Retired route");
+      expect(fixture.element.textContent).not.toContain("Retired status failed");
+      expect(fixture.calls("webSearch.test")).toHaveLength(0);
+    },
+  );
 
   it("waits for activation and refreshes automatically when only the applied revision advances", async () => {
     const fixture = await mount();

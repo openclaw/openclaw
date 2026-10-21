@@ -95,7 +95,6 @@ extensions/clickclack/src/outbound.ts	1
 extensions/clickclack/src/setup-claim.ts	1
 extensions/clickclack/src/setup-core.ts	5
 extensions/clickclack/src/setup-surface.ts	8
-extensions/clickclack/src/setup-verify.ts	1
 extensions/codex/harness.ts	1
 extensions/codex/index.ts	5
 extensions/codex/src/app-server/attempt-notifications.ts	1
@@ -1297,7 +1296,7 @@ src/agents/subagents/swarm/swarm-scheduler.ts	1
 src/agents/system-prompt-report.ts	1
 src/agents/system-prompt.ts	1
 src/agents/thinking-block.ts	1
-src/agents/tool-call-id.ts	8
+src/agents/tool-call-id.ts	7
 src/agents/tool-catalog.ts	1
 src/agents/tool-display-common.ts	1
 src/agents/tool-images.ts	2
