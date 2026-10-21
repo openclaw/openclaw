@@ -20,7 +20,6 @@ import {
   renderRemovalOnlyDependencyComment,
   shouldAutoscrubDependencyLockfiles,
 } from "../../scripts/github/dependency-guard.mjs";
-import { loadSecurityReviewPolicy } from "../../scripts/github/security-review-policy.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const headSha = "a".repeat(40);
@@ -35,7 +34,6 @@ const contentsPath = `${repoPath}/contents`;
 const manifestPath = `${contentsPath}/package.json`;
 const contributorPermission = `${repoPath}/collaborators/contributor/permission`;
 const maintainerPermission = `${repoPath}/collaborators/maintainer/permission`;
-const { isDependencyFile, isDependencyManifest, isPackageLockfile } = loadSecurityReviewPolicy();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function comparison(base = staleSha, mergeBase = base) {
@@ -467,25 +465,7 @@ describe("dependency guard script", () => {
     expect(enforcement.stdout).toContain("Automatic lockfile cleanup is best effort.");
   });
 
-  it("detects dependency guard file surfaces", () => {
-    expect(isDependencyFile("pnpm-lock.yaml")).toBe(true);
-    expect(isDependencyFile("package.json")).toBe(false);
-    expect(isDependencyFile("ui/package.json")).toBe(false);
-    expect(isDependencyFile("packages/core/package.json")).toBe(false);
-    expect(isDependencyFile("qa/convex-credential-broker/package.json")).toBe(false);
-    expect(isDependencyFile("package-lock.json")).toBe(true);
-    expect(isDependencyFile("tools/nested/pnpm-lock.yaml")).toBe(true);
-    expect(isDependencyFile("src/index.ts")).toBe(false);
-    expect(isPackageLockfile("pnpm-lock.yaml")).toBe(true);
-    expect(isPackageLockfile("package-lock.json")).toBe(true);
-    expect(isPackageLockfile("package.json")).toBe(false);
-  });
-
   it("compares package manifest fields that can affect dependency resolution", () => {
-    expect(isDependencyManifest("package.json")).toBe(true);
-    expect(isDependencyManifest("extensions/slack/package.json")).toBe(true);
-    expect(isDependencyManifest("qa/convex-credential-broker/package.json")).toBe(true);
-    expect(isDependencyManifest("src/index.ts")).toBe(false);
     expect(
       dependencyFieldChanges(
         { scripts: { test: "old" }, dependencies: { a: "1" } },

@@ -15,22 +15,10 @@ import {
   validateQaEvidenceSummaryJson,
 } from "../../extensions/qa-lab/test-api.js";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
-import { createTempDirTracker } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
-const tempDirs = createTempDirTracker();
-
-type TaxonomyFixture = {
-  surfaces?: Array<{
-    id?: string;
-    archived?: boolean;
-    categories?: Array<{
-      id?: string;
-      name?: string;
-      features?: Array<{ coverageIds?: string[] }>;
-    }>;
-  }>;
-};
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type MaturityScoresFixture = {
   rollups?: {
@@ -40,10 +28,6 @@ type MaturityScoresFixture = {
     };
   };
 };
-
-afterEach(() => {
-  tempDirs.cleanup();
-});
 
 function runCli(...args: string[]) {
   return spawnSync(
@@ -140,6 +124,21 @@ const fixtureSurface = {
 };
 const fixtureFeature = { name: "Fixture feature", coverageIds: ["tools.evidence"] };
 const experimentalLevel = { id: "experimental", code: "M1", label: "Experimental" };
+function taxonomyFixture(
+  category: Record<string, unknown>,
+  surface: Record<string, unknown> = {},
+  levels = [experimentalLevel],
+) {
+  return {
+    version: 1,
+    title: "Synthetic maturity fixture",
+    levels,
+    surfaces: [
+      { ...fixtureSurface, ...surface, categories: [{ features: [fixtureFeature], ...category }] },
+    ],
+  };
+}
+
 function writeScores(file: string, scores: object, category: object, authored = scores) {
   writeYaml(file, {
     version: 1,
@@ -226,10 +225,10 @@ function allProfileScorecardFixture(
   evidenceEntryCount = 1,
   taxonomyPath = path.join(repoRoot, "taxonomy.yaml"),
 ) {
-  const taxonomy = parseYaml(fs.readFileSync(taxonomyPath, "utf8")) as TaxonomyFixture;
-  const activeSurfaces = (taxonomy.surfaces ?? []).filter((surface) => !surface.archived);
+  const taxonomy = readQaMaturityTaxonomySource(taxonomyPath);
+  const activeSurfaces = taxonomy.surfaces.filter((surface) => !surface.archived);
   const categoryReports = activeSurfaces.flatMap((surface) =>
-    (surface.categories ?? []).map((category) => {
+    surface.categories.map((category) => {
       const coverageIds = [
         ...new Set((category.features ?? []).flatMap((feature) => feature.coverageIds ?? [])),
       ].toSorted();
@@ -528,25 +527,15 @@ describe("maturity docs renderer CLI", () => {
         ].map(([source, destination]) => ({ source, destination })),
       }),
     );
-    writeYaml(taxonomyPath, {
-      version: 1,
-      title: "Synthetic docs link fixture",
-      levels: [experimentalLevel],
-      surfaces: [
-        {
-          ...fixtureSurface,
-          categories: [
-            {
-              id: "links",
-              name: "Docs links",
-              category_note: "Synthetic fixture for renderer links",
-              features: [fixtureFeature],
-              docs: links.map(([doc]) => doc),
-            },
-          ],
-        },
-      ],
-    });
+    writeYaml(
+      taxonomyPath,
+      taxonomyFixture({
+        id: "links",
+        name: "Docs links",
+        category_note: "Synthetic fixture for renderer links",
+        docs: links.map(([doc]) => doc),
+      }),
+    );
     const scores = {
       quality: { score: 0, label: "Experimental" },
       completeness: { score: 0, label: "Experimental" },
@@ -896,25 +885,14 @@ describe("maturity docs renderer CLI", () => {
         decision: record(79),
       },
     };
-    writeYaml(taxonomyPath, {
-      version: 1,
-      title: "Synthetic decision fixture",
-      levels: [experimentalLevel, { id: "stable", code: "M4", label: "Stable" }],
-      surfaces: [
-        {
-          ...fixtureSurface,
-          level_decision: record("stable"),
-          categories: [
-            {
-              id: "review",
-              name: "Review",
-              category_note: "Synthetic review",
-              features: [fixtureFeature],
-            },
-          ],
-        },
-      ],
-    });
+    writeYaml(
+      taxonomyPath,
+      taxonomyFixture(
+        { id: "review", name: "Review", category_note: "Synthetic review" },
+        { level_decision: record("stable") },
+        [experimentalLevel, { id: "stable", code: "M4", label: "Stable" }],
+      ),
+    );
     writeScores(
       scoresPath,
       bundle,
