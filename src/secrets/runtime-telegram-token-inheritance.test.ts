@@ -30,11 +30,28 @@ describe("secrets runtime snapshot telegram token inheritance", () => {
     ).rejects.toThrow('Environment variable "MISSING_ENABLED_TELEGRAM_TOKEN" is missing or empty.');
   });
 
-  it("treats top-level Telegram token as inactive when all enabled accounts override it", async () => {
+  it("resolves the implicit default's top-level token when named accounts override it", async () => {
+    const snapshot = await prepare(
+      {
+        botToken: envRef("TELEGRAM_BASE_TOKEN"),
+        accounts: { work: { enabled: true, botToken: envRef("TELEGRAM_WORK_TOKEN") } },
+      },
+      { TELEGRAM_BASE_TOKEN: "telegram-base-token", TELEGRAM_WORK_TOKEN: "telegram-work-token" },
+    );
+
+    expect(snapshot.config.channels?.telegram).toMatchObject({
+      botToken: "telegram-base-token",
+      accounts: { work: { botToken: "telegram-work-token" } },
+    });
+    expect(snapshot.warnings).toEqual([]);
+  });
+
+  it("treats top-level Telegram token as inactive when accounts.default overrides it", async () => {
     const snapshot = await prepare(
       {
         botToken: envRef("UNUSED_TELEGRAM_BASE_TOKEN"),
         accounts: {
+          default: { enabled: true, botToken: envRef("TELEGRAM_DEFAULT_TOKEN") },
           work: {
             enabled: true,
             botToken: envRef("TELEGRAM_WORK_TOKEN"),
@@ -42,7 +59,10 @@ describe("secrets runtime snapshot telegram token inheritance", () => {
           disabled: { enabled: false },
         },
       },
-      { TELEGRAM_WORK_TOKEN: "telegram-work-token" },
+      {
+        TELEGRAM_DEFAULT_TOKEN: "telegram-default-token",
+        TELEGRAM_WORK_TOKEN: "telegram-work-token",
+      },
     );
 
     expect(snapshot.config.channels?.telegram).toMatchObject({

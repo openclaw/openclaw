@@ -138,6 +138,61 @@ describe("secrets runtime snapshot channel inactive variants", () => {
     },
   );
 
+  it("resolves the implicit Mattermost default's botToken alongside named accounts", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          mattermost: {
+            baseUrl: "https://chat.example.invalid",
+            botToken: envRef("MATTERMOST_DEFAULT"),
+            accounts: { work: { botToken: "mm-work" } },
+          },
+        },
+      }),
+      env: { MATTERMOST_DEFAULT: "mm-default" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => loadAuthStoreWithProfiles({}),
+    });
+
+    expect(snapshot.config.channels?.mattermost?.botToken).toBe("mm-default");
+    expect(snapshot.warnings).toEqual([]);
+  });
+
+  it.each([
+    { name: "explicit default", baseUrl: "https://chat.example.invalid", accountId: "default" },
+    { name: "missing baseUrl", baseUrl: undefined, accountId: "work" },
+  ])(
+    "keeps an unused Mattermost root botToken inactive with $name",
+    async ({ baseUrl, accountId }) => {
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          channels: {
+            mattermost: {
+              baseUrl,
+              botToken: envRef("MISSING_MATTERMOST_DEFAULT"),
+              accounts: {
+                [accountId]: { botToken: "mm-work", baseUrl: "https://work.example.invalid" },
+              },
+            },
+          },
+        }),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => loadAuthStoreWithProfiles({}),
+      });
+
+      expect(snapshot.config.channels?.mattermost?.botToken).toEqual(
+        envRef("MISSING_MATTERMOST_DEFAULT"),
+      );
+      expect(snapshot.warnings).toContainEqual(
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "channels.mattermost.botToken",
+        }),
+      );
+    },
+  );
+
   it("treats IRC account nickserv password refs as inactive when nickserv is disabled", async () => {
     const password = envRef("MISSING_IRC_WORK_NICKSERV_PASSWORD");
     const snapshot = await prepare({

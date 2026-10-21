@@ -10,6 +10,10 @@ export const channelSecrets = createChannelSecretContract({
   channelKey: "telegram",
   account: ["botToken", "webhookSecret"],
   channel: ["botToken", "webhookSecret"],
+  hasImplicitDefaultAccount: ({ channel, context, defaults }) =>
+    hasConfiguredSecretInputValue(channel.botToken, defaults) ||
+    Boolean(normalizeOptionalString(channel.tokenFile)) ||
+    Boolean(normalizeOptionalString(context.env.TELEGRAM_BOT_TOKEN)),
   collect(params) {
     const { channel: telegram } = params;
     const baseTokenFile = normalizeOptionalString(telegram.tokenFile) ?? "";
