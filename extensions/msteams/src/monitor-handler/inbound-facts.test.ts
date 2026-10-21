@@ -57,20 +57,14 @@ describe("msteams inbound facts", () => {
 
   it("preserves raw Bot Framework IDs while normalizing routing facts", async () => {
     const entry = await prepare({
-      id: "message-1",
-      text: "hello",
-      from: { id: "user-1", aadObjectId: "aad-1", name: "Alice" },
-      recipient: { id: "bot-1", name: "Bot" },
       conversation: {
         id: "19:channel@thread.tacv2;messageid=thread-root",
         conversationType: "channel",
       },
       channelData: {
         team: { id: "team-1" },
-        channel: { id: "channel-1" },
         tenant: { id: "tenant-1" },
       },
-      serviceUrl: "https://smba.trafficmanager.net/amer/",
     });
 
     expect(assembleMSTeamsInboundFacts(entry)).toMatchObject({
