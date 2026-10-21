@@ -26,6 +26,14 @@ its temporary loopback address. Upstream, authentication-profile, and creation-t
 policy changes still invalidate thread reuse; live requests continue through the
 current owned proxy.
 
+Provider-review acknowledgments must continue the reviewed native thread. If
+changed tools or runtime configuration would require a replacement thread, or
+native resume fails, OpenClaw refuses the acknowledgment before creating or saving
+a replacement. Restore the original tools and runtime configuration and retry
+from the original conversation. The review remains pending until Codex accepts
+the continuation; acknowledgment does not bypass the review checks or repair a
+binding that was already replaced by an earlier failed attempt.
+
 ## Shared output projection
 
 Codex uses the shared native harness projection owners for bounded tool output,

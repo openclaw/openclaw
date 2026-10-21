@@ -138,6 +138,21 @@ afterEach(async () => {
 });
 
 describe("SidebarUpdateCard", () => {
+  it("reviews updates through the latest callback on the retained card", async () => {
+    const initial = vi.fn();
+    const current = vi.fn();
+    const card = await mount(stableUpdate, {
+      statusBanner: { tone: "warn", text: "Review available update" },
+      onReviewUpdate: initial,
+    });
+    const review = card.find<HTMLButtonElement>(".sidebar-update-card__review")!;
+    await card.update({ onReviewUpdate: current });
+    review.click();
+    expect(current).toHaveBeenCalledOnce();
+    expect(initial).not.toHaveBeenCalled();
+    expect(card.find(".sidebar-update-card__review")).toBe(review);
+  });
+
   it.each([
     ["native", false],
     ["native", true],

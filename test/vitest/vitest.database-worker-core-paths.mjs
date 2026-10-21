@@ -878,6 +878,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/plugins-update-command.authority.integration.test.ts",
   "src/cli/plugins-update-command.generation.integration.test.ts",
   "src/cli/plugins-update-command.migrations.integration.test.ts",
+  "src/cli/connect-cli.reconnect.test.ts",
   "src/cli/devices-cli.gateway.test.ts",
   "src/cli/update-cli/update-command-post-update.test.ts",
   "src/hooks/installs.test.ts",
