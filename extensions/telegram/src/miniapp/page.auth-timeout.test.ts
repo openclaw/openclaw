@@ -25,17 +25,17 @@ function preparePage(scriptNonce = "test-nonce") {
     configurable: true,
     value: { WebApp: { initData: "signed", ready } },
   });
-  function run(
+  const run = (
     fetch: unknown,
     timers: { setTimeout: unknown; clearTimeout: unknown } = { setTimeout, clearTimeout },
-  ) {
+  ) => {
     // oxlint-disable-next-line typescript/no-implied-eval -- Execute the generated bootstrap, not a reimplementation.
     new Function(
       "{ window, document, AbortController, setTimeout, clearTimeout, fetch, location }",
       bootstrap,
     )({ window, document, AbortController, ...timers, fetch, location });
     expect(ready).toHaveBeenCalledTimes(1);
-  }
+  };
   return { rendered, script, location, run };
 }
 

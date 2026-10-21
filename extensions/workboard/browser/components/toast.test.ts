@@ -25,7 +25,7 @@ function mountToasts(...sources: (() => Parameters<typeof WorkboardToast>[0])[])
 }
 
 function createFlushedSignal<T>(initial: T) {
-  const [read, write] = createSignal(initial);
+  const [read, write] = createSignal<T>(() => initial);
   const update = (value: T) => {
     write(() => value);
     flush();

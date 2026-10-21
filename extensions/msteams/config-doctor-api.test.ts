@@ -5,7 +5,7 @@ import { MSTeamsConfigSchema } from "./src/config-schema.js";
 import { msteamsDoctor } from "./src/doctor.js";
 import { resolveMSTeamsLegacyWebhook } from "./src/webhook-route.js";
 
-const diagnose = (msteams: MSTeamsConfig) =>
+const diagnose = (msteams: Pick<MSTeamsConfig, "enabled" | "webhook" | "legacyWebhook">) =>
   msteamsDoctor.runConfigSequence({ cfg: { channels: { msteams } }, env: {} });
 
 describe("Microsoft Teams Gateway webhook migration", () => {
