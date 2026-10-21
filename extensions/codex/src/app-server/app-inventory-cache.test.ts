@@ -1,4 +1,3 @@
-// Codex tests cover app inventory cache plugin behavior.
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -12,15 +11,30 @@ import type { CodexAppServerRequestParams, CodexAppServerRequestResult, v2 } fro
 type AppMetadata = CodexAppServerRequestResult<"app/read">["apps"][number];
 const CACHE_TTL_MS = 60 * 60 * 1_000;
 
+function inventory(
+  apps = [app("app-1")],
+  options?: Parameters<typeof codexAppInventoryResponse>[3],
+) {
+  const cache = new CodexAppInventoryCache();
+  const request = vi.fn(async (method, params) =>
+    codexAppInventoryResponse(method, apps, params, options),
+  );
+  const key = "runtime";
+  type Options = Omit<Parameters<typeof cache.refreshNow>[0], "key" | "request">;
+  return {
+    cache,
+    request,
+    refresh: (overrides: Options = {}) => cache.refreshNow({ key, request, ...overrides }),
+    read: (overrides: Options = {}) => cache.read({ key, request, ...overrides }),
+  };
+}
+
 describe("Codex app inventory cache", () => {
   it.each([false, true, undefined])(
     "preserves cold-cache refresh intent %s across independent thread keys",
     async (forceRefetch) => {
-      const cache = new CodexAppInventoryCache();
       const apps = [app("app-1")];
-      const request = vi.fn(async (method, params) =>
-        codexAppInventoryResponse(method, apps, params),
-      );
+      const { cache, request } = inventory(apps);
 
       for (const key of ["thread-a", "thread-b"]) {
         const snapshot = await cache.refreshNow({ key, request, forceRefetch });
@@ -34,7 +48,6 @@ describe("Codex app inventory cache", () => {
   );
 
   it("coalesces native metadata and installed runtime facts without fabricating app/list fields", async () => {
-    const cache = new CodexAppInventoryCache();
     const apps = [
       { ...app("app-1"), iconUrl: "https://example.com/app-icon.png" },
       { ...app("app-2"), name: "Canonical app name" },
@@ -43,9 +56,7 @@ describe("Codex app inventory cache", () => {
       { id: "app-1", runtimeName: null, enabled: true, callable: false },
       { id: "app-2", runtimeName: "runtime-name", enabled: false, callable: false },
     ];
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params, { installedApps }),
-    );
+    const { cache, request } = inventory(apps, { installedApps });
 
     const key = buildCodexAppInventoryCacheKey(
       { codexHome: "/codex", authProfileId: "work" },
@@ -57,8 +68,7 @@ describe("Codex app inventory cache", () => {
     expect(request).toHaveBeenCalledTimes(1);
 
     const snapshot = await cache.refreshNow({ key, request, nowMs: 0 });
-    expect(snapshot.apps).toEqual(apps);
-    expect(snapshot.installedApps).toEqual(installedApps);
+    expect([snapshot.apps, snapshot.installedApps]).toEqual([apps, installedApps]);
     expect(request).toHaveBeenNthCalledWith(1, "app/installed", { forceRefresh: true });
     expect(request).toHaveBeenNthCalledWith(2, "app/read", {
       appIds: ["app-1", "app-2"],
@@ -66,8 +76,7 @@ describe("Codex app inventory cache", () => {
     });
 
     const fresh = cache.read({ key, request, nowMs: 50 });
-    expect(fresh.state).toBe("fresh");
-    expect(fresh.snapshot?.apps).toEqual(apps);
+    expect([fresh.state, fresh.snapshot?.apps]).toEqual(["fresh", apps]);
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -164,28 +173,16 @@ describe("Codex app inventory cache", () => {
   });
 
   it("limits each metadata request to the app/read 100-app contract", async () => {
-    const cache = new CodexAppInventoryCache();
     const apps = Array.from({ length: 205 }, (_, index) => app(`app-${index}`));
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params),
-    );
-
-    const snapshot = await cache.refreshNow({ key: "runtime", request });
-
-    expect(snapshot.apps).toEqual(apps);
+    const { refresh, request } = inventory(apps);
+    expect((await refresh()).apps).toEqual(apps);
     expect(request).toHaveBeenCalledTimes(4);
-    expect(request).toHaveBeenNthCalledWith(2, "app/read", {
-      appIds: apps.slice(0, 100).map((entry) => entry.id),
-      includeTools: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "app/read", {
-      appIds: apps.slice(100, 200).map((entry) => entry.id),
-      includeTools: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(4, "app/read", {
-      appIds: apps.slice(200).map((entry) => entry.id),
-      includeTools: true,
-    });
+    for (const [index, start] of [0, 100, 200].entries()) {
+      expect(request).toHaveBeenNthCalledWith(index + 2, "app/read", {
+        appIds: apps.slice(start, start + 100).map((entry) => entry.id),
+        includeTools: true,
+      });
+    }
   });
 
   it("excludes installed apps whose metadata is missing", async () => {
@@ -209,48 +206,25 @@ describe("Codex app inventory cache", () => {
   });
 
   it("marks inventory stale when the expiry would exceed the Date range", async () => {
-    const cache = new CodexAppInventoryCache();
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, [app("app-overflow")], params),
-    );
-    const key = "runtime";
-    const snapshot = await cache.refreshNow({ key, request, nowMs: MAX_DATE_TIMESTAMP_MS });
+    const { refresh, read } = inventory([app("app-overflow")]);
+    const snapshot = await refresh({ nowMs: MAX_DATE_TIMESTAMP_MS });
 
     expect(snapshot.expiresAtMs).toBe(0);
-    const read = cache.read({
-      key,
-      request,
-      nowMs: Date.parse("2026-05-29T12:00:00.000Z"),
-    });
-    expect(read.state).toBe("stale");
-    expect(read.snapshot?.apps).toEqual([app("app-overflow")]);
+    const stale = read({ nowMs: Date.parse("2026-05-29T12:00:00.000Z") });
+    expect([stale.state, stale.snapshot?.apps]).toEqual(["stale", [app("app-overflow")]]);
   });
 
   it("preserves the last successful snapshot when a refresh fails", async () => {
-    const cache = new CodexAppInventoryCache();
-    const key = "runtime";
-    await cache.refreshNow({
-      key,
-      nowMs: 0,
-      request: async (method, params) => codexAppInventoryResponse(method, [app("app-1")], params),
-    });
+    const { refresh, read, request } = inventory();
+    await refresh({ nowMs: 0 });
+    request.mockRejectedValueOnce(new Error("app inventory failed"));
 
-    await expect(
-      cache.refreshNow({
-        key,
-        nowMs: CACHE_TTL_MS + 1,
-        request: async () => {
-          throw new Error("app inventory failed");
-        },
-      }),
-    ).rejects.toThrow("app inventory failed");
+    await expect(refresh({ nowMs: CACHE_TTL_MS + 1 })).rejects.toThrow("app inventory failed");
 
-    const read = cache.read({
-      key,
-      nowMs: CACHE_TTL_MS + 1,
-      request: async (method, params) => codexAppInventoryResponse(method, [app("app-2")], params),
-    });
-    expect(read.snapshot?.apps).toEqual([app("app-1")]);
+    request.mockImplementation(async (method, params) =>
+      codexAppInventoryResponse(method, [app("app-2")], params),
+    );
+    expect(read({ nowMs: CACHE_TTL_MS + 1 }).snapshot?.apps).toEqual([app("app-1")]);
   });
 
   it("fails closed when app metadata cannot be read", async () => {
@@ -292,56 +266,39 @@ describe("Codex app inventory cache", () => {
   });
 
   it("does not renew non-target row freshness during a targeted merge", async () => {
-    const cache = new CodexAppInventoryCache();
-    const key = "runtime";
-    const apps = [app("calendar-app"), app("drive-app")];
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params),
-    );
+    const { refresh, read } = inventory([app("calendar-app"), app("drive-app")]);
 
-    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: [] });
-    await cache.refreshNow({
-      key,
-      request,
+    await refresh({ nowMs: 0, targetAppIds: [] });
+    await refresh({
       nowMs: CACHE_TTL_MS - 100,
       forceRefetch: true,
       targetAppIds: ["calendar-app"],
     });
 
     // Freshness still belongs to the complete fetch, not the near-expiry merge.
-    const read = cache.read({ key, request, nowMs: CACHE_TTL_MS + 100, suppressRefresh: true });
-    expect(read.state).toBe("stale");
+    expect(read({ nowMs: CACHE_TTL_MS + 100, suppressRefresh: true }).state).toBe("stale");
   });
 
   it("replaces an expired union entry on the next single-target refresh", async () => {
-    const cache = new CodexAppInventoryCache();
-    const key = "runtime";
-    const apps = [app("calendar-app"), app("drive-app")];
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params),
-    );
+    const { refresh, read } = inventory([app("calendar-app"), app("drive-app")]);
 
-    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: ["calendar-app"] });
-    await cache.refreshNow({
-      key,
-      request,
+    await refresh({ nowMs: 0, targetAppIds: ["calendar-app"] });
+    await refresh({
       nowMs: 1,
       forceRefetch: true,
       targetAppIds: ["drive-app"],
     });
-    // Past TTL nothing is preserved; the single-target refresh replaces the
-    // union entry and freshness recovers without a complete fetch.
-    await cache.refreshNow({
-      key,
-      request,
+    await refresh({
       nowMs: CACHE_TTL_MS + 500,
       forceRefetch: true,
       targetAppIds: ["calendar-app"],
     });
-    const read = cache.read({ key, request, nowMs: CACHE_TTL_MS + 600, suppressRefresh: true });
-    expect(read.state).toBe("fresh");
-    expect(read.snapshot?.targetAppIds).toEqual(["calendar-app"]);
-    expect(read.snapshot?.apps).toEqual([app("calendar-app")]);
+    const fresh = read({ nowMs: CACHE_TTL_MS + 600, suppressRefresh: true });
+    expect([fresh.state, fresh.snapshot?.targetAppIds, fresh.snapshot?.apps]).toEqual([
+      "fresh",
+      ["calendar-app"],
+      [app("calendar-app")],
+    ]);
   });
 });
 

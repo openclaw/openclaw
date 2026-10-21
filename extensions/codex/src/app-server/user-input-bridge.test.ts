@@ -91,7 +91,9 @@ function setup(
   });
   const request = (id: string, input = requestParams()) =>
     bridge.handleRequest({ id, params: input });
-  return { params, gateway, onOrdinaryResponse, bridge, request };
+  const answerText = (text: string) =>
+    claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text });
+  return { params, gateway, onOrdinaryResponse, bridge, request, answerText };
 }
 
 function expectCancelled(gateway: ReturnType<typeof createGatewayStub>) {
@@ -162,7 +164,7 @@ describe("Codex app-server user input bridge", () => {
   });
 
   it("keeps secret questions on the warned text-only path", async () => {
-    const { params, gateway, onOrdinaryResponse, request } = setup();
+    const { params, gateway, onOrdinaryResponse, request, answerText } = setup();
     const response = request("input-secret", secretRequestParams());
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
 
@@ -170,15 +172,13 @@ describe("Codex app-server user input bridge", () => {
     expect(payload.text).toContain("This channel may show your reply");
     expect(payload.channelData).toBeUndefined();
     expect(gateway.calls).toHaveLength(0);
-    await expect(
-      claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text: "private" }),
-    ).resolves.toBe(true);
+    await expect(answerText("private")).resolves.toBe(true);
     await expect(response).resolves.toEqual({ answers: { token: { answers: ["private"] } } });
     expect(onOrdinaryResponse).not.toHaveBeenCalled();
   });
 
   it("requires isSecret to be an own input property", async () => {
-    const { params, gateway, request } = setup();
+    const { params, gateway, request, answerText } = setup();
     const question = Object.assign(Object.create({ isSecret: true }), {
       id: "token",
       header: "Token",
@@ -194,13 +194,13 @@ describe("Codex app-server user input bridge", () => {
     expect(vi.mocked(params.onBlockReply!).mock.calls[0]![0].text).not.toContain(
       "This channel may show your reply",
     );
-    await claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text: "public" });
+    await answerText("public");
     await expect(response).resolves.toEqual({ answers: { token: { answers: ["public"] } } });
   });
 
   it("queues a replacement secret request when an earlier prompt later fails", async () => {
     const firstDelivery = createDeferred<void>();
-    const { params, request } = setup({ gatewayCall: undefined });
+    const { params, request, answerText } = setup({ gatewayCall: undefined });
     params.onBlockReply = vi
       .fn()
       .mockReturnValueOnce(firstDelivery.promise)
@@ -220,12 +220,7 @@ describe("Codex app-server user input bridge", () => {
       ).toHaveLength(2),
     );
 
-    await expect(
-      claimPendingAgentQuestionAnswer({
-        sessionKey: params.sessionKey,
-        text: "replacement secret",
-      }),
-    ).resolves.toBe(true);
+    await expect(answerText("replacement secret")).resolves.toBe(true);
     await expect(replacement).resolves.toEqual({
       answers: { token: { answers: ["replacement secret"] } },
     });

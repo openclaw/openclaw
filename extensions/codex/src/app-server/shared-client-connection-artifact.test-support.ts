@@ -1,14 +1,11 @@
-import { once } from "node:events";
-import { promisify } from "node:util";
 import { expect, it } from "vitest";
-import { WebSocketServer } from "ws";
 import { verifyStartupArtifact } from "./attempt-runtime-artifact.js";
+import { createWebSocketPeer } from "./client-websocket.test-support.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { readCodexAppServerClientRuntimeArtifact } from "./runtime-artifact.js";
 import { createIsolatedCodexAppServerClient as createClient } from "./shared-client.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
-import { codexWebSocketDataToBuffer } from "./websocket-data.js";
 
 export function registerSharedClientConnectionArtifactTests(): void {
   it.each(["binding reuse", "identity change"] as const)(
@@ -64,7 +61,6 @@ async function withRemoteServer(
     changeHome: () => void;
   }) => Promise<void>,
 ): Promise<void> {
-  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   const clients: CodexAppServerClient[] = [];
   const requests: string[] = [];
   const result = {
@@ -73,35 +69,23 @@ async function withRemoteServer(
     platformFamily: "unix",
     platformOs: "linux",
   };
-  server.on("connection", (socket) => {
-    socket.binaryType = "nodebuffer";
-    socket.on("message", (data) => {
-      const request = JSON.parse(codexWebSocketDataToBuffer(data).toString()) as {
-        id?: number;
-        method: string;
-      };
-      if (request.id === undefined) {
-        return;
-      }
-      requests.push(request.method);
-      if (request.method === "initialize") {
-        socket.send(JSON.stringify({ id: request.id, result }));
-      }
-    });
+  const peer = await createWebSocketPeer((request, respond) => {
+    if (request.id === undefined) {
+      return;
+    }
+    requests.push(request.method);
+    if (request.method === "initialize") {
+      respond(result);
+    }
   });
   try {
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected remote Codex fixture port");
-    }
     await run({
       startOptions: {
         transport: "websocket",
         command: "codex",
         args: [],
         headers: {},
-        url: `ws://127.0.0.1:${address.port}`,
+        url: peer.url,
       },
       clients,
       requests,
@@ -111,6 +95,6 @@ async function withRemoteServer(
     });
   } finally {
     await Promise.all(clients.map((client) => client.closeAndWait()));
-    await promisify(server.close.bind(server))();
+    await peer.close();
   }
 }

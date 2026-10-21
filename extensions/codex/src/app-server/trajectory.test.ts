@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -14,7 +15,6 @@ import {
   createCodexTrajectoryRecorder,
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
-  type CodexTrajectoryRecorder,
 } from "./trajectory.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-trajectory-");
@@ -24,33 +24,23 @@ beforeEach(() => {
   tempDir = sessionDirs.make();
 });
 
-function expectTrajectoryRecorder(
-  recorder: ReturnType<typeof createCodexTrajectoryRecorder>,
-): CodexTrajectoryRecorder {
-  if (recorder === null) {
-    throw new Error("Expected Codex trajectory recorder");
-  }
-  return recorder;
-}
-
 function tool(name: string, description: string): CodexDynamicToolFunctionSpec {
   return { type: "function", name, description, inputSchema: { type: "object" } };
 }
 
 async function createHostRecorder(sessionTarget: Awaited<ReturnType<typeof createSessionTarget>>) {
-  const recorder = await createTrajectoryRuntimeRecorderForTest({
-    ...sessionTarget,
-    sessionTarget,
-    runId: "run-1",
-    provider: "openai",
-    modelId: "gpt-5.4",
-    modelApi: "responses",
-    workspaceDir: tempDir,
-  });
-  if (!recorder) {
-    throw new Error("Expected host trajectory recorder");
-  }
-  return recorder;
+  return expectDefined(
+    await createTrajectoryRuntimeRecorderForTest({
+      ...sessionTarget,
+      sessionTarget,
+      runId: "run-1",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "responses",
+      workspaceDir: tempDir,
+    }),
+    "host trajectory recorder",
+  );
 }
 
 async function createSessionTarget() {
@@ -73,8 +63,9 @@ describe("Codex trajectory recorder", () => {
     // Regression: the host stopped emitting legacy `sqlite:` session-file
     // markers, so any marker re-derivation here drops every Codex capture.
     const target = await createSessionTarget();
-    const trajectoryRecorder = expectTrajectoryRecorder(
+    const trajectoryRecorder = expectDefined(
       createCodexTrajectoryRecorder(await createHostRecorder(target)),
+      "Codex trajectory recorder",
     );
     trajectoryRecorder.recordEvent("session.started");
     await trajectoryRecorder.flush();
@@ -97,11 +88,12 @@ describe("Codex trajectory recorder", () => {
       },
     ];
     const events: Array<{ type: string; data?: Record<string, unknown> }> = [];
-    const recorder = expectTrajectoryRecorder(
+    const recorder = expectDefined(
       createCodexTrajectoryRecorder({
         recordEvent: (type, data) => events.push({ type, data }),
         flush: async () => undefined,
       }),
+      "Codex trajectory recorder",
     );
 
     recordCodexTrajectoryContext(recorder, { attempt: {} as never, tools });
@@ -142,8 +134,9 @@ describe("Codex trajectory recorder", () => {
       attempt: { ...attempt, trajectoryRecorder: hostRecorder } as never,
       pluginId: "codex",
     });
-    const trajectoryRecorder = expectTrajectoryRecorder(
+    const trajectoryRecorder = expectDefined(
       createCodexTrajectoryRecorder(host.capabilities.trajectory),
+      "Codex trajectory recorder",
     );
     // Twelve entries fit the old plugin cap but exceed the host's unshrunk event cap.
     const messagesSnapshot = () =>

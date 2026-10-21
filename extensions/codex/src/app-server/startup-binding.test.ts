@@ -15,7 +15,12 @@ function byteLimitConfig(
   return { agents: { defaults: { compaction: { maxActiveTranscriptBytes } } } };
 }
 
-function tokenRecord(totalTokens?: number, modelContextWindow?: number, cumulativeTokens?: number) {
+function tokenRecord(
+  totalTokens?: number,
+  modelContextWindow?: number,
+  cumulativeTokens?: number,
+  text?: string,
+) {
   return JSON.stringify({
     payload: {
       type: "token_count",
@@ -26,6 +31,7 @@ function tokenRecord(totalTokens?: number, modelContextWindow?: number, cumulati
           : { total_token_usage: { total_tokens: cumulativeTokens } }),
         model_context_window: modelContextWindow,
       },
+      ...(text === undefined ? {} : { text }),
     },
   });
 }
@@ -63,6 +69,11 @@ describe("Codex app-server startup binding", () => {
 
   async function rotateBinding(overrides: Parameters<typeof resolveBinding>[0] = {}) {
     return (await resolveBinding(overrides)).binding;
+  }
+
+  async function expectRotated(overrides: Parameters<typeof resolveBinding>[0] = {}) {
+    expect(await rotateBinding(overrides)).toBeUndefined();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   }
 
   afterEach(async () => {
@@ -117,10 +128,7 @@ describe("Codex app-server startup binding", () => {
       await writeRollout(tokenRecord(120_000, 128_000) + "\n");
       const operation = rotateBinding({
         binding: before,
-        config:
-          pressure === "bytes"
-            ? { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "1b" } } } }
-            : undefined,
+        config: pressure === "bytes" ? byteLimitConfig("1b") : undefined,
         expectedSessionRuntimeOwnership:
           authority === "expected" ? { model: "native", auth: "host" } : undefined,
         ...(authority === "revoked"
@@ -157,13 +165,7 @@ describe("Codex app-server startup binding", () => {
 
     const binding = await rotateBinding({
       projectedTurnTokens: 999_999,
-      config: {
-        agents: {
-          defaults: {
-            compaction: { maxActiveTranscriptBytes: "1b" },
-          },
-        },
-      } as never,
+      config: byteLimitConfig("1b"),
     });
 
     expect(binding).toMatchObject({
@@ -177,55 +179,32 @@ describe("Codex app-server startup binding", () => {
     });
   });
 
-  it("reads the latest native token snapshot from one bounded rollout tail", async () => {
-    await writeRollout([
-      JSON.stringify({ payload: { type: "agent_message", text: "x".repeat(200_000) } }),
-      tokenRecord(120_000, 128_000),
-      "",
-    ]);
-    await writeExistingBinding({ rolloutPath });
-    const openFile = fs.open.bind(fs);
-    const countFileReads: Array<() => number> = [];
-    vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-      const handle = await openFile(file, flags, mode);
-      const read = vi.spyOn(handle, "read");
-      countFileReads.push(() => read.mock.calls.length);
-      return handle;
-    });
-
-    const binding = await rotateBinding();
-
-    expect(binding).toBeUndefined();
-    expect(countFileReads.map((count) => count())).toEqual([1]);
-  });
-
-  it("keeps rollouts above the safe root default on the bounded direct path", async () => {
-    const tokenSnapshot = Buffer.from(`\n${tokenRecord(120_000, 128_000)}\n`);
-    const oversizedOffset = 16 * 1024 * 1024 + 1;
-    const rolloutHandle = await fs.open(rolloutPath, "w");
-    try {
-      await rolloutHandle.truncate(oversizedOffset);
-      await rolloutHandle.write(tokenSnapshot, 0, tokenSnapshot.byteLength, oversizedOffset);
-    } finally {
-      await rolloutHandle.close();
-    }
-    await writeExistingBinding({ rolloutPath });
-    const readDirectories = vi.spyOn(fs, "readdir");
-    const openFile = fs.open.bind(fs);
-    const countFileReads: Array<() => number> = [];
-    vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-      const handle = await openFile(file, flags, mode);
-      const read = vi.spyOn(handle, "read");
-      countFileReads.push(() => read.mock.calls.length);
-      return handle;
-    });
-
-    const binding = await rotateBinding();
-
-    expect(binding).toBeUndefined();
-    expect(readDirectories).not.toHaveBeenCalled();
-    expect(countFileReads.map((count) => count())).toEqual([1]);
-  });
+  it.each([200_000, 16 * 1024 * 1024 + 1])(
+    "reads a %i-byte rollout from one bounded direct tail",
+    async (offset) => {
+      const snapshot = Buffer.from(`\n${tokenRecord(120_000, 128_000)}\n`);
+      const handle = await fs.open(rolloutPath, "w");
+      try {
+        await handle.truncate(offset);
+        await handle.write(snapshot, 0, snapshot.byteLength, offset);
+      } finally {
+        await handle.close();
+      }
+      await writeExistingBinding({ rolloutPath });
+      const readDirectories = vi.spyOn(fs, "readdir");
+      const openFile = fs.open.bind(fs);
+      const reads: Array<() => number> = [];
+      vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+        const opened = await openFile(file, flags, mode);
+        const read = vi.spyOn(opened, "read");
+        reads.push(() => read.mock.calls.length);
+        return opened;
+      });
+      await expectRotated();
+      expect(readDirectories).not.toHaveBeenCalled();
+      expect(reads.map((count) => count())).toEqual([1]);
+    },
+  );
 
   it("scans a large trailing transcript record without repeatedly copying it", async () => {
     await writeRollout([
@@ -281,22 +260,11 @@ describe("Codex app-server startup binding", () => {
     { boundary: 0, eol: "\n", suffix: "" },
     { boundary: 65_535, eol: "\r\n", suffix: "\r\n" },
   ])("reads older windows across byte $boundary", async ({ boundary, eol, suffix }) => {
-    const paddedTokenRecord = (totalTokens: number, modelContextWindow?: number, text?: string) =>
-      JSON.stringify({
-        payload: {
-          type: "token_count",
-          info: {
-            last_token_usage: { total_tokens: totalTokens },
-            model_context_window: modelContextWindow,
-          },
-          text,
-        },
-      });
-    const latest = paddedTokenRecord(120_000, undefined, "🦞€".repeat(12_000));
+    const latest = tokenRecord(120_000, undefined, undefined, "🦞€".repeat(12_000));
     const afterBoundary = `{malformed${eol}${latest}${suffix}`;
     const padding =
       (2 * 65_536 - boundary - 1 - (Buffer.byteLength(afterBoundary) % 65_536)) % 65_536;
-    const older = paddedTokenRecord(1_000, 128_000);
+    const older = tokenRecord(1_000, 128_000);
     const contents = Buffer.from(older + eol + "x".repeat(padding) + afterBoundary);
     const newlineOffset = Buffer.byteLength(older) + eol.length - 1;
     expect((newlineOffset - (contents.length % 65_536) + 65_536) % 65_536).toBe(boundary);
@@ -350,13 +318,8 @@ describe("Codex app-server startup binding", () => {
     await writeExistingBinding({ rolloutPath });
     const readDirectories = vi.spyOn(fs, "readdir");
 
-    const binding = await rotateBinding({
-      config: byteLimitConfig("1k"),
-    });
-
-    expect(binding).toBeUndefined();
+    await expectRotated({ config: byteLimitConfig("1k") });
     expect(readDirectories).not.toHaveBeenCalled();
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
   it.each(["outside file", "file symlink", "parent symlink"] as const)(
@@ -394,42 +357,19 @@ describe("Codex app-server startup binding", () => {
     await fs.mkdir(rolloutDir, { recursive: true });
     await fs.writeFile(path.join(rolloutDir, "rollout-thread-existing.jsonl"), "x".repeat(2_000));
 
-    const binding = await rotateBinding({
-      codexHome,
-      config: byteLimitConfig(1_000),
-    });
-
-    expect(binding).toBeUndefined();
-    const savedBinding = await readCodexAppServerBinding(sessionFile);
-    expect(savedBinding).toBeUndefined();
+    await expectRotated({ codexHome, config: byteLimitConfig(1_000) });
   });
 
   it("clears native rollouts at Codex's reported model context window", async () => {
     await writeExistingBinding({ dynamicToolsFingerprint: "[]" });
-    const rolloutFile = path.join(rolloutDir, "rollout-thread-existing.jsonl");
-    await fs.writeFile(
-      rolloutFile,
-      [tokenRecord(128_000), tokenRecord(undefined, 128_000)].join("\n") + "\n",
-    );
-    const binding = await rotateBinding({
-      config: byteLimitConfig("1mb"),
-    });
-
-    expect(binding).toBeUndefined();
-    const savedBinding = await readCodexAppServerBinding(sessionFile);
-    expect(savedBinding).toBeUndefined();
+    await writeRollout([tokenRecord(128_000), tokenRecord(undefined, 128_000), ""]);
+    await expectRotated({ config: byteLimitConfig("1mb") });
   });
 
   it("includes projected turn tokens in the native rollout pressure check", async () => {
     await writeExistingBinding({ dynamicToolsFingerprint: "[]" });
     await writeRollout(`${tokenRecord(220_000, 258_400)}\n`);
 
-    const binding = await rotateBinding({
-      projectedTurnTokens: 30_000,
-    });
-
-    expect(binding).toBeUndefined();
-    const savedBinding = await readCodexAppServerBinding(sessionFile);
-    expect(savedBinding).toBeUndefined();
+    await expectRotated({ projectedTurnTokens: 30_000 });
   });
 });

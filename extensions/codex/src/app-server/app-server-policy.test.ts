@@ -260,31 +260,26 @@ describe("Codex app-server policy", () => {
     expect(reviewerForStart({ env: { OPENAI_BASE_URL: "http://localhost:8080/v1" } })).toBe("user");
   });
 
-  it.each([["-pwork"]])(
-    "checks the selected native profile before trusting model-backed review: %j",
-    async (...profileArgs) => {
-      await withTempDir("openclaw-codex-review-profile-", async (codexHome) => {
-        await fs.writeFile(
-          path.join(codexHome, "work.config.toml"),
-          'openai_base_url = "http://localhost:8080/v1"\n',
-        );
-        expect(
-          reviewerForStart({
-            homeScope: "user",
-            args: [...profileArgs, "app-server"],
-            env: { CODEX_HOME: codexHome },
-          }),
-        ).toBe("user");
-      });
-    },
-  );
+  it("checks the selected native profile before trusting model-backed review", async () => {
+    await withTempDir("openclaw-codex-review-profile-", async (codexHome) => {
+      await fs.writeFile(
+        path.join(codexHome, "work.config.toml"),
+        'openai_base_url = "http://localhost:8080/v1"\n',
+      );
+      expect(
+        reviewerForStart({
+          homeScope: "user",
+          args: ["-pwork", "app-server"],
+          env: { CODEX_HOME: codexHome },
+        }),
+      ).toBe("user");
+    });
+  });
 
-  it.each(["model_providers.openai.base_url=https://api.openai.com/v1"])(
-    "keeps automatic review for native CLI string override: %s",
-    (override) => {
-      expect(reviewerForStart({ args: ["app-server", "-c", override] })).toBe("auto_review");
-    },
-  );
+  it("keeps automatic review for a trusted native CLI endpoint", () => {
+    const args = ["app-server", "-c", "model_providers.openai.base_url=https://api.openai.com/v1"];
+    expect(reviewerForStart({ args })).toBe("auto_review");
+  });
 
   it.each([
     ["-c", "\u0085openai_base_url=http://localhost:8080/v1"],
