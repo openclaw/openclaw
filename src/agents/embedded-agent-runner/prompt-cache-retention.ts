@@ -18,6 +18,10 @@ export function resolveExplicitCachedContent(extraParams: Record<string, unknown
   return raw?.trim() || undefined;
 }
 
+export function parsePromptCacheTtl(value: unknown): "30m" | "12h" | undefined {
+  return value === "30m" || value === "12h" ? value : undefined;
+}
+
 export function parseCacheRetention(value: unknown): CacheRetention | undefined {
   return value === "none" || value === "short" || value === "long" ? value : undefined;
 }

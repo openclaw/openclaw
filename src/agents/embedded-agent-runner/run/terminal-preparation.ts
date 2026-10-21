@@ -143,6 +143,8 @@ export function prepareEmbeddedRunTerminal(input: {
       ? (input.outerContextTokenMeta.contextTokensSource ?? "resolved")
       : "resolved";
   const agentMeta: EmbeddedAgentMeta = {
+    requestedCompaction: attempt.requestedCompaction,
+    cacheExpiry: attempt.cacheExpiry,
     sessionId: input.sessionIdUsed,
     sessionFile: input.sessionFileUsed,
     provider: reportedModelRef.provider,

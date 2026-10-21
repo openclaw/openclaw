@@ -356,6 +356,16 @@ export async function completeReplyAgentRun(input: {
       startedAt: replyOperation.startedAtMs,
       agentHarnessId: meta.agentMeta.agentHarnessId,
       compactionRequestBudget: context.execution.compactionRequestBudget,
+      requestedCompaction: meta.agentMeta.requestedCompaction,
+      cacheExpiry: meta.agentMeta.cacheExpiry,
+      expectedCompactionCount: activeSessionEntry.compactionCount,
+      expectedSelection: {
+        model: activeSessionEntry.model,
+        modelProvider: activeSessionEntry.modelProvider,
+        modelOverride: activeSessionEntry.modelOverride,
+        providerOverride: activeSessionEntry.providerOverride,
+        authProfileOverride: activeSessionEntry.authProfileOverride,
+      },
     },
     replyOperation.ownerSettlement.then(
       () => replyOperation.result?.kind === "completed" && !replyOperation.abortSignal.aborted,

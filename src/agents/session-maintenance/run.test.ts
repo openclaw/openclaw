@@ -1,6 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { buildEmbeddedRunExecutionParams } from "../../auto-reply/reply/agent-runner-utils.js";
 import { createTestFollowupRun } from "../../auto-reply/reply/agent-runner.test-fixtures.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
@@ -11,13 +15,20 @@ import { withSessionTurn } from "../../sessions/session-controller.admission.js"
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import { sessionControllers } from "../../sessions/session-controller.state.js";
-import { waitForSessionMaintenance } from "./coordinator.js";
-import { createSessionMaintenanceFollowup, scheduleSessionMaintenance } from "./run.js";
+import { beginForegroundSessionMaintenance, waitForSessionMaintenance } from "./coordinator.js";
+import {
+  createSessionMaintenanceFollowup,
+  scheduleSessionMaintenance,
+  type SessionMaintenanceRequest,
+} from "./run.js";
 
 const maintenanceRuntime = vi.hoisted(() => ({
   entry: undefined as SessionEntry | undefined,
   flushOperations: [] as Array<{ operation: ReplyOperation | undefined; current: boolean }>,
   compactions: 0,
+  forcedFlushes: 0,
+  advanceClockDuringFlush: false,
+  requestedCompactions: [] as Array<{ focus?: string }>,
 }));
 
 vi.mock("../../utils/provider-utils.js", () => ({
@@ -44,7 +55,16 @@ vi.mock("../command/runtime-loaders.js", async (importOriginal) => ({
     },
   }),
   loadAgentRunnerMemoryRuntime: async () => ({
-    runMemoryFlushIfNeeded: async (params: { replyOperation?: ReplyOperation }) => {
+    runMemoryFlushIfNeeded: async (params: {
+      replyOperation?: ReplyOperation;
+      force?: boolean;
+    }) => {
+      if (params.force) {
+        maintenanceRuntime.forcedFlushes += 1;
+        if (maintenanceRuntime.advanceClockDuringFlush) {
+          vi.setSystemTime(Date.now() + 310_000);
+        }
+      }
       maintenanceRuntime.flushOperations.push({
         operation: params.replyOperation,
         current: params.replyOperation
@@ -53,8 +73,11 @@ vi.mock("../command/runtime-loaders.js", async (importOriginal) => ({
       });
       return {};
     },
-    runSessionCompactionIfNeeded: async () => {
+    runSessionCompactionIfNeeded: async (params: { requestedCompaction?: { focus?: string } }) => {
       maintenanceRuntime.compactions += 1;
+      if (params.requestedCompaction) {
+        maintenanceRuntime.requestedCompactions.push(params.requestedCompaction);
+      }
     },
   }),
 }));
@@ -63,8 +86,164 @@ afterEach(() => {
   maintenanceRuntime.entry = undefined;
   maintenanceRuntime.flushOperations = [];
   maintenanceRuntime.compactions = 0;
+  maintenanceRuntime.forcedFlushes = 0;
+  maintenanceRuntime.advanceClockDuringFlush = false;
+  maintenanceRuntime.requestedCompactions = [];
   sessionControllers.clear();
   resetPluginRuntimeStateForTest();
+  clearRuntimeConfigSnapshot();
+  vi.useRealTimers();
+});
+
+it.each([
+  "expiry",
+  "expiry-30m",
+  "expiry-12h",
+  "heuristic",
+  "activity-reset",
+  "window-elapsed-during-flush",
+  "expired-before-admission",
+  "self-request",
+  "short-window",
+  "shorter-window",
+  "cache-disabled",
+  "cache-default",
+  "foreground",
+  "model-change",
+  "account-change",
+  "config-change",
+  "compacted",
+  "failed-delivery",
+  "disabled",
+] as const)("serves optional compaction safely for %s", async (mode) => {
+  vi.useFakeTimers();
+  const halfHour = mode === "expiry-30m" || mode === "heuristic" || mode === "activity-reset";
+  const expectExpiry =
+    halfHour ||
+    mode === "expiry-12h" ||
+    mode === "expiry" ||
+    mode === "window-elapsed-during-flush";
+  requireActivePluginRegistry();
+  const sessionKey = "agent:main:idle-compaction";
+  const entry: SessionEntry = {
+    sessionId: "idle-compaction",
+    updatedAt: Date.now(),
+    model: "fixture",
+    compactionCount: 0,
+  };
+  maintenanceRuntime.entry = entry;
+  const cfg = {
+    agents: {
+      defaults: {
+        compaction: {
+          enabled: mode !== "disabled",
+          // This case crosses the five-minute cache lead, not its configured work deadline.
+          timeoutSeconds: mode === "window-elapsed-during-flush" ? 360 : undefined,
+          cacheExpiry: {
+            enabled: mode === "cache-default" ? undefined : mode !== "cache-disabled",
+          },
+        },
+      },
+    },
+  };
+  const followupRun = createTestFollowupRun({
+    sessionKey,
+    sessionId: entry.sessionId,
+    // Cross the five-minute lead while keeping the admitted checkpoint within its own budget.
+    timeoutMs: 360_000,
+    config: cfg,
+  });
+  setRuntimeConfigSnapshot(cfg);
+  const request: SessionMaintenanceRequest = {
+    prepared: {
+      cfg,
+      sessionKey,
+      storePath: "/synthetic/idle-compaction/sessions.json",
+      timeoutMs: 360_000,
+    },
+    followupRun,
+    sessionId: entry.sessionId,
+    lifecycleRevision: entry.lifecycleRevision,
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    startedAt: Date.now(),
+    expectedCompactionCount: 0,
+    expectedSelection: { model: "fixture" },
+    cacheExpiry: {
+      observedAt: Date.now(),
+      windowMs:
+        mode === "shorter-window"
+          ? 60_000
+          : mode === "short-window" || mode === "self-request"
+            ? 300_000
+            : mode === "expiry-12h"
+              ? 43_200_000
+              : halfHour
+                ? 1_800_000
+                : 3_600_000,
+      basis:
+        mode === "heuristic" || mode === "activity-reset"
+          ? "codex-idle-heuristic"
+          : mode === "expiry-30m" || mode === "expiry-12h"
+            ? "openai-minimum"
+            : "anthropic-ttl",
+    },
+    requestedCompaction: mode === "self-request" ? { focus: "Keep pending work" } : undefined,
+  };
+  scheduleSessionMaintenance(request, Promise.resolve(mode !== "failed-delivery"));
+  await waitForSessionMaintenance(sessionKey);
+  expect(maintenanceRuntime.compactions).toBe(
+    mode === "disabled" || mode === "failed-delivery" ? 0 : 1,
+  );
+  if (mode === "activity-reset") {
+    const release = await beginForegroundSessionMaintenance(sessionKey);
+    await vi.advanceTimersByTimeAsync(1_800_000);
+    expect(maintenanceRuntime.forcedFlushes).toBe(0);
+    release();
+    scheduleSessionMaintenance(
+      {
+        ...request,
+        startedAt: Date.now(),
+        cacheExpiry: { observedAt: Date.now(), windowMs: 1_800_000, basis: "codex-idle-heuristic" },
+      },
+      Promise.resolve(true),
+    );
+    await waitForSessionMaintenance(sessionKey);
+  }
+  if (mode === "foreground") {
+    (await beginForegroundSessionMaintenance(sessionKey))();
+  }
+  if (mode === "model-change") {
+    entry.model = "different-model";
+  }
+  if (mode === "account-change") {
+    entry.authProfileOverride = "different-account";
+  }
+  if (mode === "config-change") {
+    setRuntimeConfigSnapshot({ agents: { defaults: { compaction: { enabled: false } } } });
+  }
+  if (mode === "compacted") {
+    entry.compactionCount = 1;
+  }
+  maintenanceRuntime.advanceClockDuringFlush = mode === "window-elapsed-during-flush";
+  if (mode === "expired-before-admission") {
+    vi.setSystemTime(Date.now() + 3_600_000);
+  }
+  const delay = mode === "expiry-12h" ? 42_900_000 : halfHour ? 1_500_000 : 3_300_000;
+  await vi.advanceTimersByTimeAsync(delay - 1);
+  await waitForSessionMaintenance(sessionKey);
+  expect(maintenanceRuntime.requestedCompactions).toEqual(
+    mode === "self-request" ? [{ focus: "Keep pending work" }] : [],
+  );
+  expect(maintenanceRuntime.forcedFlushes).toBe(mode === "self-request" ? 1 : 0);
+  await vi.advanceTimersByTimeAsync(1);
+  await waitForSessionMaintenance(sessionKey);
+  expect(maintenanceRuntime.requestedCompactions).toEqual(
+    expectExpiry ? [{}] : mode === "self-request" ? [{ focus: "Keep pending work" }] : [],
+  );
+  expect(maintenanceRuntime.forcedFlushes).toBe(expectExpiry || mode === "self-request" ? 1 : 0);
+  const count = maintenanceRuntime.compactions;
+  await vi.advanceTimersByTimeAsync(3_600_000);
+  expect(maintenanceRuntime.compactions).toBe(count);
 });
 
 it("preserves prepared model facts and restrictive policy without foreground authority", async () => {

@@ -51,6 +51,7 @@ import type { SettingsManager } from "../sessions/index.js";
 import { log } from "./logger.js";
 import {
   parseCacheRetention,
+  parsePromptCacheTtl,
   resolveCacheRetention,
   resolveExplicitCachedContent,
 } from "./prompt-cache-retention.js";
@@ -294,8 +295,9 @@ function createStreamFnWithExtraParams(
   }
 
   const streamParams: CacheRetentionStreamOptions = {};
-  if (extraParams.promptCacheTtl === "30m" || extraParams.promptCacheTtl === "12h") {
-    streamParams.promptCacheTtl = extraParams.promptCacheTtl;
+  const configuredPromptCacheTtl = parsePromptCacheTtl(extraParams.promptCacheTtl);
+  if (configuredPromptCacheTtl) {
+    streamParams.promptCacheTtl = configuredPromptCacheTtl;
   } else if (extraParams.promptCacheTtl !== undefined) {
     log.warn('ignoring invalid promptCacheTtl param; expected "30m" or "12h"');
   }

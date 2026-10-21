@@ -142,6 +142,10 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Compaction behavior for when context nears token limits, including strategy and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
   "agents.defaults.compaction.enabled":
     "Enable embedded proactive auto-compaction (default: true). Set false to stop threshold-driven embedded compaction while preserving OpenClaw overflow recovery, preflight compaction, and manual /compact.",
+  "agents.defaults.compaction.cacheExpiry":
+    "Optional one-shot idle compaction with a five-minute lead on eligible windows longer than five minutes. Uses qualified provider lifetimes or an explicitly assumed 30-minute ChatGPT idle window in the built-in OpenClaw runtime. Requires positive cache usage; no cache-hit guarantee.",
+  "agents.defaults.compaction.cacheExpiry.enabled":
+    "Enable idle cache-expiry compaction (default: false): 30-minute windows schedule at 25 minutes; one-hour windows at 55 minutes. ChatGPT/Codex OAuth through OpenClaw uses a labeled 25-minute idle heuristic, not a verified TTL. Native/CLI runtimes and unknown routes are skipped. New foreground input cancels pending work. Also respects compaction.enabled:false.",
   "agents.defaults.compaction.mode":
     'Compaction strategy mode: "safeguard" (the effective default when unset) applies guardrails to preserve recent context, while "default" uses baseline summarization without them. Set "default" only if safeguard summarization causes problems for your provider.',
   "agents.defaults.compaction.provider":

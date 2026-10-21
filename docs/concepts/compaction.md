@@ -130,6 +130,91 @@ Before compacting, OpenClaw automatically reminds the agent to save important no
   </Accordion>
 </AccordionGroup>
 
+## Model-requested compaction
+
+The optional `session-compaction` plugin supplies `session_compact`. The model can
+request compaction at natural turning points, after substantial steps, or when
+changing direction—not only when context is full. Its optional `focus` names
+what the continuation should retain. Enable the plugin and allow its tool:
+
+```json5
+{
+  plugins: { entries: { "session-compaction": { enabled: true } } },
+  tools: { alsoAllow: ["session_compact"] },
+}
+```
+
+A tool result confirms the **request**, not completed compaction. At the next
+fully settled tool-batch/model-request boundary, the host releases the attempt,
+compacts under the existing run/controller owner, and continues from the accepted
+transcript. The next step sees the summary without waiting for a final reply.
+Completed tools are not replayed, and the pending user request and focus are
+preserved by the existing compaction path. Requests coalesce across retries in
+one turn, so a continuation cannot create a compaction loop.
+
+Pending tools, parked Code Mode work and approvals do not authorize a rewrite. If
+no safe mid-turn boundary occurs, the request can fall back to existing optional
+maintenance after successful reply settlement. That fallback and idle compaction
+retain memory checkpointing; mid-turn compaction uses the existing recovery path
+and memory hooks without starting a recursive memory-flush agent turn. Durable
+memory is not erased. A failed voluntary compaction keeps the original history
+and resumes recorded work once. Cancellation still stops the run. The tool does
+not end the turn or start another agent.
+
+The capability is absent from native/CLI runtimes, one-shot local commands,
+heartbeat and memory-flush turns, and context engines that own compaction.
+`compaction.enabled: false` disables it without changing operator `/compact`.
+
+## Before cache expiry
+
+Set `agents.defaults.compaction.cacheExpiry.enabled: true` to allow one idle
+compaction near the end of a qualified provider-cache window. It is disabled by
+default and also respects `compaction.enabled: false`. This is not a keep-warm
+heartbeat: maintenance never rearms itself, and a restart discards pending timers.
+A later successful foreground turn can arm a new timer.
+
+Five-minute or shorter cache windows are always excluded, even when this option
+is enabled. This exclusion does not disable prompt caching, normal context-pressure
+compaction, manual `/compact`, or model-requested compaction.
+
+The timer requires positive cache-read or cache-write usage from the actual
+request, its start time, and a supported model, endpoint, and authentication mode.
+Provider-backed estimates count generation time toward the window. Every eligible
+window uses a five-minute lead: a 30-minute window schedules at 25 minutes and
+a one-hour window at 55 minutes; an effective 12-hour Responses window schedules
+at 11 hours 55 minutes. Already expired observations are skipped, and
+maintenance yields to foreground work. A changed
+session, model selection, credentials, configuration, or an intervening compaction
+invalidates pending work. Once started, maintenance uses the bounded compaction
+timeout rather than discarding a paid summary when the estimated cache window passes.
+
+Currently qualified routes are direct Anthropic API-key requests with an effective
+one-hour marker TTL and direct OpenAI API-key requests on GPT-5.6 and newer (the
+documented 30-minute minimum, or 12 hours when the Responses request policy accepts
+`promptCacheTtl: "12h"`). The timer uses the same lifetime selection and compatibility
+policy as the request builder; Completions and OAuth do not inherit Responses-only
+TTLs. An Anthropic `long` preference that the transport
+downgrades to a five-minute marker does not qualify. These are scheduling estimates,
+not exact expiry promises.
+
+For ChatGPT/Codex OAuth through the **built-in OpenClaw runtime**, the same opt-in
+also permits a deliberately assumed 30-minute idle window: one attempt after
+25 minutes without another foreground turn. The estimate is labeled
+`codex-idle-heuristic`, not a documented Codex TTL. It requires positive cache
+usage on the canonical `openai` provider and official ChatGPT Responses backend;
+provider aliases, custom backends, and unknown routes do not inherit it. The idle
+clock begins when the completed model activity is observed, not at request start.
+
+This does **not** enable timers for native Codex app-server or generic CLI runtimes.
+Their compaction remains runtime-owned. In particular, the native standalone
+compact operation cannot carry the admitted turn generation required by ChatGPT
+subscription sharing, so this timer does not bypass that restriction or silently
+switch runtimes. See [provider cache contracts](/reference/prompt-caching#pre-expiry-compaction).
+
+Compaction still costs inference and can lose detail. It may use a different
+prompt or summarization model, so a timer does **not** guarantee cache hits or
+cost savings. A failed memory checkpoint attempt cancels that optional compaction.
+
 ## Manual compaction
 
 Type `/compact` in a chat to force compaction when its runtime supports manual

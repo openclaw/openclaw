@@ -216,7 +216,10 @@ function readSettledToolCalls(
 
 /** Proves settlement and intentional termination for the exact current-turn tool-call batch. */
 export function resolveSettledToolBatchEvidence(
-  attempt: IncompleteTurnAttempt,
+  attempt: Pick<
+    IncompleteTurnAttempt,
+    "messagesSnapshot" | "currentAttemptAssistant" | "itemLifecycle" | "toolMetas" | "lastToolError"
+  >,
   // Set only when the attempt stopped before its next model call: a user message after
   // the current attempt's batch was steered into this run and does not start a new turn.
   options?: { midTurn?: boolean },

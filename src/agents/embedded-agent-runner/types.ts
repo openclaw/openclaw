@@ -40,6 +40,8 @@ export type BlockReplyFlushContext =
     };
 
 export type EmbeddedAgentMeta = {
+  requestedCompaction?: import("../session-maintenance/request.js").SessionCompactionRequest;
+  cacheExpiry?: import("./prompt-cache-expiry.js").PromptCacheExpiryEstimate;
   sessionId: string;
   sessionFile?: string;
   provider: string;

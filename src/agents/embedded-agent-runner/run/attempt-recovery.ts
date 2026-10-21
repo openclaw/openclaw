@@ -42,6 +42,7 @@ import type { createEmbeddedRunFailoverRetryController } from "./failover-retry-
 import { buildErrorAgentMeta } from "./helpers.js";
 import { hasComposedVisibleAnswerAfterSettledTools } from "./incomplete-turn-classification.js";
 import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
+import { compactModelRequestedBoundary } from "./model-requested-compaction.js";
 import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
@@ -142,6 +143,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       | "transient_retry"
       | "replay_unsafe"
       | "overflow_recovery"
+      | "model_requested_compaction"
       | "overflow_unrecoverable"
       | "harness_retry"
       | "harness_retry_unavailable"
@@ -406,6 +408,24 @@ export async function recoverEmbeddedRunAttempt(input: {
     armPostCompactionGuard: input.armPostCompactionGuard,
     usageAccumulator: input.usageAccumulator,
   };
+  if (
+    midTurnPrecheck &&
+    attempt.preflightRecovery?.requestedCompaction &&
+    !terminalInterrupted &&
+    !attempt.yieldDetected &&
+    !attempt.clientToolCalls &&
+    settledEvidence.allToolsProvenSettled &&
+    toolsAllowContinuation
+  ) {
+    await compactModelRequestedBoundary(commonRecoveryInput);
+    compactionRuntime.assertRecoveryActive();
+    sessionPromptState.markOwnedTranscriptRetry();
+    // Read the accepted compaction window, never the old attempt snapshot or
+    // original user prompt. Completed tool actions stay recorded, not replayed.
+    sessionPromptState.continueFromCurrentTranscript();
+    recordRecoveryDecision("accepted", "model_requested_compaction");
+    return retry();
+  }
   if (
     (currentAttemptReplaySafe || canContinueSettledMidTurnOverflow) &&
     (await recoverEmbeddedRunTimeout({

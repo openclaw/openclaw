@@ -42,11 +42,13 @@ type SettleOverrides = Partial<Omit<SettleInput, "attempt" | "state" | "subscrip
   attempt?: Partial<SettleInput["attempt"]>;
   state?: Partial<SettleInput["state"]>;
   subscription?: Partial<SettleInput["subscription"]>;
+  authMode?: "api-key";
 };
 function createSettleFixture({
   attempt,
   state,
   subscription,
+  authMode,
   ...overrides
 }: SettleOverrides = {}): SettleInput {
   const sessionId = "sess-settle-1";
@@ -60,6 +62,7 @@ function createSettleFixture({
       modelId: "gpt-5.6-luna",
       model: { api: "openai-responses" },
       config: {},
+      ...(authMode ? { runtimePlan: { auth: { selectedAuthMode: authMode } } } : {}),
       ...attempt,
     },
     activeSession: { sessionId, isCompacting: false, isStreaming: false, messages: [] },
@@ -166,6 +169,43 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       await settle;
     }
   });
+
+  it.each([
+    ["30m", 1_800_000],
+    ["12h", 43_200_000],
+  ] as const)(
+    "carries the prepared %s lifetime into the settled cache estimate",
+    async (promptCacheTtl, windowMs) => {
+      const model = {
+        ...testModel,
+        id: "gpt-5.6",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      };
+      const assistant = createAssistant(model, "done");
+      assistant.usage.cacheRead = 2000;
+      const input = createSettleFixture({
+        authMode: "api-key",
+        attempt: {
+          model,
+          postTurnMaintenance: true,
+          config: { agents: { defaults: { compaction: { cacheExpiry: { enabled: true } } } } },
+        },
+        cache: { retention: "long", promptCacheTtl },
+        subscription: {
+          getCurrentAttemptAssistant: () => assistant,
+          getLastAssistantUsage: () => ({ cacheRead: 2000 }),
+        },
+      });
+      const result = await settleEmbeddedAttemptStream(input);
+      expect(result.cacheExpiry).toEqual({
+        observedAt: assistant.timestamp,
+        windowMs,
+        basis: "openai-minimum",
+      });
+    },
+  );
 
   it("keeps the last request observation separate from billing totals", async () => {
     const input = createSettleFixture();

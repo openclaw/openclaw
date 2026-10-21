@@ -36,6 +36,7 @@ import {
   resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { log } from "../logger.js";
+import { estimatePromptCacheExpiry } from "../prompt-cache-expiry.js";
 import type { PromptCacheRequestObservation } from "../prompt-cache-request-observer.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import {
@@ -109,6 +110,7 @@ export async function settleEmbeddedAttemptStream(input: {
   cache: {
     getObservation?: () => PromptCacheRequestObservation | undefined;
     retention: PromptCacheRetention;
+    promptCacheTtl?: unknown;
   };
   shouldFlushForContextEngine: boolean;
 }) {
@@ -277,8 +279,22 @@ export async function settleEmbeddedAttemptStream(input: {
         fallbackLastCacheTouchAt,
       }),
     });
+    const cacheExpiry =
+      attempt.postTurnMaintenance &&
+      !attempt.contextEngine?.info.ownsCompaction &&
+      attempt.config?.agents?.defaults?.compaction?.cacheExpiry?.enabled === true
+        ? estimatePromptCacheExpiry({
+            model: attempt.model,
+            authMode: attempt.runtimePlan?.auth.selectedAuthMode,
+            retention: input.cache.retention,
+            promptCacheTtl: input.cache.promptCacheTtl,
+            usage: lastCallUsage,
+            requestStartedAt: usageAssistant?.timestamp,
+          })
+        : undefined;
     return {
       compactionOccurredThisAttempt,
+      ...(cacheExpiry ? { cacheExpiry } : {}),
       messagesSnapshot,
       sessionIdUsed: snapshotSelection.sessionIdUsed,
       lastAssistant,

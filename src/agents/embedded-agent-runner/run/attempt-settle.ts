@@ -52,7 +52,7 @@ export async function runEmbeddedAttemptSettledPhase(
     sessionManager,
     state: sessionRuntimeState,
     toolResultPromptProjectionState,
-    transport: { effectivePromptCacheRetention },
+    transport: { effectivePromptCacheRetention, effectiveExtraParams },
   } = sessionRuntime;
   const { nestedToolActivityState } = toolBase;
   const promptState: EmbeddedAttemptPromptState = {
@@ -194,6 +194,7 @@ export async function runEmbeddedAttemptSettledPhase(
           cache: {
             getObservation: preparedStreamRuntime.cache.getObservation,
             retention: effectivePromptCacheRetention,
+            promptCacheTtl: effectiveExtraParams.promptCacheTtl,
           },
         });
       } catch (error) {
