@@ -1790,7 +1790,6 @@ jobs:
     outputs:
       published_driver_artifact_id: ${{ steps.published_driver_package_upload.outputs.artifact-id }}
       published_driver_sha256: ${{ steps.published_driver_package.outputs.sha256 }}
-      native_runtime_artifact_id: ${{ steps.native_runtime_upload.outputs.artifact-id }}
     # The measured hosted tail reached 898s before preflight and gate overhead.
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     # Hosted rows (github backend, hybrid retries, full-release dispatches, fork PRs) run slower.
@@ -4822,9 +4821,10 @@ jobs:
   macos-swift:
     permissions:
       contents: read
+      actions: read
     name: ${{ format('macos-swift ({0})', matrix.phase) }}
-    needs: [preflight, build-artifacts]
-    if: ${{ !cancelled() && needs.preflight.outputs.run_macos_swift == 'true' && (needs.build-artifacts.result == 'success' || needs.build-artifacts.result == 'skipped') }}
+    needs: [preflight]
+    if: ${{ !cancelled() && needs.preflight.outputs.run_macos_swift == 'true' }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -4885,20 +4885,6 @@ jobs:
             --config.engine-strict=false \
             --config.enable-pre-post-scripts=true \
             --config.side-effects-cache=true
-
-      - name: Download runtime for native policy tests
-        if: matrix.phase == 'tests' && hashFiles('apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift') != ''
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          artifact-ids: ${{ needs.build-artifacts.outputs.native_runtime_artifact_id }}
-          merge-multiple: true
-          path: .artifacts/macos-native-runtime
-
-      - name: Prepare native test CLI
-        if: matrix.phase == 'tests' && hashFiles('apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift') != ''
-        env:
-          TARGET_SHA: *checkout_sha
-        run: node .ci-harness/scripts/macos-native-runtime-artifact.mjs restore .artifacts/macos-native-runtime "$TARGET_SHA" >> "$GITHUB_PATH"
 
       - name: Setup Node.js for native test tooling
         id: macos-node-tooling
@@ -5148,22 +5134,54 @@ jobs:
           trap 'rm -rf "$swabble_scratch"' EXIT
           swift test --package-path apps/swabble --scratch-path "$swabble_scratch" --build-system native --disable-index-store -Xswiftc -gline-tables-only --no-parallel
 
+      # Build independently of Linux verification; only execution needs the policy CLI.
+      - name: Build Swift tests
+        id: swift-test-build
+        if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' && matrix.phase == 'tests' }}
+        run: |
+          set -euo pipefail
+          # SwiftPM's swiftbuild backend can omit the test-bundle rpath for Sparkle.
+          # Remove once runner toolchains pass with swiftlang/swift-package-manager#10394.
+          # CI needs coverage and line backtraces, not IDE indexes or debugger type metadata.
+          swift build --package-path apps/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --build-tests
+          echo "debug-tests-built=true" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for native policy runtime
+        id: native-runtime-ready
+        if: ${{ !cancelled() && steps.swift-test-build.outcome == 'success' && matrix.phase == 'tests' && hashFiles('apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift') != '' }}
+        env:
+          TARGET_SHA: *checkout_sha
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          artifact_id="$(node .ci-harness/scripts/macos-native-runtime-artifact.mjs wait "$TARGET_SHA")"
+          echo "artifact-id=$artifact_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download runtime for native policy tests
+        id: native-runtime-download
+        if: ${{ !cancelled() && steps.native-runtime-ready.outcome == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.native-runtime-ready.outputs.artifact-id }}
+          merge-multiple: true
+          path: .artifacts/macos-native-runtime
+
+      - name: Prepare native test CLI
+        id: native-test-cli
+        if: ${{ !cancelled() && steps.native-runtime-download.outcome == 'success' }}
+        env:
+          TARGET_SHA: *checkout_sha
+        run: node .ci-harness/scripts/macos-native-runtime-artifact.mjs restore .artifacts/macos-native-runtime "$TARGET_SHA" >> "$GITHUB_PATH"
+
       - name: Swift test
         id: swift-test
-        if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' && matrix.phase == 'tests' }}
+        if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' && matrix.phase == 'tests' && steps.swift-test-build.outcome == 'success' && (hashFiles('apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift') == '' || steps.native-test-cli.outcome == 'success') }}
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
           native_test_log_dir="$RUNNER_TEMP/openclaw-native-test-logs"
           native_test_log_id="$(node -e 'process.stdout.write(require("node:crypto").randomUUID())')"
-          # SwiftPM's swiftbuild backend can omit the test-bundle rpath for Sparkle.
-          # Remove once runner toolchains pass with swiftlang/swift-package-manager#10394.
-          # Keep the release build above on the default backend.
-          # CI needs coverage and line backtraces, not IDE indexes or debugger type metadata.
-          swift_test_args=(--package-path apps/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only)
-          swift build "${swift_test_args[@]}" --build-tests
-          echo "debug-tests-built=true" >> "$GITHUB_OUTPUT"
-          swift_test_args+=(--skip-build)
+          swift_test_args=(--package-path apps/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build)
           source .ci-harness/scripts/ci-collect-checks.sh
           if [[ -f scripts/test-macos-native.mts ]]; then
             logical_cpu="$(sysctl -n hw.logicalcpu)"
@@ -5231,7 +5249,7 @@ jobs:
 
       - name: Setup bundled recovery runtime build
         id: recovery-runtime-setup
-        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && hashFiles('scripts/test-macos-app-host.sh') != '' && steps.swift-test.outputs.debug-tests-built == 'true' && steps.swift-test.outcome == 'success' }}
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && hashFiles('scripts/test-macos-app-host.sh') != '' && steps.swift-test-build.outputs.debug-tests-built == 'true' && steps.swift-test.outcome == 'success' }}
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -5262,7 +5280,7 @@ jobs:
 
       - name: Render isolated macOS health fixtures
         id: health-render
-        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && steps.swift-test-build.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
         run: bash scripts/test-macos-health-render.sh
 
       - name: Upload macOS health component renders
