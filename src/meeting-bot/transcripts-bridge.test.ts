@@ -4,8 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTranscriptsTool } from "../agents/tools/transcripts-tool.js";
+import { buildPluginApi, createUnavailableRuntime } from "../plugins/api-builder.js";
+import { instrumentPluginInstanceApi } from "../plugins/api-facades.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -284,6 +288,70 @@ it("reports a tick the plugin refuses and keeps capturing once it admits work ag
   admitting = true;
   await vi.advanceTimersByTimeAsync(5_000);
   expect(capture).toHaveBeenCalledTimes(2);
+});
+
+it("finishes an admitted capture when the plugin retires, then refuses new ticks before the final capture", async () => {
+  vi.useFakeTimers();
+  const registry = createEmptyPluginRegistry();
+  const record = createPluginRecord({ id: "meeting" });
+  registry.plugins.push(record);
+  const instance = new PluginInstance(record.id, { registry, record });
+  const api = instrumentPluginInstanceApi(
+    buildPluginApi({
+      id: record.id,
+      name: record.id,
+      source: record.source,
+      registrationMode: "full",
+      config: {},
+      runtime: createUnavailableRuntime("setup-only"),
+      logger: { info() {}, warn() {}, error() {} },
+      resolvePath: (value) => value,
+    }),
+    instance,
+  );
+  await bridge.stop(current, async () => {});
+  bridge = createMeetingDurableTranscriptBridge({
+    logger,
+    options: {
+      providerId: "meeting",
+      providerName: "Meeting",
+      stateDir,
+      runInBackground: api.lifecycle.runInBackgroundContext,
+    },
+  });
+  const effects: string[] = [];
+  const inFlight = createDeferredCore();
+  let periodic = 0;
+  await start(async () => {
+    periodic += 1;
+    effects.push(`capture ${periodic}`);
+    if (periodic === 2) {
+      await inFlight.promise;
+      effects.push("capture 2 settled");
+    }
+  });
+  // The service stop runs as admitted cleanup, after the instance drains returned work.
+  instance.lifecycle.onDispose(async () => {
+    await bridge.stop(current, async () => {
+      effects.push("final capture");
+    });
+  });
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(effects).toEqual(["capture 1", "capture 2"]);
+
+  // Retire mid-capture; the next tick (at 10 s) falls inside the 5 s drain window.
+  await vi.advanceTimersByTimeAsync(3_000);
+  const disposed = instance.dispose();
+  await vi.advanceTimersByTimeAsync(4_000);
+  expect(effects).toEqual(["capture 1", "capture 2"]);
+  expect(() => api.lifecycle.runInBackgroundContext!(() => "new tick")).toThrow(
+    "reloaded or disabled",
+  );
+
+  inFlight.resolve();
+  await expect(disposed).resolves.toEqual({ errors: [] });
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(effects).toEqual(["capture 1", "capture 2", "capture 2 settled", "final capture"]);
 });
 
 it("retries final durable delivery before completing the capture", async () => {
