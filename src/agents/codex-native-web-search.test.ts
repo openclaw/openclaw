@@ -1,4 +1,7 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ToolsSchema } from "../config/zod-schema.agent-runtime.js";
@@ -11,6 +14,7 @@ import {
   describeCodexNativeWebSearch,
   resolveCodexNativeWebSearchConfig,
 } from "./codex-native-web-search.shared.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 
 type SearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
 const searchConfig = (search: SearchConfig): OpenClawConfig => ({ tools: { web: { search } } });
@@ -62,6 +66,36 @@ describe("resolveCodexNativeSearchActivation", () => {
       "tool_policy_denied",
     ],
     [
+      "provider policy",
+      {
+        config: {
+          ...baseConfig,
+          tools: {
+            ...baseConfig.tools,
+            byProvider: { "gateway/gpt-5.5": { deny: ["web_search"] } },
+          },
+        },
+        modelId: "gpt-5.5",
+      },
+      "tool_policy_denied",
+    ],
+    [
+      "sender policy",
+      {
+        config: {
+          ...baseConfig,
+          tools: {
+            ...baseConfig.tools,
+            toolsBySender: { "channel:msteams:alice": { deny: ["web_search"] } },
+          },
+        },
+        modelId: "gpt-5.5",
+        messageProvider: "teams",
+        senderId: "alice",
+      },
+      "tool_policy_denied",
+    ],
+    [
       "sandbox policy",
       { sandboxToolPolicy: { deny: ["group:web"] }, modelId: "gpt-5.5" },
       "tool_policy_denied",
@@ -74,6 +108,40 @@ describe("resolveCodexNativeSearchActivation", () => {
     const result = activate({ config: baseConfig, modelProvider: "openai" });
     expect(result).toMatchObject({ state: "native_active" });
     expect(result).not.toHaveProperty("inactiveReason");
+  });
+
+  it("keeps native search inactive when inherited session policy denies web_search", async () => {
+    const agentId = `native-inherited-deny-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:subagent:limited`;
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-native-inherited-deny-${agentId}`,
+      "agents",
+      agentId,
+      "sessions",
+      "sessions.json",
+    );
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolDeny: ["web_search"],
+      },
+    );
+
+    const result = await withPreparedSessionCapabilityRead(() =>
+      activate({
+        config: { ...baseConfig, session: { store: storePath } },
+        sessionKey,
+        modelId: "gpt-5.5",
+      }),
+    );
+
+    expect(result).toMatchObject({ state: "managed_only", inactiveReason: "tool_policy_denied" });
   });
 });
 
@@ -113,10 +181,10 @@ describe("Codex native web-search payload helpers", () => {
     });
   });
 
-  it.each([
-    {
-      name: "live search restrictions",
-      payload: {},
+  it("injects native search restrictions into the Responses payload", () => {
+    const payload: Record<string, unknown> = {};
+    patchCodexNativeWebSearchPayload({
+      payload,
       config: searchConfig({
         openaiCodex: {
           enabled: true,
@@ -126,37 +194,38 @@ describe("Codex native web-search payload helpers", () => {
           userLocation: { country: "US" },
         },
       }),
-      status: "injected",
-      tools: [
-        {
-          type: "web_search",
-          external_web_access: true,
-          filters: { allowed_domains: ["example.com"] },
-          search_context_size: "medium",
-          user_location: { type: "approximate", country: "US" },
+    });
+    expect(payload.tools).toEqual([
+      {
+        type: "web_search",
+        external_web_access: true,
+        filters: { allowed_domains: ["example.com"] },
+        search_context_size: "medium",
+        user_location: {
+          type: "approximate",
+          country: "US",
         },
-      ],
-    },
-    {
-      name: "cached search alongside existing functions",
-      payload: { tools: [{ type: "function", name: "read" }] },
-      config: baseConfig,
-      status: "injected",
-      tools: [
-        { type: "function", name: "read" },
-        { type: "web_search", external_web_access: false },
-      ],
-    },
-    {
-      name: "existing native search without duplication",
-      payload: { tools: [{ type: "web_search" }] },
-      config: baseConfig,
-      status: "native_tool_already_present",
-      tools: [{ type: "web_search" }],
-    },
-  ])("projects $name", ({ payload, config, status, tools }) => {
-    expect(patchCodexNativeWebSearchPayload({ payload, config }).status).toBe(status);
-    expect(payload).toEqual({ tools });
+      },
+    ]);
+  });
+
+  it("injects native web_search into provider payloads", () => {
+    const payload: Record<string, unknown> = { tools: [{ type: "function", name: "read" }] };
+    const result = patchCodexNativeWebSearchPayload({ payload, config: baseConfig });
+
+    expect(result.status).toBe("injected");
+    expect(payload.tools).toEqual([
+      { type: "function", name: "read" },
+      { type: "web_search", external_web_access: false },
+    ]);
+  });
+
+  it("does not inject a duplicate native web_search tool", () => {
+    const payload: Record<string, unknown> = { tools: [{ type: "web_search" }] };
+    const result = patchCodexNativeWebSearchPayload({ payload, config: baseConfig });
+
+    expect(result.status).toBe("native_tool_already_present");
+    expect(payload.tools).toEqual([{ type: "web_search" }]);
   });
 });
 

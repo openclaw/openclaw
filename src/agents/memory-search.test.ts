@@ -5,6 +5,7 @@ import {
   clearEmbeddingProviders,
   registerEmbeddingProvider,
 } from "../plugins/embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -47,7 +48,7 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
     });
   }
   if (options?.includeGemini !== false) {
-    registerEmbeddingProvider({
+    const adapter: MemoryEmbeddingProviderAdapter = {
       id: "gemini",
       defaultModel: "gemini-embedding-001",
       transport: "remote",
@@ -57,7 +58,8 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
           .replace(/^models\//, "")
           .replace(/^(gemini|google)\//, "") === "gemini-embedding-2-preview",
       create: async () => ({ provider: null }),
-    });
+    };
+    registerEmbeddingProvider(adapter);
   }
 }
 

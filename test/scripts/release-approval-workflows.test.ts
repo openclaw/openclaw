@@ -49,6 +49,7 @@ const coreValidation = "validate_publish_request";
 const pluginValidation = "validate_release_publish_approval";
 const coreFlow = [core, coreValidation, "openclaw"] as const;
 const pluginFlow = [plugin, pluginValidation, "plugins"] as const;
+const parentPolicy = "RELEASE_PUBLISH_PARENT_STATE_POLICY";
 const parentEnv = {
   RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",
   RELEASE_PUBLISH_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
@@ -222,10 +223,59 @@ it.each([coreFlow, pluginFlow])(
   },
 );
 
+it.each([
+  [coreFlow, "Publish", parentPolicy],
+  [pluginFlow, "Publish with trusted publisher", `OPENCLAW_${parentPolicy}`],
+  [pluginFlow, "Publish approved bootstrap tarball", parentPolicy],
+] as const)(
+  "%s %s re-verifies a live parent before npm publish on the receipt route (%s)",
+  ([workflow, validationId, owner], stepName, policyVariable) => {
+    const job = requireJob(workflow, `publish_${owner}_npm`);
+    const publish = requireStep(job, stepName);
+    const policyExpression = expectDefined(publish.env?.[policyVariable], "parent state policy");
+    const policyFor = (parentApproval: string, actor: string) =>
+      runInNewContext(policyExpression.replace(/^\$\{\{|\}\}$/gu, ""), {
+        github: { actor },
+        inputs: { release_publish_run_id: "67890" },
+        needs: { [validationId]: { outputs: { parent_approval: parentApproval } } },
+      });
+    const bot = "github-actions[bot]";
+    expect(policyFor("receipt", bot)).toBe("active");
+    expect(policyFor("", "release-manager")).toBe("manual-recovery");
+    if (workflow === plugin) {
+      // Human-approved bot children keep the existing finish-after-failure contract.
+      expect(policyFor("", bot)).toBe("active-or-failure");
+    }
+
+    const script = expectDefined(publish.run, "publication script");
+    if (workflow === core) {
+      const publishes =
+        script.match(/bash trusted-workflow\/scripts\/openclaw-npm-publish\.sh --publish/gu) ?? [];
+      expect(publishes).toHaveLength(2);
+      const wrapper = readFileSync("scripts/openclaw-npm-publish.sh", "utf8");
+      expect(wrapper).toContain("--verify-publication-authority");
+      const authority = readFileSync("scripts/npm-preflight-tooling-identity.mjs", "utf8");
+      containsAll(authority, [
+        "releasePublishParentStatePolicy: env.RELEASE_PUBLISH_PARENT_STATE_POLICY",
+        "verifyReleaseToolingIdentity(publicationAuthority)",
+      ]);
+    } else {
+      const verified = script.indexOf(`--release-publish-parent-state-policy "$${policyVariable}"`);
+      expect(verified).toBeGreaterThan(-1);
+      expect(verified).toBeLessThan(script.indexOf("npm publish"));
+    }
+  },
+);
+
 it("replaces only the ClawHub human gate after parent receipt verification succeeds", () => {
   const validate = requireJob(clawhub, pluginValidation);
   const approve = requireJob(clawhub, "approve_plugins_clawhub_release");
   expect(validate.outputs?.parent_approval).toBe(receiptOutput);
+  expect(approve).toMatchObject({
+    environment:
+      "${{ needs.validate_release_publish_approval.outputs.parent_approval != 'receipt' && 'clawhub-plugin-release' || '' }}",
+    if: expect.stringContaining("needs.validate_release_publish_approval.result == 'success'"),
+  });
   const receiptRoute =
     "needs.validate_release_publish_approval.outputs.parent_approval == 'receipt'";
   const wait = requireStep(approve, "Wait for the release parent's ClawHub authorization");
@@ -234,6 +284,10 @@ it("replaces only the ClawHub human gate after parent receipt verification succe
     env: parentEnv,
     run: "node scripts/release-approval-receipt.mjs wait-clawhub-authorization",
   });
+  for (const name of ["Checkout trusted release tooling", "Setup Node"]) {
+    expect(requireStep(approve, name).if).toContain(receiptRoute);
+  }
   const publish = requireJob(clawhub, "publish_plugins_clawhub");
+  expect(publish?.needs).toContain("approve_plugins_clawhub_release");
   expect(publish?.if).toContain("needs.approve_plugins_clawhub_release.result == 'success'");
 });

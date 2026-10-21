@@ -184,10 +184,15 @@ export function createSubagentAnnounceSessionStore(
 }
 
 export const INTER_SESSION_REPLY_POLICY_CASES = [
-  ["agent:main:subagent:reply-required", "discord", undefined, undefined, "result-required"],
-  ["agent:main:subagent:optional-settle", "discord", true, "optional", "optional"],
-  ["agent:main:direct:required-settle", "webchat", undefined, "required", "result-required"],
-  ["agent:main:direct:private-reply-required", "telegram", true, undefined, "result-required"],
-  ["agent:main:telegram:direct:reply-required", "telegram", undefined, undefined, "required"],
-  ["agent:main:telegram:group:optional", "telegram", undefined, undefined, "optional"],
+  ["agent:main:subagent:reply-required", "discord"],
+  ["agent:main:subagent:optional-settle", "discord", true, true, "subagent_settle", "optional"],
+  ["agent:main:direct:optional-settle", "webchat", true, true, "subagent_settle", "optional"],
+  ["agent:main:direct:required-settle", "webchat", false, false, "subagent_settle", "required"],
+  ["agent:main:direct:peer-result", "webchat", false, true, "sessions_send", "optional"],
+  ["agent:main:direct:reply-required", "webchat"],
+  ["agent:main:direct:private-reply-required", "telegram", true],
+  ["agent:main:telegram:direct:reply-required", "telegram"],
+  ["agent:main:telegram:group:optional", "telegram", undefined, true],
+  ["agent:main:telegram:direct:delegated", "telegram", undefined, false, "sessions_send"],
+  ["agent:main:telegram:group:delegated", "telegram", undefined, true, "sessions_send"],
 ] as const;

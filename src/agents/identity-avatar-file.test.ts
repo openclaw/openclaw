@@ -134,11 +134,17 @@ it.each(["replacement", "growth", "failure"] as const)(
   },
 );
 
-it("rejects oversized files and unsupported extensions", () => {
-  const { write, read } = createWorkspace("avatar");
+it("rejects symlink escapes, hardlinks, oversized files, and unsupported extensions", () => {
+  const { write, symlink, hardlink, read } = createWorkspace("avatar");
+  write("../outside.png", "outside");
   write("large.png", Buffer.alloc(AVATAR_MAX_BYTES + 1));
+  symlink("../outside.png", "symlink.png");
+  hardlink("avatar.png");
   for (const [source, reason] of [
+    ["symlink.png", "outside_workspace"],
+    ["hardlink.png", "unreadable"],
     ["large.png", "too_large"],
+    ["missing.png", "missing"],
     ["avatar.txt", "unsupported_extension"],
   ] as const) {
     expect(read(source)).toEqual({ ok: false, reason });

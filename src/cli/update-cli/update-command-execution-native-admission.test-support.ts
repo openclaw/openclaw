@@ -108,6 +108,52 @@ export function registerNativeAdmissionTests() {
       }),
   );
 
+  it.each(["package", "staged", "git"] as const)(
+    "refuses an unsupported native receiver before activation: %s",
+    async (route) =>
+      withTestDir({ prefix: "native-before-activation-" }, async (dir) => {
+        const env = { OPENCLAW_STATE_DIR: dir };
+        const params = executionParams(route === "git" ? "git" : "package");
+        params.root = dir;
+        params.updateStepTimeoutMs = 600_000;
+        if (route === "staged") {
+          params.packageInstallSpec = path.join(dir, "candidate.tgz");
+        }
+        const events: string[] = [];
+        mocks.nativeSupport.mockImplementation(async ({ executor }) => {
+          executor.assertCurrent();
+          events.push("native-admission");
+          return false;
+        });
+        const candidate = async ({ validateCandidate }: Candidate) => {
+          await validateCandidate(dir);
+          // Models the package/Git publisher which follows successful validation.
+          events.push("publish");
+          return successfulUpdate;
+        };
+        mocks.runPackageUpdate.mockImplementation(candidate);
+        mocks.runGitUpdate.mockImplementation(
+          async (options: Parameters<typeof updateGitInstall>[0]) => {
+            if (!options.inspectGitTarget || !options.validateCandidate) {
+              throw new Error("Missing actual Git admission callbacks");
+            }
+            await options.inspectGitTarget({ schemaVersions: { state: 15, agent: 19 } });
+            return candidate({ validateCandidate: options.validateCandidate });
+          },
+        );
+        const result = await executeOwned(dir, params, env);
+        expect(result?.result).toMatchObject({
+          status: "error",
+          reason: "target-native-unsupported",
+        });
+        expect(events).toEqual(["native-admission"]);
+        expect(mocks.nativeSupport.mock.calls[0]?.[0]).toMatchObject({
+          timeoutMs: params.updateStepTimeoutMs,
+        });
+        expectBeforeActivation();
+      }),
+  );
+
   type ConsumerCase = {
     shared?: boolean;
     linkedDist?: boolean;

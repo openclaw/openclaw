@@ -177,6 +177,8 @@ describe("sealed immutable generation", () => {
     ["dirty source", /uncommitted source/u],
     ["stale build", /git runtime mismatch/u],
     ["missing SDK declarations", /core\.d\.ts/u],
+    ["foreign Git context", "uncommitted source changes"],
+    ["writable after sealing", "not sealed"],
   ] as const)("refuses a sealed release with %s", async (kind, error) => {
     const { root, sha, json } = await generation();
     if (kind === "foreign Git context") {
