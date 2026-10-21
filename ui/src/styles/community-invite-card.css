@@ -67,40 +67,38 @@
   }
 
   .invite__close {
+    --community-invite-close-visual-inset: 3px;
+
     position: absolute;
     z-index: 2;
-    inset-block-start: var(--space-2, 8px);
-    inset-inline-end: var(--space-2, 8px);
-    display: grid;
+    inset-block-start: 5px;
+    inset-inline-end: 5px;
     width: 28px;
     height: 28px;
-    place-items: center;
     padding: 0;
     border: 0;
     background: transparent;
-    color: rgb(255 255 255 / 90%);
+    color: var(--media-foreground);
     cursor: var(--cursor-action, default);
     transition: color 120ms ease;
   }
 
   .invite__close::before {
     content: "";
-    grid-area: 1 / 1;
+    position: absolute;
+    inset-block-start: var(--community-invite-close-visual-inset);
+    inset-inline-end: var(--community-invite-close-visual-inset);
     width: 22px;
     height: 22px;
     border-radius: 50%;
     /* Keep photo chrome compact while the transparent button remains easy to tap. */
-    background: rgb(0 0 0 / 24%);
+    background: color-mix(in srgb, var(--media-control-bg) 65%, transparent);
     pointer-events: none;
     transition: background 120ms ease;
   }
 
-  .invite__close:hover {
-    color: rgb(255 255 255);
-  }
-
   .invite__close:hover::before {
-    background: rgb(0 0 0 / 42%);
+    background: color-mix(in srgb, var(--media-control-bg-hover) 75%, transparent);
   }
 
   .invite__close:focus-visible {
@@ -108,13 +106,14 @@
   }
 
   .invite__close:focus-visible::before {
-    outline: 2px solid rgb(255 255 255 / 90%);
+    outline: 2px solid var(--media-foreground);
     outline-offset: 2px;
   }
 
   .invite__close svg {
-    position: relative;
-    grid-area: 1 / 1;
+    position: absolute;
+    inset-block-start: calc(var(--community-invite-close-visual-inset) + 4px);
+    inset-inline-end: calc(var(--community-invite-close-visual-inset) + 4px);
     display: block;
     width: 14px;
     height: 14px;
@@ -241,6 +240,10 @@
   }
 
   .invite__close {
+    --community-invite-close-visual-inset: 8px;
+
+    inset-block-start: 0;
+    inset-inline-end: 0;
     width: 44px;
     height: 44px;
   }

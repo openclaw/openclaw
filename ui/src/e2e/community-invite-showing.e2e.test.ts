@@ -55,15 +55,28 @@ suite.define(() => {
             const closeAppearance = await close.evaluate((node) => {
               const target = node.getBoundingClientRect();
               const backdrop = getComputedStyle(node, "::before");
+              const header = node.closest(".invite__header")!.getBoundingClientRect();
+              const glyph = node.querySelector("svg")!.getBoundingClientRect();
+              const backdropInset = (Number.parseFloat(backdrop.width) - glyph.width) / 2;
               return {
                 targetWidth: target.width,
                 targetHeight: target.height,
                 background: getComputedStyle(node).backgroundColor,
                 backdropWidth: Number.parseFloat(backdrop.width),
                 backdropHeight: Number.parseFloat(backdrop.height),
+                visibleTop: glyph.top - header.top - backdropInset,
+                visibleRight: header.right - glyph.right - backdropInset,
+                contained:
+                  target.left >= header.left &&
+                  target.top >= header.top &&
+                  target.right <= header.right &&
+                  target.bottom <= header.bottom,
               };
             });
             expect(closeAppearance.background).toBe("rgba(0, 0, 0, 0)");
+            expect(closeAppearance.visibleTop).toBeCloseTo(8, 0);
+            expect(closeAppearance.visibleRight).toBeCloseTo(8, 0);
+            expect(closeAppearance.contained).toBe(true);
             expect(closeAppearance.backdropWidth).toBeLessThanOrEqual(24);
             expect(closeAppearance.backdropHeight).toBeLessThanOrEqual(24);
             expect(closeAppearance.targetWidth).toBeGreaterThanOrEqual(mobile ? 44 : 24);
