@@ -10,10 +10,12 @@ import {
   resolveManagedGitHubProfileDir,
   writeManagedGitHubProfileFiles,
 } from "../../agents/github-tool-identity.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as stateWriter from "../../state/openclaw-state-worker-owner.js";
 import type { UserGitHubConnection } from "../../state/user-github-connections.js";
 import { updateUserGitHubConnection } from "../../state/user-github-connections.test-support.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import * as prRead from "../control-ui-session-pr-read.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
 import { personalGitHubStatusAsync as personalGitHubStatus } from "../github-personal-status.js";
@@ -451,13 +453,17 @@ it.each(["accepted", "missing", "scope", "connection", "unverified-profile"] as 
 it.each([
   ...[
     "unchanged",
+    "scope",
+    "connection",
+    "profile",
+    "session-lifecycle",
     "github-unchanged",
     "github-unavailable",
     "github-generation",
     "github-account",
   ].map((change) => ({ change, phase: "personal" })),
   // Both authority owners must also run after the later shared read.
-  { change: "github-generation", phase: "shared" },
+  ...["connection", "github-generation"].map((change) => ({ change, phase: "shared" })),
 ])("rechecks $change authority after a pending $phase read", async ({ change, phase }) => {
   await withPersonalReadFixture(async (fixture) => {
     const owner = ownerOf(fixture);
@@ -490,7 +496,19 @@ it.each([
       async (respond, release) => {
         expect(fixture.latestShared).toHaveBeenCalledOnce();
 
-        if (change === "github-generation") {
+        if (change === "scope") {
+          fixture.client.connect.scopes = [];
+        } else if (change === "connection") {
+          fixture.disconnect();
+        } else if (change === "profile") {
+          expectDefined(fixture.client.authenticatedUserProfile, "reader profile").profileId =
+            ensureProfileForEmail("replacement-reader@example.test").id;
+        } else if (change === "session-lifecycle") {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey },
+            { lifecycleRevision: "replaced-publication-session" },
+          );
+        } else if (change === "github-generation") {
           saveConnection(owner, {
             ...connection,
             generation: "6a7862d3-9895-4905-a4fb-f16f143aed3e",

@@ -75,6 +75,24 @@ describe("update schedule hydration", () => {
     const updateSchedule = {
       channel: "dev",
       autoEnabled: true,
+      install: {
+        kind: "git",
+        git: {
+          status: "behind",
+          currentSha: "a".repeat(40),
+          upstreamSha: "b".repeat(40),
+          repositoryUrl: "https://github.com/example/openclaw",
+          commitAtMs: 1_000,
+          installedAtMs: 2_000,
+          commitsBehind: 3,
+        },
+      },
+      target: {
+        kind: "git",
+        upstreamRef: "origin/main",
+        upstreamSha: "b".repeat(40),
+        commitsBehind: 3,
+      },
       campaign: {
         id: "campaign-1",
         state: "waiting-for-idle",
