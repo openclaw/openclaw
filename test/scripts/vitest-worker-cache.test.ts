@@ -163,10 +163,8 @@ it("restores identical executable bytes into the same reserved generation path",
   const owner = await f.cache();
   expect(await owner.restore()).toBeUndefined();
   const manifest = f.prepare();
-  expect(f.observe()).toEqual({
-    value: "first",
-    generation: pathToFileURL(f.directory).href,
-  });
+  const expected = { value: "first", generation: pathToFileURL(f.directory).href };
+  expect(f.observe()).toEqual(expected);
   expect(await retainVitestWorkerArtifacts(f.root, f.directory, manifest)).toBe(false);
   manifest.cacheSignature = await owner.seal(manifest);
   const { cached } = f;
@@ -197,10 +195,7 @@ it("restores identical executable bytes into the same reserved generation path",
     expect(direct.status, String(direct.error ?? direct.stderr)).toBe(0);
     expect(JSON.parse(direct.stdout).value).toBe("first");
   }
-  expect(f.observe()).toEqual({
-    value: "first",
-    generation: pathToFileURL(f.directory).href,
-  });
+  expect(f.observe()).toEqual(expected);
 });
 
 it("observes resolution changes made while checking cached output bytes", async () => {
@@ -226,7 +221,7 @@ it("observes resolution changes made while checking cached output bytes", async 
   try {
     expect(await f.restore()).toBeUndefined();
     expect(changed).toBe(true);
-    expect(fs.existsSync(path.join(f.directory, "dist"))).toBe(false);
+    f.expectAbsent("dist");
   } finally {
     reader.mockRestore();
   }

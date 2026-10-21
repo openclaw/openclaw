@@ -9,6 +9,7 @@ import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js"
 import {
   createControlledWorkerCompiler,
   createWorkerArtifactTest,
+  readFixtureLines,
   workerBorrowingProbe,
   writeFixture,
 } from "./vitest-worker-artifacts.test-support.js";
@@ -17,7 +18,6 @@ const it = createWorkerArtifactTest();
 const subprocess = it.runIf(process.platform !== "win32");
 const root = process.cwd();
 const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
-const readLines = (file: string) => fs.readFileSync(file, "utf8").trim().split("\n");
 const cacheProbe = `const cacheEnvironment=()=>({
   path: process.env.NODE_COMPILE_CACHE,
   portable: process.env.NODE_COMPILE_CACHE_PORTABLE,
@@ -68,7 +68,7 @@ process.exitCode = await runVitestBatch({
         signal: null,
         generationPresent: false,
       });
-      const generations: string[] = readLines(observed).map((line) => JSON.parse(line));
+      const generations = readFixtureLines<string>(observed);
       expect(generations).toHaveLength(2);
       expect(new Set(generations).size).toBe(1);
       expect(compiler.read()).toHaveLength(1);
@@ -350,7 +350,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
         expect(receipt).toMatchObject({ runtime: "node", cache: expectedCache });
       }
       if (ready) {
-        expect(readLines(compiled)).toHaveLength(1);
+        expect(readFixtureLines(compiled)).toHaveLength(1);
       }
     }
     expect(fs.existsSync(canceled)).toBe(mode === "cancel");

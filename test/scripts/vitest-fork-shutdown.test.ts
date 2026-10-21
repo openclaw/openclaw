@@ -39,8 +39,7 @@ function observeReadyLine(child: ChildProcess, line: string, ready: () => void) 
 }
 
 function expectClosedPipes(child: ChildProcess) {
-  expect(child.stdout?.closed).toBe(true);
-  expect(child.stderr?.closed).toBe(true);
+  expect([child.stdout?.closed, child.stderr?.closed]).toEqual([true, true]);
 }
 
 function observeOutcome<T>(invocation: Promise<T>) {

@@ -19,6 +19,7 @@ import {
   createControlledWorkerCompiler,
   createWorkerArtifactTest,
   fixtureFileBeforeSettlement,
+  readFixtureLines,
   writeFixture,
 } from "./vitest-worker-artifacts.test-support.js";
 
@@ -150,13 +151,7 @@ function createCiProbe(
     startFirst,
     firstReady,
     read: (): Observation[] =>
-      !fs.existsSync(observationsFile)
-        ? []
-        : fs
-            .readFileSync(observationsFile, "utf8")
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line)),
+      fs.existsSync(observationsFile) ? readFixtureLines(observationsFile) : [],
   };
 }
 

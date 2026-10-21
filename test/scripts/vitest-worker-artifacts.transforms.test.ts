@@ -8,6 +8,7 @@ import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js"
 import {
   createControlledWorkerCompiler,
   createWorkerArtifactTest,
+  readFixtureLines,
 } from "./vitest-worker-artifacts.test-support.js";
 import { workerTransformProbe } from "./vitest-worker-artifacts.transforms.test-support.js";
 
@@ -59,13 +60,9 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
           testRunnerFixtureEnv(),
           process.versions.bun ? "bun" : "node",
         );
-        const readLines = (name: string) =>
-          fs.readFileSync(path.join(directory, name), "utf8").trim().split("\n");
-        const readJsonLines = (name: string) => readLines(name).map((line) => JSON.parse(line));
+        const readJsonLines = <T>(name: string) => readFixtureLines<T>(path.join(directory, name));
         const counts = () => {
-          const transformed = readJsonLines("transforms.jsonl").map((file: string) =>
-            path.normalize(file),
-          );
+          const transformed = readJsonLines<string>("transforms.jsonl").map(path.normalize);
           return [[value, configuredValue], [parent]].map(
             (ids) => transformed.filter((actual) => ids.includes(actual)).length,
           );
@@ -101,7 +98,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
               ...projectNames.flatMap((name) => ["--project", name]),
             ];
             const previousObservations = fs.existsSync(path.join(directory, "observations.jsonl"))
-              ? readLines("observations.jsonl").length
+              ? readJsonLines("observations.jsonl").length
               : 0;
             const reuse = mode === "compiled" && generations.size > 0;
             const result = reuse
@@ -120,7 +117,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
                 );
             expect(result.code, result.stderr + result.stdout).toBe(0);
             const currentGenerations: string[] =
-              readJsonLines("generations.jsonl").slice(previousObservations);
+              readJsonLines<string>("generations.jsonl").slice(previousObservations);
             const observed = readJsonLines("observations.jsonl").slice(previousObservations);
             expect(observed).toEqual(
               projectNames.map(() => ({ value: expectedValue, configValue: "first" })),
