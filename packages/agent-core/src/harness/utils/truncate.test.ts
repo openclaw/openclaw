@@ -48,7 +48,7 @@ describe("truncate utilities", () => {
     ["\uD800x\uDC00\ndiscarded\n\uD800x\uDC00", 2, 7, "\uD800x\uDC00", "\uD800x\uDC00", 1, "bytes"],
     ["a\nb\nc", 1, 1, "a", "c", 1, "lines"],
     ["\n\n\n", 3, 2, "\n\n", "\n\n", 3, "bytes"],
-  ])(
+  ] as const)(
     "preserves selected lines and limit metadata: %j",
     (content, maxLines, maxBytes, head, tail, outputLines, truncatedBy) => {
       for (const [truncate, expected] of [

@@ -25,7 +25,8 @@ describe("readWebProviderEnvValue", () => {
 
 describe("hasWebProviderEntryCredential", () => {
   type Params = Parameters<typeof hasWebProviderEntryCredential>[0];
-  const hasCredential = (raw: unknown, { provider, ...overrides }: Partial<Params> = {}) =>
+  type Overrides = Omit<Partial<Params>, "provider"> & { provider?: Partial<Params["provider"]> };
+  const hasCredential = (raw: unknown, { provider, ...overrides }: Overrides = {}) =>
     hasWebProviderEntryCredential({
       config: {},
       resolveEnvValue: () => undefined,
