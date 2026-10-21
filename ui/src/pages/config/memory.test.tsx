@@ -16,7 +16,6 @@ const addonLabels = [
   ["memory-wiki", "Memory wiki", "Wiki pages", "disabled"],
 ] as const;
 const emptyOutcomes = () => ({
-  busy: {},
   errors: {},
   notices: {},
   refreshWarnings: {},
@@ -57,6 +56,8 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
       ],
     },
     addonOutcomes: emptyOutcomes(),
+    readAddonExpected: () => undefined,
+    readAddonBusy: () => false,
     engineSelection: { kind: "default", pluginId: "memory-core" },
     engineBusy: false,
     engineOutcome: null,

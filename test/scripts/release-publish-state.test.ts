@@ -68,36 +68,32 @@ const pluginOptions = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("release publication state", () => {
-  const selectorRepair = { status: "FAIL", remediation: expect.stringContaining("dist-tag") };
-  const selectorMessage = (status: string, message: string) => ({
-    status,
-    message: expect.stringContaining(message),
-  });
-  it.each`
-    tags                             | versions                 | expected                                                                                        | published
-    ${distTags("2026.9.4", version)} | ${[version]}             | ${selectorRepair}                                                                               | ${undefined}
-    ${distTags(version, "2026.9.4")} | ${[version]}             | ${selectorRepair}                                                                               | ${undefined}
-    ${distTags("2026.9.7")}          | ${["2026.9.7", version]} | ${selectorMessage("WARN", "already published; dist-tag latest stays at 2026.9.7 (superseded)")} | ${1}
-    ${distTags("2026.9.7")}          | ${["2026.9.7"]}          | ${selectorMessage("FAIL", 'cannot be safely moved to "2026.9.5" (ahead)')}                      | ${0}
-  `(
+  it.each<[string, string, string[], string | undefined, number | undefined]>([
+    ["2026.9.4", version, [version], undefined, undefined],
+    [version, "2026.9.4", [version], undefined, undefined],
+    [
+      "2026.9.7",
+      "2026.9.7",
+      ["2026.9.7", version],
+      "already published; dist-tag latest stays at 2026.9.7 (superseded)",
+      1,
+    ],
+    ["2026.9.7", "2026.9.7", ["2026.9.7"], 'cannot be safely moved to "2026.9.5" (ahead)', 0],
+  ])(
     "gates plugin publication against existing registry selectors: $tags",
-    async ({
-      tags,
-      versions,
-      expected,
-      published,
-    }: {
-      tags: ReturnType<typeof distTags>;
-      versions: string[];
-      expected: Record<string, unknown>;
-      published?: number;
-    }) => {
+    async (latest, beta, versions, message, published) => {
       vi.stubGlobal(
         "fetch",
-        vi.fn(async () => registry("@openclaw/example", versions, tags)),
+        vi.fn(async () => registry("@openclaw/example", versions, distTags(latest, beta))),
       );
       const result = await observeReleaseNpmState(pluginOptions);
-      expectGate(result.gates, { id: "npm.package.@openclaw/example", ...expected });
+      expectGate(result.gates, {
+        id: "npm.package.@openclaw/example",
+        status: published === 1 ? "WARN" : "FAIL",
+        ...(message
+          ? { message: expect.stringContaining(message) }
+          : { remediation: expect.stringContaining("dist-tag") }),
+      });
       if (published !== undefined) {
         expect(result.publishedPackages.length).toBe(published);
       }
@@ -318,6 +314,8 @@ describe("release concurrency observations", () => {
       tag_name: `v${version}`,
       html_url: `https://github.com/openclaw/openclaw/releases/tag/v${version}`,
       target_commitish: sourceSha,
+      body: "Published release notes",
+      assets: [{ name: "dependency-evidence.zip" }],
     };
     const runGh = vi.fn((args: string[]) =>
       args[1]?.includes("/releases/tags/") ? JSON.stringify(release) : runInventory([]),

@@ -1,5 +1,6 @@
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { deleteCronJobScratch } from "../../test/helpers/cron/scratch-store.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
@@ -10,7 +11,7 @@ import { normalizeReplyPayloadDirectives } from "../auto-reply/reply/reply-deliv
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readCronScratchSnapshot } from "../cron/scratch-read.js";
-import { deleteCronJobScratch, readCronJobScratchState } from "../cron/scratch-store.js";
+import { readCronJobScratchState } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";

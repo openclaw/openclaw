@@ -369,9 +369,8 @@ it.each([
   vi.stubGlobal("navigator", { mediaDevices: devices });
   const page = mountConfigPageState(configContext(), { pageId: "appearance" });
   const props = page.state.configProps;
-  await waitForSolid(() => {
-    expect(props()).toMatchObject({ microphone: { loading: false }, camera: { loading: false } });
-  });
+  await Promise.all([props().microphone?.discovery, props().camera?.discovery]);
+  flush();
   enumerateDevices.mockReset().mockResolvedValue([]);
   const startsWithPermission = scenario === "permission failure";
   // devicechange refreshes both pickers; only this scenario's picker is delayed.
@@ -391,6 +390,7 @@ it.each([
     devices.dispatchEvent(new Event("devicechange"));
   }
   refresh();
+  flush();
   const initialCalls = startsWithPermission ? 1 : 2;
   expect(enumerateDevices).toHaveBeenCalledTimes(initialCalls);
   expect(getUserMedia).not.toHaveBeenCalled();
@@ -419,7 +419,8 @@ it.each([
     await Promise.resolve();
     flush();
   } else {
-    await waitForSolid(() => expect(props()[kind]?.loading).toBe(false));
+    await props()[kind]?.discovery;
+    flush();
   }
   const permits = ["reentry with gesture", "passive failure"].includes(scenario);
   expect(getUserMedia).toHaveBeenCalledTimes(permits ? 1 : 0);
@@ -431,9 +432,41 @@ it.each([
   }
   if (scenario === "permission failure") {
     expect(enumerateDevices).toHaveBeenCalledOnce();
-    expect(props()[kind]?.error).toBeTruthy();
+    await expect(props()[kind]?.discovery).resolves.toBeTruthy();
   }
 });
+it("keeps media permission gestures live while discovery status is pending", async () => {
+  const initial = deferred<MediaDeviceInfo[]>();
+  const enumerateDevices = vi.fn().mockReturnValueOnce(initial.promise).mockResolvedValue([]);
+  const stop = vi.fn();
+  const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
+  const mediaDevices = Object.assign(new EventTarget(), { enumerateDevices, getUserMedia });
+  vi.stubGlobal("navigator", { mediaDevices });
+  const { container } = mountConfigPage(configContext(), { pageId: "appearance" });
+  const select = container.querySelector<HTMLSelectElement>("[data-settings-microphone]")!;
+  expect(select).not.toBeNull();
+  expect(select.disabled).toBe(false);
+  expect(select.closest(".settings-row")?.textContent).not.toContain("No additional microphones");
+  select.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+  initial.resolve([]);
+  await waitForSolid(() => expect(getUserMedia).toHaveBeenCalledWith({ audio: true }));
+  expect(stop).toHaveBeenCalledOnce();
+  await waitForSolid(() =>
+    expect(select.closest(".settings-row")?.textContent).toContain("No additional microphones"),
+  );
+  enumerateDevices.mockRejectedValueOnce(new DOMException("Device unavailable", "NotFoundError"));
+  mediaDevices.dispatchEvent(new Event("devicechange"));
+  await waitForSolid(() =>
+    expect(select.closest(".settings-row")?.querySelector('[role="alert"]')).not.toBeNull(),
+  );
+  expect(container.querySelector("[data-settings-microphone]")).toBe(select);
+  mediaDevices.dispatchEvent(new Event("devicechange"));
+  await waitForSolid(() =>
+    expect(select.closest(".settings-row")?.querySelector('[role="alert"]')).toBeNull(),
+  );
+  expect(container.querySelector("[data-settings-microphone]")).toBe(select);
+});
+
 it("persists only confirmed camera selections and ignores superseded failures", async () => {
   const first = deferred();
   switchActiveRealtimeTalkCameras

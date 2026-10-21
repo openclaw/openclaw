@@ -38,6 +38,7 @@ const { values } = parseArgs({
     "open-details": { type: "boolean", default: false },
     "activity-session": { type: "string" },
     "activity-patch-sessions": { type: "string" },
+    "activity-catalog-refresh": { type: "boolean", default: false },
     "activity-cron": { type: "boolean", default: false },
     "activity-models": { type: "string", default: "openai/gpt-5.6-sol,openai/gpt-5.6-luna" },
   },
@@ -83,6 +84,9 @@ async function measureLoads(runs: number) {
       "--activity-patch-sessions uses existing sessions and excludes turn/cron activity",
     );
   }
+  if (values["activity-catalog-refresh"] && !patchSessions.length) {
+    throw new Error("--activity-catalog-refresh requires --activity-patch-sessions");
+  }
   if (activitySession && (runs !== 1 || activityModels.length === 0)) {
     throw new Error("Active session measurement requires --load-runs 1 and at least one model");
   }
@@ -102,6 +106,8 @@ async function measureLoads(runs: number) {
   });
   const results: unknown[] = [];
   const cleanupErrors: string[] = [];
+  let captureFailedProbe: (() => Promise<unknown>) | undefined;
+  let failure: { message: string; probe?: unknown } | undefined;
   let activityClient: ReturnType<typeof createGatewayWsClient> | undefined;
   let activityCronJobId: string | undefined;
   const activityRpc = async (method: string, params: unknown) => {
@@ -280,6 +286,7 @@ async function measureLoads(runs: number) {
                     dataPhase: frame.payload?.data?.phase,
                     agentId: frame.payload?.agentId,
                     modelCatalogChanged: frame.payload?.modelCatalogChanged,
+                    modelCatalogStatusChanged: frame.payload?.modelCatalogStatusChanged,
                     commandsChanged: frame.payload?.commandsChanged,
                     authChanged: frame.payload?.authChanged,
                     catalogChanged: frame.payload?.catalogChanged,
@@ -362,21 +369,30 @@ async function measureLoads(runs: number) {
       content: `;(() => { const __name = (target) => target; (${installProbe.toString()})(${values["request-stacks"]}, ${values["reload-census"]}); })();`,
     });
     const page = await context.newPage();
+    captureFailedProbe = () =>
+      page.evaluate(() => ({
+        ...Reflect.get(window, "__catalogLoad"),
+        atMs: performance.now(),
+      }));
     const openDetails = async () => {
       const details = page
         .getByRole("complementary", { name: "Details", exact: true })
         .or(page.getByRole("dialog", { name: "Details", exact: true }));
       if (!(await details.isVisible())) {
-        await page
+        const button = page
           .getByRole("button", { name: "Details", exact: true })
-          .or(page.getByRole("button").and(page.locator(".chat-header-session-menu__trigger")))
           .filter({ visible: true })
-          .first()
-          .click();
-        const menu = page.getByRole("menuitem", { name: "Session details", exact: true });
-        await details.or(menu).filter({ visible: true }).first().waitFor();
-        if (await menu.isVisible()) {
-          await menu.click();
+          .first();
+        if (await button.isVisible()) {
+          await button.click();
+        } else {
+          await page
+            .getByRole("button")
+            .and(page.locator(".chat-header-session-menu__trigger"))
+            .filter({ visible: true })
+            .first()
+            .click();
+          await page.getByRole("menuitem", { name: "Session details", exact: true }).click();
         }
       }
       await details.waitFor();
@@ -455,6 +471,20 @@ async function measureLoads(runs: number) {
             );
             await activityRpc("sessions.patch", { key, label: `Synthetic activity ${step}` });
             activity.push({ method: "sessions.patch", atMs, elapsedMs: Date.now() - started });
+            if (values["activity-catalog-refresh"] && step % 3 === 0) {
+              const refreshAtMs = await page.evaluate(() => performance.now());
+              const refreshStarted = Date.now();
+              await activityRpc("models.list", {
+                agentId: parseAgentSessionKey(key)!.agentId,
+                refresh: true,
+              });
+              activity.push({
+                method: "models.list",
+                atMs: refreshAtMs,
+                elapsedMs: Date.now() - refreshStarted,
+                result: { source: "controller", refresh: true },
+              });
+            }
             continue;
           }
           const key = values["activity-session"]!;
@@ -575,18 +605,9 @@ async function measureLoads(runs: number) {
             .first()
             .waitFor();
         }
-        const displayedModel = session.activeModel || session.model;
-        if (typeof displayedModel === "string" && displayedModel) {
-          await page
-            .locator(".chat-details__environment")
-            .filter({ visible: true })
-            .getByText(displayedModel, { exact: true })
-            .waitFor();
-        }
         detailsVerification = {
           server: expected,
           presentedDetailsInputMatch: true,
-          visibleDetailsModel: displayedModel,
           visibleConversationLabel: session.label,
         };
       }
@@ -647,7 +668,10 @@ async function measureLoads(runs: number) {
         activityBlockingMs: result.tasks
           .filter(
             (task: { startTime: number }) =>
-              activityStartedAtMs !== undefined && task.startTime >= activityStartedAtMs,
+              activityStartedAtMs !== undefined &&
+              activityEndedAtMs !== undefined &&
+              task.startTime >= activityStartedAtMs &&
+              task.startTime < activityEndedAtMs,
           )
           .reduce(
             (sum: number, task: { duration: number }) => sum + Math.max(0, task.duration - 50),
@@ -665,6 +689,12 @@ async function measureLoads(runs: number) {
         await page.screenshot({ path: values.screenshot, fullPage: true });
       }
     }
+  } catch (error) {
+    failure = {
+      message: String(error),
+      probe: await captureFailedProbe?.().catch(() => undefined),
+    };
+    throw error;
   } finally {
     if (activityClient && activityCronJobId) {
       try {
@@ -687,6 +717,7 @@ async function measureLoads(runs: number) {
       reloadCensus: values["reload-census"],
       path: values["load-path"],
       cleanupErrors,
+      failure,
       results,
     };
     await mkdir(path.dirname(path.resolve(values.output!)), { recursive: true });

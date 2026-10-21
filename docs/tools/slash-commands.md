@@ -10,6 +10,9 @@ read_when:
 
 The Gateway handles commands sent as standalone messages starting with `/`.
 Host-only bash commands use `! <cmd>` (with `/bash <cmd>` as an alias).
+The bang must start the command text, after any required group mention. Bang
+commands still require command authorization and elevated access; text such as
+`hello ! poll` and Markdown images such as `![diagram](image.png)` remain ordinary chat.
 
 When a conversation is bound to an ACP session, normal text routes to the ACP
 harness. Gateway management commands remain local: `/acp ...` always reaches

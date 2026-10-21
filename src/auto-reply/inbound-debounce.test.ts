@@ -106,6 +106,79 @@ describe("createInboundDebouncer", () => {
     return { debouncer, started, finished, entered, release };
   }
 
+  it.each([false, true])(
+    "waits for shipped flush callbacks when ordering and draining (thenable: %s)",
+    async (thenable) => {
+      const started: string[] = [];
+      const finished: string[] = [];
+      const firstCompletion = createDeferred();
+      const debouncer = keyedDebouncer({
+        serializeImmediate: true,
+        // @ts-expect-error Released plugins return promises instead of the current lifecycle shape.
+        onFlush: (items) => {
+          const id = items[0]?.id ?? "";
+          started.push(id);
+          const completion = (id === "first" ? firstCompletion.promise : Promise.resolve()).then(
+            () => {
+              finished.push(id);
+            },
+          );
+          // oxlint-disable-next-line unicorn/no-thenable -- Exercise a shipped structural PromiseLike callback.
+          return thenable ? { then: completion.then.bind(completion) } : completion;
+        },
+      });
+      const first = debouncer.enqueue({ key: "a", id: "first" });
+      const second = debouncer.enqueue({ key: "a", id: "second" });
+      const outcomes = Promise.allSettled([first, second]);
+      const onDrained = vi.fn();
+      const drain = debouncer.drain().then(onDrained);
+      let beforeRelease;
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        beforeRelease = { started: [...started], drained: onDrained.mock.calls.length };
+      } finally {
+        firstCompletion.resolve();
+        await Promise.all([outcomes, drain]);
+      }
+
+      expect(await outcomes).toEqual([
+        { status: "fulfilled", value: undefined },
+        { status: "fulfilled", value: undefined },
+      ]);
+      expect(beforeRelease).toEqual({ started: ["first"], drained: 0 });
+      expect(finished).toEqual(["first", "second"]);
+      expect(onDrained).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "reports a shipped flush rejection once and releases its key (thenable: %s)",
+    async (thenable) => {
+      const failure = new Error("legacy flush failed");
+      const onError = vi.fn();
+      const calls: string[] = [];
+      const debouncer = keyedDebouncer({
+        serializeImmediate: true,
+        // @ts-expect-error Released plugins return promises instead of the current lifecycle shape.
+        onFlush: (items) => {
+          const id = items[0]?.id ?? "";
+          calls.push(id);
+          const completion = id === "first" ? Promise.reject(failure) : Promise.resolve();
+          // oxlint-disable-next-line unicorn/no-thenable -- Exercise a shipped structural PromiseLike callback.
+          return thenable ? { then: completion.then.bind(completion) } : completion;
+        },
+        onError,
+      });
+
+      await expect(debouncer.enqueue({ key: "a", id: "first" })).resolves.toBeUndefined();
+      await expect(debouncer.enqueue({ key: "a", id: "second" })).resolves.toBeUndefined();
+      await debouncer.drain();
+
+      expect(onError).toHaveBeenCalledExactlyOnceWith(failure, [{ key: "a", id: "first" }]);
+      expect(calls).toEqual(["first", "second"]);
+    },
+  );
+
   it("seals bounded batches without blocking collection behind an active flush", async () => {
     const firstGate = createDeferred();
     const { calls, debouncer } = numberDebouncer(

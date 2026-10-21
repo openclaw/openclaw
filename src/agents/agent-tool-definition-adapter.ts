@@ -430,6 +430,9 @@ export function toClientToolDefinitions(
           }
         } catch (err) {
           recorder?.discard?.(toolCallId, func.name);
+          if (signal?.aborted) {
+            throw err;
+          }
           if (err instanceof ToolInputError) {
             return buildToolExecutionErrorResult({
               toolName: func.name,

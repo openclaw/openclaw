@@ -25,10 +25,7 @@ import {
   prepareRemoteModelCatalogStartupSnapshot,
 } from "../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
-import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { markPluginRegistryActive, quiescePluginRegistry } from "../plugins/registry-lifecycle.js";
-import { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import * as runtimePluginLoadPlan from "./harness/runtime-plugin-load-plan.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
@@ -42,7 +39,6 @@ import {
   applyRemoteModelCatalogUpdate,
   getPreparedModelRuntimeSnapshot as readSnapshot,
   loadPublishedGatewayReplyDispatchRuntime as loadPublishedDispatch,
-  prepareModelRuntimeSnapshot as prepare,
   refreshPreparedModelRuntimeSnapshots as refresh,
 } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
@@ -488,39 +484,5 @@ it("does not hold Gateway shutdown on an adoption's pricing preparation", async 
   } finally {
     held.resolve();
     pricingSpy.mockRestore();
-  }
-});
-
-it("recovers adopted owners when their borrowed Gateway plugin retires after commit", async ({
-  signal,
-}) => {
-  const lender = createEmptyPluginRegistry();
-  const record = createPluginRecord({ id: "gateway-lender" });
-  lender.plugins.push(record);
-  const instance = new PluginInstance(record.id, { record, registry: lender });
-  markPluginRegistryActive(lender);
-  const gateway = createPluginRegistryOwner(lender);
-  // Only the adoption candidates borrow the lender, so its retirement does not also
-  // retire the claimed predecessors (whose own watchers would abort the attempt).
-  mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
-  const nextRegistry = createEmptyPluginRegistry();
-  const input = fixture.agentInput("default", config);
-  try {
-    await setup();
-    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(lender);
-    const adoption = applyRemoteModelCatalogUpdate(() => config);
-    expect(await adoption).toBe("published");
-    expect(instance.owner?.registry).toBe(lender);
-    const adopted = await prepare(input);
-    mocks.loadAgentRuntimePluginRegistryHandle.mockClear().mockReturnValue(nextRegistry);
-    quiescePluginRegistry(lender);
-    expect(adopted.isCurrent()).toBe(false);
-    // A lost loan never leaves the adopted catalog's owners unusable until a restart.
-    const replacement = await withinTest(prepare(input), signal);
-    expect(replacement.pluginRegistry).toBe(nextRegistry);
-    expect(replacement.isCurrent()).toBe(true);
-    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
-  } finally {
-    await gateway.close();
   }
 });

@@ -148,7 +148,13 @@ async function checkAccessiblePins(page: Page, width: number) {
   expect(await sidebar.getByRole("menuitem", { name: "Create new session" }).count()).toBe(0);
   for (const item of [viewSessions, settings, deleteAgent]) {
     await expectCounts(item, { svg: 1 });
-    expect(await style(item.locator("svg"), "width")).toBe("16px");
+    // Menu refreshes retain the row but can replace its icon before a child locator evaluates.
+    expect(
+      await item.evaluate((element) => {
+        const icon = element.querySelector("svg");
+        return icon ? getComputedStyle(icon).getPropertyValue("width") : null;
+      }),
+    ).toBe("16px");
   }
   expect(await sidebar.getByRole("menuitem", { name: "Collapse others" }).count()).toBe(0);
   const menuLabels = await sidebar.getByRole("menuitem").allTextContents();

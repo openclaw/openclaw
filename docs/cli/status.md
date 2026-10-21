@@ -315,9 +315,11 @@ succeeds or the Gateway restarts.
 - When command-local SecretRef resolution succeeds, status prefers the
   resolved snapshot and clears transient "secret unavailable" channel
   markers from the final output.
-- `status --all` includes a Secrets overview row and a diagnosis section
-  that summarizes secret diagnostics (truncated for readability) without
-  stopping report generation.
+- Human status combines Gateway-owned degraded secrets with distinct command-local
+  diagnostics, deduplicating matching config paths. It shows cold/stale state,
+  redacted reasons, and `openclaw secrets reload` guidance. The `status --all`
+  Secrets row and diagnosis count use that same list, bounded for readability.
+  JSON keeps Gateway owners and command-local `secretDiagnostics` separate.
 
 ## Memory
 

@@ -33,17 +33,6 @@ export function withDatabase<T>(
   return action(database);
 }
 
-export async function withRestoredSpies<T>(
-  spies: { mockRestore: () => void }[],
-  action: () => Promise<T>,
-): Promise<T> {
-  try {
-    return await action();
-  } finally {
-    spies.forEach((spy) => spy.mockRestore());
-  }
-}
-
 export const expectMissing = (filePath: string) =>
   expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
 

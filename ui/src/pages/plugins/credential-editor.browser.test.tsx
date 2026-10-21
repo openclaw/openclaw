@@ -179,7 +179,7 @@ it.each(["button", "modal"])("blocks %s dismissal during Save", async (dismissal
   }
   flush();
   expect(modal(editor)).not.toBeNull();
-  await vi.waitFor(() => expect(button(editor, "Cancel").disabled).toBe(true));
+  expect(button(editor, "Cancel").disabled).toBe(true);
   pending.resolve(true);
   await vi.waitFor(() => expect(modal(editor)).toBeNull());
 });

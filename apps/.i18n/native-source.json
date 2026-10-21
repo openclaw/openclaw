@@ -5450,6 +5450,7 @@
     {"path":"apps/ios/Sources/Onboarding/OnboardingWizardView.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.390a3c24fc5c41d0","source":"Gateway auth token is missing."},
     {"path":"apps/ios/Sources/Onboarding/OnboardingWizardView.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.e600b246c8c84e9b","source":"Gateway rejected credentials."},
     {"path":"apps/ios/Sources/Onboarding/OnboardingWizardView.swift","kind":"ui-call","surface":"apple","id":"native.apple.e32526dba77c6275","source":"Apply"},
+    {"path":"apps/ios/Sources/Onboarding/OnboardingWizardView.swift","kind":"ui-call","surface":"apple","id":"native.apple.9c60d46ba33836b2","source":"Back"},
     {"path":"apps/ios/Sources/Onboarding/OnboardingWizardView.swift","kind":"ui-call","surface":"apple","id":"native.apple.bf1d12346f2c153e","source":"Back to Mode Selection"},
     {"path":"apps/ios/Sources/Onboarding/OnboardingWizardView.swift","kind":"ui-call","surface":"apple","id":"native.apple.addaba7d7374d016","source":"Cancel"},
     {"path":"apps/ios/Sources/Onboarding/OnboardingWizardView.swift","kind":"ui-call","surface":"apple","id":"native.apple.b09b13e1e8301e8e","source":"Choose a mode first."},

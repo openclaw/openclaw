@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -35,6 +36,8 @@ vi.mock("../../infra/device-pairing-tokens.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/device-pairing-tokens.js")>()),
   ...mocks.tokens,
 }));
+
+const { deviceHandlers } = await import("./devices.js");
 
 export function createClient(
   scopes: string[],
@@ -86,6 +89,17 @@ export function createDeviceClient(scopes = ["operator.pairing"], deviceId = "de
 
 export function expectDeviceSuccess(opts: GatewayRequestHandlerOptions, payload: unknown) {
   expect(opts.respond).toHaveBeenCalledWith(true, payload, undefined);
+}
+
+export async function invokeDevice(opts: GatewayRequestHandlerOptions) {
+  await expectDefined(deviceHandlers[opts.req.method], opts.req.method)(opts);
+}
+
+export function expectPrivate(events: unknown, secrets: string[]) {
+  const text = JSON.stringify(events);
+  for (const secret of secrets) {
+    expect(text).not.toContain(secret);
+  }
 }
 
 export function mockRotateOperatorTokenSuccess(): void {
