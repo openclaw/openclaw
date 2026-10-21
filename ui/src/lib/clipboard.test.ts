@@ -34,7 +34,7 @@ describe("copyToClipboard", () => {
   });
 
   it("skips fallback when the caller retires a rejected async write", async () => {
-    const pending = createDeferred<void>();
+    const pending = createDeferred();
     writeText.mockReturnValue(pending.promise);
     let current = true;
 

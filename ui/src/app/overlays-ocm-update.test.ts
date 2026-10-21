@@ -47,7 +47,7 @@ async function start(patch: Partial<Run>, retry = false) {
     overlays,
     request,
     run,
-    update(change: Partial<Run>) {
+    update: (change: Partial<Run>) => {
       run = { ...run, updatedAtMs: run.updatedAtMs + 1, ...change };
       return run;
     },

@@ -5,7 +5,7 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -17,9 +17,9 @@ import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 const scope = (sessionKey: string) => ({ agentId: "main", sessionKey });
-const patch = (key: string, changes: Partial<SessionEntry>) =>
+const patch = (key: string, changes: Partial<InternalSessionEntry>) =>
   patchSessionEntryCore(scope(key), () => changes);
-const put = (key: string, sessionId: string, fields: Partial<SessionEntry>) =>
+const put = (key: string, sessionId: string, fields: Partial<InternalSessionEntry>) =>
   upsertSessionEntryCore(scope(key), { sessionId, updatedAt: 1, ...fields });
 const config = (): OpenClawConfig => ({ agents: { entries: { main: {} } } });
 function resolver(projection: SessionRowProjection, publicOnly = false) {

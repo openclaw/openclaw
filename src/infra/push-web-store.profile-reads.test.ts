@@ -15,7 +15,10 @@ import {
   type WebPushMutationGuard,
 } from "./push-web-store.js";
 import { webPushOperations } from "./push-web-store.worker.js";
-import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
+import {
+  runWithSqliteWorkerStateContext,
+  type SqliteWorkerStateContext,
+} from "./sqlite-worker-state-context.js";
 
 const admission = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) => ({
@@ -36,7 +39,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 let database: OpenClawStateDatabase;
 let stateDir: string;
-let env: NodeJS.ProcessEnv;
+let env: SqliteWorkerStateContext["environment"];
 const runtime = { open: () => database, stateOptions: () => ({ path: database.path, env }) };
 beforeEach(() => {
   stateDir = tempDirs.make("web-push-profile-reads-");

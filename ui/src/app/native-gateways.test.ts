@@ -8,7 +8,10 @@ import {
 
 const EVENT = "openclaw:native-gateways-changed";
 const snapshot = {
-  gateways: [{ ...embedderSnapshot.gateways[0], kind: "local" as const }],
+  gateways: [
+    { ...embedderSnapshot.gateways[0], kind: "local" as const },
+    { ...embedderSnapshot.gateways[1], id: "profile:studio", name: "Studio" },
+  ],
   currentId: "personal",
 };
 async function nativeCapability() {

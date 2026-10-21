@@ -6,6 +6,7 @@ import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent
 import { createEmbeddedCallGateway } from "../../agents/tools/embedded-gateway-stub.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   lookupPluginStateInWorker,
@@ -72,7 +73,7 @@ it.each(["replaced", "made private"])(
   "describes current session metadata without waiting for catalog readiness when the session is %s",
   async (change) => {
     await withRunState(async () => {
-      const reader = {
+      const reader: GatewayOperatorRoleDefinition = {
         agents: "*" as const,
         scopes: ["operator.read"],
         sessions: { others: "view" as const },

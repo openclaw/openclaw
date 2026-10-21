@@ -3,6 +3,7 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as projectionAccess from "../session-row-projection-access.js";
@@ -75,7 +76,7 @@ export async function call(
 }
 
 export function roleConfig(others: "none" | "view" | "suggest" | "write"): OpenClawConfig {
-  const role = {
+  const role: GatewayOperatorRoleDefinition = {
     sessions: { others },
     agents: "*" as const,
     scopes: ["operator.read", "operator.write"],

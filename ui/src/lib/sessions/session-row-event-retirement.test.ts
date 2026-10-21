@@ -21,7 +21,9 @@ it.each(["event", "read"] as const)(
   "does not recapture a descriptor after retirement by an authoritative %s",
   async (retirement) => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const initial: GatewaySessionRow = {
       agentId: "main",
       key: "agent:main:retired-event-capture",
