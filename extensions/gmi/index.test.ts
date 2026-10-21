@@ -1,23 +1,47 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
+import type { ProviderPlugin, ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
-function createGmiModel(id: string): Model<"openai-completions"> {
-  return {
-    provider: "gmi",
-    api: "openai-completions",
-    id,
-    name: id,
-    reasoning: true,
-    baseUrl: "https://api.gmi-serving.com/v1",
-    input: ["text"],
-    contextWindow: 128_000,
-    maxTokens: 1024,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+const gmiModel: Model<"openai-completions"> = {
+  provider: "gmi",
+  api: "openai-completions",
+  id: "openai/gpt-5.6-sol",
+  name: "GMI test model",
+  reasoning: true,
+  baseUrl: "https://api.gmi-serving.com/v1",
+  input: ["text"],
+  contextWindow: 128_000,
+  maxTokens: 1024,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+};
+
+async function capturePayload(
+  wrap: ProviderPlugin["wrapStreamFn"],
+  model: Parameters<StreamFn>[0],
+  context: Parameters<StreamFn>[1],
+  request?: Record<string, unknown>,
+  sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
+) {
+  let payload: unknown;
+  const streamFn: StreamFn = async (selected, messages, options) => {
+    const body =
+      request ?? buildOpenAICompletionsParams(selected, messages, { reasoningEffort: "high" });
+    payload = (await options?.onPayload?.(body, selected)) ?? body;
+    const stream = createAssistantMessageEventStream();
+    stream.end();
+    return stream;
   };
+  const wrapped = wrap?.({ provider: "gmi", modelId: model.id, model, sourceApi, streamFn });
+  if (!wrapped) {
+    throw new Error("Expected GMI completion wrapper");
+  }
+  expect(wrapped).toHaveProperty("preservesGenericCompatibility", true);
+  await wrapped(model, context);
+  return payload;
 }
 
 describe("gmi provider plugin", () => {
@@ -32,26 +56,14 @@ describe("gmi provider plugin", () => {
       ["gpt-5.6-sol", "high"],
       ["other/gpt-5.6-sol", "high"],
     ] as const) {
-      const model = createGmiModel(id);
+      const model = { ...gmiModel, id };
       for (const wrap of [provider.wrapStreamFn, provider.wrapSimpleCompletionStreamFn]) {
         for (const tools of [
           undefined,
           [],
           [{ name: "ping", description: "Ping", parameters: { type: "object", properties: {} } }],
         ]) {
-          let payload: unknown;
-          const baseStreamFn: StreamFn = async (selected, context, options) => {
-            const request = buildOpenAICompletionsParams(selected, context, {
-              reasoningEffort: "high",
-            });
-            payload = (await options?.onPayload?.(request, selected)) ?? request;
-            const stream = createAssistantMessageEventStream();
-            stream.end();
-            return stream;
-          };
-          const streamFn =
-            wrap?.({ provider: "gmi", modelId: id, model, streamFn: baseStreamFn }) ?? baseStreamFn;
-          await streamFn(model, {
+          const payload = await capturePayload(wrap, model, {
             messages: [{ role: "user", content: "Ping", timestamp: 0 }],
             tools,
           });
@@ -79,31 +91,14 @@ describe("gmi provider plugin", () => {
       ["openai-completions", "openai-responses", "high"],
       ["openai-responses", undefined, "high"],
     ] as const) {
-      const model = { ...createGmiModel("openai/gpt-5.6-sol"), api };
+      const model = { ...gmiModel, api };
       for (const wrap of [provider.wrapStreamFn, provider.wrapSimpleCompletionStreamFn]) {
         const payload = {
           model: model.id,
           tools: [{ type: "function", function: { name: "ping" } }],
           reasoning_effort: "high",
         };
-        const baseStreamFn: StreamFn = async (selected, _context, options) => {
-          await options?.onPayload?.(payload, selected);
-          const stream = createAssistantMessageEventStream();
-          stream.end();
-          return stream;
-        };
-        const streamFn = wrap?.({
-          provider: "gmi",
-          modelId: model.id,
-          model,
-          sourceApi,
-          streamFn: baseStreamFn,
-        });
-        if (!streamFn) {
-          throw new Error("Expected GMI completion wrapper");
-        }
-        expect(streamFn).toHaveProperty("preservesGenericCompatibility", true);
-        await streamFn(model, { messages: [] });
+        await capturePayload(wrap, model, { messages: [] }, payload, sourceApi);
         expect(payload.reasoning_effort).toBe(effort);
       }
     }
