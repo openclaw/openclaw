@@ -307,9 +307,13 @@ it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "ot
   },
 );
 
-it("releases account usage mounted after its profile row settles", () => {
-  const releaseUsage = vi.fn();
-  const registerAccountUsage = vi.fn(() => releaseUsage);
+it("releases each account usage element while retaining its profile row", () => {
+  const releaseFirstUsage = vi.fn();
+  const releaseSecondUsage = vi.fn();
+  const registerAccountUsage = vi
+    .fn(() => releaseFirstUsage)
+    .mockReturnValueOnce(releaseFirstUsage)
+    .mockReturnValueOnce(releaseSecondUsage);
   const providerCard = orderedCard(pair);
   for (const profile of providerCard.profiles) {
     profile.type = "api_key";
@@ -318,19 +322,39 @@ it("releases account usage mounted after its profile row settles", () => {
   const retainedRow = rowFor(container, "openai:one");
   expect(registerAccountUsage).not.toHaveBeenCalled();
 
-  update({
+  const oauthCard = {
     ...providerCard,
     profiles: [makeProfile("openai:one")],
     profileOrders: { openai: ["openai:one"] },
+  };
+  update(oauthCard);
+  const firstUsage = container.querySelector("openclaw-model-account-usage");
+  expect(rowFor(container, "openai:one")).toBe(retainedRow);
+  expect(firstUsage).not.toBeNull();
+  expect(registerAccountUsage).toHaveBeenCalledExactlyOnceWith(firstUsage);
+  expect(releaseFirstUsage).not.toHaveBeenCalled();
+
+  update({
+    ...oauthCard,
+    profiles: [{ ...makeProfile("openai:one"), type: "api_key" }],
   });
   expect(rowFor(container, "openai:one")).toBe(retainedRow);
-  expect(container.querySelector("openclaw-model-account-usage")).not.toBeNull();
-  expect(registerAccountUsage).toHaveBeenCalledTimes(1);
-  expect(releaseUsage).not.toHaveBeenCalled();
+  expect(container.querySelector("openclaw-model-account-usage")).toBeNull();
+  expect(releaseFirstUsage).toHaveBeenCalledTimes(1);
+
+  update(oauthCard);
+  const secondUsage = container.querySelector("openclaw-model-account-usage");
+  expect(rowFor(container, "openai:one")).toBe(retainedRow);
+  expect(secondUsage).not.toBeNull();
+  expect(secondUsage).not.toBe(firstUsage);
+  expect(registerAccountUsage).toHaveBeenCalledTimes(2);
+  expect(registerAccountUsage).toHaveBeenLastCalledWith(secondUsage);
+  expect(releaseSecondUsage).not.toHaveBeenCalled();
 
   update({ ...providerCard, profiles: [], profileOrders: {} });
   expect(container.querySelector("openclaw-model-account-usage")).toBeNull();
-  expect(releaseUsage).toHaveBeenCalledTimes(1);
+  expect(releaseFirstUsage).toHaveBeenCalledTimes(1);
+  expect(releaseSecondUsage).toHaveBeenCalledTimes(1);
 });
 
 it("releases a removed row's drag without handling the next Escape", () => {

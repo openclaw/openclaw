@@ -20,6 +20,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import {
   fetchLmstudioModels,
+  LmstudioModelLoadError,
   prepareLmstudioModelForInference,
   type LmstudioPreparedModel,
 } from "./models.fetch.js";
@@ -264,11 +265,8 @@ export async function createLmstudioEmbeddingProvider(
       } catch (error) {
         signal?.throwIfAborted();
         // Cache identity is frozen at construction, including after a failed load.
-        if (initializeIdentity && error instanceof Error && "resolvedModelKey" in error) {
-          const resolvedModelKey = error.resolvedModelKey;
-          if (typeof resolvedModelKey === "string" && resolvedModelKey.trim()) {
-            client.model = resolvedModelKey.trim();
-          }
+        if (initializeIdentity && error instanceof LmstudioModelLoadError) {
+          client.model = error.resolvedModelKey;
         }
         const details = { baseUrl, model: client.model, error: formatErrorMessage(error) };
         if (initializeIdentity) {

@@ -3,23 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { registerSkillsCli } from "./skills-cli.js";
 
-const mocks = vi.hoisted(() => ({
-  acquireGatewayLock: vi.fn(),
-  archiveWorkshopSkill: vi.fn(),
-  callGateway: vi.fn(),
-  config: {},
-  listWorkshopChanges: vi.fn(),
-  restoreWorkshopSkill: vi.fn(),
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-  },
-}));
+const mocks = await vi.hoisted(async () => {
+  const { runtimeFixture } = await import("./skills-cli.test-support.js");
+  return {
+    acquireGatewayLock: vi.fn(),
+    archiveWorkshopSkill: vi.fn(),
+    callGateway: vi.fn(),
+    config: {},
+    listWorkshopChanges: vi.fn(),
+    restoreWorkshopSkill: vi.fn(),
+    defaultRuntime: runtimeFixture(true).runtime,
+  };
+});
 
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),

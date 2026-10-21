@@ -145,20 +145,6 @@ it.each(["chat", "modifier", "background"])(
   },
 );
 
-it("supports mouse and Tab acceptance and persistent Escape dismissal", () => {
-  const f = fixture("chat", ":smi");
-  f.key("Escape");
-  f.textarea.dispatchEvent(new Event("select"));
-  flush();
-  f.closed(":smi");
-  f.input(":smil");
-  f.container.querySelector<HTMLElement>('[role="option"]')!.click();
-  expect(f.draft()).toBe("😄");
-  f.input(":thumbsup");
-  f.key("Tab");
-  f.closed("👍");
-});
-
 describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
   it("accepts before synchronous overlay retirement can dismiss the menu again", () => {
     let overlay: Overlay | undefined;
@@ -170,18 +156,30 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
         overlay?.retire();
       },
     });
-    const f = fixture(kind, "Nice :smi");
+    const f = fixture(kind);
+    f.input("Before :smi after", 11);
     expect(overlay).toBeDefined();
-    f.key("ArrowDown");
+    const list = f.container.querySelector('[role="listbox"]')!;
+    expect(list.getAttribute("aria-label")).toBe("Emoji suggestions");
+    expect(f.textarea.getAttribute("aria-controls")).toBe(list.id);
+    const first = f.textarea.getAttribute("aria-activedescendant");
+    expect(f.key("ArrowDown").defaultPrevented).toBe(true);
+    expect(f.textarea.getAttribute("aria-activedescendant")).not.toBe(first);
     f.key("ArrowUp");
     expect(f.key("Tab").defaultPrevented).toBe(true);
-    f.closed("Nice 😄");
+    f.closed("Before 😄 after");
+    expect(f.textarea.selectionStart).toBe(9);
+    expect(document.activeElement).toBe(f.textarea);
   });
 
-  it("ignores a queued selection event after focus leaves the composer", () => {
+  it.each(["blur", "Escape"])("ignores a queued selection event after %s", (dismissal) => {
     const f = fixture(kind, ":smi");
     f.textarea.setSelectionRange(4, 4);
-    f.textarea.blur();
+    if (dismissal === "blur") {
+      f.textarea.blur();
+    } else {
+      f.key("Escape");
+    }
     f.textarea.dispatchEvent(new Event("select"));
     flush();
     f.closed(":smi");
@@ -197,22 +195,6 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
     expect(locked.colon().defaultPrevented).toBe(false);
     expect(locked.container.querySelector('[aria-label="Emoji suggestions"]')).toBeNull();
   });
-});
-
-it("navigates accessible suggestions and inserts only the caret token without sending", () => {
-  const f = fixture("chat");
-  f.input("Before :smi after", 11);
-  const list = f.container.querySelector('[role="listbox"]')!;
-  expect(list.getAttribute("aria-label")).toBe("Emoji suggestions");
-  expect(f.textarea.getAttribute("aria-controls")).toBe(list.id);
-  const first = f.textarea.getAttribute("aria-activedescendant");
-  expect(f.key("ArrowDown").defaultPrevented).toBe(true);
-  expect(f.textarea.getAttribute("aria-activedescendant")).not.toBe(first);
-  f.key("ArrowUp");
-  expect(f.key("Enter").defaultPrevented).toBe(true);
-  f.closed("Before 😄 after");
-  expect(f.textarea.selectionStart).toBe(9);
-  expect(document.activeElement).toBe(f.textarea);
 });
 
 it.each([

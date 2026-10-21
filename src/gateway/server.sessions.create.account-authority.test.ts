@@ -84,24 +84,20 @@ function sessionCreation(
     ]);
     expect(entry()).toBeUndefined();
   };
-  const create = (selectedModel?: string, idempotencyKey?: string) =>
+  const send = (params: Record<string, unknown>, webchat = false) =>
     handleGatewayRequest({
-      req: {
-        type: "req",
-        id,
-        method: "sessions.create",
-        params: {
-          key,
-          ...(selectedModel ? { model: selectedModel } : {}),
-          ...(idempotencyKey ? { idempotencyKey } : {}),
-        },
-      },
+      req: { type: "req", id, method: "sessions.create", params: { key, ...params } },
       client,
       context,
       respond,
-      isWebchatConnect: () => false,
+      isWebchatConnect: () => webchat,
     });
-  return { respond, entry, expectRejected, create };
+  const create = (selectedModel?: string, idempotencyKey?: string) =>
+    send({
+      ...(selectedModel ? { model: selectedModel } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    });
+  return { respond, entry, expectRejected, create, send };
 }
 
 function holdCatalog(context: GatewayRequestHandlerOptions["context"]) {
@@ -356,22 +352,13 @@ test("sessions.create rejects a session-only creator revoked after initial menti
         return result;
       });
     try {
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "revoked-initial-mention",
-          method: "sessions.create",
-          params: {
-            key: fixture.key,
-            message: "@Recipient review this",
-            mentions: [{ profileId: recipientProfile.id, start: 0, end: 10 }],
-          },
+      await fixture.send(
+        {
+          message: "@Recipient review this",
+          mentions: [{ profileId: recipientProfile.id, start: 0, end: 10 }],
         },
-        client: fixture.client,
-        context: fixture.context,
-        respond: fixture.respond,
-        isWebchatConnect: () => true,
-      });
+        true,
+      );
       expect(validation).toHaveBeenCalledOnce();
       fixture.expectRejected();
       const history = await directSessionReq<{ messages: unknown[] }>(

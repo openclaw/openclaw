@@ -1287,9 +1287,11 @@ export function createSessionsPage(
     return {
       ...viewState,
       commandEpoch: pageEpoch,
-      loading: state.loading || details.loading(),
+      // The descriptor read belongs to the expanded slot, outside this aggregate snapshot.
+      detailsRead: details.read,
+      detailsReadKey: details.readKey,
+      onRetryDetails: details.retry,
       refreshDisabled: application.gateway.snapshot.phase !== "connected",
-      error: details.error() ?? state.error,
       basePath: application.basePath,
       agentId: resolveSessionNavigationAgentId(application),
       allAgentsScope: application.agentSelection.state.scopeId === null,

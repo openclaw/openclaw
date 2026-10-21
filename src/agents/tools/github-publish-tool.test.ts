@@ -139,8 +139,16 @@ it.each<{
     evidence: true,
   },
   {
-    name: "unmanaged sandbox",
+    // An ordinary local Docker or Podman conversation adopts a managed workspace.
+    name: "unmanaged local sandbox",
     sandbox: { workspaceSource: undefined },
+    prepare: true,
+    refresh: false,
+    evidence: true,
+  },
+  {
+    name: "unmanaged remote sandbox",
+    sandbox: { workspaceSource: undefined, backendId: "ssh" },
     prepare: false,
     refresh: false,
     evidence: true,
@@ -236,7 +244,8 @@ it.each([
   expect(callGateway).not.toHaveBeenCalled();
 });
 
-it.each(["managed-worktree", undefined] as const)(
+// Unbound sandboxed conversations yield first; github-publish-tool.handoff.test.ts owns that path.
+it.each(["managed-worktree"] as const)(
   "dispatches preparation with its current %s sandbox before owner qualification",
   async (workspaceSource) => {
     const sandbox = publicationSandbox({ workspaceSource });

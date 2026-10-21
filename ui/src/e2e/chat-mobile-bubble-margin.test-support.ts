@@ -214,7 +214,11 @@ export async function measureMargin(page: Page, testCase: MarginCase) {
       Promise.all(images.map((element) => element.decode())),
     );
   await page.evaluate(() => document.fonts.ready);
-  return target.evaluate((element, side) => {
+  return target.evaluate(async (element, side) => {
+    const finiteAnimations = element
+      .getAnimations()
+      .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime));
+    await Promise.allSettled(finiteAnimations.map((animation) => animation.finished));
     const group = element.closest(".chat-group") ?? element.closest(".chat-thread-inner")!;
     const column = group.getBoundingClientRect();
     const box = element.getBoundingClientRect();

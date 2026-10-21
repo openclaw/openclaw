@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ConfigSnapshotReadMeasure } from "../../../config/io.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../../../infra/deferred-plugin-migrations.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../../../infra/state-migrations.media-persistence-targets.js";
@@ -88,6 +89,7 @@ export async function retainHeartbeatMigrationInput(
       }
     }
   }
+  copyConfigResolutionFactsThroughRewrite(config, candidate);
   return candidate;
 }
 

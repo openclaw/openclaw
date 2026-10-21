@@ -71,18 +71,34 @@ describe("resolveRequesterToolPolicies", () => {
     expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
   }
 
-  it("retains dashboard delegation and revocation fallback without an injected capability store", async () => {
-    const root = "agent:front:main";
-    const visible = "agent:worker:dashboard:coding";
-    const helper = "agent:worker:subagent:helper";
-    const cfg = config({
-      tools: { toolsBySender: { "*": {} } },
+  function workerConfig(overrides: OpenClawConfig = {}) {
+    return config({
       agents: {
         entries: {
           front: { subagents: { allowAgents: ["worker"], delegateToolsTo: ["worker"] } },
           worker: {},
         },
       },
+      ...overrides,
+    });
+  }
+
+  function expectInherited(
+    result: ReturnType<typeof resolveRequesterToolPolicies>,
+    source: "persisted-child" | "completion-handoff",
+    policy: { allow?: string[]; deny?: string[] },
+  ) {
+    expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe(source);
+    expect(result.inheritedToolPolicy).toEqual(policy);
+  }
+
+  it("retains dashboard delegation and revocation fallback without an injected capability store", async () => {
+    const root = "agent:front:main";
+    const visible = "agent:worker:dashboard:coding";
+    const helper = "agent:worker:subagent:helper";
+    const cfg = workerConfig({
+      tools: { toolsBySender: { "*": {} } },
     });
     const delegatedToolPolicy = {
       requesterSessionKey: root,
@@ -257,11 +273,9 @@ describe("resolveRequesterToolPolicies", () => {
       expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
       return;
     }
-    expect(result.delegated).toBe(true);
-    expect(result.requesterPolicySource).toBe("completion-handoff");
+    expectInherited(result, "completion-handoff", { allow: ["read", "exec"], deny: ["write"] });
     expect(result.senderPolicy).toBeUndefined();
     expect(result.groupPolicy).toBeUndefined();
-    expect(result.inheritedToolPolicy).toEqual({ allow: ["read", "exec"], deny: ["write"] });
     expect(result.inheritedToolPolicySource).toBe("sender");
 
     const requesterOrigin = {
@@ -319,14 +333,12 @@ describe("resolveRequesterToolPolicies", () => {
       spawnedBy: parentSessionKey,
     });
 
-    expect(result.delegated).toBe(true);
-    expect(result.requesterPolicySource).toBe("persisted-child");
-    expect(result.senderPolicy).toBeUndefined();
-    expect(result.groupPolicy).toBeUndefined();
-    expect(result.inheritedToolPolicy).toEqual({
+    expectInherited(result, "persisted-child", {
       allow: ["read", "sessions_spawn"],
       deny: ["exec"],
     });
+    expect(result.senderPolicy).toBeUndefined();
+    expect(result.groupPolicy).toBeUndefined();
     expect(result.subagentPolicy).toBeDefined();
   });
 
@@ -393,48 +405,38 @@ describe("resolveRequesterToolPolicies", () => {
     expect(forged.groupPolicy).toEqual({ deny: ["read"] });
   });
 
-  it("does not trust partial persisted lineage as an authority envelope", async () => {
-    const childSessionKey = "agent:main:subagent:partial";
-    await writeSession(childSessionKey, {
-      spawnedBy: "agent:main:discord:direct:alice",
-    });
-
-    expectCurrentPolicy(await resolvePolicy({ sessionKey: childSessionKey }));
-  });
-
-  it("re-resolves sender policy for an unversioned legacy child envelope", async () => {
-    const childSessionKey = "agent:main:subagent:legacy";
-    await writeChild(childSessionKey, {
-      inheritedToolPolicyVersion: undefined,
-      inheritedToolDeny: ["message"],
-    });
-
-    const result = await resolvePolicy({ sessionKey: childSessionKey });
-
-    expectCurrentPolicy(result);
-    expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
-  });
-
-  it.each([
-    ["sender identity", { senderId: "bob" }],
-    ["external provenance", { inputProvenance: { kind: "external_user" as const } }],
-  ])("applies current policy to an existing child with %s", async (_label, externalFacts) => {
-    const childSessionKey = "agent:main:subagent:external-turn";
-    await writeChild(childSessionKey, {
-      inheritedToolDeny: ["message"],
-      inheritedToolPolicySource: "sender",
-    });
-
-    const result = await resolvePolicy({
-      sessionKey: childSessionKey,
-      messageProvider: "discord",
-      ...externalFacts,
-    });
-
-    expectCurrentPolicy(result);
-    expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
-    expect(result.inheritedToolPolicySource).toBe("sender");
-  });
+  it.each(["partial lineage", "unversioned legacy", "sender identity", "external provenance"])(
+    "applies current policy to a child with %s",
+    async (kind) => {
+      const childSessionKey = "agent:main:subagent:current-policy";
+      const partial = kind === "partial lineage";
+      const external = kind === "sender identity" || kind === "external provenance";
+      if (partial) {
+        await writeSession(childSessionKey, { spawnedBy: "agent:main:discord:direct:alice" });
+      } else {
+        await writeChild(childSessionKey, {
+          inheritedToolPolicyVersion: kind === "unversioned legacy" ? undefined : 1,
+          inheritedToolDeny: ["message"],
+          inheritedToolPolicySource: external ? "sender" : undefined,
+        });
+      }
+      const result = await resolvePolicy({
+        sessionKey: childSessionKey,
+        ...(external ? { messageProvider: "discord" } : {}),
+        ...(kind === "sender identity" ? { senderId: "bob" } : {}),
+        ...(kind === "external provenance"
+          ? { inputProvenance: { kind: "external_user" as const } }
+          : {}),
+      });
+      expectCurrentPolicy(result);
+      if (!partial) {
+        expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
+      }
+      if (external) {
+        expect(result.inheritedToolPolicySource).toBe("sender");
+      }
+    },
+  );
 
   it.each([false, true])(
     "applies current requester policy to a fresh child followup while retaining its ceiling (delegated=%s)",
@@ -459,14 +461,7 @@ describe("resolveRequesterToolPolicies", () => {
             }
           : {}),
       });
-      const cfg = config({
-        agents: {
-          entries: {
-            front: { subagents: { allowAgents: ["worker"], delegateToolsTo: ["worker"] } },
-            worker: {},
-          },
-        },
-      });
+      const cfg = workerConfig();
       const request = {
         agentId: "worker",
         sessionKey: childSessionKey,
@@ -538,10 +533,8 @@ describe("resolveRequesterToolPolicies", () => {
       ...handoff,
     });
 
-    expect(result.delegated).toBe(true);
-    expect(result.requesterPolicySource).toBe("completion-handoff");
+    expectInherited(result, "completion-handoff", { allow: ["read", "exec"] });
     expect(result.senderPolicy).toBeUndefined();
-    expect(result.inheritedToolPolicy).toEqual({ allow: ["read", "exec"] });
 
     const controllerResult = await resolvePolicy({ sessionKey: controllerSessionKey, ...handoff });
     expect(controllerResult.delegated).toBe(false);
@@ -579,30 +572,19 @@ describe("resolveRequesterToolPolicies", () => {
     return { requesterSessionKey, parentChildSessionKey, leafSessionKey };
   }
 
-  it("walks nested lineage to the projection captured from the target requester", async () => {
-    const { requesterSessionKey, leafSessionKey } = await writeNestedLineage();
+  it.each([
+    ["requester", ["exec"]],
+    ["parent-child resume envelope", ["exec", "read"]],
+  ] as const)("restores the nested completion projection for %s", async (target, deny) => {
+    const { requesterSessionKey, parentChildSessionKey, leafSessionKey } =
+      await writeNestedLineage();
+    const sessionKey = target === "requester" ? requesterSessionKey : parentChildSessionKey;
     const result = await resolvePolicy({
-      sessionKey: requesterSessionKey,
-      ...completionHandoffFacts(leafSessionKey, requesterSessionKey),
+      sessionKey,
+      ...(target === "requester" ? {} : { subagentSessionKey: parentChildSessionKey }),
+      ...completionHandoffFacts(leafSessionKey, sessionKey),
     });
-
-    expect(result.delegated).toBe(true);
-    expect(result.requesterPolicySource).toBe("completion-handoff");
-    expect(result.inheritedToolPolicy).toEqual({ deny: ["exec"] });
-  });
-
-  it("prioritizes a verified nested completion over the target subagent resume envelope", async () => {
-    const { parentChildSessionKey, leafSessionKey } = await writeNestedLineage();
-
-    const result = await resolvePolicy({
-      sessionKey: parentChildSessionKey,
-      subagentSessionKey: parentChildSessionKey,
-      ...completionHandoffFacts(leafSessionKey, parentChildSessionKey),
-    });
-
-    expect(result.delegated).toBe(true);
-    expect(result.requesterPolicySource).toBe("completion-handoff");
-    expect(result.inheritedToolPolicy).toEqual({ deny: ["exec", "read"] });
+    expectInherited(result, "completion-handoff", { deny: [...deny] });
   });
 
   it("fails closed for untrusted or mismatched completion handoffs", async () => {

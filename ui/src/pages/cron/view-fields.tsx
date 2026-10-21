@@ -112,7 +112,7 @@ export function FieldRow(props: {
             <div class={["cron-control", { "cron-control--wide": props.wide }]}>
               {props.control}
               {props.error ? (
-                <div id={props.errorId} class="cron-help cron-error">
+                <div id={props.errorId} class="cron-help cron-error" role="alert">
                   {t(props.error)}
                 </div>
               ) : undefined}

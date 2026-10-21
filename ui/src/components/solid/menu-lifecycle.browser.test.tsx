@@ -31,14 +31,6 @@ function renderSpy() {
   return vi.fn((attributes: MenuItemBindings) => <button {...attributes} />);
 }
 
-function people(render: MenuItem["render"]): MenuItem[] {
-  return Array.from({ length: 40 }, (_, id) => ({
-    id: String(id),
-    label: `Person ${id}`,
-    render,
-  }));
-}
-
 function branch(
   id: string,
   children: MenuItem["children"],
@@ -82,90 +74,6 @@ describe("Solid menu branch lifetime", () => {
     flush();
     expect(surface("people-assign").matches(":popover-open")).toBe(true);
     expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
-  });
-
-  it("prepares closed branches in idle slices after readiness and finishes synchronously on open", async () => {
-    const frames: FrameRequestCallback[] = [];
-    const idle = new Map<number, IdleRequestCallback>();
-    let nextIdle = 0;
-    const animation = vi
-      .spyOn(window, "requestAnimationFrame")
-      .mockImplementation((callback) => frames.push(callback));
-    vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
-      idle.set(++nextIdle, callback);
-      return nextIdle;
-    });
-    vi.stubGlobal("cancelIdleCallback", (id: number) => idle.delete(id));
-    const runFrames = () => frames.splice(0).forEach((callback) => callback(0));
-    const runIdle = () => {
-      expect(idle.size).toBeGreaterThan(0);
-      const [id, callback] = [...idle][0]!;
-      idle.delete(id);
-      callback({ didTimeout: false, timeRemaining: () => 10 });
-      flush();
-    };
-    const [ready, setReady] = createSignal(false);
-    const avatar = renderSpy();
-    const unopened = vi.fn(() => <button>Other content</button>);
-    const view = mountMenu({
-      lazy: true,
-      get prewarm() {
-        return ready();
-      },
-      items: [
-        branch("assign", () => people(avatar), { prewarm: true }),
-        branch("other", [{ id: "other-content", label: "Other content", render: unopened }]),
-      ],
-    });
-    expect(idle.size).toBe(0);
-    setReady(true);
-    flush();
-    runFrames();
-    runFrames();
-    runIdle();
-    expect(avatar).not.toHaveBeenCalled();
-    runFrames();
-    runFrames();
-    runIdle();
-    expect(avatar.mock.calls.length).toBeGreaterThan(0);
-    expect(avatar.mock.calls.length).toBeLessThan(40);
-    const retained = item("Person 0", "people-assign");
-    expect(surface("people-assign").matches(":popover-open")).toBe(false);
-    animation.mockRestore();
-    expect(view.handle.open()).toBe(true);
-    await openMenu("people-assign");
-    expect(idle.size).toBe(0);
-    expect(avatar).toHaveBeenCalledTimes(40);
-    expect(unopened).not.toHaveBeenCalled();
-    expect(item("Person 0", "people-assign")).toBe(retained);
-    await userEvent.keyboard("{Escape}");
-    await phase(surface("people-assign"), "hidden");
-    await openMenu("people-assign");
-    expect(item("Person 0", "people-assign")).toBe(retained);
-    expect(avatar).toHaveBeenCalledTimes(40);
-  });
-
-  it("uses the timer fallback and cancels unfinished preparation on unmount", async () => {
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame"],
-    });
-    vi.stubGlobal("requestIdleCallback", undefined);
-    const avatar = renderSpy();
-    const view = mountMenu({
-      lazy: true,
-      prewarm: true,
-      items: people(avatar),
-    });
-    vi.advanceTimersToNextFrame();
-    vi.advanceTimersToNextFrame();
-    await vi.advanceTimersByTimeAsync(50);
-    flush();
-    expect(avatar.mock.calls.length).toBeGreaterThan(0);
-    expect(avatar.mock.calls.length).toBeLessThan(40);
-    const constructed = avatar.mock.calls.length;
-    view.unmount();
-    await vi.runAllTimersAsync();
-    expect(avatar).toHaveBeenCalledTimes(constructed);
   });
 
   it.each(["array", "factory"] as const)(

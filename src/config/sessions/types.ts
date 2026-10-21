@@ -654,6 +654,14 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Original unbound files, private to this conversation's adopted workspace. */
+  priorWorkspace?: {
+    worktreeId: string;
+    sessionId: string;
+    workspaceDir: string;
+    fileRoot: string;
+    through: { generation: string | null; maxSeq: number | null };
+  };
   /** Personal discovery state, never participation, attribution, or sharing authority. */
   profileInvolvement?: { key: string; profiles: Record<string, SessionProfileInvolvement> };
   /** Transcript-wide account provenance; native binding replacement must not replace it. */

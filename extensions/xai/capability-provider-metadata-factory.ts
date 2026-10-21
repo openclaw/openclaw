@@ -292,20 +292,18 @@ export function createXaiRealtimeVoiceProviderMetadata(
     resolveConfigAsync: async ({ rawConfig }) => normalizeXaiRealtimeProviderConfig(rawConfig),
     isConfiguredAsync: ({ providerConfig, cfg, agentId }) => {
       const configApiKey = normalizeXaiRealtimeProviderConfig(providerConfig).apiKey;
-      return (async () => {
-        const { isProviderAuthProfileConfiguredAsync, resolveAgentDir } = context;
-        if (
-          normalizeOptionalString(configApiKey) ||
-          normalizeOptionalString(process.env.XAI_API_KEY)
-        ) {
-          return true;
-        }
-        return isProviderAuthProfileConfiguredAsync({
-          provider: "xai",
-          cfg,
-          ...(cfg && agentId ? { agentDir: resolveAgentDir(cfg, agentId) } : {}),
-        });
-      })();
+      const { isProviderAuthProfileConfiguredAsync, resolveAgentDir } = context;
+      if (
+        normalizeOptionalString(configApiKey) ||
+        normalizeOptionalString(process.env.XAI_API_KEY)
+      ) {
+        return Promise.resolve(true);
+      }
+      return isProviderAuthProfileConfiguredAsync({
+        provider: "xai",
+        cfg,
+        ...(cfg && agentId ? { agentDir: resolveAgentDir(cfg, agentId) } : {}),
+      });
     },
   } satisfies Omit<RealtimeVoiceProviderPlugin, "createBridge" | "createBrowserSession">;
 }

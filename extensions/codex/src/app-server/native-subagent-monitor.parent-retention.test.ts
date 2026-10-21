@@ -33,7 +33,6 @@ it("permits parent cold resume once every child is terminal, while preserving un
   await retainCodexAppServerLiveThread(client.client, "parent-thread");
   const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
     retainParentThread: (threadId) => protectCodexAppServerLiveThread(client.client, threadId),
-    recoveryPollDelaysMs: [],
   });
   onTestFinished(async () => {
     await monitor.retireParent("parent-thread");

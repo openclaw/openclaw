@@ -132,7 +132,7 @@ export async function completeCopilotAttempt(params: {
     sdkSessionId,
     timedOut,
     timedOutDuringCompaction,
-    toolMetas: snap ? [...snap.toolMetas] : [],
+    toolMetas: snap?.toolMetas ?? [],
     usage: snap?.usage,
     yieldDetected,
     yieldAcknowledgment,

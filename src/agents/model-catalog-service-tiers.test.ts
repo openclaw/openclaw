@@ -96,7 +96,7 @@ it.each(["literal", "ref"] as const)(
     };
     const record = accountCatalog.prepareServiceTierObserver({ selectedCredential: credential });
     const read = (overrides: Partial<typeof observation> = {}) =>
-      accountCatalog.readServiceTierObservation({
+      accountCatalog.readServiceTierObservations({
         ...observation,
         identityKey: credential.identityKey,
         ...overrides,
@@ -106,8 +106,8 @@ it.each(["literal", "ref"] as const)(
     const republished = evaluate({ cfg: { ...cfg, gateway: { port: 19001 } }, env });
     expect(republished.selectedCredential?.source).toBe("direct");
     expect(tiers(republished)).toEqual(["priority", "ultrafast"]);
-    expect(read({ modelId: "other-model" })).toBeUndefined();
-    expect(read({ baseUrl: "https://other.example/v1" })).toBeUndefined();
+    expect(read({ modelId: "other-model" })).toEqual([]);
+    expect(read({ baseUrl: "https://other.example/v1" })).toEqual([]);
     accountCatalog.reconcileAuth({ version: 1, profiles: {} }, () => true);
     expect(tiers()).toEqual(["priority", "ultrafast"]);
     const originalBinding = structuredClone(provider.apiKey);
@@ -122,7 +122,7 @@ it.each(["literal", "ref"] as const)(
     provider.apiKey = originalBinding;
     expect(record(observation)).toBe(false);
     provider.apiKey = replacementBinding;
-    expect(read()).toBeUndefined();
+    expect(read()).toEqual([]);
     expect(record(observation)).toBe(false);
     const next = selected();
     expect(next.selectedCredential).toEqual(credential);
@@ -134,7 +134,7 @@ it.each(["literal", "ref"] as const)(
     expect(replacement(observation)).toBe(true);
     retirement.abort();
     expect(replacement(observation)).toBe(false);
-    expect(read()).toBeUndefined();
+    expect(read()).toEqual([]);
   },
 );
 it("projects only the selected account/model/runtime/route and clears unknown observations", () => {

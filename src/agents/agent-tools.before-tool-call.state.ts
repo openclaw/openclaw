@@ -1,7 +1,7 @@
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 
 /** Detached execution facts; internal readers borrow the same snapshot. */
-export const adjustedParamsByToolCallId = new Map<string, unknown>();
+const adjustedParamsByToolCallId = new Map<string, unknown>();
 export const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
 // A tracked call starts pending (false), then crosses the implementation boundary (true).

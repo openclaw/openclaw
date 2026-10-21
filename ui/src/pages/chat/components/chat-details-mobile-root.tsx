@@ -3,6 +3,7 @@ import { For, Show } from "solid-js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import type { CronCompactJob } from "../../../api/types.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
 import { ChatDetailsSubagents, type ChatDetailsSubagentsProps } from "./chat-details-subagents.tsx";
 import {
@@ -149,6 +150,7 @@ function RootEntry(props: {
       </Show>
       <span class="chat-details-mobile-root__copy">
         <span
+          ref={createTextOverflow(() => props.entry.label)}
           class={[
             "chat-details-mobile-root__label",
             { "chat-details-mobile-root__label--note": props.entry.truncateDescription },

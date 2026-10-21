@@ -436,7 +436,7 @@ export function Memory(props: MemoryViewProps) {
       <section class="memory-page">
         <section class="content-header content-header--settings content-header--page hub-page-header">
           <div class="hub-page-header__title">
-            <div class="page-title">{t("tabs.memory")}</div>
+            <h1 class="page-title">{t("tabs.memory")}</h1>
             <div class="page-subtitle">
               {t("memoryPage.intro")} <LearnMoreLink url={MEMORY_DOCS_URL} />
             </div>

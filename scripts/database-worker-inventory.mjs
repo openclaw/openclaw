@@ -1462,6 +1462,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-transcript-store.ts",
+    [
+      {
+        tier: "W",
+        operations: ["replaceSqliteTranscriptEventsInTransaction"],
+        evidence:
+          "Full replacement runs only inside worker write transactions: session-manual-compact-mutation.worker.ts:43, session-message-rewrite.worker.ts:371, session-manager-maintenance.worker.ts:46 through session-accessor.sqlite-transcript-write.ts:131, and runNativeTranscriptWriteLock.replaceEvents (reviewed W); doctor-session-transcript-headers.ts:195 is a Doctor one-shot. Append and other operations in this mixed module stay T1.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
     [
       {

@@ -243,7 +243,6 @@ describe("native completion delivery ownership", () => {
       await client.client.request("thread/unsubscribe", { threadId });
     });
     const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-      recoveryPollDelaysMs: [],
       claimChildThread,
       releaseChildThread,
     });
@@ -317,9 +316,7 @@ describe("native completion delivery ownership", () => {
   );
 
   it("applies a native receipt immediately when active recovery learns its agent path", async () => {
-    const { client, runtime, monitor, owner } = await monitorFixture({
-      recoveryPollDelaysMs: [],
-    });
+    const { client, runtime, monitor, owner } = await monitorFixture();
     await startChild(client, owner);
     await client.notify(completedChild());
     await client.startTurn("next-turn", { error: null });
@@ -385,10 +382,10 @@ describe("native follow-up receipt custody", () => {
       consumed.resolve();
       return true;
     });
-    const { client, runtime, owner } = await monitorFixture(
-      { recoveryPollDelaysMs: [] },
-      { submissionStore: store, agentId: undefined },
-    );
+    const { client, runtime, owner } = await monitorFixture(undefined, {
+      submissionStore: store,
+      agentId: undefined,
+    });
     await startChild(client, owner, "/root/worker");
     await client.startTurn("child-turn", { error: null });
     await client.notify(completedChild("child-turn", "The build passed.", "first-result"));
@@ -449,11 +446,7 @@ describe("Codex native close admission", () => {
       runtime,
       monitor,
       owner: parent,
-    } = await monitorFixture(
-      { recoveryPollDelaysMs: [], captureChildThreadForget: async () => forget },
-      {},
-      client,
-    );
+    } = await monitorFixture({ captureChildThreadForget: async () => forget }, {}, client);
     try {
       await startChild(client, parent);
       await client.item(directSpawnItem("v1", "parent-thread", "child-thread"));
@@ -498,7 +491,7 @@ describe("Codex native close admission", () => {
     };
     class ObservedMonitor extends CodexNativeSubagentMonitor {
       constructor(...params: ConstructorParameters<typeof CodexNativeSubagentMonitor>) {
-        super(params[0], params[1], { ...params[2], recoveryPollDelaysMs: [] });
+        super(...params);
         if (params[2]?.captureChildThreadForget) {
           settleOwnership = params[2].captureChildThreadForget;
         }
