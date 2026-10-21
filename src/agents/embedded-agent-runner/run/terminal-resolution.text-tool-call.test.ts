@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildEmbeddedRunnerAssistant,
-  makeEmbeddedRunnerAttempt,
-} from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { makeEmbeddedRunnerAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
-import { makeTerminalInput } from "./terminal-resolution.test-support.js";
+import {
+  expectComplete,
+  makeTerminalInput,
+  textAssistant,
+} from "./terminal-resolution.test-support.js";
 
 // mock-isolation: Terminal recovery must not publish auth success to persistent stores.
 vi.mock("./auth-profile-success.js", () => ({
@@ -12,13 +13,14 @@ vi.mock("./auth-profile-success.js", () => ({
   reportEmbeddedRunSuccessfulAuthBinding: vi.fn(),
 }));
 
-const text = '```json\n{"name":"write","arguments":{"path":"proof.txt","content":"OK"}}\n```';
+const toolCallText =
+  '```json\n{"name":"write","arguments":{"path":"proof.txt","content":"OK"}}\n```';
 
-function makeTextCallInput(overrides: Parameters<typeof makeEmbeddedRunnerAttempt>[0] = {}) {
-  const assistant = buildEmbeddedRunnerAssistant({
-    stopReason: "stop",
-    content: [{ type: "text", text }],
-  });
+function makeTextCallInput(
+  overrides: Parameters<typeof makeEmbeddedRunnerAttempt>[0] = {},
+  text = toolCallText,
+) {
+  const assistant = textAssistant(text, { stopReason: "stop" });
   return makeTerminalInput({
     attempt: makeEmbeddedRunnerAttempt({
       assistantTexts: [text],
@@ -81,10 +83,7 @@ describe("terminal resolution for a tool call written as text", () => {
     expect(input.retryState.textToolCallAttempts).toBe(1);
 
     const repeated = await resolveEmbeddedRunTerminal(input);
-    expect(repeated.action).toBe("complete");
-    if (repeated.action !== "complete") {
-      throw new Error("expected bounded terminal failure");
-    }
+    expectComplete(repeated);
     expect(repeated.result.meta.error).toMatchObject({ kind: "incomplete_turn" });
     expect(repeated.result.payloads).toEqual([
       {
@@ -97,27 +96,20 @@ describe("terminal resolution for a tool call written as text", () => {
   it("accepts a real answer after the corrective retry", async () => {
     const input = makeTextCallInput();
     await resolveEmbeddedRunTerminal(input);
-    const assistant = buildEmbeddedRunnerAssistant({
-      stopReason: "stop",
-      content: [{ type: "text", text: "Created and read proof.txt: OK" }],
-    });
-    const recovered = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({
-        retryState: input.retryState,
-        attempt: makeEmbeddedRunnerAttempt({
-          assistantTexts: ["Created and read proof.txt: OK"],
-          currentAttemptAssistant: assistant,
-          toolMetas: [{ toolName: "write", isError: false, replaySafe: false }],
-          replayMetadata: { replaySafe: false, hadPotentialSideEffects: true },
-        }),
-        payloadsWithToolMedia: [{ text: "Created and read proof.txt: OK" }],
-      }),
+    const answer = "Created and read proof.txt: OK";
+    const recovery = makeTextCallInput(
+      {
+        lastAssistant: undefined,
+        textToolCallAttempt: false,
+        toolMetas: [{ toolName: "write", isError: false, replaySafe: false }],
+        replayMetadata: { replaySafe: false, hadPotentialSideEffects: true },
+      },
+      answer,
     );
-    expect(recovered.action).toBe("complete");
-    if (recovered.action !== "complete") {
-      throw new Error("expected normal answer");
-    }
+    recovery.retryState = { ...input.retryState };
+    const recovered = await resolveEmbeddedRunTerminal(recovery);
+    expectComplete(recovered);
     expect(recovered.result.meta.error).toBeUndefined();
-    expect(recovered.result.payloads).toEqual([{ text: "Created and read proof.txt: OK" }]);
+    expect(recovered.result.payloads).toEqual([{ text: answer }]);
   });
 });

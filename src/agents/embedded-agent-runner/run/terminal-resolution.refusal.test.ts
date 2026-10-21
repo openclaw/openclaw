@@ -1,8 +1,32 @@
 import { describe, expect, it } from "vitest";
 import { PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE } from "../../../llm/types.js";
-import { makeEmbeddedRunnerAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
 import { emptyAssistant, makeTerminalInput } from "./terminal-resolution.test-support.js";
+
+const providerReplay = {
+  v: 1,
+  type: "anthropic-compaction",
+  data: "summary",
+  provider: "anthropic",
+  api: "anthropic-messages",
+  model: "claude-sonnet-4-6",
+  baseUrlHash: "route-a",
+} as const;
+
+function refusalInput(
+  assistant: ReturnType<typeof emptyAssistant>,
+  lastAssistant?: ReturnType<typeof emptyAssistant>,
+) {
+  return makeTerminalInput({
+    assistant,
+    attemptOverrides: {
+      assistantTexts: [],
+      lastAssistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    },
+    retryState: { emptyResponseAttempts: 1 },
+  });
+}
 
 describe("terminal refusal resolution", () => {
   it.each(["prior turn", "current attempt"])(
@@ -25,28 +49,9 @@ describe("terminal refusal resolution", () => {
         ...refusal,
         stopReason: refusalOwner === "current attempt" ? "error" : "stop",
         diagnostics: refusalOwner === "current attempt" ? refusal.diagnostics : undefined,
-        providerReplay: {
-          v: 1,
-          type: "anthropic-compaction",
-          data: "summary",
-          provider: "anthropic",
-          api: "anthropic-messages",
-          model: "claude-sonnet-4-6",
-          baseUrlHash: "route-a",
-        },
+        providerReplay,
       });
-      const attempt = makeEmbeddedRunnerAttempt({
-        assistantTexts: [],
-        lastAssistant: refusalOwner === "prior turn" ? refusal : assistant,
-        currentAttemptAssistant: assistant,
-        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-      });
-      const input = makeTerminalInput({
-        attempt,
-        attemptAssistant: assistant,
-        retryState: { emptyResponseAttempts: 1 },
-      });
-
+      const input = refusalInput(assistant, refusalOwner === "prior turn" ? refusal : assistant);
       const resolved = await resolveEmbeddedRunTerminal(input);
 
       if (refusalOwner === "current attempt") {
@@ -73,31 +78,12 @@ describe("terminal refusal resolution", () => {
   );
 
   it("does not retry post-dispatch ambiguity after compaction", async () => {
-    const errorCode = PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE;
     const assistant = emptyAssistant({
       stopReason: "error",
-      errorCode,
-      providerReplay: {
-        v: 1,
-        type: "anthropic-compaction",
-        data: "summary",
-        provider: "anthropic",
-        api: "anthropic-messages",
-        model: "claude-sonnet-4-6",
-        baseUrlHash: "route-a",
-      },
+      errorCode: PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+      providerReplay,
     });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      currentAttemptAssistant: assistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    const input = makeTerminalInput({
-      attempt,
-      attemptAssistant: assistant,
-      retryState: { emptyResponseAttempts: 1 },
-    });
-
+    const input = refusalInput(assistant);
     const resolved = await resolveEmbeddedRunTerminal(input);
 
     expect(resolved).toMatchObject({
@@ -113,18 +99,7 @@ describe("terminal refusal resolution", () => {
       stopReason: "error",
       diagnostics: [{ type: "provider_refusal", timestamp: 0, details: { provider: "openai" } }],
     });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      lastAssistant: priorRefusal,
-      currentAttemptAssistant: assistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    const input = makeTerminalInput({
-      attempt,
-      attemptAssistant: assistant,
-      retryState: { emptyResponseAttempts: 1 },
-    });
-
+    const input = refusalInput(assistant, priorRefusal);
     const resolved = await resolveEmbeddedRunTerminal(input);
 
     expect(resolved).toMatchObject({
