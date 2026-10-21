@@ -15,7 +15,7 @@ afterEach(async () => {
 const p = (...parts: string[]) => state.path(...parts);
 const observe = (owner: MemoryWatchPolicy) => owner.observations(new AbortController().signal);
 type ExtraPaths = ConstructorParameters<typeof MemoryWatchPolicy>[1]["extraPaths"];
-function policy(extraPaths: ExtraPaths = [], workspace = state.workspaceDir, media = false) {
+function policy(extraPaths: ExtraPaths = [], media = false, workspace = state.workspaceDir) {
   const modalities: ("image" | "audio")[] = media ? ["image", "audio"] : [];
   return new MemoryWatchPolicy(workspace, {
     extraPaths,
@@ -46,7 +46,7 @@ it("observes the first intermediate alias separately and retains configured pare
   await fs.mkdir(p("real/workspace"), { recursive: true });
   await fs.mkdir(p("real/extra"));
   await fs.symlink(p("real"), p("alias"), "junction");
-  const owner = policy([p("alias/extra")], p("alias/workspace"));
+  const owner = policy([p("alias/extra")], false, p("alias/workspace"));
   const scopes = (await observe(owner)).flatMap((group) =>
     owner.scopes(group).map((scope) => path.resolve(group.root.rootDir, scope.path)),
   );
@@ -54,44 +54,33 @@ it("observes the first intermediate alias separately and retains configured pare
   expect(scopes).not.toContain(p("alias/extra"));
 });
 
-it("retains successful Roots across missing-descendant creation and never repins a replaced authority", async () => {
-  await fs.mkdir(p("outer"));
-  const owner = policy([p("outer/missing/notes")]);
-  const first = await observe(owner);
-  await fs.mkdir(p("outer/missing/notes"), { recursive: true });
-  const next = await observe(owner);
-  expect(next.map((group) => group.root)).toEqual(first.map((group) => group.root));
-  await fs.rename(p("outer"), p("outer-old"));
-  await fs.mkdir(p("outer/missing/notes"), { recursive: true });
-  await expect(observe(owner)).rejects.toBeDefined();
-});
-
-it("retains partial Root admission when a later configured boundary temporarily fails", async () => {
-  await fs.mkdir(p("first"));
-  await fs.mkdir(p("second"));
-  const owner = policy([p("first/notes"), p("second/notes")]);
-  const original = fs.lstat.bind(fs);
-  const failure = new Error("admission denied");
-  const stat = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-    if (String(args[0]) === p("second")) {
-      throw failure;
-    }
-    return await original(...args);
-  });
-  await expect(observe(owner)).rejects.toBe(failure);
-  stat.mockRestore();
+it.each([false, true])("retains pinned roots when later admission fails: %s", async (failLater) => {
+  await Promise.all(["first", "second"].map((name) => fs.mkdir(p(name))));
+  const owner = policy([p("first/missing/notes"), p("second/notes")]);
+  if (failLater) {
+    const original = fs.lstat.bind(fs);
+    const failure = new Error("admission denied");
+    const stat = vi
+      .spyOn(fs, "lstat")
+      .mockImplementation((...args) =>
+        String(args[0]) === p("second") ? Promise.reject(failure) : original(...args),
+      );
+    await expect(observe(owner)).rejects.toBe(failure);
+    stat.mockRestore();
+  } else {
+    const first = await observe(owner);
+    await fs.mkdir(p("first/missing/notes"), { recursive: true });
+    const next = await observe(owner);
+    expect(next.map((group) => group.root)).toEqual(first.map((group) => group.root));
+  }
   await fs.rename(p("first"), p("first-old"));
-  await fs.mkdir(p("first"));
+  await fs.mkdir(p("first/missing/notes"), { recursive: true });
   await expect(observe(owner)).rejects.toBeDefined();
 });
 
 it("selects configured patterns and multimodal files while pruning unrelated descendants", async () => {
   const extra = p("extra");
-  const owner = policy(
-    [{ path: extra, pattern: "..notes/**/*" }, p("other")],
-    state.workspaceDir,
-    true,
-  );
+  const owner = policy([{ path: extra, pattern: "..notes/**/*" }, p("other")], true);
   const group = (await observe(owner)).find((entry) =>
     entry.selections.some((selection) => selection.lexical === extra),
   )!;
