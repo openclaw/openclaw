@@ -10,6 +10,7 @@ import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import {
+  ensureDurableDirectory,
   getPublishFileExclusiveFailureDetails,
   publishFileExclusive,
   sha256File,
@@ -18,6 +19,7 @@ import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { ignoreMissingPath } from "./errno.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import {
   adoptPreparedLocation,
   releaseSnapshotTempDirectory,
@@ -126,6 +128,7 @@ export async function restoreUpdateDatabaseBackup(params: {
   env: NodeJS.ProcessEnv;
   assertCurrent: () => void;
   expectedGenerations?: UpdateDatabaseGenerations;
+  requireFresh?: boolean;
 }): Promise<string[] | null> {
   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(params.runId)) {
     throw new Error("Database rollback requires its original update run identity.");
@@ -146,6 +149,17 @@ export async function restoreUpdateDatabaseBackup(params: {
       [...new Set([...backup.sourcePaths, ...paths])],
       assertCurrent,
       async (assertOwned) => {
+        if (params.requireFresh) {
+          for (const file of paths) {
+            for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+              if (await existingFile(`${file}${suffix}`)) {
+                throw new Error(
+                  `Local checkpoint restore requires fresh database targets: ${file}`,
+                );
+              }
+            }
+          }
+        }
         if (params.expectedGenerations) {
           assertOwned();
           const generations = await readUpdateDatabaseGenerationsIsolated(paths, {
@@ -186,9 +200,31 @@ export async function restoreUpdateDatabaseBackup(params: {
           backup,
           env: params.env,
         });
+        if (backup.captureScope === "local-files" && !restoreClientCredentials) {
+          throw new Error(
+            "Local checkpoint client credentials do not match the captured global database.",
+          );
+        }
         assertOwned();
         const sources = [...backup.databases];
         for (const entry of sources) {
+          if (backup.captureScope === "local-files" || entry.localAnchor) {
+            const { readBackupEngineImage } = await import("./database-engine/physical-store.js");
+            const physical = readBackupEngineImage(entry.snapshotPath, entry.path);
+            if (
+              backup.captureScope !== "local-files" ||
+              entry.engine ||
+              (physical.engine === "postgres"
+                ? !entry.localAnchor ||
+                  physical.storeId !== entry.localAnchor.storeId ||
+                  physical.namespace !== entry.localAnchor.namespace
+                : entry.localAnchor !== undefined)
+            ) {
+              throw new Error(
+                `Local checkpoint database engine identity does not match: ${entry.path}`,
+              );
+            }
+          }
           if (entry.engine !== "postgres") {
             continue;
           }
@@ -217,7 +253,11 @@ export async function restoreUpdateDatabaseBackup(params: {
           sources[sources.indexOf(entry)] = { ...entry, ...prepared, snapshotPath };
           displaced.push(`PostgreSQL namespace ${entry.namespace}`);
         }
-        if (paths.includes(sharedPath) && shared?.engine !== "postgres") {
+        if (
+          paths.includes(sharedPath) &&
+          shared?.engine !== "postgres" &&
+          (await existingFile(sharedPath))
+        ) {
           if (!shared) {
             throw new Error(
               "Database rollback cannot preserve update history without its shared snapshot.",
@@ -272,6 +312,23 @@ export async function restoreUpdateDatabaseBackup(params: {
             if (identity) {
               moves.push({ source, target, identity });
             }
+          }
+        }
+        if (backup.captureScope === "local-files" && params.requireFresh) {
+          const directories = new Set<string>();
+          for (const entry of sources) {
+            let directory = path.parse(entry.path).root;
+            for (const component of path
+              .relative(directory, path.dirname(entry.path))
+              .split(path.sep)) {
+              directory = path.join(directory, component);
+              directories.add(directory);
+            }
+          }
+          for (const directoryPath of directories) {
+            assertOwned();
+            await ensureDurableDirectory({ directoryPath, create: createPrivateSqliteDirectory });
+            assertOwned();
           }
         }
         // Allocate every final writable image before moving any current family.

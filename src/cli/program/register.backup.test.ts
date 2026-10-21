@@ -4,6 +4,8 @@ import { registerBackupCommand } from "./register.backup.js";
 
 const mocks = vi.hoisted(() => ({
   backupCreateCommand: vi.fn(),
+  backupLocalCreateCommand: vi.fn(),
+  backupLocalRestoreCommand: vi.fn(),
   backupGitLogCommand: vi.fn(),
   backupGitRestoreCommand: vi.fn(),
   backupGitVerifyCommand: vi.fn(),
@@ -22,6 +24,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../commands/backup.js", () => ({
   backupCreateCommand: mocks.backupCreateCommand,
+}));
+vi.mock("../../commands/backup-local.js", () => ({
+  backupLocalCreateCommand: mocks.backupLocalCreateCommand,
+  backupLocalRestoreCommand: mocks.backupLocalRestoreCommand,
 }));
 
 // mock-isolation: Argument parsing must not open database owners or launch backup workers.
@@ -54,7 +60,24 @@ const { runtime } = mocks;
 beforeEach(() => vi.resetAllMocks());
 
 describe("registered backup routes", () => {
+  it("dispatches a local checkpoint restore", async () => {
+    const program = new Command();
+    registerBackupCommand(program);
+    await program.parseAsync(["backup", "local", "restore", "/tmp/checkpoint.tar.gz", "--json"], {
+      from: "user",
+    });
+    expect(mocks.backupLocalRestoreCommand).toHaveBeenCalledExactlyOnceWith(
+      runtime,
+      "/tmp/checkpoint.tar.gz",
+      { json: true },
+    );
+  });
   it.each([
+    {
+      args: "local create --output /tmp/checkpoint.tar.gz --json",
+      command: mocks.backupLocalCreateCommand,
+      options: { output: "/tmp/checkpoint.tar.gz", json: true },
+    },
     {
       args: "create --output /tmp/backups --json --dry-run",
       command: mocks.backupCreateCommand,
