@@ -2,7 +2,6 @@
 // session lifecycle persistence, and subscriber registry behavior.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ChatEventSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -498,37 +497,12 @@ describe("agent event handler", () => {
     });
   });
 
-  const requireRecord = createRequireRecord("object", "label-not-object");
-
-  function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-    expect(record).toEqual(expect.objectContaining(fields));
-  }
-
   function expectPayloadFields(value: unknown, fields: Record<string, unknown>) {
-    expectRecordFields(requireRecord(value, "event payload"), fields);
+    expect(value).toEqual(expect.objectContaining(fields));
   }
 
   function expectPayloadDataFields(value: unknown, fields: Record<string, unknown>) {
-    const payload = requireRecord(value, "event payload");
-    expectRecordFields(requireRecord(payload.data, "event payload data"), fields);
-  }
-
-  function requireMockArg(
-    mock: ReturnType<typeof vi.fn>,
-    index: number,
-    argIndex: number,
-    label: string,
-  ) {
-    return expectDefined(mock.mock.calls[index], `${label} call ${index + 1}`)[argIndex];
-  }
-
-  function requireMockPayload(
-    mock: ReturnType<typeof vi.fn>,
-    index: number,
-    payloadIndex: number,
-    label: string,
-  ) {
-    return requireRecord(requireMockArg(mock, index, payloadIndex, label), label);
+    expectPayloadFields(value, { data: expect.objectContaining(fields) });
   }
 
   it("sanitizes only broadcasted assistant buffers while preserving cross-frame tags", async () => {
@@ -1299,11 +1273,9 @@ describe("agent event handler", () => {
 
     const nodeToolCalls = h.nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
     expect(nodeToolCalls).toHaveLength(1);
-    const payload = requireRecord(nodeToolCalls[0]?.[2], "node tool payload");
-    expect(payload.stream).toBe("tool");
-    expectRecordFields(requireRecord(payload.data, "node tool payload data"), {
-      phase: "start",
-      name: "read",
+    expectPayloadFields(nodeToolCalls[0]?.[2], {
+      stream: "tool",
+      data: expect.objectContaining({ phase: "start", name: "read" }),
     });
   });
 
@@ -1497,17 +1469,14 @@ describe("agent event handler", () => {
       requestedKey: sessionKey,
       canonicalKey: sessionKey,
     });
-    const persistParams = requireRecord(
-      persistGatewaySessionLifecycleEventMock.mock.calls.find(
-        ([params]) => params.event.data.phase === "end",
-      )?.[0],
-      "terminal persistence",
-    );
-    expect(persistParams.sessionKey).toBe(sessionKey);
-    expect(persistParams.clientRunId).toBe(clientRunId);
-    const event = requireRecord(persistParams.event, "persisted event");
-    expectRecordFields(event, { runId });
-    expect(requireRecord(event.data, "lifecycle data").phase).toBe("end");
+    const persistParams = persistGatewaySessionLifecycleEventMock.mock.calls.find(
+      ([params]) => params.event.data.phase === "end",
+    )?.[0];
+    expect(persistParams).toMatchObject({
+      sessionKey,
+      clientRunId,
+      event: { runId, data: { phase: "end" } },
+    });
     expect(h.clearTrackedActiveRun).toHaveBeenCalledWith({ runId, clientRunId, sessionKey });
     const terminalCallIndex = h.broadcastToConnIds.mock.calls.indexOf(
       expectDefined(changes[1], "terminal session publication"),
@@ -1665,7 +1634,7 @@ describe("agent event handler", () => {
     currentRow = { ...currentRow, updatedAt: 2_101 };
     runA.resolve();
     await waitForFast(() => expect(h.changes()).toHaveLength(1));
-    expectPayloadFields(requireMockArg(h.broadcastToConnIds, 0, 1, "run-a session snapshot"), {
+    expectPayloadFields(h.broadcastToConnIds.mock.calls[0]?.[1], {
       status: "running",
       abortedLastRun: true,
       endedAt: null,
@@ -1680,7 +1649,7 @@ describe("agent event handler", () => {
     };
     runB.resolve();
     await waitForFast(() => expect(h.changes()).toHaveLength(2));
-    expectPayloadFields(requireMockArg(h.broadcastToConnIds, 1, 1, "run-b session snapshot"), {
+    expectPayloadFields(h.broadcastToConnIds.mock.calls[1]?.[1], {
       status: "done",
       abortedLastRun: false,
     });
@@ -1754,7 +1723,7 @@ describe("agent event handler", () => {
     );
 
     await waitForFast(() => expect(h.changes()).toHaveLength(1));
-    expectPayloadFields(requireMockArg(h.broadcastToConnIds, 0, 1, "fallback session snapshot"), {
+    expectPayloadFields(h.broadcastToConnIds.mock.calls[0]?.[1], {
       status: "done",
       updatedAt: 2_100,
       abortedLastRun: false,
@@ -1833,62 +1802,53 @@ describe("agent event handler", () => {
     expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
   });
 
-  const terminalProjectionCases: {
-    name: string;
-    sessionKey: string;
-    data: AgentEventPayload["data"];
-    text?: string;
-    expected: Record<string, unknown>;
-    absent?: string;
-  }[] = [
-    {
-      name: "safe validation diagnostic",
-      sessionKey: "session-validation-loop",
-      data: {
-        aborted: true,
-        toolErrorSummary: "edit tool validation failed: edits: must be an array",
-      },
-      expected: {
-        state: "aborted",
-        stopReason: "aborted",
-        errorMessage: "edit tool validation failed: edits: must be an array",
-      },
-    },
-    {
-      name: "unsafe abort diagnostic",
-      sessionKey: "session-unsafe-abort",
-      data: {
-        aborted: true,
-        stopReason: "aborted",
-        toolErrorSummary: "browser failed\nsecret output",
-      },
-      expected: { state: "aborted" },
-      absent: "errorMessage",
-    },
-    {
-      name: "timeout without error text",
-      sessionKey: "session-idle",
-      data: { aborted: true, stopReason: "timeout", timeoutPhase: "idle" },
-      expected: { state: "error", stopReason: "timeout", errorKind: "timeout" },
-    },
-    {
-      name: "yielded parent turn",
-      sessionKey: "agent:main:main",
-      text: "Waiting for registered continuation work.",
-      data: { yielded: true, livenessState: "paused", stopReason: "end_turn" },
-      expected: { state: "final", stopReason: "end_turn", yielded: true },
-    },
-    {
-      name: "abort overriding stale yield metadata",
-      sessionKey: "agent:main:main",
-      data: { aborted: true, yielded: true, livenessState: "paused", stopReason: "end_turn" },
-      expected: { state: "error", stopReason: "end_turn" },
-      absent: "yielded",
-    },
+  const validationError = "edit tool validation failed: edits: must be an array";
+  const terminalProjectionCases: Array<
+    [
+      name: string,
+      sessionKey: string,
+      data: AgentEventPayload["data"],
+      expected: Record<string, unknown>,
+      options?: { text?: string; absent?: string },
+    ]
+  > = [
+    [
+      "safe validation diagnostic",
+      "session-validation-loop",
+      { aborted: true, toolErrorSummary: validationError },
+      { state: "aborted", stopReason: "aborted", errorMessage: validationError },
+    ],
+    [
+      "unsafe abort diagnostic",
+      "session-unsafe-abort",
+      { aborted: true, stopReason: "aborted", toolErrorSummary: "browser failed\nsecret output" },
+      { state: "aborted" },
+      { absent: "errorMessage" },
+    ],
+    [
+      "timeout without error text",
+      "session-idle",
+      { aborted: true, stopReason: "timeout", timeoutPhase: "idle" },
+      { state: "error", stopReason: "timeout", errorKind: "timeout" },
+    ],
+    [
+      "yielded parent turn",
+      "agent:main:main",
+      { yielded: true, livenessState: "paused", stopReason: "end_turn" },
+      { state: "final", stopReason: "end_turn", yielded: true },
+      { text: "Waiting for registered continuation work." },
+    ],
+    [
+      "abort overriding stale yield metadata",
+      "agent:main:main",
+      { aborted: true, yielded: true, livenessState: "paused", stopReason: "end_turn" },
+      { state: "error", stopReason: "end_turn" },
+      { absent: "yielded" },
+    ],
   ];
   it.each(terminalProjectionCases)(
-    "projects $name on lifecycle end",
-    async ({ sessionKey, data, text, expected, absent }) => {
+    "projects %s on lifecycle end",
+    async (_name, sessionKey, data, expected, { text, absent } = {}) => {
       const h = createHarness({ resolveSessionKeyForRun: () => sessionKey });
       h.register("provider-terminal", sessionKey, "client-terminal");
       if (text) {
@@ -1948,13 +1908,10 @@ describe("agent event handler", () => {
     });
 
     expect(h.broadcastToConnIds).toHaveBeenCalledTimes(1);
-    const payload = requireMockArg(h.broadcastToConnIds, 0, 1, "tool output payload") as {
-      data?: Record<string, unknown>;
-    };
-    expect(payload.data?.result).toEqual(result);
-    expect(payload.data?.partialResult).toEqual(partialResult);
-    const nodePayload = requireMockPayload(h.nodeSendToSession, 0, 2, "node tool output payload");
-    const nodeData = requireRecord(nodePayload.data, "node tool output data");
+    const payload = h.broadcastToConnIds.mock.calls[0]?.[1];
+    expect(payload.data.result).toEqual(result);
+    expect(payload.data.partialResult).toEqual(partialResult);
+    const nodeData = h.nodeSendToSession.mock.calls[0]?.[2].data;
     expect(nodeData.result).toEqual(verboseLevel === "full" ? result : undefined);
     expect(nodeData.partialResult).toBeUndefined();
   });
@@ -2841,11 +2798,7 @@ describe("agent event handler", () => {
     expect(
       h.broadcastToConnIds.mock.calls
         .slice(streamCallStart)
-        .map(([event, payload, recipients]) => [
-          event,
-          requireRecord(payload, "event").stream,
-          recipients,
-        ]),
+        .map(([event, payload, recipients]) => [event, payload.stream, recipients]),
     ).toEqual(streams.map((stream) => ["agent", stream, new Set(["conn-selected"])]));
 
     h.broadcastToConnIds.mockClear();
