@@ -26,6 +26,7 @@ vi.mock("./src/cli.js", async (importOriginal) => ({
   registerNodesCanvasCommands: mocks.registerNodesCanvasCommands,
 }));
 
+// mock-isolation: the real tool must stay unloaded until the lazy execution boundary.
 vi.mock("./src/tool.js", () => ({ createCanvasTool: mocks.createCanvasTool }));
 
 // mock-isolation: importing the real harness would defeat the cold-registration guard.

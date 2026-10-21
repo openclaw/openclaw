@@ -94,8 +94,12 @@ it.each([
   ["duplicate files", { prepend: ["instructions.md"] }],
   ["too many files", { append: Array.from({ length: 9 }, (_, i) => `${i}.md`) }],
 ])("rejects %s configuration", (_name, extra) => {
-  const value = extra === undefined || Array.isArray(extra) ? extra : config(extra);
-  if (Array.isArray(extra) || ["unknown field", "empty agents"].includes(_name)) {
+  if (Array.isArray(extra)) {
+    expect(valid(extra)).toBe(false);
+    return;
+  }
+  const value = extra === undefined ? undefined : config(extra);
+  if (["unknown field", "empty agents"].includes(_name)) {
     expect(valid(value)).toBe(false);
   }
   expect(() => registerGuidance(value)).toThrow("agent-guidance:");
@@ -141,7 +145,7 @@ function linkedDirectory(root: boolean) {
   return root ? { directory: file("linked") } : { append: ["linked/target.md"] };
 }
 it.each([
-  ["missing", () => undefined],
+  ["missing", (): undefined => undefined],
   ["directory", () => fs.mkdirSync(file("target.md"))],
   ["symlink", () => fs.symlinkSync(file("instructions.md"), file("target.md"))],
   ["hardlink", () => fs.linkSync(file("instructions.md"), file("target.md"))],

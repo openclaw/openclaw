@@ -16,13 +16,15 @@ const catalog = buildManifestModelProviderConfig({
   providerId: "groq",
   catalog: manifest.modelCatalog.providers.groq,
 });
-const qwen = catalog.models.find((model) => model.id === "qwen/qwen3.6-27b");
-if (!qwen) {
+type CatalogModel = (typeof catalog.models)[number];
+const qwenEntry = catalog.models.find((model) => model.id === "qwen/qwen3.6-27b");
+if (!qwenEntry) {
   throw new Error("Expected Groq Qwen catalog model");
 }
+const qwen = qwenEntry;
 const enabledLevels = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const context = { messages: [] };
-function makeModel(row: Partial<Model<"openai-completions">> & { id: string }) {
+function makeModel(row: Partial<CatalogModel> & { id: string }) {
   return {
     ...qwen,
     name: row.id,
