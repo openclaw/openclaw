@@ -16,7 +16,8 @@ vi.mock("../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
 }));
 
-vi.mock("../cli/terminal-interactivity.js", () => ({
+vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/terminal-interactivity.js")>()),
   isTerminalInteractive: mocks.isTerminalInteractive,
 }));
 
