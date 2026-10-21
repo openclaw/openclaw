@@ -18,15 +18,10 @@ import {
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { expectStatus, readJson, writeJson } from "./upgrade-survivor-io.test-support.js";
+import { readJsonLines, writeExecutable } from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const temporary = () => fs.realpathSync(tempDirs.make("upgrade-recovery-assertions-"));
-const readLines = (file: string) =>
-  fs
-    .readFileSync(file, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
 function archiveOriginal(source: string, archivePath: string) {
   const identity = recoveryFileIdentity(source);
   fs.renameSync(source, archivePath);
@@ -103,7 +98,7 @@ describe.skipIf(process.platform === "win32")("recovery survivor package provena
           : integrity,
     };
     const calls = path.join(root, "npm-calls.jsonl");
-    fs.writeFileSync(
+    writeExecutable(
       path.join(bin, "npm"),
       `#!${process.execPath}
 const fs = require("node:fs");
@@ -119,7 +114,6 @@ const responses = {
 if (!Object.hasOwn(responses, args[0])) throw new Error("unexpected npm command");
 console.log(JSON.stringify(responses[args[0]]));
 `,
-      { mode: 0o755 },
     );
     const candidate = path.join(root, "candidate.tgz");
     const candidateBytes = "candidate package fixture";
@@ -133,27 +127,28 @@ console.log(JSON.stringify(responses[args[0]]));
     return {
       result,
       metadata,
-      calls: readLines(calls),
+      calls: readJsonLines<string[]>(calls),
       evidencePath: path.join(artifacts, "recovery-evidence.json"),
       candidateSha256: createHash("sha256").update(candidateBytes).digest("hex"),
     };
   }
 
   it.each([
-    {
-      requested: "openclaw@2026.8.2",
-      installedVersion: "2026.8.2",
-      packShape: "name-keyed",
-      viewShape: "array",
-    },
-    { requested: "openclaw@latest", installedVersion: "2026.8.2", packShape: "array" },
+    ["2026.8.2", "name-keyed", "array"],
+    ["latest", "array", "object"],
   ] as const)(
-    "verifies $requested against installed $installedVersion ($packShape)",
-    async (entry) => {
-      const fixture = await packageEvidence(entry);
+    "verifies openclaw@%s against the installed version (%s)",
+    async (requested, packShape, viewShape) => {
+      const installedVersion = "2026.8.2";
+      const fixture = await packageEvidence({
+        requested: `openclaw@${requested}`,
+        installedVersion,
+        packShape,
+        viewShape,
+      });
       expect(fixture.result.error).toBeUndefined();
       expectStatus(fixture.result);
-      const exactSpec = `openclaw@${entry.installedVersion}`;
+      const exactSpec = `openclaw@${installedVersion}`;
       expect(fixture.calls).toEqual([
         ["view", exactSpec, "version", "dist", "--json"],
         ["pack", exactSpec, "--ignore-scripts", "--dry-run", "--json"],
@@ -286,7 +281,7 @@ describe("recovery survivor evidence", () => {
       ]);
     }
     const scale = path.join(root, "agents/recovery-clean/sessions/recovery-scale-0.jsonl");
-    const events = readLines(scale);
+    const events = readJsonLines<{ id: string; parentId: string | null }>(scale);
     expect(events).toHaveLength(5);
     expect(events[0]).toMatchObject({ type: "session", version: 3, id: "recovery-scale-0" });
     for (let index = 1; index < events.length; index += 1) {
