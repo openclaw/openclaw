@@ -36,8 +36,10 @@ it("reopens with live admitted persistent schema while creating fresh connection
         }
         return run(sql);
       };
-    vi.spyOn(db, "prepare").mockImplementation(observe(db.prepare.bind(db)));
-    vi.spyOn(db, "exec").mockImplementation(observe(db.exec.bind(db)));
+    const prepare = db.prepare.bind(db);
+    const exec = db.exec.bind(db);
+    vi.spyOn(db, "prepare").mockImplementation(observe(prepare));
+    vi.spyOn(db, "exec").mockImplementation(observe(exec));
     return db;
   });
   for (let opened = 0; opened < 2; opened += 1) {
