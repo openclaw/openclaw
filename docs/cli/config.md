@@ -12,7 +12,11 @@ Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path
 `config set`, `config patch`, and `config unset` require the local Gateway to be
 stopped. These commands hold exclusive state ownership while publishing the file
 and its database metadata. Stop the Gateway through its service owner, wait for
-it to exit, then rerun the command.
+it to exit, then rerun the command. A running-owner refusal is an offline-only
+restriction, not an authentication failure. For online changes, use
+`openclaw gateway call config.patch` with a `raw` patch and the `hash` returned by
+`openclaw gateway call config.get` as `baseHash`; see
+[Config RPC](/gateway/configuration/config-rpc).
 
 <Note>
 When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse.

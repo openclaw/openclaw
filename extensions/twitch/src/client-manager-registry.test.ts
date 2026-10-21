@@ -1,6 +1,5 @@
-// Twitch tests cover client manager registry plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getClientManager,
   getOrCreateClientManager,
@@ -47,7 +46,9 @@ const account = {
   enabled: true,
 } satisfies TwitchAccountConfig;
 
-async function attachFakeTransport(manager: ReturnType<typeof getOrCreateClientManager>) {
+type Manager = ReturnType<typeof getOrCreateClientManager>;
+
+async function attachFakeTransport(manager: Manager) {
   const transport = await manager.getClient(account, makeTwitchTestConfig(account), "default");
   manager.onMessage(vi.fn());
   return {
@@ -56,98 +57,82 @@ async function attachFakeTransport(manager: ReturnType<typeof getOrCreateClientM
   };
 }
 
+async function retireManager() {
+  const manager = getOrCreateClientManager("default", makeLogger());
+  const transport = await attachFakeTransport(manager);
+  const cleanup = createDeferred<void>();
+  const disconnect = manager.disconnectAll.bind(manager);
+  const disconnectSpy = vi.spyOn(manager, "disconnectAll").mockImplementation(async () => {
+    await disconnect();
+    await cleanup.promise;
+  });
+  const removal = removeClientManager("default");
+  return { manager, transport, cleanup, removal, disconnectSpy };
+}
+
 describe("client manager registry", () => {
+  let retired: Awaited<ReturnType<typeof retireManager>> | undefined;
+  beforeEach(async () => {
+    retired = undefined;
+    retired = await retireManager();
+  });
   afterEach(async () => {
+    retired?.cleanup.resolve();
+    await retired?.removal.catch(() => undefined);
     await removeClientManager("default");
   });
 
   it.each(["resolves", "rejects"] as const)(
     "retires managers immediately and preserves replacements when cleanup %s",
     async (outcome) => {
-      const logger = makeLogger();
-      const firstManager = getOrCreateClientManager("default", logger);
-      const transport = await attachFakeTransport(firstManager);
-      const cleanup = createDeferred<void>();
-      const disconnect = firstManager.disconnectAll.bind(firstManager);
-      const disconnectAll = vi.spyOn(firstManager, "disconnectAll").mockImplementation(async () => {
-        await disconnect();
-        await cleanup.promise;
-      });
-      const removal = removeClientManager("default");
+      const { manager, transport, cleanup, removal, disconnectSpy } = retired!;
+      expect(disconnectSpy).toHaveBeenCalledOnce();
+      expect(transport.quit).toHaveBeenCalledOnce();
+      expect(getClientManager("default")).toBeUndefined();
 
-      try {
-        expect(disconnectAll).toHaveBeenCalledOnce();
-        expect(transport.quit).toHaveBeenCalledOnce();
-        expect(getClientManager("default")).toBeUndefined();
+      const replacement = getOrCreateClientManager("default", makeLogger());
+      expect(replacement).not.toBe(manager);
 
-        const replacement = getOrCreateClientManager("default", makeLogger());
-        expect(replacement).not.toBe(firstManager);
-
-        if (outcome === "rejects") {
-          const disconnectError = new Error("disconnect failed");
-          const rejected = expect(removal).rejects.toBe(disconnectError);
-          cleanup.reject(disconnectError);
-          await rejected;
-        } else {
-          cleanup.resolve();
-          await expect(removal).resolves.toBeUndefined();
-        }
-
-        expect(getClientManager("default")).toBe(replacement);
-      } finally {
+      if (outcome === "rejects") {
+        const disconnectError = new Error("disconnect failed");
+        const rejected = expect(removal).rejects.toBe(disconnectError);
+        cleanup.reject(disconnectError);
+        await rejected;
+      } else {
         cleanup.resolve();
-        await removal.catch(() => undefined);
+        await expect(removal).resolves.toBeUndefined();
       }
+
+      expect(getClientManager("default")).toBe(replacement);
     },
   );
 
   it("keeps outbound delivery off a retired manager and sends through its replacement", async () => {
-    const logger = makeLogger();
-    const firstManager = getOrCreateClientManager("default", logger);
-    const first = await attachFakeTransport(firstManager);
-    const cleanup = createDeferred<void>();
-    const disconnect = firstManager.disconnectAll.bind(firstManager);
-    vi.spyOn(firstManager, "disconnectAll").mockImplementation(async () => {
-      await disconnect();
-      await cleanup.promise;
-    });
-    const reconnect = vi.spyOn(firstManager, "getClient");
-    const config = makeTwitchTestConfig(account);
-    const removal = removeClientManager("default");
-
-    try {
-      await expect(
-        twitchOutbound.sendText!({
-          to: "#testchannel",
-          text: "while retiring",
-          cfg: config,
-          accountId: "default",
-        }),
-      ).rejects.toThrow(
-        "Client manager not found for account: default. Please start the Twitch gateway first.",
-      );
-      expect(reconnect).not.toHaveBeenCalled();
-      expect(first.say).not.toHaveBeenCalled();
-
-      const replacement = getOrCreateClientManager("default", makeLogger());
-      const transport = await attachFakeTransport(replacement);
-      const afterRestart = await twitchOutbound.sendText!({
+    const { manager, transport: first, cleanup, removal } = retired!;
+    const reconnect = vi.spyOn(manager, "getClient");
+    const send = (text: string) =>
+      twitchOutbound.sendText!({
         to: "#testchannel",
-        text: "after restart",
-        cfg: config,
+        text,
+        cfg: makeTwitchTestConfig(account),
         accountId: "default",
       });
+    await expect(send("while retiring")).rejects.toThrow(
+      "Client manager not found for account: default. Please start the Twitch gateway first.",
+    );
+    expect(reconnect).not.toHaveBeenCalled();
+    expect(first.say).not.toHaveBeenCalled();
 
-      expect(afterRestart.messageId).toEqual(expect.any(String));
-      expect(afterRestart.receipt?.platformMessageIds).toEqual([afterRestart.messageId]);
-      expect(transport.say).toHaveBeenCalledWith("testchannel", "after restart");
+    const replacement = getOrCreateClientManager("default", makeLogger());
+    const transport = await attachFakeTransport(replacement);
+    const afterRestart = await send("after restart");
 
-      cleanup.resolve();
-      await expect(removal).resolves.toBeUndefined();
-      expect(getClientManager("default")).toBe(replacement);
-    } finally {
-      cleanup.resolve();
-      await removal.catch(() => undefined);
-    }
+    expect(afterRestart.messageId).toEqual(expect.any(String));
+    expect(afterRestart.receipt?.platformMessageIds).toEqual([afterRestart.messageId]);
+    expect(transport.say).toHaveBeenCalledWith("testchannel", "after restart");
+
+    cleanup.resolve();
+    await expect(removal).resolves.toBeUndefined();
+    expect(getClientManager("default")).toBe(replacement);
   });
 });

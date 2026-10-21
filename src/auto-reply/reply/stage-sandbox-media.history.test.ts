@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { hydratePromptMediaMessages } from "../../agents/embedded-agent-runner/run/images.js";
+import { createHostSandboxFsBridge } from "../../agents/test-helpers/host-sandbox-fs-bridge.js";
 import { sanitizeChatHistoryMessages } from "../../gateway/chat-display-projection.sanitize.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.message.js";
 import {
@@ -118,3 +121,47 @@ describe.each([false, true])("history (sandbox=%s)", (sandbox) => {
       }),
   );
 });
+
+it.each(["present", "missing", "outside-root"] as const)(
+  "replays a staged photo on a later sandbox turn: %s",
+  (copy) =>
+    withHome("staged-history-replay-", async (home) => {
+      const fixture = await mediaFixture(home);
+      let root = path.join(home, "sandbox");
+      const photo = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+      await fs.writeFile(fixture.source, photo);
+      fixture.ctx.media = [{ path: fixture.source, contentType: "image/png" }];
+      workspace.mockResolvedValue({ workspaceDir: root, containerWorkdir: "/work" });
+      const { staged } = await stageSandboxMedia(fixture);
+      const message = buildPersistedUserTurnMessage({
+        text: "Describe this photo",
+        media: fixture.ctx.media,
+      });
+      const serialized = JSON.stringify(message);
+      const replay = JSON.parse(serialized) as typeof message;
+      const stagedPath = path.resolve(root, staged.get(0)!);
+      if (copy === "missing") {
+        await fs.rm(stagedPath);
+      } else if (copy === "outside-root") {
+        root = path.join(home, "other-sandbox");
+        await fs.mkdir(root);
+      }
+
+      const result = await hydratePromptMediaMessages(
+        [replay, buildPersistedUserTurnMessage({ text: "What color was it?" })],
+        {
+          workspaceDir: root,
+          workspaceOnly: true,
+          model: { input: ["text", "image"] },
+          sandbox: { root, bridge: createHostSandboxFsBridge(root) },
+        },
+      );
+
+      expect(result[0]).toHaveProperty("content", [
+        { type: "text", text: "Describe this photo" },
+        ...(copy === "present"
+          ? [{ type: "image", data: photo.toString("base64"), mimeType: "image/png" }]
+          : []),
+      ]);
+    }),
+);

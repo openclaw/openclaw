@@ -20,7 +20,6 @@ import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import { PaneHeaderPresence, PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { ChatDetails } from "./chat-details.tsx";
-import { ChatHeaderCreateClawAction } from "./chat-header-create-claw-action.tsx";
 import {
   ChatPanelHeaderActions,
   ChatDashboardMenu,
@@ -442,7 +441,6 @@ function ChatPaneHeaderChrome(
               <RunningSubagents count={props.runningSubagentCount} />
             </Show>
             <Show when={props.runAction}>{(action) => <PaneSubagentStop {...action()} />}</Show>
-            <ChatHeaderCreateClawAction onCreateClaw={props.onCreateClaw} />
             <Show when={!props.mergedChrome}>
               <Show when={props.presence}>
                 {(presence) => <PaneHeaderPresence {...presence()} />}

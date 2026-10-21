@@ -483,7 +483,6 @@
   "ui/src/app/gateway-store.self-profile.ts",
   "ui/src/app/gateway-store.ts",
   "ui/src/app/lazy-custom-element.ts",
-  "ui/src/app/lazy-renderer.ts",
   "ui/src/app/lazy-shell-action.ts",
   "ui/src/app/link-reader-routing.ts",
   "ui/src/app/mcp-app-link-routing.ts",

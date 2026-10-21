@@ -222,6 +222,13 @@ describe("local client credential extraction", () => {
         updated_at_ms: 17,
       },
     });
+    {
+      using local = openClientCredentialCustody(env, { migration: true })!;
+      expect(readClientCredentialReceipt(local.database)).toMatchObject({
+        phase: "complete",
+        receipt: { source: null, sharedFile: null },
+      });
+    }
     try {
       const shared = openOpenClawStateDatabase({ env });
       expect(
@@ -294,60 +301,75 @@ describe("local client credential extraction", () => {
     }
   });
 
-  it("keeps source-free recovery on its recorded file and refuses an unrelated replacement", async () => {
-    const root = dirs.make("client-fresh-recovery-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
-    const otherEnv = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("client-unrelated-state-") };
-    const sharedPath = path.join(root, "state", "openclaw.sqlite");
-    const material = generateStoredDeviceIdentity(17);
-    const identity = {
-      identity_key: "primary",
-      device_id: material.deviceId,
-      public_key_pem: material.publicKeyPem,
-      private_key_pem: material.privateKeyPem,
-      created_at_ms: 17,
-      updated_at_ms: 19,
-    };
-    runClientCredentialOperation(env, { kind: "identity.create", identity });
-    try {
-      openOpenClawStateDatabase({ env });
-      await closeOpenClawStateDatabaseAsync();
-      {
-        using local = openClientCredentialCustody(env, { migration: true })!;
-        const stored = readClientCredentialReceipt(local.database)!;
-        expect(stored.receipt.source).toBeNull();
-        writeClientCredentialReceipt(local.database, stored.receipt, "copied");
-      }
-      repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true });
-      expect(
-        runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
-      ).toEqual({ kind: "identity", identity });
+  it.each(["copied", "complete"] as const)(
+    "enriches a legacy %s bootstrap receipt only on its recorded file",
+    async (phase) => {
+      const root = dirs.make("client-fresh-recovery-");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+      const otherEnv = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("client-unrelated-state-") };
+      const sharedPath = path.join(root, "state", "openclaw.sqlite");
+      const material = generateStoredDeviceIdentity(17);
+      const identity = {
+        identity_key: "primary",
+        device_id: material.deviceId,
+        public_key_pem: material.publicKeyPem,
+        private_key_pem: material.privateKeyPem,
+        created_at_ms: 17,
+        updated_at_ms: 19,
+      };
+      runClientCredentialOperation(env, { kind: "identity.create", identity });
+      try {
+        openOpenClawStateDatabase({ env });
+        await closeOpenClawStateDatabaseAsync();
+        {
+          using local = openClientCredentialCustody(env, { migration: true })!;
+          const stored = readClientCredentialReceipt(local.database)!;
+          // Older bootstraps persisted only a file binding, including after completion.
+          stored.receipt.source = null;
+          writeClientCredentialReceipt(local.database, stored.receipt, phase);
+        }
+        repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true });
+        expect(
+          runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
+        ).toEqual({ kind: "identity", identity });
+        {
+          using local = openClientCredentialCustody(env, { migration: true })!;
+          const stored = readClientCredentialReceipt(local.database)!;
+          expect(stored).toMatchObject({
+            phase: "complete",
+            receipt: { source: { kind: "canonical", engine: "sqlite" } },
+          });
+          // An unproven older receipt must still reject replacement before enrichment.
+          stored.receipt.source = null;
+          writeClientCredentialReceipt(local.database, stored.receipt, phase);
+        }
 
-      openOpenClawStateDatabase({ env: otherEnv });
-      await closeOpenClawStateDatabaseAsync();
-      fs.renameSync(sharedPath, `${sharedPath}.original`);
-      fs.copyFileSync(
-        path.join(otherEnv.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
-        sharedPath,
-      );
-      const localPath = resolveClientCredentialStorePath(env);
-      const before = fs.readFileSync(localPath);
-      expect(() =>
-        runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
-      ).toThrow("migration is incomplete or stale");
-      const repair = repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true });
-      expect(repair.changes).toEqual([]);
-      expect(repair.warnings).toEqual([
-        expect.stringContaining("Local credentials do not match the shared database"),
-      ]);
-      expect(fs.readFileSync(localPath)).toEqual(before);
-      expect(() =>
-        runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
-      ).toThrow("migration is incomplete or stale");
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-    }
-  });
+        openOpenClawStateDatabase({ env: otherEnv });
+        await closeOpenClawStateDatabaseAsync();
+        fs.renameSync(sharedPath, `${sharedPath}.original`);
+        fs.copyFileSync(
+          path.join(otherEnv.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
+          sharedPath,
+        );
+        const localPath = resolveClientCredentialStorePath(env);
+        const before = fs.readFileSync(localPath);
+        expect(() =>
+          runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
+        ).toThrow("migration is incomplete or stale");
+        const repair = repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true });
+        expect(repair.changes).toEqual([]);
+        expect(repair.warnings).toEqual([
+          expect.stringContaining("Local credentials do not match the shared database"),
+        ]);
+        expect(fs.readFileSync(localPath)).toEqual(before);
+        expect(() =>
+          runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
+        ).toThrow("migration is incomplete or stale");
+      } finally {
+        await closeOpenClawStateDatabaseAsync();
+      }
+    },
+  );
 
   it("preserves exact identity and scopes, strips only socket material, then retires source tables", async () => {
     const f = await fixture();
@@ -724,15 +746,19 @@ it("checks the Swift receipt fixture against actual canonical migration output",
     const freshPath = path.join(freshRoot, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(freshPath), { recursive: true });
     using fresh = openNodeSqliteDatabase(freshPath);
-    runSqliteImmediateTransactionSync(fresh, () =>
-      bindFreshClientCredentialStore(fresh, { path: freshPath, env: freshEnv }),
-    );
+    runSqliteImmediateTransactionSync(fresh, () => {
+      bindFreshClientCredentialStore(fresh, { path: freshPath, env: freshEnv });
+      executeCanonicalStateSchema(fresh, { includeVersionLazyAdditiveTables: true });
+      writeCurrentStateSchemaMetadata(fresh, 123);
+    });
     using freshOwner = openClientCredentialCustody(freshEnv, {
       createIfMissing: false,
       migration: true,
     })!;
     const freshStored = readClientCredentialReceipt(freshOwner.database)!;
+    expect(freshStored.receipt.source?.identity).toBe(`${freshPath}:123`);
     freshStored.receipt.sharedFile = { path: "/fixture/state/openclaw.sqlite", dev: "1", ino: "2" };
+    freshStored.receipt.source!.identity = "/fixture/state/openclaw.sqlite:123";
     const fixtureReceipt = (name: string, stored: typeof actual, rootPath?: string) => ({
       name,
       phase: stored.phase,

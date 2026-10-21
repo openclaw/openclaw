@@ -64,7 +64,7 @@ function formatWikiOverviewClusterSummary(cluster: WikiOverview["clusters"][numb
   return parts.join(" · ");
 }
 
-export function renderWikiPreviewOverlay(props: DreamingProps) {
+export function WikiPreviewOverlay(props: DreamingProps) {
   const preview = createMemo(() => props.wikiPreview?.request);
   return (
     <Show when={preview()} keyed>
