@@ -99,7 +99,6 @@ it("delivers a committed human mention once through authenticated chat.send", as
         defaults: {
           workspace: state.workspaceDir,
           skipBootstrap: true,
-          heartbeat: { every: "0m" },
           model: { primary: model.modelRef },
           models: {
             [model.modelRef]: {

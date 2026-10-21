@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   claimCompletedAgentDeletion: vi.fn(() => true),
   migrateLegacyMainSessionKeys: vi.fn(),
   prepareSharedAuthStoreOwnership: vi.fn(),
+  provisionDefaultProactiveJob: vi.fn(async () => undefined),
 }));
 
 vi.mock("node:fs/promises", () => ({ default: { mkdir: mocks.mkdir } }));
@@ -66,6 +67,12 @@ vi.mock("../state/agent-deletion-journal.read.js", () => ({
 
 vi.mock("../state/agent-provenance.js", () => ({
   recordAgentProvenance: mocks.recordAgentProvenance,
+}));
+
+// mock-isolation: Creation/config unit cases leave real provisioning to Cron integration coverage.
+vi.mock("../cron/default-proactive-job.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cron/default-proactive-job.js")>()),
+  provisionDefaultProactiveJob: mocks.provisionDefaultProactiveJob,
 }));
 
 // mock-isolation: Workspace/config unit cases do not own a real SQLite worker or creation store.

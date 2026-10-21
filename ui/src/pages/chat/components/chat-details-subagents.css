@@ -176,6 +176,15 @@
 
 .chat-details-subagents__count {
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chat-details-subagents__count[data-status="running"] {
+  color: var(--text);
+}
+
+.chat-details-subagents__count[data-status="done"]:not(:first-child) {
+  margin-inline-start: auto;
 }
 
 .chat-details-subagents__chevron {
@@ -187,14 +196,9 @@
 }
 
 .chat-details-subagents__collapsed {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   color: var(--muted);
-}
-
-.chat-details-subagents__collapsed > .chat-details-subagents__spinner {
-  width: 12px;
-  height: 12px;
 }
 
 .chat-details-subagents--mobile {

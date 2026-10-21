@@ -6,13 +6,29 @@ import {
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
-import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import {
+  replaceSessionEntrySync,
+  persistSessionTranscriptTurn,
+} from "../config/sessions/session-accessor.js";
+import type {
+  InternalSessionEntry as SessionEntry,
+  SessionAcpMeta,
+} from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import type {
+  GatewayRequestHandler,
+  GatewayRequestHandlerOptions,
+} from "./server-methods/types.js";
+import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   create as createSessionRow,
@@ -38,6 +54,100 @@ import {
 import type { SessionTitleFields } from "./session-utils.types.js";
 
 type Row = NonNullable<ReturnType<SessionRowProjection["describe"]>>;
+
+export function seedProjectionRow(
+  name: string,
+  fields: Partial<SessionEntry> = {},
+  agentId = "main",
+  storePath?: string,
+) {
+  const entry = { sessionId: name, updatedAt: 1, ...fields };
+  const scope = {
+    agentId,
+    sessionKey: name.startsWith("agent:") ? name : `agent:${agentId}:${name}`,
+    sessionId: entry.sessionId,
+    storePath,
+  };
+  replaceSessionEntrySync(scope, entry);
+  return {
+    scope,
+    target: scope,
+    query: { agentId, key: scope.sessionKey, ...(storePath === undefined ? {} : { storePath }) },
+    entry,
+  };
+}
+
+export function appendProjectionMessages(
+  scope: Parameters<typeof persistSessionTranscriptTurn>[0],
+  ...messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"][number]["message"][]
+) {
+  return persistSessionTranscriptTurn(scope, {
+    messages: messages.map((message) => ({ message })),
+    touchSessionEntry: false,
+  });
+}
+
+export function acpProjectionMeta(
+  backend: string,
+  runtimeSessionName: string,
+  lastActivityAt = 1,
+  extra: Partial<SessionAcpMeta> = {},
+): SessionAcpMeta {
+  return {
+    backend,
+    agent: "main",
+    runtimeSessionName,
+    mode: "persistent",
+    state: "idle",
+    lastActivityAt,
+    ...extra,
+  };
+}
+
+export function withSessionRowProjectionState(
+  run: (
+    create: typeof createSessionRowProjection,
+    state: OpenClawTestState,
+    cleanup: AsyncDisposableStack,
+  ) => Promise<void>,
+  foreground = false,
+  options: Parameters<typeof withOpenClawTestState>[0] = { scenario: "minimal" },
+) {
+  return withOpenClawTestState(options, async (state) => {
+    await using cleanup = new AsyncDisposableStack();
+    if (foreground) {
+      cleanup.defer(retainSessionListForegroundWork());
+    }
+    await run(
+      async (params) => {
+        const projection = await createSessionRowProjection(params);
+        cleanup.defer(() => projection.dispose());
+        return projection;
+      },
+      state,
+      cleanup,
+    );
+  });
+}
+
+export function requestSessionRow(
+  handler: GatewayRequestHandler,
+  context: GatewayRequestHandlerOptions["context"],
+  method: string,
+  params: GatewayRequestHandlerOptions["params"],
+  respond: GatewayRequestHandlerOptions["respond"],
+  client: GatewayRequestHandlerOptions["client"] = null,
+  id = method,
+) {
+  return handler({
+    req: { type: "req", id, method },
+    params,
+    context,
+    respond,
+    client,
+    isWebchatConnect: () => false,
+  });
+}
 
 /** Synthetic owner state; tests publish changes explicitly through setEntry. */
 export function createSessionRowProjectionFixture(params: {

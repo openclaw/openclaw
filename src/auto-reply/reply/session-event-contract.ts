@@ -24,6 +24,7 @@ import type {
   SourceDeliveryPlan,
 } from "../../infra/outbound/source-delivery-plan.types.js";
 import type { SystemEvent } from "../../infra/system-events.js";
+import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
@@ -56,6 +57,7 @@ export type SessionEventOutcome = {
   deliveryError?: string;
   deliverySuppressionReason?: NormalizeReplySkipReason;
   admissionDeferred?: boolean;
+  admissionDeferredReason?: CronRunOutcome["admissionDeferredReason"];
 };
 export type SessionEventReceipt = {
   id: string;
@@ -136,6 +138,14 @@ export type ScheduledSessionAutomation = {
   prepare?: () => Promise<void>;
   /** Rebuild source wrapping with the config selected for each admission attempt. */
   preparePrompt?: (cfg: OpenClawConfig) => Promise<string>;
+  /** Selected absent notices share the receiver's exact ordinary creation operation. */
+  bindSessionCreation?: (operation: SessionEntryCreationOperation) => () => void;
+  beforeStart?: (
+    operation?: ReplyOperationObservation,
+  ) => boolean | NonNullable<CronRunOutcome["admissionDeferredReason"]>;
+  /** Retain an on-exit occurrence until existing foreground work settles. */
+  waitForIdle?: (signal?: AbortSignal, operation?: ReplyOperationObservation) => Promise<void>;
+  onStarted?: () => void;
   onLaneWait?: (info: { waiting: boolean }) => void;
   onExecutionStarted?: (info: {
     runId: string;
@@ -147,6 +157,7 @@ export type ScheduledSessionAutomation = {
   }) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   beforeDeliver?: () => Promise<void>;
+  assertDeliveryCurrent?: () => void;
   sourceDelivery?: SourceDeliveryPlan;
   finalizePromptForResolvedTools?: ResolvedToolPromptFinalizer;
 };

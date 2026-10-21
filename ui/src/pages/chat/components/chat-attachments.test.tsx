@@ -8,7 +8,7 @@ import * as toast from "../../../lib/toast.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as payloads from "../attachment-payload-store.ts";
-import "../../../lib/toast-host.ts";
+import "../../../lib/toast-host.tsx";
 import {
   chatAttachmentBatchBytes,
   resolveChatAttachmentLimits,

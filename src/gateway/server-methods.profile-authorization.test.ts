@@ -9,6 +9,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { authorizationClient } from "./server-methods.authorization.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import {
   createRequestGate,
@@ -28,17 +29,9 @@ function profileIdentity(profile: { id: string; updatedAt: number }) {
 }
 
 function createPendingProfileClient(scopes = ["operator.admin"]) {
-  return {
-    connId: "conn-pending-profile",
+  return authorizationClient("conn-pending-profile", scopes, {
     authenticatedUserId: "mutable-login@github",
-    connect: {
-      role: "operator" as const,
-      scopes,
-      client: { id: "test", version: "1", platform: "test", mode: "test" },
-      minProtocol: 1,
-      maxProtocol: 1,
-    },
-  } as NonNullable<Parameters<typeof handleGatewayRequest>[0]["client"]>;
+  });
 }
 
 async function dispatchProfile(

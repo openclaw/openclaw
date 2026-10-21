@@ -46,18 +46,18 @@ export function createModelProviderLogin(options: LoginOptions) {
   const notify = () => publish?.();
   const [query, setQuery] = createSignal("");
   const [providerSelection, setProvider] = createSignal("");
-  let currentPicker:
-    | ({
-        providers?: string[];
-        allowSetup: boolean;
-        isCurrent: () => boolean;
-      } & (
-        | { phase: "loading" }
-        | { phase: "ready"; authStatus: ModelAuthStatusResult }
-        | { phase: "error"; message: string }
-      ))
-    | null = null;
-  let inventoryRequest: AbortController | undefined;
+  let currentPicker: {
+    providers?: string[];
+    allowSetup: boolean;
+    isCurrent: () => boolean;
+    inventory: { value: ModelAuthStatusResult | Promise<ModelAuthStatusResult | null> };
+  } | null = null;
+  let inventoryRequest:
+    | {
+        controller: AbortController;
+        result: ReturnType<typeof Promise.withResolvers<ModelAuthStatusResult | null>>;
+      }
+    | undefined;
   let startChatRequest: AbortController | undefined;
   let searchInput: HTMLInputElement | undefined;
   let methodChoices: HTMLDivElement | undefined;
@@ -245,8 +245,13 @@ export function createModelProviderLogin(options: LoginOptions) {
       return;
     }
     const currentGeneration = ++generation;
-    const controller = new AbortController();
-    inventoryRequest = controller;
+    const request = {
+      controller: new AbortController(),
+      result: Promise.withResolvers<ModelAuthStatusResult | null>(),
+    };
+    inventoryRequest = request;
+    // Cancellation can retire a rejected receipt before Solid observes it.
+    void request.result.promise.catch(() => {});
     const isCurrent = () => {
       const current = options.getScope();
       return (
@@ -256,10 +261,15 @@ export function createModelProviderLogin(options: LoginOptions) {
         options.canContinue()
       );
     };
-    const picker = { providers, isCurrent, allowSetup };
+    const picker = {
+      providers,
+      isCurrent,
+      allowSetup,
+      inventory: { value: scope.authStatus ?? request.result.promise },
+    };
     setQuery("");
     setProvider("");
-    currentPicker = { ...picker, phase: "loading" };
+    currentPicker = picker;
     focusPicker = null;
     message = undefined;
     notify();
@@ -268,35 +278,28 @@ export function createModelProviderLogin(options: LoginOptions) {
         scope.authStatus ??
         (await loadModelAuthStatus(client, {
           agentId: scope.agentId,
-          signal: controller.signal,
+          signal: request.controller.signal,
         }));
-      if (inventoryRequest === controller && isCurrent()) {
+      if (inventoryRequest === request && isCurrent()) {
         const available = loginProviders(providers, authStatus, allowSetup);
         const provider = providers && available.length === 1 ? available[0] : undefined;
-        currentPicker = {
-          ...picker,
-          phase: "ready",
-          authStatus,
-        };
         setProvider(provider?.id ?? "");
         // An awaited inventory mounts the modal before its inputs exist.
         if (!scope.authStatus) {
           focusPicker = provider ? "method" : "search";
         }
+        request.result.resolve(authStatus);
       }
     } catch (error) {
-      if (inventoryRequest === controller && isCurrent()) {
-        currentPicker = {
-          ...picker,
-          phase: "error",
-          message: formatUiError(error, t("modelProviders.requestFailed")),
-        };
+      if (inventoryRequest === request && isCurrent()) {
+        request.result.reject(error);
       }
     } finally {
-      if (inventoryRequest === controller && currentGeneration === generation) {
+      if (inventoryRequest === request && currentGeneration === generation) {
         inventoryRequest = undefined;
         if (!isCurrent()) {
           currentPicker = null;
+          request.result.resolve(null);
         }
         notify();
         onSettled(focusPickerTarget);
@@ -305,22 +308,18 @@ export function createModelProviderLogin(options: LoginOptions) {
   }
 
   function invalidateInventory(): void {
-    inventoryRequest?.abort();
+    inventoryRequest?.controller.abort();
+    inventoryRequest?.result.reject(new Error(t("modelProviders.requestFailed")));
     inventoryRequest = undefined;
-    if (currentPicker?.phase === "loading") {
-      currentPicker = {
-        ...currentPicker,
-        phase: "error",
-        message: t("modelProviders.requestFailed"),
-      };
-    }
   }
 
   function reset(): void {
     generation += 1;
     startChatRequest?.abort();
     startChatRequest = undefined;
-    inventoryRequest?.abort();
+    inventoryRequest?.controller.abort();
+    // An ignored transport abort must not keep the retired read unresolved.
+    inventoryRequest?.result.resolve(null);
     inventoryRequest = undefined;
     currentPicker = null;
     focusPicker = null;
@@ -357,7 +356,8 @@ export function createModelProviderLogin(options: LoginOptions) {
     publish = undefined;
     generation += 1;
     startChatRequest?.abort();
-    inventoryRequest?.abort();
+    inventoryRequest?.controller.abort();
+    inventoryRequest?.result.resolve(null);
     completionCatalog.clear();
   });
 
@@ -383,23 +383,21 @@ export function createModelProviderLogin(options: LoginOptions) {
     });
   }
 
-  function pickerView() {
+  function pickerView(authStatus?: ModelAuthStatusResult | null) {
     view.read();
     const picker = currentPicker;
     if (!picker) {
       return null;
     }
-    const canSelect = () =>
-      currentPicker === picker && picker.phase === "ready" && picker.isCurrent();
-    const groups =
-      picker.phase === "ready"
-        ? loginProviders(picker.providers, picker.authStatus, picker.allowSetup)
-        : [];
+    const canSelect = () => currentPicker === picker && Boolean(authStatus) && picker.isCurrent();
+    const groups = authStatus
+      ? loginProviders(picker.providers, authStatus, picker.allowSetup)
+      : [];
     const provider = groups.find((group) => group.id === providerSelection());
     const accounts =
-      provider && picker.phase === "ready"
+      provider && authStatus
         ? buildModelProviderCards({
-            authStatus: picker.authStatus,
+            authStatus,
             models: null,
             providerUsage: null,
             costByProvider: null,
@@ -424,16 +422,15 @@ export function createModelProviderLogin(options: LoginOptions) {
     );
 
     return {
-      phase: picker.phase,
-      error: picker.phase === "error" ? picker.message : undefined,
-      unavailable: picker.phase === "ready" ? picker.authStatus.unavailable : undefined,
+      inventory: picker.inventory,
+      unavailable: authStatus?.unavailable,
       query: query(),
       provider,
       accounts,
       recovery,
       docsUrl,
       matches,
-      disabled: picker.phase !== "ready" || !picker.isCurrent(),
+      disabled: !authStatus || !picker.isCurrent(),
       canStart: options.canStart(),
       showDiscover: !picker.providers && Boolean(options.onDiscover),
       discoverDisabled: !picker.isCurrent(),

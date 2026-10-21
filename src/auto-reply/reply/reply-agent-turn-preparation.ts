@@ -272,8 +272,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
         return { kind: "skipped", reason: "aborted", operation } as const;
       }
 
-      // Queue drains retain the latest live runner closure per key. Keep local dispatcher
-      // callbacks in that closure so retried non-routable items use the newest transport owner.
+      // The queued source retains its runner, including its own dispatcher callbacks.
       if (kind === "queued_followup") {
         queuedFollowupAdmitted = true;
         await params.defaults.opts?.onQueuedFollowupAdmitted?.();

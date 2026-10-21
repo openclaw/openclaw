@@ -43,7 +43,6 @@ it("keeps recovered work on the ordinary budget and periodic heartbeats on 600 s
           defaults: {
             workspace: state.workspaceDir,
             skipBootstrap: true,
-            heartbeat: { every: "30m", target: "none" },
             model: { primary: "openai/gpt-5.6-luna" },
             models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
           },
@@ -129,6 +128,7 @@ it("keeps recovered work on the ordinary budget and periodic heartbeats on 600 s
           cfg,
           agentId: "main",
           sessionKey,
+          heartbeat: { every: "30m", target: "none" },
           source: "interval",
           intent: "scheduled",
         }),

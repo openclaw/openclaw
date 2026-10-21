@@ -368,7 +368,17 @@ export async function resolveWorkerPlacementSessionTarget(params: {
       repositoryWorkspaceId: initialEntry.repositoryWorkspaceId,
       deviceFolder: initialEntry.deviceFolder,
     };
-    const acceptWorktree = captureWorktreeRegistryReadGuard(worktreeContext, "source-owner");
+    const acceptWorktree = captureWorktreeRegistryReadGuard(
+      worktreeContext,
+      "source-owner",
+      initialIdentity.worktreeId
+        ? {
+            id: initialIdentity.worktreeId,
+            ownerKind: "session",
+            ownerId: initialTarget.canonicalKey,
+          }
+        : undefined,
+    );
     const worktree =
       initialIdentity.repositoryWorkspaceId || initialIdentity.deviceFolder
         ? undefined

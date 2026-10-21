@@ -55,6 +55,10 @@ function errorBody(mode: Exclude<ServerMode, "ok">): Record<string, unknown> {
 async function startEmbeddingServer() {
   const requests: Array<{ status: number; body: Record<string, unknown> }> = [];
   let mode: ServerMode = "ok";
+  const respond = (res: ServerResponse, status: number, body: Record<string, unknown>) => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(body));
+  };
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       try {
@@ -62,29 +66,24 @@ async function startEmbeddingServer() {
         if (mode !== "ok") {
           const status = mode === "quota" ? 429 : 401;
           requests.push({ status, body });
-          res.writeHead(status, { "content-type": "application/json" });
-          res.end(JSON.stringify(errorBody(mode)));
+          respond(res, status, errorBody(mode));
           return;
         }
         requests.push({ status: 200, body });
         const input = body.input;
         const texts = Array.isArray(input) ? input : [input];
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({
-            object: "list",
-            data: texts.map((text, index) => ({
-              object: "embedding",
-              embedding: [String(text).length, index + 0.5, 3],
-              index,
-            })),
-            model: body.model,
-          }),
-        );
+        respond(res, 200, {
+          object: "list",
+          data: texts.map((text, index) => ({
+            object: "embedding",
+            embedding: [String(text).length, index + 0.5, 3],
+            index,
+          })),
+          model: body.model,
+        });
       } catch (error) {
         requests.push({ status: 500, body: {} });
-        res.writeHead(500, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: { message: String(error) } }));
+        respond(res, 500, { error: { message: String(error) } });
       }
     })();
   });

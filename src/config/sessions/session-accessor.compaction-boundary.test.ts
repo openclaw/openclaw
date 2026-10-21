@@ -477,7 +477,11 @@ it("rolls back accounting when the prepared boundary identity already exists", a
     ),
   ).toThrow(`Session transcript entry was not persisted: ${keptId}: transcript-event-not-appended`);
 
-  expect(transactionSql.mock.calls.map(([sql]) => sql)).toEqual(["BEGIN IMMEDIATE", "ROLLBACK"]);
+  expect(
+    transactionSql.mock.calls
+      .map(([sql]) => sql)
+      .filter((sql) => !sql.startsWith("PRAGMA busy_timeout = ")),
+  ).toEqual(["BEGIN IMMEDIATE", "ROLLBACK"]);
   expectRolledBack(scope, before);
 });
 

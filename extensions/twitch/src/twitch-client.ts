@@ -122,9 +122,7 @@ export class TwitchClientManager {
     cfg?: OpenClawConfig,
     accountId?: string,
   ): Promise<ChatClient> {
-    const tokenResolution = resolveTwitchToken(cfg, {
-      accountId,
-    });
+    const tokenResolution = resolveTwitchToken(cfg, accountId);
 
     if (!tokenResolution.token) {
       const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;

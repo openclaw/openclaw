@@ -21,74 +21,60 @@ export function agentWorkspaceFindings(
     "agents/workspace",
   )) {
     const agentId = target.selectorId;
+    const targetEntries =
+      agentId === undefined
+        ? entries
+        : entries.filter((entry) =>
+            scopedAgentEvidenceMatches(entry, agentId, entries, entry.scope === "defaults"),
+          );
+    const allowed = new Set(readStringList(target.policy, ["allowedAccess"]));
+    const requiredDeniedTools = new Set(readStringList(target.policy, ["denyTools"]));
     findings.push(
-      ...workspaceFindings(
-        target.policy,
-        policyDocName,
-        target.requirementBase,
-        agentId === undefined
-          ? entries
-          : entries.filter((entry) =>
-              scopedAgentEvidenceMatches(entry, agentId, entries, entry.scope === "defaults"),
-            ),
-      ),
+      ...targetEntries
+        .filter(
+          (entry) =>
+            allowed.size > 0 &&
+            entry.kind === "workspaceAccess" &&
+            entry.value !== undefined &&
+            (entry.sandboxEnabled !== true || !allowed.has(entry.value)),
+        )
+        .map((entry) => {
+          const sandboxDisabled = entry.sandboxEnabled !== true;
+          const observed = sandboxDisabled
+            ? `sandbox mode '${entry.sandboxMode ?? "off"}'`
+            : `sandbox workspaceAccess '${entry.value ?? ""}'`;
+          const source = sandboxDisabled ? (entry.sandboxModeSource ?? entry.source) : entry.source;
+          return policyEvidenceFinding(
+            { source },
+            {
+              checkId: CHECK_IDS.policyAgentsWorkspaceAccessDenied,
+              message: `${workspaceLabel(entry)} ${observed} is not allowed by policy.`,
+              requirement: `oc://${policyDocName}/${target.requirementBase}/allowedAccess`,
+              fixHint:
+                "Enable sandbox mode with workspaceAccess none/ro or update policy after review.",
+            },
+          );
+        }),
+      ...targetEntries
+        .filter(
+          (entry) =>
+            entry.kind === "toolDeny" &&
+            entry.tool !== undefined &&
+            requiredDeniedTools.has(entry.tool) &&
+            entry.denied !== true,
+        )
+        .map((entry) =>
+          policyEvidenceFinding(entry, {
+            checkId: CHECK_IDS.policyAgentsToolNotDenied,
+            message: `${workspaceLabel(entry)} does not deny required tool '${entry.tool ?? ""}'.`,
+            requirement: `oc://${policyDocName}/${target.requirementBase}/denyTools`,
+            fixHint:
+              "Add the tool to tools.deny or agents.entries.<id>.tools.deny, or update policy after review.",
+          }),
+        ),
     );
   }
   return findings;
-}
-
-function workspaceFindings(
-  workspace: unknown,
-  policyDocName: string,
-  requirementBase: string,
-  entries: readonly PolicyAgentWorkspaceEvidence[],
-): HealthFinding[] {
-  const allowed = new Set(readStringList(workspace, ["allowedAccess"]));
-  const requiredDeniedTools = new Set(readStringList(workspace, ["denyTools"]));
-  return [
-    ...entries
-      .filter(
-        (entry) =>
-          allowed.size > 0 &&
-          entry.kind === "workspaceAccess" &&
-          entry.value !== undefined &&
-          (entry.sandboxEnabled !== true || !allowed.has(entry.value)),
-      )
-      .map((entry) => {
-        const sandboxDisabled = entry.sandboxEnabled !== true;
-        const observed = sandboxDisabled
-          ? `sandbox mode '${entry.sandboxMode ?? "off"}'`
-          : `sandbox workspaceAccess '${entry.value ?? ""}'`;
-        const source = sandboxDisabled ? (entry.sandboxModeSource ?? entry.source) : entry.source;
-        return policyEvidenceFinding(
-          { source },
-          {
-            checkId: CHECK_IDS.policyAgentsWorkspaceAccessDenied,
-            message: `${workspaceLabel(entry)} ${observed} is not allowed by policy.`,
-            requirement: `oc://${policyDocName}/${requirementBase}/allowedAccess`,
-            fixHint:
-              "Enable sandbox mode with workspaceAccess none/ro or update policy after review.",
-          },
-        );
-      }),
-    ...entries
-      .filter(
-        (entry) =>
-          entry.kind === "toolDeny" &&
-          entry.tool !== undefined &&
-          requiredDeniedTools.has(entry.tool) &&
-          entry.denied !== true,
-      )
-      .map((entry) =>
-        policyEvidenceFinding(entry, {
-          checkId: CHECK_IDS.policyAgentsToolNotDenied,
-          message: `${workspaceLabel(entry)} does not deny required tool '${entry.tool ?? ""}'.`,
-          requirement: `oc://${policyDocName}/${requirementBase}/denyTools`,
-          fixHint:
-            "Add the tool to tools.deny or agents.entries.<id>.tools.deny, or update policy after review.",
-        }),
-      ),
-  ];
 }
 
 function workspaceLabel(entry: PolicyAgentWorkspaceEvidence): string {

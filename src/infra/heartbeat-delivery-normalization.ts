@@ -16,7 +16,7 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import { escapeRegExp } from "../utils.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
 
-export type NormalizedHeartbeatDelivery = {
+type NormalizedHeartbeatDelivery = {
   shouldSkip: boolean;
   text: string;
   hasMedia: boolean;
@@ -24,88 +24,7 @@ export type NormalizedHeartbeatDelivery = {
   silent?: boolean;
 };
 
-function stripLeadingHeartbeatResponsePrefix(
-  text: string,
-  responsePrefix: string | undefined,
-): string {
-  const normalizedPrefix = responsePrefix?.trim();
-  if (!normalizedPrefix) {
-    return text;
-  }
-  const prefixPattern = new RegExp(
-    `^${escapeRegExp(normalizedPrefix)}(?=$|\\s|[\\p{P}\\p{S}])\\s*`,
-    "iu",
-  );
-  return text.replace(prefixPattern, "");
-}
-
-function isStreamErrorFallbackPlaceholderOnly(text: string): boolean {
-  let remaining = text.trim();
-  if (!remaining) {
-    return false;
-  }
-  while (remaining.startsWith(STREAM_ERROR_FALLBACK_TEXT)) {
-    remaining = remaining.slice(STREAM_ERROR_FALLBACK_TEXT.length).trimStart();
-  }
-  return remaining.length === 0;
-}
-
 const TRAILING_HEARTBEAT_NOTIFY_FALSE_RE = /(?:^|[\r\n])[ \t]*notify=false[ \t]*(?:\r?\n[ \t]*)*$/i;
-
-function stripTrailingHeartbeatNotifyFalse(text: string): {
-  text: string;
-  silent: boolean;
-} {
-  const match = TRAILING_HEARTBEAT_NOTIFY_FALSE_RE.exec(text);
-  return match
-    ? { text: text.slice(0, match.index).trimEnd(), silent: true }
-    : { text, silent: false };
-}
-
-function normalizeHeartbeatDelivery(
-  source:
-    | { response: HeartbeatToolResponse }
-    | {
-        payload: ReplyPayload;
-        ackMaxChars: number;
-        mode: "heartbeat" | "message";
-        silent: boolean;
-      },
-  responsePrefix: string | undefined,
-): NormalizedHeartbeatDelivery {
-  let finalText: string;
-  let hasMedia = false;
-  let isInternalPlaceholderOnly = false;
-  let silent: boolean;
-  if ("response" in source) {
-    finalText = getHeartbeatToolNotificationText(source.response);
-    silent = !source.response.notify;
-  } else {
-    const { payload, mode, ackMaxChars } = source;
-    const rawText = typeof payload.text === "string" ? payload.text : "";
-    const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
-    const stripped = stripHeartbeatToken(textForStrip, {
-      mode,
-      maxAckChars: ackMaxChars,
-    });
-    hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-    const notifyFalse = stripTrailingHeartbeatNotifyFalse(stripped.text);
-    silent = notifyFalse.silent || source.silent;
-    isInternalPlaceholderOnly = isStreamErrorFallbackPlaceholderOnly(notifyFalse.text);
-    finalText =
-      (stripped.shouldSkip && !hasMedia) || isInternalPlaceholderOnly ? "" : notifyFalse.text;
-  }
-  if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
-    finalText = `${responsePrefix} ${finalText}`;
-  }
-  return {
-    shouldSkip: !hasMedia && finalText.trim().length === 0,
-    text: finalText,
-    hasMedia,
-    isInternalPlaceholderOnly,
-    ...(silent ? { silent: true } : {}),
-  };
-}
 
 export function classifyHeartbeatAgentOutcome(params: {
   agentRun: {
@@ -165,17 +84,58 @@ export function classifyHeartbeatAgentOutcome(params: {
       : ({ kind: "ack", eventStatus: "ok-empty" } as const);
   }
   const mode = params.hasRelayableExecCompletion ? "message" : "heartbeat";
-  const normalized = normalizeHeartbeatDelivery(
-    heartbeatToolResponse && !shouldSuppressSourceReply && !(hasExplicitFailure && replyPayload)
-      ? { response: heartbeatToolResponse }
-      : {
-          payload: shouldSuppressSourceReply ? {} : (replyPayload ?? {}),
-          ackMaxChars: params.ackMaxChars,
-          mode,
-          silent: replyCompletion?.outcome === "silent",
-        },
-    params.responsePrefix,
-  );
+  let finalText: string;
+  let hasMedia = false;
+  let isInternalPlaceholderOnly = false;
+  let normalizedSilent: boolean;
+  const responsePrefix = params.responsePrefix;
+  if (
+    heartbeatToolResponse &&
+    !shouldSuppressSourceReply &&
+    !(hasExplicitFailure && replyPayload)
+  ) {
+    finalText = getHeartbeatToolNotificationText(heartbeatToolResponse);
+    normalizedSilent = !heartbeatToolResponse.notify;
+  } else {
+    const payload = shouldSuppressSourceReply ? {} : (replyPayload ?? {});
+    const ackMaxChars = params.ackMaxChars;
+    const rawText = typeof payload.text === "string" ? payload.text : "";
+    const normalizedPrefix = responsePrefix?.trim();
+    const textForStrip = normalizedPrefix
+      ? rawText.replace(
+          new RegExp(`^${escapeRegExp(normalizedPrefix)}(?=$|\\s|[\\p{P}\\p{S}])\\s*`, "iu"),
+          "",
+        )
+      : rawText;
+    const stripped = stripHeartbeatToken(textForStrip, {
+      mode,
+      maxAckChars: ackMaxChars,
+    });
+    hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
+    const match = TRAILING_HEARTBEAT_NOTIFY_FALSE_RE.exec(stripped.text);
+    const notifyFalse = match
+      ? { text: stripped.text.slice(0, match.index).trimEnd(), silent: true }
+      : { text: stripped.text, silent: false };
+    normalizedSilent = notifyFalse.silent || replyCompletion?.outcome === "silent";
+    let remaining = notifyFalse.text.trim();
+    const hasRemaining = remaining.length > 0;
+    while (remaining.startsWith(STREAM_ERROR_FALLBACK_TEXT)) {
+      remaining = remaining.slice(STREAM_ERROR_FALLBACK_TEXT.length).trimStart();
+    }
+    isInternalPlaceholderOnly = hasRemaining && remaining.length === 0;
+    finalText =
+      (stripped.shouldSkip && !hasMedia) || isInternalPlaceholderOnly ? "" : notifyFalse.text;
+  }
+  if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
+    finalText = `${responsePrefix} ${finalText}`;
+  }
+  const normalized: NormalizedHeartbeatDelivery = {
+    shouldSkip: !hasMedia && finalText.trim().length === 0,
+    text: finalText,
+    hasMedia,
+    isInternalPlaceholderOnly,
+    ...(normalizedSilent ? { silent: true } : {}),
+  };
   if (agentRunFailed && params.useHeartbeatFailureCopy) {
     const replacement = replaceGenericExternalRunFailureText(normalized.text);
     if (replacement.replaced) {

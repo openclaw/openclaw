@@ -171,7 +171,7 @@ suite.define(() => {
             await page.setViewportSize({ width: 1416, height: 707 });
           }
           const pages = await openSidebarPages(page);
-          await pages.getByRole("link", { name: "Agents", exact: true }).click();
+          await pages.getByRole("link", { name: "Sessions", exact: true }).click();
           await expect.poll(() => scrollPadding(page)).toBe(initialPadding);
         },
       );

@@ -243,7 +243,11 @@ suite.define(() => {
 
   it("reveals draft and sent comments by touch before and after reload", async () => {
     await withPage(
-      async ({ page, composer, editor, comment, preview, sentChip, pendingChip }) => {
+      async ({ page, composer, editor, comment, preview, pendingChip }) => {
+        const sent = page.locator(".chat-sent-comments-inline");
+        const sentQuote = sent.getByRole("button", { name: selectedText, exact: true });
+        const fullQuote = sent.getByRole("region", { name: "Highlighted passage:", exact: true });
+        const sentComment = sent.locator(".chat-sent-comments-inline__comment");
         const gateway = await openSelection(page);
         const source = selectedSource(page);
         await source.waitFor({ state: "visible" });
@@ -264,22 +268,23 @@ suite.define(() => {
           text: "Selected passage received.",
         });
         await page.reload();
-        await sentChip.waitFor({ state: "visible" });
-        await sentChip.tap();
-        await expectReadOnlyPreview(preview, "Check the rollback steps. 🦞");
-        expect(await preview.textContent()).toContain(selectedText);
+        await sentQuote.waitFor({ state: "visible" });
+        expect(await sentComment.textContent()).toBe("Check the rollback steps. 🦞");
+        await sentQuote.tap();
+        await expectReadOnlyPreview(fullQuote, selectedText);
         await composer.tap();
-        await expect.poll(() => preview.isVisible()).toBe(false);
+        await expect.poll(() => fullQuote.isVisible()).toBe(false);
         await selectText(source);
         await button(page, "Add to chat").tap();
         await comment.fill("Remove only this pending comment.");
         await button(editor, "Save comment").tap();
         await button(pendingChip, "Remove all comments").tap();
         await pendingChip.waitFor({ state: "detached" });
-        expect(await sentChip.count()).toBe(1);
-        await sentChip.tap();
-        await expectReadOnlyPreview(preview, "Check the rollback steps. 🦞");
-        expect(await preview.textContent()).not.toContain("Remove only this pending comment.");
+        expect(await sentQuote.count()).toBe(1);
+        await sentQuote.tap();
+        await expectReadOnlyPreview(fullQuote, selectedText);
+        expect(await sentComment.textContent()).toBe("Check the rollback steps. 🦞");
+        expect(await sent.textContent()).not.toContain("Remove only this pending comment.");
       },
       { viewport: viewports[1], hasTouch: true, isMobile: true, reducedMotion: "no-preference" },
     );
@@ -624,7 +629,10 @@ suite.define(() => {
   });
 
   it("keeps formatted selection text and DOM source offsets consistent", async () => {
-    await withPage(async ({ page, preview, sentChip }) => {
+    await withPage(async ({ page }) => {
+      const sent = page.locator(".chat-sent-comments-inline");
+      const sentQuote = sent.getByRole("button", { name: "A B", exact: true });
+      const fullQuote = sent.getByRole("region", { name: "Highlighted passage:", exact: true });
       const gateway = await openSelection(page, {}, "A  \nB");
       const paragraph = page.locator(".chat-bubble .chat-text p");
       await paragraph.waitFor({ state: "visible" });
@@ -644,17 +652,15 @@ suite.define(() => {
         runId: params.idempotencyKey,
         text: "Selected passage received.",
       });
-      await sentChip.waitFor({ state: "visible" });
-      await sentChip.hover();
-      await expect
-        .poll(() => preview.locator(".chat-comment-preview__text").textContent())
-        .toBe("A\nB");
+      await sentQuote.waitFor({ state: "visible" });
+      await sentQuote.hover();
+      await expectReadOnlyPreview(fullQuote, "A\nB");
+      expect(await fullQuote.textContent()).toBe("A\nB");
       await page.reload();
-      await sentChip.waitFor({ state: "visible" });
-      await sentChip.hover();
-      await expect
-        .poll(() => preview.locator(".chat-comment-preview__text").textContent())
-        .toBe("A\nB");
+      await sentQuote.waitFor({ state: "visible" });
+      await sentQuote.hover();
+      await expectReadOnlyPreview(fullQuote, "A\nB");
+      expect(await fullQuote.textContent()).toBe("A\nB");
     });
   });
 });

@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as nativeProvider from "../../test/e2e/qa-lab/runtime/native-provider-proof-fixture.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
@@ -18,12 +18,6 @@ vi.mock("./onboard-interactive-runner.js", async (importActual) => {
     runInteractiveOnboarding: async (run: () => Promise<void>) => await run(),
   };
 });
-
-type MockOpenAiServer = {
-  baseUrl: string;
-  requestBodies: string[];
-  close: () => Promise<void>;
-};
 
 const cleanupTasks: Array<() => Promise<void>> = [];
 
@@ -86,21 +80,18 @@ describe("guided onboarding inference composition", () => {
             mode: "replace",
             providers: {
               openai: {
-                baseUrl: `${mockOpenAi.baseUrl}/v1`,
+                baseUrl: mockOpenAi.baseUrl,
                 apiKey: "OPENAI_API_KEY",
                 api: "openai-responses",
                 request: { allowPrivateNetwork: true },
                 models: [
-                  {
-                    id: "gpt-5.6",
+                  nativeProvider.nativeModel("gpt-5.6", {
                     name: "GPT-5.6 mock",
                     api: "openai-responses",
                     reasoning: true,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     contextWindow: 272_000,
                     maxTokens: 128_000,
-                  },
+                  }),
                 ],
               },
             },
@@ -224,32 +215,25 @@ describe("guided onboarding inference composition", () => {
       }
       await run();
 
-      expect(prompter.select).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          initialValue: false,
-          options: [
-            expect.objectContaining({ value: false }),
-            expect.objectContaining({ value: true }),
-          ],
-        }),
-      );
-      expect(prompter.select).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({
-          initialValue: "one",
-          options: [
-            { value: "one", label: "One agent" },
-            { value: "team", label: "A small team: a chief of staff plus specialists" },
-          ],
-        }),
-      );
-      expect(prompter.select).toHaveBeenNthCalledWith(
-        3,
-        expect.objectContaining({
-          options: expect.arrayContaining([expect.objectContaining({ value: "full" })]),
-        }),
-      );
+      const selection = (index: number, options: object) =>
+        expect(prompter.select).toHaveBeenNthCalledWith(index, expect.objectContaining(options));
+      selection(1, {
+        initialValue: false,
+        options: [
+          expect.objectContaining({ value: false }),
+          expect.objectContaining({ value: true }),
+        ],
+      });
+      selection(2, {
+        initialValue: "one",
+        options: [
+          { value: "one", label: "One agent" },
+          { value: "team", label: "A small team: a chief of staff plus specialists" },
+        ],
+      });
+      selection(3, {
+        options: expect.arrayContaining([expect.objectContaining({ value: "full" })]),
+      });
       const persisted = await configModule.readConfigFileSnapshot();
       expect(runSystemAgentChat).not.toHaveBeenCalled();
       expect(persisted.valid).toBe(true);
@@ -309,51 +293,29 @@ describe("guided onboarding inference composition", () => {
   );
 });
 
-async function startMockOpenAiServer(): Promise<MockOpenAiServer> {
+async function startMockOpenAiServer() {
   const requestBodies: string[] = [];
-  const server = createServer((request, response) => {
-    void handleMockOpenAiRequest(request, response, requestBodies);
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("mock OpenAI server did not bind");
-  }
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    requestBodies,
-    close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve();
-        });
+  const server = nativeProvider.createNativeProvider(
+    async (request, response, body) => {
+      if (
+        request.method !== "POST" ||
+        new URL(request.url ?? "/", "http://127.0.0.1").pathname !== "/v1/responses"
+      ) {
+        response.writeHead(404).end();
+        return;
+      }
+      requestBodies.push(body);
+      writeOpenAiResponsesText(response, {
+        text: "OK",
+        messageId: "guided-inference-message",
+        responseId: "guided-inference-response",
       });
     },
+    (error, response) => response.destroy(error instanceof Error ? error : undefined),
+  );
+  return {
+    baseUrl: await nativeProvider.listenNativeProvider(server),
+    requestBodies,
+    close: () => nativeProvider.closeNativeProvider(server),
   };
-}
-
-async function handleMockOpenAiRequest(
-  request: IncomingMessage,
-  response: ServerResponse,
-  requestBodies: string[],
-): Promise<void> {
-  const url = new URL(request.url ?? "/", "http://127.0.0.1");
-  if (request.method !== "POST" || url.pathname !== "/v1/responses") {
-    response.writeHead(404).end();
-    return;
-  }
-  let body = "";
-  for await (const chunk of request) {
-    body += String(chunk);
-  }
-  requestBodies.push(body);
-  writeOpenAiResponsesText(response, {
-    text: "OK",
-    messageId: "guided-inference-message",
-    responseId: "guided-inference-response",
-  });
 }

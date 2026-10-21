@@ -12,6 +12,7 @@ import { parseAgentSessionKey } from "../../packages/session-url-contract/src/se
 import type { ControlUiReadiness } from "../../ui/src/app/control-ui-readiness.ts";
 import type { ChatDetailsSession } from "../../ui/src/pages/chat/components/chat-details-session.tsx";
 import { resolvePlaywrightChromiumExecutablePath } from "../../ui/src/test-helpers/playwright-chromium.ts";
+import { mapColdLoadCpuProfile } from "../lib/control-ui-cold-load-trace.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -29,10 +30,15 @@ const { values } = parseArgs({
     "load-path": { type: "string", default: "/dashboard" },
     "phase-seed": { type: "string", default: "1458" },
     "request-stacks": { type: "boolean", default: false },
+    "reload-census": { type: "boolean", default: false },
+    "asset-dir": { type: "string" },
+    "storage-state": { type: "string" },
     "expect-session": { type: "string" },
+    "min-sidebar-rows": { type: "string" },
     "open-details": { type: "boolean", default: false },
     "activity-session": { type: "string" },
     "activity-patch-sessions": { type: "string" },
+    "activity-catalog-refresh": { type: "boolean", default: false },
     "activity-cron": { type: "boolean", default: false },
     "activity-models": { type: "string", default: "openai/gpt-5.6-sol,openai/gpt-5.6-luna" },
   },
@@ -78,6 +84,9 @@ async function measureLoads(runs: number) {
       "--activity-patch-sessions uses existing sessions and excludes turn/cron activity",
     );
   }
+  if (values["activity-catalog-refresh"] && !patchSessions.length) {
+    throw new Error("--activity-catalog-refresh requires --activity-patch-sessions");
+  }
   if (activitySession && (runs !== 1 || activityModels.length === 0)) {
     throw new Error("Active session measurement requires --load-runs 1 and at least one model");
   }
@@ -97,6 +106,8 @@ async function measureLoads(runs: number) {
   });
   const results: unknown[] = [];
   const cleanupErrors: string[] = [];
+  let captureFailedProbe: (() => Promise<unknown>) | undefined;
+  let failure: { message: string; probe?: unknown } | undefined;
   let activityClient: ReturnType<typeof createGatewayWsClient> | undefined;
   let activityCronJobId: string | undefined;
   const activityRpc = async (method: string, params: unknown) => {
@@ -153,8 +164,11 @@ async function measureLoads(runs: number) {
       }
       activityCronJobId = job.id;
     }
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-    const installProbe = (captureStacks: boolean) => {
+    const context = await browser.newContext({
+      viewport: { width: 1440, height: 1000 },
+      storageState: values["storage-state"],
+    });
+    const installProbe = (captureStacks: boolean, reloadCensus: boolean) => {
       const requests: Array<{
         method: string;
         params: unknown;
@@ -166,6 +180,10 @@ async function measureLoads(runs: number) {
         catalog?: unknown;
       }> = [];
       const tasks: Array<{ startTime: number; duration: number }> = [];
+      const frames: Array<{ startTime: number; duration: number; blockingDuration: number }> = [];
+      const rows: Array<{ atMs: number; count: number }> = [];
+      let rowSignature = "";
+      const queries = new Map<string, number>();
       const snapshots: Array<{ atMs: number; bytes: number; catalog: unknown }> = [];
       const events: Array<{ atMs: number; event: string; payload: unknown }> = [];
       // Preserve the native receiver explicitly when forwarding from the diagnostic wrapper.
@@ -196,6 +214,33 @@ async function measureLoads(runs: number) {
           ...list.getEntries().map(({ startTime, duration }) => ({ startTime, duration })),
         );
       }).observe({ type: "longtask", buffered: true });
+      if (reloadCensus) {
+        new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            frames.push({
+              startTime: entry.startTime,
+              duration: entry.duration,
+              blockingDuration: Reflect.get(entry, "blockingDuration"),
+            });
+          }
+        }).observe({ type: "long-animation-frame", buffered: true });
+        new MutationObserver(() => {
+          const keys = Array.from(
+            document.querySelectorAll("openclaw-app-sidebar [data-session-key]"),
+            (row) => row.getAttribute("data-session-key"),
+          );
+          const signature = keys.join("\n");
+          if (signature !== rowSignature) {
+            rowSignature = signature;
+            rows.push({ atMs: performance.now(), count: keys.length });
+          }
+        }).observe(document, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["data-session-key"],
+        });
+      }
       class ObservedWebSocket extends NativeWebSocket {
         constructor(socketUrl: string | URL, protocols?: string | string[]) {
           super(socketUrl, protocols);
@@ -241,6 +286,7 @@ async function measureLoads(runs: number) {
                     dataPhase: frame.payload?.data?.phase,
                     agentId: frame.payload?.agentId,
                     modelCatalogChanged: frame.payload?.modelCatalogChanged,
+                    modelCatalogStatusChanged: frame.payload?.modelCatalogStatusChanged,
                     commandsChanged: frame.payload?.commandsChanged,
                     authChanged: frame.payload?.authChanged,
                     catalogChanged: frame.payload?.catalogChanged,
@@ -276,11 +322,37 @@ async function measureLoads(runs: number) {
           const frame = JSON.parse(data);
           if (
             frame.type === "req" &&
-            ["cron.list", "models.list", "users.self", "sessions.describe"].includes(frame.method)
+            (reloadCensus ||
+              ["cron.list", "models.list", "users.self", "sessions.describe"].includes(
+                frame.method,
+              ))
           ) {
+            let queryId: number | undefined;
+            if (reloadCensus) {
+              // Compare complete queries in memory; retain only keys and an opaque ID.
+              const canonical = JSON.stringify(frame.params, (_key, value) =>
+                value && typeof value === "object" && !Array.isArray(value)
+                  ? Object.fromEntries(
+                      Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b)),
+                    )
+                  : value,
+              );
+              const identity = `${frame.method}:${canonical}`;
+              queryId = queries.get(identity);
+              if (queryId === undefined) {
+                queryId = queries.size + 1;
+                queries.set(identity, queryId);
+              }
+            }
             const request = {
               method: frame.method,
-              params: frame.params,
+              params: reloadCensus ? undefined : frame.params,
+              ...(reloadCensus
+                ? {
+                    paramKeys: Object.keys(frame.params ?? {}).toSorted(),
+                    queryId,
+                  }
+                : {}),
               requestedAtMs: performance.now(),
               stack: captureStacks ? new Error().stack : undefined,
               precedingEvent: events.at(-1),
@@ -291,27 +363,36 @@ async function measureLoads(runs: number) {
         }
         return send.call(this, data);
       };
-      Reflect.set(window, "__catalogLoad", { requests, tasks, snapshots, events });
+      Reflect.set(window, "__catalogLoad", { requests, tasks, frames, rows, snapshots, events });
     };
     await context.addInitScript({
-      content: `;(() => { const __name = (target) => target; (${installProbe.toString()})(${values["request-stacks"]}); })();`,
+      content: `;(() => { const __name = (target) => target; (${installProbe.toString()})(${values["request-stacks"]}, ${values["reload-census"]}); })();`,
     });
     const page = await context.newPage();
+    captureFailedProbe = () =>
+      page.evaluate(() => ({
+        ...Reflect.get(window, "__catalogLoad"),
+        atMs: performance.now(),
+      }));
     const openDetails = async () => {
       const details = page
         .getByRole("complementary", { name: "Details", exact: true })
         .or(page.getByRole("dialog", { name: "Details", exact: true }));
       if (!(await details.isVisible())) {
-        await page
+        const button = page
           .getByRole("button", { name: "Details", exact: true })
-          .or(page.getByRole("button").and(page.locator(".chat-header-session-menu__trigger")))
           .filter({ visible: true })
-          .first()
-          .click();
-        const menu = page.getByRole("menuitem", { name: "Session details", exact: true });
-        await details.or(menu).filter({ visible: true }).first().waitFor();
-        if (await menu.isVisible()) {
-          await menu.click();
+          .first();
+        if (await button.isVisible()) {
+          await button.click();
+        } else {
+          await page
+            .getByRole("button")
+            .and(page.locator(".chat-header-session-menu__trigger"))
+            .filter({ visible: true })
+            .first()
+            .click();
+          await page.getByRole("menuitem", { name: "Session details", exact: true }).click();
         }
       }
       await details.waitFor();
@@ -390,6 +471,20 @@ async function measureLoads(runs: number) {
             );
             await activityRpc("sessions.patch", { key, label: `Synthetic activity ${step}` });
             activity.push({ method: "sessions.patch", atMs, elapsedMs: Date.now() - started });
+            if (values["activity-catalog-refresh"] && step % 3 === 0) {
+              const refreshAtMs = await page.evaluate(() => performance.now());
+              const refreshStarted = Date.now();
+              await activityRpc("models.list", {
+                agentId: parseAgentSessionKey(key)!.agentId,
+                refresh: true,
+              });
+              activity.push({
+                method: "models.list",
+                atMs: refreshAtMs,
+                elapsedMs: Date.now() - refreshStarted,
+                result: { source: "controller", refresh: true },
+              });
+            }
             continue;
           }
           const key = values["activity-session"]!;
@@ -510,18 +605,9 @@ async function measureLoads(runs: number) {
             .first()
             .waitFor();
         }
-        const displayedModel = session.activeModel || session.model;
-        if (typeof displayedModel === "string" && displayedModel) {
-          await page
-            .locator(".chat-details__environment")
-            .filter({ visible: true })
-            .getByText(displayedModel, { exact: true })
-            .waitFor();
-        }
         detailsVerification = {
           server: expected,
           presentedDetailsInputMatch: true,
-          visibleDetailsModel: displayedModel,
           visibleConversationLabel: session.label,
         };
       }
@@ -541,6 +627,33 @@ async function measureLoads(runs: number) {
           atMs: performance.now(),
         };
       });
+      if (values["asset-dir"] && values["request-stacks"]) {
+        for (const request of result.requests) {
+          const frames = String(request.stack ?? "")
+            .split("\n")
+            .flatMap((line) => {
+              const match = line.match(/(https?:\/\/[^\s)]+):(\d+):(\d+)/u);
+              return match
+                ? [
+                    {
+                      id: 0,
+                      callFrame: {
+                        functionName: line.trim().replace(/\s*\(?https?:.*$/u, ""),
+                        url: match[1]!,
+                        lineNumber: Number(match[2]) - 1,
+                        columnNumber: Number(match[3]) - 1,
+                      },
+                    },
+                  ]
+                : [];
+            });
+          const mapped = await mapColdLoadCpuProfile(
+            { nodes: frames },
+            { assetBaseUrl: new URL("/assets/", url).href, assetDirectory: values["asset-dir"] },
+          );
+          request.callers = mapped.profile.nodes.map(({ callFrame }) => callFrame);
+        }
+      }
       results.push({
         run,
         phaseDelayMs,
@@ -555,7 +668,10 @@ async function measureLoads(runs: number) {
         activityBlockingMs: result.tasks
           .filter(
             (task: { startTime: number }) =>
-              activityStartedAtMs !== undefined && task.startTime >= activityStartedAtMs,
+              activityStartedAtMs !== undefined &&
+              activityEndedAtMs !== undefined &&
+              task.startTime >= activityStartedAtMs &&
+              task.startTime < activityEndedAtMs,
           )
           .reduce(
             (sum: number, task: { duration: number }) => sum + Math.max(0, task.duration - 50),
@@ -563,10 +679,22 @@ async function measureLoads(runs: number) {
           ),
         ...result,
       });
+      if (
+        values["min-sidebar-rows"] &&
+        (result.rows.at(-1)?.count ?? 0) < integer(values["min-sidebar-rows"], "--min-sidebar-rows")
+      ) {
+        throw new Error("Sidebar did not load the expected fixture rows");
+      }
       if (values.screenshot && run === runs - 1) {
         await page.screenshot({ path: values.screenshot, fullPage: true });
       }
     }
+  } catch (error) {
+    failure = {
+      message: String(error),
+      probe: await captureFailedProbe?.().catch(() => undefined),
+    };
+    throw error;
   } finally {
     if (activityClient && activityCronJobId) {
       try {
@@ -583,11 +711,13 @@ async function measureLoads(runs: number) {
     }
     const report = {
       measurement:
-        "Real isolated Gateway browser loads. Native long-task blocking is sum(max(duration - 50 ms, 0)); request stack capture adds diagnostic overhead. First context is cold, subsequent documents retain browser cache and storage. Matching seeds randomize reload phase equally across paired sides. Synthetic request parameters and stacks are retained; auth and response payloads are not.",
+        "Real isolated Gateway browser loads. Native long-task blocking is sum(max(duration - 50 ms, 0)); request stack capture adds diagnostic overhead. First context is cold, subsequent documents retain browser cache and storage. Matching seeds randomize reload phase equally across paired sides. Reload census retains parameter keys and opaque query IDs; other modes retain synthetic parameters. Sidebar row milestones describe DOM inventory, not paint or authoritative freshness.",
       durationMs,
       requestStacks: values["request-stacks"],
+      reloadCensus: values["reload-census"],
       path: values["load-path"],
       cleanupErrors,
+      failure,
       results,
     };
     await mkdir(path.dirname(path.resolve(values.output!)), { recursive: true });

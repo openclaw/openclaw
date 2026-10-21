@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { assignWeightedTestFiles } from "./lib/weighted-test-shards.mts";
+import {
+  assignPostgresConformanceShards,
+  createPostgresConformanceEstimator,
+} from "./lib/postgres-conformance-shards.mts";
 
 const usage =
   "Usage: node scripts/test-database-conformance.mjs --engine postgres [--connection <dsn> | --list] [--shard <index>/<count>] [-- <targets and test options>]";
@@ -74,6 +77,7 @@ let targets = explicitTargets
       "src/state/openclaw-agent-db-engine.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-embedding-cache.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-source-index-kernel.postgres.test.ts",
+      "extensions/memory-core/src/memory/manager-duplicate-chunks.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-publication.postgres.test.ts",
       "extensions/memory-core/src/memory/manager-search.postgres.test.ts",
       "extensions/memory-core/src/tools.postgres.test.ts",
@@ -88,16 +92,21 @@ if (shardCount) {
     process.exit(2);
   }
   // All jobs read the same committed weights; missing samples never remove a target.
-  const { targetSeconds } = JSON.parse(
+  const timings = JSON.parse(
     readFileSync(new URL("../config/postgres-conformance-timings.json", import.meta.url), "utf8"),
   );
-  const shards = Array.from({ length: shardCount }, (_, index) => ({
-    checkName: String(index + 1),
-    includePatterns: [],
-    weight: 0,
-  }));
-  assignWeightedTestFiles(shards, targets, (target) => targetSeconds[target] ?? 30);
-  const selected = new Set(shards[shardIndex - 1].includePatterns);
+  const shards = assignPostgresConformanceShards(
+    targets,
+    shardCount,
+    createPostgresConformanceEstimator(timings, (file) => {
+      try {
+        return statSync(new URL(`../${file}`, import.meta.url)).size;
+      } catch {
+        return 0;
+      }
+    }),
+  );
+  const selected = new Set(shards[shardIndex - 1]);
   targets = targets.filter((target) => selected.has(target));
 }
 if (values.list) {

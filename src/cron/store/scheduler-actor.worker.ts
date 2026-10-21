@@ -256,7 +256,7 @@ function isAgentWork(job: CronJob): boolean {
     job.payload.kind === "agentTurn" ||
     job.payload.kind === "heartbeat" ||
     isHeartbeatTaskCronJob(job) ||
-    (job.sessionTarget === "main" && job.payload.kind === "systemEvent" && job.wakeMode === "now")
+    job.payload.kind === "systemEvent"
   );
 }
 

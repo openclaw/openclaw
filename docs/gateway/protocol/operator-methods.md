@@ -179,6 +179,12 @@ catalog consumers, retaining cancellation and any explicit request deadline.
   `contextTokens`, and a `local` endpoint classification. It does not expose
   endpoint URLs, headers, credentials, costs or runtime request parameters.
 
+An unchanged catalog renewal emits `chat.metadata.changed` with
+`modelCatalogChanged: false` and `modelCatalogStatusChanged: true`. The Control UI
+refreshes only cached receipts that still contain `pendingProviders`; settled
+catalogs remain reusable. Inventory, availability, and account changes still
+invalidate affected catalogs.
+
 The Control UI shares the initial `models.snapshot` with matching configured
 catalog readers. If bootstrap does not deliver it within one second, readers
 fall back to `models.list`. A late bootstrap snapshot can still settle a pending

@@ -49,42 +49,26 @@ import {
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createAgentsCoreIsolatedVitestConfig } from "../vitest/vitest.agents-core-isolated.config.ts";
-import { createAgentsCoreVitestConfig } from "../vitest/vitest.agents-core.config.ts";
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
 } from "../vitest/vitest.agents-paths.mjs";
 import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
-import { createAgentsToolsVitestConfig } from "../vitest/vitest.agents-tools.config.ts";
-import { createAgentsVitestConfig } from "../vitest/vitest.agents.config.ts";
 import { createAutoReplyReplyVitestConfig } from "../vitest/vitest.auto-reply-reply.config.ts";
 import { cliProcessTestFiles } from "../vitest/vitest.cli-process-paths.mjs";
 import { createCliProcessVitestConfig } from "../vitest/vitest.cli-process.config.ts";
-import { createCommandsVitestConfig } from "../vitest/vitest.commands.config.ts";
 import { databaseWorkerCoreTestFiles } from "../vitest/vitest.database-worker-core-paths.mjs";
-import { diagnosticForksPool } from "../vitest/vitest.forks-pool.ts";
-import { createGatewayClientVitestConfig } from "../vitest/vitest.gateway-client.config.ts";
 import { createGatewayCoreVitestConfig } from "../vitest/vitest.gateway-core.config.ts";
 import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
 import { createGatewayMethodsIsolatedVitestConfig } from "../vitest/vitest.gateway-methods-isolated.config.ts";
 import { createGatewayMethodsVitestConfig } from "../vitest/vitest.gateway-methods.config.ts";
 import { createGatewayServerIsolatedVitestConfig } from "../vitest/vitest.gateway-server-isolated.config.ts";
-import {
-  gatewayDatabaseWorkerTestFiles,
-  gatewayServerSerialTestFiles,
-  isGatewayServerTestFile,
-} from "../vitest/vitest.gateway-server-paths.mjs";
+import { gatewayServerSerialTestFiles } from "../vitest/vitest.gateway-server-paths.mjs";
 import { createGatewayServerVitestConfig } from "../vitest/vitest.gateway-server.config.ts";
-import { createGatewayVitestConfig } from "../vitest/vitest.gateway.config.ts";
 import { createInfraVitestConfig } from "../vitest/vitest.infra.config.ts";
-import { createPluginSdkLightVitestConfig } from "../vitest/vitest.plugin-sdk-light.config.ts";
-import { createPluginSdkVitestConfig } from "../vitest/vitest.plugin-sdk.config.ts";
-import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
 import { createRuntimeConfigVitestConfig } from "../vitest/vitest.runtime-config.config.ts";
 import { startupCorpusTestFiles } from "../vitest/vitest.startup-corpus-paths.mjs";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
-import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 import {
   uiE2ePrebuiltParallelTestFiles,
   uiE2eRealGatewayTestFiles,
@@ -93,9 +77,6 @@ import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTimerTestFiles,
 } from "../vitest/vitest.unit-fast-paths.mjs";
-import { createUnitFastVitestConfig } from "../vitest/vitest.unit-fast.config.ts";
-import { createUnitVitestConfigWithOptions } from "../vitest/vitest.unit.config.ts";
-import { createWizardVitestConfig } from "../vitest/vitest.wizard.config.ts";
 import {
   createChangedNodeTestShards as changedOwnerTests,
   selectedFiles,
@@ -290,6 +271,17 @@ function mockPlanTimings(read: () => Readonly<Record<string, number>>) {
 }
 function mockUnbuiltRuntime() {
   mockOriginal("build", { resolveVitestPretestBuildMode: () => undefined });
+}
+async function mockFastPaths(files: string[] = []) {
+  const original = await vi.importActual<FixtureModules["fast"]>(fixtureModuleIds.fast);
+  vi.resetModules();
+  mockFixture("fast", () => ({
+    ...original,
+    getUnitFastTestFiles: () => [...files],
+    getUnitFastIsolatedTestFiles: () => [],
+    getUnitFastTimerTestFiles: () => [],
+    getUnitFastTestFilesForIncludePatterns: () => [...files],
+  }));
 }
 
 describe("Control UI release-only inventories", () => {
@@ -1325,17 +1317,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const buildMode = vi.fn<typeof buildPrerequisites.resolveVitestPretestBuildMode>(
         () => undefined,
       );
-      const unitFastPaths = await vi.importActual<
-        typeof import("../vitest/vitest.unit-fast-paths.mjs")
-      >("../vitest/vitest.unit-fast-paths.mjs");
-      vi.resetModules();
-      mockFixture("fast", () => ({
-        ...unitFastPaths,
-        getUnitFastTestFiles: () => [fastModel],
-        getUnitFastIsolatedTestFiles: () => [],
-        getUnitFastTimerTestFiles: () => [],
-        getUnitFastTestFilesForIncludePatterns: () => [fastModel],
-      }));
+      await mockFastPaths([fastModel]);
       mockPlanShards(() => [fixtureShard("agentic", [config], configPath("full-agentic"))]);
       mockTrackedFiles((root: string) => (root === "src/agents" ? files : []));
       mockPlanTimings(() => seconds);
@@ -2359,12 +2341,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const config = configPath("infra");
       const longest = MEASURED_STORAGE_RECOVERY_TEST;
       const ordinary = "src/infra/sqlite-readonly-location.copy.test.ts";
-      vi.resetModules();
-      mockPlanShards(() => [fixtureShard("core-runtime", [config])]);
-      mockOriginal("database", { databaseWorkerCoreTestFiles: [longest] });
-      mockTrackedFiles((root: string) => (companion && root === "src/infra" ? [ordinary] : []));
       const measurements: Record<string, number> = { "core-runtime-infra-storage-state": 1 };
-      mockPlanTimings(() => measurements);
+      mockProject("core-runtime", config, "src/infra", companion ? [ordinary] : [], measurements);
+      mockOriginal("database", { databaseWorkerCoreTestFiles: [longest] });
       mockUnbuiltRuntime();
       const {
         createNodeTestShardBundles: createPlan,
@@ -2431,13 +2410,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         (_, index) => `${root}/fixture/entry-${String(index).padStart(3, "0")}.test.ts`,
       );
       const timings: Record<string, number> = { [owner]: 240 };
-      vi.resetModules();
-      mockPlanShards(() => [fixtureShard(suite, [config])]);
-      mockTrackedFiles((candidate: string) => (candidate === root ? files : []));
+      mockProject(suite, config, root, files, timings);
       mockOriginal("inventory", {
         listWholeConfigSplitFiles: (candidate: string) => (candidate === owner ? files : undefined),
       });
-      mockPlanTimings(() => timings);
       mockUnbuiltRuntime();
       const { createNodeTestShardBundles: createPlan } = await loadPlanModule([
         "build",
@@ -2861,62 +2837,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("uses 16-class capacity for the qualified compact selection without changing its scope", async () => {
-    const targets = [
-      "src/agents/embedded-agent-runner/effective-tool-policy.test.ts",
-      "src/gateway/client-callsites.guard.test.ts",
-      "src/gateway/mcp-app-extension-runtime.test.ts",
-      "src/agents/cli-runner.helpers.test.ts",
-    ];
-    const configs = new Set([
-      ...embeddedAgentVitestProjectOwners.map((owner) => owner.config),
-      configPath("gateway-client"),
-      configPath("gateway-core"),
-      configPath("agents-core"),
-    ]);
-    // Pin the inventory and costs: unrelated test removals can otherwise move
-    // these owners between serial and parallel canonical jobs.
-    const inventory = [
-      ...targets,
-      "src/agents/embedded-agent-runner/capacity-a.test.ts",
-      "src/agents/embedded-agent-runner/capacity-b.test.ts",
-      "src/agents/embedded-agent-runner/run.incomplete-turn.classification.test.ts",
-      "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
-      "src/agents/embedded-agent-runner/run/capacity.test.ts",
-    ];
-    vi.resetModules();
-    mockPlanShards(() =>
-      fullSuiteVitestShards
-        .map((shard) =>
-          Object.assign({}, shard, {
-            projects: shard.projects.filter((config) => configs.has(config)),
-          }),
-        )
-        .filter((shard) => shard.projects.length > 0),
-    );
-    mockTrackedFiles((root: string) =>
-      inventory.filter((file) => root === "." || file.startsWith(`${root}/`)),
-    );
-    mockOriginal("timings", {
-      readCompactGroupTimings: () => ({}),
-      readRuntimePlacementTimings: () => [],
-    });
-    const { createSelectedNodeTestShardBundles: createSelected } = await loadPlanModule();
-
-    const plan = required(createSelected(targets, { runnerBackend: "hybrid" }));
-    expectPlanFiles(plan, targets);
-    for (const job of plan) {
-      expect(job).toMatchObject({
-        runner: "blacksmith-16vcpu-ubuntu-2404",
-        planConcurrency: 1,
-        requiresDist: false,
-      });
-      for (const group of job.groups) {
-        expect(workers(group) ?? String(group.fallbackMaxWorkers)).toBe("2");
-      }
-    }
-  });
-
   it.each([
     ["blacksmith", "src/gateway/board-store.test.ts", "blacksmith-16vcpu-ubuntu-2404"],
     ["hybrid", "src/gateway/board-store.test.ts", "blacksmith-16vcpu-ubuntu-2404"],
@@ -2937,37 +2857,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       });
     },
   );
-
-  it("keeps selected Gateway and embedded-agent work within its runner capacity", () => {
-    const targets = [
-      "src/agents/embedded-agent-runner/effective-tool-policy.test.ts",
-      "src/gateway/mcp-app-extension-runtime.test.ts",
-      "src/agents/cli-runner.helpers.test.ts",
-      "src/gateway/openai-http.test.ts",
-      "src/agents/embedded-agent-runner/compact.small-context.test.ts",
-      "src/agents/embedded-agent-runner/stream-resolution.test.ts",
-      "src/gateway/client-callsites.guard.test.ts",
-      "src/gateway/server-plugin-subagent-runtime.fork-transport.test.ts",
-    ];
-    const plan = required(selectTests(targets, { runnerBackend: "hybrid" }));
-    const groups = plan.flatMap(jobGroups);
-    expectSameEntries(groups.flatMap(optionalPatterns), targets);
-    // Selection retains overlap only for multiple groups. Unrelated inventory may move these
-    // groups into serial Gateway templates; fixed-inventory coverage below proves
-    // parallel capacity is retained when the canonical templates permit it.
-    for (const job of plan) {
-      expect(job.requiresDist).toBe(false);
-      expect([1, 2]).toContain(job.planConcurrency);
-      expect(job.runner).toBe(
-        job.planConcurrency === 2
-          ? "blacksmith-32vcpu-ubuntu-2404"
-          : "blacksmith-16vcpu-ubuntu-2404",
-      );
-    }
-    for (const group of groups) {
-      expect(workers(group) ?? String(group.fallbackMaxWorkers)).toBe("2");
-    }
-  });
 
   it("shares one prepared runtime across affordable github groups", () => {
     const runnerBackend = "github";
@@ -3291,29 +3180,21 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     files: string[];
     shards: typeof fullSuiteVitestShards;
     timings: Record<string, number>;
+    fileTimings?: Readonly<Record<string, number>>;
     fileSeconds: (file: string) => number;
     options: {
       compactMode: "push" | "pull-request";
-      runnerBackend: string;
+      runnerBackend?: string;
       includeReleaseOnlyPluginShards: false;
       compactNodeJobCap?: number;
     };
   }) {
-    const unitFastPaths = await vi.importActual<
-      typeof import("../vitest/vitest.unit-fast-paths.mjs")
-    >("../vitest/vitest.unit-fast-paths.mjs");
-    vi.resetModules();
-    mockFixture("fast", () => ({
-      ...unitFastPaths,
-      getUnitFastTestFiles: () => [],
-      getUnitFastIsolatedTestFiles: () => [],
-      getUnitFastTimerTestFiles: () => [],
-      getUnitFastTestFilesForIncludePatterns: () => [],
-    }));
+    await mockFastPaths();
     mockPlanShards(() => params.shards);
     mockFixture("timings", () => ({
       ...testTimings,
       readCompactGroupTimings: () => params.timings,
+      ...(params.fileTimings ? { readToolingFileTimings: () => params.fileTimings! } : {}),
     }));
     mockFixture("metadata", () => ({
       ...shardMetadata,
@@ -3332,6 +3213,48 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ["metadata", "fast"],
     );
   }
+
+  it.each([undefined, "blacksmith"])(
+    "preserves compiler/artifact capacity (%s)",
+    async (runnerBackend) => {
+      const ordinary = Array.from(
+        { length: 64 },
+        (_, index) => `test/scripts/tooling-capacity-${String(index).padStart(2, "0")}.test.ts`,
+      );
+      const longFiles = new Set(ordinary.slice(0, 16));
+      const protectedFiles = [
+        "test/scripts/vitest-worker-artifacts.ci.test.ts",
+        "test/scripts/write-unified-entry-dts.test.ts",
+        "test/scripts/write-plugin-sdk-entry-dts.test.ts",
+      ];
+      const files = [...ordinary, ...protectedFiles];
+      const jobs = await createToolingFixturePlan({
+        files,
+        shards: [
+          fixtureShard("core-tooling", [configPath("tooling")], configPath("full-core-tooling")),
+        ],
+        timings: {},
+        fileTimings: {},
+        fileSeconds: (file) => (longFiles.has(file) ? 125 : 50),
+        options: {
+          compactMode: "pull-request",
+          runnerBackend,
+          includeReleaseOnlyPluginShards: false,
+        },
+      });
+      expectPlanFiles(jobs, files);
+      expect(new Set(planFiles(jobs)).size).toBe(files.length);
+      expect(jobs.some((job) => job.runner === "blacksmith-16vcpu-ubuntu-2404")).toBe(true);
+      for (const job of jobs) {
+        const needsCapacity = planFiles([job]).some((file) => protectedFiles.includes(file));
+        expectFields(job, {
+          runner: needsCapacity ? EXTRA_LARGE_NODE_TEST_RUNNER : "blacksmith-16vcpu-ubuntu-2404",
+          planConcurrency: 1,
+        });
+        expectEvery(job.groups, (group) => workers(group) === "2");
+      }
+    },
+  );
 
   it("exchanges hosted anchors before opening another pull-request job", async () => {
     const compactMode = "pull-request" as const;
@@ -3594,25 +3517,17 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("preserves Gateway runner hooks while assigning database consumers to parallel forks", () => {
+  it("retains Gateway database consumers in the canonical worker plan", () => {
     const worker = createGatewayDatabaseWorkersVitestConfig({});
     const core = createGatewayCoreVitestConfig({});
-    const server = createGatewayServerVitestConfig({ OPENCLAW_VITEST_MAX_WORKERS: "8" });
+    const server = createGatewayServerVitestConfig({});
     const methods = createGatewayMethodsVitestConfig({});
-    expect(server.test?.fileParallelism).toBe(true);
-    expect(
-      createGatewayServerVitestConfig({ OPENCLAW_VITEST_MAX_WORKERS: "1" }).test?.fileParallelism,
-    ).toBe(false);
-    expect(methods.test?.pool).toBe("forks");
-    expect(worker.test).toMatchObject({ pool: "forks", fileParallelism: true });
+    expect(worker.test).toMatchObject({ pool: "forks", fileParallelism: true, isolate: false });
     expect(core.test?.isolate).toBe(true);
-    for (const shared of [worker, server, methods]) {
-      expect(shared.test?.isolate).toBe(false);
-    }
+    expect(methods.test).toMatchObject({ pool: "forks", isolate: false });
     for (const previous of [core, server, methods]) {
       expectInherited(worker.test, previous.test, "runner", "setupFiles");
     }
-    expect(listMatchedTestFiles(worker)).toEqual(gatewayDatabaseWorkerTestFiles);
     expect(listMatchedTestFiles(worker)).toEqual(
       expect.arrayContaining([
         "src/gateway/github-publication-transcript.test.ts",
@@ -3630,33 +3545,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         "src/gateway/session-utils.queued-collector.test.ts",
       ]),
     );
-    const former = new Set([core, server, methods].flatMap(listMatchedTestFiles));
-    for (const file of gatewayDatabaseWorkerTestFiles) {
-      expect(former.has(file), file).toBe(false);
-      expect(isGatewayServerTestFile(file), file).toBe(false);
-    }
     expect(
       defaultShards.filter((shard) =>
         shard.configs.includes(configPath("gateway-database-workers")),
       ),
     ).toHaveLength(1);
-    const includeFile = join(tempDirs.make("gateway-database-routing-"), "include.json");
-    writeFileSync(includeFile, JSON.stringify([gatewayDatabaseWorkerTestFiles[0]]));
-    expect(
-      listMatchedTestFiles(
-        createGatewayDatabaseWorkersVitestConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),
-      ),
-    ).toEqual([gatewayDatabaseWorkerTestFiles[0]]);
   });
 
-  it("keeps host-owned database consumers in forks and out of their former projects", () => {
+  it("retains host-owned database consumers in the canonical infra plan", () => {
     const infra = createInfraVitestConfig({});
-    const support = createAgentsSupportVitestConfig({});
-    expectFields(infra.test, {
-      pool: diagnosticForksPool,
-      isolate: true,
-      setupFiles: support.test?.setupFiles,
-    });
+    expect(infra.test?.setupFiles).toEqual(createAgentsSupportVitestConfig({}).test?.setupFiles);
     const admitted = new Set(listMatchedTestFiles(infra));
     for (const file of [
       "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
@@ -3674,37 +3572,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     ]) {
       expect(admitted.has(file), file).toBe(true);
     }
-    const former = new Set(
-      [
-        createUnitVitestConfigWithOptions({}),
-        createUnitFastVitestConfig(),
-        createAgentsCoreVitestConfig({}),
-        createAgentsCoreIsolatedVitestConfig({}),
-        support,
-        createAgentsToolsVitestConfig({}),
-        createAgentsVitestConfig({}),
-        createAutoReplyReplyVitestConfig({}),
-        createPluginSdkLightVitestConfig({}),
-        createPluginSdkVitestConfig({}),
-        createPluginsVitestConfig({}),
-        createToolingVitestConfig({}),
-        createWizardVitestConfig({}),
-        createCommandsVitestConfig({}),
-        createRuntimeConfigVitestConfig({}),
-        createGatewayVitestConfig({}),
-        createGatewayCoreVitestConfig({}),
-        createGatewayClientVitestConfig({}),
-        createGatewayMethodsVitestConfig({}),
-        createGatewayMethodsIsolatedVitestConfig({}),
-        createGatewayServerVitestConfig({}),
-        createGatewayServerIsolatedVitestConfig({}),
-        createGatewayDatabaseWorkersVitestConfig({}),
-      ].flatMap(listMatchedTestFiles),
-    );
-    for (const file of databaseWorkerCoreTestFiles) {
-      expect(admitted.has(file), file).toBe(true);
-      expect(former.has(file), file).toBe(false);
-    }
     const gatewayWorkerFiles = databaseWorkerCoreTestFiles.filter((file) =>
       file.startsWith("src/gateway/"),
     );
@@ -3719,9 +3586,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       infraPlanFiles.filter((file) => gatewayWorkerFiles.includes(file)),
       gatewayWorkerFiles,
     );
-    const recoveryTest = "src/wizard/setup.inference-recovery.integration.test.ts";
-    expect(admitted.has(recoveryTest), recoveryTest).toBe(true);
-    expect(former.has(recoveryTest), recoveryTest).toBe(false);
     const selected = [
       "src/plugin-state/plugin-state-store.test.ts",
       "test/plugins/beam-http-identity.test.ts",

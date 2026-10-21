@@ -71,13 +71,6 @@ function decodePossibleText(data: string): string {
   return trimmed;
 }
 
-function resolveBodyReadTimeoutMs(deadline: ProviderOperationDeadline): number {
-  return resolveProviderOperationTimeoutMs({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
-  });
-}
-
 function createGeneratedMusicTooLargeError(maxBytes: number): Error {
   return new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`);
 }
@@ -95,7 +88,11 @@ async function readResponseBufferWithDeadline(
   maxBytes: number,
 ): Promise<Buffer> {
   return await readResponseWithLimit(response, maxBytes, {
-    timeoutMs: () => resolveBodyReadTimeoutMs(deadline),
+    timeoutMs: () =>
+      resolveProviderOperationTimeoutMs({
+        deadline,
+        defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
+      }),
     onTimeout: () => createProviderOperationTimeoutError(deadline),
     onOverflow: ({ maxBytes: limit }) => createGeneratedMusicTooLargeError(limit),
   });

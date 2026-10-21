@@ -1,5 +1,4 @@
 import path from "node:path";
-import { ok } from "@openclaw/normalization-core/result";
 import { readSessionEntryCreatedEntry } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { readPreparedSessionSharingChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
@@ -107,6 +106,7 @@ export async function prepareSessionMutationFacts(
         const retained = retainPreparedSessionSharingFacts({
           databaseIdentity: identity.key,
           sessionKey,
+          followLifecycle: params.followLifecycle,
           acquiring: true,
         });
         acquiringReads.set(key, retained);
@@ -255,7 +255,14 @@ export async function prepareSessionMutationFacts(
     onSessionIdentityMutation((change) => {
       if (
         change.agentId === agentId &&
-        change.previous.sessionKeys.some((key) => initialStoreKeys.includes(key))
+        change.previous.sessionKeys.some((key) => initialStoreKeys.includes(key)) &&
+        !(
+          params.followLifecycle &&
+          change.kind === "reset" &&
+          change.previous.sessionId !== undefined &&
+          change.previous.sessionId === change.current.sessionId &&
+          change.current.sessionKeys.some((key) => initialStoreKeys.includes(key))
+        )
       ) {
         invalidate();
       }
@@ -367,7 +374,7 @@ export async function prepareSessionMutationFacts(
             const store = Object.fromEntries(
               loaded.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
             );
-            read.result = ok(store);
+            read.result = store;
             if (loaded.sharing) {
               const source = loaded.databaseIdentity;
               if (

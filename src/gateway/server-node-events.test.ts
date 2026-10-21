@@ -19,6 +19,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import type { HealthSummary } from "./health/types.js";
 import { NodeRegistry } from "./node-registry.js";
+import * as nodeEventSource from "./server-node-event-source.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
@@ -162,7 +163,9 @@ function buildCtx(overrides: Partial<NodeEventContext> = {}): NodeEventContext {
 }
 
 function nodeFixture(nodeId = "node", overrides: Partial<NodeEventContext> = {}) {
-  const ctx = buildCtx(overrides);
+  const addChatRun = vi.fn();
+  const warn = vi.fn();
+  const ctx = buildCtx({ addChatRun, logGateway: { warn }, ...overrides });
   const emit = (
     event: string,
     payload: unknown,
@@ -171,6 +174,8 @@ function nodeFixture(nodeId = "node", overrides: Partial<NodeEventContext> = {})
   return {
     ctx,
     emit,
+    addChatRun,
+    warn,
     request: (
       payload: Record<string, unknown> = {},
       connection?: Parameters<typeof handleNodeEvent>[3],
@@ -322,12 +327,10 @@ describe("node exec events", () => {
       if (inTransaction) {
         registerApns.mockRejectedValueOnce(new ApnsRegistrationPairingChangedError());
       }
-      const result = await handleNodeEvent(
-        { ...buildCtx(), logGateway: { warn } },
-        "node-register",
-        nodeEvent("push.apns.register", directRegistration),
-        { resolveApnsRegistrationGeneration: async () => (inTransaction ? "generation" : null) },
-      );
+      const { emit } = nodeFixture("node-register", { logGateway: { warn } });
+      const result = await emit("push.apns.register", directRegistration, {
+        resolveApnsRegistrationGeneration: async () => (inTransaction ? "generation" : null),
+      });
       expect(result).toEqual(eventResult("push.apns.register", "pairing_changed"));
       if (!inTransaction) {
         expect(registerApns).not.toHaveBeenCalled();
@@ -360,11 +363,11 @@ describe("node exec events", () => {
           sessionKey: payload.sessionKey,
           event: "exec.finished",
         });
-        expect(heartbeat).toHaveBeenCalledWith(execEventHeartbeatOptions(payload.sessionKey));
       }
-      expect(enqueue).toHaveBeenCalledTimes(1);
-      expect(heartbeat).toHaveBeenCalledTimes(1);
-      expect(enqueue).toHaveBeenCalledWith(
+      expect(heartbeat).toHaveBeenCalledExactlyOnceWith(
+        execEventHeartbeatOptions(payload.sessionKey),
+      );
+      expect(enqueue).toHaveBeenCalledExactlyOnceWith(
         `Exec finished (node=node-2${runId ? ` id=${runId}` : ""}, code 0)\ndone`,
         { sessionKey: payload.sessionKey, contextKey: runId ? `exec:${runId}` : "exec" },
       );
@@ -378,25 +381,81 @@ describe("node exec events", () => {
         const cfg = { session: { mainKey: "main" }, tools: { exec: { notifyOnExit: false } } };
         runtimeMocks.getRuntimeConfig.mockReturnValueOnce(cfg);
       }
-      await handleNodeEvent(
-        buildCtx({ authorizeNodeSystemRunEvent: () => true }),
-        "node-2",
-        nodeEvent("exec.finished", {
-          runId: mode,
-          exitCode: 0,
-          timedOut: false,
-          output: mode === "empty output" ? "   " : "some output",
-        }),
-      );
+      const { emit } = nodeFixture("node-2", { authorizeNodeSystemRunEvent: () => true });
+      await emit("exec.finished", {
+        runId: mode,
+        exitCode: 0,
+        timedOut: false,
+        output: mode === "empty output" ? "   " : "some output",
+      });
       expectNoCalls(enqueue, heartbeat);
     },
   );
 });
 
 describe("voice transcript events", () => {
+  it.each(["reservation", "dispatch"] as const)(
+    "releases later voice transcripts after a failed %s check",
+    async (phase) => {
+      const sessionKey = `voice-authority-${phase}`;
+      const entered = createDeferred();
+      const checked = createDeferred<boolean>();
+      let current = phase !== "reservation";
+      let checks = 0;
+      const firstConnection = {
+        isConnectionCurrent: () => {
+          if (++checks === 3) {
+            entered.resolve();
+            return checked.promise;
+          }
+          return true;
+        },
+      };
+      using _ = vi
+        .spyOn(nodeEventSource, "withNodeEventSessionSource")
+        .mockImplementation(async (_evt, opts, consume) => {
+          const pending: Promise<unknown>[] = [];
+          try {
+            return await consume(opts, {
+              loaded: buildSessionLookup(sessionKey),
+              assertCurrent: () => {
+                if (opts === firstConnection && !current) {
+                  throw new Error("Node event session authority changed");
+                }
+              },
+              pending,
+            });
+          } finally {
+            await Promise.allSettled(pending);
+          }
+        });
+      const { emit } = nodeFixture();
+      const first = emit(
+        "voice.transcript",
+        { sessionKey, text: "rejected transcript" },
+        firstConnection,
+      );
+      if (phase === "reservation") {
+        await expect(first).rejects.toThrow("Node event session authority changed");
+      } else {
+        await entered.promise;
+      }
+      const later = emit("voice.transcript", { sessionKey, text: "accepted transcript" });
+      current = false;
+      checked.resolve(true);
+      await later;
+      if (phase !== "reservation") {
+        await first;
+      }
+
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ message: "accepted transcript" });
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    },
+  );
+
   it("persists only the accepted replay session ID when identical new-session events race", async () => {
-    const addChatRun = vi.fn();
-    const { emit } = nodeFixture("node-new-session-replay", { addChatRun });
+    const { emit, addChatRun } = nodeFixture("node-new-session-replay");
     lookupSession.mockImplementation((sessionKey: string) => ({
       ...buildSessionLookup(sessionKey),
       entry: undefined,
@@ -423,8 +482,7 @@ describe("voice transcript events", () => {
   });
 
   it("rechecks a queued replay after an earlier stale reservation is released", async () => {
-    const addChatRun = vi.fn();
-    const ctx = buildCtx({ addChatRun });
+    const { ctx, addChatRun } = nodeFixture();
     const stale = delayedCurrentness(1);
     let replayCurrent = true;
     const isReplayConnectionCurrent = vi.fn(() => replayCurrent);
@@ -454,8 +512,7 @@ describe("voice transcript events", () => {
   });
 
   it("skips the detached session-store touch after voice admission loses ownership", async () => {
-    const addChatRun = vi.fn();
-    const { emit } = nodeFixture("node-stale-after-voice-admission", { addChatRun });
+    const { emit, addChatRun } = nodeFixture("node-stale-after-voice-admission");
     let checkCount = 0;
     const isConnectionCurrent = vi.fn(() => {
       checkCount += 1;
@@ -490,8 +547,7 @@ describe("voice transcript events", () => {
         ...buildSessionLookup(sessionKey),
         entry: undefined,
       });
-      const addChatRun = vi.fn();
-      const { emit } = nodeFixture("node-harness-voice-missing", { addChatRun });
+      const { emit, addChatRun } = nodeFixture("node-harness-voice-missing");
 
       await emit(event, { ...payload, sessionKey });
       await Promise.resolve();
@@ -501,8 +557,7 @@ describe("voice transcript events", () => {
   );
 
   it("does not block agent dispatch when session-store touch fails", async () => {
-    const warn = vi.fn();
-    const { emit } = nodeFixture("node-v3", { logGateway: { warn } });
+    const { emit, warn } = nodeFixture("node-v3");
     touchSession.mockRejectedValueOnce(new Error("disk down"));
 
     await emit("voice.transcript", {
@@ -540,12 +595,11 @@ describe("notifications changed events", () => {
   });
 
   it("records non-delivery when a targetless notification has no system owner", async () => {
-    const warn = vi.fn();
     runtimeMocks.resolveSystemMainSessionTarget.mockImplementationOnce(() => {
       throw new Error("Set agents.defaults.systemAgent.agentId");
     });
 
-    const { notify } = nodeFixture("node-unowned", { logGateway: { warn } });
+    const { notify, warn } = nodeFixture("node-unowned");
     await notify();
 
     expectNoCalls(enqueue, heartbeat);
@@ -756,7 +810,6 @@ describe("agent request events", () => {
   it.each([false, true])(
     "delivers only through the current session route (available: %s)",
     async (available) => {
-      const warn = vi.fn();
       if (available) {
         lookupSession.mockReturnValueOnce(
           buildSessionLookup("agent:main:main", {
@@ -766,7 +819,7 @@ describe("agent request events", () => {
           }),
         );
       }
-      const { request } = nodeFixture("node-route", { logGateway: { warn } });
+      const { request, warn } = nodeFixture("node-route");
       await request({ message: "summarize this", deliver: true });
       expect(dispatch).toHaveBeenCalledTimes(1);
       const opts: unknown = dispatch.mock.calls[0]?.[0];
@@ -813,8 +866,7 @@ describe("agent request events", () => {
   });
 
   it("declines non-image attachments cleanly when parse throws UnsupportedAttachmentError", async () => {
-    const warn = vi.fn();
-    const { request } = nodeFixture("node-non-image-refusal", { logGateway: { warn } });
+    const { request, warn } = nodeFixture("node-non-image-refusal");
 
     parseAttachments.mockRejectedValueOnce(
       Object.assign(new Error("attachment a.pdf: non-image attachments not supported"), {
@@ -845,12 +897,8 @@ describe("agent request events", () => {
     { connection: undefined, reason: "missing_device_identity" },
     { connection: { deviceId: "ios-presence" }, reason: "pairing_changed" },
   ])("rejects presence without authority: $reason", async ({ connection, reason }) => {
-    const result = await handleNodeEvent(
-      buildCtx(),
-      "ios-presence",
-      nodeEvent("node.presence.alive", { trigger: "silent_push" }),
-      connection,
-    );
+    const { emit } = nodeFixture("ios-presence");
+    const result = await emit("node.presence.alive", { trigger: "silent_push" }, connection);
     expect(result).toEqual(eventResult("node.presence.alive", reason));
     expect(updatePresence).not.toHaveBeenCalled();
   });
@@ -1004,22 +1052,23 @@ describe("chat subscribe/unsubscribe events", () => {
     "canonicalizes %s with its connection owner",
     async (event) => {
       const callback = vi.fn();
-      const ctx = {
-        ...buildCtx(),
+      const { emit } = nodeFixture("node-c1", {
         [event === "chat.subscribe" ? "nodeSubscribe" : "nodeUnsubscribe"]: callback,
-      };
-      await handleNodeEvent(ctx, "node-c1", nodeEvent(event, { sessionKey: "  Main  " }), {
-        connId: "node-c1-connection",
       });
+      await emit(
+        event,
+        { sessionKey: "  Main  " },
+        {
+          connId: "node-c1-connection",
+        },
+      );
       expect(callback).toHaveBeenCalledWith("node-c1", "agent:main:main", "node-c1-connection");
     },
   );
   it("skips the event when the payload is missing a session key", async () => {
     const nodeSubscribe = vi.fn();
-    const ctx = { ...buildCtx(), nodeSubscribe };
-
-    await handleNodeEvent(ctx, "node-c3", nodeEvent("chat.subscribe", { other: 1 }));
-
+    const { emit } = nodeFixture("node-c3", { nodeSubscribe });
+    await emit("chat.subscribe", { other: 1 });
     expect(nodeSubscribe).not.toHaveBeenCalled();
   });
 });

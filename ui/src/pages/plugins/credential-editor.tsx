@@ -1,4 +1,4 @@
-import { For, createEffect, createSignal, onCleanup } from "solid-js";
+import { For, action, createEffect, createOptimistic, createSignal, onCleanup } from "solid-js";
 import type {
   PluginCredentialDescriptor,
   PluginCredentialInspection,
@@ -38,6 +38,10 @@ export type PluginCredentialEditorContext = {
 type CredentialField = Pick<ConfigNodeRenderParams, "path" | "value" | "disabled"> & {
   descriptionId?: string;
 };
+type CredentialOperation = {
+  kind: "save" | "discard";
+  current: () => boolean;
+};
 
 export type PluginCredentialEditorProps = {
   field: CredentialField;
@@ -57,15 +61,26 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   });
   const [literal, setLiteral] = createSignal("");
   const [revealed, setRevealed] = createSignal(false);
-  const [operation, setOperation] = createSignal<"save" | "discard">();
-  const saving = () => operation() === "save";
-  const cancelling = () => operation() === "discard";
+  const [operation, setOperation] = createOptimistic<CredentialOperation>();
+  const operationKind = () => {
+    const value = operation();
+    return value?.current() ? value.kind : undefined;
+  };
+  const saving = () => operationKind() === "save";
+  const cancelling = () => operationKind() === "discard";
+  const mutateReference = action(function* (
+    admitted: CredentialOperation,
+    completed: Promise<void>,
+  ) {
+    setOperation(admitted);
+    yield completed;
+  });
   let referenceSubmitted = false;
   let referenceTrigger: HTMLElement | null = null;
   let generation = 0;
   let connection: GatewayConnectionScope | null = null;
   let active = true;
-  let pending = false;
+  let pending: CredentialOperation | undefined;
   let literalInput: HTMLInputElement | undefined;
   let referenceSourceSelect: HTMLSelectElement | undefined;
 
@@ -101,7 +116,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
       // Snapshot this revision's editing intent and error copy; neither retriggers inspection.
       const [wasOpen, wasSaving, staleMessage] = [
         dialogOpen(),
-        saving(),
+        pending?.kind === "save",
         t("pluginsPage.credentials.stale"),
       ] as const;
       setRevealed(false);
@@ -114,8 +129,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         setReference({ source: "env", provider: "default", id: "" });
       }
       if (sourceChanged || next.epoch !== previous?.epoch) {
-        pending = false;
-        setOperation(undefined);
+        pending = undefined;
       }
       setLoading(false);
       setInspection((current) =>
@@ -218,6 +232,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     ) {
       return;
     }
+    setError("");
     return commitOrDiscardReference(value);
   }
 
@@ -237,52 +252,63 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     const capturedConnection = connection;
     const owner = JSON.stringify([props.context.pluginId, props.field.path]);
     const current = () =>
+      pending === admitted &&
       active &&
       props.context.gateway === gateway &&
       capturedConnection !== null &&
       gateway.isCurrent(capturedConnection) &&
       JSON.stringify([props.context.pluginId, props.field.path]) === owner;
+    const admitted: CredentialOperation = {
+      kind: value === undefined ? "discard" : "save",
+      current,
+    };
     // Admission is synchronous; Solid publishes the pending presentation after this task.
-    pending = true;
-    setOperation(value === undefined ? "discard" : "save");
+    pending = admitted;
     if (value !== undefined) {
       referenceSubmitted ||= dialogOpen();
-      setError("");
     }
-    try {
-      const acknowledged = await (value === undefined
-        ? props.context.onDiscard()
-        : props.context.onCommit(props.field.path, value));
-      if (!current()) {
-        return;
-      }
-      if (acknowledged) {
-        referenceSubmitted = false;
-        setDialogOpen(false);
-        if (value !== undefined) {
-          setLiteral("");
+    // Start the authoritative write before holding the presentation transaction.
+    const completed = (async () => {
+      try {
+        const acknowledged = await (value === undefined
+          ? props.context.onDiscard()
+          : props.context.onCommit(props.field.path, value));
+        if (!current()) {
+          return;
         }
-        await inspect();
-      } else {
-        setError(
-          props.context.saveError ||
-            t(
-              value === undefined
-                ? "configView.discardUnconfirmed"
-                : "pluginsPage.credentials.saveFailed",
-            ),
-        );
+        if (acknowledged) {
+          referenceSubmitted = false;
+          setDialogOpen(false);
+          if (value !== undefined) {
+            setLiteral("");
+          }
+          await inspect();
+        } else {
+          setError(
+            props.context.saveError ||
+              t(
+                value === undefined
+                  ? "configView.discardUnconfirmed"
+                  : "pluginsPage.credentials.saveFailed",
+              ),
+          );
+        }
+      } catch (cause) {
+        if (current()) {
+          setError(formatUiError(cause));
+        }
+      } finally {
+        if (current()) {
+          pending = undefined;
+        }
       }
-    } catch (cause) {
-      if (current()) {
-        setError(formatUiError(cause));
-      }
-    } finally {
-      if (current()) {
-        pending = false;
-        setOperation(undefined);
-      }
-    }
+    })();
+    // An action owns its opening tick, including already queued owner writes.
+    // Let same-turn save/refresh continuations publish before starting presentation.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    return current() ? mutateReference(admitted, completed) : completed;
   }
 
   const environment = () => {

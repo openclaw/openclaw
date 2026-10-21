@@ -109,14 +109,26 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     }
     context.scopeUpgrade.activate(runtime.ScopeUpgradeOwner);
     const rect = trigger.getBoundingClientRect();
+    const rail = !trigger.closest(".shell--mobile-nav") ? trigger.closest(".sidebar-rail") : null;
     const width = Math.min(390, globalThis.innerWidth - 16);
-    const preferredLeft = rect.left + rect.width / 2 - width / 2;
+    const preferredLeft = rail
+      ? rail.getBoundingClientRect().right + 8
+      : rect.left + rect.width / 2 - width / 2;
     const left = Math.max(8, Math.min(preferredLeft, globalThis.innerWidth - width - 8));
     setPanelRenderer(() => runtime.SidebarAttentionPanel);
     setPanelPosition(
       rect.top < globalThis.innerHeight / 2
-        ? { left, anchor: "top", top: Math.max(8, rect.bottom + 8) }
-        : { left, anchor: "bottom", bottom: Math.max(8, globalThis.innerHeight - rect.top + 8) },
+        ? { left, anchor: "top", top: Math.max(8, rail ? rect.top : rect.bottom + 8) }
+        : {
+            left,
+            anchor: "bottom",
+            bottom: Math.max(
+              8,
+              rail
+                ? globalThis.innerHeight - rect.bottom + 4
+                : globalThis.innerHeight - rect.top + 8,
+            ),
+          },
     );
     setSelectedTab("all");
     setPanelOpen(true);

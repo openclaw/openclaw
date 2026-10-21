@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -5,7 +6,16 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import * as mcpMutation from "../agents/mcp-config-mutation.js";
 import * as mcpConfig from "../config/mcp-config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import { normalizeCronJobCreate } from "../cron/normalize.js";
+import { CronService } from "../cron/service.js";
+import { createNoopLogger } from "../cron/service.test-harness.js";
 import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -16,8 +26,10 @@ import {
   beginAgentDeletionJournal,
   readAgentDeletionJournal,
 } from "../test-utils/agent-deletion-journal.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { applyClawAddPlanStateless, type StatelessClawAddOptions } from "./add-stateless.js";
 import * as cronInstall from "./cron.js";
+import type { ClawCronGateway } from "./cron.js";
 import { buildGatewayClawAddPlan } from "./gateway-add-plan.js";
 import { CLAW_MCP_REF_SCHEMA_VERSION, type PersistedClawMcpServerRef } from "./mcp-records.js";
 import * as mcpInstall from "./mcp.js";
@@ -28,9 +40,73 @@ import type { ClawReadResult } from "./types.js";
 import * as workspaceFiles from "./workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const cronServices: CronService[] = [];
+afterEach(async () => {
+  for (const cron of cronServices.splice(0)) {
+    cron.stop();
+    await cron.waitForIdle();
+  }
+  clearRuntimeConfigSnapshot();
+});
 afterEach(() => vi.unstubAllEnvs());
 afterEach(() => vi.restoreAllMocks());
 afterEach(() => closeOpenClawAgentDatabasesForTest());
+
+async function createClawCronGateway(
+  stateDir: string,
+  getConfig: () => OpenClawConfig,
+): Promise<ClawCronGateway> {
+  setRuntimeConfigSnapshot(getConfig());
+  const cron = new CronService({
+    storePath: path.join(stateDir, "cron", "jobs.json"),
+    scheduler: createTestGatewayScheduler(),
+    cronEnabled: false,
+    log: createNoopLogger(),
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: () => {
+      throw new Error("Claw Add must not invoke heartbeat execution");
+    },
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+  });
+  cronServices.push(cron);
+  await cron.start();
+  return {
+    waitUntilAgentAvailable: async () => {
+      setRuntimeConfigSnapshot(getConfig());
+    },
+    add: async (input, options) => {
+      const normalized = normalizeCronJobCreate(input);
+      if (!normalized) {
+        throw new Error("invalid cron input");
+      }
+      return await cron.add(normalized, { commitGuard: options?.commitGuard });
+    },
+    list: async () => ({ jobs: await cron.list({ includeDisabled: true }) }),
+    get: async (id) => {
+      const job = await cron.readJob(id);
+      return job && { ...job, configRevision: resolveCronJobConfigRevision(job) };
+    },
+    writeScratch: async (id, content, commitGuard) => {
+      const result = await cron.writeScratch(id, { content, expectedRevision: 0, commitGuard });
+      if (!result.ok) {
+        throw new Error("scratch changed before import");
+      }
+    },
+    enable: async (id, expectedConfigRevision, commitGuard) => {
+      await cron.updateWithPrecondition(
+        id,
+        { enabled: true },
+        (job) => {
+          if (resolveCronJobConfigRevision(job) !== expectedConfigRevision) {
+            throw new Error("automation changed before enable");
+          }
+        },
+        { commitGuard },
+      );
+    },
+    remove: async (id, options) => await cron.remove(id, options),
+  };
+}
 
 describe("stateless Claw Add", () => {
   let stateDir: string;
@@ -85,7 +161,9 @@ describe("stateless Claw Add", () => {
     ).toThrow(`agent ${agentId} is deleted`);
 
     const plan = await buildPlan();
-    const result = await apply(plan);
+    const result = await apply(plan, {
+      cronGateway: await createClawCronGateway(stateDir, () => config),
+    });
 
     expect(result.status).toBe("complete");
     expect(readAgentDeletionJournal(agentId, {}, "runtime")).toBeUndefined();
@@ -120,7 +198,8 @@ describe("stateless Claw Add", () => {
   });
 
   it("adds numbered ordinary agents without an install record", async () => {
-    const add = async () => apply(await buildPlan());
+    const cronGateway = await createClawCronGateway(stateDir, () => config);
+    const add = async () => apply(await buildPlan(), { cronGateway });
 
     const first = await add();
     const second = await add();

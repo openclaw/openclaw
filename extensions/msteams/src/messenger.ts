@@ -29,8 +29,12 @@ import {
   isLocalPath,
   MSTEAMS_MAX_MEDIA_BYTES,
 } from "./media-helpers.js";
-import { buildMSTeamsMessageActivity } from "./message-activity.js";
+import {
+  buildMSTeamsAdaptiveCardActivity,
+  buildMSTeamsMessageActivity,
+} from "./message-activity.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
+import { buildMSTeamsPresentationCard } from "./presentation.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsActivityLike } from "./sdk-types.js";
@@ -54,6 +58,7 @@ type MSTeamsReplyRenderOptions = {
 export type MSTeamsRenderedMessage = {
   text?: string;
   mediaUrl?: string;
+  adaptiveCard?: Record<string, unknown>;
 };
 
 const MSTEAMS_SEND_ATTEMPTS = 3;
@@ -118,7 +123,7 @@ export function renderReplyPayloadsToMessages(
       text: formatMSTeamsMarkdown(payload.text ?? "", options.tableMode),
     });
 
-    if (!reply.hasContent) {
+    if (!reply.hasContent && !payload.presentation) {
       continue;
     }
 
@@ -135,6 +140,11 @@ export function renderReplyPayloadsToMessages(
         }
       }
     }
+    if (payload.presentation) {
+      out.push({
+        adaptiveCard: buildMSTeamsPresentationCard({ presentation: payload.presentation }),
+      });
+    }
     out.push(...reply.mediaUrls.map((mediaUrl) => ({ mediaUrl })));
   }
 
@@ -150,6 +160,9 @@ async function buildActivity(
   options?: { feedbackLoopEnabled?: boolean } & MSTeamsSendHandoff,
 ): Promise<{ activity: Record<string, unknown>; pendingUploadId?: string }> {
   const activity: Record<string, unknown> = buildMSTeamsMessageActivity(msg.text);
+  if (msg.adaptiveCard) {
+    Object.assign(activity, buildMSTeamsAdaptiveCardActivity(msg.adaptiveCard));
+  }
 
   // Mark as AI-generated so Teams renders the "AI generated" badge.
   activity.channelData = {
@@ -263,7 +276,7 @@ export async function sendMSTeamsMessages(
   } & MSTeamsSendHandoff,
 ): Promise<string[]> {
   const messages = params.messages.filter(
-    (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl,
+    (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl || m.adaptiveCard,
   );
   if (messages.length === 0) {
     return [];

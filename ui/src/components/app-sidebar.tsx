@@ -305,9 +305,9 @@ function AppSidebarContent(
     return () => {
       cancelAnimationFrame(frame);
       owner.sessionData.disconnect(owner.isConnected);
+      disconnectSidebarOwner(host);
     };
   });
-  onCleanup(() => disconnectSidebarOwner(host));
   return content;
 }
 

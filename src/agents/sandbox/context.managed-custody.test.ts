@@ -3,16 +3,11 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
-import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
-import { resolveSandboxContext } from "./context.js";
+import * as custody from "./context-custody.test-support.js";
 import type { prepareLocalSandboxWorkspace } from "./local-workspace.js";
-import { resolvePreparedSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 
 const projection = vi.hoisted(() => ({
@@ -29,20 +24,13 @@ it("keeps managed workspace custody through awaited sandbox skill synchronizatio
   const workspaceDir = path.join(stateDir, "projection");
   await fs.mkdir(workspaceDir);
   const sessionKey = "agent:main:subagent:managed-custody";
-  const config: OpenClawConfig = {
-    agents: {
-      defaults: {
-        skipBootstrap: true,
-        sandbox: {
-          mode: "all",
-          workspaceAccess: "rw",
-          workspaceRoot: path.join(stateDir, "sandboxes"),
-          prune: { idleHours: 0, maxAgeDays: 0 },
-        },
-      },
+  const config = custody.createConfig(
+    { workspaceRoot: path.join(stateDir, "sandboxes") },
+    {
+      agents: { defaults: { skipBootstrap: true } },
+      skills: { load: { watch: false } },
     },
-    skills: { load: { watch: false } },
-  };
+  );
   const { skillsWorkspaceDir } = resolveSandboxWorkspaceLayoutPaths({
     cfg: { ...resolveSandboxConfigForAgent(config, "main"), scope: "session" },
     rawSessionKey: sessionKey,
@@ -55,25 +43,14 @@ it("keeps managed workspace custody through awaited sandbox skill synchronizatio
   await fs.writeFile(targetSkills, "preserve-managed-skills");
   try {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, HOME: stateDir }, async () => {
-      const owner = acquireGatewayStateOwner({
-        databasePath: resolveOpenClawStateSqlitePath(),
-        payload: {
-          pid: process.pid,
-          processNamespace: readGatewayLockProcessNamespace(),
-          createdAt: new Date().toISOString(),
-          configPath: path.join(stateDir, "openclaw.json"),
-          role: "gateway",
-        },
-      });
-      let revoked = false;
+      const owner = custody.acquireOwner(stateDir);
+      const revocation = new AbortController();
       const releaseProjection = vi.fn();
       const refusal = new Error("Local sandbox workspace authority changed");
       projection.prepare.mockImplementationOnce(async (params) => {
         const assertCurrent = () => {
           params.assertCurrent?.();
-          if (revoked) {
-            throw refusal;
-          }
+          revocation.signal.throwIfAborted();
         };
         return {
           workspaceDir,
@@ -105,23 +82,14 @@ it("keeps managed workspace custody through awaited sandbox skill synchronizatio
         }
         return result;
       });
-      const preparation = resolveSandboxContext({
-        config,
-        sessionKey,
-        workspaceDir,
-        preparedRuntimeStatus: resolvePreparedSandboxRuntimeStatus({
-          cfg: config,
-          sessionKey,
-          preparedSessionEntry: null,
-        }),
-      });
+      const preparation = custody.prepareContext(config, sessionKey, workspaceDir);
       try {
         await awaitGateBeforeSettlement(
           entered.promise,
           preparation,
           "Sandbox preparation skipped the managed skills read",
         );
-        revoked = true;
+        revocation.abort(refusal);
         expect(() => owner.assertCurrent()).not.toThrow();
         resume.resolve();
         const result = await preparation.catch((error: unknown) => error);

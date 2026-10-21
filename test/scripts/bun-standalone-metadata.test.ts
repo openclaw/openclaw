@@ -22,6 +22,12 @@ import {
   readFileDescriptorBoundedSync,
 } from "../../src/infra/boundary-file-read.js";
 import { readRootJsonObjectSync } from "../../src/infra/json-files.js";
+import { tryProcessCwd } from "../../src/infra/safe-cwd.js";
+import {
+  resolveImmutableInstallIdentity,
+  resolvePluginCandidateInstallOwner,
+} from "../../src/plugins/candidate-install-owner.js";
+import { PluginDashboardDeclarationError } from "../../src/plugins/dashboard-capabilities.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../src/plugins/hardlink-policy.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "../../src/plugins/package-entrypoints.js";
 import {
@@ -837,13 +843,13 @@ describe("standalone image metadata", () => {
       const { runtime, launcher, mainEntry, context, adapter } = fixture();
       const native = vi.fn((filename: string) => fs.realpathSync.native(filename));
       context.fs = { realpathSync: { native } };
+      context.tryProcessCwd = tryProcessCwd;
       const source = ownerSource("src/infra/is-main.ts");
       vm.runInContext(source, context);
       const launch = {
         currentFile: mainEntry,
         argv: [process.execPath, launcher],
         env: {},
-        cwd: runtime,
         wrapperEntryPairs: [{ wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" }],
       };
       expect(context.isMainModule(launch)).toBe(true);
@@ -898,6 +904,9 @@ describe("standalone image metadata", () => {
     const resolveArtifact = (params: { source: string; rootDir: string }) => params;
     Object.assign(context, {
       performance,
+      PluginDashboardDeclarationError,
+      resolveImmutableInstallIdentity,
+      resolvePluginCandidateInstallOwner,
       openRootFileSync: open,
       openPluginRootFileSync: vi.fn(openPluginRootFileSync),
       describeRootFileOpenFailure,
@@ -963,7 +972,12 @@ describe("standalone image metadata", () => {
         const steps = context.loadRuntimePluginCandidate({
           candidate: { source: sourcePath, rootDir, origin },
           manifestRecord: { channels: [], configSchema: {} },
-          context: { normalized: { slots: {} }, shouldLoadModules: true, env: {} },
+          context: {
+            normalized: { slots: {} },
+            shouldLoadModules: true,
+            installRecords: {},
+            env: {},
+          },
           options: {},
           state: { seenIds: new Map(), pluginLoadAttemptCount: 0 },
           preparedConfig: { validation: { ok: true } },

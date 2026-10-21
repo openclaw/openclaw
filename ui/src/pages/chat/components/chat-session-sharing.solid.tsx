@@ -18,7 +18,9 @@ import {
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   type ChatSessionSharingProps,
   VISIBILITY_LABEL_KEYS,
@@ -28,6 +30,8 @@ import {
   ChatSessionSharingModeIcon,
   projectChatSessionSharingRoster,
 } from "./chat-session-sharing-shared.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export * from "./chat-session-sharing-shared.tsx";
 export { useChatSessionSharingMenu } from "./chat-session-sharing-menu.tsx";
@@ -40,18 +44,10 @@ function SharingModeContent(props: { visibility: SessionVisibility }) {
           when={props.visibility === "read-only"}
           fallback={<ChatSessionSharingModeIcon visibility={props.visibility} />}
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
+          <StrokeIcon aria-hidden="true">
             <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
             <path d="M7 11h10M7 15h6M7 7h8" />
-          </svg>
+          </StrokeIcon>
         </Show>
       </span>
       <span class="chat-pane__sharing-mode-text">
@@ -652,7 +648,7 @@ export function ChatSessionSharing(props: ChatSessionSharingProps) {
                   </span>
                 </Show>
               </span>
-              <Icon name="chevronDown" />
+              <Icon name="chevronDown" class="chat-pane__sharing-chevron" />
             </>
           }
           items={sharing.items()}

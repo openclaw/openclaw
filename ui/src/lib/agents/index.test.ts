@@ -6,6 +6,7 @@ import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { agentCreationRejection } from "./creation.test-support.ts";
 import {
   createAgentCapability,
   loadToolsCatalog,
@@ -742,5 +743,177 @@ describe("setDefaultAgent", () => {
 
     expect(config.save).toHaveBeenCalledOnce();
     expect(refreshAgents).not.toHaveBeenCalled();
+  });
+});
+
+describe("agent creation", () => {
+  it("reports a failed creation without publishing a roster row", async () => {
+    const roster = { defaultId: "main", agents: [{ id: "main", name: "Molty" }] };
+    const request = vi
+      .fn<TestRequest>()
+      .mockResolvedValueOnce(roster)
+      .mockRejectedValueOnce(agentCreationRejection("Provider rejected credentials"))
+      .mockResolvedValueOnce({ exists: true, valid: true, sourceConfig: {} });
+    const agents = createAgentCapability(
+      createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway,
+    );
+    await agents.ensureList();
+    await expect(agents.create("New agent")).rejects.toThrow("Provider rejected credentials");
+    expect(request).toHaveBeenCalledWith("agents.create", {
+      agentId: expect.stringMatching(/^bot-/),
+      name: "New agent",
+      onboarding: true,
+    });
+    expect(agents.state.agentsList).toEqual(roster);
+    expect(agents.state.pendingAgent).toBeUndefined();
+    agents.dispose();
+  });
+
+  it("shows a pending agent immediately and publishes the verified receipt without another roster read", async () => {
+    const creation = deferred<unknown>();
+    const roster = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main", name: "Molty" }],
+    };
+    const request = vi
+      .fn<TestRequest>()
+      .mockResolvedValueOnce(roster)
+      .mockReturnValueOnce(creation.promise);
+    const agents = createAgentCapability(
+      createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway,
+    );
+    await agents.ensureList();
+    const creating = agents.create("New agent");
+    expect(agents.state.pendingAgent).toMatchObject({
+      id: expect.stringMatching(/^bot-/),
+      name: "New agent",
+    });
+    await expect(agents.create("New agent")).resolves.toBeNull();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["agents.list", "agents.create"]);
+    const pending = agents.state.pendingAgent;
+    expect(pending).toEqual({ id: expect.stringMatching(/^bot-/), name: "New agent" });
+    expect(agents.state.agentsList).toEqual(roster);
+    const receipt = {
+      agentId: pending!.id,
+      name: pending!.name,
+      onboarding: { sessionKey: `agent:${pending!.id}:main`, status: "completed" },
+    };
+    creation.resolve(receipt);
+    await expect(creating).resolves.toEqual(receipt);
+    expect(request).toHaveBeenLastCalledWith("agents.create", {
+      agentId: receipt.agentId,
+      name: "New agent",
+      onboarding: true,
+    });
+    expect(agents.state.agentsList?.agents).toEqual([pending, ...roster.agents]);
+    expect(agents.state.recentlyCreatedAgentId).toBe(receipt.agentId);
+    expect(agents.state.pendingAgent).toBeUndefined();
+    agents.dispose();
+  });
+
+  it("reconciles an overlapping config refresh without holding up the new chat", async () => {
+    const creation = deferred<unknown>();
+    const staleRead = deferred<unknown>();
+    const currentRead = deferred<unknown>();
+    const request = vi
+      .fn<TestRequest>()
+      .mockResolvedValueOnce({ defaultId: "main", agents: [{ id: "main", name: "Old name" }] })
+      .mockReturnValueOnce(creation.promise)
+      .mockReturnValueOnce(staleRead.promise)
+      .mockReturnValueOnce(currentRead.promise);
+    const agents = createAgentCapability(
+      createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway,
+    );
+    await agents.ensureList();
+    const creating = agents.create("New agent");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    const oldRefresh = agents.refreshList();
+    const pending = agents.state.pendingAgent!;
+    creation.resolve({ agentId: pending.id, name: pending.name });
+    await creating;
+    expect(agents.state.agentsList?.agents[0]).toEqual(pending);
+    expect(agents.state.agentsLoading).toBe(true);
+    staleRead.resolve({ defaultId: "main", agents: [{ id: "main", name: "Stale name" }] });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    expect(agents.state.agentsList?.agents[0]).toEqual(pending);
+    const currentRoster = {
+      defaultId: "main",
+      agents: [
+        { id: "main", name: "Renamed" },
+        { ...pending, identity: { emoji: "🌱" } },
+      ],
+    };
+    currentRead.resolve(currentRoster);
+    expect(await oldRefresh).toBe(agents.state.agentsList);
+    expect(agents.state.agentsList?.agents).toEqual([
+      { id: "main", name: "Renamed" },
+      { ...pending, identity: { emoji: "🌱" } },
+    ]);
+    request.mockRejectedValueOnce(new Error("Temporary read failure"));
+    await agents.refreshList();
+    expect(agents.state.agentsList).toEqual(currentRoster);
+    expect(agents.state.agentsError).toContain("Temporary read failure");
+    request.mockResolvedValueOnce(currentRoster);
+    await expect(agents.ensureList()).resolves.toEqual(currentRoster);
+    expect(agents.state.agentsList?.agents.map((agent) => agent.id)).toEqual(["main", pending.id]);
+    expect(agents.state.agentsError).toBeNull();
+    agents.dispose();
+  });
+
+  it("removes the pending row when creation fails without removing existing agents", async () => {
+    const roster = { defaultId: "main", agents: [{ id: "main", name: "Molty" }] };
+    const request = vi
+      .fn<TestRequest>()
+      .mockResolvedValueOnce(roster)
+      .mockRejectedValueOnce(agentCreationRejection("Workspace could not be created"))
+      .mockResolvedValueOnce({ exists: true, valid: true, sourceConfig: {} });
+    const agents = createAgentCapability(
+      createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway,
+    );
+    await agents.ensureList();
+    await expect(agents.create("New agent")).rejects.toThrow("Workspace could not be created");
+    expect(agents.state.pendingAgent).toBeUndefined();
+    expect(agents.state.agentsList).toEqual(roster);
+    agents.dispose();
+  });
+
+  it("recovers a disconnected creation receipt without dispatching another attempt", async () => {
+    const creation = deferred<unknown>();
+    const creationStarted = deferred();
+    const roster = { defaultId: "main", agents: [{ id: "main", name: "Molty" }] };
+    const request = vi
+      .fn<TestRequest>()
+      .mockResolvedValueOnce(roster)
+      .mockImplementationOnce(() => {
+        creationStarted.resolve();
+        return creation.promise;
+      })
+      .mockResolvedValueOnce(roster);
+    const harness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const agents = createAgentCapability(harness.gateway);
+    await agents.ensureList();
+    const creating = agents.create("New agent");
+    const pending = agents.state.pendingAgent!;
+    await creationStarted.promise;
+    harness.publish(false);
+    creation.resolve({
+      agentId: pending.id,
+      name: pending.name,
+      onboarding: { status: "completed", sessionKey: `agent:${pending.id}:main` },
+    });
+    await expect(creating).resolves.toBeNull();
+    expect(agents.state.pendingAgent).toBeUndefined();
+    expect(agents.state.agentsList).toEqual(roster);
+    harness.publish(true);
+    await expect(agents.create("New agent")).resolves.toMatchObject({ agentId: pending.id });
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "agents.list",
+      "agents.create",
+      "agents.list",
+    ]);
+    agents.dispose();
   });
 });

@@ -144,9 +144,9 @@ function spawnHandoffConsumer(params: {
     const start = new Promise((resolve) => process.stdin.once("data", resolve));
     process.stdout.write("ready\\n");
     await start;
+    Date.now = () => ${params.now};
     const result = mod.consumeGatewayRestartHandoffSync({
       expectedPid: ${params.expectedPid},
-      now: ${params.now},
       env: process.env,
     });
     process.stdout.write(JSON.stringify(result) + "\\n");
@@ -176,6 +176,7 @@ function spawnHandoffConsumer(params: {
 
 describe("gateway restart handoff", () => {
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(handoffConsumerCleanups.splice(0).map((cleanup) => cleanup()));
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
@@ -440,12 +441,12 @@ describe("gateway restart handoff", () => {
       reason: "gateway.restart",
       createdAt: 1_000,
     });
+    vi.spyOn(Date, "now").mockReturnValue(1_500);
 
     expect(
       consumeGatewayRestartHandoffSync({
         env,
         expectedPid: 12_345,
-        now: 1_500,
       }),
     ).toStrictEqual({
       status: "accepted",
@@ -456,7 +457,6 @@ describe("gateway restart handoff", () => {
       consumeGatewayRestartHandoffSync({
         env,
         expectedPid: 12_345,
-        now: 1_500,
       }),
     ).toStrictEqual({
       status: "none",
@@ -470,12 +470,12 @@ describe("gateway restart handoff", () => {
       env,
       createdAt: 1_000,
     });
+    vi.spyOn(Date, "now").mockReturnValue(1_500);
 
     expect(
       consumeGatewayRestartHandoffSync({
         env,
         expectedPid: 54_321,
-        now: 1_500,
       }),
     ).toStrictEqual({
       status: "rejected",
@@ -487,7 +487,6 @@ describe("gateway restart handoff", () => {
       consumeGatewayRestartHandoffSync({
         env,
         expectedPid: 12_345,
-        now: 1_500,
       }),
     ).toMatchObject({
       status: "accepted",
@@ -542,12 +541,12 @@ describe("gateway restart handoff", () => {
   ])("removes a $name handoff after rejecting it", async ({ insert, now, expected }) => {
     const env = createHandoffEnv();
     await insert(env);
+    vi.spyOn(Date, "now").mockReturnValue(now);
 
     expect(
       consumeGatewayRestartHandoffSync({
         env,
         expectedPid: 12_345,
-        now,
       }),
     ).toStrictEqual(expected);
     expect(readHandoffRow(env)).toBeUndefined();

@@ -509,7 +509,9 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
   const entries = createMemo(() => {
     const result: SidebarZoneEntry[] = SIDEBAR_NAV_ROUTES.filter((route) =>
       host.sidebarMenus.isRouteEnabled(route),
-    ).map((route) => ({ type: "route", route }));
+    )
+      .toSorted((left, right) => titleForRoute(left).localeCompare(titleForRoute(right)))
+      .map((route) => ({ type: "route", route }));
     for (const key of new Set([
       ...zone().pluginTabs.keys(),
       ...host.pluginNavigation().map((entry) => entry.key),

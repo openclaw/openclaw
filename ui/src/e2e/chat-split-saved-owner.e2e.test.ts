@@ -111,7 +111,6 @@ suite.define(() => {
         const cells = page.locator(".chat-split-view__cell");
         const unbound = cells.first();
         const pane = unbound.locator("openclaw-chat-pane");
-        const composer = unbound.locator(composerSelector);
         await expect.poll(() => cells.count()).toBe(2);
         await page.locator(composerSelector).last().waitFor({ state: "visible" });
         await expectUnbound(unbound);
@@ -183,9 +182,14 @@ suite.define(() => {
         await expectUnbound(unbound);
         const sidebar = page.locator("openclaw-app-sidebar");
         await sidebar.locator(".sidebar-agent-card__main").click();
-        await sidebar.locator('.sidebar-agent-menu [data-value="command:capabilities"]').click();
-        await expect.poll(() => pane.count()).toBe(1);
-        await expect.poll(() => composer.inputValue()).toBe("What can you do?");
+        await sidebar.locator('.sidebar-agent-menu [data-value="agent:main"]').click();
+        const visiblePane = cells
+          .first()
+          .locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+        await expect.poll(() => visiblePane.count()).toBe(1);
+        await expect
+          .poll(() => visiblePane.locator(composerSelector).inputValue())
+          .toBe(sessionScope === "global" ? "Scoped Home draft" : "");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(errors).toEqual([]);
       });

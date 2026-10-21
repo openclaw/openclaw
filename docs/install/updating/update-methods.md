@@ -162,8 +162,10 @@ for a source-server update: it refuses tracked local changes, including build
 outputs, and prepares the fetched target in a private checkout. It checks that
 `main` can fast-forward, or rebases the local server branch with `--rebase-merges`.
 Dependencies install with a frozen lockfile and the candidate builds before the
-serving checkout changes. A preparation failure leaves the existing service
-running. After preparation, the script stops its selected service and checks for
+serving checkout changes. The built candidate checks the selected profile's
+configuration and migration inputs through `openclaw update admit` before the
+service stops. A refusal or unavailable admission leaves the existing service
+running; resolve the reported conflict and retry. After preparation, the script stops its selected service and checks for
 other observed managed consumers before publishing source, dependencies, and
 generated output together. Stop any shared-install siblings through their own
 service owners first; this script does not stop or restart them for you.

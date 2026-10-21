@@ -53,6 +53,8 @@ it.each(["gateway", "agent-embedded"] as const)(
     try {
       const gatewayEnv = { ...env, OPENCLAW_SUPERVISOR_MODE: undefined };
       const database = openOpenClawStateDatabase({ env: gatewayEnv });
+      // Only the refused CLI may affect this snapshot, not the live owner's checkpoint timer.
+      await database.walMaintenance.stop();
       const before = snapshot(database.path);
       for (const [direct, error] of [
         [false, expect.stringMatching(/stop.*external supervisor/iu)],

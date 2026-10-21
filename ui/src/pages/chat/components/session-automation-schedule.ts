@@ -2,9 +2,12 @@ import { CronPattern } from "croner";
 import { resolveExactDurationParts } from "../../../../../src/infra/format-time/format-duration-exact.ts";
 import type { CronJob } from "../../../api/types.ts";
 import { i18n } from "../../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatUnit } from "../../../lib/format.ts";
 import { formatCronSchedule } from "../../../lib/presenter.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 const selected = (values: number[]) => values.flatMap((value, index) => (value ? [index] : []));
 const all = (values: number[]) => values.every(Boolean);

@@ -1,61 +1,43 @@
-/**
- * Unsafe sandbox mount fixture.
- *
- * Simulates a filesystem bridge that exposes host paths outside the workspace for boundary tests.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { SandboxFsBridge, SandboxResolvedPath } from "../sandbox/fs-bridge.js";
+import type { SandboxResolvedPath } from "../sandbox/fs-bridge.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { createAgentToolsSandboxContext } from "./agent-tools-sandbox-context.js";
 import { createSandboxFsBridgeFromResolver } from "./host-sandbox-fs-bridge.js";
 
-function createUnsafeMountedBridge(params: {
-  root: string;
-  agentHostRoot: string;
-  skillsHostRoot?: string;
+export function createUnsafeMountedSandbox(params: {
+  sandboxRoot: string;
+  agentRoot: string;
+  skillsWorkspaceDir?: string;
+  workspaceAccess?: "none" | "ro" | "rw";
   workspaceContainerRoot?: string;
-}): SandboxFsBridge {
-  const root = path.resolve(params.root);
-  const agentHostRoot = path.resolve(params.agentHostRoot);
-  const skillsHostRoot = params.skillsHostRoot ? path.resolve(params.skillsHostRoot) : undefined;
+}): SandboxContext {
+  const root = path.resolve(params.sandboxRoot);
+  const agentHostRoot = path.resolve(params.agentRoot);
+  const skillsHostRoot = params.skillsWorkspaceDir
+    ? path.resolve(params.skillsWorkspaceDir, "skills")
+    : undefined;
   const workspaceContainerRoot = params.workspaceContainerRoot ?? "/workspace";
-  const skillsContainerRoot = path.posix.join(
-    workspaceContainerRoot,
-    ".openclaw",
-    "sandbox-skills",
-    "skills",
-  );
   const skillsRelativeRoot = ".openclaw/sandbox-skills/skills";
+  const skillsContainerRoot = path.posix.join(workspaceContainerRoot, skillsRelativeRoot);
+  const remap = (input: string, container: string, host: string) =>
+    input === container || input.startsWith(`${container}/`)
+      ? path.join(host, input.slice(container.length))
+      : undefined;
 
   const resolvePath = (filePath: string, cwd?: string): SandboxResolvedPath => {
     const normalizedRelativePath = path.posix.normalize(filePath.replace(/\\/g, "/"));
-    const skillsRelativePath =
-      normalizedRelativePath === skillsRelativeRoot
-        ? ""
-        : normalizedRelativePath.startsWith(`${skillsRelativeRoot}/`)
-          ? normalizedRelativePath.slice(skillsRelativeRoot.length + 1)
-          : undefined;
     // Intentionally unsafe: simulate a sandbox FS bridge that maps /agent/* into a host path
     // outside the workspace root (e.g. an operator-configured bind mount).
     const hostPath =
-      filePath === "/agent" || filePath === "/agent/" || filePath.startsWith("/agent/")
-        ? path.join(
-            agentHostRoot,
-            filePath === "/agent" || filePath === "/agent/" ? "" : filePath.slice("/agent/".length),
-          )
-        : skillsHostRoot &&
-            (filePath === skillsContainerRoot || filePath.startsWith(`${skillsContainerRoot}/`))
-          ? path.join(skillsHostRoot, filePath.slice(skillsContainerRoot.length + 1))
-          : skillsHostRoot && skillsRelativePath !== undefined
-            ? path.join(skillsHostRoot, skillsRelativePath)
-            : filePath === workspaceContainerRoot ||
-                filePath.startsWith(`${workspaceContainerRoot}/`)
-              ? path.join(root, filePath.slice(workspaceContainerRoot.length))
-              : path.isAbsolute(filePath)
-                ? filePath
-                : path.resolve(cwd ?? root, filePath);
+      remap(filePath, "/agent", agentHostRoot) ??
+      (skillsHostRoot
+        ? (remap(filePath, skillsContainerRoot, skillsHostRoot) ??
+          remap(normalizedRelativePath, skillsRelativeRoot, skillsHostRoot))
+        : undefined) ??
+      remap(filePath, workspaceContainerRoot, root) ??
+      (path.isAbsolute(filePath) ? filePath : path.resolve(cwd ?? root, filePath));
 
     const relFromRoot = path.relative(root, hostPath);
     const relativePath =
@@ -72,35 +54,15 @@ function createUnsafeMountedBridge(params: {
     return { hostPath, relativePath, containerPath };
   };
 
-  return createSandboxFsBridgeFromResolver(resolvePath, [
-    { hostRoot: root, containerRoot: workspaceContainerRoot },
-    { hostRoot: agentHostRoot, containerRoot: "/agent" },
-    ...(skillsHostRoot ? [{ hostRoot: skillsHostRoot, containerRoot: skillsContainerRoot }] : []),
-  ]);
-}
-
-export function createUnsafeMountedSandbox(params: {
-  sandboxRoot: string;
-  agentRoot: string;
-  skillsWorkspaceDir?: string;
-  workspaceAccess?: "none" | "ro" | "rw";
-  workspaceContainerRoot?: string;
-}): SandboxContext {
-  const bridge = createUnsafeMountedBridge({
-    root: params.sandboxRoot,
-    agentHostRoot: params.agentRoot,
-    skillsHostRoot: params.skillsWorkspaceDir
-      ? path.join(params.skillsWorkspaceDir, "skills")
-      : undefined,
-    workspaceContainerRoot: params.workspaceContainerRoot,
-  });
   return createAgentToolsSandboxContext({
+    ...params,
     workspaceDir: params.sandboxRoot,
     agentWorkspaceDir: params.agentRoot,
-    skillsWorkspaceDir: params.skillsWorkspaceDir,
-    workspaceAccess: params.workspaceAccess ?? "rw",
-    fsBridge: bridge,
-    tools: { allow: [], deny: [] },
+    fsBridge: createSandboxFsBridgeFromResolver(resolvePath, [
+      { hostRoot: root, containerRoot: workspaceContainerRoot },
+      { hostRoot: agentHostRoot, containerRoot: "/agent" },
+      ...(skillsHostRoot ? [{ hostRoot: skillsHostRoot, containerRoot: skillsContainerRoot }] : []),
+    ]),
   });
 }
 
@@ -125,14 +87,13 @@ export async function withUnsafeMountedSandboxHarness(
     (options?.includeSkillsWorkspace ? path.join(stateDir, "skills-state") : undefined);
   await fs.mkdir(sandboxRoot, { recursive: true });
   await fs.mkdir(agentRoot, { recursive: true });
+  const context = { sandboxRoot, agentRoot, skillsWorkspaceDir };
   const sandbox = createUnsafeMountedSandbox({
-    sandboxRoot,
-    agentRoot,
-    skillsWorkspaceDir,
+    ...context,
     workspaceAccess: options?.workspaceAccess,
   });
   try {
-    await run({ sandboxRoot, agentRoot, skillsWorkspaceDir, sandbox });
+    await run({ ...context, sandbox });
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true });
   }

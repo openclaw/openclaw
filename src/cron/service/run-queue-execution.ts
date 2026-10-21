@@ -1,19 +1,19 @@
 import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
-import { parseExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { clearCronJobActive } from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { cronEventPayload } from "../event-source.js";
 import { cronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import type { CronQueuedRun } from "../store/run-queue.types.js";
+import { hasUnstartedCronAdmission } from "./admission-deferred.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
+import { assertExecutionPolicy } from "./jobs-validation.js";
 import { clearManualCronJobActive, markManualCronJobActive } from "./ops-shared.js";
 import { createCronRunHandle } from "./run-history.js";
 import type { CronRunOptions as RunOptions } from "./run-queue-requests.js";
-import { markServiceCronJobActive } from "./run-receipts.js";
+import { createCronReceiptExecutionIdentity, markServiceCronJobActive } from "./run-receipts.js";
 import {
   emit,
   isImmediateCronRunMode,
@@ -80,9 +80,6 @@ export async function launchCronRun(
     return;
   }
   const manual = options.source === "manual" || options.source === "event";
-  const activeJobMarker = manual
-    ? markManualCronJobActive(state, entry.job, entry.runReceipt)
-    : markServiceCronJobActive(state, entry.job, entry.runReceipt);
   const admittedJob = structuredClone(entry.job);
   if (options.onExit) {
     admittedJob.enabled = false;
@@ -93,10 +90,29 @@ export async function launchCronRun(
     : (options.onExit?.payload?.(structuredClone(entry.job)) ??
       options.payload ??
       executionJob.payload);
+  if (options.delivery) {
+    const configured = executionJob.delivery;
+    executionJob.delivery = {
+      mode: "announce",
+      ...configured,
+      ...options.delivery,
+      // Per-run routing cannot widen the stored delivery policy.
+      ...(configured?.target === "owner"
+        ? { target: "owner", to: undefined, threadId: undefined }
+        : {}),
+      ...(configured?.accountId ? { accountId: configured.accountId } : {}),
+      ...(configured?.mode === "none" ? { mode: "none" } : {}),
+      ...(configured?.directPolicy === "block" ? { directPolicy: "block" } : {}),
+    };
+    assertExecutionPolicy(executionJob);
+  }
   if (isImmediateCronRunMode(options.mode)) {
     executionJob.state.nextRunAtMs = options.scheduleOwnershipAtMs;
     executionJob.trigger = options.evaluateTrigger ? executionJob.trigger : undefined;
   }
+  const activeJobMarker = manual
+    ? markManualCronJobActive(state, entry.job, entry.runReceipt)
+    : markServiceCronJobActive(state, entry.job, entry.runReceipt);
   const taskRunId = createCronRunHandle({
     state,
     job: entry.job,
@@ -122,53 +138,36 @@ export async function launchCronRun(
   pending.removeCancellation?.();
   pending.started = true;
   pending.activation.resolve();
-  let executionBinding: Promise<void> | undefined;
+  const onExit = options.onExit;
   let result: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
     result = await executeJobCoreWithTimeout(state, executionJob, {
       runId: taskRunId,
+      migrationPending: entry.migrationPending,
       activeJobMarker,
       streamBatch: options.streamBatch,
       streamScheduleKey: options.streamScheduleKey,
       streamSourceIdentity: options.streamSourceIdentity,
       runReceipt: entry.runReceipt,
       runReceiptContext: pending.context,
-      executionIdentity: {
-        ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-        async onPostAdmission(admitted) {
-          const token = admitted.executionIdentityToken;
-          if (!token) {
-            return;
+      executionIdentity: createCronReceiptExecutionIdentity(
+        state,
+        entry.runReceipt,
+        pending.context,
+      ),
+      ...(onExit
+        ? {
+            idleAdmission: {
+              signal: onExit.signal,
+              assertCurrent: () => {
+                onExit.commitGuard();
+                if (activeJobMarker?.messageSourceAuthorityRevoked) {
+                  throw new Error("cron on-exit source changed while awaiting idle execution");
+                }
+              },
+            },
           }
-          // Trigger and payload admissions share one diagnostic link, never receipt authority.
-          executionBinding ??= Promise.resolve()
-            .then(async () => {
-              const binding = parseExecutionIdentityAdmissionToken(token);
-              if (binding.runId !== admitted.operationalRunInstance.runId) {
-                throw new Error("Cron execution identity does not match its admitted run");
-              }
-              const retained = await runOpenClawStateWorkerOperation(pending.context, (scope) =>
-                scope.execute({
-                  type: "cron.bindReceiptExecution",
-                  input: {
-                    receiptId: entry.runReceipt.receiptId,
-                    binding: { contextId: binding.contextId, executionId: binding.executionId },
-                  },
-                }),
-              );
-              if (!retained) {
-                throw new Error("Cron execution identity binding was not retained");
-              }
-            })
-            .catch((error: unknown) => {
-              state.deps.log.warn(
-                { err: String(error), jobId: entry.job.id },
-                "cron: failed to retain execution identity binding",
-              );
-            });
-          await executionBinding;
-        },
-      },
+        : {}),
     });
   } catch (error) {
     result = authorCronRunCompletion(executionJob, {
@@ -179,7 +178,8 @@ export async function launchCronRun(
     });
   }
   options.onTriggerDisposition?.(
-    result.triggerEval?.busy
+    result.triggerEval?.busy ||
+      (hasUnstartedCronAdmission(result) && result.admissionDeferredReason === "busy")
       ? "busy"
       : result.status === "error"
         ? "error"
@@ -226,5 +226,6 @@ export async function launchCronRun(
       job: executionJob,
     });
   }
+  pending.removeCancellation?.();
   pending.completion.resolve({ ok: true, ran: true });
 }

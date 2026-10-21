@@ -115,8 +115,7 @@ async function expectGatewayExit(args: string[]) {
 }
 
 function expectGatewayCall(expected: Record<string, unknown>) {
-  expect(callGateway).toHaveBeenCalledOnce();
-  expect(callGateway.mock.calls[0]?.[0]).toEqual(expect.objectContaining(expected));
+  expect(callGateway).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(expected));
 }
 
 async function expectJsonValidationFailure(args: string[], message: unknown) {
@@ -209,12 +208,7 @@ describe("gateway-cli coverage", () => {
           "openai-codex/gpt-5.5": 2,
         },
       },
-      cacheStatus: {
-        status: "fresh",
-        cachedFiles: 1,
-        pendingFiles: 0,
-        staleFiles: 0,
-      },
+      cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
     });
 
     await runGatewayCommand(["usage-cost", "--days", "7"]);

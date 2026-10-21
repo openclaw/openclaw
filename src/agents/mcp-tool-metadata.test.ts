@@ -13,6 +13,22 @@ function catalog(tools: Tool[], classify?: Parameters<typeof normalizeMcpToolCat
 
 const draft2020 = "https://json-schema.org/draft/2020-12/schema";
 
+it.each([undefined, { error: "ambiguous contact" }])(
+  "accepts tool errors without requiring the success output schema (%j)",
+  (structuredContent) => {
+    const validate = catalog([
+      tool("get_conversation", { outputSchema: { type: "object", required: ["messages"] } }),
+    ]).metadata.validatorForCall("get_conversation")!;
+    expect(() =>
+      validate({
+        isError: true,
+        content: [{ type: "text", text: "Call list_conversations, then pass the chosen chat_id." }],
+        structuredContent,
+      }),
+    ).not.toThrow();
+  },
+);
+
 function referencedOutput(id: string, ref = id, $schema?: string) {
   const outputSchema = {
     type: "object" as const,

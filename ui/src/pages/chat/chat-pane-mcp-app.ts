@@ -4,7 +4,7 @@ import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "../../components/mcp-
 import {
   MCP_APP_RESOURCE_MENTION_EVENT,
   type McpAppResourceMentionDetail,
-} from "../../components/mcp-app-resources.tsx";
+} from "../../components/mcp-app-resource-mention.ts";
 import {
   WIDGET_PROMPT_EVENT,
   MCP_APP_CONTEXT_EVENT,

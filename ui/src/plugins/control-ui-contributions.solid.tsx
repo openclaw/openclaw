@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
+import { Errored, For, Loading, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { iconData, type IconName } from "../components/icon-data.ts";
 import type { SidebarMenus } from "../components/sidebar-menus.tsx";
@@ -27,7 +27,7 @@ export type ContributionsElement = SolidBridgeElement<ContributionsProps>;
 
 function PluginContributionsContent(props: ContributionsProps, host: ContributionsElement) {
   const context = useApplication();
-  const [actionError, setActionError] = createSignal("");
+  const [actionRead, setActionRead] = createSignal<{ promise: Promise<void> } | null>(null);
   let lifetime = new AbortController();
   const actionLifetimes = new Map<
     AbortSignal,
@@ -90,7 +90,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
       },
     ),
   );
-  onCleanup(() => {
+  onSettled(() => () => {
     lifetime.abort();
     actionLifetimes.clear();
   });
@@ -202,46 +202,59 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
           when={props.kind === "session-header"}
           fallback={
             <>
-              <Show when={actionError()}>
-                <span role="alert">{actionError()}</span>
-              </Show>
+              <For each={actionRead() ? [actionRead()!] : []}>
+                {(read) => (
+                  <Errored
+                    fallback={(error) => {
+                      const message = () => {
+                        const failure = error();
+                        return failure instanceof Error ? failure.message : String(failure);
+                      };
+                      return <span role="alert">{message()}</span>;
+                    }}
+                  >
+                    <Loading>
+                      <ActionCompletion promise={read.promise} />
+                    </Loading>
+                  </Errored>
+                )}
+              </For>
               <For each={actions()} keyed={(action) => action.entry.signal}>
                 {(action) => (
                   <button
                     class="btn btn--sm"
                     type="button"
                     disabled={action().state?.disabled ?? false}
-                    onClick={() =>
-                      void (async () => {
-                        const current = action();
-                        const runtime = context?.plugins;
-                        if (
-                          !runtime ||
-                          current.signal.aborted ||
-                          !host.presented ||
-                          !host.isConnected
-                        ) {
-                          return;
+                    onClick={() => {
+                      const current = action();
+                      const runtime = context?.plugins;
+                      if (
+                        !runtime ||
+                        current.signal.aborted ||
+                        !host.presented ||
+                        !host.isConnected
+                      ) {
+                        return;
+                      }
+                      // Keep this outside a Solid action so owner updates render while it is pending.
+                      const promise = runControlUiPluginAction({
+                        runtime,
+                        id: current.entry.key,
+                        placement: current.entry.value.placement,
+                        sessionKey: host.sessionKey,
+                        agentId: host.agentId,
+                        session: currentSession(),
+                        signal: current.signal,
+                        isCurrent: () => host.isConnected && host.presented,
+                      }).catch((error: unknown) => {
+                        if (!current.signal.aborted) {
+                          throw error;
                         }
-                        setActionError("");
-                        try {
-                          await runControlUiPluginAction({
-                            runtime,
-                            id: current.entry.key,
-                            placement: current.entry.value.placement,
-                            sessionKey: host.sessionKey,
-                            agentId: host.agentId,
-                            session: currentSession(),
-                            signal: current.signal,
-                            isCurrent: () => host.isConnected && host.presented,
-                          });
-                        } catch (error) {
-                          if (!current.signal.aborted) {
-                            setActionError(error instanceof Error ? error.message : String(error));
-                          }
-                        }
-                      })()
-                    }
+                      });
+                      // An earlier concurrent invocation can fail after this one starts.
+                      void promise.catch(() => setActionRead({ promise }));
+                      setActionRead({ promise });
+                    }}
                   >
                     {action().state?.label ?? action().entry.value.label}
                   </button>
@@ -318,6 +331,11 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
       </For>
     </Show>
   );
+}
+
+function ActionCompletion(props: { promise: Promise<void> }) {
+  const completion = createMemo(() => props.promise.then(() => null));
+  return <>{completion()}</>;
 }
 
 defineSolidBridge<ContributionsProps>("openclaw-plugin-contributions", PluginContributionsContent, {

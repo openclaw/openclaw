@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProof,
   chatSessionListResponse,
@@ -815,6 +816,94 @@ suite.define(() => {
         expect(await trigger.getAttribute("aria-haspopup")).toBeNull();
         expect(await trigger.getAttribute("aria-expanded")).toBeNull();
         await captureProof(page, "keyboard-focus.png");
+      },
+    );
+  });
+
+  it("refreshes a held avatar after Gateway authentication reconnects", async () => {
+    const sessionKey = "agent:main:avatar-auth-reconnect";
+    const channelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(sessionKey)}`;
+
+    await suite.withPage(
+      {
+        hasTouch: false,
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        let avatarAvailable = false;
+        let rejectedAvatarRequests = 0;
+        await page.route(`**${channelAvatarUrl}`, async (route) => {
+          expect(await route.request().headerValue("authorization")).toBe(
+            "Bearer e2e-device-token",
+          );
+          if (!avatarAvailable) {
+            await route.fulfill({ status: 401 });
+            rejectedAvatarRequests += 1;
+            return;
+          }
+          await route.fulfill({
+            body: `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="32" fill="#b84cff"/><circle cx="24" cy="27" r="5" fill="white"/><circle cx="43" cy="27" r="5" fill="white"/><path d="M19 43c8 6 19 6 27 0" fill="none" stroke="white" stroke-width="4" stroke-linecap="round"/></svg>`,
+            contentType: "image/svg+xml",
+            status: 200,
+          });
+        });
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+          methodResponses: {
+            "progressCard.get": { card: null },
+            "sessions.list": chatSessionListResponse([
+              {
+                channelAvatarUrl,
+                createdActor: {
+                  type: "human",
+                  id: "profile-ada",
+                  label: "Ada King",
+                  identity: { type: "profile", id: "profile-ada" },
+                },
+                key: sessionKey,
+                kind: "direct",
+                label: "Avatar reconnect",
+                updatedAt: 1,
+              },
+            ]),
+          },
+          sessionKey,
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+        await row.waitFor({ state: "visible" });
+        await row.hover();
+        const card = page.locator(".session-progress-hovercard");
+        await card.waitFor({ state: "visible" });
+        const cardId = await card.getAttribute("id");
+        const avatar = card.locator("openclaw-channel-avatar.session-hovercard__creator-avatar");
+        const fallback = avatar.locator(".session-hovercard__creator-avatar-fallback");
+        await expect.poll(() => fallback.textContent()).toBe("AK");
+        expect(await fallback.isVisible()).toBe(true);
+        expect(await avatar.locator("img.channel-avatar").count()).toBe(0);
+
+        await expect.poll(() => rejectedAvatarRequests).toBeGreaterThan(0);
+        avatarAvailable = true;
+        await reconnectMockGateway(page, gateway);
+
+        await expect.poll(() => avatar.locator("img.channel-avatar").count()).toBe(1);
+        await expect
+          .poll(() =>
+            avatar.locator("img.channel-avatar").evaluate((image: HTMLImageElement) => ({
+              complete: image.complete,
+              naturalWidth: image.naturalWidth,
+            })),
+          )
+          .toEqual({ complete: true, naturalWidth: 64 });
+        expect(await fallback.count()).toBe(1);
+        expect(await fallback.isVisible()).toBe(false);
+        expect(await card.getAttribute("id")).toBe(cardId);
+        expect(await card.evaluate((element) => element.outerHTML)).not.toContain(
+          "e2e-device-token",
+        );
       },
     );
   });

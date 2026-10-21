@@ -1,8 +1,7 @@
-// Model set tests cover persisting default model/provider selections.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { createTestRuntime } from "../test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   logConfigUpdated: vi.fn(),
@@ -46,12 +45,33 @@ vi.mock("../runtime-plugin-install.js", () => ({
 
 import { modelsSetCommand } from "./set.js";
 
-function makeRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  } as unknown as RuntimeEnv;
+type ModelEntries = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
+
+function configWithModels(models: ModelEntries): OpenClawConfig {
+  return { agents: { defaults: { models: structuredClone(models) } } };
+}
+
+function mockSnapshot(sourceConfig: OpenClawConfig, runtimeConfig = sourceConfig) {
+  mocks.readConfigFileSnapshot.mockResolvedValue({
+    valid: true,
+    hash: "config-hash",
+    sourceConfig,
+    runtimeConfig,
+    config: runtimeConfig,
+  });
+}
+
+async function expectSelection(input: string, primary: string, models: ModelEntries) {
+  const runtime = createTestRuntime();
+  await modelsSetCommand(input, runtime);
+  expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+  const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+  expect(replaceParams?.sourceConfig.agents?.defaults).toEqual({ model: { primary }, models });
+  expect(mocks.repairModelSelectionRuntimePlugins).toHaveBeenCalledWith({
+    cfg: replaceParams?.sourceConfig,
+    model: primary,
+  });
+  expect(runtime.log).toHaveBeenCalledWith(`Default model: ${primary}`);
 }
 
 describe("modelsSetCommand", () => {
@@ -66,132 +86,32 @@ describe("modelsSetCommand", () => {
   });
 
   it("resolves aliases from runtime config while writing only source config", async () => {
-    const sourceConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-sonnet-4-6": {},
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const runtimeConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      valid: true,
-      hash: "config-hash",
-      sourceConfig,
-      runtimeConfig,
-      config: runtimeConfig,
-    });
-    const runtime = makeRuntime();
-
-    await modelsSetCommand("sonnet", runtime);
-
-    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    expect(replaceParams?.sourceConfig.agents?.defaults?.model).toEqual({
-      primary: "anthropic/claude-sonnet-4-6",
-    });
-    expect(replaceParams?.sourceConfig.agents?.defaults?.models).toEqual({
-      "anthropic/claude-sonnet-4-6": {},
-    });
-    expect(replaceParams?.sourceConfig.agents?.defaults?.models).not.toHaveProperty(
-      "openai/sonnet",
+    const models = { "anthropic/claude-sonnet-4-6": {} };
+    mockSnapshot(
+      configWithModels(models),
+      configWithModels({
+        "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+      }),
     );
-    expect(mocks.repairModelSelectionRuntimePlugins).toHaveBeenCalledWith({
-      cfg: replaceParams?.sourceConfig,
-      model: "anthropic/claude-sonnet-4-6",
-    });
-    expect(runtime.log).toHaveBeenCalledWith("Default model: anthropic/claude-sonnet-4-6");
+    await expectSelection("sonnet", "anthropic/claude-sonnet-4-6", models);
   });
 
   it("keeps authored aliases ahead of runtime-only aliases", async () => {
-    const sourceConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { alias: "sonnet" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const runtimeConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { alias: "sonnet" },
-            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      valid: true,
-      hash: "config-hash",
-      sourceConfig,
-      runtimeConfig,
-      config: runtimeConfig,
-    });
-    const runtime = makeRuntime();
-
-    await modelsSetCommand("sonnet", runtime);
-
-    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    expect(replaceParams?.sourceConfig.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-5.5",
-    });
-    expect(replaceParams?.sourceConfig.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.5": { alias: "sonnet" },
-    });
-    expect(mocks.repairModelSelectionRuntimePlugins).toHaveBeenCalledWith({
-      cfg: replaceParams?.sourceConfig,
-      model: "openai/gpt-5.5",
-    });
-    expect(runtime.log).toHaveBeenCalledWith("Default model: openai/gpt-5.5");
+    const models = { "openai/gpt-5.5": { alias: "sonnet" } };
+    mockSnapshot(
+      configWithModels(models),
+      configWithModels({
+        ...models,
+        "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+      }),
+    );
+    await expectSelection("sonnet", "openai/gpt-5.5", models);
   });
 
   it("persists manifest-owned provider aliases with the canonical provider id", async () => {
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
 
-    const sourceConfig = {
-      agents: {
-        defaults: {
-          models: {},
-        },
-      },
-    } as unknown as OpenClawConfig;
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      valid: true,
-      hash: "config-hash",
-      sourceConfig,
-      runtimeConfig: sourceConfig,
-      config: sourceConfig,
-    });
-    const runtime = makeRuntime();
-
-    await modelsSetCommand("z.ai/glm-4.7", runtime);
-
-    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    expect(replaceParams?.sourceConfig.agents?.defaults?.model).toEqual({
-      primary: "zai/glm-4.7",
-    });
-    expect(replaceParams?.sourceConfig.agents?.defaults?.models).toEqual({
-      "zai/glm-4.7": {},
-    });
-    expect(mocks.repairModelSelectionRuntimePlugins).toHaveBeenCalledWith({
-      cfg: replaceParams?.sourceConfig,
-      model: "zai/glm-4.7",
-    });
-    expect(runtime.log).toHaveBeenCalledWith("Default model: zai/glm-4.7");
+    mockSnapshot(configWithModels({}));
+    await expectSelection("z.ai/glm-4.7", "zai/glm-4.7", { "zai/glm-4.7": {} });
   });
 });

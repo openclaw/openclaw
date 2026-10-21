@@ -32,18 +32,18 @@ vi.mock("./worker-sender.js", () => ({
   }),
 }));
 
+function unexpectedEffect(): never {
+  throw new Error("This worker admission fixture cannot launch, signal, inspect, or exit");
+}
+
 beforeEach(() => {
   vi.resetModules();
   vi.resetAllMocks();
   boundary.reserve.mockRejectedValue(new Error("synthetic reservation refused before startup"));
   boundary.send.mockResolvedValue(undefined);
-  boundary.spawn.mockImplementation(() => {
-    throw new Error("This worker admission fixture cannot spawn a process");
-  });
+  boundary.spawn.mockImplementation(unexpectedEffect);
   boundary.execa.mockRejectedValue(new Error("This worker admission fixture cannot start execa"));
-  boundary.killTree.mockImplementation(() => {
-    throw new Error("This worker admission fixture cannot signal a process");
-  });
+  boundary.killTree.mockImplementation(unexpectedEffect);
 });
 
 it.each(["spawn", "spawn-execa"] as const)(
@@ -58,23 +58,13 @@ it.each(["spawn", "spawn-execa"] as const)(
         receive = listener;
         return process;
       }
-      if (event === "SIGTERM" || event === "SIGINT") {
-        return process;
-      }
-      return originalOn(event, listener);
+      return event === "SIGTERM" || event === "SIGINT" ? process : originalOn(event, listener);
     });
     vi.spyOn(process, "once").mockImplementation((event, listener) => {
-      if (event === "disconnect") {
-        return process;
-      }
-      return originalOnce(event, listener);
+      return event === "disconnect" ? process : originalOnce(event, listener);
     });
-    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
-      throw new Error("This worker admission fixture cannot signal or inspect a process");
-    });
-    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("This worker admission fixture cannot exit the test process");
-    });
+    const kill = vi.spyOn(process, "kill").mockImplementation(unexpectedEffect);
+    const exit = vi.spyOn(process, "exit").mockImplementation(unexpectedEffect);
     Object.defineProperty(process, "connected", { configurable: true, value: true });
     try {
       await import("./worker.js");
@@ -108,17 +98,14 @@ it.each(["spawn", "spawn-execa"] as const)(
       await setImmediate();
       const responses = boundary.send.mock.calls.map(([message]) => message);
       const refusal = responses.filter((message) => "id" in message && message.id === 257);
-      expect(refusal.map((message) => message.type)).toEqual(["execa-result", "error"]);
-      expect(refusal[0]).toMatchObject({
-        result: {
-          failed: true,
-          code: "ERR_SPAWN_BROKER_UNAVAILABLE",
-          error: { code: "ERR_SPAWN_BROKER_UNAVAILABLE" },
+      const error = { code: "ERR_SPAWN_BROKER_UNAVAILABLE" };
+      expect(refusal).toMatchObject([
+        {
+          type: "execa-result",
+          result: { failed: true, ...error, error },
         },
-      });
-      expect(refusal[1]).toMatchObject({
-        error: { code: "ERR_SPAWN_BROKER_UNAVAILABLE" },
-      });
+        { type: "error", error },
+      ]);
       expect(
         responses.some((message) => message.type === "owned" || message.type === "spawned"),
       ).toBe(false);
@@ -134,14 +121,11 @@ it.each(["spawn", "spawn-execa"] as const)(
     } finally {
       // All launched continuations retain only these reservation/report promises;
       // the final event-loop turn joins their catch/finally tails before restoring process hooks.
-      await Promise.allSettled([
-        ...boundary.reserve.mock.results.flatMap((result) =>
-          result.type === "return" ? [result.value] : [],
+      await Promise.allSettled(
+        [boundary.reserve, boundary.send].flatMap((mock) =>
+          mock.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : [])),
         ),
-        ...boundary.send.mock.results.flatMap((result) =>
-          result.type === "return" ? [result.value] : [],
-        ),
-      ]);
+      );
       await setImmediate();
       vi.clearAllTimers();
       vi.useRealTimers();

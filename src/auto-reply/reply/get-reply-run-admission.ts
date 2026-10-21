@@ -59,6 +59,7 @@ import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { hasPendingFollowupQueueWork } from "./queue/state.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
+import { resolveReplyTurnKind } from "./reply-turn-kind.js";
 import {
   isSlackDirectRoutedThreadTurn,
   resolveRoutedDeliveryThreadId,
@@ -391,7 +392,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const rawActiveSessionIdForInterrupt =
     capturedNativeAttempt?.operation.sessionId ?? resolveSessionlessNativeAttachment()?.sessionId;
   const shouldPreemptHeartbeat =
-    !isRoomEvent && !context.isHeartbeat && rawActiveSessionIdForInterrupt !== undefined;
+    !isRoomEvent &&
+    resolveReplyTurnKind(opts) === "visible" &&
+    rawActiveSessionIdForInterrupt !== undefined;
   assertPreparationActive();
   const heartbeatPreemption =
     sourceInput || sessionKey
@@ -444,11 +447,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     if (prioritySource) {
       retireSessionControllerInput(prioritySource);
     }
-    typing.cleanup();
-    return {
-      kind: "reply",
-      reply: { text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT },
-    } as const;
+    return finishReplyPreparation(typing, () => ({ text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT }));
   }
   const visibleTurnPreemptsHeartbeat = heartbeatPreemption === "drained";
   const resolveRuntimeAuthProfile = async () => {

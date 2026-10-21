@@ -1,12 +1,6 @@
-import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   persistSessionTranscriptTurn,
@@ -20,15 +14,9 @@ import {
 } from "../config/sessions/session-cold-storage.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+  transcriptMessage as event,
+  useTranscriptFixture,
+} from "./session-transcript-fixtures.test-support.js";
 import { readSessionTitleFieldsFromTranscriptAsync as readTitlesAsync } from "./session-transcript-title-reader.js";
 import { readSessionTitleFieldsFromTranscript as readTitles } from "./session-transcript-title-reader.worker.js";
 
@@ -47,30 +35,9 @@ vi.mock("../config/sessions/session-accessor.sqlite-active-events.js", async (im
   };
 });
 
-const tempDirs = createTempDirTracker();
-
-let tempDir: string;
-let storePath: string;
-let envSnapshot: ReturnType<typeof captureEnv>;
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  tempDir = tempDirs.make("openclaw-transcript-titles-");
-  storePath = path.join(tempDir, "sessions.json");
-  setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-  setRuntimeConfigSnapshot({});
-});
-
-afterEach(async () => {
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  clearRuntimeConfigSnapshot();
-  tempDirs.cleanup();
-  envSnapshot.restore();
-});
+const fixture = useTranscriptFixture("openclaw-transcript-titles-");
+const { scopeFor, writeTranscript, appendMessages } = fixture;
+beforeEach(() => vi.clearAllMocks());
 
 function expectTitle(
   scope: Parameters<typeof readTitles>[0],
@@ -84,27 +51,6 @@ const user = (content: unknown, fields = {}) => ({ role: "user", content, ...fie
 const assistant = (content: unknown) => ({ role: "assistant", content });
 const repeatedReplies = (count: number, content: string) =>
   Array.from({ length: count }, () => assistant(content));
-function scopeFor(sessionId: string) {
-  return { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
-}
-function event(id: string, parentId: string | null, message: Record<string, unknown>) {
-  return { type: "message", id, parentId, message };
-}
-async function writeTranscript(sessionId: string, events: unknown[]) {
-  const scope = scopeFor(sessionId);
-  await replaceTranscriptEvents(scope, events);
-  return scope;
-}
-
-async function appendMessages(
-  scope: Parameters<typeof persistSessionTranscriptTurn>[0],
-  messages: Array<{ content: unknown; display?: boolean; provenance?: unknown; role: string }>,
-) {
-  await persistSessionTranscriptTurn(scope, {
-    messages: messages.map((message) => ({ message })),
-    touchSessionEntry: false,
-  });
-}
 async function writeSqliteMessages(
   sessionId: string,
   messages: Array<{ content: unknown; display?: boolean; provenance?: unknown; role: string }>,
@@ -161,7 +107,6 @@ describe("session transcript title hydration", () => {
 
   test("keeps cold transcripts archived while reading mixed title rows and heals after restoration", async () => {
     const cold = await writeTranscript("reader-title-archived", [
-      { type: "session", version: 3, id: "reader-title-archived" },
       event("user", null, user("Archived prompt")),
       event("reply", "user", assistant("Archived reply")),
     ]);
@@ -169,10 +114,7 @@ describe("session transcript title hydration", () => {
       sessionId: cold.sessionId,
       updatedAt: Date.now(),
     });
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    });
+    const database = fixture.database();
     await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: database.path });
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 40 * 24 * 60 * 60 * 1000);
     try {
@@ -181,7 +123,7 @@ describe("session transcript title hydration", () => {
           config: {
             agents: { entries: { main: {} } },
             session: {
-              store: storePath,
+              store: fixture.path("sessions.json"),
               maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
             },
           },
@@ -226,7 +168,6 @@ describe("session transcript title hydration", () => {
   test("invalidates both cached title variants after an appended reset", async () => {
     const sessionId = "reader-title-reset-window";
     const scope = await writeTranscript(sessionId, [
-      { type: "session", version: 3, id: sessionId },
       event("old", null, user("hidden old prompt")),
       event("kept-routed", "old", {
         role: "user",
@@ -345,7 +286,7 @@ describe("session transcript title hydration", () => {
       vi
         .mocked(sessionAccessor.readSessionTranscriptMessageEventPage)
         .mock.calls.map(([, options]) => options),
-    ).toEqual([{ maxMessages: 20, offset: 0 }]);
+    ).toEqual([{ maxMessages: 20, offset: 0, readOnly: true }]);
   });
 });
 
@@ -382,6 +323,12 @@ describe("session transcript Markdown title previews", () => {
       typeof import("../config/sessions/session-accessor.sqlite-active-events.js")
     >("../config/sessions/session-accessor.sqlite-active-events.js");
     const readOlderText = vi.fn(() => olderText);
+    const watchedText = {
+      type: "text",
+      get text() {
+        return readOlderText();
+      },
+    };
     let observedRows = 0;
     const observeOlderContent = (
       entries: Pick<SessionTranscriptMessageEvent, "event" | "seq">[],
@@ -396,14 +343,7 @@ describe("session transcript Markdown title previews", () => {
           message: {
             role: "assistant",
             // Nested text survives transcript metadata normalization; only projection reads it.
-            content: [
-              {
-                type: "text",
-                get text() {
-                  return readOlderText();
-                },
-              },
-            ],
+            content: [watchedText],
           },
         };
       }

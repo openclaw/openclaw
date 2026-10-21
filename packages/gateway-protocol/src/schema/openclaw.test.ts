@@ -130,6 +130,18 @@ describe("OpenClaw setup detection protocol", () => {
   it("accepts an explicit owner across the structured setup family", () => {
     acceptsParams(validateSystemAgentSetupDetectParams, { agentId: "research" });
     acceptsParams(validateSystemAgentSetupVerifyParams, { agentId: "research" });
+    acceptsParams(validateSystemAgentSetupVerifyParams, {
+      agentId: "new-bot",
+      modelTarget: "primary",
+    });
+    acceptsParams(validateSystemAgentSetupVerifyParams, {
+      agentId: "new-bot",
+      modelTarget: "utility",
+    });
+    rejectsParams(validateSystemAgentSetupVerifyParams, {
+      agentId: "new-bot",
+      modelTarget: "fallback",
+    });
     acceptsParams(validateSystemAgentSetupActivateParams, {
       agentId: "research",
       kind: "existing-model",

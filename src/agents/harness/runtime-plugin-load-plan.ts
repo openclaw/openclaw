@@ -73,6 +73,7 @@ function resolveSelectedMemoryPluginIds(params: {
   }
   return resolveEffectivePluginActivationState({
     id: plugin.pluginId,
+    channelIds: params.metadataSnapshot.byPluginId.get(plugin.pluginId)?.channels,
     origin: plugin.origin,
     config: plugins,
     rootConfig: params.config,

@@ -221,6 +221,7 @@ export async function executeCliProcess(params: {
       ...(runParams.sessionId ? { sessionId: runParams.sessionId } : {}),
     },
   });
+  let stopForParserRefusal: (() => void) | undefined;
   const consumeStdout = (chunk: string) => {
     const chunkBytes = Buffer.byteLength(chunk);
     params.diagnostics?.observeCliOutput(chunk, "stdout", chunkBytes);
@@ -240,6 +241,9 @@ export async function executeCliProcess(params: {
       appendCapturedOutput(stdoutCapture, chunk, CLI_RUNNER_OUTPUT_PARSE_BYTES, "head");
     }
     streamingParser?.push(chunk);
+    if (streamingParser?.getErrorText()) {
+      stopForParserRefusal?.();
+    }
   };
   const consumeStderr = (chunk: string) => {
     params.diagnostics?.observeCliOutput(chunk, "stderr");
@@ -312,7 +316,13 @@ export async function executeCliProcess(params: {
           params.cliSessionIdToUse === undefined && context.openClawHistoryPrompt !== undefined,
         sessionId: params.resolvedSessionId,
         noOutputTimeoutMs: params.noOutputTimeoutMs,
-        consumeStdout,
+        consumeStdout: (chunk) => {
+          consumeStdout(chunk);
+          const errorText = streamingParser?.getErrorText();
+          if (errorText) {
+            throw createCliFailoverError(errorText, "format", failoverContext);
+          }
+        },
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
         activeToolCount: params.events.activeParsedToolCount,
         compactionActive: params.events.hasActiveCompaction,
@@ -423,10 +433,15 @@ export async function executeCliProcess(params: {
           ),
         );
         managedRunPid = managedRun.pid;
-        const detachReplyBackend = attachCliReplyBackend(runParams, () => {
+        stopForParserRefusal = () => {
           processCancelled = true;
           managedRun.cancel("manual-cancel");
-        });
+        };
+        // Output can arrive before the managed run handle is available.
+        if (streamingParser?.getErrorText()) {
+          stopForParserRefusal();
+        }
+        const detachReplyBackend = attachCliReplyBackend(runParams, stopForParserRefusal);
         try {
           result = await managedRun.wait();
           processCancelled ||= result.reason !== "exit";

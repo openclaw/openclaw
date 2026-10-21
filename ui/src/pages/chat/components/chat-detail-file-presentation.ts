@@ -355,6 +355,7 @@ export function createFilePresentationActions(context: {
 }
 
 export function renderFilePanelPresentation(context: {
+  fileAttachment?: import("./chat-file-session-attachment.ts").FileSessionAttachment;
   props: ChatDetailPanelProps;
   presentation: FilePresentationState;
   htmlPreview: ReturnType<typeof createFileHtmlPreview>;
@@ -417,6 +418,7 @@ export function renderFilePanelPresentation(context: {
     error: file ? null : state.error,
     onRetry: context.actions.retryFileEditor,
     fileView: {
+      fileAttachment: context.fileAttachment,
       htmlPreview: context.htmlPreview.controls({
         error: state.error,
         onRetry: context.actions.retryFileEditor,
@@ -516,6 +518,7 @@ export function renderFilePanelPresentation(context: {
 }
 
 export const chatDetailPanelProperties = {
+  attachmentChat: { default: undefined, attribute: false },
   onScrollPortRef: { default: undefined, attribute: false },
   panelPresentation: { default: undefined, attribute: false },
   panelActive: { default: true, type: Boolean },

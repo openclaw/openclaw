@@ -295,7 +295,6 @@ it(
             workspace: repo,
             skipBootstrap: true,
             utilityModel: "",
-            heartbeat: { every: "0m" },
             model: { primary: provider.modelRef },
             models: {
               [provider.modelRef]: {

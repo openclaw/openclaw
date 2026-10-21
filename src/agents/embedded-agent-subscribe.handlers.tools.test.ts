@@ -1,6 +1,6 @@
 import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   onAgentEvent as registerAgentEventListener,
@@ -31,13 +31,20 @@ import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.to
 import {
   createTestContext,
   endTool,
+  requireEvent,
+  requireString,
   resultWithDetails,
+  type CapturedAgentEvent,
   type ToolExecutionEndEvent,
 } from "./embedded-agent-subscribe.handlers.tools.test-support.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
 import * as questionDispatch from "./harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswer } from "./harness/gateway-question.js";
-import { normalizeAskUserParams, reserveAskUserPromptDelivery } from "./tools/ask-user-tool.js";
+import {
+  cancelAskUserPromptDelivery,
+  normalizeAskUserParams,
+  reserveAskUserPromptDelivery,
+} from "./tools/ask-user-tool.js";
 import * as gatewayTransport from "./tools/gateway.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
@@ -62,6 +69,10 @@ type ToolExecutionUpdateEvent = {
 };
 
 function startTool(ctx: ToolHandlerContext, event: ToolExecutionStartEvent) {
+  if (event.toolName === "ask_user" || event.toolName === "secrets") {
+    const { sessionKey, runId, agentId } = ctx.params;
+    onTestFinished(() => cancelAskUserPromptDelivery(event.toolCallId, sessionKey, runId, agentId));
+  }
   return handleToolExecutionStart(ctx, { type: "tool_execution_start", ...event });
 }
 
@@ -85,31 +96,10 @@ function updateTool(ctx: ToolHandlerContext, event: ToolExecutionUpdateEvent) {
 
 afterEach(finishPendingAskUserPrompts);
 
-type CapturedAgentEvent = { stream?: string; data?: Record<string, unknown> };
-
 function captureAgentEvents(): CapturedAgentEvent[] {
   const events: CapturedAgentEvent[] = [];
   registerAgentEventListener((event) => events.push(event));
   return events;
-}
-
-function requireEvent(
-  events: CapturedAgentEvent[],
-  predicate: (event: CapturedAgentEvent) => boolean,
-  label: string,
-): CapturedAgentEvent {
-  const event = events.find(predicate);
-  if (!event) {
-    throw new Error(`expected ${label} event`);
-  }
-  return event;
-}
-
-function requireString(value: unknown, label: string): string {
-  if (typeof value !== "string") {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
 }
 
 describe("progress_card compatibility plan events", () => {
@@ -526,6 +516,9 @@ describe("handleToolExecutionStart read path checks", () => {
           args,
         }),
       ).toThrow(failure);
+      onTestFinished(() =>
+        cancelAskUserPromptDelivery("ask-" + flushKind + "-retry", "agent:unit-session"),
+      );
       expect(
         reserveAskUserPromptDelivery({
           toolCallId: `ask-${flushKind}-retry`,

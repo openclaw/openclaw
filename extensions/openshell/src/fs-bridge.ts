@@ -438,12 +438,7 @@ async function nearestExistingDirectoryStats(params: {
   const rootPath = path.resolve(params.root);
   let cursor = path.resolve(params.targetPath);
   while (isPathInside(rootPath, cursor)) {
-    const stats = await fsPromises.lstat(cursor).catch((err: unknown) => {
-      if (isNotFoundError(err)) {
-        return null;
-      }
-      throw err;
-    });
+    const stats = await lstatIfExists(cursor, "ENOENT");
     if (stats) {
       if (!stats.isDirectory()) {
         throw new Error(`Sandbox rename destination parent is not a directory: ${cursor}`);
@@ -473,14 +468,7 @@ async function assertLocalPathSafety(params: {
   const unlinkSymlink =
     params.allowFinalSymlinkForUnlink &&
     hostPath !== mountHostRoot &&
-    (
-      await fsPromises.lstat(hostPath).catch((error: unknown) => {
-        if (isNotFoundError(error)) {
-          return null;
-        }
-        throw error;
-      })
-    )?.isSymbolicLink();
+    (await lstatIfExists(hostPath, "ENOENT"))?.isSymbolicLink();
   await assertNoSymlinkParents({
     rootDir: mountHostRoot,
     targetPath: unlinkSymlink ? path.dirname(hostPath) : hostPath,

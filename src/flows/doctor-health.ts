@@ -209,6 +209,11 @@ async function runDoctorHealthFlowWithResult(
     const { assertDoctorRetiredStateAdmission } =
       await import("../commands/doctor-retired-state-admission.js");
     assertDoctorRetiredStateAdmission();
+    const { prepareAutomaticHeartbeatRepair } =
+      await import("../commands/doctor-automatic-heartbeat-repair.js");
+    const automaticHeartbeatRepair = await prepareAutomaticHeartbeatRepair(options);
+    // Published updater markers opt only custody and backup into maintenance.
+    const maintenanceOptions = automaticHeartbeatRepair ? { ...options, repair: true } : options;
     if (options.repair === true || options.yes === true || interactiveRepair) {
       preparedArchiveDiscovery = await measure("doctor.archive-preparation", () =>
         startup.prepareDoctorMaintenanceArchives(
@@ -224,7 +229,7 @@ async function runDoctorHealthFlowWithResult(
     ]);
     maintenance = await measure("doctor.maintenance.begin", () =>
       beginDoctorMaintenance({
-        options,
+        options: maintenanceOptions,
         interactiveRepair,
         root,
         runtime: repairRuntime,
@@ -318,44 +323,17 @@ async function runDoctorHealthFlowWithResult(
         }
       }
       if (maintenance) {
-        const { prepareDoctorDatabaseMigrations } =
-          await import("../commands/doctor-schema-migrations.js");
-        const { createOpenClawAgentDatabasePathMatcher } =
-          await import("../state/openclaw-agent-db.paths.js");
-        const { normalizeAgentId } = await import("../routing/session-key.js");
-        const samePath = createOpenClawAgentDatabasePathMatcher();
-        const discovery = schemas.agentDatabaseMigrationDiscovery?.discovery;
-        const databaseTargets = discovery?.schemaTargets.filter(
-          ({ agentId, path: databasePath, realPath }) =>
-            !schemas.agentRefusals?.some(
-              (refusal) =>
-                normalizeAgentId(refusal.agentId) === normalizeAgentId(agentId) &&
-                refusal.paths.some((pathname) => samePath(pathname, databasePath)),
-            ) &&
-            !schemas.indeterminate.some(
-              (failure) =>
-                failure.kind === "agent" &&
-                (failure.path === databasePath ||
-                  discovery.sourceIdentities.get(failure.path)?.realPath === realPath),
-            ),
-        );
-        const backups = await measure("doctor.database-migrations", () =>
-          prepareDoctorDatabaseMigrations({
-            env: process.env,
-            check: options.fullIntegrityCheck ? "full" : "quick",
-            databasePaths: databaseTargets?.map((database) => database.path) ?? [],
-            agentDatabaseTargets: databaseTargets,
-            pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
-            pendingMigrations: schemas.pendingMigrations,
-            verifiedSnapshots,
-          }),
-        );
-        for (const message of [...backups.changes, ...backups.warnings]) {
-          effectiveRuntime.log(message);
-        }
-        if (schemas.agentDatabaseMigrationDiscovery && backups.versionMigrations) {
-          schemas.agentDatabaseMigrationDiscovery.versionMigrations = backups.versionMigrations;
-        }
+        const { prepareDoctorMigrationBackups } =
+          await import("../commands/doctor-heartbeat-migration-backup.js");
+        await prepareDoctorMigrationBackups({
+          schemas,
+          env: process.env,
+          check: options.fullIntegrityCheck ? "full" : "quick",
+          verifiedSnapshots,
+          automaticRepair: Boolean(automaticHeartbeatRepair),
+          runtime: effectiveRuntime,
+          measure,
+        });
       }
 
       const stateSchemaPreparation = await measure("doctor.state-schema", () =>
@@ -385,6 +363,7 @@ async function runDoctorHealthFlowWithResult(
           options,
           retiredStateAdmitted: true,
           stateSchemaPreparation,
+          ...(automaticHeartbeatRepair ? { automaticHeartbeatRepair } : {}),
           agentDatabaseMigrationDiscovery: schemas.agentDatabaseMigrationDiscovery,
           confirm: (p) => prompter.confirm(p),
           runtime: doctorRuntime,

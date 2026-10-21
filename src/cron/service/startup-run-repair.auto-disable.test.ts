@@ -65,13 +65,13 @@ describe("startup run repair auto-disable", () => {
       atMs: runningAtMs + 1_000,
       consecutiveErrors: 1,
     });
-    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+    expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
     expect(deferredNotifications).toHaveLength(1);
 
     await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
-    expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
-    expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
+    expect(state.deps.enqueueSessionEvent).toHaveBeenCalledOnce();
+    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -160,6 +160,7 @@ describe("startup run repair auto-disable", () => {
     }
 
     expect(job.state.autoDisabled?.reason).toBe("schedule-errors");
+    expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
     expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
     expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
     expect(deferredNotifications).toHaveLength(1);
