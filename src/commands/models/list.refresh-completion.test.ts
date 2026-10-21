@@ -99,7 +99,9 @@ module.exports = {
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_GATEWAY_PORT: undefined,
   };
-  retireAfterTest(() => unregisterResolvedAgentDir({ agentId: "main", agentDir, env }));
+  retireAfterTest(() => {
+    unregisterResolvedAgentDir({ agentId: "main", agentDir, env });
+  });
   vi.spyOn(runtimeConfig, "captureRuntimeConfigAsyncReader").mockReturnValue(
     Object.assign(
       async () => {
