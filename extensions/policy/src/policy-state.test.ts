@@ -15,7 +15,7 @@ const scanPolicyTools = (...lines: string[]) =>
 const scanPolicyExecApprovals = (config: Record<string, unknown>) =>
   collectPolicyEvidence({}, { execApprovalsRaw: JSON.stringify(config) }).execApprovals ?? [];
 
-const partial = expect.objectContaining;
+const partial = (value: Record<string, unknown>) => expect.objectContaining(value);
 function expectIncludes(actual: unknown, ...entries: Record<string, unknown>[]) {
   expect(actual).toEqual(expect.arrayContaining(entries.map((entry) => partial(entry))));
 }

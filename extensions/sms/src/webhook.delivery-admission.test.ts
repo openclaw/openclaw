@@ -46,7 +46,7 @@ function createRoute(account: ResolvedSmsAccount, warn = vi.fn()) {
   });
   return {
     delivery,
-    async submit(index: number) {
+    submit: async (index: number) => {
       const res = { statusCode: 200, setHeader: vi.fn(), end: vi.fn() };
       await handler(createRequest(account, index), res as unknown as ServerResponse);
       return res;
