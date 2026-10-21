@@ -1,6 +1,6 @@
 import { channel } from "node:diagnostics_channel";
 import { stripVTControlCharacters } from "node:util";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { logWs } from "./ws-log.js";
@@ -11,7 +11,6 @@ const output = vi.hoisted(() => {
   vi.resetModules();
   return vi.fn<(message: string) => void>();
 });
-
 vi.mock("../security/config-regex.js", { spy: true });
 vi.mock("../logging/config.js", () => ({
   readLoggingConfig: () => ({ redactPatterns: ["ordinary"] }),
@@ -19,18 +18,15 @@ vi.mock("../logging/config.js", () => ({
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ isEnabled: () => true, info: output, warn: output }),
 }));
-
 beforeEach(() => {
   setVerbose(true);
   setGatewayWsLogStyle("full");
   output.mockClear();
+  return () => {
+    setVerbose(false);
+    setGatewayWsLogStyle("auto");
+  };
 });
-
-afterEach(() => {
-  setVerbose(false);
-  setGatewayWsLogStyle("auto");
-});
-
 function logFrame(detail: unknown, count = 1): void {
   for (let index = 0; index < count; index += 1) {
     logWs("out", "res", { method: "health", ok: true, detail, id: "frame" });
@@ -52,17 +48,13 @@ test("skips the default pattern walk for WS frames without candidate substrings"
   const measurements: unknown[] = [];
   const listener = (message: unknown) => measurements.push(message);
   source.subscribe(listener);
-  try {
-    logFrame("token=synthetic-value");
-    expect(measurements).toContainEqual(expect.objectContaining({ operation: "text" }));
-    measurements.length = 0;
-    logFrame("ordinary response completed", 20);
-    expect(measurements).toHaveLength(0);
-  } finally {
-    source.unsubscribe(listener);
-  }
+  onTestFinished(() => source.unsubscribe(listener));
+  logFrame("token=synthetic-value");
+  expect(measurements).toContainEqual(expect.objectContaining({ operation: "text" }));
+  measurements.length = 0;
+  logFrame("ordinary response completed", 20);
+  expect(measurements).toHaveLength(0);
 });
-
 test.each([
   ["ordinary response completed", "ordinary response completed"],
   ["sk-abcdefghijklmnopqrstuvwxyz123456", "sk-abc…3456"],
@@ -76,12 +68,7 @@ test.each([
     "-----BEGIN PRIVATE KEY-----\n…redacted…\n-----END PRIVATE KEY-----",
   ],
   [
-    {
-      toJSON() {
-        throw new Error("diagnostic serialization failed");
-      },
-      toString: () => `token=synthetic-value ${"x".repeat(300)}`,
-    },
+    { value: 1n, toString: () => `token=synthetic-value ${"x".repeat(300)}` },
     `token=*** ${"x".repeat(230)}...`,
   ],
 ])("preserves redacted WS frame output (case %#)", (detail, expected) => {
