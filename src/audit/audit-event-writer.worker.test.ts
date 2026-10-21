@@ -9,6 +9,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
@@ -42,16 +43,15 @@ const pruneFault = useSqliteWorkerFault([
   { match: /^insert into audit_events\b/u, exitOnMatch: 1 },
 ]);
 
-let restoreConstructor: (() => void) | undefined;
 afterEach(async () => {
-  restoreConstructor?.();
+  vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function observeProcessRequests() {
-  let count = 0;
+  const count = vi.fn();
   const stop = onInternalDiagnosticEvent(
     (event) => {
       if (
@@ -59,17 +59,12 @@ function observeProcessRequests() {
         event.phase === "queued" &&
         event.requestClass === "audit.writer.process"
       ) {
-        count += 1;
+        count();
       }
     },
     { include: ["worker.request"] },
   );
-  return {
-    get count() {
-      return count;
-    },
-    stop,
-  };
+  return { count, stop };
 }
 
 function messageRecorder(writer: AuditEventWriter) {
@@ -78,6 +73,24 @@ function messageRecorder(writer: AuditEventWriter) {
     getConfig: () => ({ logging: { audit: { messages: "all" } } }),
     writer,
   });
+}
+
+function writerFixture(
+  stateDir = tempDirs.make("openclaw-audit-writer-"),
+  onError?: (count: number) => void,
+) {
+  const errors = vi.fn<(error: string) => void>();
+  errors.mockImplementation(() => onError?.(errors.mock.calls.length));
+  const writer = createAuditEventWriter({
+    scheduler: createTestGatewayScheduler(),
+    stateDir,
+    onError: errors,
+  });
+  return { writer, errors, database: { env: { OPENCLAW_STATE_DIR: stateDir } } };
+}
+
+function rowCounts(db: OpenClawStateDatabase["db"], tables: string[]) {
+  return tables.map((table) => db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count);
 }
 
 function admissionFacts(runId: string) {
@@ -91,14 +104,7 @@ function admissionFacts(runId: string) {
 
 describe("audit writer shared worker", () => {
   it("records a warm run start and finish with one worker request", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-run-pair-");
-    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({
-      scheduler: createTestGatewayScheduler(),
-      stateDir,
-      onError: (error) => errors.push(error),
-    });
+    const { writer, errors, database } = writerFixture();
     const recorder = createAgentEventAuditRecorder({ writer, getConfig: () => ({}) });
     await writer.ready;
     expect(writer.record({ ...input(), sourceId: "warm-seed", runId: "warm-seed" })).toBe(true);
@@ -129,9 +135,9 @@ describe("audit writer shared worker", () => {
         "agent.run.finished",
         "agent.run.started",
       ]);
-      expect(requests.count, "warm audit worker request count").toBe(1);
+      expect(requests.count, "warm audit worker request count").toHaveBeenCalledTimes(1);
       expect(duringTurn).toHaveLength(1);
-      expect(errors).toEqual([]);
+      expect(errors).not.toHaveBeenCalled();
     } finally {
       await recorder.stop();
       requests.stop();
@@ -146,37 +152,20 @@ describe("audit writer shared worker", () => {
       if (mode === "existing shared actor") {
         await listAuditEvents({ database, limit: 1 });
       }
-      const receipt = decisionReceipt();
-      const token = createExecutionIdentityAdmissionToken(receipt.runId, {
-        contextId: receipt.contextId,
-        executionId: receipt.executionId,
+      const { contextId, executionId, runId, ...receipt } = decisionReceipt();
+      const token = createExecutionIdentityAdmissionToken(runId, {
+        contextId,
+        executionId,
         now: receipt.occurredAt,
       });
-      const errors: string[] = [];
-      const native = requireNodeSqlite();
-      const originalConstructor = native.DatabaseSync;
-      let nativeOpens = 0;
-      native.DatabaseSync = new Proxy(originalConstructor, {
-        construct(target, args, newTarget) {
-          nativeOpens += 1;
-          return Reflect.construct(target, args, newTarget);
-        },
-      });
-      restoreConstructor = () => {
-        native.DatabaseSync = originalConstructor;
-        restoreConstructor = undefined;
-      };
+      const nativeOpens = vi.spyOn(requireNodeSqlite(), "DatabaseSync");
       const calibration = openNodeSqliteDatabase(":memory:");
       calibration.close();
-      expect(nativeOpens).toBe(1);
-      nativeOpens = 0;
+      expect(nativeOpens).toHaveBeenCalledTimes(1);
+      nativeOpens.mockClear();
       const counters = observeMainThreadSql({ includeClose: true });
       const requests = observeProcessRequests();
-      const writer = createAuditEventWriter({
-        scheduler: createTestGatewayScheduler(),
-        stateDir,
-        onError: (error) => errors.push(error),
-      });
+      const { writer, errors } = writerFixture(stateDir);
       const recorder = messageRecorder(writer);
       const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
       try {
@@ -185,27 +174,23 @@ describe("audit writer shared worker", () => {
           pruneFault.enable(1);
         }
         expect(
-          enqueueExecutionIdentityContextAtAdmission(admissionFacts(receipt.runId), {
+          enqueueExecutionIdentityContextAtAdmission(admissionFacts(runId), {
             enabled: true,
             token,
             runtimeInstanceId: "worker-runtime",
           })?.accepted,
         ).toBe(true);
-        expect(writer.recordExecutionDecision(receipt)).toBe(true);
+        expect(writer.recordExecutionDecision({ ...receipt, contextId, executionId, runId })).toBe(
+          true,
+        );
         expect(
           writer.recordExecutionDecisionWork({
             workVersion: 1,
             token,
             receipt: {
-              schemaVersion: receipt.schemaVersion,
+              ...receipt,
               receiptId: "worker-private-decision",
               occurredAt: receipt.occurredAt + 1,
-              action: receipt.action,
-              decision: receipt.decision,
-              enforcement: receipt.enforcement,
-              source: receipt.source,
-              missingEvidence: receipt.missingEvidence,
-              remediation: receipt.remediation,
             },
             refs: { target: { namespace: "session", value: "private-session-target" } },
           }),
@@ -223,35 +208,34 @@ describe("audit writer shared worker", () => {
         ).toBe(true);
         recorder.recordMessage({
           ...messageEvent("message.outbound.finished"),
-          runId: receipt.runId,
+          runId,
           executionIdentityToken: token,
         });
       } finally {
         clearSink();
         try {
           await recorder.stop();
-          expect(nativeOpens).toBe(0);
+          expect(nativeOpens).not.toHaveBeenCalled();
           counters.expectIdle();
         } finally {
           requests.stop();
           counters.restore();
-          restoreConstructor();
+          nativeOpens.mockRestore();
         }
       }
 
       const replayed = mode === "worker death after committed prefix";
       const owner = openOpenClawStateDatabase(database).db;
       expect(
-        owner
-          .prepare(`SELECT
-          (SELECT COUNT(*) FROM audit_events) AS events,
-          (SELECT COUNT(*) FROM outbound_message_execution_bindings) AS bindings,
-          (SELECT COUNT(*) FROM outbound_message_progress) AS progress,
-          (SELECT COUNT(*) FROM audit_events WHERE kind = 'message') AS messages`)
-          .get(),
-      ).toEqual({ events: 3, bindings: 1, progress: 1, messages: 1 });
-      expect(errors).toHaveLength(replayed ? 1 : 0);
-      expect(requests.count).toBe(replayed ? 2 : 1);
+        rowCounts(owner, [
+          "audit_events",
+          "outbound_message_execution_bindings",
+          "outbound_message_progress",
+          "audit_events WHERE kind = 'message'",
+        ]),
+      ).toEqual([3, 1, 1, 1]);
+      expect(errors).toHaveBeenCalledTimes(replayed ? 1 : 0);
+      expect(requests.count).toHaveBeenCalledTimes(replayed ? 2 : 1);
       expect(
         owner
           .prepare(
@@ -268,36 +252,24 @@ describe("audit writer shared worker", () => {
         now: receipt.occurredAt + 1,
       }).receipts;
       expect(decisions).toHaveLength(2);
-      expect(decisions).toContainEqual(receipt);
-      expect(decisions).toContainEqual(
-        expect.objectContaining({
-          receiptId: "worker-private-decision",
-          action: expect.objectContaining({
-            targetRef: expect.stringMatching(/^hmac-sha256:v1:/u),
-          }),
-        }),
-      );
+      expect(decisions).toContainEqual({ ...receipt, contextId, executionId, runId });
+      expect(
+        decisions.find((item) => item.receiptId === "worker-private-decision")?.action.targetRef,
+      ).toMatch(/^hmac-sha256:v1:/u);
 
       expect(owner.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
     },
   );
 
   it("drops a repeatedly crashing batch and persists work queued after its first failure", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-poison-batch-");
     const newerQueued = createDeferred();
-    const errors: string[] = [];
-    const writer = createAuditEventWriter({
-      scheduler: createTestGatewayScheduler(),
-      stateDir,
-      onError: (error) => {
-        errors.push(error);
-        // Every attempt to insert an audit event kills the real worker again.
-        pruneFault.enable(2);
-        if (errors.length === 1) {
-          recorder.recordMessage(messageEvent("message.outbound.queued"));
-          newerQueued.resolve();
-        }
-      },
+    const { writer, errors, database } = writerFixture(undefined, (count) => {
+      // Every attempt to insert an audit event kills the real worker again.
+      pruneFault.enable(2);
+      if (count === 1) {
+        recorder.recordMessage(messageEvent("message.outbound.queued"));
+        newerQueued.resolve();
+      }
     });
     const recorder = messageRecorder(writer);
     try {
@@ -307,16 +279,9 @@ describe("audit writer shared worker", () => {
       await newerQueued.promise;
       await recorder.stop();
 
-      const owner = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } }).db;
-      expect(owner.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
-        count: 0,
-      });
-      expect(
-        owner.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get(),
-      ).toEqual({
-        count: 1,
-      });
-      expect(errors).toHaveLength(3);
+      const owner = openOpenClawStateDatabase(database).db;
+      expect(rowCounts(owner, ["audit_events", "outbound_message_progress"])).toEqual([0, 1]);
+      expect(errors).toHaveBeenCalledTimes(3);
     } finally {
       await recorder.stop();
     }
@@ -328,31 +293,22 @@ describe("audit writer shared worker", () => {
     };
     const options = { ...database, database: openOpenClawStateDatabase(database) };
     const clock = vi.spyOn(Date, "now").mockReturnValue(0);
-    try {
-      const receipt = decisionReceipt();
-      recordAuditEventInDatabase(input(), options);
-      prepareExecutionIdentityContextAtAdmission(admissionFacts(receipt.runId), {
-        ...options,
-        now: 0,
-        contextId: receipt.contextId,
-        executionId: receipt.executionId,
-        runtimeInstanceId: "prune-runtime",
-      });
-      recordExecutionDecisionFactInDatabase(receipt, { ...options, now: 0 });
-      recordOutboundMessageProgressInDatabase(
-        {
-          ...messageEvent("message.outbound.queued"),
-          sourceId: "prune-progress",
-          sourceSequence: 1,
-          occurredAt: 0,
-          runId: "prune-run",
-          targetId: "synthetic-target",
-        },
-        options,
-      );
-    } finally {
-      clock.mockRestore();
-    }
+    const receipt = decisionReceipt();
+    recordAuditEventInDatabase(input(), options);
+    prepareExecutionIdentityContextAtAdmission(admissionFacts(receipt.runId), {
+      ...options,
+      contextId: receipt.contextId,
+      executionId: receipt.executionId,
+    });
+    recordExecutionDecisionFactInDatabase(receipt, { ...options, now: 0 });
+    recordOutboundMessageProgressInDatabase(
+      {
+        ...messageEvent("message.outbound.queued"),
+        sourceSequence: 1,
+      },
+      options,
+    );
+    clock.mockRestore();
     await closeOpenClawStateDatabaseAsync();
 
     pruneFault.enable();
@@ -370,15 +326,12 @@ describe("audit writer shared worker", () => {
     pruneFault.disable();
     await closeOpenClawStateDatabaseAsync();
     expect(
-      openOpenClawStateDatabase(database)
-        .db.prepare(`
-          SELECT
-            (SELECT count(*) FROM audit_events) AS events,
-            (SELECT count(*) FROM execution_identity_contexts) AS identity_contexts,
-            (SELECT count(*) FROM execution_decision_facts) AS decisions,
-            (SELECT count(*) FROM outbound_message_progress) AS progress
-        `)
-        .get(),
-    ).toEqual({ events: 0, identity_contexts: 1, decisions: 0, progress: 0 });
+      rowCounts(openOpenClawStateDatabase(database).db, [
+        "audit_events",
+        "execution_identity_contexts",
+        "execution_decision_facts",
+        "outbound_message_progress",
+      ]),
+    ).toEqual([0, 1, 0, 0]);
   });
 });
