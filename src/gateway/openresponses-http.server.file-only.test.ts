@@ -53,14 +53,7 @@ async function postInput(input: unknown, instructions?: string) {
     payloads: [{ text: "ok", mediaUrl: null }],
     meta: { durationMs: 0 },
   });
-  const res = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-openclaw-scopes": "operator.write",
-    },
-    body: JSON.stringify({ model: "openclaw", input, instructions }),
-  });
+  const res = await request(input, instructions);
   expect(res.status, await res.text()).toBe(200);
   expect(agentCommandMock).toHaveBeenCalledTimes(1);
   return agentCommandMock.mock.calls[0]?.[0] as {
@@ -68,6 +61,14 @@ async function postInput(input: unknown, instructions?: string) {
     images?: unknown[];
     extraSystemPrompt?: string;
   };
+}
+
+function request(input: unknown, instructions?: string) {
+  return fetch(`http://127.0.0.1:${port}/v1/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-openclaw-scopes": "operator.write" },
+    body: JSON.stringify({ model: "openclaw", input, instructions }),
+  });
 }
 
 function message(content: unknown) {
@@ -81,13 +82,17 @@ function createInputImage() {
   } as const;
 }
 
-function createInputFile(filename: string) {
+function createInputFile(
+  filename: string,
+  text = `contents of ${filename}`,
+  mediaType = "text/plain",
+) {
   return {
     type: "input_file",
     source: {
       type: "base64",
-      media_type: "text/plain",
-      data: Buffer.from(`contents of ${filename}`).toString("base64"),
+      media_type: mediaType,
+      data: Buffer.from(text).toString("base64"),
       filename,
     },
   } as const;
@@ -121,19 +126,7 @@ describe("OpenResponses file-only input that renders to images", () => {
       ],
     });
     const opts = await postInput(
-      [
-        message([
-          {
-            type: "input_file",
-            source: {
-              type: "base64",
-              media_type: "application/pdf",
-              data: Buffer.from("%PDF-1.4 scanned").toString("base64"),
-              filename: "scan.pdf",
-            },
-          },
-        ]),
-      ],
+      [message([createInputFile("scan.pdf", "%PDF-1.4 scanned", "application/pdf")])],
       "Describe the attached scan.",
     );
     expect(opts.message ?? "").not.toBe("");
@@ -189,14 +182,7 @@ describe("OpenResponses file-only input that renders to images", () => {
       type: index % 2 === 0 ? "input_image" : "input_file",
       source: { type: "url", url: `https://example.com/historical-${index}` },
     }));
-    const res = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-openclaw-scopes": "operator.write" },
-      body: JSON.stringify({
-        model: "openclaw",
-        input: [message(parts), message("Answer without fetching history.")],
-      }),
-    });
+    const res = await request([message(parts), message("Answer without fetching history.")]);
     expect(res.status).toBe(400);
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(extractFileContentFromSourceMock).not.toHaveBeenCalled();

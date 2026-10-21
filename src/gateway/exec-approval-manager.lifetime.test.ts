@@ -100,10 +100,7 @@ describe("ExecApprovalManager lifetime", () => {
     const record = manager.create({ command: "tail -F app.log" }, 60_000);
     await manager.register(record, 60_000);
     await manager.resolveDetailed(record.id, "allow-once", { kind: "device", id: "control-ui" });
-    const prepared = manager.prepareConsumeAllowOnce(record.id, "cron.add:watcher");
-    if (!prepared) {
-      throw new Error("expected live approval consumption");
-    }
+    const prepared = expectDefined(manager.prepareConsumeAllowOnce(record.id, "cron.add:watcher"));
     const consume = () =>
       runOpenClawStateWriteTransaction((database) => {
         prepared.assertCurrent();
@@ -154,10 +151,9 @@ describe("ExecApprovalManager lifetime", () => {
       record.approvalAuthority = () => active;
       await manager.register(record, 60_000);
       await manager.resolveDetailed(record.id, "allow-once", { kind: "device", id: "control-ui" });
-      const prepared = manager.prepareConsumeAllowOnce(record.id, "cron.add:watcher");
-      if (!prepared) {
-        throw new Error("expected live approval consumption");
-      }
+      const prepared = expectDefined(
+        manager.prepareConsumeAllowOnce(record.id, "cron.add:watcher"),
+      );
       if (change === "run closes") {
         active = false;
       } else if (change === "grace expires") {

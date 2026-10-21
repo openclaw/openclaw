@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalDecision, ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
@@ -161,13 +162,11 @@ describe("ExecApprovalManager", () => {
   }
 
   async function runTimer(timer: ApprovalClockWake | undefined, preserveNow = false) {
-    if (!timer) {
-      throw new Error("expected scheduled wake");
-    }
+    const wake = expectDefined(timer, "scheduled wake");
     if (!preserveNow) {
-      vi.spyOn(Date, "now").mockReturnValue(Math.max(Date.now(), timer.atMs));
+      vi.spyOn(Date, "now").mockReturnValue(Math.max(Date.now(), wake.atMs));
     }
-    await timer.run();
+    await wake.run();
   }
 
   it("expires resolved approval grace after elapsed time despite a wall-clock rollback", async (testContext) => {
@@ -571,10 +570,7 @@ describe("ExecApprovalManager", () => {
       } else {
         const denied = { status: "denied", terminalReason: "storage-corrupt" };
         if (recovery === "lookup") {
-          const pending = await readStored();
-          if (!pending) {
-            throw new Error("expected durable pending approval");
-          }
+          const pending = expectDefined(await readStored(), "durable pending approval");
           expect(pending.status).toBe("pending");
           expect(
             await manager.reconcileDurableLookup({ outcome: "found", record: pending }),
@@ -668,10 +664,7 @@ describe("ExecApprovalManager", () => {
       approvalKind: "exec",
       persistence: { runtimeEpoch: "runtime-a", databaseOptions },
     });
-    const durable = await readStored();
-    if (!durable) {
-      throw new Error("expected durable approval");
-    }
+    const durable = expectDefined(await readStored(), "durable approval");
     expect(await snapshot()).toMatchObject({
       decision: "allow-once",
       requestedByDeviceId: "device-owner",
