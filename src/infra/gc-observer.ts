@@ -1,4 +1,5 @@
 import { GCProfiler } from "node:v8";
+import { isMainThread } from "node:worker_threads";
 
 export type GcSample = {
   kind: "scavenge" | "mark_sweep_compact" | "incremental" | "weak_processing";
@@ -90,7 +91,8 @@ export function observeGcSamples(publish: (samples: GcSample[]) => void): (() =>
     profiler.start();
     // A per-GC PerformanceObserver wakes idle workers after every collection and
     // can sustain a collection loop. Native profiling only wakes JS on this cadence.
-    timer = setInterval(() => drain(true), 1000).unref();
+    // Bound worker batches so retirement does not drain a full second of native GC records.
+    timer = setInterval(() => drain(true), isMainThread ? 1000 : 100).unref();
   }
   subscribers.add(publish);
   return () => {

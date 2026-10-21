@@ -1052,7 +1052,9 @@ individual worker heap usage for each label set. It is a gauge for context, not 
 byte counter or a sum of simultaneous worker heaps. It can miss peaks between
 samples, and remains visible after the last worker exits.
 
-Workers report through the existing periodic memory channel. Task replies carry
+Workers report through the existing periodic memory channel. The native sampler
+drains worker GC batches every 100 ms (the main thread remains at one second).
+Task replies carry
 only a completion marker, without a heap read or another per-task round trip.
 Healthy retirement flushes the last GC batch and heap sample over the same channel
 before stopping the worker, with a 100 ms best-effort limit. Collection requires
