@@ -39,10 +39,7 @@ import {
 } from "./sessions-rewind.handler.test-support.js";
 import type { GatewayClient } from "./types.js";
 
-const mocks = vi.hoisted(() => ({
-  readMediaBuffer: vi.fn(),
-  upstreamFork: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ readMediaBuffer: vi.fn(), upstreamFork: vi.fn() }));
 
 // Queued sources stay idle: this boundary only cuts history and settles pending work.
 vi.mock("../../auto-reply/reply/queue/drain.js", () => ({
@@ -142,10 +139,7 @@ beforeEach(async () => {
   setRuntimeConfigSnapshot(cfg);
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
-    {
-      sessionId: sourceSessionId,
-      updatedAt: Date.now(),
-    },
+    { sessionId: sourceSessionId, updatedAt: Date.now() },
   );
   const scope = { agentId: "main", sessionId: sourceSessionId, sessionKey };
   await appendTranscriptEvent(scope, { type: "session", id: sourceSessionId, version: 3 });
@@ -349,10 +343,7 @@ describe("session message-cut methods", () => {
     expectCutReply(fork, expect.objectContaining({ sessionKey: expect.any(String) }));
     expect(
       await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey: forkKey ?? "" }),
-    ).toMatchObject({
-      createdActor: { type: "human", id: profile.id },
-      sandbox: "required",
-    });
+    ).toMatchObject({ createdActor: { type: "human", id: profile.id }, sandbox: "required" });
     expect(
       await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey }),
     ).not.toHaveProperty("sandbox");
@@ -576,11 +567,7 @@ describe("session message-cut methods", () => {
       createdAt: expect.any(Number),
     });
     expect((await listSessionStateEventsSince(forkKey ?? "", "main", 0, 20)).events).toContainEqual(
-      expect.objectContaining({
-        kind: "created",
-        actorType: "human",
-        actorId: profileId,
-      }),
+      expect.objectContaining({ kind: "created", actorType: "human", actorId: profileId }),
     );
 
     const rewind = await invoke("sessions.rewind", "user-entry");
@@ -694,10 +681,7 @@ function installUpstreamForkHarness(
   executionEnvironment?: "host-only",
   contract: "dual" | "legacy" | "v2" = "v2",
 ): void {
-  const sessionFork = {
-    upstreamKinds: ["codex-app-server" as const],
-    fork: mocks.upstreamFork,
-  };
+  const sessionFork = { upstreamKinds: ["codex-app-server" as const], fork: mocks.upstreamFork };
   installHarness({
     ...(contract !== "v2"
       ? { ...(executionEnvironment ? { executionEnvironment } : {}), sessionFork }

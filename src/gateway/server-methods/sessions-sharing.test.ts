@@ -41,6 +41,7 @@ import { canReceivePreparedSessionEvent } from "../session-sharing.test-utils.js
 import type { SessionsListResult } from "../session-utils.types.js";
 import { controlUiHandlers } from "./control-ui.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
+import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionReadHandlers as registeredSessionReadHandlers } from "./sessions-read.js";
 import {
@@ -280,23 +281,13 @@ it("admits bare fixed-store keys only through their persisted owner", () =>
       { agentId: "ops", sessionKey: "global", storePath },
       { sessionId: "session-ops-global", updatedAt: 1, visibility: "shared" },
     );
-    const ownedConfig = {
-      session: { scope: "global", store: storePath },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+    const ownedConfig = fixedStoreOwnershipConfig(storePath);
 
     expect(
       await call("session.members.list", { sessionKey: "global" }, context(vi.fn(), ownedConfig)),
     ).toMatchObject([[true, { sessionKey: "global", role: "owner" }, undefined]]);
 
-    const ownerlessConfig = {
-      ...ownedConfig,
-      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-    } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+    const ownerlessConfig = fixedStoreOwnershipConfig(storePath, false);
     const rejected = await call(
       "session.members.list",
       { sessionKey: "global" },

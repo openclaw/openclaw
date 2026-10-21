@@ -669,12 +669,7 @@ it.each(
       const guards =
         guardKind === "sessionMutationCommitGuard"
           ? { sessionMutationCommitGuard: assertCurrent }
-          : {
-              sessionMutationAuthorization: {
-                assertCurrent,
-                assertTargetCurrent: vi.fn(),
-              },
-            };
+          : { sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: vi.fn() } };
       probe.admission(workerAdmission, (request, grant, callback) => {
         workerCommitGrant = request.stage === "commit";
         if (workerCommitGrant) {
