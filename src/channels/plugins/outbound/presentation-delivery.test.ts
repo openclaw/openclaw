@@ -13,9 +13,11 @@ function createHandler(capabilities: ChannelPresentationCapabilities) {
 }
 
 const tablePresentation: MessagePresentation = {
+  title: "Status",
   blocks: [
     {
       type: "table",
+      caption: "Session status",
       headers: ["Item", "Value"],
       rows: [["Model", "anthropic/claude-haiku-4-5"]],
     },
