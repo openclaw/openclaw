@@ -500,10 +500,8 @@ export const en: TranslationMap & {
   communityInvite: {
     title: "Community",
     body: "Connect, ask questions, share what you build.",
-    discord: "Chat with the community",
-    reddit: "Discussions and ideas",
-    x: "News and updates",
-    opensNewTab: "Links open in a new tab.",
+    dismissForever: "Dismiss and don't show again",
+    dismissFailed: "Invitation dismissed, but your preference couldn't be saved.",
     joinPlatform: "Join the OpenClaw community on {platform}",
     followPlatform: "Follow OpenClaw on {platform}",
   },
