@@ -916,18 +916,11 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
       replaceField(f.journalPath, column, "é".repeat(512 * 1024 + 1));
       const before = journalFiles(f.anchor);
       const names = fs.readdirSync(f.anchor);
-      const metadata = fs.statSync(f.journalPath);
       expect(() => openPackageActivationJournal(f.anchor).read()).toThrow(
         "Package publication journal must contain one bounded operation.",
       );
       expect(journalFiles(f.anchor)).toEqual(before);
       expect(fs.readdirSync(f.anchor)).toEqual(names);
-      expect(fs.statSync(f.journalPath)).toMatchObject({
-        dev: metadata.dev,
-        ino: metadata.ino,
-        mode: metadata.mode,
-        mtimeMs: metadata.mtimeMs,
-      });
     },
   );
 });

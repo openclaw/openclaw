@@ -30,7 +30,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { prepareTrajectoryPayload } from "../trajectory/runtime-payload.js";
-import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   encodeArchiveContent,
   TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
@@ -52,6 +52,14 @@ import {
 } from "./state-migrations.transcript-directives.test-support.js";
 
 const tempDirs: string[] = [];
+const NO_CHANGES = { changes: [], warnings: [] };
+const archivesCursor = (sessionId = "", generation = "") => ({
+  generation,
+  phase: "archives",
+  scope: "all",
+  sessionId,
+  version: 2,
+});
 
 function openLegacyAgentDatabase(stateDir: string, agentId = "main") {
   // These active stores have known-empty deletion history before their legacy bytes exist.
@@ -92,6 +100,24 @@ function fixture() {
     read: (session: string, seq: number) => readEventJson(opened.path, session, seq),
     database: requireNativeSqliteDatabase(opened.db),
   };
+}
+
+function seedSessions(
+  database: Parameters<typeof insertSession>[0],
+  sessions: Record<string, FixtureEvent[]>,
+  storage: string,
+) {
+  for (const [name, events] of Object.entries(sessions)) {
+    if (storage === "zstd") {
+      for (const event of events) {
+        event.fixturePadding = "compression fixture ".repeat(256);
+      }
+    }
+    insertSession(database, { events, generation: `${name}-before`, sessionId: `${name}-session` });
+  }
+  if (storage === "zstd") {
+    compressTranscriptRows(database);
+  }
 }
 
 function competingWriter(stateDir: string, env: NodeJS.ProcessEnv) {
@@ -162,25 +188,15 @@ describe("historical transcript directive migration", () => {
         "Reacted [[react_to_current: ✅]] without a fact",
         30,
       );
-      if (storage === "zstd") {
-        for (const event of [tagged, user, tool, code, reaction]) {
-          event.fixturePadding = "compression fixture ".repeat(256);
-        }
-      }
-      for (const [name, events] of Object.entries({
-        tagged: [tagged, user, tool],
-        code: [code],
-        reaction: [reaction],
-      })) {
-        insertSession(database, {
-          events,
-          generation: `${name}-before`,
-          sessionId: `${name}-session`,
-        });
-      }
-      if (storage === "zstd") {
-        compressTranscriptRows(database);
-      }
+      seedSessions(
+        database,
+        {
+          tagged: [tagged, user, tool],
+          code: [code],
+          reaction: [reaction],
+        },
+        storage,
+      );
 
       const archivedTagged = textEvent(
         "archived-tagged",
@@ -254,25 +270,19 @@ describe("historical transcript directive migration", () => {
       expect(readGeneration(databasePath, "reaction-session")).not.toBe("reaction-before");
       expect(readGeneration(databasePath, "code-session")).toBe("code-before");
 
-      const { DatabaseSync } = requireNodeSqlite();
-      const migratedDb = new DatabaseSync(databasePath, { readOnly: true });
-      let archivedRow: { archive_blob: Uint8Array; archive_sha256: string };
-      try {
-        expect(
-          migratedDb
-            .prepare(
-              "SELECT session_id FROM session_transcript_fts WHERE session_transcript_fts MATCH ?",
-            )
-            .all("Final"),
-        ).toContainEqual({ session_id: "tagged-session" });
-        archivedRow = migratedDb
-          .prepare(
-            "SELECT archive_blob,archive_sha256 FROM session_transcript_archives WHERE session_id = ?",
-          )
-          .get("archived-session") as typeof archivedRow;
-      } finally {
-        migratedDb.close();
-      }
+      expect(
+        readDatabaseRow(
+          databasePath,
+          "SELECT session_id FROM session_transcript_fts WHERE session_transcript_fts MATCH ? AND session_id = ?",
+          "Final",
+          "tagged-session",
+        ),
+      ).toEqual({ session_id: "tagged-session" });
+      const archivedRow = readDatabaseRow(
+        databasePath,
+        "SELECT archive_blob,archive_sha256 FROM session_transcript_archives WHERE session_id = ?",
+        "archived-session",
+      ) as { archive_blob: Uint8Array; archive_sha256: string };
       expect(createHash("sha256").update(archivedRow.archive_blob).digest("hex")).toBe(
         archivedRow.archive_sha256,
       );
@@ -293,10 +303,7 @@ describe("historical transcript directive migration", () => {
         reaction: readGeneration(databasePath, "reaction-session"),
       };
       const archiveBytesAfterFirstRun = fs.readFileSync(archivePath);
-      await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
-        changes: [],
-        warnings: [],
-      });
+      await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual(NO_CHANGES);
       expect(readGeneration(databasePath, "tagged-session")).toBe(generationsAfterFirstRun.tagged);
       expect(readGeneration(databasePath, "reaction-session")).toBe(
         generationsAfterFirstRun.reaction,
@@ -309,19 +316,10 @@ describe("historical transcript directive migration", () => {
   it("completes a pre-stuck archives cursor when the optional table is absent", async () => {
     const { env, opened, database, databasePath } = fixture();
     opened.db.exec("DROP TABLE session_transcript_archives");
-    writeMetadata(database, {
-      generation: "",
-      phase: "archives",
-      scope: "all",
-      sessionId: "",
-      version: 2,
-    });
+    writeMetadata(database, archivesCursor());
     closeOpenClawAgentDatabasesForTest();
 
-    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
+    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual(NO_CHANGES);
     expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete", version: 2 });
     expect(hasTranscriptArchivesTable(databasePath)).toBe(false);
   });
@@ -332,13 +330,7 @@ describe("historical transcript directive migration", () => {
       const { stateDir, env, opened, database, databasePath } = fixture();
       const event = textEvent("assistant-expired", "[[reply_to_current]] Migrating");
       const archiveBytes = Buffer.from(`${JSON.stringify(event)}\n`);
-      const archiveCursor = {
-        generation: "",
-        phase: "archives",
-        scope: "all",
-        sessionId: "",
-        version: 2,
-      };
+      const archiveCursor = archivesCursor();
       let archivePath = "";
       if (scope === "schema") {
         opened.db.exec(`
@@ -478,10 +470,7 @@ describe("historical transcript directive migration", () => {
       "archived-canonical",
     );
 
-    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
+    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual(NO_CHANGES);
 
     expect(opened.db.isOpen).toBe(true);
     expect(
@@ -527,10 +516,7 @@ describe("historical transcript directive migration", () => {
       .db.prepare("UPDATE agent_database_leases SET owner_pid = ? WHERE lease_id = ?")
       .run(2_147_483_647, leaseId);
 
-    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
+    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual(NO_CHANGES);
     expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete", version: 2 });
   });
 
@@ -653,13 +639,7 @@ it.each([
       "historical-transcript-directives-v1",
       cursorPhase === "complete"
         ? { phase: "complete", version: 2 }
-        : {
-            phase: "archives",
-            generation: "generation",
-            scope: "all",
-            sessionId: "complete-recovery",
-            version: 2,
-          },
+        : archivesCursor("complete-recovery", "generation"),
     );
     metadata("historical-canonical-transcript-archive-recovery-v1", {
       rows: [
@@ -803,21 +783,7 @@ it.each(["identity", "zstd"])(
       unrecorded: [unrecorded],
       archived: [],
     };
-    for (const [name, events] of Object.entries(sessions)) {
-      if (storage === "zstd") {
-        for (const event of events) {
-          event.fixturePadding = "compression fixture ".repeat(256);
-        }
-      }
-      insertSession(database, {
-        events,
-        generation: `${name}-before`,
-        sessionId: `${name}-session`,
-      });
-    }
-    if (storage === "zstd") {
-      compressTranscriptRows(database);
-    }
+    seedSessions(database, sessions, storage);
     insertTrajectory(
       database,
       "multi-session",
@@ -874,24 +840,23 @@ it.each(["identity", "zstd"])(
     const restoredArchive = `${restored(archived)}\n${JSON.stringify(archivedUser)}\n`;
     expect(readSessionArchiveContentSync(archivePath)).toBe(restoredArchive);
     expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete", version: 2 });
-    {
-      using migrated = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      const row = migrated
-        .prepare("SELECT app_version FROM schema_meta WHERE meta_key = ?")
-        .get("historical-transcript-masked-provider-restored-v1") as { app_version: string };
-      expect(JSON.parse(row.app_version)).toEqual({
-        archiveLines: ["archived-session:archive-gen:1"],
-        transcriptRows: { "multi-session": [0, 2] },
-      });
-      // The session index holds no provider, so it stays current without a rebuild.
-      expect(
-        migrated
-          .prepare(
-            "SELECT needs_rebuild, indexed_seq FROM session_transcript_index_state WHERE session_id = ?",
-          )
-          .get("multi-session"),
-      ).toEqual({ needs_rebuild: 0, indexed_seq: 3 });
-    }
+    const recorded = readDatabaseRow(
+      databasePath,
+      "SELECT app_version FROM schema_meta WHERE meta_key = ?",
+      "historical-transcript-masked-provider-restored-v1",
+    );
+    expect(JSON.parse(String(recorded?.app_version))).toEqual({
+      archiveLines: ["archived-session:archive-gen:1"],
+      transcriptRows: { "multi-session": [0, 2] },
+    });
+    // Provider-only restoration leaves the already-current search index intact.
+    expect(
+      readDatabaseRow(
+        databasePath,
+        "SELECT needs_rebuild, indexed_seq FROM session_transcript_index_state WHERE session_id = ?",
+        "multi-session",
+      ),
+    ).toEqual({ needs_rebuild: 0, indexed_seq: 3 });
     expect(
       fs
         .readdirSync(path.dirname(databasePath))
@@ -900,10 +865,7 @@ it.each(["identity", "zstd"])(
 
     const archiveAfterFirstRun = fs.readFileSync(archivePath);
     const generationAfterFirstRun = readGeneration(databasePath, "multi-session");
-    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
+    await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual(NO_CHANGES);
     expect(readGeneration(databasePath, "multi-session")).toBe(generationAfterFirstRun);
     expect(fs.readFileSync(archivePath)).toEqual(archiveAfterFirstRun);
   },

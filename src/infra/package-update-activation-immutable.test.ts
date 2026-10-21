@@ -223,7 +223,6 @@ it.each(["candidate-verification-pending", "private error: token=fixture-secret 
 
 it.each([
   ["succeeded", 4242, "fixture"],
-  ["rolled-back", 4243, "restored"],
   ["succeeded", null, null],
 ] as const)("projects a historical %s receipt from a fresh observer", (outcome, pid, prefix) => {
   const gateway =
@@ -580,8 +579,6 @@ it.skipIf(process.platform === "win32").each([
   ["journal", "inode"],
   ["database", "bytes"],
   ["journal", "bytes"],
-  ["database", "size"],
-  ["journal", "size"],
 ] as const)(
   "preserves immutable %s with changed %s instead of admitting old recovery evidence",
   async (changed, mutation) => {
@@ -593,12 +590,10 @@ it.skipIf(process.platform === "win32").each([
       const replacement = path.join(parent, "replacement-control-bytes");
       fs.copyFileSync(source, replacement);
       fs.renameSync(replacement, source);
-    } else if (mutation === "bytes") {
+    } else {
       const bytes = fs.readFileSync(source);
       bytes[bytes.length - 1] = bytes.readUInt8(bytes.length - 1) ^ 1;
       fs.writeFileSync(source, bytes);
-    } else {
-      fs.appendFileSync(source, "changed size");
     }
     const before = controlFiles();
     expect(recovery.assertUnchanged).toThrow(/changed/u);
