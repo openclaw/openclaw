@@ -52,10 +52,6 @@ type IdentityProps = { identity: GitHubIdentityModel };
 
 export function GitHubUnloadedStatus(props: { request: RequestStatus }) {
   const completed = createMemo(() => props.request.statusCompletion);
-  const label = () => {
-    completed();
-    return t("githubConnections.notLoaded");
-  };
   return (
     <Errored
       fallback={(_error) => (
@@ -73,7 +69,9 @@ export function GitHubUnloadedStatus(props: { request: RequestStatus }) {
         on={props.request.statusCompletion}
         fallback={<SettingsStatus kind="muted" label={t("githubConnections.checking")} />}
       >
-        <SettingsStatus kind="muted" label={label()} />
+        <Show when={completed() === undefined}>
+          <SettingsStatus kind="muted" label={t("githubConnections.notLoaded")} />
+        </Show>
       </Loading>
     </Errored>
   );

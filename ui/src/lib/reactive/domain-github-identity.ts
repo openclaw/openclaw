@@ -16,8 +16,16 @@ export function createGitHubIdentityView(deps: Parameters<typeof createGitHubIde
     const observe = () => {
       const completion = owner.read().mutationCompletion;
       if (completion && completion !== previous) {
-        // The native error boundary consumes this same admitted result.
-        void showSaving(completion).catch(() => {});
+        // Commit the owner's busy publication before the action holds its frame.
+        void Promise.resolve()
+          .then(() => {
+            if (owner.read().mutationCompletion === completion) {
+              return showSaving(completion);
+            }
+            return undefined;
+          })
+          // The native error boundary consumes this same admitted result.
+          .catch(() => {});
       }
       previous = completion;
     };

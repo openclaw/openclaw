@@ -190,6 +190,7 @@ describe("GitHub identity view", () => {
       <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
     ));
     const oldSaving = identity.configure();
+    await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(view.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
     sync({ agentId: "replacement" });
@@ -199,6 +200,7 @@ describe("GitHub identity view", () => {
     identity.setDraft("token", "synthetic-new-token");
     flush();
     const saving = identity.configure();
+    await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(view.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
     oldSecret.resolve({ ok: true });
@@ -277,10 +279,12 @@ describe("GitHub identity view", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
     routed.getByRole("button", { name: "Save Identity" }).click();
+    await vi.advanceTimersByTimeAsync(0);
     flush();
     let destination: HTMLElement | undefined;
     try {
       expect(routed.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
+      expect(routed.getByRole("button", { name: "Verify" })).toHaveProperty("disabled", true);
       view.getByRole("button", { name: "Open destination" }).click();
       await vi.advanceTimersByTimeAsync(0);
       flush();
@@ -395,6 +399,7 @@ describe("GitHub identity view", () => {
     expect(view.container.querySelector(".settings-secret input")).toBe(input);
     expect(document.activeElement).toBe(input);
     const saving = identity.configure();
+    await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(input.disabled).toBe(true);
     expect(input.value).toBe("synthetic-pat");
