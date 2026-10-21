@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resolveConfiguredLiveProviderModels } from "../media-generation/live-test-helpers.js";
 export { resolveLiveAuthStore as resolveLiveVideoAuthStore } from "../media-generation/live-test-helpers.js";
 
-// Env/config filters can override this default live-test matrix.
 export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   alibaba: "alibaba/wan2.6-t2v",
   byteplus: "byteplus/seedance-1-0-lite-t2v-250428",
@@ -24,12 +23,8 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
 };
 
 const REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS = new Set(["alibaba", "google", "qwen", "xai"]);
-const TOGETHER_BUFFER_BACKED_IMAGE_TO_VIDEO_MODEL = "Wan-AI/wan2.7-i2v";
 
-type LiveVideoModel = {
-  providerId: string;
-  modelRef: string;
-};
+type LiveVideoModel = { providerId: string; modelRef: string };
 
 // Conservative resolutions avoid unsupported defaults and costly smoke lanes.
 export function resolveLiveVideoResolution(
@@ -54,20 +49,14 @@ export function resolveConfiguredLiveVideoModels(cfg: OpenClawConfig): Map<strin
 
 export function canRunBufferBackedVideoToVideoLiveLane(params: LiveVideoModel): boolean {
   const providerId = normalizeLowercaseStringOrEmpty(params.providerId);
-  // Some providers only accept remote URL references in live video-to-video
-  // lanes; skip buffer-backed coverage for those providers.
+  // These providers require remote URL references, not buffers.
   if (REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS.has(providerId)) {
     return false;
   }
   if (providerId !== "runway") {
     return providerId !== "fal" || params.modelRef.includes("reference-to-video");
   }
-  const slash = params.modelRef.indexOf("/");
-  const model =
-    slash <= 0 || slash === params.modelRef.length - 1
-      ? params.modelRef.trim()
-      : params.modelRef.slice(slash + 1).trim();
-  return model === "gen4_aleph";
+  return params.modelRef.replace(/^[^/]+\//u, "").trim() === "gen4_aleph";
 }
 
 export function canRunBufferBackedImageToVideoLiveLane(params: LiveVideoModel): boolean {
@@ -81,8 +70,5 @@ export function canRunBufferBackedImageToVideoLiveLane(params: LiveVideoModel): 
     const model = params.modelRef.replace(/^[^/]+\//u, "");
     return ["wan2.6-t2v", "wan2.6-i2v", "wan2.7-r2v"].includes(model);
   }
-  if (providerId === "together") {
-    return params.modelRef.includes(TOGETHER_BUFFER_BACKED_IMAGE_TO_VIDEO_MODEL);
-  }
-  return true;
+  return providerId !== "together" || params.modelRef.includes("Wan-AI/wan2.7-i2v");
 }
