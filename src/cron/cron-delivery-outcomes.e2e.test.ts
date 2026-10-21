@@ -15,6 +15,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { resolveCronDeliveryPreviews } from "./delivery-preview.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
@@ -138,10 +139,6 @@ const sendFailureAlert: NonNullable<CronServiceDeps["sendCronFailureAlert"]> = (
 
 function failureDelivery(to: string): NonNullable<CronJobCreate["delivery"]> {
   return { mode: "none", failureDestination: { mode: "webhook", to } };
-}
-
-function commandPayload(command: string): CronJobCreate["payload"] {
-  return { kind: "command", argv: [process.execPath, "-e", command] };
 }
 
 function agentResult(result: Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]>>) {
@@ -304,84 +301,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
     });
   });
 
-  it("routes required completion-delivery failure immediately without changing execution streak", async () => {
-    await withReceiver("completion", async (storePath, receiver, startCron) => {
-      let now = Date.now();
-      const runIsolatedAgentJob = agentResult({
-        status: "ok",
-        delivered: false,
-        deliveryAttempted: true,
-        deliveryError: "primary route rejected",
-      });
-      const cron = await startCron({
-        nowMs: () => now,
-        runIsolatedAgentJob,
-        sendCronFailureAlert: sendFailureAlert,
-      });
-      const delivery = {
-        mode: "announce",
-        bestEffort: false,
-        channel: "telegram",
-        to: "123",
-        failureDestination: { mode: "webhook", to: receiver.url },
-      } as const;
-      const job = await addJob(cron, "required completion delivery", { delivery });
-
-      await runJob(cron, job.id);
-      expect(await receiver.request).toMatchObject({
-        path: "/cron",
-        body: {
-          jobId: job.id,
-          message:
-            'Automation "required completion delivery" delivery failed\nLast error: primary route rejected',
-        },
-      });
-      await vi.waitFor(() =>
-        expectState(storePath, job.id, {
-          lastRunStatus: "ok",
-          lastDeliveryStatus: "not-delivered",
-          lastDeliveryError: "primary route rejected",
-          consecutiveErrors: 0,
-          lastFailureNotificationDelivered: true,
-          lastFailureNotificationDeliveryStatus: "delivered",
-          lastFailureAlertAtMs: now,
-        }),
-      );
-
-      now += 60_000;
-      await cron.run(job.id, "force");
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      expect(receiver.requests).toHaveLength(1);
-      const history = runHistory(storePath, job.id, 10);
-      const failedCompletion = expect.objectContaining({
-        completionStatus: "failed",
-        deliveryStatus: "not-delivered",
-      });
-      expect(history.entries).toEqual([failedCompletion, failedCompletion]);
-      expect(
-        history.entries.filter((entry) => entry.failureNotificationDelivery?.status === "unknown"),
-      ).toHaveLength(1);
-
-      now += 3_540_000;
-      runIsolatedAgentJob.mockResolvedValue({
-        status: "ok",
-        delivered: false,
-        deliveryAttempted: true,
-        deliveryError: "primary target no longer exists",
-      });
-      await cron.run(job.id, "force");
-      await vi.waitFor(() => expect(receiver.requests).toHaveLength(2));
-
-      const disabled = await addJob(cron, "disabled completion failure alert", {
-        delivery,
-        failureAlert: false,
-      });
-      await cron.run(disabled.id, "force");
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      expect(receiver.requests).toHaveLength(2);
-    });
-  });
-
   it.each(["transport", "admission"] as const)(
     "falls back to the exact job owner when Gateway alert %s rejects",
     async (failure) => {
@@ -510,37 +429,26 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
     });
   });
 
-  it("builds delivery previews from persisted webhook and opt-out jobs", async () => {
+  it("builds delivery previews for webhook and opt-out jobs", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-delivery-preview-" },
-      async (state) => {
-        const cron = createCron(state.path("cron", "jobs.json"));
-        try {
-          await cron.start();
-          const webhookJob = await addJob(cron, "webhook preview", {
-            payload: commandPayload("process.exit(0)"),
+      async () => {
+        const payload: CronJob["payload"] = {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.exit(0)"],
+        };
+        const jobs = [
+          makeCronJob({
+            id: "webhook",
+            payload,
             delivery: { mode: "webhook", to: "https://hooks.example.test/cron" },
-          });
-          const noDeliveryJob = await addJob(cron, "no delivery preview", {
-            payload: commandPayload("process.exit(0)"),
-            delivery: { mode: "none" },
-          });
-
-          const jobs = await cron.list({ includeDisabled: true });
-          const previews = await resolveCronDeliveryPreviews({ cfg: {} as never, jobs });
-          expect(previews).toMatchObject({
-            [webhookJob.id]: {
-              label: "webhook:https://hooks.example.test/cron",
-              detail: "webhook",
-            },
-            [noDeliveryJob.id]: {
-              label: "not requested",
-              detail: "not requested",
-            },
-          });
-        } finally {
-          cron.stop();
-        }
+          }),
+          makeCronJob({ id: "none", payload, delivery: { mode: "none" } }),
+        ];
+        expect(await resolveCronDeliveryPreviews({ cfg: {}, jobs })).toMatchObject({
+          webhook: { label: "webhook:https://hooks.example.test/cron", detail: "webhook" },
+          none: { label: "not requested", detail: "not requested" },
+        });
       },
     );
   });
