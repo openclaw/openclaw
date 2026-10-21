@@ -61,6 +61,7 @@ suite.define(() => {
           role: "assistant",
           __openclaw: { id: "deferred-image", seq: 2 },
           content: [
+            { type: "text", text: "The image loads within this message." },
             {
               type: "image",
               url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
@@ -68,17 +69,48 @@ suite.define(() => {
             },
           ],
         };
-        await gateway.setHistoryMessages([initialMessage, imageMessage]);
-        await gateway.emitGatewayEvent("session.message", {
-          message: imageMessage,
-          sessionKey,
-          messageId: "deferred-image",
-          messageSeq: 2,
-          activeRunIds: [],
-          hasActiveRun: false,
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await composer.fill("Keep this draft while the image loads");
+        const releaseImage = Promise.withResolvers<void>();
+        await page.route(mediaModules[0]!, async (route) => {
+          await releaseImage.promise;
+          await route.continue();
         });
+        const requestedImage = page.waitForRequest(mediaModules[0]!);
+        try {
+          await gateway.setHistoryMessages([initialMessage, imageMessage]);
+          await gateway.emitGatewayEvent("session.message", {
+            message: imageMessage,
+            sessionKey,
+            messageId: "deferred-image",
+            messageSeq: 2,
+            activeRunIds: [],
+            hasActiveRun: false,
+          });
+          await requestedImage;
+          await page
+            .locator("[data-message-id]")
+            .getByText("The image loads within this message.", { exact: true })
+            .waitFor();
+          await page.evaluate(
+            () =>
+              new Promise<void>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              }),
+          );
+          expect(await page.locator("[data-message-id] .lazy-view-state--loading").count()).toBe(0);
+          expect(await composer.inputValue()).toBe("Keep this draft while the image loads");
+          expect(await composer.evaluate((element) => element === document.activeElement)).toBe(
+            true,
+          );
+        } finally {
+          releaseImage.resolve();
+        }
         await page.locator('.chat-message-images img[alt="Deferred transcript image"]').waitFor();
         expect(mediaRequests().length).toBeGreaterThan(0);
+        expect(await composer.inputValue()).toBe("Keep this draft while the image loads");
+        expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
+        await composer.fill("");
 
         await page.setViewportSize({ width: 600, height: 900 });
         await page.locator('.agent-chat__composer-shell[data-mobile-composer="true"]').waitFor();

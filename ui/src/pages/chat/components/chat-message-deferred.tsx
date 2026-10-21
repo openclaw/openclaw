@@ -1,5 +1,4 @@
 import { lazy, Loading, Show } from "solid-js";
-import { LoadingState } from "../../../components/solid/loading-state.tsx";
 
 const Images = lazy(() => import("./chat-message-images-solid.tsx"), {
   export: "MessageImages",
@@ -22,7 +21,7 @@ export function MessageImages(
 ) {
   return (
     <Show when={props.images.length + (props.previews?.length ?? 0) > 0}>
-      <Loading fallback={<LoadingState />}>
+      <Loading>
         <Images {...props} />
       </Loading>
     </Show>
@@ -34,7 +33,7 @@ export function AssistantAttachments(
 ) {
   return (
     <Show when={props.attachments.length > 0}>
-      <Loading fallback={<LoadingState />}>
+      <Loading>
         <Attachments {...props} />
       </Loading>
     </Show>
@@ -45,7 +44,7 @@ export function MessageAttachment(
   props: Parameters<typeof import("./chat-message-attachments-solid.tsx").MessageAttachment>[0],
 ) {
   return (
-    <Loading fallback={<LoadingState />}>
+    <Loading>
       <Attachment {...props} />
     </Loading>
   );
@@ -55,7 +54,7 @@ export function ToolPreview(
   props: Parameters<typeof import("./widget-card-view.tsx").ToolPreview>[0],
 ) {
   return (
-    <Loading fallback={<LoadingState />}>
+    <Loading>
       <Preview {...props} />
     </Loading>
   );
@@ -65,7 +64,7 @@ export function ChatClawHubCard(
   props: Parameters<typeof import("./chat-clawhub-card.tsx").ChatClawHubCard>[0],
 ) {
   return (
-    <Loading fallback={<LoadingState />}>
+    <Loading>
       <Recommendation {...props} />
     </Loading>
   );

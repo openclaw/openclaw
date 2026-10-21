@@ -62,6 +62,7 @@ it("keeps Swarm progress between the transcript and composer", async () => {
   textarea.focus();
   expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();
   renderChatInto(container, { ...props, swarm: { sessionKey, sessions } });
+  await vi.dynamicImportSettled();
   const widget = await waitForSolid(() =>
     requireElement(container, "[data-test-id=chat-swarm]", "Swarm progress"),
   );
@@ -93,6 +94,7 @@ it("places inline approval above the composer and enforces its grant projection"
     const container = renderChatView({ ...approvalProps, approvalCanGrant, approvalErrors });
     document.body.append(container);
     onTestFinished(() => container.remove());
+    await vi.dynamicImportSettled();
     const host = await waitForSolid(() =>
       expectDefined(
         container.querySelector<SolidBridgeElement<object>>("openclaw-exec-approval-card"),
