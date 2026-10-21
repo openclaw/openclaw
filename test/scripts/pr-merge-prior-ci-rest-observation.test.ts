@@ -248,7 +248,8 @@ describePosix("prior-CI whole REST observation fallback", () => {
   );
 
   it("requires merged receipt during admission", () => {
-    const f = unknownGraphqlCandidate({
+    const f = unknownGraphqlCandidate();
+    configureMerge(f, {
       restMergeCommit: "missing",
       restObservation: {
         afterRestMainReads: 7,
