@@ -3,78 +3,66 @@ import { vi } from "vitest";
 import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
 import type { BaseComponentInteraction, ModalInteraction } from "../internal/discord.js";
 
-const createComponentInteractionBase = (senderId = "123456789") => {
-  const reply = vi.fn().mockResolvedValue(undefined);
-  const defer = vi.fn().mockResolvedValue(undefined);
-  const rest = {
-    get: vi.fn().mockResolvedValue({ type: ChannelType.DM }),
-    post: vi.fn().mockResolvedValue({}),
-    patch: vi.fn().mockResolvedValue({}),
-    delete: vi.fn().mockResolvedValue(undefined),
-  };
-  return {
-    reply,
-    defer,
-    client: { rest },
-    user: { id: senderId, username: "AgentUser", discriminator: "0001" },
-    message: { id: "msg-1" },
-  };
-};
+const createInteractionBase = (senderId = "123456789") => ({
+  reply: vi.fn().mockResolvedValue(undefined),
+  client: {
+    rest: {
+      get: vi.fn().mockResolvedValue({ type: ChannelType.DM }),
+      post: vi.fn().mockResolvedValue({}),
+      patch: vi.fn().mockResolvedValue({}),
+      delete: vi.fn().mockResolvedValue(undefined),
+    },
+  },
+  user: { id: senderId, username: "AgentUser", discriminator: "0001" },
+});
 
 export const createComponentButtonInteraction = (
   overrides: Partial<BaseComponentInteraction> = {},
   senderId?: string,
 ) => {
-  const base = createComponentInteractionBase(senderId);
+  const base = createInteractionBase(senderId);
+  const defer = vi.fn().mockResolvedValue(undefined);
   const interaction = {
     rawData: { channel_id: "dm-channel", id: "interaction-1" },
     customId: "occomp:cid=btn_1",
+    defer,
+    message: { id: "msg-1" },
     ...base,
     ...overrides,
   } as unknown as BaseComponentInteraction;
-  return { interaction, defer: base.defer, reply: base.reply };
+  return { interaction, defer, reply: base.reply };
 };
 
 export const createComponentSelectInteraction = (
   overrides: Partial<BaseComponentInteraction> = {},
-) => {
-  const base = createComponentInteractionBase();
-  const interaction = {
-    rawData: { channel_id: "dm-channel", id: "interaction-select-1" },
+) =>
+  createComponentButtonInteraction({
+    rawData: {
+      channel_id: "dm-channel",
+      id: "interaction-select-1",
+    } as BaseComponentInteraction["rawData"],
     customId: "occomp:cid=sel_1",
     values: ["alpha"],
-    ...base,
     ...overrides,
-  } as unknown as BaseComponentInteraction;
-  return { interaction, defer: base.defer, reply: base.reply };
-};
+  });
 
 export const createModalInteraction = (overrides: Partial<ModalInteraction> = {}) => {
-  const reply = vi.fn().mockResolvedValue(undefined);
+  const base = createInteractionBase();
   const acknowledge = vi.fn().mockResolvedValue(undefined);
-  const rest = {
-    get: vi.fn().mockResolvedValue({ type: ChannelType.DM }),
-    post: vi.fn().mockResolvedValue({}),
-    patch: vi.fn().mockResolvedValue({}),
-    delete: vi.fn().mockResolvedValue(undefined),
-  };
-  const fields = {
-    getText: (key: string) => (key === "fld_1" ? "Casey" : undefined),
-    getStringSelect: (_key: string) => undefined,
-    getRoleSelect: (_key: string) => [],
-    getUserSelect: (_key: string) => [],
-  };
   const interaction = {
+    ...base,
     rawData: { channel_id: "dm-channel", id: "interaction-2" },
-    user: { id: "123456789", username: "AgentUser", discriminator: "0001" },
     customId: "ocmodal:mid=mdl_1",
-    fields,
     acknowledge,
-    reply,
-    client: { rest },
+    fields: {
+      getText: (key: string) => (key === "fld_1" ? "Casey" : undefined),
+      getStringSelect: (_key: string) => undefined,
+      getRoleSelect: (_key: string) => [],
+      getUserSelect: (_key: string) => [],
+    },
     ...overrides,
   } as unknown as ModalInteraction;
-  return { interaction, acknowledge, reply };
+  return { interaction, acknowledge, reply: base.reply };
 };
 
 export const createButtonEntry = (
@@ -99,13 +87,6 @@ export const createModalEntry = (
   sessionKey: "session-2",
   agentId: "agent-2",
   accountId: "default",
-  fields: [
-    {
-      id: "fld_1",
-      name: "name",
-      label: "Name",
-      type: "text",
-    },
-  ],
+  fields: [{ id: "fld_1", name: "name", label: "Name", type: "text" }],
   ...overrides,
 });
