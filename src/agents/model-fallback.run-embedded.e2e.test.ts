@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import type { ModelFallbackAvailability } from "./agent-scope.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
@@ -363,6 +364,42 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       });
     },
   );
+
+  it.each([
+    {
+      name: "MCP runtime cleanup failure",
+      createError: () => new Error("MCP runtime cleanup could not confirm closure"),
+    },
+    {
+      name: "CLI history ownership change",
+      createError: () => new Error("CLI history owner changed before preparation"),
+    },
+    {
+      name: "current-turn transcript admission change",
+      createError: () =>
+        new SessionTranscriptReadFenceError(
+          "Current-turn transcript admission identity changed: test-entry",
+        ),
+    },
+  ])("does not advance to another model after $name", async ({ createError }) => {
+    await withDefaultAuth(async ({ agentDir, workspaceDir }) => {
+      const runtimeFault = createError();
+      runEmbeddedAttemptMock.mockRejectedValue(runtimeFault);
+      const result = await runEmbeddedEntryFallback(
+        { agentDir, workspaceDir },
+        "local-runtime-fault",
+        {
+          runId: "announce:requester-settle:test:local-runtime-fault",
+          fallbacksOverride: ["groq/mock-2", "groq/mock-3"],
+        },
+      ).catch((error: unknown) => error);
+
+      expectProviderAttemptCounts({ openai: 1, groq: 0 });
+      expect(result).toBeInstanceOf(Error);
+      expect(result).toMatchObject({ message: runtimeFault.message });
+      expect(suspendSessionMock).not.toHaveBeenCalled();
+    });
+  });
 
   it("keeps a pinned model on its rate-limit surface instead of escalating to fallback", async () => {
     await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {

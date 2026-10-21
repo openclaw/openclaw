@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { diagnosticErrorFailureKind } from "../infra/diagnostic-error-metadata.js";
 import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
@@ -617,6 +618,30 @@ describe("buildFailoverRemediationHint", () => {
 });
 
 describe("isNonProviderRuntimeCoordinationError", () => {
+  it.each([
+    {
+      name: "MCP runtime cleanup failure",
+      createError: () => new Error("MCP runtime cleanup could not confirm closure"),
+    },
+    {
+      name: "CLI history ownership change",
+      createError: () => new Error("CLI history owner changed before preparation"),
+    },
+    {
+      name: "current-turn transcript admission change",
+      createError: () =>
+        new SessionTranscriptReadFenceError(
+          "Current-turn transcript admission identity changed: test-entry",
+        ),
+    },
+  ])("treats $name as local coordination", ({ createError }) => {
+    const error = createError();
+    expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
+    expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+    expect(coerceToFailoverError(error)).toBeNull();
+    expectReason(error, null);
+  });
+
   it("returns true for stale gateway lifecycle ownership loss", () => {
     const staleLifecycle = createAgentRunStaleLifecycleError();
     expect(isNonProviderRuntimeCoordinationError(staleLifecycle)).toBe(true);

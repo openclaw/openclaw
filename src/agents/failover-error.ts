@@ -64,6 +64,11 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "WorkerWorkspaceReconciliationError",
   "ActiveTurnClaimError",
   "SqliteWorkerError",
+  "SessionTranscriptReadFenceError",
+]);
+const RUNTIME_COORDINATION_ERROR_MESSAGES = new Set([
+  "MCP runtime cleanup could not confirm closure",
+  "CLI history owner changed before preparation",
 ]);
 
 export { recordModelFallbackStop } from "./model-fallback-stop.js";
@@ -308,6 +313,7 @@ function hasRuntimeCoordinationFailure(err: unknown): boolean {
     (candidate) =>
       isSessionWorkStartInvalidatedError(candidate) ||
       RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||
+      RUNTIME_COORDINATION_ERROR_MESSAGES.has(readDirectErrorMessage(candidate) ?? "") ||
       resolveExecutionApprovalFailureMessage(readDirectErrorMessage(candidate)) !== undefined,
   );
 }
