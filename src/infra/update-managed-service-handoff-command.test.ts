@@ -1,11 +1,9 @@
 // Managed-service handoff command tests cover immutable update target serialization.
-import { EventEmitter } from "node:events";
 import { symlinkSync, unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -18,8 +16,8 @@ import {
   createManagedHandoffTempDirTracker,
   readManagedHandoffArtifacts,
 } from "./update-managed-service-handoff-artifacts.test-support.js";
+import { createReadyManagedServiceChild } from "./update-managed-service-handoff-command.test-support.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease.js";
-import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn());
@@ -31,28 +29,7 @@ const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-command-${pro
 const systemRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function createReadyChild(_command: string, args: string[], readyDelayMs = 0) {
-  const child = Object.assign(new EventEmitter(), {
-    pid: process.pid,
-    exitCode: null,
-    signalCode: null,
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    unref: vi.fn(),
-  });
-  process.nextTick(() => {
-    const ready = () =>
-      signalMockManagedUpdateHandoffReady({
-        child,
-        paramsPath: readManagedHandoffArtifacts(args).paramsPath,
-        cleanups: mockedHandoffLeaseCleanups,
-      });
-    if (readyDelayMs > 0) {
-      setTimeout(ready, readyDelayMs);
-    } else {
-      ready();
-    }
-  });
-  return child;
+  return createReadyManagedServiceChild(args, mockedHandoffLeaseCleanups, readyDelayMs);
 }
 
 vi.mock("node:child_process", async () => {
@@ -126,16 +103,7 @@ async function startHandoffAndReadCommand(params: {
   env?: NodeJS.ProcessEnv;
   restartDelayMs?: number;
   restartDrainTimeoutMs?: number;
-}): Promise<{
-  command: string;
-  commandArgv: string[] | undefined;
-  recoveryCommandArgv: string[];
-  triageCommandArgv: string[];
-  triageContextCommand: string;
-  parentExitTimeoutMs: number;
-  parentExitDeadlineAt: number;
-  spawnEnv: NodeJS.ProcessEnv | undefined;
-}> {
+}) {
   const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
   const result = await startManagedServiceUpdateHandoff({
     runId: params.runId,
@@ -181,14 +149,9 @@ async function startHandoffAndReadCommand(params: {
   );
   expect(metaFile.meta?.runId).toBe(params.runId);
   return {
+    ...helperParams,
     command: result.command,
-    commandArgv: helperParams.commandArgv,
-    recoveryCommandArgv: helperParams.recoveryCommandArgv,
-    triageCommandArgv: helperParams.triageCommandArgv,
-    triageContextCommand: helperParams.triageContextCommand,
-    parentExitTimeoutMs: helperParams.parentExitTimeoutMs,
-    parentExitDeadlineAt: helperParams.parentExitDeadlineAt,
-    spawnEnv: spawnCall?.[2]?.env,
+    spawnEnv: spawnCall[2].env,
   };
 }
 
@@ -492,21 +455,20 @@ describe("managed service update handoff command", () => {
         placement: { kind: "attached" as const, invocation: "a".repeat(32) },
       },
     };
-    const payload = JSON.stringify({
+    const identity = { pid: 123, startIdentity: "17" };
+    const payloadFields = {
       version: 2,
-      executor: { pid: 123, startIdentity: "17" },
-      helper: { pid: 123, startIdentity: "17" },
+      executor: identity,
+      helper: identity,
       action,
-    });
+    } as const;
+    const payload = JSON.stringify(payloadFields);
     const lease: ManagedHandoffLease = {
+      ...payloadFields,
       key: MOCK_INSTALL_ROOT,
       owner: "synthetic",
       updatedAt: 1,
       payload,
-      version: 2,
-      executor: { pid: 123, startIdentity: "17" },
-      helper: { pid: 123, startIdentity: "17" },
-      action,
     };
     const databasePath = resolveManagedUpdateLeaseDatabasePath();
     await fs.mkdir(path.dirname(databasePath), { recursive: true, mode: 0o700 });
@@ -641,8 +603,7 @@ describe("managed service update handoff command", () => {
       },
     });
 
-    expect(result.spawnEnv?.KEEP).toBe("value");
-    expect(result.spawnEnv?.OPENCLAW_UPDATE_RUN_ID).toBe(runId);
+    expect(result.spawnEnv).toMatchObject({ KEEP: "value", OPENCLAW_UPDATE_RUN_ID: runId });
     expect(
       withEnv(
         { OPENCLAW_UPDATE_DEV_TARGET_REF: result.spawnEnv?.OPENCLAW_UPDATE_DEV_TARGET_REF },
