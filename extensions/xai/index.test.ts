@@ -6,6 +6,7 @@ import {
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import type { ModelProviderConfig, OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerAuthRuntimeMocks = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ const providerAuthRuntimeMocks = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => providerAuthRuntimeMocks);
 
 import plugin from "./index.js";
+import { applyXaiOAuthConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildLiveXaiProvider } from "./provider-catalog.js";
 import setupPlugin from "./setup-api.js";
@@ -145,6 +147,85 @@ describe("xai provider plugin", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  it("preserves the existing primary during OAuth setup", () => {
+    const model = { primary: "openai/retained-model", fallbacks: ["xai/grok-4.3"] };
+    const provider: ModelProviderConfig = {
+      api: "openai-responses",
+      auth: "oauth",
+      baseUrl: "https://cli-chat-proxy.grok.com/v1",
+      models: [],
+    };
+    expect(
+      applyXaiOAuthConfig({ agents: { defaults: { model: structuredClone(model) } } }, provider)
+        .agents?.defaults?.model,
+    ).toEqual(model);
+  });
+
+  const proxyUrl = "https://cli-chat-proxy.grok.com/v1";
+  const apiUrl = "https://api.x.ai/v1";
+  it.each([
+    ["oauth", undefined, proxyUrl, "oauth"],
+    ["token", proxyUrl, proxyUrl, "token"],
+    ["token", apiUrl, apiUrl, undefined],
+    ["api_key", undefined, apiUrl, undefined],
+  ] as const)(
+    "keeps the static catalog on the selected %s route (%s)",
+    async (mode, baseUrl, expectedUrl, expectedAuth) => {
+      const result = await registeredProvider.staticCatalog?.run({
+        config: baseUrl ? { models: { providers: { xai: { baseUrl, models: [] } } } } : {},
+        env: {},
+        resolveProviderAuth: () => ({
+          mode,
+          source: "profile",
+          apiKey: undefined,
+          discoveryApiKey: "selected-fixture",
+        }),
+        resolveProviderApiKey: () => ({ apiKey: "unselected-fixture" }),
+      });
+      assert(result && "provider" in result, "expected a static xAI catalog");
+      expect([result.provider.baseUrl, result.provider.auth]).toEqual([expectedUrl, expectedAuth]);
+      expect(result.provider.models[0]?.id).toBe("grok-4.7");
+      expect(result.provider.models.some((model) => model.id === "auto")).toBe(false);
+    },
+  );
+
+  it.each([
+    { name: "an existing selection", primary: "xai/grok-4.5", expected: "xai/grok-4.5" },
+    { name: "a fresh selection", primary: undefined, expected: "xai/grok-4.7" },
+  ])("applies registered API-key setup with $name", async ({ primary, expected }) => {
+    const method = registeredProvider.auth.find((entry) => entry.id === "api-key");
+    assert(method?.runNonInteractive, "expected the non-interactive xAI API-key method");
+    const fallbacks = ["xai/grok-4.3", "xai/grok-build-0.1"];
+    const pinned = { alias: "Pinned", params: { temperature: 0.7 } };
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { ...(primary ? { primary } : {}), fallbacks: [...fallbacks] },
+          models: { "xai/grok-4.5": structuredClone(pinned) },
+        },
+      },
+    };
+    const result = await method.runNonInteractive({
+      authChoice: "xai-api-key",
+      config,
+      baseConfig: config,
+      opts: {},
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: (code) => {
+          throw new Error("Unexpected setup exit: " + code);
+        },
+      },
+      resolveApiKey: async () => ({ key: "synthetic-existing-profile", source: "profile" }),
+      toApiKeyCredential: () => {
+        throw new Error("Existing profile must not be rewritten");
+      },
+    });
+    expect(result?.agents?.defaults?.model).toEqual({ primary: expected, fallbacks });
+    expect(result?.agents?.defaults?.models?.["xai/grok-4.5"]).toEqual(pinned);
   });
 
   it("registers SuperGrok usage through xAI OAuth only", async () => {
@@ -458,15 +539,28 @@ describe("xai provider plugin", () => {
     expect(prepare(explicit)).toBe(explicit);
   });
 
+  function resolveModel(modelId: string, api = "openai-responses") {
+    return registeredProvider.resolveDynamicModel?.({
+      provider: "xai",
+      modelId,
+      modelRegistry: { find: () => null } as never,
+      providerConfig: { api, baseUrl: "https://api.x.ai/v1" },
+    } as never);
+  }
+
+  it("resolves curated rows and their aliases from the manifest", () => {
+    expect(resolveModel("xai/GROK-4.3")).toMatchObject({
+      id: "grok-4.3",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
+      cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+    });
+  });
+
   it("owns forward-compatible Grok model resolution", () => {
-    const resolve = (modelId: string, api: string) =>
-      registeredProvider.resolveDynamicModel?.({
-        provider: "xai",
-        modelId,
-        modelRegistry: { find: () => null } as never,
-        providerConfig: { api, baseUrl: "https://api.x.ai/v1" },
-      } as never);
-    expect(resolve("grok-4.3", "openai-completions")).toMatchObject({
+    expect(resolveModel("grok-4.3", "openai-completions")).toMatchObject({
       id: "grok-4.3",
       provider: "xai",
       api: "openai-completions",
@@ -475,11 +569,43 @@ describe("xai provider plugin", () => {
       input: ["text", "image"],
       contextWindow: 1_000_000,
     });
-    expect(resolve("grok-build-latest", "openai-responses")).toMatchObject({
+    expect(resolveModel("grok-build-latest")).toMatchObject({
       id: "grok-4.5",
       reasoning: true,
       contextWindow: 500_000,
     });
+    const expectModel = (input: string, id: string, fields: Record<string, unknown> = {}) =>
+      expect(resolveModel(input)).toMatchObject({
+        provider: "xai",
+        api: "openai-responses",
+        baseUrl: "https://api.x.ai/v1",
+        reasoning: true,
+        contextWindow: 1_000_000,
+        maxTokens: 64_000,
+        id,
+        ...fields,
+      });
+    const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const thinking = { minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "high" };
+    expectModel("grok-4-1-fast", "grok-4-1-fast", { cost: zeroCost });
+    expectModel("grok-4.5-latest", "grok-4.5", {
+      thinkingLevelMap: { off: null, ...thinking },
+      input: ["text", "image"],
+      contextWindow: 500_000,
+    });
+    expectModel("grok-4.3-latest", "grok-4.3", {
+      thinkingLevelMap: { off: "none", ...thinking },
+      input: ["text", "image"],
+    });
+    expectModel("grok-4.20-0309-reasoning", "grok-4.20-0309-reasoning", {
+      input: ["text", "image"],
+      maxTokens: 30_000,
+    });
+    expectModel("grok-3-mini-fast", "grok-3-mini-fast", { input: ["text"], cost: zeroCost });
+  });
+
+  it("refuses the unsupported multi-agent endpoint ids", () => {
+    expect(resolveModel("grok-4.20-multi-agent-experimental-beta-0304")).toBeUndefined();
   });
 
   it("marks modern Grok refs without accepting multi-agent ids", () => {

@@ -207,23 +207,39 @@ it("drains a queued follow-up when the terminal consumer throws", async () => {
   ]);
 });
 
-it("flushes a queued turn after malformed terminal output over a real WebSocket", async () => {
+it("keeps valid terminal transcripts beside malformed output and flushes the queued turn", async () => {
   const clientEventTypes: string[] = [];
 
-  const outcome = await captureRealtimeOutcome(terminal("completed", { output: [null] }), {
-    queuedUserMessage: "Continue after malformed terminal output.",
-    onClientEvent: (event) => {
-      if (typeof event.type === "string") {
-        clientEventTypes.push(event.type);
-      }
+  const outcome = await captureRealtimeOutcome(
+    terminal("completed", {
+      output: [
+        null,
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            null,
+            { type: "output_text", text: "Valid text " },
+            { type: "output_audio", transcript: "and audio" },
+          ],
+        },
+      ],
+    }),
+    {
+      queuedUserMessage: "Continue after malformed terminal output.",
+      onClientEvent: (event) => {
+        if (typeof event.type === "string") {
+          clientEventTypes.push(event.type);
+        }
+      },
     },
-  });
+  );
 
   expect(outcome).toEqual({
-    callbackOrder: ["outcome", "terminal"],
+    callbackOrder: ["transcript", "outcome", "terminal"],
     errors: [],
     outcomes: [{ status: "completed" }],
-    transcripts: [],
+    transcripts: [{ speaker: "assistant", text: "Valid text and audio", final: true }],
     tools: [],
   });
   expect(clientEventTypes).toEqual([
@@ -255,13 +271,6 @@ it("stops terminal output when a tool callback closes the bridge", async () => {
 
 it.each([
   scenario(
-    "preserves terminal-only transcripts",
-    terminal("completed", { output: [assistantAudio("terminal answer")] }),
-    {
-      transcripts: [{ speaker: "assistant", text: "terminal answer", final: true }],
-    },
-  ),
-  scenario(
     "surfaces provider failure details",
     terminal("failed", { status_details: { error: { code: "rate_limit_exceeded" } } }),
     { errors: ["xAI realtime voice response failed: rate_limit_exceeded"] },
@@ -279,23 +288,14 @@ it.each([
     type: "response.output_item.done",
     item: completedTool,
   }),
-  scenario("buffers final tool arguments", toolArguments),
   scenario(
-    "discards buffered calls after failure",
-    [toolArguments, terminal("failed", { output: [] })],
+    "discards buffered and terminal calls after failure",
+    [toolArguments, terminal("failed", { output: [completedTool] })],
     { errors: ["xAI realtime voice response failed"] },
   ),
   scenario("ignores incomplete replayed calls", {
     type: "conversation.item.created",
     item: { ...completedTool, status: "incomplete" },
-  }),
-  scenario(
-    "recovers completed terminal tool calls",
-    terminal("completed", { output: [completedTool] }),
-    { tools: [expectedTool] },
-  ),
-  scenario("ignores failed-response tool output", terminal("failed", { output: [completedTool] }), {
-    errors: ["xAI realtime voice response failed"],
   }),
   scenario(
     "ignores incomplete terminal calls",

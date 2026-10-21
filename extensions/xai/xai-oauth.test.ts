@@ -44,13 +44,18 @@ const LOGIN_DEVICE_CODE = {
 };
 const CATALOG_MODEL = { id: "grok-4.6", api_backend: "responses" };
 const fetchImpl = vi.fn<typeof fetch>();
+const tokens = (access_token = "access", refresh_token = "refresh", expires_in = 60) => ({
+  access_token,
+  refresh_token,
+  expires_in,
+});
 
 function mockResponses(...responses: Response[]) {
   responses.forEach((response) => fetchImpl.mockResolvedValueOnce(response));
 }
 
-function mockLoginFetch(deviceCode: object, tokens: object, model: object = CATALOG_MODEL) {
-  mockResponses(...[DEVICE_DISCOVERY, deviceCode, tokens].map((value) => jsonResponse(value)));
+function mockLoginFetch(deviceCode: object, tokenBody: object, model: object = CATALOG_MODEL) {
+  mockResponses(...[DEVICE_DISCOVERY, deviceCode, tokenBody].map((value) => jsonResponse(value)));
   fetchImpl.mockImplementation(async (input) => {
     const url = requestUrl(input);
     if (url.endsWith("/models")) {
@@ -347,9 +352,7 @@ describe("xAI OAuth", () => {
       const auth = transport.get("https://auth.x.ai");
       auth.intercept({ path: "/.well-known/openid-configuration" }).reply(200, DEVICE_DISCOVERY);
       auth.intercept({ path: "/oauth2/device/code", method: "POST" }).reply(200, DEVICE_CODE);
-      auth
-        .intercept({ path: "/oauth2/token", method: "POST" })
-        .reply(200, { access_token: "access", refresh_token: "refresh", expires_in: 60 });
+      auth.intercept({ path: "/oauth2/token", method: "POST" }).reply(200, tokens());
     }
     const origin = transport.get(new URL(redirectStart).origin);
     origin.intercept({ path: new URL(redirectStart).pathname }).reply(async () => {
@@ -402,7 +405,7 @@ describe("xAI OAuth", () => {
         await owner.hold();
         return jsonResponse({ error: "authorization_pending" }, 400);
       }
-      return jsonResponse({ access_token: "access", refresh_token: "refresh", expires_in: 60 });
+      return jsonResponse(tokens());
     });
     await owner.rejectLogin(
       {
@@ -435,11 +438,7 @@ describe("xAI OAuth", () => {
       expect(requestUrl(url)).toBe(TOKEN_URL);
       expect(init?.method).toBe("POST");
       expect(requireStringBody(init)).toContain("refresh_token=refresh-1");
-      return jsonResponse({
-        access_token: "access-2",
-        refresh_token: "refresh-2",
-        expires_in: 120,
-      });
+      return jsonResponse(tokens("access-2", "refresh-2", 120));
     });
     const result = await refresh(LEGACY_TOKEN_URL);
 
@@ -628,14 +627,11 @@ describe("xAI OAuth", () => {
   it("preserves the device-code note link without a complete URI", async () => {
     mockLoginFetch(
       { ...LOGIN_DEVICE_CODE, expires_in: OVERFLOW_SECONDS, interval: OVERFLOW_SECONDS },
-      { access_token: "access-token", refresh_token: "refresh-1", expires_in: 120 },
+      tokens("access-token", "refresh-1", 120),
     );
-    const note = vi.fn<(message: string, title?: string) => Promise<void>>(async () => {});
+    const note = vi.fn(async (_message: string, _title?: string) => {});
     const openUrl = vi.fn(async () => {});
-    await runLogin({
-      openUrl,
-      prompter: createTestWizardPrompter({ note }),
-    });
+    await runLogin({ openUrl, prompter: createTestWizardPrompter({ note }) });
 
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("Code expires in 5 minutes."),
@@ -798,25 +794,19 @@ describe("xAI OAuth", () => {
 
   it("keeps device-code polling deadline monotonic so a wall-clock jump cannot end authorization early", async () => {
     const login = startLogin(() => jsonResponse({ error: "authorization_pending" }, 400));
-    await login.requested.promise; // first token poll complete
+    await login.requested.promise;
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(0);
     expect(login.pollTimes).toHaveLength(1);
 
-    // Jump the wall clock forward by 60s. A Date.now()-seeded deadline would now
-    // read as already expired and terminate the loop; a monotonic deadline is
-    // unaffected and must keep polling at the normal interval.
+    // Only monotonic time may expire device authorization.
     vi.setSystemTime(Date.now() + 60_000);
-    // Advance the normal poll interval; the extra 0ms advances flush the awaited
-    // continuation that resumes the poll loop.
     for (let i = 0; i < 12 && login.pollTimes.length < 2; i++) {
       await vi.advanceTimersByTimeAsync(250);
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(0);
     }
 
-    // The next poll must still fire at the normal interval instead of being
-    // aborted by the (fake) wall-clock jump.
     expect(login.pollTimes.length).toBeGreaterThan(1);
     login.controller.abort();
     await expect(login.outcome).resolves.toMatchObject({ error: expect.any(Error) });

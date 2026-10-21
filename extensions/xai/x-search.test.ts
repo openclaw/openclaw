@@ -1,24 +1,24 @@
 import { jsonResponse, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXaiFetchInspectors } from "./responses-http.test-support.js";
+import { defineSearchCacheTests } from "./search-cache.test-support.js";
 import { createXSearchTool } from "./x-search.js";
 
 const { firstFetchUrl, firstAuthorizationHeader, parseFirstRequestBody } =
   createXaiFetchInspectors("x_search");
 const citation = "https://x.com/openclaw/status/1";
+const textContent = (text: string) => ({
+  type: "output_text",
+  text,
+  annotations: [{ type: "url_citation", url: citation }],
+});
 
 function installXSearchFetch(
   payload: Record<string, unknown> = {
     output: [
       {
         type: "message",
-        content: [
-          {
-            type: "output_text",
-            text: "Found X posts",
-            annotations: [{ type: "url_citation", url: citation }],
-          },
-        ],
+        content: [textContent("Found X posts")],
       },
     ],
     citations: [citation],
@@ -52,6 +52,21 @@ function createConfiguredXSearchTool(config?: Parameters<typeof xaiPluginConfig>
   return tool;
 }
 
+function profileTool(apiKey: string) {
+  const tool = createXSearchTool({
+    config: {},
+    runtimeConfig: {},
+    auth: {
+      hasAuthForProvider: (providerId) => providerId === "xai",
+      resolveApiKeyForProvider: async (providerId) => (providerId === "xai" ? apiKey : undefined),
+    },
+  });
+  if (!tool) {
+    throw new Error("Expected configured X search tool");
+  }
+  return tool;
+}
+
 function search(
   query: string,
   config?: Parameters<typeof xaiPluginConfig>[0],
@@ -59,11 +74,6 @@ function search(
   signal?: AbortSignal,
 ) {
   return createConfiguredXSearchTool(config).execute(query, { query, ...args }, signal);
-}
-
-function cacheSearch(query: string) {
-  return async (cacheTtlMinutes: number) =>
-    (await search(query, { xSearch: { cacheTtlMinutes } })).details as Record<string, unknown>;
 }
 
 afterEach(() => {
@@ -80,22 +90,9 @@ describe("xai x_search tool", () => {
             : "Account B answer",
       }),
     );
-    const tool = (apiKey: string) => {
-      const result = createXSearchTool({
-        config: {},
-        runtimeConfig: {},
-        auth: {
-          hasAuthForProvider: () => true,
-          resolveApiKeyForProvider: async () => apiKey,
-        },
-      });
-      if (!result) {
-        throw new Error("Expected configured X search tool");
-      }
-      return result;
-    };
-    const firstTool = tool("fixture-key-a");
-    const otherTool = tool("fixture-key-b");
+    const firstTool = profileTool("fixture-key-a");
+    const otherTool = profileTool("fixture-key-b");
+    expect(firstTool.name).toBe("x_search");
     const args = { query: "credential-scoped X search cache regression" };
     const first = await firstTool.execute("account-a", args);
     const other = await otherTool.execute("account-b", args);
@@ -112,21 +109,6 @@ describe("xai x_search tool", () => {
     ).toEqual(["Bearer fixture-key-a", "Bearer fixture-key-b"]);
   });
 
-  it("enables x_search from an xAI auth profile and uses it for requests", async () => {
-    const mockFetch = installXSearchFetch();
-    const tool = createXSearchTool({
-      config: {},
-      auth: {
-        hasAuthForProvider: (providerId) => providerId === "xai",
-        resolveApiKeyForProvider: async (providerId) =>
-          providerId === "xai" ? "xai-profile-key" : undefined, // pragma: allowlist secret
-      },
-    });
-    expect(tool?.name).toBe("x_search");
-    await tool?.execute("x-search:auth-profile", { query: "auth profile search" });
-    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-profile-key");
-  });
-
   it("bounds external xAI answers and closes hostile citation metadata", async () => {
     const inlineCitation = { start_index: 0, end_index: 8, url: citation };
     installXSearchFetch({
@@ -138,13 +120,11 @@ describe("xai x_search tool", () => {
       ],
     });
     const { details } = await search("xai-hostile-result", { xSearch: { inlineCitations: true } });
-    expect(details).toEqual(
-      expect.objectContaining({
-        truncated: true,
-        citations: [citation],
-        inlineCitations: [inlineCitation],
-      }),
-    );
+    expect(details).toMatchObject({
+      truncated: true,
+      citations: [citation],
+      inlineCitations: [inlineCitation],
+    });
     expect(JSON.stringify(details)).not.toContain("<|im_start|>");
     expect(JSON.stringify(details).length).toBeLessThan(22_000);
   });
@@ -177,60 +157,15 @@ describe("xai x_search tool", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("does not cache an X search result completed after caller cancellation", async () => {
-    const controller = new AbortController();
-    const reason = new Error("operator cancelled X search after response");
-    const mockFetch = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        controller.abort(reason);
-        return jsonResponse({ output_text: "Cancelled X answer", citations: [] });
-      })
-      .mockResolvedValueOnce(jsonResponse({ output_text: "Recovered X answer", citations: [] }));
-    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
-    const tool = createConfiguredXSearchTool();
-    const query = "unique standalone x_search late-cancel cache regression";
-    await expect(tool.execute("xai-late-cancel", { query }, controller.signal)).rejects.toBe(
-      reason,
-    );
-    const recovered = await tool.execute("xai-late-cancel-retry", { query });
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect((recovered.details as { content?: string }).content).toContain("Recovered X answer");
-  });
-
-  it("bypasses populated X search cache reads and writes at zero TTL", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-    const mockFetch = installXSearchFetch({ output_text: "Fresh X answer" });
-    const cachedSearch = cacheSearch("X search zero TTL cache policy true");
-    mockFetch.mockResolvedValueOnce(jsonResponse({ output_text: "Original X answer" }));
-    await cachedSearch(15);
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const uncached = await cachedSearch(0);
-      expect(uncached.cached).toBeUndefined();
-      expect(uncached.content).toContain("Fresh X answer");
-    }
-    const enabled = await cachedSearch(15);
-    expect(mockFetch).toHaveBeenCalledTimes(3);
-    expect(enabled).toMatchObject({
-      cached: true,
-      content: expect.stringContaining("Original X answer"),
-    });
-  });
-
-  it("applies a shortened X search cache TTL to an existing result", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-    const mockFetch = installXSearchFetch({ output_text: "Fresh X answer" });
-    mockFetch.mockResolvedValueOnce(jsonResponse({ output_text: "Original X answer" }));
-    const cachedSearch = cacheSearch("X search shortened TTL cache policy");
-    await cachedSearch(15);
-    now.mockReturnValue(1_060_000);
-    const refreshed = await cachedSearch(1);
-    const cached = await cachedSearch(1);
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(refreshed.cached).toBeUndefined();
-    expect(refreshed.content).toContain("Fresh X answer");
-    expect(cached).toMatchObject({ cached: true, content: refreshed.content });
-  });
+  defineSearchCacheTests(
+    "X search",
+    (text) => jsonResponse({ output_text: text, citations: [] }),
+    async (query, { ttl, signal }) =>
+      (await search(query, { xSearch: { cacheTtlMinutes: ttl } }, {}, signal)).details as Record<
+        string,
+        unknown
+      >,
+  );
 
   it("uses the xAI Responses x_search tool with structured filters", async () => {
     const mockFetch = installXSearchFetch();
@@ -248,16 +183,14 @@ describe("xai x_search tool", () => {
     });
     expect(mockFetch).toHaveBeenCalled();
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
-    expect(parseFirstRequestBody(mockFetch)).toEqual(
-      expect.objectContaining({
-        model: "grok-4.7",
-        input: [{ role: "user", content: "dinner recipes" }],
-        store: false,
-        reasoning: { effort: "low" },
-        max_turns: 2,
-        tools: [{ type: "x_search", ...filters }],
-      }),
-    );
+    expect(parseFirstRequestBody(mockFetch)).toMatchObject({
+      model: "grok-4.7",
+      input: [{ role: "user", content: "dinner recipes" }],
+      store: false,
+      reasoning: { effort: "low" },
+      max_turns: 2,
+      tools: [{ type: "x_search", ...filters }],
+    });
     expect((result.details as { citations?: string[] }).citations).toEqual([citation]);
   });
 

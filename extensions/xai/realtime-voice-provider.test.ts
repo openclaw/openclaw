@@ -568,32 +568,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     ]);
   });
 
-  it("continues after malformed terminal items and content beside valid text", async () => {
-    const { bridge, socket, onTranscript } = await observe("onTranscript");
-    responseCreated(socket);
-    bridge.sendUserMessage?.("Continue.");
-    socket.emitServer({
-      type: "response.done",
-      response: {
-        status: "completed",
-        output: [
-          null,
-          {
-            type: "message",
-            role: "assistant",
-            content: [
-              null,
-              { type: "output_text", text: "Valid text " },
-              { type: "output_audio", transcript: "and audio" },
-            ],
-          },
-        ],
-      },
-    });
-    expectTail(socket, userMessageEvent("Continue."), { type: "response.create" });
-    expect(onTranscript.mock.calls).toEqual([["assistant", "Valid text and audio", true]]);
-  });
-
   it.each([false, true])(
     "interrupts acknowledged legacy playback (completed=%s)",
     async (completed) => {
@@ -675,6 +649,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     if (completed === undefined) {
       toolArguments(socket, "item_tool_1", "call_1", streamed, toolName);
     }
+    expect(onToolCall).not.toHaveBeenCalled();
     responseDone(socket);
     expect(onToolCall).toHaveBeenCalledExactlyOnceWith({
       itemId: "item_tool_1",

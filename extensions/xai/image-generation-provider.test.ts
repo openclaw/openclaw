@@ -13,15 +13,12 @@ const { auth, http } = vi.hoisted(() => ({
         (params: ImageRequest) => Promise<{ response: Response; release: () => Promise<void> }>
       >(),
     assertOkOrThrowHttpError: vi.fn(async () => {}),
-    resolveProviderHttpRequestConfig: vi.fn((params: Record<string, unknown>) => {
-      const headers = new Headers(params.defaultHeaders as HeadersInit | undefined);
-      return {
-        baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.x.ai/v1",
-        allowPrivateNetwork: false,
-        headers,
-        dispatcherPolicy: undefined,
-      };
-    }),
+    resolveProviderHttpRequestConfig: vi.fn((params: Record<string, unknown>) => ({
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.x.ai/v1",
+      allowPrivateNetwork: false,
+      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+      dispatcherPolicy: undefined,
+    })),
     createProviderOperationDeadline: vi.fn((params: Record<string, unknown>) => ({
       timeoutMs: params.timeoutMs,
       label: params.label,
@@ -41,11 +38,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
     "openclaw/plugin-sdk/provider-http",
   );
-  return {
-    ...actual,
-    ...http,
-    readProviderJsonResponse: actual.readProviderJsonResponse,
-  };
+  return { ...actual, ...http };
 });
 
 function generate(overrides: Partial<GenerateImageParams> = {}) {
@@ -66,9 +59,7 @@ function xaiConfig(overrides: { apiKey?: string; baseUrl?: string }) {
 
 function mockImage(mime_type?: string, b64_json = Buffer.from("testpng").toString("base64")) {
   http.postJsonRequest.mockResolvedValue({
-    response: Response.json({
-      data: [{ b64_json, mime_type }],
-    }),
+    response: Response.json({ data: [{ b64_json, mime_type }] }),
     release: vi.fn(async () => {}),
   });
 }
@@ -86,6 +77,10 @@ function requirePostJsonCall(index = 0): ImageRequest {
     throw new Error(`Expected postJsonRequest call ${index}`);
   }
   return params;
+}
+
+function inputImage(value: string, mimeType = "image/png") {
+  return { buffer: Buffer.from(value), mimeType };
 }
 
 describe("xai image generation provider", () => {
@@ -121,11 +116,7 @@ describe("xai image generation provider", () => {
     }
     vi.stubEnv("XAI_API_KEY", undefined);
     expect(await isConfigured({})).toBe(false);
-    expect(
-      await isConfigured({
-        cfg: xaiConfig({ apiKey: "xai-image-test-key" }),
-      }),
-    ).toBe(true);
+    expect(await isConfigured({ cfg: xaiConfig({ apiKey: "xai-image-test-key" }) })).toBe(true);
   });
 
   it.each([
@@ -150,17 +141,15 @@ describe("xai image generation provider", () => {
       baseUrl: "https://custom.x.ai/v1",
     });
     const request = requirePostJsonCall();
-    expect(request.url).toContain("/images/generations");
     expect(result.model).toBe(model);
     expect(provider.defaultTimeoutMs).toBe(600_000);
     expect(request).toMatchObject({
+      url: "https://custom.x.ai/v1/images/generations",
       timeoutMs: 600_000,
       body: { model, aspect_ratio: "20:9", resolution: "2k" },
     });
     expect(http.resolveProviderOperationTimeoutMs).toHaveBeenCalledWith(
-      expect.objectContaining({
-        defaultTimeoutMs: 600_000,
-      }),
+      expect.objectContaining({ defaultTimeoutMs: 600_000 }),
     );
   });
 
@@ -171,18 +160,16 @@ describe("xai image generation provider", () => {
         "image/png",
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYGD4z0ABAAEfAG0B0xMAAAAASUVORK5CYII=",
       );
-      const buffer = Buffer.from("fakeimage");
       await generate({
         model,
-        prompt: "Render this as a pencil sketch with detailed shading",
-        inputImages: [{ buffer, mimeType: "image/png" }],
+        inputImages: [inputImage("fakeimage")],
       });
 
       const request = requirePostJsonCall();
       expect(request.url).toContain("/images/edits");
       expect(request.body).toMatchObject({
         model,
-        prompt: "Render this as a pencil sketch with detailed shading",
+        prompt: "Combine the references",
         image: { url: expect.stringContaining("data:image/png;base64,"), type: "image_url" },
         response_format: "b64_json",
       });
@@ -193,9 +180,9 @@ describe("xai image generation provider", () => {
     mockImage("image/png", Buffer.from("edited").toString("base64"));
     await generate({
       inputImages: [
-        { buffer: Buffer.from("first"), mimeType: "image/png" },
-        { buffer: Buffer.from("second"), mimeType: "image/jpeg" },
-        { buffer: Buffer.from("third"), mimeType: "image/webp" },
+        inputImage("first"),
+        inputImage("second", "image/jpeg"),
+        inputImage("third", "image/webp"),
       ],
     });
 
@@ -211,10 +198,7 @@ describe("xai image generation provider", () => {
   it("rejects more than three xAI edit references before HTTP", async () => {
     await expect(
       generate({
-        inputImages: Array.from({ length: 4 }, (_, index) => ({
-          buffer: Buffer.from(`reference-${index}`),
-          mimeType: "image/png",
-        })),
+        inputImages: Array.from({ length: 4 }, (_, index) => inputImage(`reference-${index}`)),
       }),
     ).rejects.toThrow("xAI image editing supports up to 3 reference images");
     expect(http.postJsonRequest).not.toHaveBeenCalled();
