@@ -8,8 +8,8 @@ import {
 
 it.each([
   ["active-memory-mvd4zk3v-d58af102", undefined, undefined, false],
-  ["ordinary", "agent:main:active-memory:0123456789ab", undefined, false],
-  [undefined, undefined, "agent:main:active-memory:0123456789ab", false],
+  ["ordinary", "agent:main:explicit:portal-1:active-memory:0123456789ab", undefined, false],
+  [undefined, undefined, "agent:main:telegram:direct:owner:active-memory:0123456789ab", false],
   ["ordinary", "agent:main:explicit:active-memory-notes", undefined, true],
 ] as const)(
   "indexability for id=%s key=%s archive=%s",

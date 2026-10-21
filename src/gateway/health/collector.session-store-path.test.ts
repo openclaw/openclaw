@@ -287,7 +287,7 @@ it.each(["admission-refused", "owner-closed"] as const)(
   },
 );
 
-it.each([
+it.for([
   "before-read",
   "during-read",
   "only-agent",
@@ -411,7 +411,7 @@ it.each([
   },
 );
 
-it.each(["desktop", "certificate"] as const)(
+it.for(["desktop", "certificate"] as const)(
   "publishes status after deletion during the final %s preparation",
   async (phase, { state }) => {
     const cfg = deletionConfig(phase === "desktop");
@@ -458,7 +458,7 @@ it.each(["desktop", "certificate"] as const)(
   },
 );
 
-it.each(["text", "json"] as const)(
+it.for(["text", "json"] as const)(
   "publishes local %s status after final backup preparation",
   async (format, { state }) => {
     const cfg = deletionConfig(true);
@@ -535,7 +535,7 @@ it.each(["text", "json"] as const)(
   },
 );
 
-it.each(["engines", "logs", "usage"] as const)(
+it.for(["engines", "logs", "usage"] as const)(
   "publishes status --all after deletion during %s preparation",
   async (phase, { state }) => {
     const cfg = deletionConfig();
@@ -602,7 +602,7 @@ it.each(["engines", "logs", "usage"] as const)(
   },
 );
 
-it.each([true, false])(
+it.for([true, false])(
   "refills shared-store recent sessions and excludes deleted namespaces (configured: %s)",
   async (configured, { state }) => {
     const storePath = state.statePath("shared.sqlite");
@@ -636,7 +636,7 @@ it.each([true, false])(
   },
 );
 
-it.each(["snapshot", "read-error"] as const)(
+it.for(["snapshot", "read-error"] as const)(
   "handles deletion of a shared store's sole configured reader (%s)",
   async (outcome, { state }) => {
     const storePath = state.statePath("shared.sqlite");

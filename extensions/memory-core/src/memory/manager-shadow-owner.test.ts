@@ -63,16 +63,19 @@ describe("private shadow admission", () => {
       await close();
     });
     const owner = await createShadow("retiring.sqlite");
-    expect(() => owner.db.exec("DELETE FROM memory_index_chunks")).toThrow(/readonly/i);
+    const db = owner.db;
+    expect(() => db.exec("DELETE FROM memory_index_chunks")).toThrow(/readonly/i);
     const closing = owner.closeShadow();
     try {
       await entered.promise;
-      expect(owner).toMatchObject({ db: { isOpen: true }, shadowReleased: false });
+      expect(db.isOpen).toBe(true);
+      expect(owner.shadowReleased).toBe(false);
     } finally {
       released.resolve();
       await closing;
     }
-    expect(owner).toMatchObject({ db: { isOpen: false }, shadowReleased: true });
+    expect(db.isOpen).toBe(false);
+    expect(owner.shadowReleased).toBe(true);
   });
 
   it("queues inherited reentrant callbacks until the native writer settles", async () => {

@@ -15,8 +15,9 @@ import {
 } from "./session-event-wake.js";
 import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
 
-const [resource, root] = process.argv.slice(2);
-assert.ok(root, "The retention fixture requires its owned temporary directory");
+const [resource, rootArgument] = process.argv.slice(2);
+assert.ok(rootArgument, "The retention fixture requires its owned temporary directory");
+const root = rootArgument;
 const context = new AsyncLocalStorage<QueueTimerCaller>();
 
 class QueueTimerCaller {

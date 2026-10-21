@@ -88,7 +88,7 @@ it("refreshes expired claims after sleep and restart", async ({ stateDir }) => {
   expect(await buildDeliveryQueueHealthSummary()).toEqual(failedOnly);
 });
 
-it.each(["failed", "pressure"])(
+it.for(["failed", "pressure"])(
   "keeps a %s queue invalidation received during a health read",
   async (healthKind, { stateDir }) => {
     const ingress = createIngress(stateDir, () => 1_000);

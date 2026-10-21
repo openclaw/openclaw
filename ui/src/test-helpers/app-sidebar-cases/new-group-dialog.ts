@@ -2,6 +2,7 @@ import { describe, expect, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import "../../lib/toast-host.ts";
+import type { SessionGroupMutationResult } from "../app-sidebar.ts";
 import { installDialogPolyfill, submitInputDialog, waitForInputDialog } from "../modal-dialog.ts";
 import { openSubmenu, selectMenuValue } from "../session-menu.ts";
 import { waitForFast } from "../wait-for.ts";
@@ -25,7 +26,7 @@ const waitForClose = () => waitForFast(() => expect(dialog()).toBeNull());
 async function startGroupMove(methods: string[]) {
   onTestFinished(installDialogPolyfill());
   const { sidebar, harness } = await mountMultiSelect(methods);
-  const write = createDeferred<string>();
+  const write = createDeferred<SessionGroupMutationResult>();
   harness.groupsPut.mockReturnValueOnce(write.promise);
   for (const target of targets) {
     click(rowLink(sidebar, target.key), { altKey: true });
