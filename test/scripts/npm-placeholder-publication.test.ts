@@ -143,22 +143,21 @@ describe("npm placeholder publication", () => {
       packageEntry("zoom-meetings", names[0]),
     ]);
     const outputDir = join(tempDirs.make("npm-placeholder-output-parent-"), "publication");
-    const manifest = await createPlaceholderPublication({
+    const manifest = await planPublication({
       repoRoot: root,
       outputDir,
       packages: names.join(","),
-      targetSha: SHA,
-      workflowSha: WORKFLOW_SHA,
       fetchImpl: async () => registryResponse(),
     });
 
-    expect(manifest.packages.map((entry) => entry.packageName)).toEqual(names);
-    expect(manifest.packages.map((entry) => entry.packageDir)).toEqual([
-      "extensions/zoom-meetings",
-      "extensions/comfy",
-    ]);
-    expect(manifest.packages.every((entry) => entry.action === "publish")).toBe(true);
-    expect(manifest.packages.every((entry) => entry.newPackage)).toBe(true);
+    expect(manifest.packages).toMatchObject(
+      names.map((name, index) => ({
+        packageName: name,
+        packageDir: `extensions/${index ? "comfy" : "zoom-meetings"}`,
+        action: "publish",
+        newPackage: true,
+      })),
+    );
     expect(readFileSync(join(outputDir, "npm-placeholder-manifest.json"), "utf8")).toContain(
       `"targetSha": "${SHA}"`,
     );
@@ -174,7 +173,6 @@ describe("npm placeholder publication", () => {
 
   it("requires three stable registry observations during planning", async () => {
     const root = createRepo([packageEntry("comfy", packageName)]);
-
     await expect(
       planPublication({
         repoRoot: root,
@@ -191,10 +189,7 @@ describe("npm placeholder publication", () => {
         packageName,
         registryState(
           { placeholder: "0.0.0" },
-          {
-            integrity: "sha512-different",
-            shasum: "different",
-          },
+          { integrity: "sha512-different", shasum: "different" },
         ),
       ),
     ).toThrow("npm registry tarball bytes differ");

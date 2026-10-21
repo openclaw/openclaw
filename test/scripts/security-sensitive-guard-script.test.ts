@@ -1,16 +1,9 @@
-import { spawnSync } from "node:child_process";
-import {
-  copyFileSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { copyFileSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadSecurityReviewPolicy } from "../../scripts/github/security-review-policy.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runGuardFixture } from "./security-review.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const headSha = "a".repeat(40);
@@ -91,9 +84,6 @@ type Options = {
 
 function runGuard(options: Options = {}) {
   const root = tempDirs.make("security-sensitive-guard-");
-  const eventPath = path.join(root, "event.json");
-  const logPath = path.join(root, "requests.jsonl");
-  const fixturePath = path.join(root, "fixture.json");
   const files = options.files ?? [{ filename: "src/gateway/auth.ts", status: "modified" }];
   const pr = {
     ...pullRequest,
@@ -117,15 +107,6 @@ function runGuard(options: Options = {}) {
     },
     ...options.routes,
   };
-  writeFileSync(
-    eventPath,
-    JSON.stringify({
-      repository: { default_branch: "main" },
-      ...(options.event ?? { pull_request: pr }),
-    }),
-  );
-  writeFileSync(fixturePath, JSON.stringify({ routes, logPath, clock: true }));
-  writeFileSync(logPath, "");
   const script = options.script ?? "security-sensitive-guard";
   let scriptPath = path.resolve(`scripts/github/${script}.mjs`);
   if (options.policy !== undefined) {
@@ -149,33 +130,14 @@ function runGuard(options: Options = {}) {
     symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
     scriptPath = realpathSync(path.join(root, `scripts/github/${script}.mjs`));
   }
-  const result = spawnSync(
-    process.execPath,
-    ["--import", path.resolve("test/fixtures/github-guard-fetch.mjs"), scriptPath],
-    {
-      encoding: "utf8",
-      env: {
-        PATH: process.env.PATH,
-        GITHUB_TOKEN: "fixture-token",
-        GITHUB_EVENT_PATH: eventPath,
-        GITHUB_REPOSITORY: "openclaw/openclaw",
-        GITHUB_RUN_ID: "123",
-        OPENCLAW_GUARD_TEST_FIXTURE: fixturePath,
-      },
-    },
-  );
-  const requests = readFileSync(logPath, "utf8")
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map(
-      (line) =>
-        JSON.parse(line) as {
-          method: string;
-          path?: string;
-          body?: { state?: string; context?: string; body?: string; labels?: string[] };
-        },
-    );
+  const result = runGuardFixture({
+    root,
+    script: scriptPath,
+    routes,
+    event: { repository: { default_branch: "main" }, ...(options.event ?? { pull_request: pr }) },
+    env: { PATH: process.env.PATH },
+  });
+  const { requests } = result;
   return {
     ...result,
     requests,

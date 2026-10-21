@@ -40,12 +40,6 @@ function expectText(text: string, included: string[], excluded: string[] = []) {
   }
 }
 
-function dockerEnv(source: string) {
-  const start = source.indexOf("docker_env=(");
-  const end = source.indexOf(")\n\nforward_env_if_set", start);
-  return { start, end, text: source.slice(start, end) };
-}
-
 function runHotpathCandidate(consentSupported: boolean) {
   const root = mkTempRoot();
   const hotpath = script.slice(
@@ -166,55 +160,14 @@ it("requires Convex leases instead of static credentials", () => {
   );
 });
 
-it("mounts configured output paths before entering the container", () => {
-  expectText(script, [
-    '*) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;',
-    'mkdir -p "$OUTPUT_DIR_HOST"',
-    'printf \'schema=1\\nexit_code=%s\\nlive_output=job_log\\n\' "$rc" > "$OUTPUT_DIR_HOST/run-metadata.txt"',
-    "trap cleanup EXIT",
-    '-v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER"',
-  ]);
-  expectText(
-    dockerEnv(script).text,
-    ['-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER_RELATIVE"'],
-    [
-      '-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"',
-      '-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"',
-    ],
-  );
-});
-
-it("uses the container temp root for OpenClaw runtime scratch files", () => {
-  const { start, end, text } = dockerEnv(script);
-  expect(start).toBeGreaterThanOrEqual(0);
-  expect(end).toBeGreaterThan(start);
-  expect(text).toContain("-e TMPDIR=/tmp");
-});
-
-it("forwards destructive downgrade approval only through the explicit env list", () => {
-  const { end, text } = dockerEnv(script);
-  const forwardingStart = script.indexOf("for key in \\", end);
-  const forwardingEnd = script.indexOf("; do", forwardingStart);
-
-  expect(text).not.toContain("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS");
-  expect(script.slice(forwardingStart, forwardingEnd)).toContain(
-    "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
-  );
-});
-
-it("isolates the trusted private QA harness from the installed package candidate", () => {
+// Mount/env isolation is exercised through captured Docker calls in npm-telegram-upgrade.test.ts.
+it("links runtime dependencies from the trusted QA harness", () => {
   expectText(
     script,
     [
+      '*) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;',
       'cp "$ROOT_DIR/package.json" "$harness_package_json"',
       'node --import tsx "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.mts" "$harness_package_json"',
-      '-v "$harness_package_json:/app/package.json:ro"',
-      '-v "$harness_package_json:/app/extensions/qa-lab/node_modules/openclaw/package.json:ro"',
-      '-v "$ROOT_DIR/node_modules:/trusted-harness/node_modules:ro"',
-      '-v "$ROOT_DIR/.agents:/app/.agents:ro"',
-      ...["dist", "packages", "extensions", "taxonomy.yaml", "qa/scenarios"].map(
-        (entry) => `-v "$ROOT_DIR/${entry}:/app/${entry}:ro"`,
-      ),
       "for dependency_dir in /trusted-harness/node_modules/*",
       "for workspace_dir in /app/packages/* /app/extensions/*",
       'link_harness_dependency "$workspace_dir" "$workspace_name"',
@@ -225,7 +178,6 @@ it("isolates the trusted private QA harness from the installed package candidate
       'cp "$openclaw_package_dir/package.json" /app/package.json',
       "/app/node_modules/openclaw/package.json",
       "link_installed_package_dependency",
-      '-v "$ROOT_DIR:/app',
     ],
   );
 });

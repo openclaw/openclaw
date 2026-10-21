@@ -239,22 +239,20 @@ async function bundleFixture(callerWorkflowPath = workflowPath) {
   const producer = packageProducer(callerWorkflowPath);
   const tarball = Buffer.from("exact publishable root archive");
   const aiTarball = Buffer.from("exact publishable AI archive");
-  const corePackage = {
-    packageName: "@openclaw/ai",
+  const packageEntry = (packageName: string, tarballName: string, bytes: Buffer) => ({
+    packageName,
     packageVersion: "2026.8.1",
-    tarballName: "openclaw-ai-2026.8.1.tgz",
-    tarballSha256: hash(aiTarball),
-  };
+    tarballName,
+    tarballSha256: hash(bytes),
+  });
+  const corePackage = packageEntry("@openclaw/ai", "openclaw-ai-2026.8.1.tgz", aiTarball);
   const manifest = {
     schema: "openclaw.npm-package-bundle/v1",
     producer,
     releaseTag: "v2026.8.1",
     releaseSha: sourceSha,
     npmDistTag: "beta",
-    packageName: "openclaw",
-    packageVersion: "2026.8.1",
-    tarballName: "openclaw-2026.8.1.tgz",
-    tarballSha256: hash(tarball),
+    ...packageEntry("openclaw", "openclaw-2026.8.1.tgz", tarball),
     corePackageTarballs: [corePackage],
     dependencyTarballs: [corePackage],
   };
@@ -887,18 +885,6 @@ it.each([
   expect(existsSync(outputDir)).toBe(false);
 });
 
-it("rejects a substituted tarball before sealing qualification", async () => {
-  const fixture = await bundleFixture();
-  const inputDir = writeBundleInput(fixture, "npm-substitution-");
-  writeFileSync(join(inputDir, fixture.manifest.tarballName), "replacement archive");
-  const outputDir = join(inputDir, "qualified");
-  const proof = await qualificationFixture(fixture.descriptor);
-  await expect(qualifyFixture(fixture.descriptor, inputDir, outputDir, proof)).rejects.toThrow(
-    "tarball digest mismatch",
-  );
-  expect(existsSync(outputDir)).toBe(false);
-});
-
 it("rejects a descriptor for another source or reusable owner", async () => {
   const { descriptor } = await bundleFixture();
   expect(() => validateDescriptor(descriptor, "c".repeat(40))).toThrow("source SHA mismatch");
@@ -906,7 +892,16 @@ it("rejects a descriptor for another source or reusable owner", async () => {
   expect(() => validateDescriptor(descriptor)).toThrow("trusted preflight owner");
 });
 
-it.each<[string, (proof: QualificationFixture) => void, string]>([
+it.each<
+  [string, (proof: QualificationFixture, fixture: BundleFixture, inputDir: string) => void, string]
+>([
+  [
+    "substituted tarball",
+    (_proof, fixture, inputDir) => {
+      writeFileSync(join(inputDir, fixture.manifest.tarballName), "replacement archive");
+    },
+    "tarball digest mismatch",
+  ],
   [
     "source check still running",
     (proof) => Object.assign(proof.jobs[0]!, { status: "in_progress" }),
@@ -953,7 +948,7 @@ it.each<[string, (proof: QualificationFixture) => void, string]>([
   const inputDir = writeBundleInput(fixture, "npm-proof-input-");
   const outputDir = join(inputDir, "qualified");
   const proof = await qualificationFixture(fixture.descriptor);
-  mutate(proof);
+  mutate(proof, fixture, inputDir);
   await expect(qualifyFixture(fixture.descriptor, inputDir, outputDir, proof)).rejects.toThrow(
     expectedError,
   );

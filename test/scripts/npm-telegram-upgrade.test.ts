@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-docker.sh");
+const repoRoot = path.resolve(TEST_DIR, "../..");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scenario = "telegram-published-upgrade-bindings";
 const published = "openclaw@2026.9.6";
@@ -20,7 +21,7 @@ function fixture() {
   const run = (env: NodeJS.ProcessEnv, args = [DOCKER_SCRIPT_PATH]) =>
     spawnSync("bash", args, {
       encoding: "utf8",
-      cwd: path.resolve(TEST_DIR, "../.."),
+      cwd: repoRoot,
       env: {
         ...process.env,
         PATH: `${root}${path.delimiter}${process.env.PATH}`,
@@ -99,6 +100,7 @@ fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
     OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: "ci",
     OPENCLAW_QA_CONVEX_SITE_URL: "https://broker.invalid",
     OPENCLAW_QA_CONVEX_SECRET_CI: "synthetic-fixture-secret",
+    OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: upgrade ? "1" : "",
   });
   expect(result.status, result.stderr).toBe(0);
   const runs = readFileSync(callsPath, "utf8")
@@ -114,8 +116,29 @@ fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
     expect.arrayContaining([
       "OPENCLAW_QA_CONVEX_SECRET_CI",
       `OPENCLAW_NPM_TELEGRAM_UPGRADE_CANDIDATE=${upgrade ? candidatePath : ""}`,
+      "TMPDIR=/tmp",
+      "OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR=.artifacts/qa-e2e/npm-telegram-live-output",
+      `${path.join(root, "output")}:/app/.artifacts/qa-e2e/npm-telegram-live-output`,
+      `${repoRoot}/node_modules:/trusted-harness/node_modules:ro`,
+      ...["dist", "packages", "extensions", ".agents", "taxonomy.yaml", "qa/scenarios"].map(
+        (entry) => `${repoRoot}/${entry}:/app/${entry}:ro`,
+      ),
     ]),
   ]);
   expect(runs[0]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);
   expect(runs[1]?.includes(`${candidate}:${candidatePath}:ro`)).toBe(upgrade);
+  expect(runs[0]?.includes("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS")).toBe(false);
+  expect(runs[1]?.includes("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS")).toBe(upgrade);
+  const harness = runs[1]!.find((arg) => arg.endsWith(":/app/package.json:ro"));
+  expect(harness).toBeDefined();
+  expect(runs[1]).toContain(
+    harness!.replace(
+      ":/app/package.json:ro",
+      ":/app/extensions/qa-lab/node_modules/openclaw/package.json:ro",
+    ),
+  );
+  expect(runs[1]?.some((arg) => arg.startsWith(`${repoRoot}:/app`))).toBe(false);
+  expect(readFileSync(path.join(root, "output/run-metadata.txt"), "utf8")).toBe(
+    "schema=1\nexit_code=0\nlive_output=job_log\n",
+  );
 });
