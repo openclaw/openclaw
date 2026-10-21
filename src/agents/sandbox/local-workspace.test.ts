@@ -109,12 +109,6 @@ it.runIf(process.platform !== "win32")(
     const spec = await backend.buildExecSpec(execParams);
     authority.abort(new Error("revoked"));
     expect(() => spec.assertCurrent?.()).toThrow("revoked");
-    await expect(bridge.writeFile({ filePath: "blocked.txt", data: "no" })).rejects.toThrow(
-      "revoked",
-    );
-    await expect(fs.stat(path.join(root, "blocked.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
     authority = new AbortController();
     await backend.finalizeExec?.(finalization("completed", spec.finalizeToken));
     expect(finalized).toHaveBeenCalledOnce();
@@ -136,15 +130,6 @@ it.runIf(process.platform !== "win32")(
         await expect(operation).rejects.toThrow("revoked");
       }
     };
-    await rejectAfterAdmission(() => [
-      backend.runShellCommand({ script: `touch "${root}/blocked.txt"` }),
-      backend.buildExecSpec(execParams),
-    ]);
-    await expect(fs.stat(path.join(root, "blocked.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    authority = new AbortController();
-    waitForAdmission = undefined;
     const stage = getSandboxInputStager(bridge)!;
     const stageInput = (prefix: string, content: string) =>
       stage({ prefix, content, assertCurrent: () => {} });

@@ -144,45 +144,24 @@ describe("sandbox backend registry", () => {
     expectHooks("docker", [registration.factory, null, null]);
   });
 
-  it("restores distinct entries when the same registration object is installed twice", () => {
-    const backendId = "test-repeated-registration";
-    const shared = createGenerationRegistration("shared");
-    const middle = createGenerationRegistration("middle");
-    const first = registerSandboxBackend(backendId, shared);
-    const second = registerSandboxBackend(backendId, middle);
-    const third = registerSandboxBackend(backendId, shared);
-    third();
-    expectHooks(backendId, [middle.factory, middle.manager, middle.resolveWorkdir]);
-    first();
-    expect(getSandboxBackendFactory(backendId)).toBe(middle.factory);
-    second();
-    expect(getSandboxBackendFactory(backendId)).toBeNull();
-    third();
-    expect(getSandboxBackendFactory(backendId)).toBeNull();
-  });
-
   it.each([
-    ["older retires first", ["A", "B"], ["B", null]],
-    ["restore predecessor", ["B", "A"], ["A", null]],
-    ["skip retired predecessors", ["B", "A", "C"], ["C", "C", null]],
-    ["restore newest predecessor", ["B", "C", "A"], ["C", "A", null]],
-    ["repeat stale disposal", ["B", "A", "B"], ["A", null, null]],
-  ] as const)("preserves all backend authority: %s", (_scenario, dispose, active) => {
-    const generations = [...new Set(dispose)].toSorted();
+    ["older retires first", ["A", "B"], [0, 1], ["B", null]],
+    ["restore predecessor", ["A", "B"], [1, 0], ["A", null]],
+    ["skip retired predecessors", ["A", "B", "C"], [1, 0, 2], ["C", "C", null]],
+    ["restore newest predecessor", ["A", "B", "C"], [1, 2, 0], ["C", "A", null]],
+    ["repeat stale disposal", ["A", "B"], [1, 0, 1], ["A", null, null]],
+    ["same object registered twice", ["A", "B", "A"], [2, 0, 1, 2], ["B", "B", null, null]],
+  ] as const)("preserves all backend authority: %s", (_scenario, initial, dispose, active) => {
     const backendId = "test-generation-ownership";
-    const registrations = new Map<string, ReturnType<typeof createGenerationRegistration>>();
-    const disposers = new Map<string, () => void>();
-
-    for (const label of generations) {
-      const registration = createGenerationRegistration(label);
-      registrations.set(label, registration);
-      disposers.set(label, registerSandboxBackend(backendId, registration));
-    }
-
-    for (const [index, disposedLabel] of dispose.entries()) {
+    const registrations = new Map(
+      [...new Set(initial)].map((label) => [label, createGenerationRegistration(label)]),
+    );
+    const disposers = initial.map((label) =>
+      registerSandboxBackend(backendId, registrations.get(label)!),
+    );
+    for (const [index, slot] of dispose.entries()) {
       const expectedLabel = active[index];
-      disposers.get(disposedLabel)!();
-
+      disposers[slot]!();
       const expected = expectedLabel ? registrations.get(expectedLabel) : undefined;
       expectHooks(backendId, [
         expected?.factory ?? null,

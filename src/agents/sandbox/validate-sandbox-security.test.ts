@@ -25,6 +25,10 @@ function bindResult(bind: string, options?: Omit<SandboxSecurityConfig, "binds">
   return expect(() => validateBindMounts([bind], options));
 }
 
+function scopedBind(source: string, root: string, target = "/data:ro") {
+  return bindResult(`${source}:${target}`, { allowedSourceRoots: [root] });
+}
+
 function directories(first: string, second: string) {
   const root = tempDirs.make("openclaw-bind-");
   const make = (name: string) => {
@@ -98,11 +102,9 @@ describe("validateBindMounts", () => {
       mkdirSync(literal);
       mkdirSync(slash, { recursive: true });
       symlinkSync(slash, join(literal, "escape"));
-      bindResult(`${literal}:/data:ro`, { allowedSourceRoots: [literal] }).not.toThrow();
+      scopedBind(literal, literal).not.toThrow();
       for (const source of [slash, join(literal, "escape/missing")]) {
-        bindResult(`${source}:/data:ro`, { allowedSourceRoots: [literal] }).toThrow(
-          "outside allowed roots",
-        );
+        scopedBind(source, literal).toThrow("outside allowed roots");
       }
     },
   );
@@ -152,9 +154,7 @@ describe("validateBindMounts", () => {
         allowedSourceRoots: ["D:/data/openclaw"],
       }),
     ).toBeUndefined();
-    bindResult("D:/other/project:/src:ro", { allowedSourceRoots: ["d:/data/openclaw"] }).toThrow(
-      /outside allowed roots/,
-    );
+    scopedBind("D:/other/project", "d:/data/openclaw", "/src:ro").toThrow(/outside allowed roots/);
   });
 
   it("blocks credential binds through canonical home aliases", () => {
@@ -186,19 +186,15 @@ describe("validateBindMounts", () => {
     const [workspace, outside] = directories("workspace", "outside");
     const link = join(workspace, "escape");
     symlinkSync(destination ?? outside, link);
-    bindResult(`${join(link, leaf)}:/mnt/data:ro`, { allowedSourceRoots: [workspace] }).toThrow(
-      error,
-    );
+    scopedBind(join(link, leaf), workspace, "/mnt/data:ro").toThrow(error);
   });
 
   it.runIf(process.platform !== "win32")(
     "validates the exact spaced source and target instead of a trimmed sibling",
     () => {
       const [plain, spaced] = directories("allowed", "allowed ");
-      bindResult(`${spaced}:/workspace `, { allowedSourceRoots: [spaced] }).not.toThrow();
-      bindResult(`${spaced}:/data`, { allowedSourceRoots: [plain] }).toThrow(
-        "outside allowed roots",
-      );
+      scopedBind(spaced, spaced, "/workspace ").not.toThrow();
+      scopedBind(spaced, plain, "/data").toThrow("outside allowed roots");
       bindResult(`${plain}:/workspace`).toThrow("reserved container path");
       bindResult(` ${plain}:/data`).toThrow("non-absolute");
     },
@@ -214,9 +210,7 @@ describe("validateBindMounts", () => {
       ] as const) {
         mkdirSync(join(allowed, name));
         symlinkSync(destination, join(allowed, `${name} `));
-        bindResult(`${join(allowed, `${name} `)}:/data`, { allowedSourceRoots: [allowed] }).toThrow(
-          error,
-        );
+        scopedBind(join(allowed, `${name} `), allowed, "/data").toThrow(error);
       }
     },
   );
@@ -230,9 +224,7 @@ describe("validateBindMounts", () => {
 
   it("blocks bind sources outside allowed roots when allowlist is configured", () => {
     const [allowedRoot, externalRoot] = directories("allowed", "external");
-    bindResult(`${externalRoot}:/data:ro`, { allowedSourceRoots: [allowedRoot] }).toThrow(
-      /outside allowed roots/,
-    );
+    scopedBind(externalRoot, allowedRoot).toThrow(/outside allowed roots/);
   });
 
   it("blocks reserved container target paths by default", () => {
@@ -268,25 +260,14 @@ describe("validateBindMounts", () => {
 });
 
 describe("validateNetworkMode", () => {
-  it("allows bridge/none/custom/undefined", () => {
-    expect(validateNetworkMode("bridge")).toBeUndefined();
-    expect(validateNetworkMode("none")).toBeUndefined();
-    expect(validateNetworkMode("my-custom-network")).toBeUndefined();
-    expect(validateNetworkMode(undefined)).toBeUndefined();
+  it.each(["bridge", "none", "my-custom-network", undefined])("allows network %s", (mode) => {
+    expect(validateNetworkMode(mode)).toBeUndefined();
   });
-
-  it("blocks host mode (case-insensitive)", () => {
-    for (const mode of ["host", "HOST"]) {
-      expect(() => validateNetworkMode(mode), mode).toThrow(`network mode "${mode}" is blocked`);
-    }
-  });
-
-  it("blocks container namespace joins by default", () => {
-    for (const mode of ["container:abc123", "CONTAINER:ABC123"]) {
-      expect(() => validateNetworkMode(mode), mode).toThrow(
-        `network mode "${mode}" is blocked by default`,
-      );
-    }
+  it.each(["host", "HOST", "container:abc123", "CONTAINER:ABC123"])("blocks network %s", (mode) => {
+    const suffix = mode.toLowerCase().startsWith("container:") ? " by default" : "";
+    expect(() => validateNetworkMode(mode), mode).toThrow(
+      `network mode "${mode}" is blocked${suffix}`,
+    );
   });
 
   it("allows container namespace joins with explicit dangerous override", () => {

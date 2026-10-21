@@ -4,11 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
-import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { runExecProcess } from "../bash-tools.exec-runtime.js";
@@ -26,7 +23,7 @@ import { SandboxRuntimeRetiredError } from "./provisioning-error.js";
 import { maybePruneSandboxes } from "./prune.js";
 import * as registry from "./registry.js";
 import { readRegistry, readRegistryEntry, updateRegistry } from "./registry.js";
-import { useSandboxRegistryState } from "./registry.test-support.js";
+import { acquireSandboxGatewayOwner, useSandboxRegistryState } from "./registry.test-support.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 
 vi.mock("../../skills/loading/workspace-skill-sync.runtime.js", () => ({
@@ -150,16 +147,7 @@ async function seedLegacyRuntime() {
 
 describe("durable sandbox runtime generations", () => {
   it("rejects hosted custody released during reserved backend discovery before allocation", async () => {
-    const owner = acquireGatewayStateOwner({
-      databasePath: resolveOpenClawStateSqlitePath(),
-      payload: {
-        pid: process.pid,
-        processNamespace: readGatewayLockProcessNamespace(),
-        createdAt: new Date().toISOString(),
-        configPath: path.join(workspaceDir, "openclaw.json"),
-        role: "gateway",
-      },
-    });
+    using owner = acquireSandboxGatewayOwner(workspaceDir);
     const entered = createDeferred();
     const resume = createDeferred();
     const allocate = vi.fn();
@@ -188,7 +176,6 @@ describe("durable sandbox runtime generations", () => {
     } finally {
       resume.resolve();
       await preparation.catch(() => {});
-      owner.release();
     }
   });
 
