@@ -114,7 +114,7 @@ it.each([
   ["unsupported inspection", inspectionFailure, null],
 ] satisfies [string, RegExp | null, Partial<Security> | null, Partial<Security>?][])(
   "enforces Windows ACL admission: %s",
-  async (_label, error, root, ancestor) => {
+  async (_label, error, root, ancestor: Partial<Security> = {}) => {
     mockSecurity(root, ancestor);
     const result = admitRoot();
     if (error) {

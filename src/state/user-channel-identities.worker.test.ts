@@ -34,7 +34,7 @@ it.each(
     grant();
   });
   using cleanup = new DisposableStack();
-  cleanup.defer(admission.finish);
+  cleanup.defer(() => admission.finish());
   const postMessage = admission.port.postMessage.bind(admission.port);
   vi.spyOn(admission.port, "postMessage").mockImplementation((message, transferList) => {
     if (isRecord(message) && (message.stage === "transaction" || message.stage === "commit")) {

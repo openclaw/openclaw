@@ -106,7 +106,7 @@ it.each(["beforeRun", "startRun"] as const)(
         throw revoked;
       }
     });
-    const startRun = async <T>(start: () => T) => {
+    const startRun = async <T>(start: () => T): Promise<Awaited<T>> => {
       await Promise.resolve();
       admit();
       return await start();

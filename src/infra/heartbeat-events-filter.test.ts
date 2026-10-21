@@ -120,7 +120,7 @@ it.each([
   ],
 ] satisfies Array<[string, string[], string[], { deliverToUser: boolean }?]>)(
   "builds continuation prompt for %s",
-  (event, expected, unexpected, opts) => {
+  (event, expected, unexpected, opts?: Parameters<typeof buildExecEventPrompt>[1]) => {
     checkPrompt(buildExecEventPrompt([event], opts), expected, unexpected);
   },
 );
