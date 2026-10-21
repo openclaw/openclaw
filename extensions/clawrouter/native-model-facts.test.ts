@@ -13,6 +13,7 @@ const providerAuthRuntimeMocks = vi.hoisted(() => ({
   resolveApiKeyForProvider: vi.fn(async () => ({ apiKey: "fixture-key" })),
 }));
 
+// mock-isolation: Never read real auth profile stores; these fixtures need only a fixed key.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => providerAuthRuntimeMocks);
 
 import plugin from "./index.js";
