@@ -86,6 +86,7 @@ export type SignalEventHandlerDeps = {
   runtime: RuntimeEnv;
   channelRuntime?: PluginRuntime["channel"];
   abortSignal?: AbortSignal;
+  isDeliveryRetired?: () => boolean;
   runTrackedTask?: (task: () => Promise<void>) => void;
   cfg: OpenClawConfig;
   baseUrl: string;
@@ -127,5 +128,6 @@ export type SignalEventHandlerDeps = {
     textLimit: number;
     replyContext?: SignalNativeReplyContext;
     chatType?: "direct" | "group";
+    assertDirectAdapterHandoff?: () => void;
   }) => Promise<void>;
 };
