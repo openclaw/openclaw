@@ -173,6 +173,53 @@ afterEach(async () => {
   }
 });
 
+it.each([false, true])(
+  "reports a long acquired effect only when contended=%s",
+  async (contended) => {
+    const target = { scope: "acquired-effect-store", identities: ["acquired-effect-session"] };
+    const owner = Symbol("effect-producer");
+    const effect = await withTrace(traces.first, () =>
+      beginEffect({ ...target, owner, serializeOwner: true }),
+    );
+    const waiter = contended ? hold("lifecycle", target, traces.waiter, owner) : undefined;
+    try {
+      await advance(2_000);
+      await expectRecords(
+        "waiting",
+        contended
+          ? [
+              {
+                operationTraceId: traces.waiter.traceId,
+                holderTraceId: traces.first.traceId,
+                holderObserved: true,
+                holderPhase: "run",
+                queueKind: "lifecycle",
+                waitMs: 2_000,
+              },
+            ]
+          : [],
+      );
+    } finally {
+      effect.release();
+      waiter?.release();
+      await waiter?.promise;
+    }
+    await expectRecords(
+      "slow",
+      contended
+        ? [
+            {
+              operationTraceId: traces.first.traceId,
+              lifecycleQueueWaitMs: 0,
+              phaseDurationsMs: { prepare: 0, run: 2_000, finalize: 0 },
+            },
+            { operationTraceId: traces.waiter.traceId, lifecycleQueueWaitMs: 2_000 },
+          ]
+        : [],
+    );
+  },
+);
+
 it("reports the current holder after turnover and preserves the waiter's trace and FIFO order", async () => {
   const target = { scope: "private-store-path", identities: ["private-session-key"] };
   const order: string[] = [];

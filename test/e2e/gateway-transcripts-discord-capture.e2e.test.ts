@@ -372,7 +372,6 @@ it("fences late Discord STT and preserves the admitted owner's history after a r
           skipBootstrap: true,
           systemAgent: { agentId: "main" },
           sessionStore: { agentId: "main" },
-          heartbeat: { every: "0m" },
           model: { primary: provider.modelRef, fallbacks: [] },
           models: {
             [provider.modelRef]: {

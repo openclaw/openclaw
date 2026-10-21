@@ -34,7 +34,10 @@ function writeToolPlugin(params: {
   failure?: "import" | "registration";
   workspaceAccess?: boolean | "execute";
   factoryReadsWorkspace?: boolean;
+  webSearchProviderId?: string;
 }): string {
+  const webSearchProviderId =
+    params.webSearchProviderId ?? (params.id === "shared" ? "inspection-search" : undefined);
   fs.mkdirSync(params.root, { recursive: true });
   const writeJson = (name: string, value: unknown) =>
     fs.writeFileSync(path.join(params.root, name), JSON.stringify(value));
@@ -47,7 +50,7 @@ function writeToolPlugin(params: {
     id: params.id,
     contracts: {
       tools: [`${params.id}_tool`],
-      ...(params.id === "shared" ? { webSearchProviders: ["inspection-search"] } : {}),
+      ...(webSearchProviderId ? { webSearchProviders: [webSearchProviderId.trim()] } : {}),
     },
     configSchema: { type: "object", additionalProperties: false },
   });
@@ -61,9 +64,9 @@ module.exports = { id: ${JSON.stringify(params.id)}, register(api) {
   event("register", { mode: api.registrationMode });
   api.lifecycle.onDispose(() => event("dispose"));
   if (${params.failure === "registration"}) throw new Error("fixture admission failed");
-  if (${params.id === "shared"}) {
+  if (${webSearchProviderId !== undefined}) {
     api.registerWebSearchProvider({
-      id: "inspection-search", label: "Inspection search", hint: "Synthetic search",
+      id: ${JSON.stringify(webSearchProviderId)}, label: "Inspection search", hint: "Synthetic search",
       envVars: [], placeholder: "", signupUrl: "https://example.com", credentialPath: "",
       getCredentialValue() {}, setCredentialValue() {},
       createTool() { throw new Error("Inspection must not execute search providers"); }
@@ -382,3 +385,61 @@ it("refuses a selected workspace source outside the prepared inspection inventor
     expect(readEvents(events)).toEqual([]);
   });
 });
+
+it.each(["a-first", "z-second"])(
+  "deduplicates identical provider ids across inspected and supplemental owners (%s inspected)",
+  async (selected) => {
+    await withInspectionState(async (state) => {
+      const events = state.path("duplicate-provider-events.jsonl");
+      const ids = ["a-first", "z-second"];
+      const providerId = " inspection-search ";
+      const paths = ids.map((id) =>
+        writeToolPlugin({
+          root: state.path("plugins", id),
+          id,
+          events,
+          webSearchProviderId: providerId,
+        }),
+      );
+      const config: OpenClawConfig = {
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+        plugins: pluginConfig(paths, ids),
+      };
+      const loadContext = resolvePluginRuntimeLoadContext({ config, env: process.env });
+      expect(loadContext.manifestRegistry?.plugins.map((record) => record.id)).toEqual(ids);
+      const inspection = await acquirePluginToolInspectionRegistry({
+        loadContext,
+        scopes: [
+          {
+            context: { config, agentId: "main", workspaceDir: state.workspaceDir },
+            toolAllowlist: [`${selected}_tool`],
+          },
+        ],
+      });
+      try {
+        const registry = inspection.registry;
+        assert(registry, "Expected the selected inspection registry");
+        expect(registry.webSearchProviders.map(({ provider }) => provider.id)).toEqual([
+          providerId,
+        ]);
+        const providers = withPluginRuntimeRegistryScope(registry, () =>
+          resolveRuntimeWebSearchProviders({
+            config,
+            onlyPluginIds: ids,
+            manifestRecords: loadContext.manifestRegistry?.plugins,
+          }),
+        );
+        expect(providers.map(({ pluginId, id }) => ({ pluginId, id }))).toEqual([
+          { pluginId: "a-first", id: providerId },
+        ]);
+        expect(
+          readEvents(events, "register")
+            .map(({ plugin }) => plugin)
+            .toSorted(),
+        ).toEqual(ids);
+      } finally {
+        await inspection.release();
+      }
+    });
+  },
+);

@@ -11,22 +11,22 @@ import {
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Control UI heartbeat scratch" });
+const suite = createControlUiE2eSuite({ name: "Control UI automation scratch" });
 
-const job = createCronJob("heartbeat-monitor", "Heartbeat (main)", {
+const job = createCronJob("migrated-checklist", "Evening checklist", {
   schedule: { kind: "every", everyMs: 1_800_000 },
   sessionTarget: "main",
-  payload: { kind: "heartbeat" },
+  payload: { kind: "agentTurn", message: "Review the evening checklist" },
 });
 
-const scratchContent = "# Heartbeat checklist\n\n- Inspect queued work.\n";
+const scratchContent = "# Evening checklist\n\n- Inspect queued work.\n";
 const scratchResponse = {
   scratch: { content: scratchContent, revision: 1, updatedAtMs: 1 },
   currentRevision: 1,
   maxBytes: 262_144,
 };
 
-async function openMonitor(page: Page, readOnly = false, scratch: unknown = scratchResponse) {
+async function openAutomation(page: Page, readOnly = false, scratch: unknown = scratchResponse) {
   const gateway = await installMockGateway(page, {
     ...(readOnly && { operatorScopes: ["operator.read"] }),
     methodResponses: {
@@ -45,7 +45,7 @@ async function openMonitor(page: Page, readOnly = false, scratch: unknown = scra
 
 suite.define(() => {
   it.each([
-    ["shows authorized scratch in the read-only monitor without sending a write", false],
+    ["loads authorized automation scratch on demand without sending a write", false],
     ["does not request admin-only scratch for a read-only operator", true],
   ] as const)("%s", async (_name, readOnly) => {
     await suite.withPage(
@@ -56,9 +56,16 @@ suite.define(() => {
         }),
       },
       async ({ page }) => {
-        const gateway = await openMonitor(page, readOnly);
-        const monitor = page.locator("#cron-payload-text");
-        await expect.poll(() => monitor.inputValue()).toBe(readOnly ? "" : scratchContent);
+        const gateway = await openAutomation(page, readOnly);
+        const editor = page.locator("openclaw-cron-scratch-editor");
+        expect(await gateway.getRequests("cron.scratch.get")).toEqual([]);
+        if (readOnly) {
+          expect(await editor.count()).toBe(0);
+        } else {
+          await editor.locator("summary").click();
+          await editor.getByRole("button", { name: "Load scratch", exact: true }).click();
+          await expect.poll(() => editor.locator("textarea").inputValue()).toBe(scratchContent);
+        }
         expect((await gateway.getRequests("cron.scratch.get")).map(({ params }) => params)).toEqual(
           readOnly ? [] : [{ id: job.id }],
         );
@@ -66,14 +73,12 @@ suite.define(() => {
           expect(await gateway.getRequests(method)).toEqual([]);
         }
         if (!readOnly) {
-          expect({
-            readonly: await monitor.getAttribute("readonly"),
-            editable: await monitor.isEditable(),
-          }).toEqual({ readonly: "", editable: false });
-          await monitor.scrollIntoViewIfNeeded();
+          const scratch = editor.locator("textarea");
+          expect(await scratch.isEditable()).toBe(true);
+          await scratch.scrollIntoViewIfNeeded();
           await writeFile(
-            path.join(suite.artifactDir, "heartbeat-monitor-scratch.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".cron-page"), [monitor]),
+            path.join(suite.artifactDir, "automation-scratch.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".cron-page"), [scratch]),
           );
         }
       },
@@ -81,14 +86,15 @@ suite.define(() => {
   });
 
   it("shows a scratch read failure instead of an empty success state", async () => {
-    const errorMessage = "Heartbeat scratch is temporarily unavailable.";
+    const errorMessage = "Automation scratch is temporarily unavailable.";
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      await openMonitor(page, false, {
+      await openAutomation(page, false, {
         __mockError: { code: "UNAVAILABLE", message: errorMessage },
       });
-      await expect
-        .poll(() => page.locator(".cron-error-banner").textContent())
-        .toContain(errorMessage);
+      const editor = page.locator("openclaw-cron-scratch-editor");
+      await editor.locator("summary").click();
+      await editor.getByRole("button", { name: "Load scratch", exact: true }).click();
+      await expect.poll(() => editor.getByRole("status").textContent()).toContain(errorMessage);
     });
   });
 });

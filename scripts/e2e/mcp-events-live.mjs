@@ -397,7 +397,6 @@ try {
         skipBootstrap: true,
         model: { primary: ledger.model },
         models: { [ledger.model]: { agentRuntime: { id: "openclaw" } } },
-        heartbeat: { every: "0m" },
         thinkingDefault: "off",
       },
     },

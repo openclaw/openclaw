@@ -225,19 +225,20 @@ export async function updateMessageSlack(params: {
   accountId?: string;
   channelId: string;
   teamId?: string;
+  token?: string;
+  eventScope?: SlackEventScope;
   messageTs: string;
   text: string;
   blocks: (Block | KnownBlock)[];
 }): Promise<void> {
   const cfg = requireRuntimeConfig(params.cfg, "Slack update");
   const account = resolveSlackAccount({ cfg, accountId: params.accountId });
-  assertSlackDetachedTargetAllowed(account.accountId, params.teamId);
-  const token = resolveToken({
-    accountId: account.accountId,
-    fallbackToken: account.botToken,
-    fallbackSource: account.botTokenSource,
+  const { client } = resolveSlackDelivery({
+    account,
+    eventScope: params.eventScope,
+    opts: { cfg, token: params.token },
+    recipient: { kind: "channel", id: params.channelId, teamId: params.teamId },
   });
-  const client = getSlackWriteClient(token, { teamId: params.teamId });
   await client.chat.update({
     channel: params.channelId,
     ts: params.messageTs,
@@ -377,6 +378,7 @@ function resolveSlackDelivery(params: {
     };
   }
 
+  assertSlackDetachedTargetAllowed(params.account.accountId, params.recipient.teamId);
   const credential = resolveToken({
     explicit: params.opts.token,
     accountId: params.account.accountId,
@@ -890,9 +892,6 @@ export async function sendMessageSlack(
     throw new Error("invalid_enterprise_slack_listener_scope");
   }
   const recipient = eventScope ? parseEnterpriseEventRecipient(to) : parseRecipient(to);
-  if (!eventScope) {
-    assertSlackDetachedTargetAllowed(account.accountId, recipient.teamId);
-  }
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
   if (!normalizedMessage && !opts.mediaUrl && !blocks) {
     throw new Error("Slack send requires text, blocks, or media");
@@ -955,7 +954,7 @@ async function sendMessageSlackQueued(params: {
   ) => {
     // Fallback can split blocks across several sends; identify controls on the
     // actual posted card so uploads and text chunks cannot steal finalization.
-    // Preserve only accepted display blocks; actions contain private callback data.
+    // Keep private accepted blocks so finalization can retain unrelated controls.
     const slackQuestionActionIds = resolveSlackQuestionActionIds(deliveredBlocks);
     const deliveryResult = slackQuestionActionIds.length
       ? {
@@ -963,9 +962,7 @@ async function sendMessageSlackQueued(params: {
           meta: {
             ...result.meta,
             slackQuestionActionIds,
-            [SLACK_QUESTION_FINALIZATION_BLOCKS]: deliveredBlocks!.filter(
-              (block) => block.type !== "actions",
-            ),
+            [SLACK_QUESTION_FINALIZATION_BLOCKS]: deliveredBlocks,
           },
         }
       : result;

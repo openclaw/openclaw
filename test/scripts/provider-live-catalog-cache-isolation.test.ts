@@ -60,6 +60,9 @@ export default extensions;
       runNodeScript(
         [path.join(repoRoot, "scripts/run-vitest.mjs"), "--config", config, ...files],
         testRunnerFixtureEnv({
+          // Reuse this runtime instead of staging Bun again under the fixture's isolated HOME.
+          OPENCLAW_VITEST_RUNTIME: process.versions.bun ? "bun" : "node",
+          ...(process.versions.bun ? { OPENCLAW_BUN_PATH: process.execPath } : {}),
           OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: local("module-cache"),
         }),
         DEFAULT_VITEST_TEST_TIMEOUT_MS,

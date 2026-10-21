@@ -270,7 +270,6 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
                 params: { transport: "sse", openaiWsWarmup: false },
               },
             },
-            heartbeat: { every: "0m" },
             skipBootstrap: true,
             skills: [],
             timeoutSeconds: 120,

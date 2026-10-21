@@ -6,7 +6,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { deserialize } from "node:v8";
-import { MessagePort } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.ts";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
@@ -105,11 +105,9 @@ const phases: Phase[] = [];
 let active: Phase | undefined;
 let droppedDiagnostics = 0;
 // Observe existing worker transport without adding a test seam to the persistence owner.
-// The proxy forwards the original receiver through Reflect.apply.
-// oxlint-disable-next-line typescript/unbound-method
-const originalPost = MessagePort.prototype.postMessage;
-MessagePort.prototype.postMessage = new Proxy(originalPost, {
-  apply(target, receiver, args) {
+function observeWorker(worker: Worker) {
+  const post = worker.postMessage.bind(worker);
+  worker.postMessage = (...args: Parameters<Worker["postMessage"]>) => {
     const message = args[0];
     const body = isRecord(message) && message.type === "post" ? message.value : message;
     if (active && isRecord(body) && body.type === "execute" && body.input instanceof Uint8Array) {
@@ -122,9 +120,10 @@ MessagePort.prototype.postMessage = new Proxy(originalPost, {
         active.workboardReads[command.type] = (active.workboardReads[command.type] ?? 0) + 1;
       }
     }
-    return Reflect.apply(target, receiver, args);
-  },
-});
+    return post(...args);
+  };
+}
+process.on("worker", observeWorker);
 const unsubscribe = onInternalDiagnosticEvent((event) => {
   if (!active) {
     return;
@@ -326,6 +325,14 @@ try {
       const used = process.cpuUsage(cpu);
       phase.cpuMs = (used.user + used.system) / 1000;
       active = undefined;
+      if (name === "after-mutation") {
+        for (const command of ["boards.entries", "cards.listBoardAggregates"]) {
+          assert(
+            (phase.workboardReads[command] ?? 0) > 0,
+            `Missing ${command} observations after writes`,
+          );
+        }
+      }
       phases.push(phase);
     }
     assert.equal(droppedDiagnostics, 0, "Diagnostic loss makes handler counts incomplete");
@@ -382,6 +389,9 @@ try {
     peer.close();
   }
   unsubscribe();
-  MessagePort.prototype.postMessage = originalPost;
-  await server.close({ reason: "synthetic Workboard benchmark finished" });
+  try {
+    await server.close({ reason: "synthetic Workboard benchmark finished" });
+  } finally {
+    process.off("worker", observeWorker);
+  }
 }

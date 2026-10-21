@@ -12,6 +12,7 @@ import {
   postJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderApiKeyHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asSafeIntegerInRange,
@@ -154,6 +155,9 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
           missingApiKeyMessage: "Together API key missing",
           baseUrl: resolveTogetherVideoBaseUrl(req),
           defaultBaseUrl: TOGETHER_VIDEO_BASE_URL,
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.together?.request,
+          ),
           allowPrivateNetwork: false,
           provider: "together",
           capability: "video",
@@ -240,6 +244,8 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
                   : { ...deadline, label: `Together video generation task ${videoId}` },
               defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
               fetchFn,
+              ssrfPolicy: { allowPrivateNetwork },
+              dispatcherPolicy,
               maxAttempts: MAX_POLL_ATTEMPTS,
               pollIntervalMs: POLL_INTERVAL_MS,
               requestFailedMessage: "Together video status request failed",

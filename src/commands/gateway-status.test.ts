@@ -733,7 +733,10 @@ describe("gateway-status command", () => {
     },
   );
 
-  it("infers SSH target from gateway.remote.url and ssh config", async () => {
+  it.each([
+    { ssh: undefined, port: 2222, explicitPort: false },
+    { ssh: "alias:22", port: 22, explicitPort: true },
+  ])("resolves SSH port $port with explicit=$explicitPort", async ({ ssh, port, explicitPort }) => {
     const { runtime } = createRuntimeCapture();
     await withEnvAsync({ USER: "steipete" }, async () => {
       readBestEffortConfig.mockResolvedValueOnce(
@@ -742,15 +745,20 @@ describe("gateway-status command", () => {
       resolveSshConfig.mockResolvedValueOnce({
         user: "steipete",
         host: "peters-mac-studio-1.sheep-coho.ts.net",
-        port: 2222,
+        port,
         identityFiles: ["/tmp/id_ed25519"],
       });
 
-      await runGatewayStatus(runtime, { timeout: "1000", json: true });
+      await runGatewayStatus(runtime, { timeout: "1000", json: true, ssh });
 
       expect(startSshPortForward).toHaveBeenCalledTimes(1);
+      expect(resolveSshConfig).toHaveBeenCalledWith(expect.anything(), {
+        explicitPort,
+        identity: undefined,
+        timeoutMs: 800,
+      });
       const call = requireSshForwardCall();
-      expect(call.target).toBe("steipete@peters-mac-studio-1.sheep-coho.ts.net:2222");
+      expect(call.target).toBe(`steipete@peters-mac-studio-1.sheep-coho.ts.net:${port}`);
       expect(call.identity).toBe("/tmp/id_ed25519");
     });
   });

@@ -135,6 +135,7 @@ export async function loadSessionDiff(
         sessionKey: params.sessionKey,
         baseCommit: managedBase?.baseCommit,
         summaryOnly: params.summaryOnly,
+        poll: params.poll,
       };
       let result: SessionsDiffResult;
       if (params.scope === "commit") {

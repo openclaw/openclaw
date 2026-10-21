@@ -4,6 +4,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as binaryDetection from "../../infra/detect-binary.js";
 import type { ProcessSupervisor, SpawnInput } from "../../process/supervisor/types.js";
 import { markGatewayIngressTransport } from "../ingress-attribution.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
@@ -48,6 +49,7 @@ const cleanups: Array<() => void> = [];
 afterEach(() => {
   cleanups.splice(0).forEach((close) => close());
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 const flush = async () => {
   for (let n = 0; n < 12; n++) {
@@ -256,12 +258,12 @@ describe("screen-owned desktop audio", () => {
           };
         },
       };
+      vi.spyOn(binaryDetection, "detectBinary").mockResolvedValue(true);
       const owner = createManagedLinuxAudio({
         supervisor,
         tempDir: tempDirs.make("desktop-viewer-admission-"),
         env: {},
         assertCurrent() {},
-        runtime: { detectBinary: async () => true },
       });
       const audio = await owner.ready;
       const requesterAbort = new AbortController();

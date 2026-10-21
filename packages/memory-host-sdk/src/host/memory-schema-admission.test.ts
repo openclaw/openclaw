@@ -11,6 +11,7 @@ import {
 import { assertSqliteIntegrity } from "../../../../src/infra/sqlite-integrity.js";
 import { admitSqliteSchema } from "../../../../src/infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../../../src/infra/sqlite-transaction.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../../../src/state/openclaw-agent-schema.js";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
@@ -61,6 +62,30 @@ function observe(before?: Parameters<typeof observeHostDataSql>[0]) {
     },
   };
 }
+
+it("reuses agent-created memory objects on first admission and repairs later DDL", () => {
+  using db = openNodeSqliteDatabase(":memory:");
+  db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+  admitSqliteSchema(db);
+  const observed = observeHostDataSql();
+  using _ = { [Symbol.dispose]: observed.restore };
+  runSqliteImmediateTransactionSync(db, () => expectSchema(db));
+  expect(
+    observed.queries.filter((sql) =>
+      /CREATE TABLE IF NOT EXISTS memory_(?:index_|embedding_cache)|CREATE INDEX IF NOT EXISTS idx_memory_|DROP INDEX IF EXISTS idx_memory_index_chunks_path;|PRAGMA main\.table_xinfo\(meta\)|SELECT 1 AS found FROM sqlite_master/iu.test(
+        sql,
+      ),
+    ),
+  ).toEqual([]);
+  insertChunk(db, "retained", "searchable body");
+  expect(ftsMatches(db, "searchable")).toEqual([{ id: "retained" }]);
+  db.exec("DROP INDEX idx_memory_index_chunks_source");
+  runSqliteImmediateTransactionSync(db, () => expectSchema(db));
+  expect(schemaEntry(db, "idx_memory_index_chunks_source")).toEqual({
+    name: "idx_memory_index_chunks_source",
+  });
+  expect(ftsMatches(db, "searchable")).toEqual([{ id: "retained" }]);
+});
 
 it.each(["clean", "missing seal"])("reopens after %s without losing schema repair", (close) => {
   const filename = path.join(tempDirs.make("memory-admission-seal-"), "memory.sqlite");

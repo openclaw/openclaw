@@ -134,7 +134,6 @@ describe("executeAgentTurn: primary probe routing", () => {
     markAutoFallbackPrimaryProbe({
       probe,
       sessionKey: "main",
-      now: Date.now(),
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",

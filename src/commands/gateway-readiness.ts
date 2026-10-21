@@ -129,7 +129,7 @@ export async function ensureDashboardGatewayReady(options: GatewayReadinessOptio
   }
 
   if (shouldInstall) {
-    const { runDaemonInstall } = await import("../cli/daemon-cli/install.runtime.js");
+    const { runDaemonInstall } = await import("../cli/daemon-cli/install.js");
     await runDaemonInstall({ json: false });
   } else {
     const { runDaemonStart } = await import("../cli/daemon-cli/lifecycle.js");

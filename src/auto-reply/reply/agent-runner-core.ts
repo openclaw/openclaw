@@ -76,20 +76,14 @@ export function scheduleFollowupDrainAfterReplyOperationClear(params: {
 }): void {
   runAfterReplyOperationClear(params.operation, (admissionSessionId) => {
     const completedSessionId = params.operation.sessionId;
-    const runFollowupAfterClear =
-      admissionSessionId === completedSessionId
-        ? params.runFollowup
-        : (queued: FollowupRun) =>
-            params.runFollowup(
-              queued.run.sessionId === completedSessionId
-                ? { ...queued, admissionSessionId }
-                : queued,
-            );
     // Same-key sessions in other physical stores may retain their own dedupe mailbox.
     scheduleFollowupDrain(
       params.queueKey,
-      runFollowupAfterClear,
+      params.runFollowup,
       getSessionControllerEntryForOperation(params.operation),
+      admissionSessionId === completedSessionId
+        ? undefined
+        : { from: completedSessionId, to: admissionSessionId },
     );
   });
 }

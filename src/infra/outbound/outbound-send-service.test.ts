@@ -73,7 +73,8 @@ vi.mock("../../media/local-roots.js", async () => {
   };
 });
 
-vi.mock("../../config/sessions.js", () => ({
+vi.mock("../../config/sessions/transcript.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/transcript.runtime.js")>()),
   appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
 }));
 

@@ -70,9 +70,7 @@ const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
     "const currentGuardrail = currentPluginConfig?.guardrail;",
   ],
   "extensions/amazon-bedrock-mantle/register.sync.runtime.ts": [
-    "resolvePluginConfigObject(",
-    "const startupPluginConfig = (api.pluginConfig ?? {})",
-    "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
+    "pluginConfig: resolvePluginConfigObject(ctx.config, providerId),",
   ],
   "extensions/ollama/index.ts": [
     "resolvePluginConfigObject(",
@@ -284,6 +282,9 @@ describe("plugin contract boundary invariants", () => {
 
   it("keeps live provider config surfaces on runtime config lookups", () => {
     expectSnippetGuards(BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS);
+    expect(
+      readRepoSource("extensions/amazon-bedrock-mantle/register.sync.runtime.ts"),
+    ).not.toContain("api.pluginConfig");
   });
 
   it("keeps long-lived bundled hook handlers off startup-only registration gates", () => {

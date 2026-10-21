@@ -1,52 +1,18 @@
 import type { Context } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
-import {
-  captureAnthropicRequest,
-  registerParityHostLifecycle,
-} from "./provider-transport-parity.test-support.js";
+import { capturePaths } from "./anthropic-parity.test-support.js";
+import { registerParityHostLifecycle } from "./provider-transport-parity.test-support.js";
 import { createZeroUsage } from "./usage.test-support.js";
 
 describe("Anthropic 5.5 transport parity", () => {
   registerParityHostLifecycle();
 
   it.each([
-    [undefined, "medium"],
-    ["minimal", "low"],
-    ["xhigh", "xhigh"],
-    ["max", "max"],
-    ["off", undefined],
-  ] as const)(
-    "sends Haiku 5.5 %s without legacy budgets or fallbacks",
-    async (reasoning, effort) => {
-      for (const implementation of ["provider", "transport"] as const) {
-        const { payload, headers } = await captureAnthropicRequest(implementation, {
-          model: { id: "claude-haiku-5-5", maxTokens: 128_000 },
-          reasoning,
-          toolChoice: { type: "tool", name: "lookup" },
-          temperature: 0.2,
-        });
-        expect(payload).toMatchObject({
-          max_tokens: 128_000,
-          tool_choice: { type: "tool", name: "lookup" },
-        });
-        if (reasoning === "off") {
-          expect(payload.thinking).toEqual({ type: "disabled" });
-          expect(payload).not.toHaveProperty("output_config");
-        } else {
-          expect(payload.thinking).toMatchObject({ type: "adaptive" });
-          expect(payload.thinking).not.toHaveProperty("budget_tokens");
-          expect(payload.output_config).toEqual({ effort });
-        }
-        expect(payload).not.toHaveProperty("temperature");
-        expect(payload).not.toHaveProperty("service_tier");
-        expect(payload).not.toHaveProperty("fallbacks");
-        expect(payload).not.toHaveProperty("speed");
-        expect(headers.get("anthropic-beta") ?? "").not.toContain("server-side-fallback");
-      }
-    },
-  );
-
-  it.each([
+    ["haiku", undefined, "medium", false],
+    ["haiku", "minimal", "low", false],
+    ["haiku", "xhigh", "xhigh", false],
+    ["haiku", "max", "max", false],
+    ["haiku", "off", undefined, false],
     ["opus", undefined, "medium", false],
     ["opus", "off", "low", true],
     ["opus", "max", "max", false],
@@ -57,52 +23,71 @@ describe("Anthropic 5.5 transport parity", () => {
   ] as const)(
     "sends %s %s thinking at %s effort (alias=%s)",
     async (family, reasoning, effort, alias) => {
+      const haiku = family === "haiku";
+      const sonnet = family === "sonnet";
       const toolChoice =
-        reasoning === "off"
+        haiku || reasoning === "off"
           ? { type: "tool" as const, name: "lookup" }
           : reasoning === "max"
             ? "auto"
             : "any";
       const display = reasoning === "max" ? "omitted" : "summarized";
       const id = `claude-${family}-5-5`;
-      const model = alias
-        ? { id: "production-claude", params: { canonicalModelId: id }, reasoning: false }
-        : { id };
-      const betweenTools = family === "sonnet" && reasoning === "off";
-      for (const implementation of ["provider", "transport"] as const) {
-        const { payload, headers } = await captureAnthropicRequest(implementation, {
-          model,
-          reasoning,
-          toolChoice,
-          thinkingDisplay: display,
-          temperature: 0.2,
-        });
-        expect(payload).toMatchObject({ model: model.id, tool_choice: { type: "auto" } });
-        if (betweenTools) {
-          expect(payload.thinking).toEqual({ type: "between_tools" });
+      const model = haiku
+        ? { id, maxTokens: 128_000 }
+        : alias
+          ? { id: "production-claude", params: { canonicalModelId: id }, reasoning: false }
+          : { id };
+      const betweenTools = sonnet && reasoning === "off";
+      for await (const { payload, headers } of capturePaths({
+        model,
+        reasoning,
+        toolChoice,
+        thinkingDisplay: haiku ? undefined : display,
+        temperature: 0.2,
+      })) {
+        const beta = headers.get("anthropic-beta");
+        expect(payload).toMatchObject(
+          haiku
+            ? { max_tokens: 128_000, tool_choice: { type: "tool", name: "lookup" } }
+            : { model: model.id, tool_choice: { type: "auto" } },
+        );
+        if (betweenTools || (haiku && reasoning === "off")) {
+          expect(payload.thinking).toEqual({ type: betweenTools ? "between_tools" : "disabled" });
           expect(payload).not.toHaveProperty("output_config");
-          expect(headers.get("anthropic-beta")).not.toContain(
-            "thinking-binding-controls-2026-08-01",
-          );
+          if (betweenTools) {
+            expect(beta).not.toContain("thinking-binding-controls-2026-08-01");
+          }
         } else {
           expect(payload.output_config).toEqual({ effort });
-          if (family === "sonnet") {
+          if (sonnet) {
             expect(payload.thinking).toEqual({
               type: "adaptive",
               display,
               block_binding: { prefix_mismatch_behavior: "drop_block" },
             });
             expect(payload.fallbacks).toBe("default");
-            expect(headers.get("anthropic-beta")).toContain("thinking-binding-controls-2026-08-01");
-            expect(headers.get("anthropic-beta")).toContain("server-side-fallback-2026-07-01");
+            expect(beta).toContain("thinking-binding-controls-2026-08-01");
+            expect(beta).toContain("server-side-fallback-2026-07-01");
             expect(payload).not.toHaveProperty("speed");
           } else {
-            expect(payload.thinking).toMatchObject({ type: "adaptive", display });
+            expect(payload.thinking).toMatchObject(
+              haiku ? { type: "adaptive" } : { type: "adaptive", display },
+            );
           }
         }
         expect(payload).not.toHaveProperty("temperature");
-        if (family === "sonnet") {
+        if (sonnet) {
           expect(payload).not.toHaveProperty("service_tier");
+        }
+        if (haiku) {
+          for (const key of ["service_tier", "fallbacks", "speed"]) {
+            expect(payload).not.toHaveProperty(key);
+          }
+          if (reasoning !== "off") {
+            expect(payload.thinking).not.toHaveProperty("budget_tokens");
+          }
+          expect(beta ?? "").not.toContain("server-side-fallback");
         }
       }
     },
@@ -145,11 +130,10 @@ describe("Anthropic 5.5 transport parity", () => {
         { role: "user", content: "Continue.", timestamp: 3 },
       ],
     };
-    for (const implementation of ["provider", "transport"] as const) {
-      const { payload } = await captureAnthropicRequest(implementation, {
-        model: { id: target },
-        context,
-      });
+    for await (const { payload } of capturePaths({
+      model: { id: target },
+      context,
+    })) {
       expect(payload.messages).toMatchObject([
         { role: "user" },
         {

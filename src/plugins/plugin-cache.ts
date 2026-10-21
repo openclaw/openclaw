@@ -164,6 +164,7 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
 
 /** Invalidate discovery facts without retiring callbacks owned by this operation. */
 export function invalidatePluginCacheMetadata(cache: PluginCache): void {
+  cache.inspectionNativeEsmPolicy = undefined;
   cache.sourceAdmissions?.invalidate();
   cache.metadata = createPluginMetadataCache();
   cache.sdk.native.parents.clear();

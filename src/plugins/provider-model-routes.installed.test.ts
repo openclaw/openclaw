@@ -9,6 +9,7 @@ import { getModelRefStatus, resolveModelRefFromString } from "../agents/model-se
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { materializePreparedModelCatalog } from "../agents/prepared-model-runtime.full-catalog.js";
 import type { PreparedRuntimeCapabilityModel } from "../agents/prepared-model-runtime.types.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnv } from "../test-utils/env.js";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
@@ -243,19 +244,16 @@ describe("installed Arcee catalog identity", () => {
     return {
       provider,
       modelId,
-      model: {
+      model: makeProviderModelFixture({
         provider: "fixture-runtime",
         id: modelId,
-        name: modelId,
         api: "openai-completions",
         baseUrl: "https://fixture.example.test/v1",
         reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 1024,
         maxTokens: 256,
         params: { runtimeModel: modelId },
-      },
+      }),
     };
   }
 

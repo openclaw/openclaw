@@ -429,6 +429,15 @@ describe("warm boot app root", () => {
     expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")).toBeUndefined();
   });
 
+  it("does not install requested readiness after the application is disposed", async () => {
+    const { rosterSubscriptions } = await createOfflineSurface();
+    expect(window.openclawControlUi).toBeUndefined();
+    disposeApp();
+    await settleImports();
+    expect(rosterSubscriptions).not.toHaveBeenCalled();
+    expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")).toBeUndefined();
+  });
+
   it("releases the keyboard viewport when the mounted application is disposed", async () => {
     vi.stubGlobal(
       "visualViewport",

@@ -183,6 +183,7 @@ describe("worker environment store", () => {
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
 
+    using exec = vi.spyOn(database.db, "exec");
     expect(() =>
       runOpenClawStateWriteTransaction(
         () => {
@@ -192,8 +193,11 @@ describe("worker environment store", () => {
         { database },
       ),
     ).toThrow("refused environment mutation");
+    expect(exec.mock.calls.filter(([sql]) => /\b(?:SAVEPOINT|RELEASE)\b/i.test(sql))).toEqual([]);
     expect(table()).toBeUndefined();
-    ensureWorkerEnvironmentStoreSchema(database);
+    runOpenClawStateWriteTransaction(() => ensureWorkerEnvironmentStoreSchema(database), {
+      database,
+    });
     expect(table()).toEqual({ name: "worker_environment_ssh_fallback_ports" });
 
     store = await createWorkerEnvironmentStore({ database, now: () => nowMs });

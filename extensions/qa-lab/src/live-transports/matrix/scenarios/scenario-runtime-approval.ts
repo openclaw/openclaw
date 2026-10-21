@@ -32,26 +32,6 @@ const MATRIX_QA_APPROVAL_SHORT_WINDOW_MS = 4_000;
 const MATRIX_QA_APPROVAL_LONG_COMMAND_TEXT = "matrix approval chunk fallback ".repeat(40);
 
 type MatrixQaApprovalDecision = "allow-once" | "deny";
-type MatrixQaApprovalOptionReactionParams = {
-  context: MatrixQaScenarioContext;
-  emoji: string;
-  roomId: string;
-  targetEventId: string;
-};
-
-function isApprovalOptionReaction(
-  event: MatrixQaObservedEvent,
-  params: MatrixQaApprovalOptionReactionParams,
-) {
-  return (
-    event.roomId === params.roomId &&
-    event.sender === params.context.sutUserId &&
-    event.type === "m.reaction" &&
-    event.reaction?.eventId === params.targetEventId &&
-    event.reaction.key === params.emoji
-  );
-}
-
 function assertApprovalMetadata(params: {
   event: Pick<MatrixQaObservedEvent, "approval" | "eventId">;
   expectedKind: ChannelApprovalKind;
@@ -209,58 +189,6 @@ function listDriverDmApprovalCandidateRoomIds(context: MatrixQaScenarioContext) 
   ];
 }
 
-async function reactToApproval(params: {
-  context: MatrixQaScenarioContext;
-  decision: MatrixQaApprovalDecision;
-  roomId: string;
-  targetEventId: string;
-}) {
-  const client = createMatrixQaDriverScenarioClient(params.context);
-  const emoji =
-    params.decision === "allow-once"
-      ? MATRIX_QA_APPROVAL_ALLOW_ONCE_REACTION
-      : MATRIX_QA_APPROVAL_DENY_REACTION;
-  const isOptionReaction = (event: MatrixQaObservedEvent) =>
-    isApprovalOptionReaction(event, { ...params, emoji });
-  if (!params.context.observedEvents.some(isOptionReaction)) {
-    await client.waitForRoomEvent({
-      observedEvents: params.context.observedEvents,
-      predicate: isOptionReaction,
-      roomId: params.roomId,
-      timeoutMs: params.context.timeoutMs,
-    });
-  }
-  const eventId = await client.sendReaction({
-    emoji,
-    messageId: params.targetEventId,
-    roomId: params.roomId,
-  });
-  await client
-    .waitForRoomEvent({
-      observedEvents: params.context.observedEvents,
-      predicate: (event) =>
-        event.roomId === params.roomId &&
-        event.sender === params.context.driverUserId &&
-        event.type === "m.reaction" &&
-        event.reaction?.eventId === params.targetEventId &&
-        event.reaction.key === emoji,
-      roomId: params.roomId,
-      timeoutMs: params.context.timeoutMs,
-    })
-    .catch((err: unknown) => {
-      throw new Error(
-        `Matrix approval reaction ${eventId} was not observed before waiting for the gateway decision: ${String(err)}`,
-      );
-    });
-  return {
-    eventId,
-    reaction: {
-      eventId: params.targetEventId,
-      key: emoji,
-    },
-  };
-}
-
 async function requestApproval(
   context: MatrixQaScenarioContext,
   kind: ChannelApprovalKind,
@@ -296,19 +224,6 @@ function requestExecApproval(params: {
     host: "gateway",
     security: "full",
     ...(params.threadRootEventId ? { turnSourceThreadId: params.threadRootEventId } : {}),
-  });
-}
-
-async function waitForApprovalDecision(params: {
-  approvalId: string;
-  context: MatrixQaScenarioContext;
-  kind: ChannelApprovalKind;
-}) {
-  return waitForLiveQaApprovalDecision({
-    approvalId: params.approvalId,
-    gateway: { call: params.context.gatewayCall },
-    kind: params.kind,
-    timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
   });
 }
 
@@ -422,16 +337,56 @@ async function runApprovalReactionScenario(params: {
       throw new Error(`chunk event ${chunk.event.eventId} unexpectedly duplicated metadata`);
     }
   }
-  const reaction = await reactToApproval({
-    context: params.context,
-    decision: params.decision,
-    roomId: params.context.roomId,
-    targetEventId: approval.event.eventId,
+  const reactionContext = params.context;
+  const decision = params.decision;
+  const roomId = reactionContext.roomId;
+  const targetEventId = approval.event.eventId;
+  const reactionClient = createMatrixQaDriverScenarioClient(reactionContext);
+  const emoji =
+    decision === "allow-once"
+      ? MATRIX_QA_APPROVAL_ALLOW_ONCE_REACTION
+      : MATRIX_QA_APPROVAL_DENY_REACTION;
+  const isOptionReaction = (event: MatrixQaObservedEvent) =>
+    event.roomId === roomId &&
+    event.sender === reactionContext.sutUserId &&
+    event.type === "m.reaction" &&
+    event.reaction?.eventId === targetEventId &&
+    event.reaction.key === emoji;
+  if (!reactionContext.observedEvents.some(isOptionReaction)) {
+    await reactionClient.waitForRoomEvent({
+      observedEvents: reactionContext.observedEvents,
+      predicate: isOptionReaction,
+      roomId,
+      timeoutMs: reactionContext.timeoutMs,
+    });
+  }
+  const reactionEventId = await reactionClient.sendReaction({
+    emoji,
+    messageId: targetEventId,
+    roomId,
   });
-  const result = await waitForApprovalDecision({
+  await reactionClient
+    .waitForRoomEvent({
+      observedEvents: reactionContext.observedEvents,
+      predicate: (event) =>
+        event.roomId === roomId &&
+        event.sender === reactionContext.driverUserId &&
+        event.type === "m.reaction" &&
+        event.reaction?.eventId === targetEventId &&
+        event.reaction.key === emoji,
+      roomId,
+      timeoutMs: reactionContext.timeoutMs,
+    })
+    .catch((err: unknown) => {
+      throw new Error(
+        `Matrix approval reaction ${reactionEventId} was not observed before waiting for the gateway decision: ${String(err)}`,
+      );
+    });
+  const result = await waitForLiveQaApprovalDecision({
     approvalId,
-    context: params.context,
+    gateway: { call: params.context.gatewayCall },
     kind,
+    timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
   });
   assertApprovalDecisionResult({
     approvalId,
@@ -452,8 +407,8 @@ async function runApprovalReactionScenario(params: {
           `approval id: ${approvalId}`,
           `approval kind: ${approval.event.approval?.kind ?? "<missing>"}`,
           `decision: ${params.decision}`,
-          `reaction event: ${reaction.eventId}`,
-          `reaction target: ${reaction.reaction?.eventId ?? "<missing>"}`,
+          `reaction event: ${reactionEventId}`,
+          `reaction target: ${targetEventId}`,
         ]
     ).join("\n"),
   } satisfies MatrixQaScenarioExecution;

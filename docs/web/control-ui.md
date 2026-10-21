@@ -29,6 +29,9 @@ editors, Memory Import selections, Activity history, Dreaming results, approval
 queues, and open board and portal documents in memory. A transport interruption
 does not reset those page-local drafts. The connection indicator at the bottom
 left shows the connection state; retained data may be out of date until reconnect.
+While automatic reconnection is running, the indicator shows **Reconnecting…**
+with the sidebar's standard spinner and without a Retry button. **Retry** remains available when automatic recovery stops.
+A required page refresh keeps its separate refresh action.
 
 If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
 
@@ -74,6 +77,8 @@ An authenticated same-origin reload includes shared display settings and your pr
 Saved pin labels remain visible while their details refresh, even when those sessions are outside the first list page. Unavailable pins disappear silently without removing their saved shortcuts. Sidebar session updates arriving within one display frame paint together. Sidebar refreshes reuse unchanged session rows while still receiving current counts, defaults, and filters. Reconnecting can reuse those rows when the same client retains their revision; changes to visible membership or row facts return a fresh page.
 
 Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
+
+On a dashboard reload, a saved widget with an unexpired view ticket can load its document while the first Gateway connection is pending. Gateway-backed actions still wait for the connection, and loading pauses if the Gateway goes offline. Expired tickets require a fresh ticket from the Gateway.
 
 Transcript history loads in parallel with the browser cache. An unchanged history response keeps the cached message rows and widget sizes in place. The transcript restores its saved reading position, or opens at the end, before showing its initial measured rows. Measured rows become visible once their selected geometry is committed, without an extra layout frame.
 
@@ -283,29 +288,22 @@ name the child session that failed, even when its parent has finished or continu
 working. Select the warning to open the child session and acknowledge its failure;
 a subagent chat opens without adding a sidebar row.
 
-Choose **New agent** in the sidebar or Agents home to open the custodian chat.
-It recommends a chief of staff, researcher, writer, reviewer, or a small team
-with all four. Reply with a choice, or describe custom work and a name. Role
-choices use the same [role templates](/cli/agents#role-templates) as the CLI;
-creation waits for operator approval. For custom work, the approved purpose is
-saved in the new workspace's `AGENTS.md`; the normal identity ceremony still runs.
-With `skipBootstrap` enabled, only these requested instructions are seeded, without
-the generic identity or bootstrap files.
-Existing workspace instructions are never overwritten. If `AGENTS.md` already
-contains different instructions, choose a new workspace for the custom agent.
-Created agents appear in Agents home and
-the agent switcher.
+Choose **Create new agent** in the agent selector to open a name-and-avatar
+dialog. Enter a name and choose or generate a Blobster avatar. On submission,
+the agent appears first in the list and its own chat opens immediately while
+OpenClaw checks that inference is usable. If the check fails, OpenClaw explains
+the problem and does not create an agent. After verification, it saves the agent
+and a greeting that uses its name, then asks you to choose one role. The agent
+follows up by asking for more detail about your goal before helping. Every
+message stays in that conversation; leaving and returning resumes the same
+chat. Its stable internal ID can appear in the URL, but never as its display
+name or subtitle. The latest created agent stays first after a reload.
 
-The sidebar agent menu uses horizontal rows with a bounded, scrollable list.
-With more than six agents, **Find an agent…** filters by display name or agent ID;
-matching names retain their existing pinned order. Duplicate names show their
-IDs underneath. New-agent, directory, capability, and settings actions stay outside
-the scrolling list. Reopening the menu clears the filter and brings the selected
-agent into view.
-Opening **New agent** keeps your existing Ask OpenClaw conversation. Finish any
-pending wizard or approval before opening the creation choices.
-If team creation stops partway through, the custodian reports the retained
-agents so you can inspect them before creating the missing members.
+The selector starts with **Create new agent**, using a plus-circle icon, followed
+by **Show all** when multiple agents are available. Compact avatar-and-name rows
+fill a bounded, scrollable list. Each row's settings gear opens that agent's
+existing settings without switching the selected agent. Reopening the menu
+brings the selected agent into view.
 
 ## Download files
 
@@ -326,6 +324,13 @@ Downloads use the session's existing file-read access, including managed reposit
 workspaces. Provider-backed node workspaces whose bridge only supports whole-file
 reads do not yet support downloads. Authorization errors appear in the UI; transfer
 progress and failures appear in your browser's download manager.
+
+To add an open file to your next message, choose **Attach to session** from the
+file toolbar's **⋯** menu. The file appears in the existing message draft; it is
+sent only when you send that message. Clean files use their original bytes.
+Text files with unsaved editor changes attach the current edited text without
+saving the file. Existing upload permissions and attachment size limits apply.
+Switching the file or session cancels a pending read.
 
 ## Take a photo in chat
 
@@ -398,20 +403,17 @@ If you paste a setup code from **Devices → Pair device → Copy setup code** i
 
 Local onboarding generates a Gateway secret in token mode by default, without a token/password picker, and preserves existing password mode. Use `--gateway-auth password` or `--gateway-password <value>` for explicit password setup; Tailscale Funnel requires password mode. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into **Gateway secret**.
 
-## Agents home
+<a id="agents-home" />
 
-Open **Agents** in the sidebar, choose **See all agents** in the agent menu, or
-visit `/agents` to see your configured agents as a roster. Each card shows the
-agent's identity, model, current work status, last activity, and a preview from its
-main chat. **Open chat** opens that agent's
-main session. Working agents appear first, followed by the most recently active.
+## Agents and Claws
 
-**Manage agents** opens `/settings/agents`. **New agent** requires the Gateway's
-`openclaw.chat` method and `operator.admin` scope. Without that access, the Agents
-home and settings controls stay visible but disabled; their tooltip explains how
-to pair with the required scope and reconnect. Opening the custodian directly
-also explains missing access instead of silently waiting. `/agents` opens the
-roster; agent configuration remains at `/settings/agents`.
+Use the agent selector to open an agent's chat or its settings gear to configure
+that agent. Per-agent settings remain at `/settings/agents/<id>`.
+
+Open **Claws** in **Pages**, or visit `/claws`, to discover official Claws.
+This page contains Claws discovery only. Enable **Claws** in **Settings → Labs**
+to make it available; when disabled, both the Pages entry and direct visits to
+Claws discovery or details are unavailable. The former `/agents` overview is removed.
 
 To browse sessions across agents, choose the **Show all** tile in the agent
 switcher. It appears with two or more agents and groups their own avatars: two
@@ -419,12 +421,11 @@ overlap diagonally, three or four form a two-column grid, and five or more show
 three avatars plus a remaining-agent count. This enables **team mode**, a browser
 preference that is off by default. The top row becomes a workspace header with
 the configured Gateway display name, or **OpenClaw**, and a small static OpenClaw mark.
-Both modes use the same menu: agent tiles, **New agent**, **See all agents**, then
-a divider before **What can Harbor do?** and **Harbor settings**, named for the
-active agent. **See all agents** opens `/agents`; the named settings action opens
-that agent’s configuration. The selected tile has an avatar ring. Help and its
-links remain in the account menu. Pinned sessions stay in **Pages**, using their
-agent's avatar as the icon.
+Both modes use the same selector: **Create new agent**, **Show all**, then compact
+agent rows with a settings gear on the right. Choosing a gear opens that agent's
+configuration without selecting it. The selected row has an avatar ring. Help
+and its links remain in the account menu. Pinned sessions stay in **Pages**, using
+their agent's avatar as the icon.
 Other sessions appear under collapsible agent headers in configured roster order,
 which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
 open that agent's main chat. The separate collapse control only folds its sessions.
@@ -449,8 +450,7 @@ chat; open an agent's main chat from its group header to select it. Chat actions
 always belong to the conversation's agent.
 
 Choose **All sessions** from an agent group’s options menu to open the Sessions
-page filtered to that agent. Open **Agents** in the sidebar to return to the roster
-page. See [Sidebar navigation](/web/control-ui/sessions-and-sidebar#sidebar-navigation)
+page filtered to that agent. See [Sidebar navigation](/web/control-ui/sessions-and-sidebar#sidebar-navigation)
 for group controls and filtering.
 
 Agent names and avatars follow agent and identity updates. While a configured avatar image loads,
@@ -464,7 +464,7 @@ misses for current profile revisions, agent avatars, and resolved workspace icon
 the browser cache for up to one minute. New profile and agent image revisions use a new URL.
 This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
 
-Activity and previews on the page and sidebar roster refresh on session events
+Activity and previews in the sidebar roster refresh on session events
 and Gateway reconnects. Reusing cached ancestry for the selected session does not
 trigger another list read. Events collect in a randomized four-to-five-second window
 that later events cannot postpone, spreading automatic reads across browsers.

@@ -208,6 +208,10 @@ describe("Search configuration lifecycle", () => {
     const field = fixture.edit(label, "synthetic-replacement");
     const committed = fixture.runtime.flushFormChanges();
     await fixture.writeStarted.promise;
+    if (label === "Example API key") {
+      await vi.advanceTimersByTimeAsync(0);
+      await waitForSolid(() => expect(field.disabled).toBe(true));
+    }
     if (phase === "pending reverted") {
       fixture.runtime.patchForm(endpointPath, "https://initial.example.test");
     }

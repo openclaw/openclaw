@@ -3,6 +3,7 @@ import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packa
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { shellViewport, type ShellViewportSnapshot } from "../../app/shell-viewport.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { buildCompanionQuestionPrefill } from "../../lib/chat/companion-question.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -33,6 +34,8 @@ import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   sidebarMainPanel,
 } from "./sidebar-layout.ts";
+
+registerChatSessionEnglish();
 
 export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
   sidebarRegionElement: HTMLElement | null = null;
@@ -120,11 +123,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       reservedHeight: this.mobilePresentation.reservedHeight,
       destination: this.mobilePresentation.destination,
       detailsMount: this.mobilePresentation.detailsMount,
-      setDetailsMount: (element) => {
-        if (element !== this.mobilePresentation.detailsMount) {
-          this.mobilePresentation.detailsMount = element;
-        }
-      },
+      setDetailsMount: this.setMobileDetailsMount,
       navigate: (destination, source) => this.navigateMobileHost(destination, source),
       reveal: (source) => this.navigateMobileHost(this.mobilePresentation.destination, source),
       close: () => {
@@ -173,6 +172,13 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       onViewportChange: this.onMobileViewportChange,
     };
   }
+
+  // The renderer keys attachment cleanup by this pane's stable callback.
+  private readonly setMobileDetailsMount = (element: HTMLElement | null): void => {
+    if (element !== this.mobilePresentation.detailsMount) {
+      this.mobilePresentation.detailsMount = element;
+    }
+  };
 
   private readonly onMobileComposerEditingChange = (editing: boolean): void => {
     if (!this.usesMobileHost || editing === this.mobilePresentation.composerEditing) {

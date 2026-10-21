@@ -1,9 +1,11 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as execRunner from "../process/exec-runner.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
 import * as processExec from "../process/exec.js";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import { executeGitCommand, executeGitCommandBytes } from "./git-exec.js";
+import { buildUpdateCommandRunner, runStep } from "./update-runner-command.js";
 
 const fetch = (options: Parameters<typeof executeGitCommandBytes>[2] = {}) =>
   executeGitCommandBytes("/repo", ["fetch", "origin"], { timeoutMs: 10_000, ...options });
@@ -94,6 +96,74 @@ it("cancels during backoff without starting another Git process", async () => {
   controller.abort();
   expect(await pending).toMatchObject({ termination: "signal", code: null });
   expect(calls).toHaveLength(1);
+});
+
+it.each([10_000, undefined])(
+  "completes an update fetch after an incomplete advertisement (timeout %s)",
+  async (timeoutMs) => {
+    results(
+      { ...failure, stderr: "fatal: transfer closed with 187 bytes remaining to read" },
+      success,
+    );
+    const { runCommand } = await buildUpdateCommandRunner();
+    const completed = vi.fn();
+    const pending = runStep({
+      name: "git-target-inspection-fetch",
+      argv: ["git", "-C", "/repo", "--git-dir=/inspection.git", "fetch", "origin"],
+      cwd: "/repo",
+      timeoutMs,
+      runCommand,
+      stepIndex: 0,
+      totalSteps: 1,
+      progress: { onStepComplete: completed },
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toMatchObject({ exitCode: 0, stdoutTail: "complete output" });
+    expect(completed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ exitCode: 0 }));
+    expect(completed.mock.calls[0]?.[0].failureFacts).toBeUndefined();
+    expect(calls.map((call) => call.timeoutMs)).toEqual([
+      timeoutMs,
+      timeoutMs === undefined ? undefined : 9_000,
+    ]);
+  },
+);
+
+it("stops the updater's inherited command scope during retry backoff", async () => {
+  const { runCommand } = await buildUpdateCommandRunner();
+  const controller = new AbortController();
+  const pending = withCommandProcessScope(
+    () => runCommand(["git", "fetch", "origin"], {}),
+    controller.signal,
+  );
+  await vi.advanceTimersByTimeAsync(100);
+  controller.abort();
+  expect(await pending).toMatchObject({ termination: "signal", code: null });
+  expect(calls).toHaveLength(1);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("rechecks updater authority before a second network attempt", async () => {
+  const revoked = new Error("update requester revoked");
+  let current = true;
+  const { runCommand } = await buildUpdateCommandRunner(undefined, () => {
+    if (!current) {
+      throw revoked;
+    }
+  });
+  const pending = runCommand(["git", "fetch", "origin"], {});
+  const rejected = expect(pending).rejects.toBe(revoked);
+  await vi.advanceTimersByTimeAsync(100);
+  current = false;
+  await vi.advanceTimersByTimeAsync(900);
+  await rejected;
+  expect(calls).toHaveLength(1);
+});
+
+it("does not retry package installation after a transport-like failure", async () => {
+  const { runCommand } = await buildUpdateCommandRunner();
+  expect(await runCommand(["pnpm", "install"], {})).toEqual(failure);
+  expect(calls).toHaveLength(1);
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 it.each(["beforeRun", "startRun"] as const)(

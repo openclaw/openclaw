@@ -1,4 +1,8 @@
 import "./discussions/session-authority.test-support.js";
+import {
+  hasControlCommand,
+  shouldComputeCommandAuthorized,
+} from "openclaw/plugin-sdk/command-detection";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +32,7 @@ import type {
 let runtime: PluginRuntime;
 beforeEach(() => {
   runtime = createInboundRuntime(false);
+  vi.mocked(runtime.channel.text.hasControlCommand).mockImplementation(hasControlCommand);
   setClickClackRuntime(runtime);
 });
 
@@ -97,6 +102,31 @@ function handleCurrent(
 }
 
 describe("ClickClack inbound mention gating", () => {
+  it.each([
+    { body: "! poll", allowed: false },
+    { body: "hello ! poll", allowed: false },
+    { body: "@blackbird ! poll", allowed: true },
+    { body: "/bash poll", allowed: true },
+  ])(
+    "keeps command authorization separate from mention bypass: $body",
+    async ({ body, allowed }) => {
+      vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockImplementation(
+        shouldComputeCommandAuthorized,
+      );
+      vi.mocked(runtime.channel.commands.shouldHandleTextCommands).mockReturnValue(true);
+      await dispatchPublished(
+        makeAccount({ requireMention: true, allowFrom: ["usr_owner"] }),
+        { body },
+        { commands: { bash: true } },
+      );
+      const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
+      expect(dispatch).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      if (allowed) {
+        expect(dispatch.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
+      }
+    },
+  );
+
   it.each([
     { name: "direct message", body: "hello", direct: true, allowed: true },
     { name: "empty group body", body: "", allowed: false },
@@ -464,6 +494,11 @@ describe("ClickClack inbound mention gating", () => {
       },
       true,
     ),
+    scenario("spaced bash still needs a mention", {
+      patch: { requireMentionInBotThreads: true },
+      body: "! poll",
+      command: true,
+    }),
   ])(
     "rechecks admission when $name while ingress settles",
     async ({

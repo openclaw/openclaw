@@ -52,6 +52,8 @@ afterEach(() => {
 });
 
 it("opens navigation actions through the sidebar menu owner for pointer and keyboard access", async () => {
+  const warnings = vi.spyOn(console, "warn");
+  onTestFinished(() => warnings.mockRestore());
   const run = vi.fn();
   const abort = new AbortController();
   const entry = registrations({ pageHref: () => "/boards" }, abort.signal);
@@ -129,6 +131,9 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
   abort.abort();
   staleItem.click();
   expect(run).toHaveBeenCalledTimes(3);
+  expect(
+    warnings.mock.calls.filter(([message]) => String(message).includes("NO_OWNER_EFFECT")),
+  ).toEqual([]);
 });
 
 it("shows the active plugin section's ordered children and leaves pinned children standalone", async () => {

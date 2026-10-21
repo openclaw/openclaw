@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { prepareSecretsRuntimeFastPathSnapshot } from "../../secrets/runtime-fast-path.js";
 import { activateSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
+import { prepareSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
@@ -50,7 +50,10 @@ import {
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
 import { authProfileScopeCwdEntrypoint } from "./store-scope-cwd-runtime.test-support.js";
-import { createAuthOwnerTestFixtures } from "./store-state-owner.test-support.js";
+import {
+  createAuthOwnerTestFixtures,
+  persistOwnerProfile as persistProfile,
+} from "./store-state-owner.test-support.js";
 import {
   captureAuthProfileStorePersistenceSnapshot as capturePersistence,
   restoreAuthProfileStorePersistenceSnapshot as restorePersistence,
@@ -58,7 +61,6 @@ import {
   withEnvOnlyAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
-import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 const { tempDirs, saveOptions, apiKey, store, snapshotAt, unreadableOuter, seedRoot } =
   createAuthOwnerTestFixtures();
@@ -92,18 +94,6 @@ function saveProfiles(profiles: AuthProfileStore["profiles"], agentDir?: string)
 }
 function writeRaw(profiles: unknown, agentDir: string) {
   writePersistedAuthProfileStoreRaw({ version: 1, profiles }, agentDir);
-}
-function persistProfile(
-  root: Pick<Root, "stateDir">,
-  profileId: string,
-  credential: AuthProfileCredential,
-  agentDir?: string,
-) {
-  return persistAuthProfileBatch({
-    stateDir: root.stateDir,
-    agentDir,
-    profiles: [{ profileId, credential }],
-  });
 }
 function refuseMigration(root: Root) {
   markAuthProfileMigrationRequired(
@@ -208,7 +198,6 @@ describe("auth publication owner receipts", () => {
       if (mode === "cold") {
         clearRuntimeAuthProfileStoreSnapshots();
       } else if (mode === "admitted") {
-        const { prepareSecretsRuntimeSnapshot } = await import("../../secrets/runtime.js");
         await withEnvAsync(owner.env, async () => {
           const snapshot = await prepareSecretsRuntimeSnapshot({
             config: {},
@@ -250,7 +239,6 @@ describe("auth publication owner receipts", () => {
   it.each(["prepare", "activate"] as const)(
     "requires a recorded migration diagnosis discovered at %s before empty-owner activation",
     async (discoveredAt) => {
-      const { prepareSecretsRuntimeSnapshot } = await import("../../secrets/runtime.js");
       const first = await seedRoot("first");
       const second = await seedRoot("second");
       const agentDir = tempDirs.make("openclaw-auth-owner-empty-activation-");
@@ -599,16 +587,13 @@ describe("auth publication owner receipts", () => {
     const coldAgentDir = tempDirs.make("openclaw-auth-owner-unrelated-cold-");
     const assertOuterUnchanged = unreadableOuter("future");
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: coldAgentDir, store: store("cold") }]);
-    const prepared = prepareSecretsRuntimeFastPathSnapshot({
+    const snapshot = await prepareSecretsRuntimeSnapshot({
       config: {},
       env: first.env,
       agentDirs: [first.agentDir],
       loadAuthStore: () => withEnv(first.env, () => readStore(first.agentDir)),
     });
-    assert(prepared, "missing prepared snapshot");
-    expect(() =>
-      activateSecretsRuntimeSnapshotState({ ...prepared, refreshHandler: null }),
-    ).not.toThrow();
+    expect(() => activateSnapshot(snapshot)).not.toThrow();
     expect(snapshotAt(first.agentPath)?.profiles.shared).toEqual(apiKey("first"));
     assertOuterUnchanged();
   });

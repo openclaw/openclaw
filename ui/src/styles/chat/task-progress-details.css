@@ -319,6 +319,15 @@
   height: 20px;
 }
 
+/* Match the inset drawing and stroke of the sibling check and clock SVGs. */
+.task-progress-details
+  :is(.session-progress-card__current-marker, .session-progress-card__step-marker)
+  > .session-run-spinner {
+  width: calc(var(--session-progress-marker-size) - 2px);
+  height: calc(var(--session-progress-marker-size) - 2px);
+  border-width: 1px;
+}
+
 /* Keep the checklist's smaller type while sharing the desktop row geometry. */
 .chat-details-desktop-body
   .task-progress-details--desktop[data-desktop-details]

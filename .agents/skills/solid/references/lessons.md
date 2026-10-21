@@ -31,6 +31,18 @@ The [rc.14 changelog](https://github.com/solidjs/solid/blob/8d23a5a13b23f8bfd5f0
 - **RPC fixtures must return fresh snapshots.** Reusing and mutating objects already passed into a store bypasses reactive updates. Clone mock responses when simulating later JSON replies, as the snapshot polling test does.
 - **Binding slots were renamed.** `BindingSlot` replaces `AttributeSlot` without an alias and restricts fill output types. OpenClaw currently uses neither API.
 
+### rc.16 upgrade
+
+The [rc.16 changelogs](https://github.com/solidjs/solid/tree/b0ad1df505b835058a4b3750ab37d6576bb18c01/packages) and shipped `CHEATSHEET.md` refine these contracts:
+
+- **Teardown writes are supported.** rc.16 exempts cleanup callbacks from the dev owned-write restriction and fixes cleanup writes stranding later transactions. The rc.14 failure above is historical; keep teardown focused on releasing resources rather than republishing disposed view state.
+- **Object derivations may omit a seed.** `createStore(fn)`, `createProjection(fn)`, and `createOptimisticStore(fn)` accept complete object answers without an invented `{}` seed. A provided seed must be a complete value; arrays still need `[]`.
+- **Deferred reads declare lag.** `createDeferred` suspends for its first answer, then keeps the previous answer during refetch without holding unrelated rendering. `isPending` still reports the refetch. Adopt only where stale presentation is intended.
+- **Held errors land with held values.** Until that commit, ordinary readers and `Errored` retain the previous frame; `latest` can expose the proposed error. `untrack` does not turn an unresolved read into a fallback.
+- **Loading resets consume values.** Use `on={identity()}`; an accessor passed as `on` never reads its dependency. Refresh a derived store at its root, then read the nested value after settlement.
+- **Providers own subtree state.** The cheatsheet now recommends provider-created state for portable request isolation; module scope is shared by server requests. OpenClaw's plain TypeScript domain owners retain their existing authority and lifetime.
+- **Binding slots are removed.** `BindingSlot`, `SlotOutput`, `SlotError`, and the frames `bind` entry are gone. OpenClaw uses none of them; ordinary slots remain.
+
 ## DOM ownership
 
 - **A tag can have only one renderer.** During migration, duplicate primitive implementations let custom-element upgrades render over Solid's children. Native custom elements and their Solid callers now share one implementation through the bridge.

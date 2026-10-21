@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createStore, Show } from "solid-js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { withPromiseModalHost } from "../components/promise-modal-host.ts";
@@ -87,9 +87,16 @@ export function startBrowserAuthRecovery(
         update?.();
       }
       const content = () => {
-        const readView = () => ({ openedSignIn, pending: Boolean(pending), probeResult });
-        const [view, setView] = createSignal(readView());
-        update = () => setView(readView());
+        const [view, setView] = createStore(
+          { openedSignIn, pending: Boolean(pending), probeResult },
+          { shallow: true },
+        );
+        update = () =>
+          setView((draft) => {
+            draft.openedSignIn = openedSignIn;
+            draft.pending = Boolean(pending);
+            draft.probeResult = probeResult;
+          });
         return (
           <openclaw-modal-dialog
             label={t("connection.browserSignIn.title")}
@@ -105,15 +112,15 @@ export function startBrowserAuthRecovery(
                   </div>
                 </div>
               </div>
-              <Show when={view().openedSignIn}>
+              <Show when={view.openedSignIn}>
                 <p>{t("connection.browserSignIn.returnHint")}</p>
               </Show>
               <p role="status" aria-live="polite">
-                {view().pending
+                {view.pending
                   ? t("connection.browserSignIn.checking")
-                  : view().probeResult === "unavailable"
+                  : view.probeResult === "unavailable"
                     ? t("connection.browserSignIn.unavailable")
-                    : view().probeResult === "sign-in"
+                    : view.probeResult === "sign-in"
                       ? t("connection.browserSignIn.stillRequired")
                       : null}
               </p>
@@ -121,8 +128,8 @@ export function startBrowserAuthRecovery(
                 <button class="btn primary" onClick={() => void signIn()}>
                   {t("connection.browserSignIn.action")}
                 </button>
-                <Show when={view().openedSignIn}>
-                  <button class="btn" disabled={view().pending} onClick={() => void check(true)}>
+                <Show when={view.openedSignIn}>
+                  <button class="btn" disabled={view.pending} onClick={() => void check(true)}>
                     {t("connection.browserSignIn.checkAgain")}
                   </button>
                 </Show>
