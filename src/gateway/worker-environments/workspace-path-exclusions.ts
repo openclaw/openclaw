@@ -14,7 +14,7 @@ const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
 ] as const;
 
 // These producers own exact checkout-relative roots, not every .cache or .artifacts path.
-const BUILD_CACHE_ROOT_PATHS = [
+export const BUILD_CACHE_ROOT_PATHS = [
   ".artifacts/build-all-cache",
   ".artifacts/build-cache-inputs",
 ] as const;

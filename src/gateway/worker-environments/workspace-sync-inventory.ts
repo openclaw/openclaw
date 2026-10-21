@@ -18,7 +18,7 @@ import {
   MAX_WORKSPACE_GIT_CANDIDATES,
   MAX_WORKSPACE_INVENTORY_PATH_BYTES,
 } from "./workspace-inventory-limits.js";
-import { isBuildCacheWorkspacePath } from "./workspace-path-exclusions.js";
+import { BUILD_CACHE_ROOT_PATHS, isBuildCacheWorkspacePath } from "./workspace-path-exclusions.js";
 
 const STDERR_LIMIT = 4_096;
 const COMMAND_KILL_GRACE_MS = 300;
@@ -57,6 +57,9 @@ export async function readGitTransferBuildCacheAdmission(params: {
     throw new Error("Worker workspace transfer list exceeds its byte limit");
   }
   const raw = await fs.readFile(params.listPath, { signal: params.signal });
+  if (!BUILD_CACHE_ROOT_PATHS.some((root) => raw.includes(root))) {
+    return [];
+  }
   const paths = raw.toString("utf8").split("\0").filter(Boolean);
   if (paths.length > MAX_WORKSPACE_GIT_CANDIDATES) {
     throw new Error("Worker workspace Git path candidates exceed their byte limit");
