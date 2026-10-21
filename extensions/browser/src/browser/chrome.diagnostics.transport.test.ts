@@ -4,7 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { diagnoseChromeCdp } from "./chrome.diagnostics.js";
 import * as chrome from "./chrome.js";
 import { createBrowserRouteContext } from "./server-context.js";
@@ -89,31 +89,27 @@ async function startCdpFixture(
     server.listen(0, "127.0.0.1", resolve);
   });
   const port = (server.address() as AddressInfo).port;
-  let closing: Promise<void> | undefined;
-  const fixture = {
+  return {
     url: `http://127.0.0.1:${port}`,
     reached,
     requests,
     disconnected,
     releaseUpgrade: () => releaseUpgrade(),
     releaseCommand: () => releaseCommand(),
-    close: () =>
-      (closing ??= (async () => {
-        for (const socket of sockets) {
-          socket.destroy();
-        }
-        await Promise.all([
-          new Promise<void>((resolve) => {
-            wss.close(() => resolve());
-          }),
-          new Promise<void>((resolve) => {
-            server.close(() => resolve());
-          }),
-        ]);
-      })()),
+    close: async () => {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await Promise.all([
+        new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+        }),
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        }),
+      ]);
+    },
   };
-  onTestFinished(fixture.close);
-  return fixture;
 }
 
 afterEach(() => {
@@ -145,36 +141,44 @@ describe("Chrome CDP diagnostic transport", () => {
   it("diagnoses stale command channels with the discovered WebSocket URL", async () => {
     const fixture = await startCdpFixture({ hold: "command" });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const onDiagnostic = vi.fn();
-    const probing = chrome.isChromeCdpReady(fixture.url, 1_000, 1_000, undefined, {
-      onDiagnostic,
-    });
-    await fixture.reached.command.promise;
-    await vi.advanceTimersByTimeAsync(1_100);
+    try {
+      const onDiagnostic = vi.fn();
+      const probing = chrome.isChromeCdpReady(fixture.url, 1_000, 1_000, undefined, {
+        onDiagnostic,
+      });
+      await fixture.reached.command.promise;
+      await vi.advanceTimersByTimeAsync(1_100);
 
-    await expect(probing).resolves.toBe(false);
-    expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        ok: false,
-        code: "websocket_health_command_timeout",
-        wsUrl: `${fixture.url.replace("http:", "ws:")}/devtools/browser/test`,
-      }),
-    );
-    await fixture.disconnected.command.promise;
+      await expect(probing).resolves.toBe(false);
+      expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          ok: false,
+          code: "websocket_health_command_timeout",
+          wsUrl: `${fixture.url.replace("http:", "ws:")}/devtools/browser/test`,
+        }),
+      );
+      await fixture.disconnected.command.promise;
+    } finally {
+      await fixture.close();
+    }
   });
 
   it("gives the health command its full timeout after a delayed handshake", async () => {
     const fixture = await startCdpFixture({ hold: "handshake", holdCommand: true });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const probing = diagnoseChromeCdp(fixture.url, 1_000, 1_000);
-    await fixture.reached.handshake.promise;
-    await vi.advanceTimersByTimeAsync(600);
-    fixture.releaseUpgrade();
-    await fixture.reached.command.promise;
-    await vi.advanceTimersByTimeAsync(600);
-    fixture.releaseCommand();
+    try {
+      const probing = diagnoseChromeCdp(fixture.url, 1_000, 1_000);
+      await fixture.reached.handshake.promise;
+      await vi.advanceTimersByTimeAsync(600);
+      fixture.releaseUpgrade();
+      await fixture.reached.command.promise;
+      await vi.advanceTimersByTimeAsync(600);
+      fixture.releaseCommand();
 
-    await expect(probing).resolves.toMatchObject({ ok: true });
+      await expect(probing).resolves.toMatchObject({ ok: true });
+    } finally {
+      await fixture.close();
+    }
   });
 
   it.each<ProbePhase>(["http", "handshake", "command"])(
@@ -183,31 +187,39 @@ describe("Chrome CDP diagnostic transport", () => {
       const fixture = await startCdpFixture({ hold: phase });
       const controller = new AbortController();
       const reason = new Error("diagnostic request cancelled");
-      const probing = diagnoseChromeCdp(
-        fixture.url,
-        60_000,
-        60_000,
-        undefined,
-        controller.signal,
-      ).then(
-        (result) => result,
-        (error: unknown) => error,
-      );
-      await fixture.reached[phase].promise;
-      controller.abort(reason);
+      try {
+        const probing = diagnoseChromeCdp(
+          fixture.url,
+          60_000,
+          60_000,
+          undefined,
+          controller.signal,
+        ).then(
+          (result) => result,
+          (error: unknown) => error,
+        );
+        await fixture.reached[phase].promise;
+        controller.abort(reason);
 
-      await expect(cancellableProbe(probing)).resolves.toBe(reason);
-      await fixture.disconnected[phase].promise;
-      expect(fixture.requests).toEqual(["/json/version"]);
+        await expect(cancellableProbe(probing)).resolves.toBe(reason);
+        await fixture.disconnected[phase].promise;
+        expect(fixture.requests).toEqual(["/json/version"]);
+      } finally {
+        await fixture.close();
+      }
     },
   );
 
   it("reports malformed advertised WebSocket URLs as a failed diagnostic", async () => {
     const fixture = await startCdpFixture({ advertisedUrl: "not-a-url" });
-    await expect(diagnoseChromeCdp(fixture.url)).resolves.toMatchObject({
-      ok: false,
-      code: "websocket_handshake_failed",
-    });
+    try {
+      await expect(diagnoseChromeCdp(fixture.url)).resolves.toMatchObject({
+        ok: false,
+        code: "websocket_handshake_failed",
+      });
+    } finally {
+      await fixture.close();
+    }
   });
 
   it("cancels discovery through the default-profile context", async () => {
@@ -215,14 +227,18 @@ describe("Chrome CDP diagnostic transport", () => {
     const controller = new AbortController();
     const reason = new Error("default profile probe cancelled");
     const profile = fixtureProfile(fixture.url);
-    const probing = profile
-      .isHttpReachable(60_000, controller.signal)
-      .catch((error: unknown) => error);
-    await fixture.reached.http.promise;
-    controller.abort(reason);
-    await expect(cancellableProbe(probing)).resolves.toBe(reason);
-    await fixture.disconnected.http.promise;
-    expect(fixture.requests).toEqual(["/json/version"]);
+    try {
+      const probing = profile
+        .isHttpReachable(60_000, controller.signal)
+        .catch((error: unknown) => error);
+      await fixture.reached.http.promise;
+      controller.abort(reason);
+      await expect(cancellableProbe(probing)).resolves.toBe(reason);
+      await fixture.disconnected.http.promise;
+      expect(fixture.requests).toEqual(["/json/version"]);
+    } finally {
+      await fixture.close();
+    }
   });
 
   it("stops a profile while its readiness command is pending", async () => {

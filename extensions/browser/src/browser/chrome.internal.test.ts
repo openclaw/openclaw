@@ -286,59 +286,68 @@ describe("chrome.ts internal", () => {
   });
 
   it.each([
-    ["headed Chrome", [], true, true, false],
-    ["headless Chrome", ["--headless=new"], true, true, true],
-    ["a local relay", [], false, true, undefined],
-    ["a remote browser", [], true, false, undefined],
-  ] as const)(
-    "inspects %s only after proving local process ownership",
-    async (_name, extraArgs, ownsPort, loopback, expected) => {
-      const browserPid = 43210;
-      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      await withMockChromeCdpServer({
-        wsPath: "/devtools/browser/EXTERNAL_MODE",
-        onCommand: (method) => {
-          expect(method).toBe("SystemInfo.getProcessInfo");
-          return { processInfo: [{ type: "browser", id: browserPid }] };
-        },
-        run: async (baseUrl) => {
-          const port = Number(new URL(baseUrl).port);
-          mockLinuxManagedChromeOwnership({
-            pid: browserPid,
-            port,
-            executablePath: "/usr/bin/chromium",
-            userDataDir: "/tmp/external-browser",
-            ownsPort,
-            extraArgs: [...extraArgs],
-          });
-          const profile = {
-            name: "manual-cdp",
-            cdpUrl: baseUrl,
-            cdpHost: "127.0.0.1",
-            cdpIsLoopback: loopback,
-            cdpPort: port,
-            color: "#00AA00",
-            driver: "openclaw",
-            headless: false,
-            attachOnly: true,
-          } as ResolvedBrowserProfile;
-          await expect(
-            inspectLocalChromeHeadlessMode({
-              profile,
-              browserWebSocketUrl: `ws://127.0.0.1:${port}/devtools/browser/EXTERNAL_MODE`,
-              timeoutMs: 100,
-            }),
-          ).resolves.toBe(expected);
-        },
-      });
-      if (loopback) {
-        expect(killSpy).toHaveBeenCalledWith(browserPid, 0);
-      } else {
-        expect(killSpy).not.toHaveBeenCalled();
-      }
+    { name: "headed Chrome", extraArgs: [], ownsPort: true, loopback: true, expected: false },
+    {
+      name: "headless Chrome",
+      extraArgs: ["--headless=new"],
+      ownsPort: true,
+      loopback: true,
+      expected: true,
     },
-  );
+    { name: "a local relay", extraArgs: [], ownsPort: false, loopback: true, expected: undefined },
+    {
+      name: "a remote browser",
+      extraArgs: [],
+      ownsPort: true,
+      loopback: false,
+      expected: undefined,
+    },
+  ])("inspects $name only after proving local process ownership", async (testCase) => {
+    const browserPid = 43210;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/EXTERNAL_MODE",
+      onCommand: (method) => {
+        expect(method).toBe("SystemInfo.getProcessInfo");
+        return { processInfo: [{ type: "browser", id: browserPid }] };
+      },
+      run: async (baseUrl) => {
+        const port = Number(new URL(baseUrl).port);
+        mockLinuxManagedChromeOwnership({
+          pid: browserPid,
+          port,
+          executablePath: "/usr/bin/chromium",
+          userDataDir: "/tmp/external-browser",
+          ownsPort: testCase.ownsPort,
+          extraArgs: testCase.extraArgs,
+        });
+        const profile = {
+          name: "manual-cdp",
+          cdpUrl: baseUrl,
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: testCase.loopback,
+          cdpPort: port,
+          color: "#00AA00",
+          driver: "openclaw",
+          headless: false,
+          attachOnly: true,
+        } as ResolvedBrowserProfile;
+        await expect(
+          inspectLocalChromeHeadlessMode({
+            profile,
+            browserWebSocketUrl: `ws://127.0.0.1:${port}/devtools/browser/EXTERNAL_MODE`,
+            timeoutMs: 100,
+          }),
+        ).resolves.toBe(testCase.expected);
+      },
+    });
+    if (testCase.loopback) {
+      expect(killSpy).toHaveBeenCalledWith(browserPid, 0);
+    } else {
+      expect(killSpy).not.toHaveBeenCalled();
+    }
+  });
 
   describe("launchOpenClawChrome", () => {
     let tmpDir = "";
@@ -669,25 +678,26 @@ describe("chrome.ts internal", () => {
       expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
     });
 
-    it("checks Chrome's IPv4 bind and the configured IPv6 endpoint", async () => {
-      const cdpUrl = "http://[::1]:51111";
-      const configuredProbeHost = "::1";
-      vi.spyOn(fs, "existsSync").mockReturnValue(false);
-      const portBusy = new Error("Port is already in use.");
-      portBusy.name = "PortInUseError";
-      ensurePortAvailableMock.mockImplementation(async (_port, host) => {
-        if (host === configuredProbeHost) {
-          throw portBusy;
-        }
-      });
-      const profile = { ...makeProfile(51111), cdpUrl };
+    it.each([{ cdpUrl: "http://[::1]:51111", configuredProbeHost: "::1" }])(
+      "checks Chrome's IPv4 bind and the configured $configuredProbeHost endpoint",
+      async ({ cdpUrl, configuredProbeHost }) => {
+        vi.spyOn(fs, "existsSync").mockReturnValue(false);
+        const portBusy = new Error("Port is already in use.");
+        portBusy.name = "PortInUseError";
+        ensurePortAvailableMock.mockImplementation(async (_port, host) => {
+          if (host === configuredProbeHost) {
+            throw portBusy;
+          }
+        });
+        const profile = { ...makeProfile(51111), cdpUrl };
 
-      await expect(launchOpenClawChrome(makeResolved(), profile)).rejects.toThrow(portBusy);
-      expect(ensurePortAvailableMock.mock.calls).toEqual([
-        [51111, "127.0.0.1"],
-        [51111, configuredProbeHost],
-      ]);
-    });
+        await expect(launchOpenClawChrome(makeResolved(), profile)).rejects.toThrow(portBusy);
+        expect(ensurePortAvailableMock.mock.calls).toEqual([
+          [51111, "127.0.0.1"],
+          [51111, configuredProbeHost],
+        ]);
+      },
+    );
 
     it("completes successfully when Chrome reports /json/version and CDP is reachable", async () => {
       // Mock executable discovery to a truthy path.
@@ -1044,12 +1054,27 @@ describe("chrome.ts internal", () => {
     );
 
     it.each([
-      ["directory with spaces", "", " with spaces", false],
-      ["space-suffixed directory", " backup", "", false],
-      ["replacement lock from another host", "", "", true],
-    ] as const)(
-      "keeps cross-runtime cleanup bound to the %s",
-      async (_name, suffix, profileSuffix, replaceLock) => {
+      {
+        name: "directory with spaces",
+        suffix: "",
+        profileSuffix: " with spaces",
+        replaceLock: false,
+      },
+      {
+        name: "space-suffixed directory",
+        suffix: " backup",
+        profileSuffix: "",
+        replaceLock: false,
+      },
+      {
+        name: "replacement lock from another host",
+        suffix: "",
+        profileSuffix: "",
+        replaceLock: true,
+      },
+    ])(
+      "keeps cross-runtime cleanup bound to the $name",
+      async ({ suffix, profileSuffix, replaceLock }) => {
         const executablePath = await stubExistingProfile();
 
         const managedPid = 43213;
@@ -1285,55 +1310,76 @@ describe("chrome.ts internal", () => {
     });
 
     it("reuses existing preferences without bootstrapping another Chrome", async () => {
-      const profileName = path.basename(tmpDir);
-      const colorInt = ((0xff << 24) | 0xff4500) >> 0;
-      const userDataDir = managedDirectory(profileName);
-      const preferencesPath = path.join(userDataDir, "Default", "Preferences");
-      await fsp.mkdir(path.dirname(preferencesPath), { recursive: true });
-      await fsp.writeFile(
-        path.join(userDataDir, "Local State"),
-        JSON.stringify({
-          profile: { info_cache: { Default: { name: profileName, profile_color_seed: colorInt } } },
-        }),
-      );
-      await fsp.writeFile(
-        preferencesPath,
-        JSON.stringify({
-          browser: { theme: { user_color2: colorInt } },
-          autogenerated: { theme: { color: colorInt } },
-          custom: { preserved: true },
-        }),
-      );
-      const existsSync = fs.existsSync.bind(fs);
-      vi.spyOn(fs, "existsSync").mockImplementation(
-        (candidate) =>
-          /Google Chrome|google-chrome|\/usr\/bin\/chromium/.test(String(candidate)) ||
-          existsSync(candidate),
-      );
-      spawnMock.mockImplementation(() => makeFakeProc());
-      await withMockChromeCdpServer({
-        wsPath: "/devtools/browser/DECORATED",
-        run: async (baseUrl) => {
-          const profile = makeBrowserProfile({
-            name: profileName,
-            color: "#FF4500",
-            cdpPort: Number(new URL(baseUrl).port),
-            cdpUrl: baseUrl,
-            headless: true,
-          });
-          const { resolved } = makeBrowserServerState({
-            profile,
-            resolvedOverrides: { noSandbox: true },
-          });
-          const running = await launchOpenClawChrome(resolved, profile);
-          expect(running.pid).toBe(4242);
-          expect(spawnMock).toHaveBeenCalledOnce();
-          expect(JSON.parse(await fsp.readFile(preferencesPath, "utf8"))).toMatchObject({
+      try {
+        const profileName = path.basename(tmpDir);
+        const colorHex = "#FF4500";
+        const colorInt = ((0xff << 24) | 0xff4500) >> 0;
+        const userDataDir = path.join(resolveOpenClawUserDataDir(profileName));
+        await fsp.mkdir(path.join(userDataDir, "Default"), { recursive: true });
+        await fsp.writeFile(
+          path.join(userDataDir, "Local State"),
+          JSON.stringify({
+            profile: {
+              info_cache: {
+                Default: {
+                  name: profileName,
+                  profile_color_seed: colorInt,
+                },
+              },
+            },
+          }),
+        );
+        await fsp.writeFile(
+          path.join(userDataDir, "Default", "Preferences"),
+          JSON.stringify({
+            browser: { theme: { user_color2: colorInt } },
+            autogenerated: { theme: { color: colorInt } },
             custom: { preserved: true },
-          });
-          running.proc.kill?.("SIGTERM");
-        },
-      });
+          }),
+        );
+        const existsSync = fs.existsSync.bind(fs);
+        vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+          const s = String(p);
+          if (
+            s.includes("Google Chrome") ||
+            s.includes("google-chrome") ||
+            s.includes("/usr/bin/chromium")
+          ) {
+            return true;
+          }
+          return existsSync(p);
+        });
+        spawnMock.mockImplementation(() => makeFakeProc());
+        await withMockChromeCdpServer({
+          wsPath: "/devtools/browser/DECORATED",
+          run: async (baseUrl) => {
+            const port = Number(new URL(baseUrl).port);
+            const profile = makeBrowserProfile({
+              name: profileName,
+              color: colorHex,
+              cdpPort: port,
+              cdpUrl: baseUrl,
+              headless: true,
+            });
+            const { resolved } = makeBrowserServerState({
+              profile,
+              resolvedOverrides: { noSandbox: true },
+            });
+            const running = await launchOpenClawChrome(resolved, profile);
+            expect(running.pid).toBe(4242);
+            expect(spawnMock).toHaveBeenCalledOnce();
+            expect(
+              JSON.parse(
+                await fsp.readFile(path.join(userDataDir, "Default", "Preferences"), "utf8"),
+              ),
+            ).toMatchObject({ custom: { preserved: true } });
+            running.proc.kill?.("SIGTERM");
+          },
+        });
+      } finally {
+        const staged = resolveOpenClawUserDataDir(path.basename(tmpDir));
+        await fsp.rm(staged, { recursive: true, force: true }).catch(() => {});
+      }
     });
 
     it("redacts launch stderr even when log redaction is disabled", async () => {
