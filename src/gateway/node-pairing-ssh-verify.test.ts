@@ -181,27 +181,21 @@ describe("startNodePairingSshVerify", () => {
     ]);
   });
 
-  test("rejects a remote identity with a different key and cools the target down", async () => {
-    const expected = makeIdentity();
-    const other = makeIdentity();
-    const probe = probeReturning({
-      status: "ok",
-      stdout: `{"deviceId":"${expected.deviceId}","publicKey":"${other.publicKey}"}\n`,
-    });
-    const started = startProbe(expected, probe);
-    await expect(started?.done).resolves.toEqual({ ok: false, reason: "identity-mismatch" });
-    expect(startProbe(expected, probe)).toBeNull();
-  });
-
-  test("rejects a matching key under a different device id", async () => {
-    const identity = makeIdentity();
-    const probe = probeReturning({
-      status: "ok",
-      stdout: `{"deviceId":"someone-else","publicKey":"${identity.publicKey}"}\n`,
-    });
-    const started = startProbe(identity, probe);
-    await expect(started?.done).resolves.toEqual({ ok: false, reason: "identity-mismatch" });
-  });
+  test.each(["publicKey", "deviceId"] as const)(
+    "rejects a mismatched %s and cools the target down",
+    async (field) => {
+      const identity = makeIdentity();
+      const probe = probeReturning({
+        status: "ok",
+        stdout: JSON.stringify({ ...identity, [field]: makeIdentity()[field] }),
+      });
+      await expect(startProbe(identity, probe)?.done).resolves.toEqual({
+        ok: false,
+        reason: "identity-mismatch",
+      });
+      expect(startProbe(identity, probe)).toBeNull();
+    },
+  );
 
   test("reports probe failures and unreadable identities distinctly", async () => {
     const identity = makeIdentity();

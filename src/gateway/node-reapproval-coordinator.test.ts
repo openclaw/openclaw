@@ -126,42 +126,23 @@ describe("node reapproval coordinator", () => {
     expect((await listNodePairing(baseDir)).pending).toEqual([]);
   });
 
-  test("keeps only the latest request waiting behind active work", async () => {
-    const { baseDir, coordinator, request } = await pairedFixture("latest", limit);
-    const active = request();
-    const superseded = request("microphone");
-    const latest = request("location");
-
-    await expect(active).resolves.toMatchObject({
-      request: { caps: ["camera", "screen"] },
-    });
-    await expect(superseded).resolves.toBeNull();
-    await expect(latest).resolves.toMatchObject({
-      request: { caps: ["camera", "location"] },
-    });
-    await expectPending(baseDir, { caps: ["camera", "location"] });
-
-    coordinator.dispose();
-  });
-
-  test("cancels queued work when the latest declaration matches active work", async () => {
-    const { baseDir, coordinator, request } = await pairedFixture("active-latest", limit);
-    const active = request();
-    const stale = request("microphone");
-    const latest = request();
-
-    await expect(active).resolves.toMatchObject({
-      request: { caps: ["camera", "screen"] },
-    });
-    await expect(stale).resolves.toBeNull();
-    await expect(latest).resolves.toMatchObject({
-      request: { caps: ["camera", "screen"] },
-      created: false,
-    });
-    await expectPending(baseDir, { caps: ["camera", "screen"] });
-
-    coordinator.dispose();
-  });
+  test.each(["location", "screen"])(
+    "supersedes queued work with the latest %s declaration, reusing active work if equal",
+    async (surface) => {
+      const { baseDir, coordinator, request } = await pairedFixture(`latest-${surface}`, limit);
+      const active = request();
+      const stale = request("microphone");
+      const latest = request(surface);
+      await expect(active).resolves.toMatchObject({ request: { caps: ["camera", "screen"] } });
+      await expect(stale).resolves.toBeNull();
+      await expect(latest).resolves.toMatchObject({
+        request: { caps: ["camera", surface] },
+        ...(surface === "screen" ? { created: false } : {}),
+      });
+      await expectPending(baseDir, { caps: ["camera", surface] });
+      coordinator.dispose();
+    },
+  );
 
   test("retains the newest cleanup claim across equivalent reconnects", async () => {
     const { baseDir, coordinator } = await pairedFixture("cleanup-generation");

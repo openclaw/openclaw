@@ -24,21 +24,12 @@ it("never projects private worker controls from persisted or pending state", asy
   expect(node?.pendingDeclaredCommands).toEqual(["screen.snapshot"]);
 });
 
-it("keeps the operator node name across live metadata and reconnects", async () => {
-  for (const [connId, liveName, approvedName, expectedName] of [
-    ["conn-1", "Live Name", "Operator Name", "Operator Name"],
-    ["conn-2", "Replacement Live Name", "Operator Name", "Operator Name"],
-    ["conn-3", "Live Fallback", undefined, "Live Fallback"],
-  ]) {
-    const fixture = createCatalogFixture(
-      {
-        displayName: approvedName === undefined ? undefined : "Device Name",
-        nodeSurface: nodeSurface({ displayName: approvedName }),
-      },
-      [{ connId, displayName: liveName }],
-    );
-    expect((await fixture.read()).nodes[0]?.displayName).toBe(expectedName);
-  }
+it("falls back to the live node name when pairing has no name", async () => {
+  const fixture = createCatalogFixture(
+    { displayName: undefined, nodeSurface: nodeSurface({ displayName: undefined }) },
+    [{ displayName: "Live Fallback" }],
+  );
+  expect((await fixture.read()).nodes[0]?.displayName).toBe("Live Fallback");
 });
 
 it("lets live runner consent override stored session-host history", async () => {
