@@ -125,10 +125,30 @@ it("records build demand for subsequent ordinary reserve refill", async () => {
 });
 
 it.each([
-  ["expiry", () => (f.nowMs += IDLE_TIMEOUT_MS)],
-  ["removed profile", () => delete f.config.cloudWorkers!.profiles!.development],
-  ["replaced provider", () => (f.developmentProfile.provider = "other-provider")],
-  ["global cap", () => (f.config.cloudWorkers!.preparedPool = { maxTotal: 0 })],
+  [
+    "expiry",
+    (): void => {
+      f.nowMs += IDLE_TIMEOUT_MS;
+    },
+  ],
+  [
+    "removed profile",
+    (): void => {
+      delete f.config.cloudWorkers!.profiles!.development;
+    },
+  ],
+  [
+    "replaced provider",
+    (): void => {
+      f.developmentProfile.provider = "other-provider";
+    },
+  ],
+  [
+    "global cap",
+    (): void => {
+      f.config.cloudWorkers!.preparedPool = { maxTotal: 0 };
+    },
+  ],
 ] as const)("retires an unfinished build on %s", async (_invalidation, invalidate) => {
   f.developmentProfile.readyWorkers = 0;
   const build = await f.seed("build", { purpose: "build" });

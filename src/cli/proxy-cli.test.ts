@@ -10,6 +10,7 @@ const handlers = vi.hoisted(() => ({
   runProxyValidateCommand: vi.fn(),
 }));
 
+// mock-isolation: exercise CLI routing without opening proxy listeners or capture stores.
 vi.mock("./proxy-cli.runtime.js", () => ({
   ...handlers,
   runDebugProxyPurgeCommand: vi.fn(),

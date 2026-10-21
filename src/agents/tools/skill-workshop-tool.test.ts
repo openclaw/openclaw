@@ -41,7 +41,7 @@ function workshop(options: Omit<SkillWorkshopToolOptions, "config" | "agentId"> 
   const tool = createSkillWorkshopTool({ config: {}, agentId: "main", ...options });
   return async (action: string, params: Record<string, unknown> = {}, signal?: AbortSignal) => {
     const result = await tool.execute(action, { action, name: "deploy", ...params }, signal);
-    return result.content.map((part) => part.text ?? "").join("");
+    return result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
   };
 }
 

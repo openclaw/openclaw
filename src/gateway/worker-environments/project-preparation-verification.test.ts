@@ -90,8 +90,6 @@ it.each(["removed", "HEAD", "completion", "standalone", "appeared"] as const)(
     const first = changed === "appeared" ? f.operation() : await f.preparedOperation();
     const prepared = (await first.project.prepare(f)).preparedWorkspace!;
     first.close();
-    const workspace = prepared.workspaceDir;
-    const git = (...args: string[]) => requireGit(workspace, args);
     const project = changed === "appeared" ? f.project : await advanceProject(f.repository);
     const next =
       changed === "appeared"
@@ -110,6 +108,8 @@ it.each(["removed", "HEAD", "completion", "standalone", "appeared"] as const)(
             await replacement.project.prepare(f);
             replacement.close();
           } else if (calls === 1) {
+            const workspace = prepared.workspaceDir;
+            const git = (...args: string[]) => requireGit(workspace, args);
             if (changed === "removed") {
               await fs.rename(path.dirname(workspace), path.join(f.home, "retired"));
             } else if (changed === "HEAD") {

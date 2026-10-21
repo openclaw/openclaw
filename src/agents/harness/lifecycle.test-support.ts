@@ -37,7 +37,14 @@ export const createAttemptParams = (): AttemptParams =>
     trigger: "manual",
   }) as unknown as AttemptParams;
 
-export const createFinalizationParams: () => SettledParams<AttemptParams> = createAttemptParams;
+export function createFinalizationParams(): SettledParams<AttemptParams> {
+  const {
+    hostCapabilities: _hostCapabilities,
+    onSettledTurn: _onSettledTurn,
+    ...params
+  } = createAttemptParams();
+  return params;
+}
 
 export function createDiagnosticTrace(): DiagnosticTraceContext {
   return { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: "01" };

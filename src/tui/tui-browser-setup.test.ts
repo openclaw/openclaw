@@ -78,7 +78,7 @@ it("rejects extra arguments without history, model forwarding, or local executio
     "/browser-setup verify; whoami",
     "/BROWSER-SETUP install\nsecret-input",
     "/browser-setup pair secret-input",
-  ].forEach(submit);
+  ].forEach((input) => submit(input));
   await flushAsyncSelect();
   const untouched = [runJson, editor.addToHistory, h.sendChat];
   expect(untouched.map((mock) => mock.mock.calls)).toEqual([[], [], []]);

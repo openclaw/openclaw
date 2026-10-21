@@ -9,6 +9,7 @@ import * as models from "../../test-utils/turn-model-selection-differential.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const selectHarness = vi.hoisted(() => vi.fn());
+// mock-isolation: capture harness selection without loading a provider runtime.
 vi.mock("../../agents/harness/selection-decision.js", () => ({
   resolveAgentHarnessDeliveryDefaults: (...args: unknown[]) => selectHarness(...args),
 }));

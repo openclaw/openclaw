@@ -18,19 +18,23 @@ vi.mock("../gateway/session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: loadSessionEntry,
 }));
 
+// mock-isolation: keep status rendering on the synthetic agent rather than live agent discovery.
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentEntries: () => [],
   resolveSessionAgentId: () => "main",
 }));
 
+// mock-isolation: use a fixed model without resolving provider configuration.
 vi.mock("../agents/model-selection.js", () => ({
   resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-5.4" }),
 }));
 
+// mock-isolation: supply deterministic directive defaults without loading runtime model state.
 vi.mock("../auto-reply/reply/directive-handling.defaults.js", () => ({
   resolveDefaultModel: () => ({ defaultProvider: "openai", defaultModel: "gpt-5.4" }),
 }));
 
+// mock-isolation: provide synthetic thinking levels without consulting provider catalogs.
 vi.mock("../auto-reply/reply/model-selection.js", () => ({
   createModelSelectionState: async () => ({
     resolveThinkingCatalog: async () => [],

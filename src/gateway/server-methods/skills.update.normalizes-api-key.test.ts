@@ -10,6 +10,7 @@ const secretEntry = {
   env: { GEMINI_API_KEY: "secret-env-key-456", BRAVE_REGION: "us" },
 };
 
+// mock-isolation: record config mutations without reading or writing operator configuration.
 vi.mock("../../config/config.js", () => {
   return {
     loadConfig: () => loadedConfig,

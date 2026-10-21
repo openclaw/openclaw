@@ -51,11 +51,14 @@ function createFixture(delayWrites = false) {
           writes.push(req);
         }
       }
-      if (req.method === "sessions.create") {
-        assert(typeof params.key === "string");
-      }
       const payloads = new Map<string, () => unknown>([
-        ["sessions.create", () => ({ ok: true, key: `agent:main:${params.key}` })],
+        [
+          "sessions.create",
+          () => {
+            assert(typeof params.key === "string");
+            return { ok: true, key: `agent:main:${params.key}` };
+          },
+        ],
         ["chat.send", () => ({ runId: params.idempotencyKey })],
         ["chat.abort", () => ({ ok: true, aborted: false })],
         [

@@ -87,7 +87,7 @@ export function transportFixture(beforeSocketCleanup = () => {}) {
       socket.destroy();
     }
     for (const server of servers.splice(0).toReversed()) {
-      await promisify(server.close).call(server);
+      await promisify(server.close.bind(server))();
     }
     await waitForSocketDrain();
   });

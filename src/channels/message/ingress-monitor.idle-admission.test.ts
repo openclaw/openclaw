@@ -11,12 +11,13 @@ import {
   type RawEvent,
   type StoredEvent,
 } from "./ingress-monitor.test-harness.js";
+import type { ChannelIngressQueue } from "./ingress-queue.js";
 
 const runWithQueue = useIngressMonitorQueueFixture();
 const raw: RawEvent = { id: "fresh", lane: "a", text: "synthetic message" };
 const payload = { version: 1 as const, rawEvent: JSON.stringify(raw) };
 
-function createFixture(queue: Parameters<typeof createMonitor>[0]) {
+function createFixture(queue: ChannelIngressQueue<StoredEvent>) {
   const monitors: ReturnType<typeof createMonitor>[] = [];
   const entered = createDeferred();
   const released = createDeferred();
