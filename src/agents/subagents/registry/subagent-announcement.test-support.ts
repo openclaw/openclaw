@@ -5,12 +5,18 @@ import { createContext } from "../../../gateway/server-plugin-in-process-dispatc
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as hookRuntime from "../../../plugins/hook-runner-global.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import type { runOpenClawStateWorkerOperation as runWorker } from "../../../state/openclaw-state-worker-store.js";
 import type { DomainScope } from "../../../state/openclaw-state-worker-store.types.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
-import type { useSubagentControlFixture } from "./subagent-control.test-support.js";
+import {
+  runSubagentStateWorkerOperation,
+  type useSubagentControlFixture,
+} from "./subagent-control.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { RegisterSubagentRunParams as Registration } from "./subagent-registry-run-launch-record.js";
@@ -140,6 +146,38 @@ export const storedAnnouncement = (
   runId: string,
   database?: Parameters<typeof loadSubagentRegistryFromSqlite>[0],
 ) => loadSubagentRegistryFromSqlite(database).get(runId);
+
+/** Hold one native command either before execution or after commit, before its ACK. */
+export function holdAnnouncementCommand(
+  select: (command: Parameters<DomainScope["execute"]>[0]) => boolean,
+  afterCommit = false,
+) {
+  const ready = createDeferredCore();
+  const release = createDeferredCore();
+  let held = false;
+  const worker = sqliteWorkerOwnerProbe.command(
+    stateWorker,
+    async (command, options, scope) => {
+      if (afterCommit) {
+        const result = await scope.execute(command, options);
+        if (!held && select(command)) {
+          held = true;
+          ready.resolve();
+          await release.promise;
+        }
+        return result;
+      }
+      if (!held && select(command)) {
+        held = true;
+        ready.resolve();
+        await release.promise;
+      }
+      return scope.execute(command, options);
+    },
+    { original: runSubagentStateWorkerOperation },
+  );
+  return { ready, release, worker };
+}
 
 export function withUnreadableReceipt<T>(
   run: typeof runWorker,

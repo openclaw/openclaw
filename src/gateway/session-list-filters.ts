@@ -30,7 +30,7 @@ import {
   projectSessionOwner,
   addSessionOwnerFacetIdentity,
   sortSessionOwnerFacet,
-  projectSessionParticipant,
+  resolveSessionProfileId,
   projectSessionPeople,
   projectSessionPeopleFacet,
   resolveSessionListProfileReference,
@@ -209,11 +209,7 @@ export function* filterSessionEntries(
   const profileRelation = opts.profileRelation
     ? {
         ...opts.profileRelation,
-        profileId: projectSessionParticipant(
-          { type: "profile", id: opts.profileRelation.profileId },
-          identities,
-          cfg,
-        ).identity.id,
+        profileId: resolveSessionProfileId(opts.profileRelation.profileId, identities),
       }
     : undefined;
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
@@ -474,8 +470,7 @@ export function* filterSessionEntries(
       const createdProfileId = sessionCreatorProfileId(entry.createdActor);
       if (
         !createdProfileId ||
-        projectSessionParticipant({ type: "profile", id: createdProfileId }, identities, cfg)
-          .identity.id !== profileRelation.profileId
+        resolveSessionProfileId(createdProfileId, identities) !== profileRelation.profileId
       ) {
         continue;
       }

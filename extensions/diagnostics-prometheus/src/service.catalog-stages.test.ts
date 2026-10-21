@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { baseEvent, createMetricsHarness, trusted, untrusted } from "./service.test-helpers.js";
+
+// mock-isolation: Keep Gateway runtime initialization outside the fixture; scrape as a read-authorized operator.
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope: () => ({
+    client: { connect: { scopes: ["operator.read"] } },
+  }),
+}));
 
 it("exports trusted Control UI document timings in seconds with only bounded stage labels", () => {
   const metrics = createMetricsHarness();

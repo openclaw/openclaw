@@ -79,6 +79,7 @@ import {
   buildSessionObserverUtilityModelPatch,
   type SessionObserverModelSelection,
 } from "./session-observer-settings.ts";
+import { createConfigUpdateStatusRead } from "./updates-status-read.ts";
 import { createConfigViewState, createMediaDeviceState } from "./view-state.ts";
 import type * as View from "./view-state.ts";
 
@@ -156,7 +157,7 @@ export function createConfigPage(
   const customThemeImportOwner = new themeImport.CustomThemeImportOwner(invalidate);
   let configViewState: View.ConfigViewState = createConfigViewState();
   let runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
-  let updateStatusClient: GatewayBrowserClient | null = null;
+  const updateStatus = createConfigUpdateStatusRead(context);
   let mediaDeviceWatch: (() => void) | null = null;
   const mediaDevices = {
     microphone: createMediaDeviceState(),
@@ -266,7 +267,7 @@ export function createConfigPage(
       systemInfoUnavailable = false;
       observerModels.reset();
       resetConfigViewState();
-      updateStatusClient = null;
+      updateStatus.reset();
       previousGateway = gateway;
       previousClient = snapshot.client;
       previousHello = snapshot.hello;
@@ -288,16 +289,7 @@ export function createConfigPage(
       observerModels.refresh();
     }
     syncAppearanceRequests();
-    const updateClient =
-      pageId === "updates" && canCallGatewayMethod(snapshot, "update.status", "operator.admin")
-        ? snapshot.client
-        : null;
-    if (updateClient !== updateStatusClient) {
-      updateStatusClient = updateClient;
-      if (updateClient) {
-        void context.overlays.refreshUpdateStatus();
-      }
-    }
+    updateStatus.synchronize(pageId);
     const campaign = context.overlays.snapshot.updateSchedule?.campaign;
     const ticking =
       pageId === "updates" &&
@@ -960,5 +952,7 @@ export function createConfigPage(
     nowMs,
     mutationDisabled,
     updateBusy,
+    updateStatusRead: updateStatus.read,
+    refreshUpdateStatus: updateStatus.refresh,
   };
 }

@@ -26,6 +26,7 @@ import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
+import { publishHooksTokenEnvKey } from "./hooks.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
@@ -368,6 +369,8 @@ export async function prepareGatewayKernelState(params: {
     required: null,
   });
   const initialHooksConfig = runtimeConfig.hooksConfig;
+  // Publish before startup prepares plugins and other host exec owners.
+  publishHooksTokenEnvKey(initialHooksConfig);
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
