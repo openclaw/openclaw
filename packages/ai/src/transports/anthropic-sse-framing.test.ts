@@ -57,7 +57,7 @@ it.each([
   ["\n", "\r\n"],
   ["\r\n", "\n"],
 ])("parses fragmented %j/%j framing", async (newline, blankLine) => {
-  const result = await runResponse(chunks([...frame(anthropicEvents, newline, blankLine)]));
+  const result = await runResponse(chunks(frame(anthropicEvents, newline, blankLine).split("")));
   expect(result.stopReason).toBe("stop");
   expect(
     result.content.filter((block) => block.type === "text").map((block) => block.text),

@@ -1,4 +1,4 @@
-import { ChildProcess } from "node:child_process";
+import { ChildProcess, type MessageOptions, type SendHandle } from "node:child_process";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createSpawnBrokerHost } from "./host.js";
 
@@ -48,19 +48,24 @@ it.each([true, false])(
           ? { ref: referenceChannel(true), unref: referenceChannel(false) }
           : {},
       },
+      send: {
+        value: (
+          message: unknown,
+          ...args: Array<SendHandle | MessageOptions | ((error: Error | null) => void) | undefined>
+        ) => {
+          args.find((arg) => typeof arg === "function")?.(null);
+          if (
+            message &&
+            typeof message === "object" &&
+            "type" in message &&
+            message.type === "shutdown"
+          ) {
+            queueMicrotask(exit);
+          }
+          return true;
+        },
+      },
       kill: { value: exit },
-    });
-    vi.spyOn(child, "send").mockImplementation((message, ...args) => {
-      args.find((arg) => typeof arg === "function")?.(null);
-      if (
-        message &&
-        typeof message === "object" &&
-        "type" in message &&
-        message.type === "shutdown"
-      ) {
-        queueMicrotask(exit);
-      }
-      return true;
     });
     native.spawn.mockReturnValueOnce(child);
     const host = createSpawnBrokerHost({ nativeResources: true });

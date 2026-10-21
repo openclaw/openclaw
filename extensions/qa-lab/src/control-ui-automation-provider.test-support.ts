@@ -107,7 +107,7 @@ export async function startAutomationProvider() {
         Object.assign({}, failure, { error: redactQaGatewayDebugText(inspect(failure.error)) }),
       ),
     }),
-    holdInitialRequestForRestart: (marker: string) =>
+    holdInitialRequestForRestart: (marker: string): NonNullable<typeof restartHold> =>
       (restartHold = { marker, recovering: false, reached: false }),
     async stop() {
       server.closeAllConnections();

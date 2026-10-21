@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
@@ -15,11 +15,25 @@ vi.mock("../config/sessions.js", () => ({
 
 function createDatabase(pathname: string, table: string): void {
   const database = new DatabaseSync(pathname);
-  database.exec(`CREATE TABLE ${table} (meta_key TEXT PRIMARY KEY)`);
+  if (table === "schema_meta") {
+    database.exec(`
+      CREATE TABLE schema_meta (
+        meta_key TEXT PRIMARY KEY,
+        role TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        agent_id TEXT
+      );
+      INSERT INTO schema_meta (meta_key, role, schema_version, agent_id)
+      VALUES ('primary', 'agent', 0, 'main');
+    `);
+  } else {
+    database.exec(`CREATE TABLE ${table} (meta_key TEXT PRIMARY KEY)`);
+  }
   database.close();
 }
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => vi.clearAllMocks());
 const storePathFor = (name: string) => path.join(tempDirs.make("session-target-"), name);
 const resolve = (opts: Parameters<typeof resolveCommandSessionStoreTargets>[0]["opts"] = {}) =>
   resolveCommandSessionStoreTargets({ cfg: {}, opts });
@@ -82,8 +96,8 @@ it.each(["missing", "suffixless", "directory", "non-database", "foreign-database
 );
 
 it.each([
-  ["legacy JSON locator", "sessions.json", "openclaw-agent.sqlite"],
-  ["suffixless locator", "offline-store", "offline-store.sqlite"],
+  ["legacy JSON locator", "sessions.json", "openclaw-agent.main.sqlite"],
+  ["suffixless locator", "offline-store", "offline-store.main.sqlite"],
 ])("accepts an existing SQLite target resolved from a %s", (_name, locator, target) => {
   const storePath = storePathFor(locator);
   createDatabase(path.join(path.dirname(storePath), target), "schema_meta");

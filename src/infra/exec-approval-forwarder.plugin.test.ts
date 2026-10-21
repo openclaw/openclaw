@@ -5,7 +5,12 @@ import type { ApprovalRequestInput } from "./approval-types.js";
 import * as fixtures from "./exec-approval-forwarder.test-support.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
-const payload = { title: "Review", description: "Tool", policySubject: { pluginKey: "sage" } };
+const payload = {
+  pluginId: "sage",
+  title: "Review",
+  description: "Tool",
+  policySubject: { pluginKey: "sage" },
+};
 const request: PluginApprovalRequest = {
   id: "plugin:req-sage",
   request: payload,

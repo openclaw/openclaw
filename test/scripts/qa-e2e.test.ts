@@ -38,6 +38,7 @@ async function runCli(args: string[], status: "pass" | "fail" = "pass") {
     });
     return runtime;
   });
+  // mock-isolation: Exercise CLI parsing without loading or running the private QA runtime.
   vi.doMock("../../extensions/qa-lab/api.js", loadRuntime);
   const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
   const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);

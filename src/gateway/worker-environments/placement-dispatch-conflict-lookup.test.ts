@@ -42,7 +42,7 @@ it.each([
     const root = tempDirs.make("openclaw-dispatch-");
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     let store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-    const options = {
+    const options: Parameters<typeof createPlacementHarness>[2] = {
       workspacePath: path.join(root, "workspace"),
       priorWorkspaceResultConflictLookup:
         kind === "unknown" ? { kind, reason: "malformed-report" } : { kind },

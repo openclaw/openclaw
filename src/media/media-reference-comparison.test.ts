@@ -3,8 +3,8 @@ import { normalizeMediaReferenceForComparison as normalize } from "./media-refer
 
 describe("normalizeMediaReferenceForComparison", () => {
   it("matches encoded file URLs with equivalent absolute paths", () => {
-    expect(normalizeMediaReferenceForComparison("file:///tmp/generated%20image.png")).toBe(
-      normalizeMediaReferenceForComparison("/tmp/generated image.png"),
+    expect(normalize("file:///tmp/generated%20image.png")).toBe(
+      normalize("/tmp/generated image.png"),
     );
   });
 
@@ -14,18 +14,14 @@ describe("normalizeMediaReferenceForComparison", () => {
     ["FILE:/workspace/a%2Fb.png", "/workspace/a/b.png"],
     ["FILE:/workspace/a%2fb.png", "/workspace/a/b.png"],
   ])("preserves encoded separator URL %s without colliding with %s", (fileUrl, localPath) => {
-    expect(normalizeMediaReferenceForComparison(fileUrl)).toBe(fileUrl);
-    expect(normalizeMediaReferenceForComparison(fileUrl)).not.toBe(
-      normalizeMediaReferenceForComparison(localPath),
-    );
+    expect(normalize(fileUrl)).toBe(fileUrl);
+    expect(normalize(fileUrl)).not.toBe(normalize(localPath));
   });
 
   it.each(["file:/tmp/generated.png", "FILE:/tmp/generated.png", "FILE:///tmp/generated.png"])(
     "matches canonical file URL form %s with the triple-slash form",
     (fileUrl) => {
-      expect(normalizeMediaReferenceForComparison(fileUrl)).toBe(
-        normalizeMediaReferenceForComparison("file:///tmp/generated.png"),
-      );
+      expect(normalize(fileUrl)).toBe(normalize("file:///tmp/generated.png"));
     },
   );
 
@@ -37,23 +33,19 @@ describe("normalizeMediaReferenceForComparison", () => {
   );
 
   it("keeps parent segments distinct without resolving filesystem identity", () => {
-    expect(normalizeMediaReferenceForComparison("/tmp/output/../generated.png")).toBe(
-      "/tmp/output/../generated.png",
-    );
+    expect(normalize("/tmp/output/../generated.png")).toBe("/tmp/output/../generated.png");
   });
 
   it("applies URL parent-segment semantics before filesystem comparison", () => {
-    expect(normalizeMediaReferenceForComparison("file:///tmp/output/../generated.png")).toBe(
-      normalizeMediaReferenceForComparison("/tmp/generated.png"),
-    );
-    expect(normalizeMediaReferenceForComparison("file:///tmp/output/%2e%2e/generated.png")).toBe(
-      normalizeMediaReferenceForComparison("/tmp/generated.png"),
+    expect(normalize("file:///tmp/output/../generated.png")).toBe(normalize("/tmp/generated.png"));
+    expect(normalize("file:///tmp/output/%2e%2e/generated.png")).toBe(
+      normalize("/tmp/generated.png"),
     );
   });
 
   it("normalizes safe absolute path syntax symmetrically", () => {
-    expect(normalizeMediaReferenceForComparison("/tmp/output/./generated.png")).toBe(
-      normalizeMediaReferenceForComparison("file:///tmp/output/./generated.png"),
+    expect(normalize("/tmp/output/./generated.png")).toBe(
+      normalize("file:///tmp/output/./generated.png"),
     );
   });
 

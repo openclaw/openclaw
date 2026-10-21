@@ -71,11 +71,20 @@ async function useFeature(surface: Surface, env: NodeJS.ProcessEnv, id: string) 
             direction: "outbound",
             channel: "qa-channel",
             conversationKind: "direct",
-            action: binding ? "message.outbound.finished" : "message.outbound.queued",
-            status: binding ? "succeeded" : "started",
-            outcome: binding ? "sent" : "queued",
-            resultCount: binding ? 1 : 0,
-            ...(binding ? { executionIdentityToken: token } : {}),
+            ...(binding
+              ? {
+                  action: "message.outbound.finished",
+                  status: "succeeded",
+                  outcome: "sent",
+                  resultCount: 1,
+                  executionIdentityToken: token,
+                }
+              : {
+                  action: "message.outbound.queued",
+                  status: "started",
+                  outcome: "queued",
+                  resultCount: 0,
+                }),
           },
         },
       ],

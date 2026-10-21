@@ -1,14 +1,25 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, vi } from "vitest";
-import * as sessions from "../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  replaceSessionEntry,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { readPendingInputSource } from "../../config/sessions/session-pending-input-source.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentTurnTestContext } from "../../gateway/agent-turn/agent-run-dispatch.test-support.js";
-import * as userTurns from "../../gateway/agent-turn/agent-run-user-turn.js";
+import {
+  prepareAgentRunUserTurn,
+  releasePreparedAgentRunUserTurn,
+} from "../../gateway/agent-turn/agent-run-user-turn.js";
 import { captureAgentTurnPrincipal } from "../../gateway/agent-turn/principal.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
-import * as peerDelivery from "../../gateway/session-send-delivery.js";
+import {
+  readSessionSendDelivery,
+  type SessionSendDeliveryEndpoint,
+} from "../../gateway/session-send-delivery.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
@@ -18,54 +29,57 @@ import { prepareSessionsSendCommunication } from "../tools/sessions-send-communi
 /** Persist the real accepted peer envelope, then leave only its interrupted durable input. */
 export async function seedConsumedPeerRestartInput(params: {
   cfg: OpenClawConfig;
-  source: peerDelivery.SessionSendDeliveryEndpoint & { storePath: string };
-  target: peerDelivery.SessionSendDeliveryEndpoint & { storePath: string };
+  source: SessionSendDeliveryEndpoint & { storePath: string };
+  target: SessionSendDeliveryEndpoint & { storePath: string };
   runId: string;
   requesterOrigin?: RequesterOrigin;
 }) {
-  const { cfg, source, target, runId, requesterOrigin } = params;
-  const { storePath, ...sourceIdentity } = source;
-  const { agentId, sessionKey } = sourceIdentity;
+  const { cfg, source, target, runId } = params;
   const message = "Complete the saved peer task.";
   const provenance = {
     kind: "inter_session" as const,
     sourceTool: "sessions_send",
-    sourceSessionKey: sessionKey,
+    sourceSessionKey: source.sessionKey,
   };
-  const input = { message, inputProvenance: provenance };
-  const request = { ...input, idempotencyKey: runId };
-  const sourceEntry = await sessions.replaceSessionEntry(source, {
+  await replaceSessionEntry(source, {
     sessionId: source.sessionId,
     lifecycleRevision: source.lifecycleRevision,
     updatedAt: 1,
   });
-  const storedTarget = await sessions.replaceSessionEntry(target, {
+  const targetEntry = {
     sessionId: target.sessionId,
     lifecycleRevision: target.lifecycleRevision,
-    permissionMode: "full",
+    permissionMode: "full" as const,
     updatedAt: 1,
-  });
+  };
+  await replaceSessionEntry(target, targetEntry);
   const receiver = vi.fn(async () => {
-    const turn = await userTurns.prepareAgentRunUserTurn({
+    const turn = await prepareAgentRunUserTurn({
       assertCurrent() {},
       onUserTurnMediaPersisted() {},
       request: { message, idempotencyKey: runId, deliver: false },
       cfg,
+      sessionEntry: targetEntry,
       resolvedSessionKey: target.sessionKey,
       admittedSessionId: target.sessionId,
       activeSessionAgentId: target.agentId,
       suppressVisibleSessionEffects: false,
       requestedPromptPersistenceSuppression: false,
       canUseInternalRuntimeHandoff: true,
-      ...input,
+      message,
       effectiveTranscriptInputText: message,
+      inputProvenance: provenance,
       images: [],
       offloadedRefs: [],
       runId,
-      client: requesterOrigin
+      client: params.requesterOrigin
         ? captureAgentTurnPrincipal(
             createSyntheticPluginRuntimeClient({
-              agentToolCaller: { agentId, sessionKey, requesterOrigin },
+              agentToolCaller: {
+                agentId: source.agentId,
+                sessionKey: source.sessionKey,
+                requesterOrigin: params.requesterOrigin,
+              },
             }),
           )
         : null,
@@ -77,19 +91,35 @@ export async function seedConsumedPeerRestartInput(params: {
         buildAgentRunTerminalOutcome({ status: "error", stopReason: "restart" }),
       );
     } finally {
-      await userTurns.releasePreparedAgentRunUserTurn(turn);
+      await releasePreparedAgentRunUserTurn(turn);
     }
     return { runId, status: "accepted" };
   });
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+  const endpoint = async (expected: SessionSendDeliveryEndpoint) => {
+    const loaded = await resolveGatewaySessionStoreTargetInWorker({
+      cfg,
+      key: expected.sessionKey,
+      agentId: expected.agentId,
+      assertActive() {},
+      projection: "full",
+    });
+    return {
+      agentId: loaded.agentId,
+      sessionKey: loaded.canonicalKey,
+      storePath: loaded.readSource?.path ?? loaded.storePath,
+      entry: loaded.store[loaded.canonicalKey],
+    };
+  };
   const communication = await withPluginRuntimeGatewayContextResolver(
     () => context,
     async () =>
       prepareSessionsSendCommunication({
         config: cfg,
-        source: { ...sourceIdentity, storePath, entry: sourceEntry ?? undefined },
-        target: { ...target, entry: storedTarget ?? undefined },
-        ...input,
+        source: await endpoint(source),
+        target: await endpoint(target),
+        message,
+        inputProvenance: provenance,
         allowApproval: false,
         callGateway: async <T>() => (await receiver()) as T,
       }),
@@ -100,7 +130,9 @@ export async function seedConsumedPeerRestartInput(params: {
       params: {
         agentId: target.agentId,
         sessionKey: target.sessionKey,
-        ...request,
+        message,
+        inputProvenance: provenance,
+        idempotencyKey: runId,
       },
     });
   } finally {
@@ -110,12 +142,17 @@ export async function seedConsumedPeerRestartInput(params: {
   // Standalone input promotion removes its queue row; committed bytes retain its source.
   expect(accepted?.snapshot.pending).toBeUndefined();
   const savedMessage = expectDefined(accepted?.snapshot.committed, "accepted peer input");
-  expect(peerDelivery.readSessionSendDelivery(savedMessage)).toMatchObject({
+  expect(readSessionSendDelivery(savedMessage)).toMatchObject({
     runId,
-    source: sourceIdentity,
+    source: {
+      agentId: source.agentId,
+      sessionKey: source.sessionKey,
+      sessionId: source.sessionId,
+      lifecycleRevision: source.lifecycleRevision,
+    },
     target: { sessionKey: target.sessionKey, sessionId: target.sessionId },
   });
-  await sessions.updateSessionEntry(target, (entry) => ({
+  await updateSessionEntry(target, (entry) => ({
     ...buildCurrentRunRestartRecoveryClaim({
       entry,
       runId,
@@ -126,5 +163,5 @@ export async function seedConsumedPeerRestartInput(params: {
     status: "interrupted",
     abortedLastRun: true,
   }));
-  return { receiver, originalTranscript: await sessions.loadTranscriptEvents(target) };
+  return { receiver, originalTranscript: await loadTranscriptEvents(target) };
 }
