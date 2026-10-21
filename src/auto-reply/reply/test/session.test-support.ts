@@ -118,7 +118,7 @@ export async function runExplicitResetCases(
         Provider: "telegram",
         Surface: "telegram",
       },
-      cfg: { session: { store: storePath, idleMinutes: 999 } },
+      cfg: { session: { store: storePath } },
     });
     results.push({ name, body, result, stored: readSessionStore(storePath) });
   }
