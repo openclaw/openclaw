@@ -166,6 +166,7 @@ export function bootstrapSharedAuthStoreInWorker(
         const fallbackPath = input.fallbackSourcePath;
         const fallbackIdentity = input.fallbackSourceIdentity;
         let fallbackAnchor: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+        let committing = false;
         try {
           // Main still backs inherited reads until ownership flips. Hold its existing-file
           // writer reservation through the shared commit so a foreign writer cannot make
@@ -179,11 +180,13 @@ export function bootstrapSharedAuthStoreInWorker(
               if (fallbackRows.store || fallbackRows.state) {
                 return commit(false);
               }
+              committing = true;
               return commit(true, fallbackPath);
             },
             { operationLabel: "auth-profiles.bootstrap-fallback-source" },
           );
-        } catch {
+        } catch (error) {
+          if (committing) throw error;
           // Leave unreadable fallback state to Doctor rather than flipping ownership past it.
           return commit(false);
         } finally {
