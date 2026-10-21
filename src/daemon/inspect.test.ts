@@ -44,6 +44,10 @@ const CLAWDBOT_GATEWAY_CONTENTS =
   "[Service]\nExecStart=/usr/bin/node /opt/clawdbot/dist/entry.js gateway --port 18789\n";
 const CUSTOM_OPENCLAW_GATEWAY_CONTENTS =
   "[Service]\nExecStart=/usr/bin/node /opt/openclaw/dist/entry.js gateway --port 18888\n";
+const cli = "/usr/bin/openclaw";
+const node = ["/usr/bin/node", "/opt/openclaw/openclaw.mjs"];
+const shell = (command: string) => ["/bin/sh", "-c", command];
+const nodeCommand = (args: string) => `${node.join(" ")} ${args}`;
 
 function plist(
   label: string,
@@ -218,46 +222,40 @@ it("resets inline metadata for an unbranded systemd command", async () => {
 
 it("includes current, sibling, custom, and template systemd Gateways while preserving incomplete inspection", async () => {
   const { home, write, userDir } = nativeFixture("linux", "managed-systemd-");
-  const writeCommand = (name: string, command: string) =>
-    write(path.join(userDir, `${name}.service`), `[Service]\nExecStart=${command}\n`);
-
-  for (const name of ["openclaw-gateway", "openclaw-gateway-dev", "rescue"]) {
-    await write(path.join(userDir, `${name}.service`), CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
+  for (const file of [
+    ...["openclaw-gateway", "openclaw-gateway-dev", "rescue", "clawdbot-upgraded"].map((name) =>
+      path.join(userDir, `${name}.service`),
+    ),
+    "/etc/systemd/system/openclaw@.service",
+    "/usr/lib/systemd/system/vendor-gateway.service",
+  ]) {
+    await write(file, CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
   }
-  await write("/etc/systemd/system/openclaw@.service", CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
-  await write("/usr/lib/systemd/system/vendor-gateway.service", CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
-  await write(
-    path.join(userDir, "openclaw-node.service"),
-    '[Service]\nExecStart=/usr/bin/openclaw node run\nEnvironment="OPENCLAW_SERVICE_MARKER=openclaw" "OPENCLAW_SERVICE_KIND=node"\n',
-  );
-  for (const [name, args] of [
-    ["named-node", 'node run --display-name "Home Gateway"'],
-    ["exact-node", "node run --display-name gateway"],
-    ["profile-node", "--profile gateway node run"],
-    ["install", "gateway install --runtime bun"],
-    ["profile-install", "--profile rescue gateway --profile rescue install"],
-    ["status", "gateway status --json"],
+  for (const [name, command] of [
+    ["named-node", nodeCommand('node run --display-name "Home Gateway"')],
+    ["exact-node", nodeCommand("node run --display-name gateway")],
+    ["profile-node", nodeCommand("--profile gateway node run")],
+    ["install", nodeCommand("gateway install --runtime bun")],
+    ["profile-install", nodeCommand("--profile rescue gateway --profile rescue install")],
+    ["status", nodeCommand("gateway status --json")],
+    [
+      "runtime-options",
+      "/usr/bin/node -C development --import /opt/bootstrap.mjs /opt/clawdbot/dist/entry.js --profile rescue gateway run",
+    ],
+    [
+      "shell",
+      "/bin/sh -c 'NODE_ENV=production exec /usr/bin/openclaw --profile rescue gateway run'",
+    ],
+    ["shell-node", `/bin/sh -c 'exec /usr/bin/openclaw node run --display-name "Home Gateway"'`],
+    ["env", "/usr/bin/env NODE_ENV=production node /opt/clawdbot/dist/entry.js gateway run"],
+    [
+      "openclaw-node",
+      '/usr/bin/openclaw node run\nEnvironment="OPENCLAW_SERVICE_MARKER=openclaw" "OPENCLAW_SERVICE_KIND=node"',
+    ],
   ] as const) {
-    await writeCommand(name, `/usr/bin/node /opt/openclaw/openclaw.mjs ${args}`);
+    await write(path.join(userDir, `${name}.service`), `[Service]\nExecStart=${command}\n`);
   }
-  await writeCommand(
-    "runtime-options",
-    "/usr/bin/node -C development --import /opt/bootstrap.mjs /opt/clawdbot/dist/entry.js --profile rescue gateway run",
-  );
   await write(path.join(userDir, "clawdbot-gateway.service"), CLAWDBOT_GATEWAY_CONTENTS);
-  await write(path.join(userDir, "clawdbot-upgraded.service"), CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
-  await writeCommand(
-    "shell",
-    "/bin/sh -c 'NODE_ENV=production exec /usr/bin/openclaw --profile rescue gateway run'",
-  );
-  await writeCommand(
-    "shell-node",
-    `/bin/sh -c 'exec /usr/bin/openclaw node run --display-name "Home Gateway"'`,
-  );
-  await writeCommand(
-    "env",
-    "/usr/bin/env NODE_ENV=production node /opt/clawdbot/dist/entry.js gateway run",
-  );
   await write("/lib/systemd/system", "unreadable service directory");
 
   const managed = await expectProjections(home, {
@@ -452,32 +450,21 @@ it("includes user and global launchd Gateways without admitting Node or legacy j
   await write("/Library/LaunchAgents/org.example.global.plist", plist("org.example.global"));
   await write("/Library/LaunchDaemons/ai.openclaw.gateway.plist", plist("ai.openclaw.gateway"));
   const wrapper = ["/opt/service-env/rescue-env-wrapper.sh", "/opt/service-env/rescue.env"];
-  const node = ["/usr/bin/node", "/opt/openclaw/openclaw.mjs"];
   const wrapped = (...args: string[]) => [...wrapper, ...args];
-  const cli = "/usr/bin/openclaw";
   for (const [label, args] of [
-    [
-      "org.example.shell",
-      ["/bin/sh", "-c", "NODE_ENV=production exec /usr/bin/openclaw --profile rescue gateway run"],
-    ],
-    [
-      "org.example.env",
-      ["/usr/bin/env", "NODE_ENV=production", "node", "/opt/openclaw/openclaw.mjs", "gateway"],
-    ],
-    [
-      "org.example.shell-node",
-      ["/bin/sh", "-c", 'exec /usr/bin/openclaw node run --display-name "Home Gateway"'],
-    ],
+    ["org.example.shell", shell(`NODE_ENV=production exec ${cli} --profile rescue gateway run`)],
+    ["org.example.env", ["/usr/bin/env", "NODE_ENV=production", "node", node[1]!, "gateway"]],
+    ["org.example.shell-node", shell(`exec ${cli} node run --display-name "Home Gateway"`)],
     ["org.example.named-node", [...node, "node", "run", "--display-name", "Home Gateway"]],
     [
       "org.example.wrapped",
       [
         "/bin/sh",
         ...wrapper,
-        "/usr/bin/node",
+        node[0]!,
         "--import",
         "/opt/bootstrap.mjs",
-        "/opt/openclaw/openclaw.mjs",
+        node[1]!,
         "--profile",
         "rescue",
         "gateway",

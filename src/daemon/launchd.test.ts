@@ -653,7 +653,6 @@ describe("launchd install", () => {
   it("refuses an in-band label migration before mutating either LaunchAgent", async () => {
     state.serviceStates.set(`${DOMAIN}/ai.openclaw.gateway`, "not-loaded");
     getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
-
     await withEnvAsync(
       { ...SERVICE_MARKERS, OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.legacy-gateway" },
       async () => {
@@ -662,7 +661,6 @@ describe("launchd install", () => {
         );
       },
     );
-
     expect(state.fileWrites).toEqual([]);
     expect(state.launchctlCalls).toEqual([
       ["print", `${DOMAIN}/ai.openclaw.gateway`],
@@ -723,14 +721,13 @@ describe("launchd install", () => {
     state.bootoutError = "Boot-out failed: 5: Input/output error";
     state.bootoutCode = 5;
     const operation = install({ environment: { OPENCLAW_GATEWAY_PORT: "19000" } });
-    await expect(operation).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
-    await expect(operation).rejects.toBeInstanceOf(Error);
     await expect(operation).rejects.toMatchObject({
       message: "launchctl bootstrap failed: Operation not permitted",
     });
-    expect(state.files.has(PLIST)).toBe(false);
-    expect(state.files.has(ENV_FILE)).toBe(false);
-    expect(state.files.has(WRAPPER)).toBe(false);
+    await expect(operation).rejects.toBeInstanceOf(Error);
+    for (const path of [PLIST, ENV_FILE, WRAPPER]) {
+      expect(state.files.has(path)).toBe(false);
+    }
     expectCommands("print print enable bootstrap print");
   });
 
@@ -922,9 +919,7 @@ describe("launchd install", () => {
   });
 
   it("warns before overwriting a customized generated LaunchAgent env wrapper during restart rewrite", async () => {
-    await install({
-      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
-    });
+    await install({ environment: { OPENCLAW_GATEWAY_PORT: "18789" } });
     const generatedWrapper = expectDefined(state.files.get(WRAPPER), "generated wrapper");
     state.files.set(
       WRAPPER,
@@ -1104,26 +1099,18 @@ describe("launchd install", () => {
     "protects an in-band %s when XPC_SERVICE_NAME is inherited",
     async (action) => {
       getSelfAndAncestorPidsSync.mockReturnValue(new Set([...launchdCallerPids, 4242]));
-      await withEnvAsync(
-        {
-          ...EXTERNAL_PROCESS,
-          ...SERVICE_MARKERS,
-        },
-        async () => {
-          if (action === "stop") {
-            await expect(stopLaunchAgent(control())).rejects.toThrow(
-              "Refusing to stop LaunchAgent ai.openclaw.gateway from inside the same launchd service",
-            );
-          } else {
-            await expect(restartLaunchAgent(control())).resolves.toEqual({
-              outcome: "scheduled",
-            });
-            expect(
-              launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff,
-            ).toHaveBeenCalledWith({ env: ENV, mode: "kickstart", waitForPid: process.pid });
-          }
-        },
-      );
+      await withEnvAsync({ ...EXTERNAL_PROCESS, ...SERVICE_MARKERS }, async () => {
+        if (action === "stop") {
+          await expect(stopLaunchAgent(control())).rejects.toThrow(
+            "Refusing to stop LaunchAgent ai.openclaw.gateway from inside the same launchd service",
+          );
+        } else {
+          await expect(restartLaunchAgent(control())).resolves.toEqual({ outcome: "scheduled" });
+          expect(
+            launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff,
+          ).toHaveBeenCalledWith({ env: ENV, mode: "kickstart", waitForPid: process.pid });
+        }
+      });
       expectCommands("print");
     },
   );
@@ -1491,15 +1478,10 @@ describe("launchd install", () => {
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {
     state.bootstrapError = GUI_UNAVAILABLE;
-    let message = "";
-    try {
-      await install();
-    } catch (error) {
-      message = String(error);
-    }
-    expect(message).toContain("logged-in macOS GUI session");
-    expect(message).toContain("wrong user (including sudo)");
-    expect(message).toContain("https://docs.openclaw.ai/gateway");
+    const message = await install().catch(String);
+    expect(String(message)).toContain("logged-in macOS GUI session");
+    expect(String(message)).toContain("wrong user (including sudo)");
+    expect(String(message)).toContain("https://docs.openclaw.ai/gateway");
   });
 });
 

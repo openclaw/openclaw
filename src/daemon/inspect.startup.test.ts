@@ -121,6 +121,10 @@ const scheduledTask = (taskPath: string, scriptPath: string) => ({
   state: 3,
   actions: [{ type: 0, path: scriptPath, arguments: "", workingDirectory: "" }],
 });
+const startupUnknown = {
+  running: false,
+  runtime: { status: "unknown", inspectionFailure: { timeoutMs: 200 } },
+};
 
 it.each(["cmd", "9.2/9.3"] as const)(
   "discovers a %s Startup launcher without a usable Scheduler",
@@ -243,13 +247,9 @@ it.each(["process timeout", "absent port", "late absent port"])(
     const state = await readStartupWithinDeadline(startupPath);
     expect(nativeBudgets).toEqual(mode === "process timeout" ? [200] : [200, 160]);
     const expired = mode !== "absent port";
-    expect(state).toMatchObject({
-      running: false,
-      runtime: {
-        status: expired ? "unknown" : "stopped",
-        ...(expired ? { inspectionFailure: { timeoutMs: 200 } } : {}),
-      },
-    });
+    expect(state).toMatchObject(
+      expired ? startupUnknown : { running: false, runtime: { status: "stopped" } },
+    );
     expect(state.runtime?.pid).toBeUndefined();
     expect(taskProbe.probeScheduledTaskState).not.toHaveBeenCalled();
     if (mode === "process timeout") {
@@ -277,10 +277,7 @@ it("settles exact Startup inspection when its initial file read stalls", async (
   const inspection = readStartupWithinDeadline(startupPath);
   await entered.promise;
   await vi.advanceTimersByTimeAsync(200);
-  expect(await inspection).toMatchObject({
-    running: false,
-    runtime: { status: "unknown", inspectionFailure: { timeoutMs: 200 } },
-  });
+  expect(await inspection).toMatchObject(startupUnknown);
   expect(signal?.aborted).toBe(true);
   expect(spawnSync).not.toHaveBeenCalled();
 });

@@ -26,10 +26,7 @@ function mockLaunchctl(
   before: (command: string) => void = () => {},
 ) {
   vi.spyOn(native, "execLaunchctl").mockImplementation(async (args) => {
-    const command = args[0];
-    if (!command) {
-      throw new Error("Missing native command");
-    }
+    const command = args[0] ?? "";
     before(command);
     const handler = Object.hasOwn(handlers, command) ? handlers[command] : undefined;
     if (!handler) {
@@ -80,9 +77,7 @@ it.each(
           return loaded ? success : missing;
         },
       },
-      (command) => {
-        commands.push(command);
-      },
+      (command) => commands.push(command),
     );
     const result = restartLaunchAgent(controlArgs(preserveAutoStart));
     if (scenario === "bootstrap-failure") {

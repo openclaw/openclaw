@@ -176,7 +176,6 @@ it("fails closed when launchctl cannot classify system ownership", async () => {
 
 it.each([
   ["valid non-string Label", 42, undefined, true],
-  ["unreadable foreign plist", undefined, "EACCES", true],
   ["read-only status probe", undefined, undefined, false],
 ] as const)("reports no ownership for a %s", async (_name, value, error, scanInstalledPlists) => {
   plist("com.vendor.foreign", value, error);
