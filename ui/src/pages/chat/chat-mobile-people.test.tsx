@@ -31,7 +31,6 @@ const labels: ChatMobilePeopleBodyProps["labels"] = {
   mention: "Mention",
   mentionPerson: (name) => "Mention " + name,
   morePeople: (count) => count + " more people",
-  shownPeople: (count) => count + " shown",
 };
 
 it("projects native identities and mentions through the People body without sending or closing on rejection", async () => {
@@ -114,7 +113,7 @@ it("projects native identities and mentions through the People body without send
   expect(view.getByRole("region", { name: "Owner" }).textContent).toContain("Avery");
   expect(view.getByRole("region", { name: "Participants" }).querySelectorAll("li")).toHaveLength(2);
   expect(view.getByText("3 more people")).toBeDefined();
-  expect(view.getByRole("region", { name: "Participants" }).textContent).toContain("2 shown");
+  expect(view.getByRole("heading", { name: "Participants" }).textContent).toBe("Participants");
   expect(view.queryByText("Elsewhere")).toBeNull();
   const trigger = view.getByRole("button", { name: "Open people" });
   trigger.click();

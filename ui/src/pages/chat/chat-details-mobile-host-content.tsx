@@ -388,8 +388,6 @@ function MobileHostContent(
             mention: t("chat.sessionHeader.mention"),
             mentionPerson: (name) => t("chat.sessionHeader.mentionPerson", { name }),
             morePeople: (count) => t("chat.sessionHeader.morePeople", { count: String(count) }),
-            shownPeople: (count: number) =>
-              t("chat.sessionDetails.peopleShown", { count: String(count) }),
           },
         },
       });

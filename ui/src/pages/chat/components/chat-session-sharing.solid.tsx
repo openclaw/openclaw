@@ -276,7 +276,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                         type="button"
                         class="chat-pane__sharing-person"
                         disabled={Boolean(reason() || props.state?.loading)}
-                        title={reason() ?? t("chat.sessionSharing.membershipDescription")}
+                        title={reason()}
                       >
                         <Content />
                       </button>

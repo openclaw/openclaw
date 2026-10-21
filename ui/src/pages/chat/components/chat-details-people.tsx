@@ -69,14 +69,11 @@ export function ChatDetailsPeopleSummary(props: ChatDetailsPeopleSummaryProps) {
   const remaining = () => total() - preview().length;
   return (
     <span class="chat-details-people__summary">
-      <span class="sr-only">
-        {t(
-          props.partial
-            ? "chat.sessionDetails.peopleShownDescription"
-            : "chat.sessionDetails.peopleCount",
-          { count: String(total()) },
-        )}
-      </span>
+      <Show when={!props.partial}>
+        <span class="sr-only">
+          {t("chat.sessionDetails.peopleCount", { count: String(total()) })}
+        </span>
+      </Show>
       <Show
         when={props.expanded}
         fallback={
@@ -100,15 +97,15 @@ export function ChatDetailsPeopleSummary(props: ChatDetailsPeopleSummaryProps) {
           </span>
         }
       >
-        <span
-          class="chat-details-people__count chat-details-desktop-section__count"
-          aria-hidden="true"
-        >
-          <span class="chat-details-desktop-section__count-separator">·</span>
-          {props.partial
-            ? t("chat.sessionDetails.peopleShown", { count: String(total()) })
-            : total()}
-        </span>
+        <Show when={!props.partial}>
+          <span
+            class="chat-details-people__count chat-details-desktop-section__count"
+            aria-hidden="true"
+          >
+            <span class="chat-details-desktop-section__count-separator">·</span>
+            {total()}
+          </span>
+        </Show>
       </Show>
     </span>
   );

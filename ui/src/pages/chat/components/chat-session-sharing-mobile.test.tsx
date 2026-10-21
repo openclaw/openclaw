@@ -158,7 +158,7 @@ it("keeps Public confirmed until its owner publishes and preserves membership fo
   await Promise.resolve();
   expect(toggle.checked).toBe(false);
   expect(view.getByText("Session members")).toBeDefined();
-  const permission = view.getByRole("checkbox", { name: "Pat Member, Not a member" });
+  const permission = view.getByRole("checkbox", { name: "Pat Member, Visitor" });
   permission.focus();
   setSource({ ...initial, state: { ...initial.state!, loading: true } });
   flush();

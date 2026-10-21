@@ -19,7 +19,6 @@ type ChatMobilePeopleLabels = {
   mention: string;
   mentionPerson: (fullName: string) => string;
   morePeople: (count: number) => string;
-  shownPeople: (count: number) => string;
 };
 
 export type ChatMobilePeopleBodyProps = {
@@ -56,10 +55,8 @@ function PeopleSection(props: {
     <section class="chat-mobile-people__section" aria-label={props.title}>
       <h3>
         {props.title}
-        <Show when={props.showCount}>
-          <span>
-            {props.partial ? props.labels.shownPeople(props.people.length) : props.people.length}
-          </span>
+        <Show when={props.showCount && !props.partial}>
+          <span>{props.people.length}</span>
         </Show>
       </h3>
       <ul class="chat-mobile-people__list">

@@ -188,7 +188,7 @@ export function chatSessionMembershipLabel(owner: boolean, member: boolean) {
       ? "chat.sessionSharing.owner"
       : member
         ? "chat.sessionSharing.member"
-        : "chat.sessionSharing.notMember",
+        : "chat.sessionSharing.visitor",
   );
 }
 

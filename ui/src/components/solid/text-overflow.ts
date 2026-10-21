@@ -11,12 +11,7 @@ export function createTextOverflow(content: () => unknown) {
         return undefined;
       }
       const target = element;
-      const overflow =
-        target.scrollHeight > target.clientHeight + 1
-          ? "block"
-          : target.scrollWidth > target.clientWidth + 1
-            ? "inline"
-            : "none";
+      const overflow = target.scrollWidth > target.clientWidth + 1 ? "inline" : "none";
       return () => {
         target.dataset.textOverflow = overflow;
       };

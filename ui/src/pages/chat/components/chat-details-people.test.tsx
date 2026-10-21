@@ -82,7 +82,7 @@ it("shows three preview identities plus the remaining count, then the controlled
   expect(view.container.querySelector(".chat-details-people__overflow")).toBeNull();
 });
 
-it("identifies a loaded People union as partial without inventing its total", () => {
+it("omits count metadata for a partial People list", () => {
   const people: SessionParticipant[] = [
     { identity: { type: "profile", id: "owner" }, label: "Owner" },
   ];
@@ -90,10 +90,10 @@ it("identifies a loaded People union as partial without inventing its total", ()
   const view = mountSolid(() => (
     <ChatDetailsPeopleSummary people={people} expanded partial={partial()} />
   ));
-  expect(view.getByText("1 shown")).toBeDefined();
-  expect(view.getByText("People shown: 1.")).toBeDefined();
+  expect(view.container.textContent).toBe("");
+  expect(view.container.querySelector(".chat-details-people__count")).toBeNull();
   setPartial(false);
   flush();
   expect(view.getByText("1")).toBeDefined();
-  expect(view.queryByText("1 shown")).toBeNull();
+  expect(view.getByText("People: 1.")).toBeDefined();
 });

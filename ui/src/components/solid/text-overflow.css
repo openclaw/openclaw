@@ -13,7 +13,3 @@
     transparent
   );
 }
-
-[data-text-overflow="block"] {
-  mask-image: linear-gradient(to bottom, black calc(100% - 1em), transparent);
-}

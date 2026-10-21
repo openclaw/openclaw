@@ -194,7 +194,6 @@ export function ChatPaneMobileComposition(props: {
     },
     mentionPerson: (name: string) => t("chat.sessionHeader.mentionPerson", { name }),
     morePeople: (count: number) => t("chat.sessionHeader.morePeople", { count: String(count) }),
-    shownPeople: (count: number) => t("chat.sessionDetails.peopleShown", { count: String(count) }),
   };
   const adapter = createChatSessionSharingMobileAdapter(sharing, {
     onOpenSharing: () => host()?.navigate(sharingPage, actionSource()),

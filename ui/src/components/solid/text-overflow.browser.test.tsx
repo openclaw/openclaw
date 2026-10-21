@@ -45,19 +45,3 @@ it("keeps full labels and adjacent controls while fading only clipped text in ei
   expect(getComputedStyle(label).maskImage).toBe("none");
   expect(label.textContent).toBe(long);
 });
-
-it("preserves a two-line heading limit and fades only its clipped final line", async () => {
-  const view = mountSolid(() => (
-    <div
-      ref={createTextOverflow(() => "long heading")}
-      style="width:130px;max-height:40px;line-height:20px;overflow:hidden"
-    >
-      A long pull request title that needs more than two lines to remain completely readable
-    </div>
-  ));
-  const heading = view.container.firstElementChild!;
-  await settleLayout();
-  expect(getComputedStyle(heading).maskImage).not.toBe("none");
-  expect(heading.getBoundingClientRect().height).toBe(40);
-  expect(heading.textContent).toContain("completely readable");
-});
