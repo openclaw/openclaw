@@ -175,27 +175,25 @@ it.each(
         expect(rows()).toEqual(before);
         order.push("callback");
       };
-      const replacements = <T>(entries: T[]) => {
+      const replacement = { sessionKey: targetKey, entry: updated };
+      const replacements = (canonical = false) => {
         prepared();
-        return { result: resultToken, replacements: entries };
+        return {
+          result: resultToken,
+          replacements: [{ ...replacement, previousSessionKeys: canonical ? [sourceKey] : [] }],
+        };
       };
       try {
         await withPluginRuntimeRegistryScope(registry, async () => {
           if (operation === "session.entry-replacements") {
+            const request = {
+              storePath,
+              sessionKeys: split ? [sourceKey, targetKey] : [sourceKey],
+              update: async () => replacements(split),
+            };
             const result = split
-              ? await applySessionEntryCanonicalReplacements({
-                  storePath,
-                  sessionKeys: [sourceKey, targetKey],
-                  update: async () =>
-                    replacements([
-                      { sessionKey: targetKey, entry: updated, previousSessionKeys: [sourceKey] },
-                    ]),
-                })
-              : await applySessionEntryReplacements({
-                  storePath,
-                  sessionKeys: [sourceKey],
-                  update: async () => replacements([{ sessionKey: targetKey, entry: updated }]),
-                });
+              ? await applySessionEntryCanonicalReplacements(request)
+              : await applySessionEntryReplacements(request);
             expect(result).toBe(resultToken);
           } else {
             const result = await applySessionEntryLifecycleMutation({
@@ -353,16 +351,7 @@ it("coalesces automatic maintenance through native planning and finalization", a
       }
       return result;
     });
-    const workerOutcomes: Parameters<
-      typeof reclamationDiagnostics.logSqliteReclamationWorkerOutcome
-    >[0][] = [];
-    const logWorkerOutcome = reclamationDiagnostics.logSqliteReclamationWorkerOutcome;
-    vi.spyOn(reclamationDiagnostics, "logSqliteReclamationWorkerOutcome").mockImplementation(
-      (outcome) => {
-        workerOutcomes.push(outcome);
-        logWorkerOutcome(outcome);
-      },
-    );
+    const diagnostics = vi.spyOn(reclamationDiagnostics, "logSqliteReclamationWorkerOutcome");
     const { operations } = observeSlowWriters();
     const request = {
       activeSessionKey: activeKey,
@@ -384,6 +373,7 @@ it("coalesces automatic maintenance through native planning and finalization", a
       operations.filter((operation) => operation === "session.reclamation.worker-commit"),
     ).toEqual(["session.reclamation.worker-commit"]);
     expect(finalizer).toHaveBeenCalledOnce();
+    const workerOutcomes = diagnostics.mock.calls.map(([outcome]) => outcome);
     expect(workerOutcomes.map(({ kind }) => kind)).toEqual(["maintenance-finalize"]);
     for (const outcome of workerOutcomes) {
       expect(outcome.outcome).toBe("resolved");
