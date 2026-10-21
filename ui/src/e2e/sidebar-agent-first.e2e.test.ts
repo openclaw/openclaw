@@ -25,7 +25,7 @@ const agentsList: AgentsListResult = {
 function session(
   name: string,
   updatedAt: number,
-  fields: Partial<GatewaySessionRow>,
+  fields: Partial<Omit<GatewaySessionRow, "updatedAt">>,
 ): GatewaySessionRow & ControlUiSessionFixture {
   return { key: `agent:main:${name}`, agentId: "main", kind: "direct", updatedAt, ...fields };
 }

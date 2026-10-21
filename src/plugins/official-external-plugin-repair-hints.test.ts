@@ -11,6 +11,7 @@ import {
 
 const resolvePresence = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Repair cases supply missing or blocked channel owners without a live registry.
 vi.mock("./channel-plugin-ids.js", () => ({
   resolveConfiguredChannelPresencePolicy: resolvePresence,
 }));

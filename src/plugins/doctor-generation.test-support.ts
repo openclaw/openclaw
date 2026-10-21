@@ -17,7 +17,7 @@ export function createDoctorGenerationFixture(rootDir: string, id: string) {
         },
       },
     },
-    inventory(doctorContract: PluginManifestRecord["doctorContract"]) {
+    inventory: (doctorContract: PluginManifestRecord["doctorContract"]) => {
       return {
         records: [
           createPluginManifestRecordFixture({

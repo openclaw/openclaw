@@ -37,7 +37,17 @@ describe("Discord bot-owned thread mention gating", () => {
     const invalid = { ...guild, requireMentionInBotThreads: "false" };
     expect(DiscordConfigSchema.safeParse({ guilds: { "123": invalid } }).success).toBe(false);
   });
-  it.each([
+  it.each<{
+    name: string;
+    ownerId: string;
+    admitted: boolean;
+    strict?: boolean;
+    autoThread?: boolean;
+    mentioned?: boolean;
+    relaxedParent?: boolean;
+    replyToBot?: boolean;
+    users?: string[];
+  }>([
     { ...botThread, name: "bot-created thread", strict: false },
     { ...botThread, name: "automatically created thread", autoThread: true },
     { ...botThread, name: "strict explicit mention", strict: true, mentioned: true },

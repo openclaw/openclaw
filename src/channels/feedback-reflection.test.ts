@@ -8,6 +8,7 @@ import {
 
 const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Reflection dispatch uses a fixed session path rather than host state directories.
 vi.mock("../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: vi.fn(() => "/state/main/sessions.json"),
 }));

@@ -22,7 +22,8 @@ it.each([
   ["lint", { OPENCLAW_LINT_TOOL: "bun", PATH: "/usr/bin" }, true],
   ["format", { OPENCLAW_FORMAT_TOOL: "bun" }, "error", false],
   ["format", {}, false, false],
-] as const)("selects %s for %j", (kind, env, bun, available = true) => {
+] as const)("selects %s for %j", (kind, env, bun, availability) => {
+  const available = availability ?? true;
   const resolvePinnedBun = vi.fn(() => (available ? pinnedBun : unavailable));
   const notice = vi.fn();
   const run = () => resolveDevTool(kind, env, { resolvePinnedBun, notice });

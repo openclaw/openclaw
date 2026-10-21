@@ -124,9 +124,10 @@ describe("hydrateDiscordMessageIfNeeded", () => {
   it.each(["missing", "mismatched"])("handles failed %s reply hydration", async (state) => {
     const test = fixture(state === "missing" ? reply() : staleReply());
     const error = Object.assign(new Error("Forbidden"), { status: 403 });
-    test.rest.get = vi.fn().mockRejectedValue(error);
+    const get = vi.fn().mockRejectedValue(error);
+    test.rest.get = get;
     const { message } = await test.hydrate();
-    expect(test.rest.get).toHaveBeenCalledOnce();
+    expect(get).toHaveBeenCalledOnce();
     expect(message.referencedMessage).toBeNull();
     if (state === "missing") {
       expect(message).toBe(test.message);

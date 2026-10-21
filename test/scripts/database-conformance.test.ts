@@ -62,8 +62,12 @@ describe("PostgreSQL conformance shards", () => {
     }
     expect(shards.flat().toSorted()).toEqual(full.toSorted());
     expect(new Set(shards.flat()).size).toBe(full.length);
+    const firstShard = shards[0];
+    if (!firstShard) {
+      throw new Error("expected the first conformance shard");
+    }
     const options = ["--maxWorkers=1"];
-    expect(targets(["--shard", "1/3", "--", ...options])).toEqual([...shards[0], ...options]);
+    expect(targets(["--shard", "1/3", "--", ...options])).toEqual([...firstShard, ...options]);
     const custom = ["custom.test.ts", ...options];
     expect(targets(["--", ...custom])).toEqual(custom);
   });

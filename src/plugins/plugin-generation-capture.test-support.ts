@@ -16,8 +16,9 @@ export function writeTree(root: string, files: Record<string, string | Record<st
   }
 }
 
-export const expectBytes = (filename: string, bytes: Buffer) =>
-  void expect(fs.readFileSync(filename)).toEqual(bytes);
+export const expectBytes = (filename: string, bytes: Buffer) => {
+  expect(fs.readFileSync(filename)).toEqual(bytes);
+};
 
 export const readText = (filename: string) => fs.readFileSync(filename, "utf8");
 

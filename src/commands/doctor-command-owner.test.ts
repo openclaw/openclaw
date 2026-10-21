@@ -9,6 +9,7 @@ import {
 const note = vi.hoisted(() => vi.fn());
 const owners = (...ownerAllowFrom: string[]) => ({ commands: { ownerAllowFrom } });
 
+// mock-isolation: Capture command-owner diagnostics without writing to the operator's terminal.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 afterEach(() => vi.unstubAllEnvs());

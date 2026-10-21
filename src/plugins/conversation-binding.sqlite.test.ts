@@ -51,7 +51,8 @@ let restoreEnv: () => void;
 let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 
 beforeEach(async () => {
-  restoreEnv = captureEnv(["OPENCLAW_STATE_DIR"]).restore;
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  restoreEnv = () => envSnapshot.restore();
   registrySnapshot = captureActivePluginRegistrySnapshot();
   await drainGlobalSingletonLifecycleState();
   await closeState();

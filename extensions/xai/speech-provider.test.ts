@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   configured: vi.fn(async () => false),
   resolveKey: vi.fn(async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined })),
 }));
+// mock-isolation: Provider request tests replace network synthesis and voice discovery with fixtures.
 vi.mock("./tts.js", () => ({
   listXaiTtsVoices: mocks.voices,
   xaiTTS: mocks.tts,
@@ -26,6 +27,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: () => false,
   isProviderAuthProfileConfiguredAsync: mocks.configured,
 }));
+// mock-isolation: OAuth fallback responses are fixtures and must not read host credentials.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: mocks.resolveKey,
 }));

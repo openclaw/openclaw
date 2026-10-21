@@ -87,7 +87,7 @@ it("bounds and orders queued audio on initial connect and reopen without replayi
   initial.forEach((audio) => session.sendAudio(audio));
   await session.connect();
   expect(forwarded).toEqual(initial.slice(1));
-  expect(forwarded.every(Buffer.isBuffer)).toBe(true);
+  expect(forwarded.every((audio) => Buffer.isBuffer(audio))).toBe(true);
   expect(m.buildTranscriptionProvider).toHaveBeenCalledOnce();
   expect(m.transcriptionConnect).toHaveBeenCalledOnce();
   expect(m.transcriptionConnect.mock.invocationCallOrder[0]).toBeLessThan(

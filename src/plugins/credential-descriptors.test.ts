@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./runtime/gateway-request-scope.js", () => ({
   getPluginRegistryForContext: mocks.registry,
 }));
+// mock-isolation: Synthetic provider metadata proves ownership without loading bundled plugins.
 vi.mock("./web-provider-public-artifacts.explicit.js", () => ({
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: mocks.search,
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: mocks.fetch,

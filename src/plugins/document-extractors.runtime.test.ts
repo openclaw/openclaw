@@ -52,6 +52,7 @@ vi.mock("./public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleFromCandidatesSync: mocks.loadPublicArtifact,
 }));
 
+// mock-isolation: Extractor availability comes from the fixture inventory, not host plugin discovery.
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>

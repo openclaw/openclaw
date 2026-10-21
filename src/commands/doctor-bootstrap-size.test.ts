@@ -11,6 +11,7 @@ const resolveBootstrapContextForDiagnostics = vi.hoisted(() => vi.fn());
 const resolveBootstrapMaxChars = vi.hoisted(() => vi.fn(() => 20_000));
 const resolveBootstrapTotalMaxChars = vi.hoisted(() => vi.fn(() => 150_000));
 
+// mock-isolation: Capture Doctor diagnostics without writing to the operator's terminal.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 vi.mock("../agents/agent-scope.js", () => ({
