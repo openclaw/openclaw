@@ -460,6 +460,7 @@ async function resolveReplyFromConfig(
           // Cache and classify now; the final provider and owner policy are
           // resolved later, immediately before the embedded turn starts.
           selfServeLocalPaths: false,
+          signal: optsWithSkillFilter?.abortSignal,
           ...(utilityModelSelectionLocked
             ? {
                 processingMode:
@@ -470,6 +471,7 @@ async function resolveReplyFromConfig(
             : {}),
         }),
       );
+      assertReplyPreprocessingActive(optsWithSkillFilter?.abortSignal);
       extractedFileImages = mediaResult?.extractedFileImages;
       enableLocalPathSelfServe = mediaResult?.enableLocalPathSelfServe;
     }

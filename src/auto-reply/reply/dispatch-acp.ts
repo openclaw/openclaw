@@ -20,11 +20,7 @@ import {
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agents/agent-run-terminal-outcome.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveSessionAgentId,
-} from "../../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   PreparedQuestionAnswerRefusedError,
   QuestionAnswerUnconfirmedError,
@@ -58,7 +54,6 @@ import { createLazyAcpElicitationHandler } from "./acp-elicitation-handler-lazy.
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
   collectDescribedImageAttachmentIndexes,
-  loadAgentTurnMediaRuntime,
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
@@ -69,6 +64,7 @@ import type {
   AcpDispatchAttemptResult,
 } from "./dispatch-acp-delivery.types.js";
 import { finalizeAcpTurnOutput } from "./dispatch-acp-finalize.js";
+import { prepareAcpMediaUnderstanding } from "./dispatch-acp-media.js";
 import { resolveAcpTurnText } from "./dispatch-acp-prompt.js";
 import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
@@ -475,27 +471,15 @@ export async function tryDispatchAcpReplyCore(
       ctx: params.ctx,
       cfg: params.cfg,
     });
-    let extractedFileImages = params.extractedFileImages ?? [];
-    if (hasInboundMediaForUnderstanding(params.ctx) && !params.ctx.MediaUnderstanding?.length) {
-      try {
-        const { applyMediaUnderstanding } = await loadAgentTurnMediaRuntime();
-        const mediaResult = await applyMediaUnderstanding({
-          ctx: params.ctx,
-          cfg: params.cfg,
-          deliveredImageIndexes: new Set(resolvedTurnAttachments.attachmentIndexes ?? []),
-          agentId: acpAgentId,
-          agentDir: resolveAgentDir(params.cfg, acpAgentId),
-          workspaceDir: resolveAgentWorkspaceDir(params.cfg, acpAgentId),
-        });
-        if (mediaResult.extractedFileImages.length > 0) {
-          extractedFileImages = [...extractedFileImages, ...mediaResult.extractedFileImages];
-        }
-      } catch (err) {
-        logVerbose(
-          `dispatch-acp: media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
-        );
-      }
-    }
+    const extractedFileImages = await prepareAcpMediaUnderstanding({
+      ctx: params.ctx,
+      cfg: params.cfg,
+      agentId: acpAgentId,
+      attachmentIndexes: resolvedTurnAttachments.attachmentIndexes,
+      extractedFileImages: params.extractedFileImages,
+      signal: params.abortSignal,
+    });
+    params.abortSignal?.throwIfAborted();
 
     const promptText = params.ctx.agentText.trim();
     const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
@@ -684,6 +668,15 @@ export async function tryDispatchAcpReplyCore(
     return result;
   } catch (err) {
     params.turnAdoption?.assertCurrent();
+    if (!turnDispatched && params.abortSignal?.aborted) {
+      emitAuditTerminal();
+      params.recordProcessed("completed", { reason: "acp_aborted" });
+      params.markIdle("message_aborted");
+      return {
+        queuedFinal: false,
+        counts: delivery.applyRoutedCounts(params.dispatcher.getQueuedCounts()),
+      };
+    }
     const acpError = toAcpRuntimeError({
       error: err,
       fallbackCode: "ACP_TURN_FAILED",

@@ -25,7 +25,7 @@ vi.mock("../utils/message-channel.js", () => ({
     channel === "voicechat" || channel === "telegram",
 }));
 
-import { sendTranscriptEcho } from "./echo-transcript.js";
+import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 
 const EMPTY_CONFIG = {} as OpenClawConfig;
 
@@ -80,6 +80,66 @@ describe("sendTranscriptEcho", () => {
     });
 
     expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("forwards Telegram account and thread metadata to outbound delivery", async () => {
+    await sendTranscriptEcho({
+      ctx: createCtx({
+        Provider: "telegram",
+        From: undefined,
+        OriginatingTo: "telegram:42",
+        AccountId: "primary",
+        MessageThreadId: 77,
+      }),
+      cfg: EMPTY_CONFIG,
+      transcript: "threaded voice note",
+    });
+
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith({
+      cfg: EMPTY_CONFIG,
+      channel: "telegram",
+      to: "telegram:42",
+      accountId: "primary",
+      threadId: 77,
+      payloads: [
+        { text: DEFAULT_ECHO_TRANSCRIPT_FORMAT.replace("{transcript}", "threaded voice note") },
+      ],
+      bestEffort: true,
+      durability: "best_effort",
+    });
+  });
+
+  it("does not send if the turn is stopped while loading the message runtime", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("Turn stopped", "AbortError");
+    const running = sendTranscriptEcho({
+      ctx: createCtx(),
+      cfg: EMPTY_CONFIG,
+      transcript: "late transcript",
+      signal: controller.signal,
+    });
+    controller.abort(reason);
+
+    await expect(running).rejects.toBe(reason);
+    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("preserves caller cancellation instead of swallowing it as a delivery failure", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("Turn stopped", "AbortError");
+    mockDeliverOutboundPayloads.mockImplementationOnce(async (params) => {
+      expect(params.signal).toBe(controller.signal);
+      controller.abort(reason);
+      throw new Error("transport closed");
+    });
+    await expect(
+      sendTranscriptEcho({
+        ctx: createCtx(),
+        cfg: EMPTY_CONFIG,
+        transcript: "transcript",
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
   });
 
   it("swallows delivery failures", async () => {

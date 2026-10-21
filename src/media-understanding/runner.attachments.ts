@@ -35,7 +35,7 @@ export function createMediaAttachmentCache(
 /** Creates an inbound cache whose session-scoped read policy stays authoritative. */
 export function createScopedMediaAttachmentCache(
   attachments: MediaAttachment[],
-  params: Parameters<typeof resolveMediaAttachmentLocalRoots>[0],
+  params: Parameters<typeof resolveMediaAttachmentLocalRoots>[0] & { signal?: AbortSignal },
 ): MediaAttachmentCache {
   return createMediaAttachmentCache(attachments, {
     localPathRoots: resolveMediaAttachmentLocalRoots(params),
@@ -43,6 +43,7 @@ export function createScopedMediaAttachmentCache(
     includeDefaultLocalPathRoots: false,
     ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
     workspaceDir: params.workspaceDir,
+    signal: params.signal,
   });
 }
 

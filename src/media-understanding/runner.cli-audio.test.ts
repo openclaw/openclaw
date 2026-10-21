@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import * as globals from "../globals.js";
 import { logWarn } from "../logger.js";
@@ -29,7 +29,10 @@ vi.mock("../media/media-services.js", () => ({
 }));
 
 type Fixture = Parameters<Parameters<typeof withAudioFixture>[1]>[0];
-type Overrides = Pick<Parameters<typeof runCliEntry>[0], "assertCurrent" | "config" | "request">;
+type Overrides = Pick<
+  Parameters<typeof runCliEntry>[0],
+  "assertCurrent" | "config" | "request" | "execution"
+>;
 
 function runFixture(
   { ctx, media, cache }: Fixture,
@@ -133,6 +136,68 @@ beforeEach(() => {
   runFfmpegMock.mockReset();
 });
 afterEach(() => vi.clearAllMocks());
+
+it.each(["conversion", "transcription"] as const)(
+  "cancels %s and removes scratch files only after the command settles",
+  async (phase) => {
+    const controller = new AbortController();
+    const reason = new Error("media command stopped");
+    const started = createDeferred<{ outputDir: string; signal?: AbortSignal }>();
+    const released = createDeferred();
+    const command = async (args: string[], options?: { signal?: AbortSignal }) => {
+      const outputPath = phase === "conversion" ? args.at(-1) : args[2];
+      if (!outputPath) {
+        throw new Error("missing output path");
+      }
+      started.resolve({ outputDir: path.dirname(outputPath), signal: options?.signal });
+      await released.promise;
+      options?.signal?.throwIfAborted();
+      return "late transcript";
+    };
+    if (phase === "conversion") {
+      runFfmpegMock.mockImplementationOnce(command);
+    } else {
+      runExecMock.mockImplementationOnce(
+        async (_command: string, args: string[], options?: { signal?: AbortSignal }) => ({
+          stdout: await command(args, options),
+          stderr: "",
+        }),
+      );
+    }
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-cli-cancellation",
+        extension: phase === "conversion" ? "mp3" : "wav",
+        mediaType: "audio/mpeg",
+        fileContents: createSafeAudioFixtureBuffer(),
+      },
+      async (fixture) => {
+        const operation = runFixture(fixture, whisper, {
+          execution: { signal: controller.signal },
+        });
+        try {
+          const running = await awaitGateBeforeSettlement(
+            started.promise,
+            operation,
+            "media command did not start",
+          );
+          controller.abort(reason);
+          expect((await fs.stat(running.outputDir)).isDirectory()).toBe(true);
+          released.resolve();
+          await expect(operation).rejects.toBe(reason);
+          expect(running.signal).toBe(controller.signal);
+          await expect(fs.stat(running.outputDir)).rejects.toMatchObject({ code: "ENOENT" });
+          if (phase === "conversion") {
+            expect(runExecMock).not.toHaveBeenCalled();
+          }
+        } finally {
+          released.resolve();
+          await operation.catch(() => {});
+        }
+      },
+    );
+  },
+);
 
 it.each([
   ["cli-missing-command", undefined, false],

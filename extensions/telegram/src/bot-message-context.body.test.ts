@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
 import { makeDirectTelegramConfig } from "./bot.config.test-support.js";
 import {
   apiCalls,
@@ -531,6 +532,50 @@ it("preserves named-account DM topic voice echo routing without a group mention"
     '[Audio transcript (machine-generated, untrusted)]: "hello from a voice note"',
   );
 });
+
+it.each(["resolve", "reject"] as const)(
+  "cancels DM voice preflight before model dispatch when transcription later %ss",
+  async (outcome) => {
+    const bot = await inputBot(audioConfig());
+    const abort = new AbortController();
+    const cancellation = new Error("ingress-superseded");
+    const started = createDeferred<AbortSignal | undefined>();
+    const release = createDeferred<void>();
+    transcribe.mockImplementationOnce(async ({ signal }) => {
+      started.resolve(signal);
+      await release.promise;
+      if (outcome === "reject") {
+        throw new Error("transcription failed after cancellation");
+      }
+      return "late voice transcript";
+    });
+    const update = {
+      update_id: ++updateId,
+      message: voiceMessage(false),
+    };
+    const processing = runWithTelegramSpooledReplayUpdate(
+      update,
+      () => deliverTelegramUpdate(bot, update),
+      {
+        abortSignal: abort.signal,
+        onAdopted: async () => undefined,
+        onDeferred: () => undefined,
+        onAbandoned: () => undefined,
+      },
+    );
+    try {
+      const signal = await started.promise;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      abort.abort(cancellation);
+      expect(signal?.aborted).toBe(true);
+    } finally {
+      release.resolve();
+      await processing;
+    }
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toEqual([]);
+  },
+);
 
 it("inherits disabled group audio preflight when the topic leaves it unset", async () => {
   const cfg = config({

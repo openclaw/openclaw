@@ -285,12 +285,14 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
+    assertMediaExecutionCurrent(params.execution);
     const normalizedMedia = await normalizeImageDescriptionInput({
       buffer: media.buffer,
       fileName: media.fileName,
       mime: media.mime,
       maxBytes,
     });
+    assertMediaExecutionCurrent(params.execution);
     let optimizedMedia: Awaited<ReturnType<typeof optimizeImageDescriptionInput>>;
     try {
       optimizedMedia = await optimizeImageDescriptionInput({
@@ -303,7 +305,9 @@ export async function runProviderEntry(params: {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
       });
+      assertMediaExecutionCurrent(params.execution);
     } catch (error) {
+      assertMediaExecutionCurrent(params.execution);
       if (error instanceof ImageOptimizationLimitError) {
         throw new MediaUnderstandingSkipError(
           "maxBytes",
@@ -321,19 +325,21 @@ export async function runProviderEntry(params: {
       provider: requestProviderId,
       prompt: params.request?.prompt ?? prompt,
       timeoutMs,
-      signal: params.execution?.signal,
       profile: entry.profile,
       preferredProfile: entry.preferredProfile,
       agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       cfg: params.cfg,
+      ...(params.execution?.signal ? { signal: params.execution?.signal } : {}),
     };
     const describeImage = provider?.describeImage ?? describeImageWithModel;
+    assertMediaExecutionCurrent(params.execution);
     const result = await withGuardedFetchRequestAuthority(
       params.execution ? () => assertMediaExecutionCurrent(params.execution) : undefined,
       () => describeImage(imageInput),
     );
+    assertMediaExecutionCurrent(params.execution);
     return ok({
       kind: "image.description",
       attachmentIndex: params.attachmentIndex,
@@ -363,6 +369,7 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
+    assertMediaExecutionCurrent(params.execution);
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
     const audioLanguage = params.request?.language ?? entry.language ?? params.config?.language;
     // STT prompts are spelling/context hints; injected instructions can be echoed on silence.
@@ -384,6 +391,7 @@ export async function runProviderEntry(params: {
         workspaceDir: params.workspaceDir,
       }) ||
       entry.model;
+    assertMediaExecutionCurrent(params.execution);
     const input = {
       buffer: media.buffer,
       fileName: media.fileName,
@@ -395,7 +403,7 @@ export async function runProviderEntry(params: {
       query: providerQuery,
       timeoutMs,
       fetchFn,
-      signal: params.execution?.signal,
+      ...(params.execution?.signal ? { signal: params.execution?.signal } : {}),
     };
     let result: AudioTranscriptionResult;
     if (provider.transcribeAudioWithContext) {
@@ -414,6 +422,7 @@ export async function runProviderEntry(params: {
             preferredProfile: entry.preferredProfile,
           }),
       );
+      assertMediaExecutionCurrent(params.execution);
       if (!attempt.ok) {
         return attempt;
       }
@@ -428,6 +437,7 @@ export async function runProviderEntry(params: {
         providerId,
         provider,
       });
+      assertMediaExecutionCurrent(params.execution);
       result = await withGuardedFetchRequestAuthority(
         () => {
           params.assertCurrent?.();
@@ -442,6 +452,7 @@ export async function runProviderEntry(params: {
           ),
       );
     }
+    assertMediaExecutionCurrent(params.execution);
     if (isTranscriptArtifactText(result.text)) {
       return ok(null);
     }
@@ -463,6 +474,7 @@ export async function runProviderEntry(params: {
     maxBytes,
     timeoutMs,
   });
+  assertMediaExecutionCurrent(params.execution);
   const estimatedBase64Bytes = estimateBase64Size(media.size);
   const maxBase64Bytes = resolveVideoMaxBase64Bytes(maxBytes);
   if (estimatedBase64Bytes > maxBase64Bytes) {
@@ -476,6 +488,7 @@ export async function runProviderEntry(params: {
     providerId,
     provider,
   });
+  assertMediaExecutionCurrent(params.execution);
   const { baseUrl, headers, request } = resolveProviderRequestContext({
     ...params,
     providerId,
@@ -490,6 +503,7 @@ export async function runProviderEntry(params: {
       providerRegistry: params.providerRegistry,
     }) ||
     entry.model;
+  assertMediaExecutionCurrent(params.execution);
   const result = await executeProviderRequest(
     providerId,
     auth,
@@ -506,10 +520,11 @@ export async function runProviderEntry(params: {
         prompt,
         timeoutMs,
         fetchFn,
-        signal: params.execution?.signal,
+        ...(params.execution?.signal ? { signal: params.execution?.signal } : {}),
       }),
     params.execution,
   );
+  assertMediaExecutionCurrent(params.execution);
   return ok({
     kind: "video.description",
     attachmentIndex: params.attachmentIndex,
@@ -540,8 +555,10 @@ export async function runCliEntry(
     maxBytes,
     timeoutMs,
   });
+  assertMediaExecutionCurrent(params.execution);
   if (capability === "audio") {
     const stat = await fs.stat(attachmentPath);
+    assertMediaExecutionCurrent(params.execution);
     assertMinAudioSize({ size: stat.size, attachmentIndex });
   }
   params.assertCurrent?.();
@@ -549,6 +566,7 @@ export async function runCliEntry(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-cli-"),
   );
   try {
+    assertMediaExecutionCurrent(params.execution);
     let mediaPath = attachmentPath;
     if (
       capability === "audio" &&
@@ -562,7 +580,7 @@ export async function runCliEntry(
         write: async (outputPath) => {
           params.assertCurrent?.();
           assertMediaExecutionCurrent(params.execution);
-          await runFfmpeg([
+          const conversionArgs = [
             "-y",
             "-i",
             attachmentPath,
@@ -575,11 +593,16 @@ export async function runCliEntry(
             "-f",
             "wav",
             outputPath,
-          ]);
+          ];
+          await (params.execution?.signal
+            ? runFfmpeg(conversionArgs, { signal: params.execution.signal })
+            : runFfmpeg(conversionArgs));
+          assertMediaExecutionCurrent(params.execution);
         },
       });
       mediaPath = wavPath;
     }
+    assertMediaExecutionCurrent(params.execution);
     const outputBase = path.join(outputDir, path.parse(mediaPath).name);
 
     const templCtx: TemplateContext & Record<string, unknown> = {
@@ -620,6 +643,7 @@ export async function runCliEntry(
         ? path.dirname(mediaPath)
         : undefined,
     });
+    assertMediaExecutionCurrent(params.execution);
     const requestedBackend =
       capability === "audio"
         ? resolveRequestedLocalAudioBackend({
@@ -641,6 +665,7 @@ export async function runCliEntry(
       stdout,
       mediaPath,
     });
+    assertMediaExecutionCurrent(params.execution);
     const text = trimOutput(resolved, maxChars);
     if (!text || (capability === "audio" && isTranscriptArtifactText(resolved))) {
       return null;
@@ -654,11 +679,15 @@ export async function runCliEntry(
       ...(requestedBackend ? { requestedBackend } : {}),
       ...(observedBackend ? { observedBackend } : {}),
     };
+  } catch (error) {
+    assertMediaExecutionCurrent(params.execution);
+    throw error;
   } finally {
     await fs.rm(outputDir, { recursive: true, force: true }).catch((error: unknown) => {
       logWarn(
         `media-understanding: failed to remove CLI temporary directory ${outputDir}: ${String(error)}; remove it manually.`,
       );
     });
+    assertMediaExecutionCurrent(params.execution);
   }
 }

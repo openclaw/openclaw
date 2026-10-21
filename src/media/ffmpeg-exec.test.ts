@@ -17,10 +17,11 @@ vi.mock("../infra/resolve-system-bin.js", () => ({
 let parseFfprobeCodecAndSampleRate: typeof import("./ffmpeg-exec.js").parseFfprobeCodecAndSampleRate;
 let resolveFfmpegBin: typeof import("./ffmpeg-exec.js").resolveFfmpegBin;
 let runFfprobe: typeof import("./ffmpeg-exec.js").runFfprobe;
+let runFfmpeg: typeof import("./ffmpeg-exec.js").runFfmpeg;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ parseFfprobeCodecAndSampleRate, resolveFfmpegBin, runFfprobe } =
+  ({ parseFfprobeCodecAndSampleRate, resolveFfmpegBin, runFfprobe, runFfmpeg } =
     await import("./ffmpeg-exec.js"));
 });
 
@@ -132,6 +133,20 @@ describe("runFfprobe", () => {
     runExecMock.mockRejectedValue(childError);
 
     await expect(runFfprobe(["pipe:0"], { input: Buffer.from("audio") })).rejects.toBe(childError);
+  });
+});
+
+describe("media process cancellation", () => {
+  it.each(["ffmpeg", "ffprobe"] as const)("forwards caller cancellation to %s", async (command) => {
+    const signal = new AbortController().signal;
+    resolveSystemBinMock.mockReturnValue(`/usr/bin/${command}`);
+    runExecMock.mockResolvedValue({ stdout: "ok", stderr: "" });
+    await (command === "ffmpeg" ? runFfmpeg : runFfprobe)(["-version"], { signal });
+    expect(runExecMock).toHaveBeenCalledWith(
+      `/usr/bin/${command}`,
+      ["-version"],
+      expect.objectContaining({ signal }),
+    );
   });
 });
 

@@ -9,6 +9,7 @@ import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveAttachmentKind, selectAttachments } from "./attachments.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import type { ExtractedFileImage } from "./extracted-file-images.js";
@@ -81,7 +82,8 @@ function enableLocalPathSelfServe(
   }
 }
 
-export async function applyMediaUnderstanding(params: {
+type ApplyMediaUnderstandingParams = {
+  signal?: AbortSignal;
   ctx: MsgContext;
   cfg: OpenClawConfig;
   agentId?: string;
@@ -96,7 +98,29 @@ export async function applyMediaUnderstanding(params: {
   selfServeLocalPaths?: boolean;
   /** Attachment indexes the caller (ACP) has already resolved into native turn attachments. */
   deliveredImageIndexes?: ReadonlySet<number>;
-}): Promise<ApplyMediaUnderstandingResult> {
+};
+
+export async function applyMediaUnderstanding(
+  params: ApplyMediaUnderstandingParams,
+): Promise<ApplyMediaUnderstandingResult> {
+  const signal =
+    params.execution && params.signal
+      ? AbortSignal.any([params.execution.signal, params.signal])
+      : (params.signal ?? params.execution?.signal);
+  const execution = signal ? { ...params.execution, signal } : undefined;
+  // Let Stop settle the caller even if a provider ignores cancellation. The work
+  // keeps ownership of its cache until every active consumer has settled.
+  return await racePromiseWithAbortSignal(
+    () => applyMediaUnderstandingWork({ ...params, signal, execution }),
+    signal,
+    (abortedSignal) => abortedSignal.reason,
+  );
+}
+
+async function applyMediaUnderstandingWork(
+  params: ApplyMediaUnderstandingParams,
+): Promise<ApplyMediaUnderstandingResult> {
+  params.signal?.throwIfAborted();
   const { ctx, cfg } = params;
   const commandCandidates = [ctx.CommandBody, ctx.RawBody, ctx.Body];
   const originalUserText = commandCandidates
@@ -130,6 +154,7 @@ export async function applyMediaUnderstanding(params: {
           ? AUDIO_ONLY_CAPABILITY_ORDER
           : CAPABILITY_ORDER,
       async (capability) => {
+        params.signal?.throwIfAborted();
         const request = {
           capability,
           cfg,
@@ -147,6 +172,7 @@ export async function applyMediaUnderstanding(params: {
         try {
           return await runCapability(request);
         } catch (err) {
+          params.signal?.throwIfAborted();
           if (shouldLogVerbose()) {
             logVerbose(`Media understanding task failed: ${String(err)}`);
           }
@@ -177,6 +203,7 @@ export async function applyMediaUnderstanding(params: {
       },
       { concurrency: resolveConcurrency(cfg), stopOnError: false },
     );
+    params.signal?.throwIfAborted();
     if (providerRegistryError) {
       throw providerRegistryError.error;
     }
@@ -217,6 +244,27 @@ export async function applyMediaUnderstanding(params: {
       }
     }
 
+    // Only skip file extraction for attachments that have a real (non-synthetic)
+    // audio transcription. Synthetic placeholders should not prevent file extraction
+    // for tiny audio-MIME files that could be recovered as text via forcedTextMime.
+    const fileContext =
+      params.processingMode === "audio-only"
+        ? { blocks: [], images: [], localPathSelfServeUpgrades: [] }
+        : await extractFileContext({
+            attachments,
+            cache,
+            cfg,
+            signal: params.signal,
+            limits: resolveFileExtractionLimits(cfg),
+            skipAttachmentIndexes:
+              audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
+            // Placement is the caller's fact. Absent an authoritative host-readable
+            // placement, suppress — a wrong path is worse than the plain marker (#122411).
+            selfServePathsEnabled: params.selfServeLocalPaths === true,
+          });
+    // Publish only after all preprocessing has completed for this turn.
+    params.signal?.throwIfAborted();
+
     if (decisions.length > 0) {
       ctx.MediaUnderstandingDecisions = [...(ctx.MediaUnderstandingDecisions ?? []), ...decisions];
     }
@@ -233,39 +281,12 @@ export async function applyMediaUnderstanding(params: {
           ctx.CommandBody = transcript;
           ctx.RawBody = transcript;
         }
-        // Echo transcript back to chat before agent processing, if configured.
-        const audioCfg = cfg.tools?.media?.audio;
-        if (audioCfg?.echoTranscript && transcript) {
-          await sendTranscriptEcho({
-            ctx,
-            cfg,
-            transcript,
-            format: audioCfg.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
-          });
-        }
       } else if (originalUserText) {
         ctx.CommandBody = originalUserText;
         ctx.RawBody = originalUserText;
       }
       ctx.MediaUnderstanding = [...(ctx.MediaUnderstanding ?? []), ...outputs];
     }
-    // Only skip file extraction for attachments that have a real (non-synthetic)
-    // audio transcription. Synthetic placeholders should not prevent file extraction
-    // for tiny audio-MIME files that could be recovered as text via forcedTextMime.
-    const fileContext =
-      params.processingMode === "audio-only"
-        ? { blocks: [], images: [], localPathSelfServeUpgrades: [] }
-        : await extractFileContext({
-            attachments,
-            cache,
-            cfg,
-            limits: resolveFileExtractionLimits(cfg),
-            skipAttachmentIndexes:
-              audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
-            // Placement is the caller's fact. Absent an authoritative host-readable
-            // placement, suppress — a wrong path is worse than the plain marker (#122411).
-            selfServePathsEnabled: params.selfServeLocalPaths === true,
-          });
     // Only processed capabilities have decisions, so audio-only runs cannot
     // add markers for image/video inputs still owned by the native harness.
     const processedCapabilities = new Set(decisions.map((decision) => decision.capability));
@@ -322,6 +343,22 @@ export async function applyMediaUnderstanding(params: {
       finalizeInboundContext(ctx, { forceBodyForCommands: true });
     }
 
+    const audioCfg = cfg.tools?.media?.audio;
+    if (
+      audioCfg?.echoTranscript &&
+      ctx.Transcript &&
+      outputs.some((output) => output.kind === "audio.transcription")
+    ) {
+      await sendTranscriptEcho({
+        ctx,
+        cfg,
+        transcript: ctx.Transcript,
+        format: audioCfg.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+        signal: params.signal,
+      });
+      params.signal?.throwIfAborted();
+    }
+
     return {
       extractedFileImages: fileContext.images,
       ...(fileContext.localPathSelfServeUpgrades.length > 0
@@ -329,12 +366,14 @@ export async function applyMediaUnderstanding(params: {
             enableLocalPathSelfServe: (
               contexts: MsgContext[],
               stagedPaths?: ReadonlyMap<number, string>,
-            ) =>
+            ) => {
+              params.signal?.throwIfAborted();
               enableLocalPathSelfServe(
                 fileContext.localPathSelfServeUpgrades,
                 contexts,
                 stagedPaths,
-              ),
+              );
+            },
           }
         : {}),
     };

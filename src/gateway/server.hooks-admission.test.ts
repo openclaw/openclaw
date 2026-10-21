@@ -742,8 +742,16 @@ describe("gateway hook admission", () => {
     },
   );
 
-  test("returns typed admission failures and leaves the idempotency key retryable", async () => {
+  test("returns typed admission failures and leaves the idempotency key retryable", async ({
+    signal,
+  }) => {
     await withHookGateway(async ({ port }) => {
+      const failureNotice = createDeferred<HookReceipt>();
+      observeHookReceipts((_text, receipt, source) => {
+        if (source === "hook") {
+          failureNotice.resolve(receipt);
+        }
+      });
       cronIsolatedRun
         .mockResolvedValueOnce({
           status: "error",
@@ -765,6 +773,10 @@ describe("gateway hook admission", () => {
       expect(conflict.status).toBe(409);
       const conflictBody = (await conflict.json()) as { ok?: boolean; runId?: string };
       expect(conflictBody.ok).toBe(false);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      // The immediate failure notice can create the initially absent store. Join that
+      // real work so retries test cron admission, not a concurrent physical-store change.
+      await withinTest((await withinTest(failureNotice.promise, signal)).settled, signal);
 
       const gatewayFailure = await request();
       expect(gatewayFailure.status).toBe(502);
@@ -774,6 +786,7 @@ describe("gateway hook admission", () => {
       };
       expect(gatewayFailureBody.ok).toBe(false);
       expect(gatewayFailureBody.runId).not.toBe(conflictBody.runId);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
 
       const admitted = await request();
       await expectResponse(admitted);

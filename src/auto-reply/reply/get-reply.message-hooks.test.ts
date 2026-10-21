@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -466,6 +466,69 @@ describe("getReplyFromConfig message hooks", () => {
     );
     expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
   });
+
+  it.each(["cooperative", "late success"] as const)(
+    "stops cancelled media preprocessing before links and hooks (%s)",
+    async (completion) => {
+      const controller = new AbortController();
+      const reason = new Error("media reply cancelled");
+      const started = createDeferred();
+      const release = createDeferred();
+      let cancelled = false;
+      mocks.applyMediaUnderstanding.mockImplementationOnce(async (params) => {
+        const { signal } = params as typeof params & { signal?: AbortSignal };
+        const onAbort = () => {
+          cancelled = true;
+          release.resolve();
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+        started.resolve();
+        try {
+          await release.promise;
+          if (completion === "cooperative") {
+            signal?.throwIfAborted();
+          }
+          return { extractedFileImages: [] };
+        } finally {
+          signal?.removeEventListener("abort", onAbort);
+        }
+      });
+      const pendingReply = getReplyFromConfig(
+        buildCtx({ BodyForAgent: "inspect this audio and https://example.test/page" }),
+        { abortSignal: controller.signal },
+        withFastReplyConfig({}),
+      );
+      const rejection = expect(pendingReply).rejects.toMatchObject({
+        name: "AbortError",
+        cause: reason,
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          started.promise,
+          pendingReply,
+          "media preprocessing did not start",
+        );
+        controller.abort(reason);
+        expect.soft(cancelled).toBe(true);
+        // Retire the fixture even on the baseline where the caller signal is absent.
+        release.resolve();
+        await rejection;
+        expect.soft(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
+        expect.soft(mocks.initSessionState).not.toHaveBeenCalled();
+        expect.soft(mocks.createInternalHookEvent).not.toHaveBeenCalled();
+        expect.soft(mocks.triggerInternalHook).not.toHaveBeenCalled();
+        expect.soft(runReply).not.toHaveBeenCalled();
+        expect
+          .soft(logVerbose)
+          .not.toHaveBeenCalledWith(
+            expect.stringContaining("media understanding failed, proceeding with raw content"),
+          );
+      } finally {
+        release.resolve();
+        await rejection;
+      }
+    },
+  );
 
   it("continues dispatching when media understanding fails before reply routing", async () => {
     mocks.applyMediaUnderstanding.mockRejectedValueOnce(

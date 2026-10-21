@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { transcribeFirstAudio } from "./audio-preflight.js";
 
@@ -25,6 +26,38 @@ describe("transcribeFirstAudio", () => {
   beforeEach(() => {
     runCapabilityMock.mockReset();
     sendTranscriptEchoMock.mockReset();
+  });
+
+  it("does not echo or mark a late transcript after preflight cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("preflight stopped");
+    const started = createDeferred();
+    const released = createDeferred();
+    runCapabilityMock.mockImplementationOnce(async () => {
+      started.resolve();
+      await released.promise;
+      return { outputs: [{ kind: "audio.transcription", text: "late transcript" }] };
+    });
+    const ctx: MsgContext = {
+      media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
+    };
+    const params = {
+      ctx,
+      cfg: { tools: { media: { audio: { echoTranscript: true } } } },
+      signal: controller.signal,
+    };
+    const operation = transcribeFirstAudio(params);
+    try {
+      await awaitGateBeforeSettlement(started.promise, operation, "preflight did not start");
+      controller.abort(reason);
+      released.resolve();
+      await expect(operation).rejects.toBe(reason);
+      expect(sendTranscriptEchoMock).not.toHaveBeenCalled();
+      expect(ctx.media?.[0]?.transcribed).not.toBe(true);
+    } finally {
+      released.resolve();
+      await operation.catch(() => {});
+    }
   });
 
   it.each<{ media: MsgContext["media"] }>([

@@ -133,6 +133,8 @@ export type MediaAttachmentCacheOptions = {
   includeDefaultLocalPathRoots?: boolean;
   ssrfPolicy?: SsrFPolicy;
   workspaceDir?: string;
+  /** Cancellation owned by the media-understanding run, including shared cache borrowers. */
+  signal?: AbortSignal;
 };
 
 /**
@@ -147,12 +149,14 @@ export class MediaAttachmentCache {
   private readonly attachments: MediaAttachment[];
   private readonly localPathRoots: readonly string[];
   private readonly ssrfPolicy: SsrFPolicy | undefined;
+  private readonly signal: AbortSignal | undefined;
   private readonly fallbackWorkspaceDir?: string;
   private canonicalLocalPathRoots?: Promise<readonly string[]>;
 
   constructor(attachments: MediaAttachment[], options?: MediaAttachmentCacheOptions) {
     this.attachments = attachments;
     this.ssrfPolicy = options?.ssrfPolicy;
+    this.signal = options?.signal;
     this.localPathRoots =
       options?.includeDefaultLocalPathRoots === false
         ? mergeInboundPathRoots(options.localPathRoots)
@@ -170,6 +174,7 @@ export class MediaAttachmentCache {
     timeoutMs: number;
   }): Promise<MediaBufferResult> {
     const entry = await this.ensureEntry(params.attachmentIndex);
+    this.signal?.throwIfAborted();
     const url = remoteFetchUrl(entry.attachment.url);
     if (entry.bufferResult) {
       if (entry.bufferResult.size > params.maxBytes) {
@@ -179,6 +184,7 @@ export class MediaAttachmentCache {
     }
 
     const local = await this.withLocalFile(entry, () => this.readEntryLocalBuffer(entry, params));
+    this.signal?.throwIfAborted();
     if (local) {
       return local;
     }
@@ -200,7 +206,9 @@ export class MediaAttachmentCache {
         maxBytes: params.maxBytes,
         ssrfPolicy: this.ssrfPolicy,
         retry: REMOTE_MEDIA_FETCH_RETRY,
+        ...(this.signal ? { requestInit: { signal: this.signal } } : {}),
       });
+      this.signal?.throwIfAborted();
       const classification = await classifyAttachmentBytes({
         buffer: fetched.buffer,
         name: fetched.fileName ?? url,
@@ -209,6 +217,7 @@ export class MediaAttachmentCache {
         declaredMime: concreteMime(entry.attachment.mime),
         additionalMimeHints: [fetched.contentType, fetched.headerContentType],
       });
+      this.signal?.throwIfAborted();
       entry.bufferResult = {
         buffer: fetched.buffer,
         classification,
@@ -218,6 +227,7 @@ export class MediaAttachmentCache {
       };
       return entry.bufferResult;
     } catch (err) {
+      this.signal?.throwIfAborted();
       if (err instanceof MediaFetchError && err.code === "max_bytes") {
         throw maxBytesError(params);
       }
@@ -239,6 +249,7 @@ export class MediaAttachmentCache {
     let opened = await this.prepareLocalFile(entry);
     let buffer: Buffer;
     try {
+      this.signal?.throwIfAborted();
       if (!entry.resolvedPath) {
         return undefined;
       }
@@ -246,6 +257,7 @@ export class MediaAttachmentCache {
         throw maxBytesError(params);
       }
       opened ??= await openLocalFileSafely({ filePath: entry.resolvedPath });
+      this.signal?.throwIfAborted();
       if (opened.stat.size > params.maxBytes) {
         throw maxBytesError(params);
       }
@@ -258,6 +270,7 @@ export class MediaAttachmentCache {
       }
       buffer = await readFileHandleBounded(opened.handle, params.maxBytes);
     } catch (err) {
+      this.signal?.throwIfAborted();
       if (err instanceof FsSafeError) {
         if (err.code === "too-large") {
           throw maxBytesError(params);
@@ -277,6 +290,7 @@ export class MediaAttachmentCache {
     } finally {
       await opened?.handle.close().catch(() => {});
     }
+    this.signal?.throwIfAborted();
     const filePath = opened.realPath;
     entry.resolvedPath = filePath;
     const classification = await classifyAttachmentBytes({
@@ -284,6 +298,7 @@ export class MediaAttachmentCache {
       name: filePath,
       declaredMime: concreteMime(entry.attachment.mime),
     });
+    this.signal?.throwIfAborted();
     entry.bufferResult = {
       buffer,
       classification,
@@ -302,15 +317,18 @@ export class MediaAttachmentCache {
     read: () => Promise<T | undefined>,
   ): Promise<T | undefined> {
     do {
+      this.signal?.throwIfAborted();
       if (!entry.resolvedPath) {
         continue;
       }
       try {
         const result = await read();
+        this.signal?.throwIfAborted();
         if (result !== undefined) {
           return result;
         }
       } catch (err) {
+        this.signal?.throwIfAborted();
         if (
           !(err instanceof MediaUnderstandingSkipError) ||
           (err.reason !== "blocked" && err.reason !== "empty")
@@ -333,6 +351,7 @@ export class MediaAttachmentCache {
       return false;
     }
     const inboundReference = await resolveInboundMediaReference(storeRef).catch(() => null);
+    this.signal?.throwIfAborted();
     if (!inboundReference || inboundReference.physicalPath === entry.resolvedPath) {
       return false;
     }
@@ -344,8 +363,10 @@ export class MediaAttachmentCache {
   /** Returns a local path for providers that cannot accept buffers, creating a temp file if needed. */
   async getPath(params: Parameters<MediaAttachmentCache["getBuffer"]>[0]): Promise<string> {
     const entry = await this.ensureEntry(params.attachmentIndex);
+    this.signal?.throwIfAborted();
     const local = await this.withLocalFile(entry, async () => {
       await (await this.prepareLocalFile(entry))?.handle.close().catch(() => {});
+      this.signal?.throwIfAborted();
       const size = entry.statSize;
       if (entry.resolvedPath) {
         if (size !== undefined && size > params.maxBytes) {
@@ -355,6 +376,7 @@ export class MediaAttachmentCache {
       }
       return undefined;
     });
+    this.signal?.throwIfAborted();
     if (local) {
       return local;
     }
@@ -367,17 +389,22 @@ export class MediaAttachmentCache {
     }
 
     const bufferResult = await this.getBuffer(params);
+    this.signal?.throwIfAborted();
     const extension = path.extname(bufferResult.fileName || "") || "";
     const tmpPath = buildRandomTempFilePath({
       prefix: "openclaw-media",
       extension,
     });
     this.stagedPaths.add(tmpPath);
-    await fs.writeFile(tmpPath, bufferResult.buffer).catch(async (error: unknown) => {
-      // A failed attempt cannot remove another borrower's file; retain failed removals for cleanup.
-      await this.removeStagedPath(tmpPath);
-      throw error;
-    });
+    await fs
+      .writeFile(tmpPath, bufferResult.buffer, { signal: this.signal })
+      .catch(async (error: unknown) => {
+        // A failed attempt cannot remove another borrower's file; retain failed removals for cleanup.
+        await this.removeStagedPath(tmpPath);
+        this.signal?.throwIfAborted();
+        throw error;
+      });
+    this.signal?.throwIfAborted();
     entry.tempPath = tmpPath;
     return tmpPath;
   }
@@ -414,6 +441,7 @@ export class MediaAttachmentCache {
   }
 
   private async ensureEntry(attachmentIndex: number): Promise<AttachmentCacheEntry> {
+    this.signal?.throwIfAborted();
     const entry: AttachmentCacheEntry = this.entries.get(attachmentIndex) ?? {
       attachment: this.attachments.find((item) => item.index === attachmentIndex) ?? {
         index: attachmentIndex,
@@ -421,6 +449,7 @@ export class MediaAttachmentCache {
     };
     if (!entry.localResolutionAttempted) {
       entry.resolvedPath = await this.resolveLocalPath(entry.attachment);
+      this.signal?.throwIfAborted();
       entry.localResolutionAttempted = true;
     }
     this.entries.set(attachmentIndex, entry);
@@ -433,6 +462,7 @@ export class MediaAttachmentCache {
       return undefined;
     }
     const inboundReference = await resolveInboundMediaReference(rawPath).catch(() => null);
+    this.signal?.throwIfAborted();
     if (inboundReference) {
       return inboundReference.physicalPath;
     }
@@ -457,6 +487,7 @@ export class MediaAttachmentCache {
 
   /** Transfers a newly validated handle to the caller; cached path metadata needs no open. */
   private async prepareLocalFile(entry: AttachmentCacheEntry): Promise<OpenResult | undefined> {
+    this.signal?.throwIfAborted();
     if (!entry.resolvedPath) {
       return undefined;
     }
@@ -465,6 +496,7 @@ export class MediaAttachmentCache {
       // Roots may already be canonical while macOS attachments still use /tmp or /var aliases.
       const candidatePath = entry.resolvedPath;
       const canonicalPath = await fs.realpath(candidatePath).catch(() => candidatePath);
+      this.signal?.throwIfAborted();
       if (!isInboundPathAllowed({ filePath: canonicalPath, roots: canonicalRoots })) {
         entry.resolvedPath = undefined;
         if (shouldLogVerbose()) {
@@ -484,6 +516,7 @@ export class MediaAttachmentCache {
     let opened: OpenResult | undefined;
     try {
       opened = await openLocalFileSafely({ filePath: entry.resolvedPath });
+      this.signal?.throwIfAborted();
       const canonicalRoots = await this.getCanonicalLocalPathRoots();
       if (!isInboundPathAllowed({ filePath: opened.realPath, roots: canonicalRoots })) {
         entry.resolvedPath = undefined;
@@ -502,6 +535,7 @@ export class MediaAttachmentCache {
       return opened;
     } catch (err) {
       await opened?.handle.close().catch(() => {});
+      this.signal?.throwIfAborted();
       if (err instanceof MediaUnderstandingSkipError) {
         throw err;
       }
@@ -534,7 +568,7 @@ export class MediaAttachmentCache {
   }
 
   private async getCanonicalLocalPathRoots(): Promise<readonly string[]> {
-    return await (this.canonicalLocalPathRoots ??= (async () =>
+    const roots = await (this.canonicalLocalPathRoots ??= (async () =>
       mergeInboundPathRoots(
         this.localPathRoots,
         await Promise.all(
@@ -546,5 +580,7 @@ export class MediaAttachmentCache {
           }),
         ),
       ))());
+    this.signal?.throwIfAborted();
+    return roots;
   }
 }

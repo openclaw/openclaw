@@ -85,6 +85,7 @@ export async function hasProviderAuthAvailable(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  execution?: MediaExecutionContext;
 }): Promise<boolean> {
   // Literal config keys are cheap to detect; defer loading model-auth until
   // profile/env discovery is actually needed.
@@ -96,6 +97,7 @@ export async function hasProviderAuthAvailable(params: {
     return true;
   }
   const { hasAvailableAuthForProvider } = await loadModelAuth();
+  assertMediaExecutionCurrent(params.execution);
   return await hasAvailableAuthForProvider({
     ...params,
     modelApi: resolveOpenAiAudioAuthModelApi({
@@ -107,12 +109,13 @@ export async function hasProviderAuthAvailable(params: {
 
 export type MediaExecutionContext = {
   signal: AbortSignal;
-  assertCurrent: () => void;
+  // Some callers also hold a live authority fence beyond the cancellation signal.
+  assertCurrent?: () => void;
 };
 
 export function assertMediaExecutionCurrent(execution?: MediaExecutionContext): void {
   execution?.signal.throwIfAborted();
-  execution?.assertCurrent();
+  execution?.assertCurrent?.();
 }
 
 type ProviderExecutionAuth =
@@ -210,6 +213,7 @@ export async function resolveProviderExecutionAuth(params: {
   workspaceDir?: string;
   providerId: string;
   provider?: MediaUnderstandingProvider;
+  execution?: MediaExecutionContext;
 }): Promise<ProviderExecutionAuth> {
   const apiKeyAuth = (apiKey: string, source?: string): ProviderExecutionAuth => ({
     kind: "api-key",
@@ -231,6 +235,7 @@ export async function resolveProviderExecutionAuth(params: {
   }
   const { isProviderAuthError, requireApiKey, resolveApiKeyForProviderCore } =
     await loadModelAuth();
+  assertMediaExecutionCurrent(params.execution);
   try {
     const auth = await resolveApiKeyForProviderCore({
       provider: params.providerId,
@@ -244,8 +249,10 @@ export async function resolveProviderExecutionAuth(params: {
         providerId: params.providerId,
       }),
     });
+    assertMediaExecutionCurrent(params.execution);
     return apiKeyAuth(requireApiKey(auth, params.providerId), auth.source);
   } catch (err) {
+    assertMediaExecutionCurrent(params.execution);
     if (
       !isProviderAuthError(err, "missing-provider-auth") &&
       !isProviderAuthError(err, "missing-api-key")

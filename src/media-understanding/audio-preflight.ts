@@ -5,6 +5,7 @@ import { formatAudioTranscripts } from "../../packages/media-understanding-commo
 import type { RuntimeMsgContext as MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { normalizeMediaFacts } from "../media/media-facts.js";
 import { isAudioAttachment } from "./attachments.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -25,6 +26,7 @@ type AudioPreflightParams = {
   workspaceDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
+  signal?: AbortSignal;
 };
 
 /**
@@ -49,6 +51,20 @@ async function transcribeAudio(
   params: AudioPreflightParams,
   firstOnly: boolean,
 ): Promise<string | undefined> {
+  // Release the caller on Stop while the worker retains its cache until the
+  // provider exits, even when that provider ignores the cancellation signal.
+  return await racePromiseWithAbortSignal(
+    () => transcribeAudioWork(params, firstOnly),
+    params.signal,
+    (signal) => signal.reason,
+  );
+}
+
+async function transcribeAudioWork(
+  params: AudioPreflightParams,
+  firstOnly: boolean,
+): Promise<string | undefined> {
+  params.signal?.throwIfAborted();
   const { ctx, cfg } = params;
 
   const audioConfig = cfg.tools?.media?.audio;
@@ -71,6 +87,7 @@ async function transcribeAudio(
     const cache = createMediaAttachmentCache(media, {
       localPathRoots,
       ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     let result: Awaited<ReturnType<typeof runCapability>>;
     try {
@@ -86,10 +103,12 @@ async function transcribeAudio(
         providerRegistry,
         config: cfg.tools?.media?.audio,
         activeModel,
+        ...(params.signal ? { execution: { signal: params.signal } } : {}),
       });
     } finally {
       await cache.cleanup();
     }
+    params.signal?.throwIfAborted();
     if (!firstOnly) {
       // Retain selected and dropped indexes even without usable speech: the
       // later media pass must not repeat this completed selection budget.
@@ -112,9 +131,11 @@ async function transcribeAudio(
         cfg,
         transcript,
         format: audioConfig.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+        ...(params.signal ? { signal: params.signal } : {}),
       });
     }
 
+    params.signal?.throwIfAborted();
     // Persist transcription state on the matching fact so later normalization
     // cannot shift or lose it through a parallel index list.
     const facts = normalizeMediaFacts(ctx.media);
@@ -129,6 +150,7 @@ async function transcribeAudio(
 
     return transcript;
   } catch (err) {
+    params.signal?.throwIfAborted();
     // Preflight cannot block message handling; mention checks can still run on text-only input.
     if (shouldLogVerbose()) {
       logVerbose(`audio-preflight: transcription failed: ${String(err)}`);

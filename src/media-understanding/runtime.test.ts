@@ -2,11 +2,13 @@
 // state, cleanup, remote references, and direct model-backed image calls.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   describeVideoFile,
   describeImageFile,
   describeImageFileWithModel,
+  describePreparedImageWithModel,
   extractStructuredWithModel,
   runMediaUnderstandingFile,
   transcribeAudioFile,
@@ -425,6 +427,164 @@ describe("media-understanding runtime", () => {
       expect.objectContaining({ timeoutMs: MAX_TIMER_TIMEOUT_MS }),
     );
   });
+
+  it("discards a file result if the caller cancels while its cache is being cleaned up", async () => {
+    const controller = new AbortController();
+    const reason = new Error("file request stopped during cleanup");
+    const cleaning = createDeferred();
+    const released = createDeferred();
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.wav", mime: "audio/wav" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [{ kind: "audio.transcription", text: "late transcript", attachmentIndex: 0 }],
+      decision: { capability: "audio", outcome: "success", attachments: [] },
+    });
+    mocks.cleanup.mockImplementationOnce(async () => {
+      cleaning.resolve();
+      await released.promise;
+    });
+    const operation = runMediaUnderstandingFile({
+      capability: "audio",
+      filePath: "/tmp/sample.wav",
+      cfg: {},
+      signal: controller.signal,
+    });
+    try {
+      await awaitGateBeforeSettlement(cleaning.promise, operation, "cache cleanup did not start");
+      controller.abort(reason);
+      released.resolve();
+      await expect(operation).rejects.toBe(reason);
+    } finally {
+      released.resolve();
+      await operation.catch(() => {});
+    }
+  });
+
+  it.each([
+    { capability: "image", outcome: "success" },
+    { capability: "image", outcome: "failure" },
+    { capability: "structured", outcome: "success" },
+    { capability: "structured", outcome: "failure" },
+  ] as const)(
+    "passes cancellation to direct $capability providers and discards late $outcome",
+    async ({ capability, outcome }) => {
+      const controller = new AbortController();
+      const reason = new Error("direct media request stopped");
+      const started = createDeferred<AbortSignal | undefined>();
+      const released = createDeferred();
+      const provider = {
+        id: "vision-plugin",
+        capabilities: ["image" as const],
+        describeImage: async (
+          request: Parameters<NonNullable<MediaUnderstandingProvider["describeImage"]>>[0],
+        ) => {
+          started.resolve(request.signal);
+          await released.promise;
+          return { text: "late image description", model: "vision" };
+        },
+        extractStructured: async (
+          request: Parameters<NonNullable<MediaUnderstandingProvider["extractStructured"]>>[0],
+        ) => {
+          started.resolve(request.signal);
+          await released.promise;
+          return {
+            text: "{}",
+            parsed: {},
+            model: "vision",
+            provider: "vision-plugin",
+            contentType: "json" as const,
+          };
+        },
+      };
+      mocks.buildProviderRegistry.mockReturnValue(new Map([["vision-plugin", provider]]));
+      mocks.normalizeMediaProviderId.mockReturnValue("vision-plugin");
+      mocks.getMediaUnderstandingProvider.mockReturnValue(provider);
+      const image = { buffer: Buffer.from("image"), mime: "image/png", fileName: "photo.png" };
+      const common = {
+        provider: "vision-plugin",
+        model: "vision",
+        cfg: {},
+        signal: controller.signal,
+      };
+      const operation =
+        capability === "image"
+          ? describePreparedImageWithModel({
+              ...common,
+              image,
+              prompt: "Describe it",
+              agentDir: "/tmp/agent",
+            })
+          : extractStructuredWithModel({
+              ...common,
+              input: [{ type: "image", ...image }],
+              instructions: "Return JSON",
+            });
+      try {
+        const receivedSignal = await awaitGateBeforeSettlement(
+          started.promise,
+          operation,
+          "direct provider did not start",
+        );
+        controller.abort(reason);
+        if (outcome === "failure") {
+          released.reject(new Error("late provider failure"));
+        } else {
+          released.resolve();
+        }
+        await expect(operation).rejects.toBe(reason);
+        expect(receivedSignal).toBe(controller.signal);
+      } finally {
+        released.resolve();
+        await operation.catch(() => {});
+      }
+    },
+  );
+
+  it.each(["normalization", "optimization"] as const)(
+    "preserves cancellation when image %s fails late",
+    async (stage) => {
+      const controller = new AbortController();
+      const reason = new Error("image preparation stopped");
+      const started = createDeferred();
+      const released = createDeferred();
+      const failLate = async () => {
+        started.resolve();
+        await released.promise;
+        throw new Error("late image decoding failure");
+      };
+      if (stage === "normalization") {
+        mocks.getBuffer.mockResolvedValue({
+          buffer: Buffer.from("00000018667479706d736631000000000000000000000000", "hex"),
+          fileName: "photo.heif",
+          mime: "image/heif-sequence",
+          size: 24,
+        });
+        mocks.convertHeicToJpeg.mockImplementationOnce(failLate);
+      } else {
+        mocks.optimizeImageDescriptionInput.mockImplementationOnce(failLate);
+      }
+      const operation = describeImageFileWithModel({
+        ...IMAGE_MODEL_DEFAULTS,
+        filePath: "/tmp/photo.heif",
+        signal: controller.signal,
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          started.promise,
+          operation,
+          "image preparation did not start",
+        );
+        controller.abort(reason);
+        released.resolve();
+        await expect(operation).rejects.toBe(reason);
+        expect(mocks.describeImageWithModel).not.toHaveBeenCalled();
+      } finally {
+        released.resolve();
+        await operation.catch(() => {});
+      }
+    },
+  );
 
   it("caps explicit structured extraction timeouts before provider execution", async () => {
     const extractStructured = vi.fn<NonNullable<MediaUnderstandingProvider["extractStructured"]>>(
