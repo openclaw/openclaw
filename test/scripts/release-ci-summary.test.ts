@@ -2089,7 +2089,7 @@ describe("release CI summary child correlation", () => {
         return `RERUN_GROUP: all\nFAIL_FAST: false\nTARGET_SHA: ${fixture.targetSha}`;
       }
       if (id === npmId) {
-        return `TARGET_SHA: ${fixture.targetSha}\nDispatched full-release-artifacts.yml: https://github.com/${repository}/actions/runs/81 (attempt 1)`;
+        return `Artifact dispatch npm target ${fixture.targetSha}: https://github.com/${repository}/actions/runs/81 (attempt 1)`;
       }
       return sourceLog(id);
     };
@@ -2155,7 +2155,8 @@ describe("release CI summary child correlation", () => {
         getJobLog,
         getReleaseEvidenceClient: () => ({
           ...createReleaseEvidenceClient(repository),
-          getWorkflowSource: () => "node scripts/full-release-artifacts.mjs resolve",
+          getWorkflowSource: () =>
+            'env:\n  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "1"\njobs:\n  npm_artifacts:\n    name: Prepare release npm artifacts\n    env:\n      CHILD_WORKFLOW_KIND: artifact-npm\n    steps: []\n',
         }),
         rerunFailed,
         rerunParent,

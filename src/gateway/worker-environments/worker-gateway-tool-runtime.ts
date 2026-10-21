@@ -238,8 +238,6 @@ export function createWorkerGatewayToolRuntime(params: {
           );
         } catch (error) {
           return workerSessionToolErrorResult(error);
-        } finally {
-          assertCurrent();
         }
       };
       const predecessor =

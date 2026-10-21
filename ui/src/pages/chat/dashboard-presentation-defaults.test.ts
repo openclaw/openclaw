@@ -43,7 +43,7 @@ vi.mock("../../components/board/board-view.ts", () => {
   return {};
 });
 
-const defaultAction = '[value="dashboard-default"]';
+const defaultAction = '[data-value="dashboard-default"]';
 const defaultStatus = '[data-menu-status="dashboard-default"]';
 
 function pendingSave(h: ReturnType<typeof createDashboardHarness>) {
@@ -326,10 +326,11 @@ describe("dashboard default activation and personal layout persistence", () => {
   it("preserves personal precedence through a focused link and clears it when matching shared", async () => {
     const h = createDashboardHarness({ row: session({ boardPresentation: "expanded" }) });
     h.sync();
-    await h.header();
-    const focus = h.mount.querySelector<HTMLButtonElement>(".chat-panel-focus");
-    expect(focus).not.toBeNull();
-    await select(h.mount.querySelector(".chat-pane__layout-menu")!, "focus");
+    const menu = await h.header();
+    expect(menu.querySelector('[data-value="dashboard-expand"]')?.textContent).toContain(
+      "Restore split",
+    );
+    await select(menu, "dashboard-expand");
     expectPresentation(h.state.sidebarLayout, false);
     expect(h.saved()?.dashboardPresentationOverride).toBe("split");
 
@@ -494,8 +495,8 @@ describe("dashboard default activation and personal layout persistence", () => {
   );
 });
 
-describe("dashboard shared default in the real header Layout menu", () => {
-  it("offers a differing view in the compact menu to a writer without requiring admin scope", async () => {
+describe("dashboard shared default in the native Dashboard menu", () => {
+  it("offers a differing view in the compact Dashboard menu to a writer without requiring admin scope", async () => {
     const h = createDashboardHarness({
       row: session({ boardPresentation: "expanded" }),
     });
@@ -508,7 +509,7 @@ describe("dashboard shared default in the real header Layout menu", () => {
     expect(menu.querySelector(defaultAction)?.textContent).toContain(
       t("chat.sidePanel.useViewAsDefault"),
     );
-    expect(menu.querySelector(defaultAction)?.hasAttribute("disabled")).toBe(false);
+    expect(menu.querySelector(defaultAction)?.getAttribute("aria-disabled")).not.toBe("true");
     expect(menu.textContent).toContain(t("chat.sidePanel.defaultViewDescription"));
     expect(menu.querySelector(defaultStatus)).toBeNull();
     expectPresentation(h.state.sidebarLayout, false);
@@ -531,7 +532,7 @@ describe("dashboard shared default in the real header Layout menu", () => {
       expect(status?.textContent).toContain(t("chat.sidePanel.currentViewIsDefault"));
       expect(status?.textContent).toContain(t("chat.sidePanel.defaultViewDescription"));
       expect(menu.querySelector(defaultAction)).toBeNull();
-      await select(menu, "dashboard-default");
+      await select(menu, "dashboard-default-status");
       expect(h.request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
       expectPresentation(h.state.sidebarLayout, false);
     },
@@ -604,7 +605,7 @@ describe("dashboard shared default in the real header Layout menu", () => {
     const operation = save.mock.results[0]?.value;
     expect(operation).toBeDefined();
     menu = await h.header();
-    expect(menu.querySelector(defaultAction)?.hasAttribute("disabled")).toBe(true);
+    expect(menu.querySelector(defaultAction)?.getAttribute("aria-disabled")).toBe("true");
     expect(menu.querySelector(defaultAction)?.textContent).toContain(
       t("chat.sidePanel.savingDefault"),
     );
@@ -638,7 +639,7 @@ describe("dashboard shared default in the real header Layout menu", () => {
     expect(menu.querySelector(defaultStatus)?.textContent).toContain(
       t("chat.sidePanel.currentViewIsDefault"),
     );
-    await select(menu, "dashboard-default");
+    await select(menu, "dashboard-default-status");
     expect(patch).toHaveBeenCalledTimes(1);
     expect(showToast).toHaveBeenCalledWith({
       message: t("chat.sidePanel.defaultSaved"),
@@ -658,7 +659,9 @@ describe("dashboard shared default in the real header Layout menu", () => {
     await select(await h.header(), "dashboard-default");
     const operation = save.mock.results[0]?.value;
     expect(operation).toBeDefined();
-    expect((await h.header()).querySelector(defaultAction)?.hasAttribute("disabled")).toBe(true);
+    expect((await h.header()).querySelector(defaultAction)?.getAttribute("aria-disabled")).toBe(
+      "true",
+    );
     reply.reject(new Error("Dashboard default denied"));
     await operation;
     expect(h.state.chatError).toContain("Dashboard default denied");
@@ -666,7 +669,9 @@ describe("dashboard shared default in the real header Layout menu", () => {
       message: t("chat.sidePanel.defaultSaveError", { error: "Dashboard default denied" }),
       anchor: h.pane.element,
     });
-    expect((await h.header()).querySelector(defaultAction)?.hasAttribute("disabled")).toBe(false);
+    const retry = (await h.header()).querySelector<HTMLButtonElement>(defaultAction);
+    expect(retry).not.toBeNull();
+    expect(retry!.disabled).toBe(false);
     expect(h.saved()).toEqual(before);
     expect(h.state.sessionsResult?.sessions[0]?.boardPresentation).toBe("split");
   });

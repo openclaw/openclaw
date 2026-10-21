@@ -43,73 +43,29 @@ type NativeOfflineCase = {
   phase?: "inspect" | "prepare";
   state?: number | string;
 };
-
-export const nativeOfflineCases: NativeOfflineCase[] = [
-  {
-    platform: "linux",
-    label: "terminal inactive",
-    runtime: "stopped",
-    loaded: true,
-    offline: true,
-  },
-  {
-    platform: "linux",
-    label: "restart transition",
-    runtime: "unknown",
-    loaded: true,
-    offline: false,
-  },
-  { platform: "linux", label: "running", runtime: "running", loaded: true, offline: false },
-  { platform: "darwin", label: "unloaded", runtime: "stopped", loaded: false, offline: true },
-  {
-    platform: "darwin",
-    label: "loaded enabled",
-    runtime: "stopped",
-    loaded: true,
-    enabled: true,
-    offline: false,
-  },
-  {
-    platform: "darwin",
-    label: "loaded disabled",
-    runtime: "stopped",
-    loaded: true,
-    enabled: false,
-    offline: false,
-  },
-  {
-    platform: "darwin",
-    label: "loaded disabled preparation",
-    runtime: "stopped",
-    loaded: true,
-    enabled: false,
-    offline: false,
-    phase: "prepare",
-  },
-  {
-    platform: "darwin",
-    label: "enabled unknown",
-    runtime: "stopped",
-    loaded: true,
-    offline: false,
-  },
-  ...[
-    { label: "disabled", state: 1, offline: true },
-    { label: "ready", state: 3, offline: true },
-    { label: "queued", state: 2, offline: false },
-    { label: "running", state: 4, offline: false },
-    { label: "unknown", state: 0, offline: false },
-    { label: "malformed", state: "3 trailing output", offline: false },
-  ].map<NativeOfflineCase>((task) => ({
-    platform: "win32",
-    runtime:
-      task.state === 1 || task.state === 3 ? "stopped" : task.state === 4 ? "running" : "unknown",
-    loaded: true,
-    label: task.label,
-    state: task.state,
-    offline: task.offline,
-  })),
+const offlineRows: [NodeJS.Platform, string, Partial<NativeOfflineCase>][] = [
+  ["linux", "terminal inactive", { offline: true }],
+  ["linux", "restart transition", { runtime: "unknown" }],
+  ["linux", "running", { runtime: "running" }],
+  ["darwin", "unloaded", { loaded: false, offline: true }],
+  ["darwin", "loaded enabled", { enabled: true }],
+  ["darwin", "loaded disabled", { enabled: false }],
+  ["darwin", "loaded disabled preparation", { enabled: false, phase: "prepare" }],
+  ["darwin", "enabled unknown", {}],
+  ["win32", "disabled", { state: 1, offline: true }],
+  ["win32", "ready", { state: 3, offline: true }],
+  ["win32", "queued", { state: 2, runtime: "unknown" }],
+  ["win32", "running", { state: 4, runtime: "running" }],
+  ["win32", "unknown", { state: 0, runtime: "unknown" }],
+  ["win32", "malformed", { state: "3 trailing output", runtime: "unknown" }],
 ];
+export const nativeOfflineCases = offlineRows.map(
+  ([platform, label, overrides]): NativeOfflineCase =>
+    Object.assign(
+      { platform, label, runtime: "stopped" as const, loaded: true, offline: false },
+      overrides,
+    ),
+);
 
 vi.mock("./update-command-service-drain.js", () => ({
   withGatewayMaintenanceDrain: mocks.drain,
@@ -158,28 +114,21 @@ export function mockRegisteredWindowsLauncher(
   home: string,
   running = false,
 ): GatewayServiceCommandConfig {
+  const entrypoint = path.join(process.cwd(), "openclaw.mjs");
   const command = {
-    programArguments: [
-      process.execPath,
-      path.join(process.cwd(), "openclaw.mjs"),
-      "gateway",
-      "--port",
-      "18789",
-    ],
+    programArguments: [process.execPath, entrypoint, "gateway", "--port", "18789"],
     environment: { HOME: home },
     sourcePath: mocks.taskScriptPath,
   };
   mocks.processes = [
     { ProcessId: 111, CommandLine: "powershell.exe Get-CimInstance Win32_Process" },
-    ...(running
-      ? [
-          {
-            ProcessId: fixtureGatewayPid,
-            CommandLine: command.programArguments.map((arg) => `"${arg}"`).join(" "),
-          },
-        ]
-      : []),
   ];
+  if (running) {
+    mocks.processes.push({
+      ProcessId: fixtureGatewayPid,
+      CommandLine: command.programArguments.map((arg) => `"${arg}"`).join(" "),
+    });
+  }
   const script = Buffer.from(buildTaskScript(command));
   const readFile = fs.readFile;
   vi.spyOn(fs, "readFile").mockImplementation(async (pathname, options) =>

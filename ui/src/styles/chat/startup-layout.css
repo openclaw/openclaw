@@ -1,8 +1,6 @@
-@media (min-width: 1121px) {
-  .content--chat.content--workbench {
-    padding-left: 0;
-    padding-right: 0;
-  }
+.content--chat.content--workbench {
+  padding-left: 0;
+  padding-right: 0;
 }
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   :root {
@@ -383,10 +381,254 @@
   -webkit-user-select: none;
 }
 
-/* Window-chrome insets make the header padding asymmetric. The outer columns
-   absorb that difference so the agent stays centered on the whole pane, while
-   leading and trailing items still span into them without overlapping it. */
-.chat-pane__header--agent {
+/* Desktop composition; mobile keeps its own presenter and touch targets. */
+.chat-pane__header:not(.chat-pane__header--mobile) {
+  min-height: var(--desktop-header-height, calc(var(--rail-header-height) - var(--space-1)));
+  padding-inline: 12px 8px;
+  gap: 4px;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-leading,
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-trailing {
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__identity-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-icon-btn,
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle,
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__layout-trigger {
+  min-height: 32px;
+  height: 32px;
+  gap: 6px;
+  padding-inline: 8px;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-icon-btn {
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__panels-toggle svg {
+  stroke-width: 1.8;
+}
+
+/* Header composition supplies the approved glyph to the native Details trigger. */
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle,
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__panels-toggle {
+  width: var(--rail-header-action-size);
+  min-width: var(--rail-header-action-size);
+  height: var(--rail-header-action-size);
+  min-height: var(--rail-header-action-size);
+  padding: 0;
+  justify-content: center;
+  border-color: transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle {
+  border-radius: calc(8px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile)
+  .chat-details-toggle:is(:hover, [aria-expanded="true"]) {
+  background: var(--bg-hover);
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle svg,
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__workspace-chip svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__panels-toggle[aria-expanded="true"] {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile)
+  :is(
+    .chat-pane__workspace-chip,
+    .chat-pane__session-title,
+    .chat-pane__session-title-input,
+    .chat-pane__parent-session
+  ) {
+  min-height: 32px;
+  padding: 0 8px;
+  margin-inline: 0;
+  font-family: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+  line-height: calc(20px * var(--control-ui-text-scale));
+  letter-spacing: normal;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__session-title {
+  padding-inline-end: 0;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__crumbs {
+  transform: none;
+  gap: 4px;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__workspace-menu {
+  min-width: 32px;
+
+  > .chat-pane__workspace-chip {
+    min-width: 0;
+  }
+
+  .chat-pane__workspace-chip svg {
+    flex: 0 0 auto;
+  }
+
+  > .oc-menu {
+    --menu-padding: 8px;
+    --menu-radius: 12px;
+    --menu-item-radius: 5px;
+
+    min-width: 180px;
+    padding: var(--menu-padding);
+    border-color: var(--border-strong);
+    font-size: calc(12px * var(--control-ui-text-scale));
+    line-height: calc(18px * var(--control-ui-text-scale));
+  }
+
+  .oc-menu-item {
+    min-height: 32px;
+    padding: 4px 8px;
+    line-height: inherit;
+  }
+
+  .oc-menu-item__icon {
+    margin-inline-end: 10px;
+  }
+
+  .session-menu__separator {
+    margin: 6px 0;
+    border-color: color-mix(in srgb, var(--border-strong) 70%, var(--border));
+  }
+
+  .session-menu__icon,
+  .session-menu__icon svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .session-menu__icon svg {
+    stroke-width: 1.5;
+  }
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__device-offline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  margin-inline-start: 4px;
+  padding-inline: 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: var(--warn);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__device-offline > svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__device-name {
+  min-width: 0;
+  max-width: 128px;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__crumb-sep svg {
+  display: block;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+  height: 28px;
+  padding-inline: 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: var(--warn);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-icon--busy {
+  animation: chat-pane-connection-spin 900ms linear infinite;
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-retry {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 400;
+  line-height: 16px;
+  cursor: var(--cursor-action);
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile)
+  .chat-pane__connection-retry:is(:hover, :focus-visible) {
+  color: var(--text);
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-divider {
+  width: 1px;
+  height: 12px;
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+}
+
+@keyframes chat-pane-connection-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-icon--busy {
+    animation: none;
+  }
+}
+
+.chat-pane__header.chat-pane__header--agent {
   --chat-pane-header-start: var(--chat-pane-header-inset-start, 8px);
   --chat-pane-header-end: var(--chat-pane-header-inset-end, 8px);
   display: grid;
@@ -844,8 +1086,7 @@ openclaw-chat-pane {
 }
 
 .chat-split-view--narrow .chat-split-view__cell--narrow-hidden,
-.chat-split-view--narrow .chat-split-view__column--narrow-hidden,
-.chat-split-view--narrow resizable-divider {
+.chat-split-view--narrow .chat-split-view__column--narrow-hidden {
   display: none;
 }
 
@@ -943,6 +1184,10 @@ openclaw-chat-sidebar-region,
   grid-area: divider;
 }
 
+.sidebar-region--desktop .sidebar-column__divider {
+  --resize-handle-rest-color: var(--border);
+}
+
 .sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
   grid-template-rows: auto minmax(0, 1fr) auto auto minmax(0, 1fr);
 }
@@ -978,6 +1223,254 @@ openclaw-chat-sidebar-region,
   display: none;
 }
 
+/* The native presentation owner supplies desktop independently of pane width.
+   Keep split allocation behind a side overlay; never move live panel roots. */
+.sidebar-region--desktop {
+  --desktop-header-height: calc(var(--rail-header-height) - var(--space-1));
+  --chat-details-motion: 280ms cubic-bezier(0.32, 0.72, 0, 1);
+  --desktop-side-reserve: 0px;
+  --desktop-divider-reserve: 0px;
+  --desktop-header-reserve: 0px;
+  --desktop-panel-width: var(--side-panel-width);
+  --desktop-panel-height: calc(100% - var(--desktop-header-height));
+  --desktop-panel-start: 100%;
+  --desktop-panel-top: 0px;
+  --desktop-frame-motion: var(--chat-details-motion);
+  grid-template-columns: minmax(0, 1fr) var(--desktop-divider-reserve) minmax(
+      0,
+      var(--desktop-side-reserve)
+    );
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "main-header divider side-header" "main divider side";
+  transition:
+    grid-template-columns var(--desktop-frame-motion),
+    grid-template-rows var(--desktop-frame-motion);
+}
+
+/* Share the inspector's curve: reserving its column must not jump the transcript
+   to the destination before the surface arrives. No text scaling or remount. */
+.sidebar-region--desktop .chat-main__conversation {
+  transition: inset-inline-end var(--chat-details-motion);
+}
+
+.sidebar-region--desktop [data-details-instant] > .chat-main__conversation,
+.sidebar-region--desktop [data-details-restoring] > .chat-main__conversation,
+.sidebar-region--desktop[data-sidebar-resizing] .chat-main__conversation {
+  transition: none;
+}
+
+/* Automatic Details uses the destination frame for its reservation. The side
+   panel can keep moving without first stretching or squeezing the transcript. */
+.sidebar-region--desktop [data-details-restoring] > .chat-main__conversation {
+  inset-inline-end: calc(
+    100% - var(--chat-details-frame-width, 100%) + var(--chat-details-space, 0px)
+  );
+}
+
+/* Keep the one global toggle outside both moving headers. Its 28px target and
+   4px neighbour gap match the native desktop header; the rail keeps its 8px edge. */
+.sidebar-region--desktop.sidebar-region--external-toggle {
+  --desktop-toggle-space: calc(var(--rail-header-action-size) + var(--space-1));
+  --desktop-side-action-gap: 0px;
+}
+
+.sidebar-region--desktop > .sidebar-region__panels-toggle {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  right: var(--desktop-toggle-inset, 8px);
+  height: var(--desktop-header-height);
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-region__panels-toggle .chat-pane__panels-toggle {
+  width: var(--rail-header-action-size);
+  min-width: var(--rail-header-action-size);
+  height: var(--rail-header-action-size);
+  min-height: var(--rail-header-action-size);
+  padding: 0;
+  border-color: transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+}
+
+.sidebar-region__panels-toggle .chat-pane__panels-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.sidebar-region__panels-toggle .chat-pane__panels-toggle svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.8;
+}
+
+.sidebar-region__panels-toggle .chat-pane__panels-toggle[aria-expanded="true"] {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.sidebar-region--desktop.sidebar-region--external-toggle > .sidebar-region__header {
+  padding-inline-end: var(--desktop-toggle-space);
+}
+
+.sidebar-region--desktop.sidebar-region--external-toggle.sidebar-region--right.sidebar-region--side-visible
+  > .sidebar-region__header {
+  padding-inline-end: 0;
+}
+
+/* Reserve inside the full-width rail so its occupied-tab border continues
+   underneath the toggle. Below leaves that border in the lower panel. */
+.sidebar-region--desktop.sidebar-region--external-toggle:is(
+    .sidebar-region--right,
+    .sidebar-region--expanded-side
+  )
+  [data-region-header="side"] {
+  /* Replace the toggle's 4px gap plus the actions' 4px trailing padding with
+     the same gap used between the two actions inside the rail. */
+  --desktop-side-toggle-reserve: calc(
+    var(--desktop-toggle-space) - 8px + var(--desktop-side-action-gap)
+  );
+  --rail-header-padding-end: calc(
+    var(--desktop-toggle-inset, 8px) + var(--desktop-side-toggle-reserve)
+  );
+}
+
+.sidebar-region--desktop.sidebar-region--open:is(
+    :not(.sidebar-region--expanded),
+    .sidebar-region--expanded-side
+  ) {
+  --desktop-side-reserve: var(--side-panel-width);
+  --desktop-divider-reserve: var(--resize-handle-size, 6px);
+  --desktop-header-reserve: var(--desktop-header-height);
+  --desktop-panel-start: calc(100% - var(--desktop-panel-width));
+  grid-template-columns: minmax(0, 1fr) var(--desktop-divider-reserve) minmax(
+      0,
+      var(--desktop-side-reserve)
+    );
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "main-header divider side-header" "main divider side";
+}
+
+.sidebar-region--desktop.sidebar-region--left {
+  --desktop-panel-start: calc(-1 * var(--desktop-panel-width));
+  grid-template-columns: minmax(0, var(--desktop-side-reserve)) var(
+      --desktop-divider-reserve
+    ) minmax(0, 1fr);
+  grid-template-areas: "side-header divider main-header" "side divider main";
+}
+
+.sidebar-region--desktop.sidebar-region--left.sidebar-region--open:is(
+    :not(.sidebar-region--expanded),
+    .sidebar-region--expanded-side
+  ) {
+  --desktop-panel-start: 0px;
+  grid-template-columns: minmax(0, var(--desktop-side-reserve)) var(
+      --desktop-divider-reserve
+    ) minmax(0, 1fr);
+  grid-template-areas: "side-header divider main-header" "side divider main";
+}
+
+.sidebar-region--desktop.sidebar-region--bottom {
+  --side-panel-max-height: calc(
+    (100% - 2 * var(--desktop-header-height) - var(--resize-handle-size, 6px)) * 0.6
+  );
+  --desktop-panel-width: 100%;
+  --desktop-panel-height: min(var(--side-panel-height), var(--side-panel-max-height));
+  --desktop-panel-start: 0px;
+  --desktop-panel-top: 100%;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) var(--desktop-divider-reserve) var(
+      --desktop-header-reserve
+    ) minmax(0, var(--desktop-side-reserve));
+  grid-template-areas: "main-header" "main" "divider" "side-header" "side";
+}
+
+.sidebar-region--desktop.sidebar-region--bottom.sidebar-region--open:is(
+    :not(.sidebar-region--expanded),
+    .sidebar-region--expanded-side
+  ) {
+  --desktop-side-reserve: min(var(--side-panel-height), var(--side-panel-max-height));
+  --desktop-panel-top: calc(100% - var(--desktop-panel-height) - var(--desktop-header-height));
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) var(--desktop-divider-reserve) var(
+      --desktop-header-reserve
+    ) minmax(0, var(--desktop-side-reserve));
+  grid-template-areas: "main-header" "main" "divider" "side-header" "side";
+}
+
+.sidebar-region--desktop :is([data-region="side"], [data-region-header="side"]) {
+  position: absolute;
+  z-index: 3;
+  grid-area: auto;
+  top: calc(var(--desktop-panel-top) + var(--desktop-header-height));
+  inset-inline-start: var(--desktop-panel-start);
+  width: var(--desktop-panel-width);
+  height: var(--desktop-panel-height);
+  opacity: 1;
+  transition:
+    top var(--desktop-frame-motion),
+    inset-inline-start var(--desktop-frame-motion),
+    width var(--desktop-frame-motion),
+    height var(--desktop-frame-motion),
+    opacity var(--desktop-frame-motion),
+    display var(--desktop-frame-motion) allow-discrete;
+
+  @starting-style {
+    opacity: 0;
+  }
+}
+
+.sidebar-region--desktop [data-region-header="side"] {
+  top: var(--desktop-panel-top);
+  height: var(--desktop-header-height);
+  min-height: var(--desktop-header-height);
+}
+
+.sidebar-region--desktop:not(.sidebar-region--open)
+  :is([data-region="side"], [data-region-header="side"]),
+.sidebar-region--desktop [data-region="side"][hidden] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sidebar-region--desktop.sidebar-region--expanded-side.sidebar-region--open {
+  --desktop-panel-start: 0px;
+  --desktop-panel-top: 0px;
+  --desktop-panel-width: 100%;
+  --desktop-panel-height: calc(100% - var(--desktop-header-height));
+}
+
+.sidebar-region--desktop.sidebar-region--expanded-side [data-region="main"][hidden] {
+  display: flex;
+  visibility: hidden;
+}
+
+.sidebar-region--desktop.sidebar-region--expanded-side
+  :is(.sidebar-region__header, .sidebar-column__divider) {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.sidebar-region--desktop.sidebar-region--expanded-side.sidebar-region--open
+  .side-panel__empty-body {
+  display: flex;
+}
+
+.sidebar-region--desktop[data-sidebar-resizing],
+.sidebar-region--desktop[data-sidebar-resizing]
+  :is([data-region="side"], [data-region-header="side"]) {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-region--desktop,
+  .sidebar-region--desktop .chat-main__conversation,
+  .sidebar-region--desktop :is([data-region="side"], [data-region-header="side"]) {
+    transition: none;
+  }
+}
+
 /* Shell layout owns the dynamic physical-left safe edge. Native hosts replace
    the web-control calculation with their actual window chrome. */
 .shell {
@@ -1004,8 +1497,16 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav, .shell--settings)
   );
 }
 
-/* Only the physical top-left header needs window-control clearance. A left
-   dock puts the side tabs there; mobile has a separate topbar row. */
+/* The web rail has no overlaid sidebar control to reserve in the session header.
+   Native hosts retain their window-control clearance. */
+html:not(.openclaw-native-macos, .openclaw-native-desktop, .openclaw-native-web-chrome)
+  .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav)
+  .chat-pane__header:not(.chat-pane__header--mobile) {
+  --chat-pane-leading-inset: 12px;
+}
+
+/* Only the physical top-left header needs window-control clearance. Left docks
+   and expanded desktop side panels put side tabs there; mobile has its own row. */
 .shell:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
@@ -1019,12 +1520,22 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav, .shell--settings)
 .shell:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
-  .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded):not(
-    .sidebar-region--narrow
+  .sidebar-region:is(
+    .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded):not(
+        .sidebar-region--narrow
+      ),
+    .sidebar-region--desktop.sidebar-region--expanded-side.sidebar-region--open
   )
   [data-region-header="side"] {
-  --chat-pane-header-inset-start: var(--shell-titlebar-inset);
+  --chat-pane-header-inset-start: var(--chat-pane-leading-inset, var(--shell-titlebar-inset));
   padding-left: var(--chat-pane-header-inset-start);
+}
+
+/* Native hosts retain their window-chrome height for both contiguous headers. */
+html:is(.openclaw-native-macos, .openclaw-native-desktop)
+  .shell:not(.shell--mobile-nav)
+  .sidebar-region--desktop {
+  --desktop-header-height: var(--openclaw-native-titlebar-height, 50px);
 }
 
 /* Native pane headers share the window controls' centerline. Drawer layouts
@@ -1032,7 +1543,7 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav, .shell--settings)
 html:is(.openclaw-native-macos, .openclaw-native-desktop)
   .shell:not(.shell--mobile-nav)
   .chat-pane__header {
-  min-height: var(--openclaw-native-titlebar-height, 50px);
+  min-height: var(--desktop-header-height, var(--openclaw-native-titlebar-height, 50px));
 }
 
 /* Only the visible top-right header shares the Linux/Windows caption buttons.
@@ -1046,10 +1557,13 @@ html.openclaw-native-desktop
     1 of .chat-split-view__cell:not(.chat-split-view__cell--narrow-hidden)
   )
   .sidebar-region {
+  --desktop-toggle-inset: calc(var(--openclaw-native-window-controls-width, 0px) + 6px);
+  --desktop-header-height: var(--openclaw-native-titlebar-height, 52px);
+
   &:not(
       .sidebar-region--open:not(.sidebar-region--expanded):not(.sidebar-region--left):not(
           .sidebar-region--bottom
-        ):not(.sidebar-region--narrow)
+        ):is(.sidebar-region--desktop, :not(.sidebar-region--narrow))
     )
     > .sidebar-region__header
     .chat-pane__header,
@@ -1057,10 +1571,13 @@ html.openclaw-native-desktop
       .sidebar-region--expanded-side,
       .sidebar-region--open:not(.sidebar-region--expanded):not(.sidebar-region--left):not(
           .sidebar-region--bottom
-        ):not(.sidebar-region--narrow)
+        ):is(.sidebar-region--desktop, :not(.sidebar-region--narrow))
     )
     [data-region-header="side"] {
-    --chat-pane-header-inset-end: calc(var(--openclaw-native-window-controls-width, 0px) + 6px);
+    --chat-pane-header-inset-end: calc(
+      var(--openclaw-native-window-controls-width, 0px) + 6px +
+        var(--desktop-side-toggle-reserve, 0px)
+    );
     padding-right: var(--chat-pane-header-inset-end);
     min-height: var(--openclaw-native-titlebar-height, 52px);
   }
@@ -1091,5 +1608,28 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop)
   .chat-thread {
     scrollbar-gutter: auto;
     scrollbar-width: none;
+  }
+}
+
+.chat-split-view--active-cell
+  > .chat-split-view__column
+  > .chat-split-view__cell:not(.chat-split-view__cell--active)
+  .chat-pane__header:not(.chat-pane__header--mobile)
+  .chat-pane__identity-actions {
+  display: none;
+}
+
+/* Details remains a stable click target while pointer-down activates a pane.
+   Reserve the controls after it, but keep every other action non-interactive. */
+.chat-split-view.chat-split-view--active-cell
+  > .chat-split-view__column
+  > .chat-split-view__cell:not(.chat-split-view__cell--active)
+  .chat-pane__header:not(.chat-pane__header--mobile)
+  .chat-pane__actions {
+  display: flex;
+
+  > :not(openclaw-chat-details):not(.chat-details-toggle),
+  > :not(openclaw-chat-details):not(.chat-details-toggle) * {
+    visibility: hidden;
   }
 }

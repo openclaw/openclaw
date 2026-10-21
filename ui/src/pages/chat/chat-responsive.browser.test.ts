@@ -692,7 +692,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         "chat-pane__header-leading",
         "chat-pane__header-trailing",
       ]);
-      expect(geometry.gap).toBeCloseTo(8, 0);
+      expect(geometry.gap).toBeCloseTo(4, 0);
       expect(geometry.titleScrollWidth).toBeGreaterThan(geometry.titleClientWidth);
     });
   });

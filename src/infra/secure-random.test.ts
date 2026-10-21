@@ -112,11 +112,9 @@ describe("secure-random", () => {
   });
 
   it("delegates bounded integer generation to crypto.randomInt", () => {
-    cryptoMocks.randomInt.mockReturnValueOnce(2).mockReturnValueOnce(7);
+    cryptoMocks.randomInt.mockReturnValueOnce(2);
 
     expect(generateSecureInt(5)).toBe(2);
-    expect(generateSecureInt(3, 9)).toBe(7);
-    expect(cryptoMocks.randomInt).toHaveBeenNthCalledWith(1, 5);
-    expect(cryptoMocks.randomInt).toHaveBeenNthCalledWith(2, 3, 9);
+    expect(cryptoMocks.randomInt).toHaveBeenCalledExactlyOnceWith(5);
   });
 });

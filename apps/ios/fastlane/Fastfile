@@ -1780,40 +1780,23 @@ def validate_app_store_ipa!(ipa_path, expected_commit:, expected_build_timestamp
 end
 
 def verify_snapshot_test_result!(result_bundle_path, device)
-  UI.user_error!("Screenshot test result bundle is missing for #{device}: #{result_bundle_path}") unless File.directory?(result_bundle_path)
-
   stdout, stderr, status = Open3.capture3(
-    "xcrun",
-    "xcresulttool",
-    "get",
-    "test-results",
-    "summary",
-    "--path",
-    result_bundle_path,
-    "--compact"
+    "node", File.join(repo_root, "scripts", "ios-screenshot-evidence.mjs"),
+    "verify", "--xcresult", result_bundle_path
   )
-  unless status.success?
-    detail = stderr.to_s.strip
-    detail = stdout.to_s.strip if detail.empty?
-    UI.user_error!("Failed to inspect screenshot test results for #{device}: #{detail}")
-  end
+  return if status.success?
 
-  summary = JSON.parse(stdout)
-  failed_tests = summary.fetch("failedTests")
-  result = summary.fetch("result")
-  return if result == "Passed" && failed_tests.zero?
-
-  UI.test_failure!("Screenshot UI tests failed on #{device}: result=#{result}, failedTests=#{failed_tests}.")
-rescue JSON::ParserError, KeyError => e
-  UI.user_error!("Invalid screenshot test result summary for #{device}: #{e.message}")
+  detail = stderr.to_s.strip
+  detail = stdout.to_s.strip if detail.empty?
+  UI.test_failure!("Screenshot UI tests failed on #{device}: #{detail}")
 end
 
-def archive_snapshot_test_result!(result_bundle_path:, archive_directory:, device:, screenshot_name:, attempt:)
+def archive_snapshot_test_result!(result_bundle_path:, archive_directory:, device:, attempt:)
   return unless File.directory?(result_bundle_path)
 
   archive_path = File.join(
     archive_directory,
-    "#{device}-#{screenshot_name}-attempt-#{attempt}.xcresult"
+    "#{device}-attempt-#{attempt}.xcresult"
   )
   FileUtils.rm_rf(archive_path)
   FileUtils.mv(result_bundle_path, archive_path)
@@ -1821,7 +1804,7 @@ end
 
 def write_release_ios_screenshot_attempts!(attempts:, output_path:)
   temporary_path = "#{output_path}.tmp"
-  evidence = { "schemaVersion" => 1, "attempts" => attempts }
+  evidence = { "schemaVersion" => 2, "attempts" => attempts }
   File.write(
     temporary_path,
     "#{JSON.pretty_generate(evidence)}\n"
@@ -1846,13 +1829,11 @@ def record_release_ios_screenshot_attempt!(
   attempts:,
   output_path:,
   device:,
-  screenshot_name:,
   attempt:,
   capture_outcome:
 )
   attempts << {
     "deviceName" => device,
-    "screenshotName" => screenshot_name,
     "attempt" => attempt,
     "captureOutcome" => capture_outcome
   }
@@ -1872,10 +1853,9 @@ ensure
   UI.message("Screenshot xcodebuild #{arguments.last}: #{elapsed.round(2)}s (#{log_path})")
 end
 
-def capture_release_ios_screenshot!(
+def capture_release_ios_screenshots!(
   project:,
   device:,
-  screenshot:,
   output_directory:,
   result_bundle_path:,
   result_bundle_archive_directory:,
@@ -1887,61 +1867,48 @@ def capture_release_ios_screenshot!(
   snapshot_cache_directory:,
   diagnostics: nil
 )
-  test_name = screenshot.fetch(:test)
-  screenshot_name = screenshot.fetch(:name)
-  filename = "#{device}-#{screenshot_name}.png"
-  expected_screenshot_path = File.join(output_directory, "en-US", filename)
-  captured_screenshot_path = File.join(snapshot_cache_directory, "screenshots", filename)
-
+  screenshot_paths = RELEASE_IOS_SCREENSHOT_TESTS.map do |screenshot|
+    filename = "#{device}-#{screenshot.fetch(:name)}.png"
+    [
+      File.join(snapshot_cache_directory, "screenshots", filename),
+      File.join(output_directory, "en-US", filename)
+    ]
+  end
   attempt = 1
-  FileUtils.rm_f(expected_screenshot_path)
-  FileUtils.rm_f(captured_screenshot_path)
+  screenshot_paths.each { |paths| paths.each { |path| FileUtils.rm_f(path) } }
   FileUtils.rm_rf(result_bundle_path)
   FileUtils.mkdir_p(File.dirname(result_bundle_path))
   begin
-    app_identifier = bundle_identifier_for_product(
-      File.join(derived_data_path, "Build", "Products", "Debug-iphonesimulator", "OpenClaw.app")
-    )
-    installed_apps = sh(
-      "/bin/bash", "-o", "pipefail", "-c",
-      "#{shell_join(["xcrun", "simctl", "listapps", device_udid])} | /usr/bin/plutil -convert json -o - -",
-      log: false
-    )
-    if JSON.parse(installed_apps).key?(app_identifier)
-      sh("xcrun", "simctl", "uninstall", device_udid, app_identifier)
-    end
-    # Keep independent XCTest sessions without Snapshot rebooting the simulator or
-    # querying build settings again just to choose its log filename.
-    log_path = File.join(log_directory, "#{device}-#{screenshot_name}.log")
-    screenshot_phase(diagnostics, "capture-#{screenshot_name}", device: device, udid: device_udid, log_path: log_path) do
+    # The device is fresh. Each test still launches and terminates its own app;
+    # share only the initial installation and XCTest session across its captures.
+    log_path = File.join(log_directory, "#{device}.log")
+    screenshot_phase(diagnostics, "capture", device: device, udid: device_udid, log_path: log_path) do
       run_screenshot_xcodebuild!(
         [
           "-project", project, "-scheme", "OpenClawUITests", "-configuration", "Debug",
           "-derivedDataPath", derived_data_path,
           "-destination", "platform=iOS Simulator,id=#{device_udid}",
           "-resultBundlePath", result_bundle_path,
-          "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/#{test_name}",
+          *RELEASE_IOS_SCREENSHOT_TESTS.map { |screenshot| "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/#{screenshot.fetch(:test)}" },
           *Shellwords.split(IOS_SCREENSHOT_XCARGS),
           "FASTLANE_SNAPSHOT=YES", "FASTLANE_LANGUAGE=en-US", "test-without-building"
         ],
         log_path: log_path
       )
     end
-    verify_snapshot_test_result!(result_bundle_path, "#{device} #{screenshot_name} attempt #{attempt}")
-    FileUtils.cp(captured_screenshot_path, expected_screenshot_path)
+    verify_snapshot_test_result!(result_bundle_path, "#{device} attempt #{attempt}")
+    screenshot_paths.each { |source, destination| FileUtils.cp(source, destination) }
   rescue StandardError
     archive_snapshot_test_result!(
       result_bundle_path: result_bundle_path,
       archive_directory: result_bundle_archive_directory,
       device: device,
-      screenshot_name: screenshot_name,
       attempt: attempt
     )
     record_release_ios_screenshot_attempt!(
       attempts: capture_attempts,
       output_path: capture_attempts_path,
       device: device,
-      screenshot_name: screenshot_name,
       attempt: attempt,
       capture_outcome: "failed"
     )
@@ -1952,14 +1919,12 @@ def capture_release_ios_screenshot!(
     result_bundle_path: result_bundle_path,
     archive_directory: result_bundle_archive_directory,
     device: device,
-    screenshot_name: screenshot_name,
     attempt: attempt
   )
   record_release_ios_screenshot_attempt!(
     attempts: capture_attempts,
     output_path: capture_attempts_path,
     device: device,
-    screenshot_name: screenshot_name,
     attempt: attempt,
     capture_outcome: "succeeded"
   )
@@ -2488,23 +2453,20 @@ platform :ios do
         screenshot_phase(diagnostics, "status-bar", device: device.fetch("name"), udid: device_udid) do
           sh("xcrun", "simctl", "status_bar", device_udid, "override", *Shellwords.split(SNAPSHOT_STATUS_BAR_ARGUMENTS))
         end
-        RELEASE_IOS_SCREENSHOT_TESTS.each do |screenshot|
-          capture_release_ios_screenshot!(
-            project: project,
-            device: device.fetch("name"),
-            screenshot: screenshot,
-            output_directory: output_directory,
-            result_bundle_path: result_bundle_path,
-            result_bundle_archive_directory: result_bundle_archive_directory,
-            log_directory: log_directory,
-            capture_attempts: capture_attempts,
-            capture_attempts_path: capture_attempts_path,
-            derived_data_path: derived_data_path,
-            device_udid: device_udid,
-            snapshot_cache_directory: snapshot_cache_directory,
-            diagnostics: diagnostics
-          )
-        end
+        capture_release_ios_screenshots!(
+          project: project,
+          device: device.fetch("name"),
+          output_directory: output_directory,
+          result_bundle_path: result_bundle_path,
+          result_bundle_archive_directory: result_bundle_archive_directory,
+          log_directory: log_directory,
+          capture_attempts: capture_attempts,
+          capture_attempts_path: capture_attempts_path,
+          derived_data_path: derived_data_path,
+          device_udid: device_udid,
+          snapshot_cache_directory: snapshot_cache_directory,
+          diagnostics: diagnostics
+        )
       end
     end
     verify_release_ios_screenshot_manifest!(

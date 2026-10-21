@@ -549,19 +549,26 @@ describe("config strict validation", () => {
     expect(raw.tts).not.toHaveProperty("providers");
   });
 
-  it("reports retired plugin model refs without an agents section", () => {
-    const raw = {
-      plugins: {
-        entries: {
-          "lossless-claw": { config: { summaryModel: "anthropic/claude-opus-4-5" } },
+  it.each([
+    { summaryModel: "anthropic/claude-opus-4-5", expectedPaths: [] },
+    { summaryModel: " anthropic/claude-opus-4-5 ", expectedPaths: ["plugins"] },
+  ])(
+    "reports only noncanonical plugin model refs without agents: '$summaryModel'",
+    ({ summaryModel, expectedPaths }) => {
+      const raw = {
+        plugins: {
+          entries: {
+            "lossless-claw": { config: { summaryModel } },
+          },
         },
-      },
-    };
-    const issues = findLegacyConfigIssues(raw);
+      };
+      const issues = findLegacyConfigIssues(raw);
 
-    expect(issuePaths(issues)).toContain("plugins");
-    expect(issuePaths(issues)).not.toContain("agents");
-  });
+      expect(issuePaths(issues)).toEqual(expectedPaths);
+      expect(raw.plugins.entries["lossless-claw"].config.summaryModel).toBe(summaryModel);
+      expect(raw).not.toHaveProperty("agents");
+    },
+  );
 
   it("rejects legacy sandbox perSession without read-time auto-migration", async () => {
     await withSnapshot(

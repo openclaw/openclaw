@@ -199,6 +199,7 @@ export function createUiBrowserVitestConfig(
         "@zag-js/menu",
         "@zag-js/rect-utils",
         "@zag-js/vanilla",
+        "croner",
         "dompurify",
         "file-type",
         "highlight.js/lib/core",

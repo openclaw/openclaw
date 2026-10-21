@@ -67,11 +67,12 @@ export function createChatComposerContext(
   voice: { dictation: ComposerDictationOwner; picker: ComposerMicrophoneOwner },
   prediction: ComposerPrediction | undefined,
   questionPanelProps: QuestionPanelProps | null,
+  streaming: boolean,
 ) {
   const state = getChatComposerState(props.paneId);
   state.slashCommandDispatchConnected = props.connected;
   const canCompose = props.canCompose ?? props.canSend;
-  const isBusy = props.sending || props.stream !== null;
+  const isBusy = props.sending || streaming;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const showAbortableUi = canAbort && !hasTerminalRunStatus(props.runStatus);
   const submittedProgress = props.queue.find((item) =>
@@ -139,7 +140,7 @@ export function createChatComposerContext(
     ? t("chat.waitingForApproval")
     : submittedProgress?.sendState === "waiting-model"
       ? t("chat.composer.preparingModel")
-      : props.stream !== null
+      : streaming
         ? t("chat.composer.responding", { name: assistantName })
         : sendingForCurrentSession || submittedProgress
           ? t("chat.composer.sendingMessage")

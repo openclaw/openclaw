@@ -10,7 +10,6 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { detectLegacyStateMigrations } from "./state-migrations.doctor.js";
 import { autoMigrateLegacyPluginDoctorState } from "./state-migrations.plugin-doctor.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 
 const registry = vi.hoisted(() => ({
   entries: [] as Array<{ pluginId: string; migration: PluginDoctorStateMigration }>,
@@ -54,7 +53,6 @@ describe("legacy JSON plugin migration diagnostics", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     registry.entries = [];
-    resetAutoMigrateLegacyStateDirForTest();
     await state.cleanup();
   });
 

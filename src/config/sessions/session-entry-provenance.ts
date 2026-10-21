@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
 import {
   SESSION_EXPANDED_PARTICIPANT_LIMIT,
@@ -17,14 +18,74 @@ export type SessionActor = SchemaContract<
   Pick<ProjectedSessionCreatedActor, "type" | "id" | "label">
 >;
 
-/** Only trusted creation owners may stamp a Gateway profile namespace. */
-export type SessionCreatedActor = SessionActor &
-  ({ type: "human"; source: "profile" | "channel" | "unknown" } | { type: "agent" | "system" });
+/** Causal creator attribution; the enclosing actor stays the legacy isolation identity. */
+type DelegatedSessionCreator =
+  | { type: "human"; source: "profile"; id: string }
+  | { type: "agent"; id?: string };
 
-export function sessionCreatorProfileId(
-  actor: (SessionActor & { source?: unknown }) | undefined,
-): string | undefined {
+/** Only trusted creation owners may stamp Gateway profile namespaces. */
+export type SessionCreatedActor = SessionActor &
+  ({ type: "human"; source: "profile" | "channel" | "unknown" } | { type: "agent" | "system" }) & {
+    delegatedBy?: DelegatedSessionCreator;
+  };
+
+type CreatorInput = SessionActor & { source?: unknown; delegatedBy?: unknown };
+
+/** Creator-facing policy and display use attribution, never the execution/isolation identity. */
+export function resolveSessionCreatorActor(
+  actor: SessionCreatedActor | undefined,
+): SessionCreatedActor | undefined;
+export function resolveSessionCreatorActor(
+  actor: CreatorInput | undefined,
+): CreatorInput | undefined;
+export function resolveSessionCreatorActor(
+  actor: CreatorInput | undefined,
+): CreatorInput | undefined {
+  const creator = actor?.delegatedBy;
+  if (isRecord(creator)) {
+    const id = typeof creator.id === "string" ? creator.id.trim() : undefined;
+    if (creator.type === "human" && creator.source === "profile" && id) {
+      return { type: "human", source: "profile", id };
+    }
+    if (creator.type === "agent") {
+      return { type: "agent", ...(id ? { id } : {}) };
+    }
+  }
+  return actor;
+}
+
+export function sessionCreatorProfileId(actor: CreatorInput | undefined): string | undefined {
+  return sessionIsolationProfileId(resolveSessionCreatorActor(actor));
+}
+
+/** Deliberately ignores attribution: old and new readers must choose the same sandbox. */
+export function sessionIsolationProfileId(actor: CreatorInput | undefined): string | undefined {
   return actor?.type === "human" && actor.source === "profile" ? actor.id : undefined;
+}
+
+/** Call only at creation with a host-captured causal requester, never a selected tool user. */
+export function attributeDelegatedSessionCreator(
+  actor: SessionCreatedActor | undefined,
+  requesterProfileId?: string,
+  spawningAgentId?: string,
+): SessionCreatedActor | undefined {
+  const id = requesterProfileId?.trim();
+  if (!actor) {
+    return undefined;
+  }
+  const { delegatedBy: _previous, ...legacyActor } = actor;
+  const agentId = spawningAgentId?.trim();
+  if (!id && legacyActor.type !== "human" && (!agentId || legacyActor.id === agentId)) {
+    return legacyActor;
+  }
+  // Keep the legacy actor and hot columns unchanged. Older readers safely ignore this
+  // nested attribution and their full-object creation-stamp preservation retains it.
+  return {
+    ...legacyActor,
+    delegatedBy: id
+      ? { type: "human", source: "profile", id }
+      : { type: "agent", ...(agentId ? { id: agentId } : {}) },
+  };
 }
 
 export type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
@@ -98,12 +159,13 @@ export function inheritSpawnSessionOwner(
   resolveProfileId: (profileId: string) => string | undefined = (profileId) => profileId,
 ): SessionOwnerAssignment | undefined {
   const assigned = source?.owner?.actor;
+  const creator = resolveSessionCreatorActor(source?.createdActor);
   const owner = assigned
     ? assigned.type === "human"
       ? assigned
       : undefined
-    : source?.createdActor?.type === "human" && source.createdActor.source === "profile"
-      ? source.createdActor
+    : creator?.type === "human" && creator.source === "profile"
+      ? creator
       : undefined;
   const directMatch = owner?.id && requesterProfileId && owner.id === requesterProfileId;
   const resolvedOwnerId = !directMatch && owner?.id ? resolveProfileId(owner.id) : owner?.id;

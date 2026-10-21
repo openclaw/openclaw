@@ -905,9 +905,6 @@ importers:
       marked:
         specifier: 18.1.1
         version: 18.1.1
-      signal-utils:
-        specifier: 0.21.1
-        version: 0.21.1(signal-polyfill@0.2.2)
       solid-js:
         specifier: 2.0.0-rc.14
         version: 2.0.0-rc.14
@@ -955,9 +952,6 @@ importers:
 
   extensions/clickclack:
     dependencies:
-      ws:
-        specifier: 8.22.0
-        version: 8.22.0
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -968,6 +962,9 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+      ws:
+        specifier: 8.22.0
+        version: 8.22.0
 
   extensions/cloudflare:
     dependencies:

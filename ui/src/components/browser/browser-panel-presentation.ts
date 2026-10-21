@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import type { LinkFaviconFetcher } from "../../pages/chat/link-favicon-cache.ts";
 import { createDockLayout } from "../dock-layout.ts";
 import { browserPanelLayout } from "../dock-panel-layout.ts";
 import { notifyPanelHostedTabsChanged } from "../panel-hosted-tabs.ts";
@@ -29,6 +30,8 @@ export type BrowserPanelInputs = {
   authToken: string | null;
   embedded: boolean;
   tabsInHeader: boolean;
+  mobilePresentation?: boolean;
+  fetchFavicon?: LinkFaviconFetcher;
   presented: boolean;
   refreshOnPresentation: boolean;
   sessionKey: string;

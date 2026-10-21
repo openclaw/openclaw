@@ -24,7 +24,7 @@ export const page = definePage({
       header: true,
       renderSolid: (props: SolidRouteProps<RouteLocation>) =>
         createComponent(ShellLayoutBoundary, {
-          traits: { activityPage: true, toolbarHeader: true, settingsWorkspace: true },
+          traits: { activityPage: true, settingsWorkspace: true },
           get children() {
             return createComponent(module.ActivityPage, {
               get routeLocation() {

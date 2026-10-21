@@ -178,6 +178,7 @@ env:
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"
   FULL_RELEASE_LANE_INPUTS_CONTRACT: "1"
+  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "1"
   CHILD_EVIDENCE_REUSE: ${{ inputs.reuse_evidence && inputs.rerun_group == 'all' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
 
 jobs:
@@ -1491,6 +1492,9 @@ jobs:
             if [[ ! "$child_run_attempt" =~ ^[1-9][0-9]*$ || -z "${url// }" ]]; then
               echo "::error::${workflow} child run omitted its attempt or URL." >&2
               exit 1
+            fi
+            if [[ "$CHILD_WORKFLOW_KIND" == artifact-* ]]; then
+              echo "Artifact dispatch ${CHILD_WORKFLOW_KIND#artifact-} target ${TARGET_SHA}: ${url} (attempt ${child_run_attempt})"
             fi
             echo "Dispatched ${workflow}: ${url} (attempt ${child_run_attempt})"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"

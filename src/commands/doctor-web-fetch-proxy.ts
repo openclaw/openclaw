@@ -19,9 +19,8 @@ type ProxyEnvSource = {
   label: "doctor process" | "installed Gateway service";
 };
 
-async function probeDirectTlsConnectivity(): Promise<DirectConnectivity> {
-  return await new Promise((resolve) => {
-    let settled = false;
+function probeDirectTlsConnectivity(): Promise<DirectConnectivity> {
+  return new Promise((resolve) => {
     const socket = tls.connect({
       host: DIRECT_PROBE_HOST,
       port: DIRECT_PROBE_PORT,
@@ -29,10 +28,6 @@ async function probeDirectTlsConnectivity(): Promise<DirectConnectivity> {
       timeout: DIRECT_PROBE_TIMEOUT_MS,
     });
     const finish = (result: DirectConnectivity) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
       socket.destroy();
       resolve(result);
     };

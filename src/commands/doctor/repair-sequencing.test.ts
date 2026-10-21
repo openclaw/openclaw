@@ -785,16 +785,7 @@ describe("doctor repair sequencing", () => {
     const { repairStaleAgentModelRefs: repairStaleAgentModelRefsActual } = await vi.importActual<
       typeof import("./shared/stale-agent-model-ref-repair.js")
     >("./shared/stale-agent-model-ref-repair.js");
-    mocks.repairStaleAgentModelRefs.mockImplementationOnce(
-      (
-        cfg: OpenClawConfig,
-        options: NonNullable<Parameters<typeof repairStaleAgentModelRefsActual>[1]>,
-      ) =>
-        repairStaleAgentModelRefsActual(cfg, {
-          ...options,
-          persistedProviderIdsByAgentId: new Map([["main", new Set()]]),
-        }),
-    );
+    mocks.repairStaleAgentModelRefs.mockImplementationOnce(repairStaleAgentModelRefsActual);
     const pluginMetadataSnapshotState = {
       current: staleSnapshot,
     };

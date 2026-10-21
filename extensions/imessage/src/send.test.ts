@@ -34,7 +34,6 @@ type ErrorRuntimeModule = typeof import("openclaw/plugin-sdk/error-runtime");
 type PersistedEchoCacheModule = typeof import("./monitor/persisted-echo-cache.js");
 type ReplyCacheModule = typeof import("./monitor-reply-cache.js");
 type SendModule = typeof import("./send.js");
-let clearIMessageApprovalReactionTargetsForTest: ApprovalReactionsModule["clearIMessageApprovalReactionTargetsForTest"];
 let IMessageRpcRequestError: ClientModule["IMessageRpcRequestError"];
 let PlatformMessageNotDispatchedError: ErrorRuntimeModule["PlatformMessageNotDispatchedError"];
 let resolveIMessageApprovalReactionTargetWithPersistence: ApprovalReactionsModule["resolveIMessageApprovalReactionTargetWithPersistence"];
@@ -53,10 +52,8 @@ async function loadFreshSendModule(): Promise<void> {
   }));
   ({ IMessageRpcRequestError } = await import("./client.js"));
   ({ PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime"));
-  ({
-    clearIMessageApprovalReactionTargetsForTest,
-    resolveIMessageApprovalReactionTargetWithPersistence,
-  } = await import("./approval-reactions.js"));
+  ({ resolveIMessageApprovalReactionTargetWithPersistence } =
+    await import("./approval-reactions.js"));
   ({ hasPersistedIMessageEcho } = await import("./monitor/persisted-echo-cache.js"));
   ({ sendMessageIMessage } = await import("./send.js"));
   clientRuntime = await import("./client.js");
@@ -105,7 +102,6 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   afterEach(async () => {
-    clearIMessageApprovalReactionTargetsForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();

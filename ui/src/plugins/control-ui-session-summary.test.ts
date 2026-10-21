@@ -20,7 +20,7 @@ function setup(identity?: () => AgentIdentityResult) {
   const { gateway, current } = createGatewayStoreTestStore();
   onTestFinished(() => gateway.stop());
   gateway.start();
-  current().opts.onHello?.({
+  current().testOptions.onHello?.({
     ...GATEWAY_STORE_TEST_HELLO,
     auth: { role: "operator", scopes: ["operator.sessions.read"] },
   });
@@ -49,7 +49,7 @@ function setup(identity?: () => AgentIdentityResult) {
   element.presented = true;
   document.body.append(element);
   const emit = (event: string, key = "agent:main:one", agentId = "main") =>
-    current().opts.onEvent?.(createGatewayEvent(event, { sessionKey: key, agentId }));
+    current().testOptions.onEvent?.(createGatewayEvent(event, { sessionKey: key, agentId }));
   const shown = (text: string) => vi.waitFor(() => expect(element.textContent).toContain(text));
   const reply = async (index: number, text: string, data: ChatHistoryResponse = history(text)) => {
     await vi.waitFor(() => expect(requests).toHaveLength(index + 1));
@@ -134,8 +134,8 @@ it.each(["session", "agent", "connection", "gateway"] as const)(
     } else if (change === "agent") {
       element.session = { sessionKey: "agent:main:one", agentId: "other" };
     } else {
-      current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
-      current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+      current().testOptions.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+      current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
     }
     await vi.waitFor(() => expect(nextRequests).toHaveLength(2));
     expect(committedText.length).toBeGreaterThan(0);
@@ -273,7 +273,7 @@ it("does not resume progress requests after removal with an update queued", asyn
   element.session = { ...element.session! };
   element.remove();
   await element.updateComplete;
-  current().opts.onEvent?.(
+  current().testOptions.onEvent?.(
     createGatewayEvent("progressCard.changed", { sessionKey: "agent:main:one", revision: 2 }),
   );
   await settled(1);
@@ -298,8 +298,8 @@ it("rejects an old session response and reloads after reconnect without a parent
   emit("session.message");
   await settled(2);
 
-  current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+  current().testOptions.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
   await element.updateComplete;
-  current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+  current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
   await reply(2, "Reconnected session");
 });

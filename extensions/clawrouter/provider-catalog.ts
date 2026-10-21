@@ -14,6 +14,7 @@ import {
   normalizeOptionalString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CLAWROUTER_ROUTE_METADATA_KEY as ROUTE_METADATA_KEY } from "./provider-policy-api.js";
 
 const CLAWROUTER_DEFAULT_BASE_URL = "https://clawrouter.openclaw.ai";
 
@@ -21,7 +22,6 @@ const PROVIDER_ID = "clawrouter";
 // Inventory changes infrequently; inference still enforces current grants and budgets.
 // Explicit catalog refresh bypasses this response cache at the acquisition owner.
 const CATALOG_CACHE_TTL_MS = 60 * 60_000;
-const ROUTE_METADATA_KEY = "clawrouterRoute";
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 32_768;
 const DEFAULT_COST = {
@@ -56,6 +56,7 @@ type CatalogPricing = {
   cacheWrite1hInputMicrosPerMillion?: number;
   maxInputTokens?: number;
   defaultMaxOutputTokens?: number;
+  serviceTiers?: string[];
 };
 
 type CatalogModel = {
@@ -63,6 +64,7 @@ type CatalogModel = {
   displayName?: string;
   upstream: string;
   capabilities: string[];
+  input?: Array<"text" | "image">;
   supportedReasoningEfforts?: CatalogReasoningEffort[];
   pricing?: CatalogPricing;
 };
@@ -80,6 +82,7 @@ type RouteMetadata = {
   api: NonNullable<ModelDefinitionConfig["api"]>;
   baseUrl: string;
   upstreamModel?: string;
+  serviceTiers?: string[];
 };
 
 export function normalizeClawRouterReasoningEfforts(
@@ -140,6 +143,9 @@ function parseCatalogPricing(value: unknown): CatalogPricing | undefined {
     ),
     maxInputTokens: asPositiveSafeInteger(row.maxInputTokens),
     defaultMaxOutputTokens: asPositiveSafeInteger(row.defaultMaxOutputTokens),
+    serviceTiers: Array.isArray(row.serviceTiers)
+      ? normalizeTrimmedStringList(row.serviceTiers.map((tier) => asOptionalRecord(tier)?.id))
+      : undefined,
   };
 }
 
@@ -155,9 +161,26 @@ function parseCatalogModel(value: unknown): CatalogModel | undefined {
     displayName: normalizeOptionalString(row?.displayName),
     upstream,
     capabilities: normalizeTrimmedStringList(row?.capabilities),
+    input: parseCatalogInput(row?.input),
     supportedReasoningEfforts: normalizeClawRouterReasoningEfforts(row?.supportedReasoningEfforts),
     pricing: parseCatalogPricing(row?.pricing),
   };
+}
+
+function parseCatalogInput(value: unknown): CatalogModel["input"] {
+  if (value === undefined) {
+    return undefined;
+  }
+  // A present but unusable declaration must not regain vision through a name heuristic.
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > 2 ||
+    !value.every((modality) => modality === "text" || modality === "image")
+  ) {
+    return ["text"];
+  }
+  return value;
 }
 
 function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
@@ -212,8 +235,22 @@ function inferReasoning(providerId: string, modelId: string): boolean {
   return /(?:claude-|gemini-|gpt-5|gpt-oss|deepseek-v|reasoner|glm-5|grok-4|minimax-m)/u.test(id);
 }
 
-function inferInput(providerId: string, modelId: string): Array<"text" | "image"> {
-  const id = `${providerId}/${modelId}`.toLowerCase();
+// Older router catalogs omit input. Match exact native OpenAI identities, not a
+// GPT generation prefix: unknown siblings can have different modality contracts.
+const OPENAI_NATIVE_IMAGE_MODEL_IDS = new Set([
+  "gpt-6.1-sol",
+  "gpt-6-sol",
+  "gpt-6-astra",
+  "gpt-4.1",
+  "gpt-4.1-mini",
+  "gpt-4.1-nano",
+]);
+
+function inferInput(providerId: string, model: CatalogModel): Array<"text" | "image"> {
+  if (providerId === "openai" && OPENAI_NATIVE_IMAGE_MODEL_IDS.has(model.upstream)) {
+    return ["text", "image"];
+  }
+  const id = `${providerId}/${model.id}`.toLowerCase();
   return /(?:claude-|gemini-|gpt-4o|gpt-5)/u.test(id) ? ["text", "image"] : ["text"];
 }
 
@@ -309,7 +346,7 @@ function buildRoutedModel(
           },
         }
       : {}),
-    input: inferInput(provider.id, model.id),
+    input: model.input ?? inferInput(provider.id, model),
     cost: modelCost(model.pricing),
     contextWindow: model.pricing?.maxInputTokens ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: model.pricing?.defaultMaxOutputTokens ?? DEFAULT_MAX_TOKENS,
@@ -318,6 +355,12 @@ function buildRoutedModel(
         api,
         baseUrl,
         ...(upstreamModel ? { upstreamModel } : {}),
+        // Only this catalog provider/transport owns OpenAI scheduling tiers.
+        ...(provider.id === "openai" &&
+        api === "openai-responses" &&
+        model.pricing?.serviceTiers?.length
+          ? { serviceTiers: model.pricing.serviceTiers }
+          : {}),
       } satisfies RouteMetadata,
     },
   };

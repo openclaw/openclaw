@@ -1,3 +1,4 @@
+import { merge } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
@@ -35,6 +36,7 @@ import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
 import { showChatAnnotationEditor } from "./components/chat-selection-popup.tsx";
+import type { SidebarContent, SidebarOpenResult } from "./components/chat-sidebar-content-types.ts";
 import type { ChatSwarmProgressProps } from "./components/chat-swarm-progress.solid.tsx";
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
@@ -64,11 +66,22 @@ export type ChatProps = Omit<
   | "onCompanionSelection"
   | "onOpenSession"
   | "onSend"
+  | "onOpenSidebar"
 > &
-  Omit<ChatComposerProps, "notices" | "footerContent" | "disabled" | "onOpenImage"> &
+  Omit<
+    ChatComposerProps,
+    | "notices"
+    | "footerContent"
+    | "disabled"
+    | "onOpenImage"
+    | "mobileActivityPills"
+    | "mobileApprovalContent"
+    | "onOpenSidebar"
+  > &
   ChatDetailsProps &
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
+    onOpenSidebar?: (content: SidebarContent) => SidebarOpenResult;
     onConversationFrameRef?: (element: HTMLElement) => void | (() => void);
     onFooterElementRef?: (element: HTMLElement) => void | (() => void);
     onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
@@ -202,7 +215,7 @@ export function createChatViewFrame(
   const openImmediateImage = props.onOpenImage
     ? (item: ImageLightboxItem) => openImage?.(item, props.onRequestOpenImage?.())
     : undefined;
-  const attachmentDropHandlers = createChatAttachmentDropHandlers({ ...props, canCompose });
+  const attachmentDropHandlers = createChatAttachmentDropHandlers(merge(props, { canCompose }));
   const placementStartup =
     props.placementStartup?.phase === "failed" ? null : props.placementStartup;
   const initialTurn = props.placementStartup?.initialTurn;
@@ -217,8 +230,7 @@ export function createChatViewFrame(
   }
   // Placement is visible work, but does not own an abortable model run yet.
   const runWorking = Boolean(placementStartup) || isChatRunWorking(props);
-  const threadProps: ChatThreadProps = {
-    ...props,
+  const threadProps: ChatThreadProps = merge(props, {
     asyncQuestions,
     loading: props.loading && !placementStartup,
     streamStartedAt: placementStartup?.startedAt ?? props.streamStartedAt,
@@ -228,15 +240,17 @@ export function createChatViewFrame(
     runActive: props.runActive === true,
     runWorking,
     runFinalizing: !isSessionRunVisuallyActive(true, props.startupStatus?.phase),
-    startupLabel: chatStartupStatusLabel(
-      props.startupStatus,
-      placementStartup,
-      props.environmentStartStatus,
-      (runWorking || props.stream !== null) &&
-        props.awaitingActivity !== false &&
-        !props.stream?.trim() &&
-        props.toolMessages.length === 0,
-    ),
+    get startupLabel() {
+      return chatStartupStatusLabel(
+        props.startupStatus,
+        placementStartup,
+        props.environmentStartStatus,
+        (runWorking || props.stream !== null) &&
+          props.awaitingActivity !== false &&
+          !props.stream?.trim() &&
+          props.toolMessages.length === 0,
+      );
+    },
     retryAt: props.startupStatus?.phase === "retrying" ? props.startupStatus.retryAt : undefined,
     failureActionsRunId: chatFailureRunId(props.runError, props.selectedSession),
     questionPrompts: props.gatewayQuestionPrompts,
@@ -291,7 +305,7 @@ export function createChatViewFrame(
     onOpenSession: props.onSessionSelect,
     // Portaled menus can outlive a render; resolve focus from the current session owner.
     onFocusComposer: () => focusComposer(true),
-  };
+  } satisfies Partial<ChatThreadProps>);
   questionState.transcriptRenderContext.onAsyncQuestionSubmit = props.onAsyncQuestionSubmit;
   questionState.transcriptRenderContext.onAsyncQuestionDiscard = asyncQuestions.discard;
   const inputDisplay = selectChatInputDisplay(
@@ -308,7 +322,7 @@ export function createChatViewFrame(
     : undefined;
   const historyFailed =
     historyLoadState?.phase === "failed" && historyLoadState.sessionKey === props.sessionKey;
-  const transcriptEmpty =
+  const transcriptEmpty = () =>
     !runWorking &&
     props.messages.length === 0 &&
     inputDisplay.pendingInputs.length === 0 &&
@@ -328,7 +342,9 @@ export function createChatViewFrame(
     displayQueue,
     historyLoadState,
     historyFailed,
-    transcriptEmpty,
+    get transcriptEmpty() {
+      return transcriptEmpty();
+    },
   };
 }
 

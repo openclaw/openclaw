@@ -48,8 +48,7 @@ describe("ACP replay worker", () => {
   afterEach(() => closeOpenClawStateDatabaseAsync());
 
   it("binds fresh metadata, sequence and payload values across worker appends", async ({ dir }) => {
-    let now = 100;
-    const f = await fixture(dir, { now: () => now++, warm: 3 });
+    const f = await fixture(dir, { warm: 3 });
     const { ledger, session } = f;
     const db = f.db();
     const appends = Array.from({ length: 4 }, (_, index) => ({
@@ -58,12 +57,24 @@ describe("ACP replay worker", () => {
       update: update(`payload-${index}-漢\0\ud800`),
     }));
     const expected = structuredClone(appends);
+    const initial = db.prepare("SELECT created_at, updated_at FROM acp_replay_sessions").get();
+    // Separate native clock windows without changing worker-issued authority time.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1);
+    });
+    const timestampWindows: Array<{ before: number; after: number }> = [];
     for (const event of appends) {
+      const before = Date.now();
       await ledger.recordUpdate({ sessionId: session.sessionId, ...event });
+      timestampWindows.push({ before, after: Date.now() });
     }
     const replay = await ledger.readReplayBySessionId(session);
     expect(replay).toMatchObject({ complete: true, sessionKey: "key-3-漢😀" });
-    expectValues(db, "updated_at, next_seq FROM acp_replay_sessions").toEqual([114, 8]);
+    expectValues(db, "created_at, updated_at, next_seq FROM acp_replay_sessions").toEqual([
+      initial?.created_at,
+      replay.events.at(-1)?.at,
+      8,
+    ]);
     expect(
       replay.events
         .slice(3)
@@ -71,7 +82,11 @@ describe("ACP replay worker", () => {
     ).toEqual(
       expected.map((event, index) => [index + 4, event.sessionKey, event.runId, event.update]),
     );
-    expect(replay.events.slice(3).map((event) => event.at)).toEqual([108, 110, 112, 114]);
+    expect(timestampWindows[0]?.before).toBeGreaterThan(Number(initial?.updated_at));
+    for (const [index, { before, after }] of timestampWindows.entries()) {
+      expect(replay.events[index + 3]?.at).toBeGreaterThanOrEqual(before);
+      expect(replay.events[index + 3]?.at).toBeLessThanOrEqual(after);
+    }
     expectAcpReplayUtf8Accounting(db);
 
     await closeOpenClawStateDatabaseAsync();
@@ -93,7 +108,7 @@ describe("ACP replay worker", () => {
       write: (operation) => runOpenClawStateWriteTransaction(operation, options),
       writeAdmitted: (operation) => runOpenClawStateWriteTransaction(operation, options),
     };
-    const { now: _now, ...limits } = normalizeAcpLedgerOptions();
+    const limits = normalizeAcpLedgerOptions();
     db.setAuthorizer((action, table, column) =>
       action === constants.SQLITE_READ && table === "acp_replay_events" && column === "update_json"
         ? constants.SQLITE_DENY
@@ -155,7 +170,7 @@ describe("ACP replay worker", () => {
   });
 
   it("uses current caps across shared handles and gapped sequences", async ({ dir }) => {
-    const options = { path: path.join(dir, "state.sqlite"), now: () => 100 };
+    const options = { path: path.join(dir, "state.sqlite") };
     const cappedLedger = (maxEventsPerSession: number, maxSessions: number) =>
       createSqliteAcpEventLedger({ ...options, maxEventsPerSession, maxSessions });
     const roomy = cappedLedger(10, 3);
@@ -168,9 +183,9 @@ describe("ACP replay worker", () => {
       }
     }
     const db = nativeDatabase(options);
-    // Imported/retained history can have gaps; next_seq is not an event count.
+    // Retained history can have tied timestamps and gaps; next_seq is not an event count.
     db.exec(
-      "UPDATE acp_replay_events SET seq = seq * 10; UPDATE acp_replay_sessions SET next_seq = 31",
+      "UPDATE acp_replay_events SET seq = seq * 10; UPDATE acp_replay_sessions SET next_seq = 31, updated_at = 100",
     );
     await narrow.startSession({
       sessionId: "a",

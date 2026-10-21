@@ -17,25 +17,7 @@ vi.mock("./proxy.js", () => ({
 
 import { sendMessageZalo } from "./send.js";
 
-type ZaloSendResult = Awaited<ReturnType<typeof sendMessageZalo>>;
-
-function requireSuccessfulSend(result: ZaloSendResult, expectedMessageId: string) {
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error(`expected successful Zalo send: ${result.error}`);
-  }
-  expect(result.messageId).toBe(expectedMessageId);
-  return result;
-}
-
-function expectFailedSend(result: ZaloSendResult, expectedError: string) {
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    throw new Error("expected failed Zalo send");
-  }
-  expect(result.error).toBe(expectedError);
-  expect(result.receipt.platformMessageIds).toStrictEqual([]);
-}
+const cfg = { channels: { zalo: { botToken: "zalo-token" } } };
 
 describe("zalo send", () => {
   beforeEach(() => {
@@ -46,14 +28,13 @@ describe("zalo send", () => {
   });
 
   it("fails fast for missing token or blank photo URLs", async () => {
-    const missingToken = await sendMessageZalo("dm-chat-3", "hello", {});
-    expectFailedSend(missingToken, "No Zalo bot token configured");
+    await expect(sendMessageZalo("dm-chat-3", "hello", { cfg: {} })).rejects.toThrow(
+      "No Zalo bot token configured",
+    );
 
-    const blankPhoto = await sendMessageZalo("dm-chat-4", "", {
-      token: "zalo-token",
-      mediaUrl: "   ",
-    });
-    expectFailedSend(blankPhoto, "No photo URL provided");
+    await expect(sendMessageZalo("dm-chat-4", "", { cfg, mediaUrl: "   " })).rejects.toThrow(
+      "No photo URL provided",
+    );
 
     expect(sendMessageMock).not.toHaveBeenCalled();
     expect(sendPhotoMock).not.toHaveBeenCalled();
@@ -81,10 +62,10 @@ describe("zalo send", () => {
 
     try {
       await sendMessageZalo("dm-chat-surrogate-text", boundaryText, {
-        token: "zalo-token",
+        cfg,
       });
       const result = await sendMessageZalo("dm-chat-surrogate-caption", boundaryText, {
-        token: "zalo-token",
+        cfg,
         mediaUrl: "https://example.com/photo.jpg",
       });
 
@@ -97,9 +78,8 @@ describe("zalo send", () => {
           caption: "a".repeat(1999),
         }),
       );
-      expect(requireSuccessfulSend(result, "z-photo-surrogate").receipt.platformMessageIds).toEqual(
-        ["z-photo-surrogate"],
-      );
+      expect(result.messageId).toBe("z-photo-surrogate");
+      expect(result.receipt.platformMessageIds).toEqual(["z-photo-surrogate"]);
     } finally {
       resolvePhotoHost.mockRestore();
     }
@@ -134,17 +114,16 @@ describe("zalo send", () => {
       undefined,
     );
     expect(resolveZaloProxyFetchMock).toHaveBeenCalledOnce();
-    const successful = requireSuccessfulSend(result, "z-photo-2");
-    expect(successful.receipt.platformMessageIds).toEqual(["z-photo-2"]);
+    expect(result.messageId).toBe("z-photo-2");
+    expect(result.receipt.platformMessageIds).toEqual(["z-photo-2"]);
   });
 
   it("preserves handoff rejection identity without changing provider failures", async () => {
     const providerError = new Error("provider unavailable");
     sendMessageMock.mockRejectedValueOnce(providerError);
 
-    expectFailedSend(
-      await sendMessageZalo("dm-chat-provider-error", "hello", { token: "zalo-token" }),
-      providerError.message,
+    await expect(sendMessageZalo("dm-chat-provider-error", "hello", { cfg })).rejects.toBe(
+      providerError,
     );
 
     const authorityError = new Error("source authority revoked");
@@ -160,7 +139,7 @@ describe("zalo send", () => {
 
     await expect(
       sendMessageZalo("dm-chat-revoked", "hello", {
-        token: "zalo-token",
+        cfg,
         assertDirectAdapterHandoff,
       }),
     ).rejects.toBe(authorityError);

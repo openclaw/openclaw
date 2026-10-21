@@ -106,6 +106,7 @@ suite.define(() => {
         const openai = picker.locator(
           '[data-chat-model-provider-group="openai"] [data-chat-model-provider-toggle]',
         );
+        await page.locator(".agent-chat__composer-combobox textarea").click();
         await trigger.click();
         await polledCount(picker.locator("[data-chat-model-provider-toggle]")).toBe(2);
         const auth = picker.locator(
@@ -197,7 +198,7 @@ suite.define(() => {
           await search.fill(query);
           await search.focus();
           // This exercises browser event ownership, not a native OS IME candidate window.
-          const { prevented, highlightedBefore, highlightedAfter } = await search.evaluate(
+          const { prevented, highlightedBefore } = await search.evaluate(
             (input, args) => {
               const previousHighlight = input.getAttribute("aria-activedescendant");
               const event = new KeyboardEvent("keydown", {
@@ -212,7 +213,6 @@ suite.define(() => {
               return {
                 prevented: event.defaultPrevented,
                 highlightedBefore: previousHighlight,
-                highlightedAfter: input.getAttribute("aria-activedescendant"),
               };
             },
             { key, composition },
@@ -224,7 +224,7 @@ suite.define(() => {
             expect.soft(prevented).toBe(false);
             expect.soft(await picker.getAttribute("open")).not.toBeNull();
             expect.soft(await search.inputValue()).toBe(query);
-            expect.soft(highlightedAfter).toBe(highlightedBefore);
+            expect.soft(await search.getAttribute("aria-activedescendant")).toBe(highlightedBefore);
             expect.soft(await gateway.getRequests("sessions.patch")).toEqual([]);
           } else {
             expect(prevented).toBe(true);
@@ -240,7 +240,7 @@ suite.define(() => {
                 await search.press("Escape");
                 expect(await picker.getAttribute("open")).toBeNull();
               } else {
-                expect(highlightedAfter).not.toBe(highlightedBefore);
+                await polledAttribute(search, "aria-activedescendant").not.toBe(highlightedBefore);
               }
             }
           }

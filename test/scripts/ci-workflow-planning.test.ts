@@ -8765,6 +8765,15 @@ describe("ci workflow guards", () => {
         selectedJobs: [],
       }),
     ),
+    ...["scripts/lib/ios-test-results.mjs", "scripts/lib/ios-test-results.d.mts"].map(
+      (changedPath) => ({
+        label: `Screenshot input ${changedPath}`,
+        changedPath,
+        eventName: "push" as const,
+        screenshots: true,
+        selectedJobs: ["ios-build"],
+      }),
+    ),
     {
       label: "iOS unit tests do not select screenshot capture",
       changedPath: "apps/ios/Tests/SettingsTests.swift",

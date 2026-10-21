@@ -37,10 +37,11 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { createChatPageSessions, createChatPageStateContext } from "./chat-page.test-support.ts";
+import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import { removeQueuedMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { requestChatSend } from "./chat-send-request.ts";
+import { createChatPageStateContext } from "./chat-state-context.test-support.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -54,7 +55,11 @@ import {
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { createSessionEventState, renderedTranscript } from "./chat-state.test-support.ts";
+import {
+  createSessionEventState,
+  emitGatewayEvent,
+  renderedTranscript,
+} from "./chat-state.test-support.ts";
 import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
 import { AssistantAttachments } from "./components/chat-message-attachments-solid.tsx";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
@@ -69,14 +74,6 @@ import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { createHost as createToolStreamHost } from "./tool-stream.test-helpers.ts";
 
 const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
-
-function emitGatewayEvent(
-  state: ChatPageHost,
-  event: Parameters<typeof handlePageGatewayEvent>[1]["event"],
-  payload: Parameters<typeof handlePageGatewayEvent>[1]["payload"],
-) {
-  handlePageGatewayEvent(state, { type: "event", event, payload });
-}
 
 beforeEach(() => {
   vi.spyOn(assistantIdentity, "loadLocalAssistantIdentity").mockReturnValue({

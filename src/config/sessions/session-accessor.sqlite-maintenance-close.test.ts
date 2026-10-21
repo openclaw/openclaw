@@ -18,12 +18,9 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it.for([
-  { owner: "canonical agent", alias: false },
-  { owner: "aliased shared store", alias: true },
-])(
-  "joins active maintenance finalization during physical close ($owner)",
-  async ({ alias }, test) => {
+it.for([false, true])(
+  "joins active maintenance finalization during physical close (alias=%s)",
+  async (alias, test) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = {
         agentId: "main",
@@ -104,10 +101,7 @@ it.for([
           throw new Error("Automatic maintenance omitted its live owner predicate");
         }
         finalizerEntered.resolve(isCurrent);
-        finalization = (async () => {
-          await releaseFinalizer.promise;
-          return finalize(...args);
-        })();
+        finalization = releaseFinalizer.promise.then(() => finalize(...args));
         return finalization;
       });
       const reclaim = vi.spyOn(reclamationRun, "runSqliteSessionReclamation");

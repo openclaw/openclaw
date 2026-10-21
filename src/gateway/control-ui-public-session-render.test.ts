@@ -1,6 +1,7 @@
 import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
 import { applyLoggingConfig, resetLogger } from "../logging/logger.js";
+import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { computeInlineScriptHashes } from "./control-ui-csp.js";
 import {
   PUBLIC_SESSION_CONTENT_SECURITY_POLICY,
@@ -31,6 +32,155 @@ function render(
 }
 
 describe("public session document", () => {
+  const widgetDetails = {
+    kind: "canvas",
+    presentation: {
+      target: "assistant_message",
+      title: "Saved timeline",
+      preferredHeight: 600,
+      sandbox: "scripts",
+    },
+    view: { id: "cv_timeline", url: "/__openclaw__/canvas/documents/cv_timeline/index.html" },
+  };
+  const widgetReceipt = message("toolResult", [], {
+    toolName: "show_widget",
+    details: widgetDetails,
+  });
+  const nestedReceipt = createNestedToolActivity({
+    runId: "run",
+    scopeId: "scope",
+    afterEntryId: null,
+    startOrder: 0,
+    toolCallId: "call",
+    toolName: "show_widget",
+    input: {},
+    result: { content: [], details: widgetDetails },
+    isError: false,
+    startedAt: 1,
+    timestamp: 2,
+  });
+  const widgetOptions = {
+    mediaBaseUrl: "/control/share/session/media?token=v1.opaque",
+    widgetUrls: new Map([["cv_timeline", "/control/share/session/media?widget=v1.widget"]]),
+  };
+
+  it("renders hosted shortcodes with the public widget URL and preserves surrounding text", () => {
+    const page = JSDOM.fragment(
+      render(
+        [
+          message(
+            "assistant",
+            'Before [embed ref="cv_timeline" title="A & B" height="1050" /] After',
+          ),
+        ],
+        widgetOptions,
+      ),
+    );
+    const article = page.querySelector("article")!;
+    const frame = article.querySelector("iframe")!;
+    expect(article.textContent).toContain("Before  After");
+    expect(article.textContent).not.toContain("[embed");
+    expect(frame.getAttribute("src")).toBe("/control/share/session/media?widget=v1.widget");
+    expect(frame.src).not.toContain("v1.opaque");
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("title")).toBe("A & B");
+    expect(frame.style.height).toBe("1050px");
+    expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
+  });
+
+  it("renders only explicitly mapped widgets and gives byte-stable rows content revisions", () => {
+    const messages = [
+      widgetReceipt,
+      message("assistant", '[embed ref="unmapped" /]', {
+        content: [
+          { type: "toolCall", id: "read", name: "read", arguments: {} },
+          { type: "text", text: '[embed ref="unmapped" /]' },
+        ],
+      }),
+    ];
+    const html = render(messages, widgetOptions);
+    expect(render(messages, widgetOptions)).toBe(html);
+    const page = JSDOM.fragment(html);
+    expect(page.querySelectorAll("iframe")).toHaveLength(1);
+    for (const row of page.querySelectorAll(".transcript > *")) {
+      expect(row.getAttribute("data-public-item")).toBeTruthy();
+      expect(row.getAttribute("data-public-revision")).toMatch(/^[a-f0-9]{24}$/);
+    }
+    expect(
+      JSDOM.fragment(
+        render([widgetReceipt], { mediaBaseUrl: widgetOptions.mediaBaseUrl }),
+      ).querySelector("iframe"),
+    ).toBeNull();
+  });
+
+  it("merges a nested receipt into its same-turn shortcode and inherits its title", () => {
+    const page = JSDOM.fragment(
+      render(
+        [
+          message("user", "Show the timeline"),
+          nestedReceipt,
+          message("assistant", 'Here it is [embed ref="cv_timeline" /]'),
+        ],
+        widgetOptions,
+      ),
+    );
+    expect(page.querySelectorAll("iframe")).toHaveLength(1);
+    const frame = page.querySelector("iframe")!;
+    expect(frame.closest("article")?.textContent).toContain("Here it is");
+    expect(frame.title).toBe("Saved timeline");
+  });
+
+  it("renders standalone tool receipts at their position and deduplicates across turns", () => {
+    const page = JSDOM.fragment(
+      render(
+        [
+          widgetReceipt,
+          message("assistant", "Done"),
+          message("user", "Again"),
+          nestedReceipt,
+          message(
+            "assistant",
+            '[embed url="/__openclaw__/canvas/documents/cv_timeline/index.html" /]',
+          ),
+        ],
+        widgetOptions,
+      ),
+    );
+    expect(page.querySelectorAll("iframe")).toHaveLength(1);
+    const article = page.querySelector("article")!;
+    expect(article.classList.contains("assistant")).toBe(true);
+    expect(article.querySelector("iframe")?.style.height).toBe("600px");
+  });
+
+  it("keeps code and non-hosted embeds literal and excludes non-inline receipts", () => {
+    const text =
+      '```text\n[embed ref="cv_timeline" /]\n```\n`[embed ref="cv_timeline" /]`\n[embed url="https://www.youtube.com/watch?v=example" /]';
+    const page = JSDOM.fragment(
+      render(
+        [
+          message("assistant", text),
+          { ...widgetReceipt, isError: true },
+          { ...widgetReceipt, display: false },
+          {
+            ...widgetReceipt,
+            details: { ...widgetDetails, presentation: { target: "node_panel" } },
+          },
+        ],
+        widgetOptions,
+      ),
+    );
+    expect(page.querySelector("iframe")).toBeNull();
+    expect(page.textContent).toContain('[embed ref="cv_timeline" /]');
+    expect(page.textContent).toContain("https://www.youtube.com/watch?v=example");
+  });
+
+  it("retains shortcode-only messages and requires a mapped widget URL to render frames", () => {
+    const messages = [message("assistant", '[embed ref="cv_timeline" /]')];
+    expect(JSDOM.fragment(render(messages, widgetOptions)).querySelector("iframe")?.title).toBe(
+      "A shared conversation",
+    );
+    expect(JSDOM.fragment(render(messages)).querySelector("iframe")).toBeNull();
+  });
   it("adds only a protected login handoff, including unavailable conversations", () => {
     const entryUrl = "/control/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Ftopic";
     const html = render([], { entryUrl });
@@ -302,6 +452,7 @@ describe("public session document", () => {
       expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain(hash);
     }
     expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain("font-src 'self'");
+    expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain("frame-src 'self'");
     expect(html).toContain('<link rel="stylesheet" href="/control/fonts/instrument-sans.css">');
   });
 
