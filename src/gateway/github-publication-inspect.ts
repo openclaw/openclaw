@@ -128,7 +128,7 @@ function refFacts(
 }
 
 /** Read-only observation. Callers must retain admission and revalidate before using or disclosing it. */
-async function inspectOwnGitHubPullRequest(params: {
+export async function inspectOwnGitHubPullRequest(params: {
   pullRequestUrl: string;
   agentId: string;
   requester: GitHubPublicationRequesterV2;

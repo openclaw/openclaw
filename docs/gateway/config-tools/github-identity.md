@@ -120,6 +120,39 @@ and does not bind or prepare the PR in the conversation. Its result is data,
 not authority for another action. The separate `inspect` action below keeps its
 existing full-operator and session-publication requirements.
 
+To continue that PR in a local managed sandbox, use `github_publish` with
+`action: "prepare_pr"` and `pullRequestUrl`. A separate inspection call is
+optional: preparation verifies the current linked author, repository access,
+original head and publisher write eligibility again. The request can be made in
+one message or established earlier in the conversation before the URL arrives.
+An explicitly empty managed workspace can receive the PR without selecting a
+project first. Existing managed projects must match the PR's head or base
+repository. Ordinary unbound workspaces are not adopted by this action.
+
+Initial preparation requires a clean workspace without dirty, untracked, or
+unpublished work. Otherwise it preserves that work and asks you to keep or finish
+it separately before continuing. A clean workspace receives exactly the verified
+PR head's files, even when the selected project's base is newer. Preparation
+keeps the current directory and sandbox scope and records the original PR
+association. The sandbox's current branch and HEAD remain intact; the source
+files are staged for work on the PR.
+
+Repeating a completed preparation of the same head preserves later edits without
+resetting or synchronizing source files. If the remote PR head has advanced,
+preparation refuses clearly; updating an already prepared workspace is not yet
+supported. The returned review base is the common ancestor of the accepted PR
+head and its base, so an older PR head does not make newer base work appear to be
+deleted.
+
+An interrupted initial preparation retains the same accepted source for retry.
+If recovery returns `headChanged: true`, it completed that original accepted
+head while GitHub has since advanced. Preparation makes no GitHub writes
+and is not a publication receipt. Publication and other PR actions for an
+imported association remain unavailable; they refuse instead of creating a
+replacement PR or acting on an earlier publication from this conversation.
+Keep the updated Gateway when continuing an imported workspace; older versions
+do not understand this association.
+
 Use `github_publish` with `action: "edit"` to change the current session's shared
 PR title or description without publishing source. Call it without `title`/`body`
 to read the current metadata, then send `requestId`, `expectedHeadCommit`, and only

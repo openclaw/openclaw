@@ -73,6 +73,7 @@ describe("method scope resolution and authorization", () => {
   it("admits own PR preparation while retaining full-write admission for privileged actions", () => {
     for (const action of [
       "inspect_pr",
+      "prepare_pr",
       "refresh_base",
       "edit",
       "request_review",
