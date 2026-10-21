@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+// mock-isolation: the real renderer must stay unloaded until the HTTP route is used.
 vi.mock("./src/host/a2ui.js", () => {
   mocks.loadRenderer();
   return { handleA2uiHttpRequest: mocks.handleHttpRequest };
