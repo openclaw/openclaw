@@ -60,7 +60,7 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     const controller = new AbortController();
     pending = controller;
     try {
-      const { showInputDialog } = await import("../../components/input-dialog.ts");
+      const { showInputDialog } = await import("../../components/input-dialog.tsx");
       await showInputDialog({
         signal: controller.signal,
         title: t("devices.inventory.renameTitle", { name: device.name }),

@@ -5,7 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { showInputDialog } from "../../components/input-dialog.ts";
+import { showInputDialog } from "../../components/input-dialog.tsx";
 import * as sessionMenuWork from "../../components/session-menu-work.ts";
 import * as uiErrors from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -50,7 +50,10 @@ import {
 } from "./sessions-page.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
-vi.mock("../../components/input-dialog.ts", () => ({ showInputDialog: vi.fn() }));
+vi.mock("../../components/input-dialog.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/input-dialog.tsx")>()),
+  showInputDialog: vi.fn(),
+}));
 function capturedTarget(row: GatewaySessionRow) {
   return {
     key: row.key,
@@ -108,8 +111,8 @@ afterEach(() => {
 });
 describe("sessions page lifecycle", () => {
   it("keeps a failed rename editable until a confirmed retry succeeds", async () => {
-    const actual = await vi.importActual<typeof import("../../components/input-dialog.ts")>(
-      "../../components/input-dialog.ts",
+    const actual = await vi.importActual<typeof import("../../components/input-dialog.tsx")>(
+      "../../components/input-dialog.tsx",
     );
     vi.mocked(showInputDialog).mockImplementation(actual.showInputDialog);
     const fixture = createModalDialogTestFixture();
