@@ -20,10 +20,6 @@ import {
 } from "./system-run-approval-binding.js";
 import { normalizeSystemRunApprovalPlan } from "./system-run-approval-plan.js";
 import * as mutableFilePolicy from "./system-run-mutable-file-policy.js";
-import {
-  hasPosixShellCodeLoadingOption,
-  resolvePosixShellScriptOperandIndex,
-} from "./system-run-shell-file-operand.js";
 
 function expectOk<T extends { ok: boolean }>(result: T): T & { ok: true } {
   expect(result.ok).toBe(true);
@@ -274,21 +270,6 @@ describe("matchSystemRunApprovalBinding", () => {
   });
 });
 
-describe("POSIX shell stdin option detection", () => {
-  it.each([
-    ...["-s", "-se", "-es", "-ls", "-lse"].map((flag) => ({
-      argv: ["bash", flag, "job.sh"],
-      loading: true,
-      index: null,
-    })),
-    { argv: ["bash", "--", "-se"], loading: false, index: 2 },
-    { argv: ["bash", "job.sh", "-secret"], loading: false, index: 1 },
-  ])("detects stdin options only before the operand: $argv", ({ argv, loading, index }) => {
-    expect(hasPosixShellCodeLoadingOption(argv, "bash")).toBe(loading);
-    expect(resolvePosixShellScriptOperandIndex(argv, "bash")).toBe(index);
-  });
-});
-
 describe("mutable file operand binding", () => {
   afterEach(() => vi.restoreAllMocks());
   it.runIf(process.platform !== "win32")(
@@ -454,6 +435,7 @@ describe("mutable file operand binding", () => {
         "sub/script.sh": "echo sub\n",
         "loader.js": "module.exports = {};\n",
         "payload.sh": "echo payload\n",
+        "-se": "echo positional\n",
       };
       for (const [file, bytes] of Object.entries(files)) {
         fs.mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
@@ -466,6 +448,8 @@ describe("mutable file operand binding", () => {
         cwd,
       );
       expect(scriptPaths(positionalArgument)).toEqual([path.join(cwd, "job.sh")]);
+      const afterDoubleDash = await bind({ kind: "argv", argv: ["bash", "--", "-se"] }, cwd);
+      expect(scriptPaths(afterDoubleDash)).toEqual([path.join(cwd, "-se")]);
       const cannotBind = "SYSTEM_RUN_DENIED: approval cannot safely bind ";
       const startup = cannotBind + "shell startup files";
       const environment = cannotBind + "shell startup environment";

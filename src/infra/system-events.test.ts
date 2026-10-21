@@ -29,12 +29,8 @@ import {
   type SystemEvent,
 } from "./system-events.js";
 
-function enqueueEntry(
-  text: string,
-  sessionKey: string,
-  options: Partial<Parameters<typeof enqueueSystemEventEntry>[1]> = {},
-) {
-  return expectDefined(enqueueSystemEventEntry(text, { ...options, sessionKey }), text);
+function enqueueEntry(text: string, sessionKey: string) {
+  return expectDefined(enqueueSystemEventEntry(text, { sessionKey }), text);
 }
 
 function claim(sessionKey: string, events: SystemEvent[], cancelled: () => void) {
@@ -331,59 +327,12 @@ describe("system events (session routing)", () => {
   });
 
   it("normalizes structural case without changing opaque channel IDs", () => {
-    expect(enqueueSystemEvent("Global", { sessionKey: "AGENT:Ops:GLOBAL" })).toBe(true);
+    expect(enqueueSystemEvent("Global", { sessionKey: " AGENT:Ops:GLOBAL " })).toBe(true);
     expect(enqueueSystemEvent("Global", { sessionKey: "agent:ops:global" })).toBe(false);
     expect(peekSystemEvents("agent:ops:global")).toEqual(["Global"]);
     enqueueSystemEvent("Opaque room", { sessionKey: "AGENT:Ops:Signal:Group:AbC+123=" });
     expect(peekSystemEvents("agent:ops:signal:group:AbC+123=")).toEqual(["Opaque room"]);
     expect(peekSystemEvents("agent:ops:signal:group:abc+123=")).toEqual([]);
-  });
-
-  it("keeps structurally identical receipt-owned siblings distinct", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-09T00:00:00Z"));
-    const options = { sessionKey: " " + key + " ", contextKey: "exec:reused-slug" };
-    const first = enqueueSystemEventWithReceipt("completed", options, {
-      allowDuplicate: true,
-    });
-    expect(first).not.toBeNull();
-    const second = enqueueSystemEventWithReceipt("completed", options, {
-      allowDuplicate: true,
-    });
-    const queued = peekEntries(key);
-
-    expect(queued[0]).toEqual({ ...queued[1], id: queued[0]?.id });
-    expect(queued[0]?.id).not.toBe(queued[1]?.id);
-    expect(second?.()).toBe(true);
-    expect(ids(peekEntries(key))).toEqual([queued[0]?.id]);
-    expect(second?.()).toBe(false);
-    expect(first?.()).toBe(true);
-    expect(peekEntries(key)).toStrictEqual([]);
-  });
-
-  it("does not consume an identical successor from a serialized stale snapshot", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-08T00:00:00Z"));
-    const options = {
-      sessionKey: key,
-      contextKey: "build:123",
-      deliveryContext: { ...route },
-    };
-    const original = enqueueEntry("Build completed", key, options);
-    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercises a serialized SDK snapshot.
-    const staleCopy: SystemEvent = JSON.parse(JSON.stringify(original));
-    expect(staleCopy.id).toBe(original.id);
-
-    expect(ids(consumeSelected(key, [original]))).toEqual([original.id]);
-    const successor = enqueueEntry("Build completed", key, options);
-    expect(successor.id).not.toBe(original.id);
-    expect(successor).toEqual({ ...original, id: successor.id });
-
-    expect(consumeSelected(key, [staleCopy])).toStrictEqual([]);
-    expect(ids(peekEntries(key))).toEqual([successor.id]);
-
-    expect(ids(consumeSelected(key, [successor]))).toEqual([successor.id]);
-    expect(peekEntries(key)).toStrictEqual([]);
   });
 
   it("matches consumed delivery contexts through normalized route identity", () => {

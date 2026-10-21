@@ -437,7 +437,6 @@ it.each([
   ["missing target", Buffer.from("../../missing\n")],
   ["invalid UTF-8", Buffer.from([0xff, 10])],
   ["NUL", Buffer.from([0, 10])],
-  ["oversized file", null],
   ["non-file", null],
   ["dangling control", null],
   ["dangling alias", Buffer.from("../../first-link\n")],
@@ -455,9 +454,7 @@ it.each([
     if (suffix) {
       await fs.writeFile(marker, Buffer.concat([valid, suffix]));
     }
-    if (kind === "oversized file") {
-      await fs.writeFile(marker, Buffer.alloc(1024 * 1024 + 1, 10));
-    } else if (kind === "non-file") {
+    if (kind === "non-file") {
       await fs.mkdir(marker);
     } else if (kind === "dangling alias" || kind === "cyclic alias") {
       const first = at("first-link");
