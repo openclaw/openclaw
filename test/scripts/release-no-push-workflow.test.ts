@@ -355,24 +355,10 @@ function executeReleaseGroupCapture(
 }
 
 function runReleaseGroupCapture(
-  group: string,
-  runReleaseSoak = false,
-  liveSuiteFilter = "",
-  crossOsSuiteFilter = "",
-  phase = "all",
-  candidateArtifactJson = "",
-  releaseProfile = "beta",
+  ...args: Parameters<typeof executeReleaseGroupCapture>
 ): Record<string, string> {
-  const execution = executeReleaseGroupCapture(
-    group,
-    runReleaseSoak,
-    liveSuiteFilter,
-    crossOsSuiteFilter,
-    phase,
-    candidateArtifactJson,
-    releaseProfile,
-  );
-  expect(execution.result.status, `${group}: ${execution.result.stderr}`).toBe(0);
+  const execution = executeReleaseGroupCapture(...args);
+  expect(execution.result.status, `${args[0]}: ${execution.result.stderr}`).toBe(0);
   return execution.outputs;
 }
 
@@ -724,12 +710,12 @@ describe("release validation no-push transport", () => {
       expect(dispatch.run).toContain('-f phase="$PHASE"');
       expect(dispatch.run).not.toContain("child_rerun_group");
     }
-    expect(candidateRequest.run).toContain(
+    expectText(candidateRequest.run, [
       '[[ "$RERUN_GROUP" =~ ^(all|plugin-prerelease)$ ]] && plugin_required=true',
-    );
-    expect(candidateRequest.run).toContain('[[ "$RERUN_GROUP" =~ ^(all|cross-os)$ &&');
-    expect(candidateRequest.run).toContain('elif [[ "$RERUN_GROUP" =~ ^(all|package)$ &&');
-    expect(candidateRequest.run).toContain('elif [[ "$RERUN_GROUP" == "live-e2e" &&');
+      '[[ "$RERUN_GROUP" =~ ^(all|cross-os)$ &&',
+      'elif [[ "$RERUN_GROUP" =~ ^(all|package)$ &&',
+      'elif [[ "$RERUN_GROUP" == "live-e2e" &&',
+    ]);
     const candidateAcquisition = job(full, "candidate_acquisition");
     expect(candidateAcquisition.if).toContain(
       "needs.resolve_target.outputs.candidate_required == 'true'",
@@ -742,74 +728,37 @@ describe("release validation no-push transport", () => {
       "import { createReleaseCheckSelection } from './workflow/scripts/plan-release-workflow-matrix.mjs'",
     );
     expect(capture.run).toContain("JSON.stringify(createReleaseCheckSelection({");
-    expect(job(release, "prepare_release_package").if).toBe(
-      "needs.resolve_target.outputs.package_required == 'true'",
-    );
-    expect(job(release, "docker_e2e_release_checks").if).toBe(
-      "needs.resolve_target.outputs.docker_required == 'true'",
-    );
-    expect(job(release, "install_smoke_release_checks").if).toBe(
-      "needs.resolve_target.outputs.install_smoke_scheduled == 'true'",
-    );
-    expect(job(release, "qa_lab_parity_lane_release_checks").if).toBe(
-      "needs.resolve_target.outputs.qa_parity_scheduled == 'true'",
-    );
+    for (const [name, output] of [
+      ["prepare_release_package", "package_required"],
+      ["docker_e2e_release_checks", "docker_required"],
+      ["install_smoke_release_checks", "install_smoke_scheduled"],
+      ["qa_lab_parity_lane_release_checks", "qa_parity_scheduled"],
+    ] as const) {
+      expect(job(release, name).if).toBe(`needs.resolve_target.outputs.${output} == 'true'`);
+    }
     expect(job(release, "qa_live_release_checks").if).toContain(
       "needs.resolve_target.outputs.qa_live_scheduled == 'true'",
     );
   });
 
   it.each([
-    {
-      group: "install-smoke",
-      groups: ["install-smoke"],
-      packageRequired: "false",
-      dockerRequired: "false",
-    },
-    {
-      group: "qa",
-      groups: ["qa-parity", "qa-live"],
-      packageRequired: "false",
-      dockerRequired: "false",
-    },
-    {
-      group: "qa-parity",
-      groups: ["qa-parity"],
-      packageRequired: "false",
-      dockerRequired: "false",
-    },
-    {
-      group: "qa-live",
-      groups: ["qa-live"],
-      packageRequired: "false",
-      dockerRequired: "false",
-    },
-    {
-      group: "cross-os",
-      groups: ["cross-os"],
-      packageRequired: "true",
-      dockerRequired: "false",
-    },
-    {
-      group: "package",
-      groups: ["package"],
-      packageRequired: "true",
-      dockerRequired: "false",
-    },
-    {
-      group: "live-e2e",
-      groups: ["live-e2e"],
-      packageRequired: "true",
-      dockerRequired: "true",
-    },
-  ])(
-    "maps $group to explicit release resources",
-    ({ group, groups, packageRequired, dockerRequired }) => {
+    ["install-smoke", ["install-smoke"], "false", "false"],
+    ["qa", ["qa-parity", "qa-live"], "false", "false"],
+    ["qa-parity", ["qa-parity"], "false", "false"],
+    ["qa-live", ["qa-live"], "false", "false"],
+    ["cross-os", ["cross-os"], "true", "false"],
+    ["package", ["package"], "true", "false"],
+    ["live-e2e", ["live-e2e"], "true", "true"],
+  ] as const)(
+    "maps %s to explicit release resources",
+    (group, groups, packageRequired, dockerRequired) => {
       const outputs = runReleaseGroupCapture(group);
       expect(JSON.parse(outputs.release_check_groups_json ?? "null")).toEqual(groups);
-      expect(outputs.package_required).toBe(packageRequired);
-      expect(outputs.docker_required).toBe(dockerRequired);
-      expect(outputs.skip_package_telegram_e2e).toBe("false");
+      expect(outputs).toMatchObject({
+        package_required: packageRequired,
+        docker_required: dockerRequired,
+        skip_package_telegram_e2e: "false",
+      });
     },
   );
 
@@ -839,44 +788,21 @@ describe("release validation no-push transport", () => {
   );
 
   it.each([
-    {
-      phase: "independent",
-      candidateArtifactJson: "",
-      installSmokeScheduled: "true",
-      crossOsScheduled: "false",
-      packageAcceptanceScheduled: "false",
-      qaParityScheduled: "true",
-      packageRequired: "false",
-    },
-    {
-      phase: "candidate",
-      candidateArtifactJson: '{"packagePublished":false}',
-      installSmokeScheduled: "false",
-      crossOsScheduled: "true",
-      packageAcceptanceScheduled: "true",
-      qaParityScheduled: "false",
-      packageRequired: "true",
-    },
-  ])(
-    "restricts phase=$phase to its owned release checks",
-    ({
-      phase,
-      candidateArtifactJson,
-      installSmokeScheduled,
-      crossOsScheduled,
-      packageAcceptanceScheduled,
-      qaParityScheduled,
-      packageRequired,
-    }) => {
+    ["independent", "", "true", "false"],
+    ["candidate", '{"packagePublished":false}', "false", "true"],
+  ] as const)(
+    "restricts phase=%s to its owned release checks",
+    (phase, candidateArtifactJson, independent, candidate) => {
       const outputs = runReleaseGroupCapture("all", false, "", "", phase, candidateArtifactJson);
-
-      expect(outputs.phase).toBe(phase);
-      expect(outputs.install_smoke_scheduled).toBe(installSmokeScheduled);
-      expect(outputs.cross_os_scheduled).toBe(crossOsScheduled);
-      expect(outputs.package_acceptance_scheduled).toBe(packageAcceptanceScheduled);
-      expect(outputs.qa_parity_scheduled).toBe(qaParityScheduled);
-      expect(outputs.package_required).toBe(packageRequired);
-      expect(outputs.skip_package_telegram_e2e).toBe("true");
+      expect(outputs).toMatchObject({
+        phase,
+        install_smoke_scheduled: independent,
+        cross_os_scheduled: candidate,
+        package_acceptance_scheduled: candidate,
+        qa_parity_scheduled: independent,
+        package_required: candidate,
+        skip_package_telegram_e2e: "true",
+      });
     },
   );
 
@@ -884,27 +810,13 @@ describe("release validation no-push transport", () => {
     const outputs = runReleaseGroupCapture("live-e2e", false, " Repo-E2E,\trepo-smoke ");
 
     expect(JSON.parse(outputs.release_check_groups_json ?? "null")).toEqual(["live-e2e"]);
-    expect(outputs.live_e2e_scheduled).toBe("true");
-    expect(outputs.live_suite_filter).toBe("repo-e2e,repo-smoke");
-    expect(outputs.repo_live_suite_filter).toBe("repo-e2e,repo-smoke");
-    expect(outputs.package_required).toBe("false");
-    expect(outputs.docker_required).toBe("false");
-  });
-
-  it("rejects blank normalized live filters before install-smoke scheduling", () => {
-    const filter = " \t, , ";
-    const parent = executeParentFilterValidation("install-smoke", filter);
-    const child = executeReleaseGroupCapture("install-smoke", false, filter);
-
-    expect(parent.result.status).not.toBe(0);
-    expect(parent.result.stderr).toContain(
-      "live_suite_filter must contain at least one suite selector",
-    );
-    expect(child.result.status).not.toBe(0);
-    expect(child.result.stderr).toContain(
-      "live_suite_filter must contain at least one suite selector",
-    );
-    expect(child.outputs.install_smoke_scheduled).toBeUndefined();
+    expect(outputs).toMatchObject({
+      live_e2e_scheduled: "true",
+      live_suite_filter: "repo-e2e,repo-smoke",
+      repo_live_suite_filter: "repo-e2e,repo-smoke",
+      package_required: "false",
+      docker_required: "false",
+    });
   });
 
   it.each([
@@ -937,31 +849,24 @@ describe("release validation no-push transport", () => {
     },
   );
 
-  it("rejects blank normalized live filters before live-E2E can widen or require prep", () => {
+  it.each([
+    ["install-smoke", false, ["install_smoke_scheduled"]],
+    ["live-e2e", false, ["live_e2e_scheduled", "package_required", "docker_required"]],
+    ["cross-os", true, ["cross_os_scheduled"]],
+  ] as const)("rejects blank normalized filters before %s scheduling", (group, crossOs, absent) => {
     const filter = " \t, , ";
-    const { outputs, result } = executeReleaseGroupCapture("live-e2e", false, filter);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("live_suite_filter must contain at least one suite selector");
-    expect(outputs.live_e2e_scheduled).toBeUndefined();
-    expect(outputs.package_required).toBeUndefined();
-    expect(outputs.docker_required).toBeUndefined();
-  });
-
-  it("rejects blank normalized cross-OS filters before scheduling", () => {
-    const filter = " \t, , ";
-    const parent = executeParentFilterValidation("cross-os", "", filter);
-    const child = executeReleaseGroupCapture("cross-os", false, "", filter);
-
-    expect(parent.result.status).not.toBe(0);
-    expect(parent.result.stderr).toContain(
-      "cross_os_suite_filter must contain at least one suite selector",
-    );
-    expect(child.result.status).not.toBe(0);
-    expect(child.result.stderr).toContain(
-      "cross_os_suite_filter must contain at least one suite selector",
-    );
-    expect(child.outputs.cross_os_scheduled).toBeUndefined();
+    const live = crossOs ? "" : filter;
+    const cross = crossOs ? filter : "";
+    const child = executeReleaseGroupCapture(group, false, live, cross);
+    for (const { result } of [executeParentFilterValidation(group, live, cross), child]) {
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        `${crossOs ? "cross_os" : "live"}_suite_filter must contain at least one suite selector`,
+      );
+    }
+    for (const key of absent) {
+      expect(child.outputs[key]).toBeUndefined();
+    }
   });
 
   it("fails before a QA selector can collapse into an unfiltered live-E2E run", () => {
@@ -1258,11 +1163,16 @@ describe("release validation no-push transport", () => {
     const dispatch = step(job(full, "summary"), "Request release evidence update");
 
     expect(verify.run).toBe("node scripts/full-release-validation-state.mjs verify");
-    expect(dispatch.run).not.toContain('GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"');
-    expect(dispatch.run).toContain("reused green product evidence from chain-root run");
-    expect(dispatch.run).toContain("--connect-timeout 10");
-    expect(dispatch.run).toContain("--max-time 30");
-    expect(dispatch.run).toContain("https://api.github.com/repos/openclaw/releases/dispatches");
+    expectText(
+      dispatch.run,
+      [
+        "reused green product evidence from chain-root run",
+        "--connect-timeout 10",
+        "--max-time 30",
+        "https://api.github.com/repos/openclaw/releases/dispatches",
+      ],
+      ['GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"'],
+    );
   });
 
   it("publishes an attempt-qualified canonical manifest plus a temporary legacy alias", () => {
@@ -1282,19 +1192,20 @@ describe("release validation no-push transport", () => {
     const packageAcceptance = readWorkflow(PACKAGE_ACCEPTANCE);
     const pluginPrerelease = readWorkflow(PLUGIN_PRERELEASE);
 
-    expect(fullText).toContain("dispatch_child plugin-prerelease.yml");
-    expect(fullText).toContain("dispatch_child openclaw-release-checks.yml");
-    expect(fullText).toContain("dispatch_child openclaw-performance.yml");
-    expect(fullText).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"');
+    expectText(fullText, [
+      "dispatch_child plugin-prerelease.yml",
+      "dispatch_child openclaw-release-checks.yml",
+      "dispatch_child openclaw-performance.yml",
+      'gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
+    ]);
 
     const preparePackage = job(release, "prepare_release_package");
     const live = job(release, "live_repo_e2e_release_checks");
     const docker = job(release, "docker_e2e_release_checks");
     const acceptance = job(release, "package_acceptance_release_checks");
-    expectReadOnlyPackagePermission(preparePackage);
-    expectReadOnlyPackagePermission(live);
-    expectReadOnlyPackagePermission(docker);
-    expectReadOnlyPackagePermission(acceptance);
+    for (const caller of [preparePackage, live, docker, acceptance]) {
+      expectReadOnlyPackagePermission(caller);
+    }
     expect(step(preparePackage, "Resolve release package artifact").run).toContain(
       'if [[ "$source_sha" != "$PACKAGE_REF" ]]',
     );
@@ -1348,11 +1259,9 @@ describe("release validation no-push transport", () => {
       default: "no-push-artifact",
       type: "string",
     });
-    expect(standardAcceptance.with?.shared_image_policy).toBe("${{ inputs.shared_image_policy }}");
-    expect(standardAcceptance.with?.shared_image_artifact_namespace).toBe(
-      "${{ inputs.shared_image_artifact_namespace }}",
-    );
     expect(standardAcceptance.with).toMatchObject({
+      shared_image_policy: "${{ inputs.shared_image_policy }}",
+      shared_image_artifact_namespace: "${{ inputs.shared_image_artifact_namespace }}",
       package_artifact_digest: "${{ needs.resolve_package.outputs.package_artifact_digest }}",
       package_artifact_id: "${{ needs.resolve_package.outputs.package_artifact_id }}",
       package_artifact_run_attempt:
@@ -1403,10 +1312,10 @@ describe("release validation no-push transport", () => {
     expect(validation.outputs?.workflow_sha).toBe("${{ steps.workflow.outputs.workflow_sha }}");
     const workflowIdentity = step(validation, "Resolve job workflow identity");
     expect(workflowIdentity.env?.JOB_CONTEXT).toBe("${{ toJSON(job) }}");
-    expect(workflowIdentity.run).toContain(
+    expectText(workflowIdentity.run, [
       "job.workflow_repository must be an owner/repository slug",
-    );
-    expect(workflowIdentity.run).toContain("job.workflow_sha must be a full lowercase commit SHA");
+      "job.workflow_sha must be a full lowercase commit SHA",
+    ]);
     const harnessCheckout = step(validation, "Materialize selected-source contract resolver").with;
     expect(harnessCheckout).toMatchObject({
       repository: "${{ steps.workflow.outputs.workflow_repository }}",
@@ -1503,22 +1412,18 @@ describe("release validation no-push transport", () => {
       expect(dispatchInputs[inputName], inputName).toBeUndefined();
       expect(workflow.on?.workflow_call?.inputs?.[inputName], inputName).toBeDefined();
     }
-    expect(validateSelectedRef.env?.PACKAGE_ARTIFACT_DIGEST).toBe(
-      "${{ inputs.package_artifact_digest }}",
-    );
-    expect(validateSelectedRef.env?.PACKAGE_ARTIFACT_RUN_ATTEMPT).toBe(
-      "${{ inputs.package_artifact_run_attempt }}",
-    );
-    expect(validateSelectedRef.env?.PACKAGE_ARTIFACT_RUN_ID).toBe(
-      "${{ inputs.package_artifact_run_id }}",
-    );
-    expect(validateSelectedRef.env?.PACKAGE_ARTIFACT_ID).toBe("${{ inputs.package_artifact_id }}");
-    expect(validateSelectedRef.env?.PACKAGE_FILE_NAME).toBe("${{ inputs.package_file_name }}");
-    expect(validateSelectedRef.env?.PACKAGE_SOURCE_SHA).toBe("${{ inputs.package_source_sha }}");
-    expect(validateSelectedRef.run).toContain(
+    expect(validateSelectedRef.env).toMatchObject({
+      PACKAGE_ARTIFACT_DIGEST: "${{ inputs.package_artifact_digest }}",
+      PACKAGE_ARTIFACT_RUN_ATTEMPT: "${{ inputs.package_artifact_run_attempt }}",
+      PACKAGE_ARTIFACT_RUN_ID: "${{ inputs.package_artifact_run_id }}",
+      PACKAGE_ARTIFACT_ID: "${{ inputs.package_artifact_id }}",
+      PACKAGE_FILE_NAME: "${{ inputs.package_file_name }}",
+      PACKAGE_SOURCE_SHA: "${{ inputs.package_source_sha }}",
+    });
+    expectText(validateSelectedRef.run, [
       "Package artifact selection requires the complete immutable artifact and package identity tuple.",
-    );
-    expect(validateSelectedRef.run).toContain('"$PACKAGE_SOURCE_SHA" == "$selected_sha"');
+      '"$PACKAGE_SOURCE_SHA" == "$selected_sha"',
+    ]);
     for (const name of [
       "prepare_docker_e2e_image",
       "prepare_live_test_image",
@@ -1534,23 +1439,19 @@ describe("release validation no-push transport", () => {
         expect(checkout.with?.["persist-credentials"], `${name}:${checkout.name}`).toBe(false);
       }
     }
-    expect(dockerProducer.outputs?.image_artifact_name).toContain("image_artifact");
-    expect(liveProducer.outputs?.image_artifact_name).toContain("image_artifact");
     for (const producer of [dockerProducer, liveProducer]) {
+      expect(producer.outputs?.image_artifact_name).toContain("image_artifact");
       expect(producer.outputs?.image_archive_sha256).toContain("archive_sha256");
       expect(producer.outputs?.image_artifact_id).toContain("artifact-id");
       expect(producer.outputs?.image_artifact_digest).toContain("artifact-digest");
     }
-    expect(dockerProducer.outputs?.image_artifact_run_id).toContain("github.run_id");
-    expect(dockerProducer.outputs?.image_artifact_run_id).toContain(
-      "inputs.shared_image_artifact_run_id",
-    );
-    expect(dockerProducer.outputs?.image_artifact_run_attempt).toContain("github.run_attempt");
-    expect(dockerProducer.outputs?.image_artifact_run_attempt).toContain(
-      "inputs.shared_image_artifact_run_attempt",
-    );
-    expect(liveProducer.outputs?.image_artifact_run_id).toBe("${{ github.run_id }}");
-    expect(liveProducer.outputs?.image_artifact_run_attempt).toBe("${{ github.run_attempt }}");
+    for (const field of ["run_id", "run_attempt"]) {
+      expectText(dockerProducer.outputs?.[`image_artifact_${field}`], [
+        `github.${field}`,
+        `inputs.shared_image_artifact_${field}`,
+      ]);
+      expect(liveProducer.outputs?.[`image_artifact_${field}`]).toBe(`\${{ github.${field} }}`);
+    }
     expect(dockerProducer.outputs?.package_artifact_id).toContain("artifact-id");
     expect(dockerProducer.outputs?.package_artifact_digest).toContain("artifact-digest");
     expect(dockerProducer.outputs?.package_artifact_run_attempt).toContain("run_attempt");
@@ -1566,11 +1467,11 @@ describe("release validation no-push transport", () => {
       ARTIFACT_RUN_ATTEMPT: "${{ inputs.package_artifact_run_attempt }}",
       ARTIFACT_RUN_ID: "${{ inputs.package_artifact_run_id }}",
     });
-    expect(packageIdentity.run).toContain('--arg digest "sha256:${ARTIFACT_DIGEST}"');
-    expect(packageIdentity.run).toContain(
+    expectText(packageIdentity.run, [
+      '--arg digest "sha256:${ARTIFACT_DIGEST}"',
       "actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}",
-    );
-    expect(packageIdentity.run).toContain("artifact_digest=$ARTIFACT_DIGEST");
+      "artifact_digest=$ARTIFACT_DIGEST",
+    ]);
     for (const [name, condition] of [
       [
         "Download current-run OpenClaw Docker E2E package",
@@ -1590,29 +1491,21 @@ describe("release validation no-push transport", () => {
       });
     }
 
-    for (const name of [
-      "Build bare Docker E2E image artifact",
-      "Build functional Docker E2E image artifact",
-    ]) {
-      const build = step(dockerProducer, name);
+    for (const target of ["bare", "functional"]) {
+      const build = step(dockerProducer, `Build ${target} Docker E2E image artifact`);
       expect(build.if).toContain("shared_image_policy == 'no-push-artifact'");
-      expect(build.run).not.toContain("--push");
-      expect(build.run).not.toContain("--sbom=true");
-      expect(build.run).not.toContain("--provenance=mode=max");
+      expectText(
+        build.run,
+        ["docker build", `--target ${target}`, '--tag "$IMAGE_REF"'],
+        ["--push", "--sbom=true", "--provenance=mode=max"],
+      );
     }
-    const bareBuild = step(dockerProducer, "Build bare Docker E2E image artifact");
-    expect(bareBuild.run).toContain("docker build");
-    expect(bareBuild.run).toContain("--target bare");
-    expect(bareBuild.run).toContain('--tag "$IMAGE_REF"');
     const functionalBuild = step(dockerProducer, "Build functional Docker E2E image artifact");
-    expect(functionalBuild.run).toContain("docker build");
-    expect(functionalBuild.run).toContain("--target functional");
-    expect(functionalBuild.run).toContain(
+    expectText(functionalBuild.run, [
       'docker_e2e_prepare_package_context "$GITHUB_WORKSPACE/.artifacts/docker-e2e-package/openclaw-current.tgz"',
-    );
-    expect(functionalBuild.run).toContain('--build-context "openclaw_package=$package_context"');
-    expect(functionalBuild.run).toContain("--file .release-harness/scripts/e2e/Dockerfile");
-    expect(functionalBuild.run).toContain('--tag "$IMAGE_REF"');
+      '--build-context "openclaw_package=$package_context"',
+      "--file .release-harness/scripts/e2e/Dockerfile",
+    ]);
     const packDockerArtifact = step(dockerProducer, "Pack Docker E2E image artifact");
     expect(packDockerArtifact.env?.PACKAGE_SHA256).toBe("${{ steps.package.outputs.sha256 }}");
     expectText(packDockerArtifact.run, [
@@ -2167,57 +2060,14 @@ describe("release validation no-push transport", () => {
     }
   });
 
-  it("fails a missing required local live image before any registry pull", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-live-local-image-"));
-    const bin = join(root, "bin");
-    const calls = join(root, "docker.log");
-    try {
-      mkdirSync(bin);
-      writeFileSync(calls, "");
-      const docker = join(bin, "docker");
-      writeFileSync(
-        docker,
-        `#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
-if [[ "$1" == "image" && "$2" == "inspect" ]]; then
-  exit 1
-fi
-if [[ "$1" == "pull" ]]; then
-  exit 0
-fi
-exit 2
-`,
-      );
-      chmodSync(docker, 0o755);
-
-      const result = spawnSync("bash", [resolve(LIVE_BUILD)], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          DOCKER_COMMAND_TIMEOUT: "5s",
-          FAKE_DOCKER_LOG: calls,
-          OPENCLAW_LIVE_IMAGE: "openclaw-live-test:required-local",
-          OPENCLAW_LIVE_REQUIRE_LOCAL_IMAGE: "1",
-          OPENCLAW_SKIP_DOCKER_BUILD: "1",
-          PATH: `${bin}:${process.env.PATH ?? ""}`,
-        },
-      });
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "Required local live-test image not found: openclaw-live-test:required-local",
-      );
-      expect(readFileSync(calls, "utf8")).toBe("image inspect openclaw-live-test:required-local\n");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("fails a missing required local Docker E2E image before pull or build fallback", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-docker-e2e-local-image-"));
-    const bin = join(root, "bin");
-    const calls = join(root, "docker.log");
-    try {
+  it.each(["live-test", "Docker E2E"])(
+    "fails a missing required local %s image before pull or build fallback",
+    (kind) => {
+      const live = kind === "live-test";
+      const image = `${live ? "openclaw-live-test" : "openclaw-e2e"}:required-local`;
+      const root = tempDirs.make("openclaw-required-local-image-");
+      const bin = join(root, "bin");
+      const calls = join(root, "docker.log");
       mkdirSync(bin);
       writeFileSync(calls, "");
       const docker = join(bin, "docker");
@@ -2239,32 +2089,38 @@ exit 2
 
       const result = spawnSync(
         "bash",
-        [
-          "-c",
-          `source "$1"
+        live
+          ? [resolve(LIVE_BUILD)]
+          : [
+              "-c",
+              `source "$1"
 docker_e2e_build_or_reuse "openclaw-e2e:required-local" "required local image test"`,
-          "bash",
-          resolve(DOCKER_E2E_IMAGE_HELPER),
-        ],
+              "bash",
+              resolve(DOCKER_E2E_IMAGE_HELPER),
+            ],
         {
           encoding: "utf8",
           env: {
             ...process.env,
             FAKE_DOCKER_LOG: calls,
-            OPENCLAW_DOCKER_BUILD_ON_MISSING: "1",
-            OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1",
+            ...(live
+              ? {
+                  DOCKER_COMMAND_TIMEOUT: "5s",
+                  OPENCLAW_LIVE_IMAGE: image,
+                  OPENCLAW_LIVE_REQUIRE_LOCAL_IMAGE: "1",
+                }
+              : {
+                  OPENCLAW_DOCKER_BUILD_ON_MISSING: "1",
+                  OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1",
+                }),
             OPENCLAW_SKIP_DOCKER_BUILD: "1",
             PATH: `${bin}:${process.env.PATH ?? ""}`,
           },
         },
       );
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "Required local Docker E2E image not found: openclaw-e2e:required-local",
-      );
-      expect(readFileSync(calls, "utf8")).toBe("image inspect openclaw-e2e:required-local\n");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+      expect(result.stderr).toContain(`Required local ${kind} image not found: ${image}`);
+      expect(readFileSync(calls, "utf8")).toBe(`image inspect ${image}\n`);
+    },
+  );
 });

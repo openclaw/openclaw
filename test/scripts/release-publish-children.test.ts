@@ -159,26 +159,20 @@ if (args[0] === 'run' && args[1] === 'view') {
 }
 
 describe("plugin npm child lifecycle", () => {
-  it.each([
-    {
-      label: "a pre-publish failure while the child is still running",
-      states: failedBeforePublish,
-    },
-    {
-      label: "a terminal pre-publish failure",
-      states: [failedBeforePublish[1]!],
-    },
-    {
-      label: "a failed job while a sibling publisher is still running",
-      states: [
+  it.each<[string, RunState[]]>([
+    ["a pre-publish failure while the child is still running", failedBeforePublish],
+    ["a terminal pre-publish failure", [failedBeforePublish[1]!]],
+    [
+      "a failed job while a sibling publisher is still running",
+      [
         active(previewFailed, "in_progress"),
         active(previewFailed, "in_progress"),
         terminal("failure", previewFailed, publish("success")),
       ],
-    },
-    {
-      label: "a failure after publication started",
-      states: [
+    ],
+    [
+      "a failure after publication started",
+      [
         terminal(
           "failure",
           previewPassed,
@@ -186,18 +180,16 @@ describe("plugin npm child lifecycle", () => {
           job("Publish plugin npm package (@openclaw/x)", "failure"),
         ),
       ],
-    },
-    {
-      label: "a cancelled pre-publish job",
-      states: [terminal("cancelled", job(previewFailed.name, "cancelled"), publish("skipped"))],
-    },
-  ])("fails the publication step without replacing $label", ({ states }) => {
+    ],
+    [
+      "a cancelled pre-publish job",
+      [terminal("cancelled", job(previewFailed.name, "cancelled"), publish("skipped"))],
+    ],
+  ])("fails the publication step without replacing %s", (_label, states) => {
     expect(startCorePublication).toBeDefined();
     const result = fixture({ 91: states, 92: succeeded }).run(startCorePublication!);
-    expect(result.status).toBe(1);
-    expect(result.dispatches).toHaveLength(0);
+    expect(result).toMatchObject({ status: 1, dispatches: [], outputs: "" });
     expect(result.stderr).toContain("Plugin npm publish failed");
-    expect(result.outputs).toBe("");
     expect(result.events).toEqual(states.map(({ status }) => `observed 91 ${status}`));
     expect(result.stderr).toContain("deferred cleanup will preserve ClawHub recovery evidence");
   });

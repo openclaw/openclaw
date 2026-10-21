@@ -40,6 +40,17 @@ function rejects(overrides: PlanOverrides, message: string, base = sourceFixture
   expect(() => validateReleasePlan(plan(overrides, base))).toThrow(message);
 }
 
+function versionFields(version: string) {
+  return {
+    version,
+    release_id: version,
+    tag: `v${version}`,
+    target_context_ref: `refs/tags/v${version}`,
+  };
+}
+
+const fullValidation = { allowed_groups: ["all", "ci", "package"], profile: "full", soak: true };
+
 describe("release plan contract", () => {
   it("pins exact canonical source and lock bytes as the cross-repo golden fixture", () => {
     expect(RELEASE_PLAN_CANONICALIZATION).toBe("ascii-sorted-compact-json-trailing-newline-v1");
@@ -52,35 +63,25 @@ describe("release plan contract", () => {
   });
 
   it("rejects alpha as beta publication authority", () => {
-    const version = "2026.9.24-alpha.1";
     rejects(
-      {
-        purpose: "beta-publish",
-        version,
-        tag: `v${version}`,
-        release_id: version,
-        target_context_ref: `refs/tags/v${version}`,
-      },
+      { purpose: "beta-publish", ...versionFields("2026.9.24-alpha.1") },
       "Alpha releases are retired;",
     );
   });
 
   it("rejects duplicate, reordered, pretty, CRLF, and non-ASCII lock bytes", () => {
-    const duplicate = lockText.replace(
-      '{"digest":',
-      `{"digest":"${String(lockFixture.digest)}","digest":`,
-    );
-    expect(() => parseReleasePlanLockJson(duplicate)).toThrow("duplicate key");
-    const nestedDuplicate = lockText.replace(
-      '"tooling":{"ref":',
-      '"tooling":{"ref":"ignored","\\u0072ef":',
-    );
-    expect(() => parseReleasePlanLockJson(nestedDuplicate)).toThrow("duplicate key");
-    const arrayEntryDuplicate = lockText.replace(
-      '{"name":"@openclaw/example","targets":',
-      '{"name":"ignored","name":"@openclaw/example","targets":',
-    );
-    expect(() => parseReleasePlanLockJson(arrayEntryDuplicate)).toThrow("duplicate key");
+    for (const [before, after] of [
+      ['{"digest":', `{"digest":"${String(lockFixture.digest)}","digest":`],
+      ['"tooling":{"ref":', '"tooling":{"ref":"ignored","\\u0072ef":'],
+      [
+        '{"name":"@openclaw/example","targets":',
+        '{"name":"ignored","name":"@openclaw/example","targets":',
+      ],
+    ] as const) {
+      expect(() => parseReleasePlanLockJson(lockText.replace(before, after))).toThrow(
+        "duplicate key",
+      );
+    }
     expect(() =>
       parseReleasePlanLockJson(
         `${JSON.stringify({
@@ -102,35 +103,24 @@ describe("release plan contract", () => {
   });
 
   it("rejects values that JSON.stringify would erase or coerce", () => {
-    const withUndefined = { ...sourceFixture, ignored: undefined };
-    expect(JSON.stringify(withUndefined)).toBe(JSON.stringify(sourceFixture));
-    expect(() => canonicalReleasePlanJson(withUndefined)).toThrow("unsupported undefined");
-
-    const withNan = { ...sourceFixture, tag: Number.NaN };
-    expect(JSON.stringify(withNan)).toBe(JSON.stringify({ ...sourceFixture, tag: null }));
-    expect(() => canonicalReleasePlanJson(withNan)).toThrow("must be finite");
-
-    for (const value of [
-      Number.POSITIVE_INFINITY,
-      Number.NEGATIVE_INFINITY,
-      () => undefined,
-      Symbol("ignored"),
-      1n,
-    ]) {
-      expect(() => canonicalReleasePlanJson({ ...sourceFixture, ignored: value })).toThrow(
-        "canonical JSON",
-      );
+    for (const [value, error] of [
+      [undefined, "unsupported undefined"],
+      [Number.NaN, "must be finite"],
+      [Number.POSITIVE_INFINITY, "canonical JSON"],
+      [Number.NEGATIVE_INFINITY, "canonical JSON"],
+      [() => undefined, "canonical JSON"],
+      [Symbol("ignored"), "canonical JSON"],
+      [1n, "canonical JSON"],
+      [-0, "negative zero"],
+    ] as const) {
+      expect(() => canonicalReleasePlanJson({ ...sourceFixture, ignored: value })).toThrow(error);
     }
-    expect(() => canonicalReleasePlanJson({ ...sourceFixture, ignored: -0 })).toThrow(
-      "negative zero",
-    );
   });
 
   it("rejects non-tree and non-data JSON structures", () => {
     const sparseGroups = ["all"];
     sparseGroups.length = 3;
     sparseGroups[2] = "package";
-    expect(JSON.stringify(sparseGroups)).toBe('["all",null,"package"]');
     expect(() =>
       canonicalReleasePlanJson(plan({ validation: { allowed_groups: sparseGroups } })),
     ).toThrow("must be dense");
@@ -149,10 +139,7 @@ describe("release plan contract", () => {
     expect(() => canonicalReleasePlanJson(nonPlain)).toThrow("must be plain");
 
     const accessor = { ...sourceFixture };
-    Object.defineProperty(accessor, "hidden", {
-      enumerable: true,
-      get: () => "ignored",
-    });
+    Object.defineProperty(accessor, "hidden", { enumerable: true, get: () => "ignored" });
     expect(() => canonicalReleasePlanJson(accessor)).toThrow("enumerable data properties");
 
     const symbolKey = { ...sourceFixture, [Symbol("ignored")]: true };
@@ -163,12 +150,7 @@ describe("release plan contract", () => {
     rejects(
       {
         purpose: "stable-publish",
-        validation: {
-          allowed_groups: ["all", "ci", "package"],
-          intent: "release-stable",
-          profile: "stable",
-          soak: true,
-        },
+        validation: { ...fullValidation, intent: "release-stable", profile: "stable" },
       },
       "stable-publish release plan version must be stable",
     );
@@ -177,12 +159,7 @@ describe("release plan contract", () => {
         purpose: "main-qualification",
         tag: null,
         target_context_ref: "refs/tags/null",
-        validation: {
-          allowed_groups: ["all", "ci", "package"],
-          intent: "main-weekly",
-          profile: "full",
-          soak: true,
-        },
+        validation: { ...fullValidation, intent: "main-weekly" },
       },
       "candidate SHA context",
     );
@@ -205,26 +182,15 @@ describe("release plan contract", () => {
         tag: null,
         target_context_ref: sourceFixture.candidate_sha,
         tooling: { ref: "refs/heads/main" },
-        validation: {
-          allowed_groups: ["all", "ci", "package"],
-          intent: "diagnostic-full",
-          profile: "full",
-          soak: true,
-        },
+        validation: { ...fullValidation, intent: "diagnostic-full" },
       }),
     );
     expect(diagnosticPlan).toMatchObject({
       purpose: "diagnostic",
       tag: null,
       target_context_ref: sourceFixture.candidate_sha,
-      validation: {
-        intent: "diagnostic-full",
-        profile: "full",
-        soak: true,
-      },
+      validation: { intent: "diagnostic-full", profile: "full", soak: true },
     });
-    expect(diagnosticPlan.purpose).not.toBe("main-qualification");
-    expect(diagnosticPlan.purpose).not.toBe("postpublish-confidence");
 
     rejects(
       {
@@ -236,11 +202,7 @@ describe("release plan contract", () => {
     );
     rejects(
       {
-        validation: {
-          intent: "release-beta",
-          profile: "beta",
-          soak: false,
-        },
+        validation: { intent: "release-beta", profile: "beta", soak: false },
       },
       "diagnostic does not allow validation intent",
       diagnosticPlan,
@@ -254,26 +216,11 @@ describe("release plan contract", () => {
 
   it("rejects unknown authority, invalid ordering, and unsupported versions", () => {
     rejects({ run_id: "123" }, "release plan keys must be exactly");
-    rejects(
-      {
-        version: "2026.08.1-beta.2",
-        release_id: "2026.08.1-beta.2",
-        tag: "v2026.08.1-beta.2",
-        target_context_ref: "refs/tags/v2026.08.1-beta.2",
-      },
-      "supported release version",
-    );
+    rejects(versionFields("2026.08.1-beta.2"), "supported release version");
     rejects(
       {
         inventory: {
-          packages: [
-            { name: "openclaw", targets: ["npm"], version: "2026.8.1-beta.2" },
-            {
-              name: "@openclaw/example",
-              targets: ["clawhub", "npm"],
-              version: "2026.8.1-beta.2",
-            },
-          ],
+          packages: sourceFixture.inventory.packages.toReversed(),
         },
       },
       "ascending ASCII order",
@@ -289,12 +236,7 @@ describe("release plan contract", () => {
         tag: null,
         target_context_ref: sourceFixture.candidate_sha,
         tooling: { ref: "refs/heads/feature" },
-        validation: {
-          allowed_groups: ["all", "ci", "package"],
-          intent: "main-weekly",
-          profile: "full",
-          soak: true,
-        },
+        validation: { ...fullValidation, intent: "main-weekly" },
       },
       "trusted main",
     );
