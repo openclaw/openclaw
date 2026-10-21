@@ -1,12 +1,11 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createParallelFreeWebSearchProvider } from "./parallel-free-web-search-provider.js";
 
 installPinnedHostnameTestHooks();
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 function result(id: string, searchId: string) {
   return {
@@ -16,13 +15,13 @@ function result(id: string, searchId: string) {
   };
 }
 
-function events(messages: unknown[], newline = "\n"): string {
-  return messages.map((message) => `data: ${JSON.stringify(message)}${newline}${newline}`).join("");
+function events(messages: unknown[]): string {
+  return messages.map((message) => `data: ${JSON.stringify(message)}\n\n`).join("");
 }
 
 async function search(
   callBody: (requestId: string) => string,
-  initBody?: (requestId: string) => string,
+  initBody = (id: string) => JSON.stringify({ id, result: { protocolVersion: "2025-06-18" } }),
 ) {
   const requests: Array<{ method: string; headers: Headers }> = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
@@ -35,10 +34,7 @@ async function search(
       return new Response(null, { status: 204 });
     }
     const initializing = request.method === "initialize";
-    const body = initializing
-      ? (initBody?.(request.id) ??
-        JSON.stringify({ id: request.id, result: { protocolVersion: "2025-06-18" } }))
-      : callBody(request.id);
+    const body = (initializing ? initBody : callBody)(request.id);
     return new Response(body, {
       headers: {
         "content-type": /^[{[]/.test(body) ? "application/json" : "text/event-stream",
@@ -46,12 +42,10 @@ async function search(
       },
     });
   });
-  const tool = createParallelFreeWebSearchProvider().createTool({
-    searchConfig: { cacheTtlMinutes: 0 },
-  });
-  if (!tool) {
-    throw new Error("Expected Parallel free search tool");
-  }
+  const tool = expectDefined(
+    createParallelFreeWebSearchProvider().createTool({ searchConfig: { cacheTtlMinutes: 0 } }),
+    "Parallel free search tool",
+  );
   const output = await tool.execute({
     search_queries: ["public documentation"],
     session_id: "fixture-search-session",
