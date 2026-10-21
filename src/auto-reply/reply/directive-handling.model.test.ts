@@ -146,9 +146,12 @@ let createModelVisibilityPolicy: typeof import("../../agents/model-visibility-po
 let buildModelAliasIndex: typeof import("../../agents/model-selection.js").buildModelAliasIndex;
 let resolveModelSelectionFromDirective: typeof import("./directive-handling.model-selection.js").resolveModelSelectionFromDirective;
 let parseInlineSessionDirectives: typeof import("./directive-handling.parse.js").parseInlineSessionDirectives;
+let createInlineDirectiveParams: typeof import("./directive-handling.mixed-inline.test-helpers.js").createInlineDirectiveParams;
 let applyInlineDirectiveOverrides: typeof import("./get-reply-directives-apply.js").applyInlineDirectiveOverrides;
 
 beforeAll(async () => {
+  ({ createInlineDirectiveParams } =
+    await import("./directive-handling.mixed-inline.test-helpers.js"));
   ({ handleDirectiveOnly } = await import("./directive-handling.impl.js"));
   ({ maybeHandleModelDirectiveInfo } = await import("./directive-handling.model.js"));
   ({ createModelVisibilityPolicy } = await import("../../agents/model-visibility-policy.js"));
@@ -284,48 +287,19 @@ async function persistedSession(
   };
 }
 
-function setDirectiveTestProviders(
-  providers: Array<{
-    id: string;
-    label?: string;
-    auth?: unknown[];
-    resolveThinkingProfile?: (
-      context: ProviderDefaultThinkingPolicyContext,
-    ) => ProviderThinkingProfile | null | undefined;
-  }>,
-): void {
-  pluginPolicyMock.thinkingProfiles.clear();
-  for (const provider of providers) {
-    if (provider.resolveThinkingProfile) {
-      pluginPolicyMock.thinkingProfiles.set(provider.id, provider.resolveThinkingProfile);
-    }
-  }
-}
-
 function setOpenAiRuntimeScopedUltraProvider(): void {
-  setDirectiveTestProviders([
-    {
-      id: "openai",
-      label: "OpenAI",
-      auth: [],
-      resolveThinkingProfile: ({ agentRuntime }) => ({
-        levels: [
-          { id: "off" },
-          { id: "low" },
-          { id: "medium" },
-          { id: "high" },
-          { id: "max" },
-          ...(agentRuntime === "openclaw" ? ([{ id: "ultra" }] as const) : []),
-        ],
-      }),
-    },
-  ]);
+  pluginPolicyMock.thinkingProfiles.set("openai", ({ agentRuntime }) => ({
+    levels: [
+      ...(["off", "low", "medium", "high", "max"] as const).map((id) => ({ id })),
+      ...(agentRuntime === "openclaw" ? ([{ id: "ultra" }] as const) : []),
+    ],
+  }));
 }
 
 beforeEach(() => {
   vi.useRealTimers();
   setFastModelsCliBackendDeps();
-  setDirectiveTestProviders([]);
+  pluginPolicyMock.thinkingProfiles.clear();
   pluginPolicyMock.channels.clear();
   authProfilesStoreMock.profiles = {};
   vi.mocked(resolveAgentDir).mockReset().mockReturnValue(TEST_AGENT_DIR);
@@ -339,7 +313,7 @@ beforeEach(() => {
 afterEach(() => {
   clearRuntimeConfigSnapshot();
   cliBackendsTesting.resetDepsForTest();
-  setDirectiveTestProviders([]);
+  pluginPolicyMock.thinkingProfiles.clear();
   pluginPolicyMock.channels.clear();
   clearInternalHooks();
 });
@@ -410,7 +384,6 @@ async function persistModelDirectiveForTest(params: {
     params.directiveOnly || originalDirectives.cleaned.trim()
       ? params.command
       : `${params.command} continue with the request`;
-  const directives = parseInlineSessionDirectives(commandBody);
   const cfg = params.cfg ?? baseConfig();
   const sessionEntry = params.sessionEntry ?? createSessionEntry();
   const provider = params.provider ?? "anthropic";
@@ -425,69 +398,35 @@ async function persistModelDirectiveForTest(params: {
   modelState.allowedModelKeys = new Set(params.allowedModelKeys);
   modelState.allowedModelCatalog = params.allowedModelCatalog ?? [];
   modelState.resolveThinkingCatalog = async () => params.allowedModelCatalog;
-  const result = await applyInlineDirectiveOverrides({
-    ctx: { Body: commandBody, Provider: "telegram", Surface: "telegram" },
+  const input: Parameters<typeof applyInlineDirectiveOverrides>[0] = createInlineDirectiveParams({
+    body: commandBody,
     cfg,
-    agentId,
-    agentDir: TEST_AGENT_DIR,
-    workspaceDir: "/tmp/workspace",
-    agentCfg: cfg.agents?.defaults ?? {},
     sessionEntry,
-    sessionStore: { [sessionKey]: sessionEntry },
-    sessionKey,
-    sessionScope: undefined,
-    isGroup: false,
-    allowTextCommands: true,
-    command: {
-      surface: "telegram",
-      channel: "telegram",
-      ownerList: [],
-      senderIsOwner: params.canPersistStickyModelSelection ?? true,
-      isAuthorizedSender: params.isAuthorizedSender ?? true,
-      rawBodyNormalized: commandBody,
-      commandBodyNormalized: commandBody,
-    },
-    directives,
-    elevatedEnabled: false,
-    elevatedAllowed: false,
-    elevatedFailures: [],
-    defaultProvider: "anthropic",
-    defaultModel: "claude-opus-4-6",
-    aliasIndex: params.aliasIndex ?? baseAliasIndex(),
     provider,
     model,
-    modelState,
-    initialModelLabel: params.initialModelLabel ?? `${provider}/${model}`,
-    formatModelSwitchEvent: (label) => label,
-    resolvedElevatedLevel: "off",
-    defaultActivation: () => "always",
-    contextTokens: 8192,
-    effectiveModelDirective: directives.rawModelDirective,
-    typing: {
-      onReplyStart: async () => {},
-      startTypingLoop: async () => {},
-      startTypingOnText: async () => {},
-      refreshTypingTtl: () => {},
-      isActive: () => false,
-      markRunComplete: () => {},
-      markDispatchIdle: () => {},
-      cleanup: () => {},
-    },
+    sessionKey,
+    aliasIndex: params.aliasIndex,
+    defaultProvider: "anthropic",
+    defaultModel: "claude-opus-4-6",
+    senderIsOwner: params.canPersistStickyModelSelection ?? true,
   });
+  input.agentId = agentId;
+  input.modelState = modelState;
+  input.elevatedEnabled = input.elevatedAllowed = false;
+  input.command.isAuthorizedSender = params.isAuthorizedSender ?? true;
+  input.initialModelLabel = params.initialModelLabel ?? input.initialModelLabel;
+  input.formatModelSwitchEvent = (label) => label;
+  const result = await applyInlineDirectiveOverrides(input);
   const persisted =
     result.kind === "continue"
       ? {
           provider: result.provider,
           model: result.model,
-          contextTokens: result.contextTokens,
-          directiveAck: result.directiveAck,
           errorText: undefined,
         }
       : {
           provider,
           model,
-          contextTokens: 8192,
-          directiveAck: undefined,
           errorText: Array.isArray(result.reply) ? result.reply[0]?.text : result.reply?.text,
         };
   return { persisted, sessionEntry, result };
@@ -1133,16 +1072,9 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   });
 
   it("preserves a concurrent thinking preference while applying an unrelated directive", async () => {
-    setDirectiveTestProviders([
-      {
-        id: "anthropic",
-        label: "Anthropic",
-        auth: [],
-        resolveThinkingProfile: () => ({
-          levels: [{ id: "off" }, { id: "low" }, { id: "high" }],
-        }),
-      },
-    ]);
+    pluginPolicyMock.thinkingProfiles.set("anthropic", () => ({
+      levels: [{ id: "off" }, { id: "low" }, { id: "high" }],
+    }));
     const { storePath, sessionEntry, sessionStore } = await persistedSession(
       { thinkingLevel: "xhigh" },
       { thinkingLevel: "low" },
@@ -1202,23 +1134,15 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   });
 
   it("rejects thinking levels forbidden by the concrete runtime policy", async () => {
-    setDirectiveTestProviders([
-      {
-        id: "anthropic",
-        resolveThinkingProfile: () => ({
-          levels: [{ id: "minimal" }, { id: "medium" }, { id: "adaptive" }],
-          defaultLevel: "adaptive",
-          preserveWhenCatalogReasoningFalse: true,
-        }),
-      },
-      {
-        id: "claude-cli",
-        resolveThinkingProfile: () => ({
-          levels: [{ id: "off" }],
-          defaultLevel: "off",
-        }),
-      },
-    ]);
+    pluginPolicyMock.thinkingProfiles.set("anthropic", () => ({
+      levels: [{ id: "minimal" }, { id: "medium" }, { id: "adaptive" }],
+      defaultLevel: "adaptive",
+      preserveWhenCatalogReasoningFalse: true,
+    }));
+    pluginPolicyMock.thinkingProfiles.set("claude-cli", () => ({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    }));
     const sessionEntry = createSessionEntry();
     const catalogEntry = {
       provider: "anthropic",
@@ -1243,76 +1167,55 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
   it("persists verbose on and off directives", async () => {
     const sessionEntry = createSessionEntry();
-
-    const enabled = await runHandleCommand("/verbose on", { sessionEntry });
-    expect(enabled?.text).toMatch(/^⚙️ Verbose logging enabled\./);
-    expect(sessionEntry.verboseLevel).toBe("on");
-
-    const disabled = await runHandleCommand("/verbose off", { sessionEntry });
-    expect(disabled?.text).toMatch(/Verbose logging disabled\./);
-    expect(sessionEntry.verboseLevel).toBe("off");
+    for (const [mode, text] of [
+      ["on", /^⚙️ Verbose logging enabled\./],
+      ["off", /Verbose logging disabled\./],
+    ] as const) {
+      const reply = await runHandleCommand(`/verbose ${mode}`, { sessionEntry });
+      expect(reply?.text).toMatch(text);
+      expect(sessionEntry.verboseLevel).toBe(mode);
+    }
   });
 
   it("persists and reports fast-mode directives", async () => {
     const sessionEntry = createSessionEntry();
 
-    const onReply = await runHandleCommand("/fast on", { sessionEntry });
-    expect(onReply?.text).toContain("Fast mode enabled");
-    expect(sessionEntry.fastMode).toBe(true);
-
-    const statusReply = await runHandleCommand("/fast", {
-      sessionEntry,
-      currentFastMode: sessionEntry.fastMode,
-    });
-    expect(statusReply?.text).toContain("Current fast mode: on");
-
-    const ultrafastReply = await runHandleCommand("/fast ultrafast", { sessionEntry });
-    expect(ultrafastReply?.text).toContain("Ultrafast mode enabled.");
-    expect(sessionEntry.fastMode).toBe("ultrafast");
+    for (const [command, text, mode] of [
+      ["/fast on", "Fast mode enabled", true],
+      ["/fast", "Current fast mode: on", true],
+      ["/fast ultrafast", "Ultrafast mode enabled.", "ultrafast"],
+      ["/fast off", "Fast mode disabled", false],
+      ["/fast default", "Fast mode reset to default", undefined],
+    ] as const) {
+      const reply = await runHandleCommand(command, {
+        sessionEntry,
+        currentFastMode: sessionEntry.fastMode,
+      });
+      expect(reply?.text).toContain(text);
+      expect(sessionEntry.fastMode).toBe(mode);
+    }
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
       "Ultrafast mode enabled.",
       expect.objectContaining({ contextKey: "fast:ultrafast" }),
     );
-
-    const offReply = await runHandleCommand("/fast off", {
-      sessionEntry,
-      currentFastMode: sessionEntry.fastMode,
-    });
-    expect(offReply?.text).toContain("Fast mode disabled");
-    expect(sessionEntry.fastMode).toBe(false);
-
-    const defaultReply = await runHandleCommand("/fast default", {
-      sessionEntry,
-      currentFastMode: sessionEntry.fastMode,
-    });
-    expect(defaultReply?.text).toContain("Fast mode reset to default");
-    expect(sessionEntry.fastMode).toBeUndefined();
   });
 
   it("persists and reports elevated-mode directives when allowed", async () => {
     const sessionEntry = createSessionEntry();
-    const base = {
-      elevatedAllowed: true,
-      elevatedEnabled: true,
-      sessionEntry,
-    } satisfies Partial<HandleParams>;
-
-    const onReply = await runHandleCommand("/elevated on", base);
-    expect(onReply?.text).toContain("Elevated mode set to ask");
-    expect(sessionEntry.elevatedLevel).toBe("on");
-
-    const statusReply = await runHandleCommand("/elevated", {
-      ...base,
-      currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
-    });
-    expect(statusReply?.text).toContain("Current elevated level: on");
-
-    const offReply = await runHandleCommand("/elevated off", {
-      ...base,
-      currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
-    });
-    expect(offReply?.text).toContain("Elevated mode disabled");
-    expect(sessionEntry.elevatedLevel).toBe("off");
+    for (const [command, text, level] of [
+      ["/elevated on", "Elevated mode set to ask", "on"],
+      ["/elevated", "Current elevated level: on", "on"],
+      ["/elevated off", "Elevated mode disabled", "off"],
+    ] as const) {
+      const reply = await runHandleCommand(command, {
+        elevatedAllowed: true,
+        elevatedEnabled: true,
+        sessionEntry,
+        currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
+      });
+      expect(reply?.text).toContain(text);
+      expect(sessionEntry.elevatedLevel).toBe(level);
+    }
   });
 
   it("queues system events for elevated and reasoning mode directives", async () => {

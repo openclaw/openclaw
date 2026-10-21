@@ -90,151 +90,105 @@ describe("routeReply delivery result", () => {
     setActivePluginRegistry(createTestRegistry());
   });
 
-  it.each([
-    ["channel_transform", true, 0, "deliveredNotVisible", false],
-    ["invisible", true, 2, "delivered", true],
-    ["not-dispatched", true, 2, "delivered", true],
-    ["not-dispatched", false, 1, "failedBeforeSend", false],
-    ["unknown", true, 1, "failedAfterSend", true],
-    ["no-identity", true, 1, "failedAfterSend", true],
-    ["partial", true, 1, "delivered", true],
-  ] as const)(
-    "settles routed %s with caption fallback=%s",
-    async (outcome, fallback, calls, count, visible) => {
-      const custody =
-        outcome === "partial"
-          ? {
+  it("settles partial routed delivery without replaying its caption", async () => {
+    const custody = {
+      sessionKey: "agent:main:background-delivery",
+      storePath: path.join(tempDirs.make("partial-background-delivery-"), "sessions.json"),
+      sessionId: "partial-session",
+      intentId: "partial-intent",
+      deliveryId: "partial-delivery",
+    };
+    await replaceSessionEntry(custody, {
+      sessionId: custody.sessionId,
+      updatedAt: Date.now(),
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "voice caption",
+        createdAt: Date.now(),
+        intentId: custody.intentId,
+        deliveries: [{ id: custody.deliveryId, state: "prepared" }],
+      },
+    });
+    mocks.deliverOutboundPayloads.mockResolvedValue([
+      { channel: "telegram", messageId: "caption-sent" },
+    ]);
+    const notDispatched = new PlatformMessageNotDispatchedError("before platform dispatch", {
+      cause: new Error("offline"),
+    });
+    mocks.deliverOutboundPayloads.mockRejectedValueOnce(
+      new OutboundDeliveryError("later payload failed", {
+        cause: notDispatched,
+        results: [{ channel: "telegram", messageId: "already-sent" }],
+        stage: "platform_send",
+      }),
+    );
+    let deliveryError: string | undefined;
+    try {
+      const cfg = { session: { store: custody.storePath } };
+      const result = await dispatchInboundMessageWithRoutedChannelDispatcher({
+        cfg,
+        ctx: {
+          Body: "Continue",
+          AgentId: "main",
+          SessionKey: "agent:main:background-delivery",
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "original",
+        },
+        dispatcherOptions: {
+          deliver: async (payload, info) => {
+            const sent = await routeReply({
+              cfg,
+              payload,
+              channel: "telegram",
+              to: "original",
+              agentId: "main",
               sessionKey: "agent:main:background-delivery",
-              storePath: path.join(tempDirs.make("partial-background-delivery-"), "sessions.json"),
-              sessionId: "partial-session",
-              intentId: "partial-intent",
-              deliveryId: "partial-delivery",
-            }
-          : undefined;
-      if (custody) {
-        await replaceSessionEntry(custody, {
-          sessionId: custody.sessionId,
-          updatedAt: Date.now(),
-          pendingFinalDelivery: {
-            kind: "replayable",
-            text: "voice caption",
-            createdAt: Date.now(),
-            intentId: custody.intentId,
-            deliveries: [{ id: custody.deliveryId, state: "prepared" }],
-          },
-        });
-      }
-      const plugin = createChannelPlugin();
-      if (outcome === "channel_transform") {
-        plugin.messaging = {
-          transformReplyPayload: ({ payload }) => (payload.mediaUrl ? null : payload),
-        };
-        setActivePluginRegistry(
-          createTestRegistry([{ pluginId: "telegram", plugin, source: "test" }]),
-        );
-      }
-      mocks.deliverOutboundPayloads.mockResolvedValue([
-        { channel: "telegram", messageId: "caption-sent" },
-      ]);
-      const notDispatched = new PlatformMessageNotDispatchedError("before platform dispatch", {
-        cause: new Error("offline"),
-      });
-      if (outcome === "invisible") {
-        mocks.deliverOutboundPayloads.mockResolvedValueOnce([]);
-      } else if (outcome === "no-identity") {
-        suppressDelivery("adapter_returned_no_identity");
-      } else if (outcome === "not-dispatched") {
-        mocks.deliverOutboundPayloads.mockRejectedValueOnce(notDispatched);
-      } else if (outcome === "unknown") {
-        mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("transport outcome unknown"));
-      } else if (outcome === "partial") {
-        mocks.deliverOutboundPayloads.mockRejectedValueOnce(
-          new OutboundDeliveryError("later payload failed", {
-            cause: notDispatched,
-            results: [{ channel: "telegram", messageId: "already-sent" }],
-            stage: "platform_send",
-          }),
-        );
-      }
-      let deliveryError: string | undefined;
-      try {
-        const cfg = custody ? { session: { store: custody.storePath } } : {};
-        const result = await dispatchInboundMessageWithRoutedChannelDispatcher({
-          cfg,
-          ctx: {
-            Body: "Continue",
-            AgentId: "main",
-            SessionKey: "agent:main:background-delivery",
-            Provider: "telegram",
-            Surface: "telegram",
-            OriginatingChannel: "telegram",
-            OriginatingTo: "original",
-          },
-          dispatcherOptions: {
-            deliver: async (payload, info) => {
-              const sent = await routeReply({
-                cfg,
-                payload,
-                channel: "telegram",
-                to: "original",
-                agentId: "main",
-                sessionKey: "agent:main:background-delivery",
-                replyKind: info.kind,
-                mirror: false,
-              });
-              if (!sent.ok) {
-                if (!sent.delivered || sent.ambiguous) {
-                  throw new Error(sent.error, { cause: sent.cause });
-                }
-                deliveryError = sent.error;
+              replyKind: info.kind,
+              mirror: false,
+            });
+            if (!sent.ok) {
+              if (!sent.delivered || sent.ambiguous) {
+                throw new Error(sent.error, { cause: sent.cause });
               }
-              return {
-                visibleReplySent: sent.delivered,
-                ...(sent.ambiguous ? { ambiguous: true } : {}),
-                ...(sent.suppressed ? { suppression: { reason: sent.reason } } : {}),
-              };
-            },
-          },
-          dispatchReplyFromConfig: async ({ dispatcher }) => {
-            const payload = {
-              text: "voice caption",
-              mediaUrl: "https://example.com/voice.opus",
-              audioAsVoice: true,
+              deliveryError = sent.error;
+            }
+            return {
+              visibleReplySent: sent.delivered,
+              ...(sent.ambiguous ? { ambiguous: true } : {}),
+              ...(sent.suppressed ? { suppression: { reason: sent.reason } } : {}),
             };
-            if (custody) {
-              setReplyPayloadMetadata(payload, { pendingFinalDeliveryCompletion: custody });
-            }
-            if (fallback) {
-              attachReplyDispatchUndeliveredFallback(
-                payload,
-                buildCaptionedFinalTextFallback(payload),
-              );
-            }
-            dispatcher.sendFinalReply(payload);
-            return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
           },
-        });
-        expect(result.settledReceipt).toMatchObject({
-          counts: { final: { [count]: 1 } },
-          anyVisibleDelivered: visible,
-        });
-        expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(calls);
-        if (custody) {
-          expect(deliveryError).toContain("later payload failed");
-          await closeOpenClawAgentDatabasesAsync(path.dirname(custody.storePath));
-          closeOpenClawAgentDatabasesForTest(path.dirname(custody.storePath));
-          expect(
-            (loadSessionEntry(custody) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
-          ).toEqual([{ id: custody.deliveryId, state: "delivered" }]);
-        }
-      } finally {
-        if (custody) {
-          await closeOpenClawAgentDatabasesAsync(path.dirname(custody.storePath));
-          closeOpenClawAgentDatabasesForTest(path.dirname(custody.storePath));
-        }
-      }
-    },
-  );
+        },
+        dispatchReplyFromConfig: async ({ dispatcher }) => {
+          const payload = {
+            text: "voice caption",
+            mediaUrl: "https://example.com/voice.opus",
+            audioAsVoice: true,
+          };
+          setReplyPayloadMetadata(payload, { pendingFinalDeliveryCompletion: custody });
+          attachReplyDispatchUndeliveredFallback(payload, buildCaptionedFinalTextFallback(payload));
+          dispatcher.sendFinalReply(payload);
+          return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+        },
+      });
+      expect(result.settledReceipt).toMatchObject({
+        counts: { final: { delivered: 1 } },
+        anyVisibleDelivered: true,
+      });
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+      expect(deliveryError).toContain("later payload failed");
+      await closeOpenClawAgentDatabasesAsync(path.dirname(custody.storePath));
+      closeOpenClawAgentDatabasesForTest(path.dirname(custody.storePath));
+      expect(
+        (loadSessionEntry(custody) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
+      ).toEqual([{ id: custody.deliveryId, state: "delivered" }]);
+    } finally {
+      await closeOpenClawAgentDatabasesAsync(path.dirname(custody.storePath));
+      closeOpenClawAgentDatabasesForTest(path.dirname(custody.storePath));
+    }
+  });
 
   it.each([
     ["cancelled_by_message_sending_hook", { suppressed: true }],

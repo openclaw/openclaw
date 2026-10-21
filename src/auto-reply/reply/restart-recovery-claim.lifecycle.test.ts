@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   markSessionAbortTarget,
@@ -48,9 +52,10 @@ async function claimFixture(
   overrides: Partial<Parameters<typeof createReplyRestartRecoveryClaimController>[0]> = {},
 ) {
   const scope = {
-    agentId: "main",
-    storePath: path.join(tempDirs.make("openclaw-reply-claim-"), "sessions.json"),
-    sessionKey: "agent:main:main",
+    agentId: overrides.agentId ?? "main",
+    storePath:
+      overrides.storePath ?? path.join(tempDirs.make("openclaw-reply-claim-"), "sessions.json"),
+    sessionKey: overrides.sessionKey ?? "agent:main:main",
   };
   const fixture = await createRecoveryControllerFixture(
     scope,
@@ -65,6 +70,43 @@ async function claimFixture(
   );
   return { ...fixture, controller: fixture.controller() };
 }
+
+it("adopts an exact channel recovery claim before execution starts", async () => {
+  setRuntimeConfigSnapshot({});
+  onTestFinished(clearRuntimeConfigSnapshot);
+  const deliveryContext = {
+    channel: "telegram",
+    to: "chat",
+    accountId: "default",
+    threadId: "thread",
+  };
+  const claim = {
+    restartRecoveryDeliveryContext: deliveryContext,
+    restartRecoveryDeliveryReceiptState: "terminal-pending" as const,
+    restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+    restartRecoveryDeliveryRunId: "recovery-run",
+    restartRecoveryDeliverySourceRunId: "source-turn",
+    restartRecoveryDeliveryToolCallId: "message-call",
+  };
+  await using fixture = await claimFixture(
+    {
+      ...claim,
+      abortedLastRun: false,
+      lifecycleRunId: "recovery-run",
+      sessionId: "channel-session",
+      startedAt: 1,
+    },
+    {
+      sessionKey: "agent:main:telegram:group:chat:topic:thread",
+      resolveDeliveryContext: () => deliveryContext,
+      sourceTurnId: "source-turn",
+    },
+  );
+  await expect(fixture.controller.admitUserTurn()).resolves.toBe("admitted");
+  const persisted = loadSessionEntry(fixture.scope);
+  expect(persisted).toMatchObject(claim);
+  expect(persisted?.status).toBeUndefined();
+});
 
 async function restartReply(
   controller: ReturnType<typeof createReplyRestartRecoveryClaimController>,
