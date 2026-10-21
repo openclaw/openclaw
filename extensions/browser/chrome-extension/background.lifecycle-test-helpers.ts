@@ -66,7 +66,7 @@ export function connectCdpClient(bridge: ExtensionRelayBridge) {
       expect(frame).not.toHaveProperty("error");
       return frame.result;
     },
-    root: client.child,
+    root: (...args: Parameters<typeof client.child>) => client.child(...args),
   };
 }
 

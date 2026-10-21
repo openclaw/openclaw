@@ -16,7 +16,9 @@ export function catalogClient(
       }
     },
   });
-  onTestFinished(() => harness.client.closeAndWait());
+  onTestFinished(async () => {
+    await harness.client.closeAndWait();
+  });
   return harness;
 }
 

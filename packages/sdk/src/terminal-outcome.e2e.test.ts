@@ -57,6 +57,7 @@ it("reports the superseded writer as cancelled in events and waits", async () =>
       for await (const { type } of run.events((event) => terminalTypes.has(event.type))) {
         return type;
       }
+      return undefined;
     })().catch((error: unknown) => error);
 
     await claimAgentSessionWriter({

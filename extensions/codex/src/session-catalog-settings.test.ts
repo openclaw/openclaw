@@ -27,7 +27,9 @@ const liveSettingsEvent = {
 function nativeThread(overrides: Partial<CodexThread> = {}): CodexThread {
   return {
     ...threadStartResult().thread,
-    ...catalogThread({ ...persisted, ...overrides }),
+    ...catalogThread(persisted),
+    status: { type: "idle" },
+    ...overrides,
   };
 }
 
@@ -127,6 +129,7 @@ it.each([false, true])(
         }
         cursor = page.nextCursor;
       } while (cursor);
+      return undefined;
     };
     await resume();
     expect(await findThread(runtime.cwd)).toMatchObject({ threadId: "thread-1", ...runtime });
