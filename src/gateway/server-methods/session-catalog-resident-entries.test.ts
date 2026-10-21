@@ -14,7 +14,10 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import type {
+  SessionCatalogEntrySnapshot,
+  SessionCatalogProvider,
+} from "../../plugins/session-catalog.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -24,6 +27,7 @@ import {
   createSessionRowProjection,
   type SessionRowProjection,
 } from "../session-row-projection.js";
+import { catalogHost, catalogSession } from "./session-catalog.fixtures.test-support.js";
 import { sessionCatalogHandlers } from "./session-catalog.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -37,21 +41,11 @@ const original = {
 };
 
 function session(overrides: Partial<SessionCatalogSession> = {}): SessionCatalogSession {
-  return {
-    threadId: "native-thread",
-    sessionKey: key,
-    status: "stored",
-    archived: false,
-    canContinue: true,
-    canArchive: false,
-    ...overrides,
-  };
+  return catalogSession("native-thread", { sessionKey: key, ...overrides });
 }
 
 function hosts(sessions: SessionCatalogSession[]): SessionCatalogHost[] {
-  return [
-    { hostId: "gateway:fixture", label: "Fixture", kind: "gateway", connected: true, sessions },
-  ];
+  return [catalogHost({ hostId: "gateway:fixture", label: "Fixture", sessions })];
 }
 
 const payload = (respond: ReturnType<typeof vi.fn>) => respond.mock.calls[0]?.[1];
@@ -59,8 +53,7 @@ const firstHost = (respond: ReturnType<typeof vi.fn>) => payload(respond)?.catal
 const replace = (entry: Partial<typeof original> & { label?: string }) =>
   replaceSessionEntrySync({ agentId: "main", sessionKey: key }, { ...original, ...entry });
 function expectSnapshot(host: SessionCatalogHost, label: string, numbers: number[]) {
-  expect(host.label).toBe(label);
-  expect(host.sessions[0]?.pullRequest?.numbers).toEqual(numbers);
+  expect(host).toMatchObject({ label, sessions: [{ pullRequest: { numbers } }] });
 }
 
 async function withCatalog(
@@ -223,8 +216,12 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
       replace({ label: "Main" });
       replaceSessionEntrySync({ agentId: "work", sessionKey: workKey }, workEntry);
       const planningRevisions: Array<object | undefined> = [];
+      const planningEntries: Array<
+        ReturnType<SessionCatalogEntrySnapshot["entriesForAgent"]> | undefined
+      > = [];
       setList(async ({ sessionEntries }) => {
         planningRevisions.push(sessionEntries?.revision);
+        planningEntries.push(sessionEntries?.entriesForAgent("main"));
         return hosts(
           (sessionEntries?.entriesForCatalog?.() ?? []).map(({ agentId, sessionKey, entry }) =>
             Object.assign(session({ threadId: `${agentId}:${entry.sessionId}`, sessionKey }), {
@@ -259,10 +256,14 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
         return rows;
       });
       expect(planningRevisions[0]).toBeDefined();
+      expect(planningEntries[0]).toMatchObject([
+        { sessionKey: key, entry: { sessionId: original.sessionId } },
+      ]);
       const expectReusedPoll = async (expected: typeof first, index: number, previous: number) => {
         expect(payload(await list())).toEqual(payload(expected));
         expect(broadRowsRead).toBe(0);
         expect(planningRevisions[index]).toBe(planningRevisions[previous]);
+        expect(planningEntries[index]).toBe(planningEntries[previous]);
       };
       await expectReusedPoll(first, 1, 0);
 

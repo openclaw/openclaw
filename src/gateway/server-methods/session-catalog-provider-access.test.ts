@@ -16,16 +16,18 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { SessionCatalogListLifetime } from "./session-catalog-list-lifetime.js";
 import { listSessionCatalogProvider } from "./session-catalog-provider-access.js";
+import { catalogProvider } from "./session-catalog.fixtures.test-support.js";
+
+const blockedProvider = (
+  id: string,
+  gate: ReturnType<typeof createDeferredCore<SessionCatalogHost[]>>,
+  label = "Blocking catalog",
+) => catalogProvider(id, { label, list: vi.fn(() => gate.promise) });
 
 describe("session catalog provider admission", () => {
   it("starts fast providers while four distinct slow providers remain unsettled", async () => {
     const gate = createDeferredCore<SessionCatalogHost[]>();
-    const slow: SessionCatalogProvider = {
-      id: "slow-catalog",
-      label: "Slow catalog",
-      list: vi.fn(() => gate.promise),
-      read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-    };
+    const slow = blockedProvider("slow-catalog", gate, "Slow catalog");
     const healthy: SessionCatalogProvider = {
       ...slow,
       id: "healthy-catalog",
@@ -52,12 +54,7 @@ describe("session catalog provider admission", () => {
     const firstRegistry = createEmptyPluginRegistry();
     const queuedRegistry = createEmptyPluginRegistry();
     const gate = createDeferredCore<SessionCatalogHost[]>();
-    const blocker: SessionCatalogProvider = {
-      id: "blocking-catalog",
-      label: "Blocking catalog",
-      list: vi.fn(() => gate.promise),
-      read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-    };
+    const blocker = blockedProvider("blocking-catalog", gate);
     let observedScope: ReturnType<typeof getPluginRuntimeGatewayRequestScope>;
     const retained: { release: (() => void) | null } = { release: null };
     const queued: SessionCatalogProvider = {
@@ -118,12 +115,7 @@ describe("session catalog provider admission", () => {
       const before = getActiveGatewayRootWorkHolders();
       const root = tryBeginGatewayRootWorkAdmission("retired-catalog-enumeration")!;
       const gate = createDeferredCore<SessionCatalogHost[]>();
-      const blocker: SessionCatalogProvider = {
-        id: "blocking-catalog",
-        label: "Blocking catalog",
-        list: vi.fn(() => gate.promise),
-        read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-      };
+      const blocker = blockedProvider("blocking-catalog", gate);
       const queued = { ...blocker, id: "retired-catalog", list: vi.fn(async () => []) };
       const successor = { ...blocker, id: "live-catalog", list: vi.fn(async () => []) };
       const activeOwner = new AbortController();

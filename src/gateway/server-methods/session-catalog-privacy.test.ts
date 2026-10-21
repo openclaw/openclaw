@@ -31,17 +31,12 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
+import { catalogHost, catalogSession } from "./session-catalog.fixtures.test-support.js";
 import { sessionCatalogHandlers } from "./session-catalog.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
-const nativeSession = (overrides: Partial<SessionCatalogSession> = {}): SessionCatalogSession => ({
-  threadId: "published-native",
-  status: "stored",
-  archived: false,
-  canContinue: false,
-  canArchive: false,
-  ...overrides,
-});
+const nativeSession = (overrides: Partial<SessionCatalogSession> = {}) =>
+  catalogSession("published-native", { canContinue: false, ...overrides });
 const forbidden = expect.objectContaining({ code: ErrorCodes.FORBIDDEN });
 const progressRows = (broadcast: ReturnType<typeof vi.fn>) =>
   broadcast.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions.map(
@@ -109,20 +104,11 @@ async function createCatalog() {
       },
     );
   }
-  const host: SessionCatalogHost = {
-    hostId: "gateway:local",
-    label: "Local",
-    kind: "gateway",
-    connected: true,
-    sessions: ["foreign", "owned", "collision"].map((id) => ({
-      threadId: id,
-      sessionKey: `agent:main:${id}`,
-      status: "stored",
-      archived: false,
-      canContinue: true,
-      canArchive: true,
-    })),
-  };
+  const host = catalogHost({
+    sessions: ["foreign", "owned", "collision"].map((id) =>
+      catalogSession(id, { sessionKey: `agent:main:${id}`, canArchive: true }),
+    ),
+  });
   const runtime = createPluginRuntime();
   const enumerate = (sessionEntries?: SessionCatalogEntrySnapshot): SessionCatalogHost => {
     const adopted = listAdoptedSessionCatalogSessions({
@@ -310,13 +296,12 @@ describe("catalog delivery uses current canonical privacy", () => {
   it("lists remote publications without local stores while preserving mixed-request adoption", () =>
     withCatalog(async (fixture) => {
       const { call, list } = fixture;
-      const remoteHost: SessionCatalogHost = {
+      const remoteHost = catalogHost({
         hostId: "node:source",
         label: "Source",
         kind: "node",
-        connected: true,
         sessions: [nativeSession({ threadId: "remote" })],
-      };
+      });
       fixture.registry.sessionCatalogs.push({
         pluginId: "publication",
         source: import.meta.url,

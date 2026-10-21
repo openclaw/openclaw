@@ -14,6 +14,11 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
+import {
+  catalogHost,
+  catalogProvider,
+  catalogSession,
+} from "./session-catalog.fixtures.test-support.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<{ provider: SessionCatalogProvider }>;
@@ -82,36 +87,21 @@ function client(profileId: string, scopes = ["operator.read", "operator.write"])
 }
 
 function session(threadId: string, sessionKey?: string) {
-  return {
-    threadId,
-    status: "stored",
-    archived: false,
+  return catalogSession(threadId, {
     ...(sessionKey ? { sessionKey } : {}),
-    canContinue: true,
     canArchive: true,
-  };
+  });
 }
 
 function host(sessions: ReturnType<typeof session>[], nextCursor?: string) {
-  return {
-    hostId: "gateway:local",
-    label: "Local",
-    kind: "gateway" as const,
-    connected: true,
+  return catalogHost({
     sessions,
     ...(nextCursor ? { nextCursor } : {}),
-  };
+  });
 }
 
-function provider(overrides: Partial<SessionCatalogProvider> = {}): SessionCatalogProvider {
-  return {
-    id: "codex",
-    label: "Codex",
-    list: vi.fn(async () => []),
-    read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
-    ...overrides,
-  };
-}
+const provider = (overrides: Partial<SessionCatalogProvider> = {}) =>
+  catalogProvider("codex", { label: "Codex", ...overrides });
 
 function install(
   overrides: Partial<SessionCatalogProvider>,
