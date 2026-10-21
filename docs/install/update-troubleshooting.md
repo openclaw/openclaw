@@ -306,7 +306,9 @@ then update through **2026.10.5**:
 ```bash
 openclaw update --channel stable --tag 2026.10.5
 openclaw --version
+openclaw gateway stop
 openclaw update --channel dev
+openclaw gateway start
 ```
 
 Continue to the development update only after the first update completes and
@@ -315,6 +317,12 @@ and state/configuration paths throughout. Set console logging to `info` for both
 updates as described [above](#debug-logging-blocks-the-update-handoff).
 The older updater can report that automatic database restoration is unavailable
 during the intermediate update; retain your verified backup.
+
+Stop other OpenClaw processes using the same state before the development update.
+For a foreground Gateway, use its original terminal or supervisor to stop and
+restart it. Custom state/configuration paths can make the updater skip service
+management; follow that warning. Doctor reporting `An agent database is in use`
+means maintenance was deferred, even if an earlier step completed.
 
 If the direct update has already failed, preserve its snapshots and candidate.
 Run `openclaw update repair` and follow its process-ownership instructions before
