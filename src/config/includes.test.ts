@@ -60,18 +60,11 @@ function resolveWithEvents(obj: unknown, files: Record<string, unknown>) {
   return { result: resolveIncludes(obj, CONFIG_FILE, resolver), events };
 }
 
-function scan(configDir: string, parsed: unknown, allowedRoots?: string[]) {
-  return collectIncludePathsRecursive({
-    configPath: path.join(configDir, "openclaw.json"),
-    parsed,
-    allowedRoots,
-  });
-}
-
 type IncludeFixture = {
   at: (name: string) => string;
   write: (name: string, content: unknown) => Promise<void>;
-  configDir: string;
+  scan: (parsed: unknown, allowedRoots?: string[]) => Promise<string[]>;
+  resolve: (parsed: unknown, options?: Parameters<typeof resolveIncludes>[3]) => unknown;
 };
 
 function withFiles(
@@ -87,7 +80,14 @@ function withFiles(
       for (const [name, content] of Object.entries(files)) {
         await write(name, content);
       }
-      await run({ at, write, configDir });
+      const filename = at("config/openclaw.json");
+      await run({
+        at,
+        write,
+        scan: (parsed, allowedRoots) =>
+          collectIncludePathsRecursive({ configPath: filename, parsed, allowedRoots }),
+        resolve: (parsed, options) => resolveIncludes(parsed, filename, undefined, options),
+      });
     });
 }
 
@@ -258,9 +258,9 @@ it.runIf(process.platform !== "win32")(
   "only reports includes the production resolver can safely open",
   withFiles(
     { "config/safe.json5": { safe: true }, "outside.json5": { outside: true } },
-    async ({ at, configDir }) => {
+    async ({ at, scan }) => {
       await fs.symlink(at("outside.json5"), at("config/outside-link.json5"));
-      const includePaths = await scan(configDir, {
+      const includePaths = await scan({
         $include: ["./safe.json5", "../outside.json5", "./outside-link.json5"],
       });
       expect(includePaths).toEqual([await fs.realpath(at("config/safe.json5"))]);
@@ -306,10 +306,10 @@ it.runIf(process.platform !== "win32")(
 
 it(
   "honors explicitly allowed include roots",
-  withFiles({}, async ({ at, configDir }) => {
+  withFiles({}, async ({ at, scan }) => {
     const sharedIncludePath = at("shared/shared.json5");
     await writeFixture(sharedIncludePath, "{ shared: true }\n", true);
-    expect(await scan(configDir, { $include: sharedIncludePath }, [at("shared")])).toEqual([
+    expect(await scan({ $include: sharedIncludePath }, [at("shared")])).toEqual([
       await fs.realpath(sharedIncludePath),
     ]);
   }),
@@ -323,8 +323,8 @@ it(
       "config/safe.json5": { safe: true },
       "escaped.json5": { escaped: true },
     },
-    async ({ at, configDir }) => {
-      expect(await scan(configDir, { $include: "./nested/outer.json5" })).toEqual([
+    async ({ at, scan }) => {
+      expect(await scan({ $include: "./nested/outer.json5" })).toEqual([
         await fs.realpath(at("config/nested/outer.json5")),
         await fs.realpath(at("config/safe.json5")),
       ]);
@@ -339,13 +339,13 @@ it(
       "config/shared.json5": { $include: "./leaf.json5" },
       "config/leaf.json5": { leaf: true },
     },
-    async ({ at, write, configDir }) => {
+    async ({ at, write, scan }) => {
       for (let index = 0; index < MAX_INCLUDE_DEPTH - 1; index += 1) {
         const nextInclude =
           index === MAX_INCLUDE_DEPTH - 2 ? "./shared.json5" : `./chain-${index + 1}.json5`;
         await write(`config/chain-${index}.json5`, { $include: nextInclude });
       }
-      const includePaths = await scan(configDir, {
+      const includePaths = await scan({
         $include: ["./chain-0.json5", "./shared.json5"],
       });
 
@@ -410,7 +410,7 @@ it(
   "rejects include files that are hardlinked aliases",
   withFiles(
     { "outside/secret.json5": { logging: { redactSensitive: "tools" } } },
-    async ({ at, configDir }) => {
+    async ({ at, resolve: readIncludes }) => {
       if (process.platform === "win32") {
         return;
       }
@@ -423,9 +423,9 @@ it(
         throw err;
       }
 
-      expect(() =>
-        resolveIncludes({ $include: "./extra.json5" }, path.join(configDir, "openclaw.json")),
-      ).toThrow(/security checks|hardlink/i);
+      expect(() => readIncludes({ $include: "./extra.json5" })).toThrow(
+        /security checks|hardlink/i,
+      );
     },
   ),
 );
@@ -434,38 +434,34 @@ it(
   "rejects include files larger than the guarded read limit",
   withFiles(
     { "config/big.json5": { blob: "a".repeat(2 * 1024 * 1024 + 1) } },
-    async ({ configDir }) => {
-      expect(() =>
-        resolveIncludes({ $include: "./big.json5" }, path.join(configDir, "openclaw.json")),
-      ).toThrow(/security checks|max/i);
+    async ({ resolve: readIncludes }) => {
+      expect(() => readIncludes({ $include: "./big.json5" })).toThrow(/security checks|max/i);
     },
   ),
 );
 
 it(
   "rejects a symlinked include that escapes both the config directory and every allowed root",
-  withFiles({ "off-limits/secret.json5": { leaked: true } }, async ({ at, configDir }) => {
-    await fs.mkdir(at("allowed"));
-    try {
-      await fs.symlink(
-        at("off-limits/secret.json5"),
-        at("config/secret.json5"),
-        process.platform === "win32" ? "file" : undefined,
-      );
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EPERM") {
-        return;
+  withFiles(
+    { "off-limits/secret.json5": { leaked: true } },
+    async ({ at, resolve: readIncludes }) => {
+      await fs.mkdir(at("allowed"));
+      try {
+        await fs.symlink(
+          at("off-limits/secret.json5"),
+          at("config/secret.json5"),
+          process.platform === "win32" ? "file" : undefined,
+        );
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EPERM") {
+          return;
+        }
+        throw err;
       }
-      throw err;
-    }
 
-    expect(() =>
-      resolveIncludes(
-        { $include: "./secret.json5" },
-        path.join(configDir, "openclaw.json"),
-        undefined,
-        { allowedRoots: [at("allowed")] },
-      ),
-    ).toThrow(/resolves outside config directory/);
-  }),
+      expect(() =>
+        readIncludes({ $include: "./secret.json5" }, { allowedRoots: [at("allowed")] }),
+      ).toThrow(/resolves outside config directory/);
+    },
+  ),
 );

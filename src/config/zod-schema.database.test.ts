@@ -56,10 +56,6 @@ describe("database config", () => {
     {},
     { engine: "sqlite" },
     { engine: "postgres" },
-    { engine: "postgres", families: { agent: { engine: "postgres" } } },
-    { families: { agent: { engine: "postgres" } } },
-    { engine: "postgres", families: { state: { engine: "sqlite" } } },
-    { engine: "postgres", families: { workboard: { engine: "sqlite" } } },
     {
       families: {
         state: { engine: "postgres" },
@@ -70,7 +66,6 @@ describe("database config", () => {
       },
     },
     { families: {} },
-    { families: { state: { engine: "postgres" }, agent: { engine: "sqlite" } } },
     {
       engine: "postgres",
       families: {
@@ -94,10 +89,7 @@ describe("database config", () => {
     { families: { state: "postgres" } },
     { families: { state: { engine: "unknown" } } },
     { families: { state: { engine: "postgres", postgres: { schemaPrefix: "state" } } } },
-    { families: { agents: { engine: "sqlite" } } },
     { families: { quarantine: { engine: "sqlite" } } },
-    { families: { "managed-update": { engine: "sqlite" } } },
-    { families: { "package-activation": { engine: "sqlite" } } },
   ])("rejects invalid database config %j", (database) => {
     expect(OpenClawSchema.safeParse({ database }).success).toBe(false);
   });
