@@ -1,50 +1,47 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  createEmptyPluginRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/channel-test-helpers";
+import * as plugins from "openclaw/plugin-sdk/channel-test-helpers";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { getRealtimeTranscriptionProvider } from "openclaw/plugin-sdk/realtime-transcription";
-import { useAutoCleanupTempDirTracker, withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { afterEach, assert, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { CallManager } from "./manager.js";
 import { MockProvider } from "./providers/mock.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
-import { VoiceCallWebhookServer } from "./webhook.js";
+import { VoiceCallWebhookServer as WebhookServer } from "./webhook.js";
 
-afterEach(resetPluginRuntimeStateForTest);
+afterEach(plugins.resetPluginRuntimeStateForTest);
+afterEach(vi.unstubAllEnvs);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const providerIds = ["active-stt", "configured-stt"];
-const writeJson = (dir: string, name: string, value: unknown) =>
-  fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
+function writePluginFiles(dir: string, files: Record<string, string | object>) {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [name, value] of Object.entries(files)) {
+    const contents = typeof value === "string" ? value : JSON.stringify(value);
+    fs.writeFileSync(path.join(dir, name), contents);
+  }
+}
 
 it.each([undefined, "configured-stt-alias"])(
-  "VoiceCallWebhookServer discovers configured transcription with selection %s",
+  "discovers STT via %s",
   async (configuredProviderId) => {
-    const root = tempDirs.make("voice-call-provider-discovery-");
-    const workspace = path.join(root, "workspace");
-    fs.mkdirSync(workspace, { recursive: true });
+    const workspace = tempDirs.make("voice-call-provider-discovery-");
     for (const id of providerIds) {
-      const pluginDir = path.join(root, "extensions", id);
-      fs.mkdirSync(pluginDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(pluginDir, "index.cjs"),
-        `module.exports = { id: "${id}", register(api) {
+      writePluginFiles(path.join(workspace, "extensions", id), {
+        "index.cjs": `module.exports = { id: "${id}", register(api) {
             api.registerRealtimeTranscriptionProvider({
               id: "${id}", aliases: ["${id}-alias"], label: "${id}",
               isConfigured: ({ providerConfig }) => providerConfig.ready === true,
               createSession: () => { throw new Error("startup must not start transcription"); },
             });
           } };`,
-      );
-      writeJson(pluginDir, "openclaw.plugin.json", {
-        id,
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-        contracts: { realtimeTranscriptionProviders: [id] },
+        "openclaw.plugin.json": {
+          id,
+          configSchema: { type: "object", additionalProperties: false, properties: {} },
+          contracts: { realtimeTranscriptionProviders: [id] },
+        },
+        "package.json": { openclaw: { extensions: ["./index.cjs"] } },
       });
-      writeJson(pluginDir, "package.json", { openclaw: { extensions: ["./index.cjs"] } });
     }
     const cfg = {
       agents: { defaults: { workspace } },
@@ -53,46 +50,35 @@ it.each([undefined, "configured-stt-alias"])(
         entries: Object.fromEntries(providerIds.map((id) => [id, { enabled: true }])),
       },
     };
-    await withEnvAsync(
-      {
-        OPENCLAW_STATE_DIR: path.join(root, "state"),
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "extensions"),
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      },
-      async () => {
-        const activeProvider = getRealtimeTranscriptionProvider("active-stt", cfg);
-        assert(activeProvider, "expected the real loader to discover the active fixture provider");
-        const registry = createEmptyPluginRegistry();
-        registry.realtimeTranscriptionProviders.push({
-          pluginId: "active-stt",
-          pluginName: "active-stt",
-          source: path.join(root, "extensions", "active-stt", "index.cjs"),
-          provider: activeProvider,
-        });
-        setActivePluginRegistry(registry, undefined, "default", workspace);
-        const config = createVoiceCallBaseConfig();
-        config.serve.port = 0;
-        config.streaming.enabled = true;
-        config.streaming.provider = configuredProviderId;
-        config.streaming.providers = {
-          "active-stt": { ready: false },
-          [configuredProviderId ?? "configured-stt"]: { ready: true },
-        };
-        const server = new VoiceCallWebhookServer(
-          createTestPluginServiceScheduler(),
-          config,
-          new CallManager(config, path.join(root, "calls")),
-          new MockProvider(),
-          cfg,
-        );
-        try {
-          await server.start();
-          expect(server.getMediaStreamHandler()).not.toBeNull();
-        } finally {
-          await server.stop();
-        }
-      },
-    );
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspace, "state"));
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(workspace, "extensions"));
+    vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+    const activeProvider = getRealtimeTranscriptionProvider("active-stt", cfg);
+    assert(activeProvider, "expected the real loader to discover the active fixture provider");
+    const registry = plugins.createEmptyPluginRegistry();
+    registry.realtimeTranscriptionProviders.push({
+      pluginId: "active-stt",
+      source: path.join(workspace, "extensions", "active-stt", "index.cjs"),
+      provider: activeProvider,
+    });
+    plugins.setActivePluginRegistry(registry, undefined, "default", workspace);
+    const config = createVoiceCallBaseConfig();
+    config.serve.port = 0;
+    config.streaming.enabled = true;
+    config.streaming.provider = configuredProviderId;
+    config.streaming.providers = {
+      "active-stt": { ready: false },
+      [configuredProviderId ?? "configured-stt"]: { ready: true },
+    };
+    const scheduler = createTestPluginServiceScheduler();
+    const manager = new CallManager(config, path.join(workspace, "calls"));
+    const server = new WebhookServer(scheduler, config, manager, new MockProvider(), cfg);
+    try {
+      await server.start();
+      expect(server.getMediaStreamHandler()).not.toBeNull();
+    } finally {
+      await server.stop();
+    }
   },
 );
