@@ -6247,7 +6247,6 @@
 ["src/gateway/worker-environments/worker-turn-payload.test.ts","../agent-runtime-identity-token.js","1fc7c18979548e3b143882e63bbb66e27a22836153c00761d9ad23acb40bd6c1",1]
 ["src/gateway/workspace-icon-http.test.ts","./http-utils.js","b4339777ba629d92731ec883979138d0bc1ec82e7136ee40bf7e4a09e00e0f15",1]
 ["src/gateway/ws-log.redaction.test.ts","../logging/config.js","982f844437865e3a3b5b6869b297ca59ea9ff5123728b602ebb645365f9e8203",1]
-["src/gateway/ws-log.redaction.test.ts","../logging/subsystem.js","6c9f3c9b62abde7cadb5bdb550a5e5405272d3ed00d113874fa97d2ef2132612",1]
 ["src/globals.test.ts","../packages/terminal-core/src/theme.js","9a1d8031bf0d77701aee614f6e34eb12668111dba29f4060ef64fa6088662e51",1]
 ["src/globals.test.ts","./global-state.js","fb74c28fa3ff1a06f2ecfd50e782954d2ecb1e92cf51fa7bec0228bf49fdcc17",1]
 ["src/globals.test.ts","./logging/logger.js","2843fb7a506e14a3b4a5d5fd69d5718060986823e5808cf221f040170ebdb137",1]
