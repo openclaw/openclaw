@@ -12,7 +12,6 @@ import {
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionObserverDigestForLifecycle } from "../config/sessions/observer-digest.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -45,7 +44,6 @@ import type {
   DormantSessionObserverRun,
   SessionObserverDeps,
   SessionObserverRead,
-  SessionObserverPersistDigest,
   SessionObserverState,
 } from "./session-observer-model.js";
 import { createSessionObserverDigestPersister } from "./session-observer-persistence.js";
@@ -68,12 +66,18 @@ const FINAL_DIGEST_MIN_RUN_MS = 30_000;
 export function createSessionObserver(deps: SessionObserverDeps): SessionObserverService {
   const resolveStorePath = (agentId: string) =>
     resolveSessionStorePathCore(deps.getConfig().session?.store, { agentId });
-  const readSession = (sessionKey: string, agentId: string): SessionEntry | undefined =>
-    deps.getSessionRowProjection?.()?.sharingTarget({ key: sessionKey, agentId })?.entry;
-  const persistDigest: SessionObserverPersistDigest = (params) =>
+  const readSession: NonNullable<SessionObserverDeps["readSession"]> =
+    deps.readSession ??
+    ((sessionKey, agentId) =>
+      deps.getSessionRowProjection?.()?.sharingTarget({ key: sessionKey, agentId })?.entry);
+  const persistDigest: NonNullable<SessionObserverDeps["persistDigest"]> = (params) =>
     params.reader
       ? params.reader.persist(params)
-      : defaultPersistDigest({ ...params, storePath: resolveStorePath(params.agentId) });
+      : (
+          deps.persistDigest ??
+          ((input) =>
+            defaultPersistDigest({ ...input, storePath: resolveStorePath(input.agentId) }))
+        )(params);
   const contextlessTerminalRuns = new Map<string, number>();
   const terminalRuns = new Map<string, number>();
   const pendingTerminalErrors = new Map<string, ReturnType<typeof setTimeout>>();
@@ -178,8 +182,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
 
   const synthesizeTerminalDigest = createSessionObserverTerminalPublisher({
     dormantRuns,
-    readSession: (sessionKey, agentId) =>
-      defaultReadSession(sessionKey, agentId, resolveStorePath(agentId)),
+    readSession:
+      deps.readSession ??
+      ((sessionKey, agentId) => defaultReadSession(sessionKey, agentId, resolveStorePath(agentId))),
     persistDigest,
     work,
     runStillCurrent,

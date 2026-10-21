@@ -4,6 +4,7 @@ import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import {
   createHarness,
+  createObserverTimerTracker,
   declareObserverVisibility,
   flushObserver,
   modelMessage,
@@ -40,14 +41,11 @@ it("waits for an abort-ignoring completion before retrying and never publishes i
   try {
     await startAndAddToolNotes(harness.observer);
     await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
     expect(completeModel).toHaveBeenCalledOnce();
     const requestSignal = completeModel.mock.calls[0]?.[0].abortSignal as AbortSignal;
     await vi.advanceTimersByTimeAsync(30_000);
-    await flushObserver();
     expect(requestSignal.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(60_000);
-    await flushObserver();
     expect(completeModel).toHaveBeenCalledOnce();
     expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
 
@@ -70,6 +68,7 @@ it.for(["preparation", "completion"] as const)(
   async (stage, { signal }) => {
     const preparation = createDeferred<ReturnType<typeof preparedModel>>();
     const completion = createDeferred<Message>();
+    const timers = createObserverTimerTracker();
     const harness = createHarness({
       prepareModel: vi.fn(() =>
         stage === "preparation" ? preparation.promise : Promise.resolve(preparedModel()),
@@ -81,7 +80,6 @@ it.for(["preparation", "completion"] as const)(
     try {
       await startAndAddToolNotes(harness.observer);
       await vi.advanceTimersByTimeAsync(42_000);
-      await flushObserver();
       expect(harness.prepareModel).toHaveBeenCalledOnce();
       expect(harness.completeModel).toHaveBeenCalledTimes(stage === "preparation" ? 0 : 1);
       disposal = harness.observer.disposeAsync().then(disposed);
@@ -91,11 +89,10 @@ it.for(["preparation", "completion"] as const)(
       preparation.resolve(preparedModel());
       completion.resolve(message("Late digest"));
       await withinTest(disposal, signal);
-      await vi.advanceTimersByTimeAsync(60_000);
-      await flushObserver();
       expect(disposed).toHaveBeenCalledOnce();
       expect(harness.completeModel).toHaveBeenCalledTimes(stage === "preparation" ? 0 : 1);
       expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
+      expect(timers.ownedTimers.size).toBe(0);
     } finally {
       disposal ??= harness.observer.disposeAsync();
       preparation.resolve(preparedModel());
@@ -145,10 +142,10 @@ it.for([
         return completion === "logical-result" ? message("Logical result") : await physical;
       }),
     );
+    const timers = createObserverTimerTracker();
     const harness = createHarness({ subscribe: false, completeModel });
     const observe = async (index: number) => {
       const sessionKey = `agent:main:session-${index}`;
-      harness.setSession({ sessionId: `session-${index}`, updatedAt: 0 }, sessionKey);
       const connId = `conn-${index}`;
       harness.subscribers.subscribe(connId, sessionKey)?.commit();
       declareObserverVisibility(harness.observer, connId);
@@ -159,7 +156,6 @@ it.for([
         await observe(index);
       }
       await vi.advanceTimersByTimeAsync(12_000);
-      await flushObserver();
       expect(completeModel).toHaveBeenCalledTimes(6);
       if (kind === "replaced") {
         await startAndAddToolNotes(harness.observer, {
@@ -174,7 +170,6 @@ it.for([
       }
       expect(signals[0]?.aborted).toBe(true);
       await vi.advanceTimersByTimeAsync(12_000);
-      await flushObserver();
       expect(completeModel).toHaveBeenCalledTimes(6);
       expect(counts).toMatchObject({ active: 6, released: 0 });
 
@@ -193,12 +188,8 @@ it.for([
         request.resolve(message("Cleanup"));
       }
       await withinTest(disposal, signal);
-      const completedRequests = completeModel.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(60_000);
-      await flushObserver();
-      expect(completeModel).toHaveBeenCalledTimes(completedRequests);
-      expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
       expect(counts).toMatchObject({ active: 0, released: pending.length });
+      expect(timers.ownedTimers.size).toBe(0);
     }
   },
 );

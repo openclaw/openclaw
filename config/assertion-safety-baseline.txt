@@ -1297,6 +1297,7 @@ src/agents/subagents/registry/subagent-registry.ts	1
 src/agents/subagents/registry/subagent-session-cleanup.ts	2
 src/agents/subagents/spawn/acp-spawn-parent-stream.ts	1
 src/agents/subagents/swarm/swarm-output-schema.ts	1
+src/agents/subagents/swarm/swarm-scheduler.ts	1
 src/agents/system-prompt-report.ts	1
 src/agents/system-prompt.ts	1
 src/agents/thinking-block.ts	1

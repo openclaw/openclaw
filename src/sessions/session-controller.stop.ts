@@ -698,10 +698,17 @@ async function drainSessionControllerOwnersForTest(): Promise<void> {
   }
 }
 
-if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
-  Object.assign(globalThis, {
-    [Symbol.for("openclaw.sessionControllerTestApi")]: {
-      drainSessionControllerOwnersForTest,
-    },
-  });
+type SessionControllerTestApi = {
+  drainSessionControllerOwnersForTest?: () => Promise<void>;
+};
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  // SAFETY: globalThis hosts the symbol-keyed internal test API publications.
+  const publications = globalThis as Record<PropertyKey, unknown>;
+  const registryKey = Symbol.for("openclaw.sessionControllerTestApi");
+  // SAFETY: Storage publishes this mutable registry API before Stop can load.
+  const api = publications[registryKey] as SessionControllerTestApi | undefined;
+  if (api) {
+    api.drainSessionControllerOwnersForTest = drainSessionControllerOwnersForTest;
+  }
 }

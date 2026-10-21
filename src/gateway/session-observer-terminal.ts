@@ -5,7 +5,7 @@ import {
   isSameSessionObserverLifecycle,
   synthesizeSessionObserverTerminalDigest,
   type DormantSessionObserverRun,
-  type SessionObserverPersistDigest,
+  type SessionObserverDeps,
   type SessionObserverRead,
   type SessionObserverState,
 } from "./session-observer-model.js";
@@ -19,7 +19,7 @@ export function createSessionObserverTerminalPublisher(params: {
     sessionKey: string,
     agentId: string,
   ) => SessionEntry | undefined | Promise<SessionEntry | undefined>;
-  persistDigest: SessionObserverPersistDigest;
+  persistDigest: NonNullable<SessionObserverDeps["persistDigest"]>;
   work: Pick<ReturnType<typeof createSessionObserverWork>, "withCurrent" | "closing" | "resetting">;
   runStillCurrent: (runId: string, sessionKey: string, agentId: string) => () => boolean;
   broadcast: (digest: SessionObserverDigest, agentId: string) => void;

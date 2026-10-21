@@ -1,41 +1,14 @@
-import "../config/sessions/session-entry-patch-delivery.test-support.js";
-import path from "node:path";
-import { beforeEach, onTestFinished, vi } from "vitest";
+import { vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import type { GatewayStoredSessionTarget } from "../config/sessions/combined-store-model-sources.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  deleteSessionEntryRows,
-  readExactSessionEntryRow,
-  writeSessionEntry,
-} from "../config/sessions/session-accessor.sqlite-entry-store.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../state/openclaw-agent-db.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
 import * as observerModel from "./session-observer-model.js";
-import type { SessionObserverPersistDigest } from "./session-observer-model.js";
-import * as observerReads from "./session-observer-read.js";
+import type { SessionObserverDeps } from "./session-observer-model.js";
 import { createSessionObserver } from "./session-observer.js";
-import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-
-// Keep mock registration in the early side-effect import, ahead of native consumers.
-const { getSessionEntryPatchDelivery } =
-  await import("../config/sessions/session-entry-patch-delivery.test-support.js");
 
 const cfg = {
   gateway: { controlUi: { sessionObserver: true } },
@@ -44,55 +17,7 @@ const cfg = {
 
 let eventSequence = 0;
 
-export type PersistDigestParams = Parameters<SessionObserverPersistDigest>[0];
-
-const nativeRead = observerReads.captureSessionObserverRead;
-const nativePersist = observerModel.defaultPersistDigest;
-let nativeState: OpenClawTestState;
-let harnessSequence = 0;
-const nativeIo = new Set<Promise<unknown>>();
-const harnesses = new Set<ReturnType<typeof createHarness>>();
-const persisters = new Map<string, ReturnType<typeof vi.fn<typeof nativePersist>>>();
-
-function trackNativeIo<T>(run: () => Promise<T>): Promise<T> {
-  const result = run();
-  nativeIo.add(result);
-  const settled = () => nativeIo.delete(result);
-  void result.then(settled, settled);
-  return result;
-}
-
-beforeEach(async () => {
-  nativeState = await createOpenClawTestState({ scenario: "minimal", label: "observer" });
-  vi.spyOn(observerReads, "captureSessionObserverRead").mockImplementation((...args) => {
-    const reader = nativeRead(...args);
-    return {
-      ...reader,
-      withRead: (consume) => trackNativeIo(() => reader.withRead(consume)),
-      persist: (params) => trackNativeIo(() => reader.persist(params)),
-    };
-  });
-  vi.spyOn(observerModel, "defaultPersistDigest").mockImplementation((params) =>
-    trackNativeIo(() => {
-      const persist =
-        params.storePath &&
-        persisters.get(resolveUnsuffixedSqliteTargetFromSessionStorePath(params.storePath).path);
-      return (persist || nativePersist)(params);
-    }),
-  );
-  onTestFinished(async () => {
-    try {
-      for (const harness of harnesses) {
-        await harness.observer.disposeAsync();
-        await harness.releaseNative();
-      }
-    } finally {
-      harnesses.clear();
-      persisters.clear();
-      await nativeState.cleanup();
-    }
-  });
-});
+export type PersistDigestParams = Parameters<NonNullable<SessionObserverDeps["persistDigest"]>>[0];
 
 export function resetSessionObserverEventSequence(): void {
   eventSequence = 0;
@@ -158,16 +83,33 @@ export function persistedLiveDigest(
 }
 
 export async function flushObserver(): Promise<void> {
-  // Model fixtures can deliberately remain pending. Only join real native I/O.
-  for (;;) {
-    for (let index = 0; index < 12; index += 1) {
-      await Promise.resolve();
-    }
-    if (nativeIo.size === 0) {
-      return;
-    }
-    await Promise.allSettled(nativeIo);
+  for (let index = 0; index < 12; index += 1) {
+    await Promise.resolve();
   }
+}
+
+export function createObserverTimerTracker() {
+  // Install after unrelated timers: these controlled fixtures schedule only observer work.
+  const nativeSetTimeout = setTimeout;
+  const nativeClearTimeout = clearTimeout;
+  const ownedTimers = new Set<ReturnType<typeof setTimeout>>();
+  const setTimeoutFn = Object.assign((callback: () => void, delay?: number) => {
+    const timer = nativeSetTimeout(() => {
+      ownedTimers.delete(timer);
+      callback();
+    }, delay);
+    ownedTimers.add(timer);
+    return timer;
+  }, nativeSetTimeout);
+  const clearTimeoutFn: typeof clearTimeout = (timer) => {
+    if (timer && typeof timer === "object") {
+      ownedTimers.delete(timer);
+    }
+    nativeClearTimeout(timer);
+  };
+  vi.spyOn(globalThis, "setTimeout").mockImplementation(setTimeoutFn);
+  vi.spyOn(globalThis, "clearTimeout").mockImplementation(clearTimeoutFn);
+  return { ownedTimers };
 }
 
 export function createHarness(options?: {
@@ -176,82 +118,10 @@ export function createHarness(options?: {
   visible?: boolean;
   completeModel?: ReturnType<typeof vi.fn<typeof observerModel.defaultCompleteModel>>;
   prepareModel?: ReturnType<typeof vi.fn<typeof observerModel.defaultPrepareModel>>;
-  initialEntry?: SessionEntry;
+  persistDigest?: ReturnType<typeof vi.fn<(params: PersistDigestParams) => Promise<unknown>>>;
+  readSession?: ReturnType<typeof vi.fn>;
   config?: OpenClawConfig;
 }) {
-  const config: OpenClawConfig = options?.config ?? structuredClone(cfg);
-  config.session = {
-    ...config.session,
-    store:
-      config.session?.store ?? nativeState.path(`harness-${++harnessSequence}`, "{agentId}.sqlite"),
-  };
-  const env = { ...process.env };
-  const databases = new Map<string, ReturnType<typeof openOpenClawAgentDatabase>>();
-  const executions: ReturnType<typeof captureOpenClawAgentDatabaseExecution>[] = [];
-  const targets = new Map<string, GatewayStoredSessionTarget>();
-  const rows = createSessionRowProjectionFixture({
-    cfg: config,
-    store: {},
-    targetsBySessionKey: targets,
-  });
-  const persistDigest = vi.fn(nativePersist);
-  const databaseFor = (agentId: string) => {
-    const storePath = resolveUnsuffixedSqliteTargetFromSessionStorePath(
-      resolveSessionStorePathCore(config.session?.store, { agentId, env }),
-    ).path;
-    let database = databases.get(storePath);
-    if (!database) {
-      database = openOpenClawAgentDatabase({ agentId, path: storePath, env });
-      databases.set(storePath, database);
-      // Keep native execution alive until this harness has joined its observer work.
-      executions.push(captureOpenClawAgentDatabaseExecution({ agentId, path: storePath, env }));
-      persisters.set(path.resolve(storePath), persistDigest);
-    }
-    return database;
-  };
-  const projectionKey = (sessionKey: string, agentId: string) =>
-    sessionKey.startsWith("agent:") ? sessionKey : `agent:${agentId}:${sessionKey}`;
-  const publishRow = (sessionKey: string, agentId: string, database = databaseFor(agentId)) => {
-    const entry = readExactSessionEntryRow(database, sessionKey)?.entry;
-    const key = projectionKey(sessionKey, agentId);
-    targets.set(key, {
-      agentId,
-      storeKey: sessionKey,
-      storeTarget: { agentId, storePath: database.path },
-      entry,
-      readSourceEntry: (sourceKey) => readExactSessionEntryRow(database, sourceKey)?.entry,
-      resolveSourceKey: (sourceKey) => sourceKey,
-    });
-    rows.setEntry(key, entry);
-  };
-  const setSession = (
-    entry: SessionEntry | undefined,
-    sessionKey = "agent:main:session-1",
-    agentId = "main",
-  ) => {
-    const database = databaseFor(agentId);
-    if (entry) {
-      writeSessionEntry(database, sessionKey, entry);
-    } else {
-      runOpenClawAgentWriteTransaction((current) => deleteSessionEntryRows(current, sessionKey), {
-        agentId,
-        path: database.path,
-        env,
-      });
-    }
-    publishRow(sessionKey, agentId);
-  };
-  setSession(options?.initialEntry ?? { sessionId: "session-id", updatedAt: 0 });
-  const stopRows = sessionChanges.subscribe((change) => {
-    if (
-      "sessionKey" in change &&
-      change.agentId &&
-      change.storePath &&
-      databases.has(change.storePath)
-    ) {
-      publishRow(change.sessionKey, change.agentId, databases.get(change.storePath)!);
-    }
-  });
   const subscribers = createSessionMessageSubscriberRegistry();
   const sessionEventSubscribers = createSessionEventSubscriberRegistry();
   if (options?.subscribe !== false) {
@@ -271,6 +141,9 @@ export function createHarness(options?: {
       }),
     );
   const broadcastToConnIds = vi.fn();
+  const persistDigest = options?.persistDigest ?? vi.fn(async () => true);
+  const readSession =
+    options?.readSession ?? vi.fn(() => ({ sessionId: "session-id", updatedAt: 0 }));
   const prepareSpy = vi
     .spyOn(observerModel, "defaultPrepareModel")
     .mockImplementation(prepareModel);
@@ -278,11 +151,12 @@ export function createHarness(options?: {
     .spyOn(observerModel, "defaultCompleteModel")
     .mockImplementation(completeModel);
   const observer = createSessionObserver({
-    getConfig: () => config,
+    getConfig: () => options?.config ?? cfg,
     subscribers,
     sessionEventSubscribers,
     broadcastToConnIds,
-    getSessionRowProjection: () => rows,
+    readSession: readSession as never,
+    persistDigest: persistDigest as never,
   });
   // Restore native exports; only this observer retains the rearmed spies.
   prepareSpy.mockRestore();
@@ -292,37 +166,16 @@ export function createHarness(options?: {
   if ((options?.subscribe !== false || options?.broadSubscribe) && options?.visible !== false) {
     declareObserverVisibility(observer);
   }
-  const harness = {
+  return {
     observer,
-    setSession,
-    readSession: (sessionKey = "agent:main:session-1", agentId = "main") => {
-      const storePath = resolveUnsuffixedSqliteTargetFromSessionStorePath(
-        resolveSessionStorePathCore(config.session?.store, { agentId, env }),
-      ).path;
-      const database = databases.get(storePath);
-      return database && readExactSessionEntryRow(database, sessionKey)?.entry;
-    },
-    delivery: (agentId = "main") =>
-      getSessionEntryPatchDelivery({
-        agentId,
-        path: databaseFor(agentId).path,
-        env,
-      }),
-    persistNative: nativePersist,
-    async releaseNative() {
-      stopRows();
-      rows.dispose();
-      await Promise.all(executions.map((execution) => execution.release()));
-    },
     subscribers,
     sessionEventSubscribers,
     prepareModel,
     completeModel,
     broadcastToConnIds,
     persistDigest,
+    readSession,
   };
-  harnesses.add(harness);
-  return harness;
 }
 
 export function declareObserverVisibility(

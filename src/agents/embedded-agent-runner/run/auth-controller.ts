@@ -158,6 +158,7 @@ export function createEmbeddedRunAuthController(params: {
   allowTransientCooldownProbe: boolean;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
   authProfileStateMode?: "read-write" | "read-only";
+  runId?: string;
   provider: string;
   modelId: string;
   state: EmbeddedRunAuthState;
@@ -393,6 +394,7 @@ export function createEmbeddedRunAuthController(params: {
         reason,
         cfg: params.config,
         agentDir: params.agentDir,
+        runId: params.runId,
         modelId: params.modelId,
       });
     } catch (markError) {

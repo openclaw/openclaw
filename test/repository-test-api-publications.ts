@@ -28,6 +28,7 @@ const publications: Record<string, string | symbol> = {
   "src/agents/subagents/registry/subagent-registry.ts": Symbol.for(
     "openclaw.subagentRegistryTestApi",
   ),
+  "src/agents/subagents/swarm/swarm-scheduler.ts": Symbol.for("openclaw.swarmSchedulerTestApi"),
   "src/agents/tools/ask-user-tool.ts": Symbol.for("openclaw.askUserToolTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),
   "src/agents/worktrees/run-lease.ts": Symbol.for("openclaw.worktreeRunLeaseTestApi"),
@@ -57,6 +58,7 @@ const publications: Record<string, string | symbol> = {
   "src/node-host/plugin-node-host.ts": Symbol.for("openclaw.nodeHostPluginTestApi"),
   "src/plugins/memory-runtime.ts": Symbol.for("openclaw.memoryRuntimeTestApi"),
   "src/sessions/session-controller.stop.ts": Symbol.for("openclaw.sessionControllerTestApi"),
+  "src/sessions/session-controller.storage.ts": Symbol.for("openclaw.sessionControllerTestApi"),
   "src/sessions/session-upstream-monitor.ts": Symbol.for("openclaw.sessionUpstreamMonitorTestApi"),
   "src/skills/runtime/remote-skills.ts": Symbol.for("openclaw.remoteNodeSkillsTestApi"),
   "src/talk/client-voice-session.ts": Symbol.for("openclaw.clientVoiceSessionTestApi"),

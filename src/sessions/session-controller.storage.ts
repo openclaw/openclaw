@@ -51,3 +51,28 @@ export const messageAdmissionsByAttachment = controllerState.messageAdmissionsBy
 export const afterClearByOperation = controllerState.afterClearByOperation;
 export const successorBarrierStartsByOperation = controllerState.successorBarrierStartsByOperation;
 export const successorBarrierGroupsByOperation = controllerState.successorBarrierGroupsByOperation;
+
+// Mailbox-only producers allocate this state without loading operation lifecycle
+// runtime. Publish cleanup with the storage owner so a completed test file cannot
+// retain reservations that block the next file's FIFO admission.
+if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+  Object.assign(globalThis, {
+    [Symbol.for("openclaw.sessionControllerTestApi")]: {
+      resetSessionControllerForTest(): void {
+        for (const entry of controllerState.controllers.values()) {
+          entry.active?.watchdog.close();
+          for (const operation of entry.lifecycle?.operations ?? []) {
+            operation.watchdog.close();
+          }
+          for (const waiter of entry.waiters) {
+            waiter.finish(false);
+          }
+        }
+        controllerState.controllers.clear();
+        controllerState.entriesByAlias.clear();
+        controllerState.entriesByStore.clear();
+        controllerState.rpcSourcesByRunId.clear();
+      },
+    },
+  });
+}

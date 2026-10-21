@@ -11,6 +11,7 @@ import {
   type EventRoute,
 } from "./session-observer-suite.test-support.js";
 import {
+  createObserverTimerTracker,
   declareObserverVisibility,
   flushObserver,
   modelMessage,
@@ -31,19 +32,7 @@ async function addToolNotes(harness: Harness, runId = "run-1") {
 
 it("keeps global observer streams scoped to their owning agents", async () => {
   vi.setSystemTime(1_000);
-  const harness = createHarness({
-    subscribe: false,
-    config: {
-      gateway: { controlUi: { sessionObserver: true } },
-      agents: {
-        ownership: "explicit",
-        defaults: { utilityModel: "openai/gpt-test", systemAgent: { agentId: "main" } },
-        entries: { main: {}, work: {} },
-      },
-    },
-  });
-  harness.setSession({ sessionId: "main-global", updatedAt: 0 }, "global", "main");
-  harness.setSession({ sessionId: "work-global", updatedAt: 0 }, "global", "work");
+  const harness = createHarness({ subscribe: false });
   harness.subscribers.subscribe("conn-main", "agent:main:global")?.commit();
   harness.subscribers.subscribe("conn-legacy", "global")?.commit();
   harness.subscribers.subscribe("conn-work", "agent:work:global")?.commit();
@@ -91,7 +80,6 @@ it("terminalizes a preamble-only digest without a utility model", async () => {
   expectBroadcast(harness, { headline: "Running tests" }, 0);
   expect(harness.completeModel).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(100);
-  await flushObserver();
   await preamble(harness, "Wrapping up");
   await emitEvent(harness, "lifecycle", { phase: "end", startedAt: 0, endedAt: 40_000 });
   await flushObserver();
@@ -102,7 +90,6 @@ it("terminalizes a preamble-only digest without a utility model", async () => {
   await preamble(harness, "Late preamble");
   await emitEvent(harness, "lifecycle", { phase: "end", startedAt: 0, endedAt: 40_001 });
   await vi.advanceTimersByTimeAsync(2_000);
-  await flushObserver();
   expect(harness.broadcastToConnIds).toHaveBeenCalledTimes(terminalCount);
 });
 
@@ -174,15 +161,12 @@ it("coalesces live completions and cancels in-flight work for the terminal diges
   try {
     await startAndAddToolNotes(harness.observer);
     await vi.advanceTimersByTimeAsync(11_999);
-    await flushObserver();
     expect(completeModel).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    await flushObserver();
     expect(completeModel).toHaveBeenCalledOnce();
 
     await addToolNotes(harness);
     await vi.advanceTimersByTimeAsync(9_000);
-    await flushObserver();
     expect(completeModel).toHaveBeenCalledOnce();
 
     first.resolve(modelMessage({ headline: "Starting the work", health: "on-track" }));
@@ -218,7 +202,6 @@ it("suspends when hidden and resumes on the next event after becoming visible", 
   expect(harness.observer.getCompanionSnapshot("agent:main:session-1").notes).toEqual([]);
   await addToolNotes(harness);
   await vi.advanceTimersByTimeAsync(12_000);
-  await flushObserver();
   expect(harness.completeModel).toHaveBeenCalledOnce();
 
   harness.observer.setConnectionVisibility("conn-1", true);
@@ -276,7 +259,6 @@ it("demotes the least recently active model while retaining preamble state", asy
   const harness = createHarness();
   for (let index = 0; index < 7; index += 1) {
     const sessionKey = `agent:main:session-${index}`;
-    harness.setSession({ sessionId: `session-${index}`, updatedAt: 0 }, sessionKey);
     harness.subscribers.subscribe(`conn-${index}`, sessionKey)?.commit();
     declareObserverVisibility(harness.observer, `conn-${index}`);
     vi.setSystemTime(index);
@@ -294,12 +276,10 @@ it("demotes the least recently active model while retaining preamble state", asy
   const demoted = { runId: "run-0", sessionKey: "agent:main:session-0" };
   await preamble(harness, "Checking files", demoted);
   await vi.advanceTimersByTimeAsync(100);
-  await flushObserver();
   await preamble(harness, "Running", demoted);
   await preamble(harness, "Running tests", demoted);
   expect(harness.broadcastToConnIds).toHaveBeenCalledTimes(beforePreamble + 1);
   await vi.advanceTimersByTimeAsync(1_900);
-  await flushObserver();
   expect(harness.broadcastToConnIds).toHaveBeenCalledTimes(beforePreamble + 2);
   expect(lastDigest(harness)?.headline).toBe("Running tests");
 });
@@ -308,14 +288,12 @@ it("preserves revisions across active and dormant run rollover", async () => {
   const harness = createHarness();
   await startAndAddToolNotes(harness.observer);
   await vi.advanceTimersByTimeAsync(12_000);
-  await flushObserver();
   await addToolNotes(harness);
   await advance(12_000);
 
   await startAndAddToolNotes(harness.observer, { runId: "run-2" });
   await emitEvent(harness, "lifecycle", { phase: "end", endedAt: 30_000 });
   await vi.advanceTimersByTimeAsync(12_000);
-  await flushObserver();
   harness.subscribers.unsubscribe("conn-1", "agent:main:session-1");
   await emitEvent(harness, "lifecycle", { phase: "start" }, { runId: "run-3" });
   harness.subscribers.subscribe("conn-2", "agent:main:session-1")?.commit();
@@ -334,22 +312,18 @@ it("accepts a model digest after the preamble generation advances", async () => 
   const harness = createHarness({ completeModel });
   await emitEvent(harness, "lifecycle", { phase: "start" });
   await vi.advanceTimersByTimeAsync(11_500);
-  await flushObserver();
   await preamble(harness, "Checking files");
   await vi.advanceTimersByTimeAsync(500);
-  await flushObserver();
   await addToolNotes(harness);
   await flushObserver();
   expect(completeModel).toHaveBeenCalledOnce();
 
   await vi.advanceTimersByTimeAsync(100);
-  await flushObserver();
   await preamble(harness, "Running focused tests");
   model.resolve(modelMessage({ headline: "Stale model summary", health: "on-track" }));
   await flushObserver();
   expectBroadcast(harness, { headline: "Stale model summary" });
   await vi.advanceTimersByTimeAsync(1_900);
-  await flushObserver();
   expectBroadcast(harness, { headline: "Stale model summary" });
 });
 
@@ -367,7 +341,6 @@ it("stops live model attempts at the budget when requests are superseded", async
   });
   await startAndAddToolNotes(harness.observer);
   await vi.advanceTimersByTimeAsync(12_000);
-  await flushObserver();
   expect(completeModel).toHaveBeenCalledOnce();
 
   for (let attempt = 1; attempt <= 39; attempt += 1) {
@@ -384,13 +357,11 @@ it("stops live model attempts at the budget when requests are superseded", async
       await emitEvent(harness, "tool", { phase: "start", name: "read", args: { attempt, note } });
     }
     await vi.advanceTimersByTimeAsync(12_000);
-    await flushObserver();
     expect(completeModel).toHaveBeenCalledTimes(attempt + 1);
   }
 
   await startAndAddToolNotes(harness.observer, { count: 4 });
   await vi.advanceTimersByTimeAsync(24_000);
-  await flushObserver();
   expect(completeModel).toHaveBeenCalledTimes(39);
   completeModel.mockResolvedValue(modelMessage({ headline: "Finished", health: "done" }));
   await emitEvent(harness, "lifecycle", { phase: "end", startedAt: 0, endedAt: Date.now() });
@@ -400,28 +371,25 @@ it("stops live model attempts at the budget when requests are superseded", async
 });
 
 it("disables model work when digest persistence reports a missing entry", async () => {
+  const persistDigest = vi.fn(async () => null);
   const unrelated = vi.fn();
   const unrelatedTimer = setTimeout(unrelated, 60_000);
-  const harness = createHarness();
-  const delivery = harness.delivery();
-  delivery.beforeCommit = () => {
-    delivery.beforeCommit = undefined;
-    harness.setSession(undefined);
-  };
+  const { ownedTimers } = createObserverTimerTracker();
+  const harness = createHarness({ persistDigest });
   await startAndAddToolNotes(harness.observer);
 
   await advance(12_000);
   expect(harness.completeModel).toHaveBeenCalledOnce();
-  expect(harness.persistDigest).toHaveBeenCalledOnce();
+  expect(persistDigest).toHaveBeenCalledOnce();
+  expect(ownedTimers.size).toBe(0);
 
   await startAndAddToolNotes(harness.observer, { count: 4 });
   await vi.advanceTimersByTimeAsync(24_000);
-  await flushObserver();
   expect(harness.completeModel).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(24_000);
-  await flushObserver();
   expect(unrelated).toHaveBeenCalledOnce();
   expect(harness.completeModel).toHaveBeenCalledOnce();
+  expect(ownedTimers.size).toBe(0);
   await harness.observer.disposeAsync();
   clearTimeout(unrelatedTimer);
 });

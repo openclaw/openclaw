@@ -3,7 +3,6 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import * as entryFacts from "../config/sessions/session-entry-read-facts.js";
@@ -27,12 +26,12 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import * as observerModel from "./session-observer-model.js";
+import type { SessionObserverDeps } from "./session-observer-model.js";
 import * as observerWork from "./session-observer-work.js";
 import { createSessionObserver } from "./session-observer.js";
 import {
   createHarness,
   event,
-  flushObserver,
   modelMessage,
   preparedModel,
   resetSessionObserverEventSequence,
@@ -40,7 +39,6 @@ import {
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import * as sessionReads from "./session-utils-store-lookup.js";
 
-const nativePersistDigest = observerModel.defaultPersistDigest;
 const key = "agent:main:session-1";
 const initialEntry = { sessionId: "session-id", lifecycleRevision: "life-a", updatedAt: 1 };
 const successorEntry = { ...initialEntry, lifecycleRevision: "life-b", updatedAt: 2 };
@@ -63,13 +61,12 @@ function send(
   return observer.handleEventAsync(event({ stream, data, runId }));
 }
 
-async function sendPreamble(
+function sendPreamble(
   observer: ReturnType<typeof createSessionObserver>,
   progressText: string,
   runId?: string,
 ) {
-  await send(observer, "item", { kind: "preamble", progressText }, runId);
-  await flushObserver();
+  return send(observer, "item", { kind: "preamble", progressText }, runId);
 }
 
 function interceptNextEntryRead(storePath: string, afterRead: () => void | Promise<void>) {
@@ -98,16 +95,18 @@ function interceptNextEntryRead(storePath: string, afterRead: () => void | Promi
   return intercepted;
 }
 
-function observerFixture({ env, path }: OpenClawTestState, useDefaultStore = false) {
+function observerFixture(
+  { env, path }: OpenClawTestState,
+  persistDigests = false,
+  useDefaultStore = false,
+) {
   const database = openOpenClawAgentDatabase({ agentId: "main", env });
   writeSessionEntry(database, key, initialEntry);
   const peer = new DatabaseSync(database.path);
   const subscribers = createSessionMessageSubscriberRegistry();
   subscribers.subscribe("viewer", key)?.commit();
   const broadcast = vi.fn();
-  const persisted = vi
-    .spyOn(observerModel, "defaultPersistDigest")
-    .mockImplementation(nativePersistDigest);
+  const persisted = vi.fn<NonNullable<SessionObserverDeps["persistDigest"]>>(async () => true);
   let now = 1_000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
   const cfg = {
@@ -127,6 +126,7 @@ function observerFixture({ env, path }: OpenClawTestState, useDefaultStore = fal
     getConfig: () => cfg,
     subscribers,
     broadcastToConnIds: broadcast,
+    ...(persistDigests ? {} : { persistDigest: persisted }),
   });
   // Restore native exports; only this observer retains the rearmed spies.
   prepareSpy.mockRestore();
@@ -170,10 +170,11 @@ function observerFixture({ env, path }: OpenClawTestState, useDefaultStore = fal
 
 async function withObserver(
   run: (fixture: ReturnType<typeof observerFixture>) => Promise<void>,
+  persistDigests = false,
   useDefaultStore = false,
 ) {
   await withOpenClawTestState({ label: "observer-worker" }, async (state) => {
-    const fixture = observerFixture(state, useDefaultStore);
+    const fixture = observerFixture(state, persistDigests, useDefaultStore);
     try {
       await run(fixture);
     } finally {
@@ -197,74 +198,78 @@ it("does not discover physical stores for unwatched assistant deltas", async () 
 });
 
 it("moves observer admission, publication, terminal and companion reads off the caller and observes foreign resets", async () => {
-  await withObserver(async ({ observer, broadcast, peer, resetLifecycle, advanceClock }) => {
-    // Keep entry reads cold while target discovery retains its admitted inventory.
-    vi.spyOn(entryFacts, "readRetainedSessionEntryFacts").mockReturnValue(undefined);
-    const start = event({ stream: "lifecycle", data: { phase: "start" } });
-    let inventories = 0;
-    let entries = 0;
-    const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
-    vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
-      const result = await run(...args);
-      if (
-        result.ok &&
-        typeof result.value === "object" &&
-        result.value !== null &&
-        "kind" in result.value
-      ) {
-        inventories += Number(result.value.kind === "session-target-inventory");
-        entries += Number(result.value.kind === "session-exact-entries");
-      }
-      return result;
-    });
-    {
-      using sql = traceSql();
-      observer.handleEvent(start);
-      sql.expectIdle();
-      sql.clear();
-      await observer.handleEventAsync({ ...start, runId: "worker-run" });
-      expect(inventories).toBe(1);
-      inventories = 0;
-      entries = 0;
-      await sendPreamble(observer, "Worker observation", "worker-run");
-      expect(inventories).toBe(0);
-      expect(entries).toBeGreaterThanOrEqual(2);
-      entries = 0;
-      for (const delta of ["Checking ", "the implementation."]) {
-        await send(observer, "assistant", { delta }, "worker-run");
-      }
-      expect({ inventories, entries }).toEqual({ inventories: 0, entries: 0 });
-      const snapshot = await observer.getCompanionSnapshotAsync(key, "main");
-      expect(snapshot.digest?.headline).toBe("Worker observation");
-      expect(snapshot.notes).toContainEqual({
-        sequence: 1,
-        text: "Assistant: Checking the implementation.",
+  await withObserver(
+    async ({ observer, broadcast, peer, resetLifecycle, advanceClock }) => {
+      // Keep entry reads cold while target discovery retains its admitted inventory.
+      vi.spyOn(entryFacts, "readRetainedSessionEntryFacts").mockReturnValue(undefined);
+      const start = event({ stream: "lifecycle", data: { phase: "start" } });
+      let inventories = 0;
+      let entries = 0;
+      const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+      vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
+        const result = await run(...args);
+        if (
+          result.ok &&
+          typeof result.value === "object" &&
+          result.value !== null &&
+          "kind" in result.value
+        ) {
+          inventories += Number(result.value.kind === "session-target-inventory");
+          entries += Number(result.value.kind === "session-exact-entries");
+        }
+        return result;
       });
-      sql.expectIdle();
-      sql.restore();
-      peer.prepare(lifecycleUpdate).run(key);
-      advanceClock();
-      inventories = 0;
-      entries = 0;
       {
-        using fresh = traceSql();
-        await sendPreamble(observer, "Retired observation", "worker-run");
+        using sql = traceSql();
+        observer.handleEvent(start);
+        sql.expectIdle();
+        sql.clear();
+        await observer.handleEventAsync({ ...start, runId: "worker-run" });
+        expect(inventories).toBe(1);
+        inventories = 0;
+        entries = 0;
+        await sendPreamble(observer, "Worker observation", "worker-run");
         expect(inventories).toBe(0);
-        expect(entries).toBeGreaterThan(0);
-        expect(broadcast).toHaveBeenCalledTimes(1);
-        fresh.expectIdle();
+        expect(entries).toBeGreaterThanOrEqual(2);
+        entries = 0;
+        for (const delta of ["Checking ", "the implementation."]) {
+          await send(observer, "assistant", { delta }, "worker-run");
+        }
+        expect({ inventories, entries }).toEqual({ inventories: 0, entries: 0 });
+        const snapshot = await observer.getCompanionSnapshotAsync(key, "main");
+        expect(snapshot.digest?.headline).toBe("Worker observation");
+        expect(snapshot.notes).toContainEqual({
+          sequence: 1,
+          text: "Assistant: Checking the implementation.",
+        });
+        sql.expectIdle();
+        sql.restore();
+        peer.prepare(lifecycleUpdate).run(key);
+        advanceClock();
+        inventories = 0;
+        entries = 0;
+        {
+          using fresh = traceSql();
+          await sendPreamble(observer, "Retired observation", "worker-run");
+          expect(inventories).toBe(0);
+          expect(entries).toBeGreaterThan(0);
+          expect(broadcast).toHaveBeenCalledTimes(1);
+          fresh.expectIdle();
+        }
+        await resetLifecycle();
+        {
+          using after = traceSql();
+          expect((await observer.getCompanionSnapshotAsync(key, "main")).digest).toBeUndefined();
+          await send(observer, "lifecycle", { phase: "end" }, "worker-run");
+          await observer.disposeAsync();
+          expect(broadcast).toHaveBeenCalledTimes(1);
+          after.expectIdle();
+        }
       }
-      await resetLifecycle();
-      {
-        using after = traceSql();
-        expect((await observer.getCompanionSnapshotAsync(key, "main")).digest).toBeUndefined();
-        await send(observer, "lifecycle", { phase: "end" }, "worker-run");
-        await observer.disposeAsync();
-        expect(broadcast).toHaveBeenCalledTimes(1);
-        after.expectIdle();
-      }
-    }
-  }, true);
+    },
+    false,
+    true,
+  );
 });
 
 it.for(["rewrite", "native rewrite", "close"] as const)(
@@ -416,50 +421,46 @@ it("joins the worker-backed persistence of a legacy event adapter", async () => 
         )
         .get(key),
     ).toEqual({ headline: "Legacy admission" });
-  });
+  }, true);
 });
 
 it("lets the publisher finish its nested write before persisting the background digest", async ({
   signal,
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const options = { agentId: "main", env: state.env };
+    const options = { agentId: "main", path: state.path("sessions.sqlite"), env: state.env };
     const entered = createDeferred();
     const release = createDeferred();
     const order: string[] = [];
     let digestEntered = false;
+    const persistDigest = vi.fn(() =>
+      runOpenClawAgentWorkerWrite(options, async () => {
+        digestEntered = true;
+        entered.resolve();
+        await release.promise;
+        order.push("persisted");
+        return true;
+      }),
+    );
     const harness = createHarness({
       config: {
-        session: { store: resolveSessionStorePathCore(undefined, options) },
+        session: { store: options.path },
         gateway: { controlUi: { sessionObserver: true } },
-        agents: { defaults: { utilityModel: "" }, entries: { main: {} } },
+        agents: { defaults: { utilityModel: "" } },
       },
+      persistDigest,
     });
-    const delivery = harness.delivery();
-    delivery.beforeCommit = async () => {
-      digestEntered = true;
-      entered.resolve();
-      await release.promise;
-    };
-    delivery.afterCommit = () => {
-      order.push("persisted");
-    };
     let successor: Promise<void> | undefined;
     let disposal: Promise<void> | undefined;
     try {
-      // Admit the real direct reader before the publisher reserves the same writer FIFO.
-      await withinTest(send(harness.observer, "lifecycle", { phase: "start" }), signal);
-      await withinTest(
-        runOpenClawAgentWriteAdmission(options, async () => {
-          await harness.observer.handleEventAsync(preambleEvent("Reviewing"));
-          expect(harness.persistDigest).toHaveBeenCalledOnce();
-          expect(digestEntered).toBe(false);
-          await runOpenClawAgentWorkerWrite(options, async () => {
-            order.push("publisher");
-          });
-        }),
-        signal,
-      );
+      await runOpenClawAgentWriteAdmission(options, async () => {
+        await harness.observer.handleEventAsync(preambleEvent("Reviewing"));
+        expect(persistDigest).toHaveBeenCalledOnce();
+        expect(digestEntered).toBe(false);
+        await runOpenClawAgentWorkerWrite(options, async () => {
+          order.push("publisher");
+        });
+      });
       await withinTest(entered.promise, signal);
       successor = runOpenClawAgentWriteAdmission(options, () =>
         runOpenClawAgentWorkerWrite(options, async () => {
@@ -534,7 +535,7 @@ it.for(["model", "failed model", "synthesized terminal"] as const)(
       try {
         harness = createHarness({
           config,
-          initialEntry: { ...initialEntry, lifecycleRevision: "owned" },
+          readSession: vi.fn(() => ({ ...initialEntry, lifecycleRevision: "owned" })),
           prepareModel: vi.fn(async () => preparedModel()),
           completeModel: vi.fn(async () => {
             if (kind === "failed model") {

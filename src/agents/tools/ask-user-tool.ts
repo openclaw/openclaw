@@ -10,7 +10,11 @@ import { sha256Hex } from "../../infra/crypto-digest.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { sleep } from "../../utils/sleep.js";
-import { resolveAgentQuestionGatewayCall } from "../harness/gateway-question-dispatch.js";
+import {
+  resolveAgentQuestionGatewayCall,
+  type AgentHarnessQuestionGatewayCall,
+  type AgentQuestionDispatcher,
+} from "../harness/gateway-question-dispatch.js";
 import { registerPendingAgentQuestion } from "../harness/gateway-question.js";
 import {
   resolveAgentQuestionAnswerAuthority,
@@ -454,12 +458,13 @@ export function createAskUserTool(params: {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
+  gatewayCall?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher;
   /** How this run shows a prompt when its harness does not reserve one. */
   questionPrompt?: QuestionPromptDelivery;
 }): AnyAgentTool {
   // Tool callbacks may run outside their creation scope; never borrow the invoker's owner.
   const questionAuthority = resolveAgentQuestionAnswerAuthority();
-  const gatewayCall = resolveAgentQuestionGatewayCall();
+  const gatewayCall = resolveAgentQuestionGatewayCall(params.gatewayCall);
   return {
     label: "Ask User",
     name: "ask_user",
@@ -539,6 +544,7 @@ export function createAskUserTool(params: {
               ...question,
               id,
             })),
+            gatewayCall: params.gatewayCall,
             onCancel: () => {
               prompt.close();
               if (

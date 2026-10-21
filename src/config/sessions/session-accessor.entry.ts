@@ -25,6 +25,7 @@ import {
   listSessionEntryRows,
   listSessionEntriesReadOnly,
   loadExactSessionEntryCandidates,
+  loadExactSessionEntryReadOnly,
   patchSessionEntryCore,
   patchSessionEntryTarget,
 } from "./session-accessor.sqlite-entry.js";
@@ -43,6 +44,7 @@ import type {
   ResolvedSessionEntryUpdateContext,
   ResolvedSessionEntryUpdateResult,
   SessionEntrySummary,
+  SessionEntryReadView,
   SessionEntryPatchOptions,
   SessionEntryPatchContext,
   SessionEntryPatchResult,
@@ -500,9 +502,28 @@ export async function updateResolvedSessionEntry<T>(
 /** Lists entries from the resolved store, preserving the persisted key for each row. */
 export function listSessionEntriesCore(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   if (scope.clone === false) {
-    return listSessionEntriesReadOnly({ ...scope, clone: false });
+    return openSessionEntryReadView(scope).entries();
   }
   return listSessionEntryRows(scope);
+}
+
+/**
+ * Synchronous read view: `get` queries one exact persisted key without alias resolution;
+ * `entries` caches listing metadata or loads complete entries. Rows and nested values are
+ * borrowed: callers must not mutate them and must drop the view before any await.
+ */
+export function openSessionEntryReadView(
+  scope: Omit<SessionEntryListScope, "clone" | "readConsistency"> = {},
+): SessionEntryReadView {
+  return {
+    get: (sessionKey) =>
+      loadExactSessionEntryReadOnly({
+        ...scope,
+        clone: false,
+        sessionKey,
+      })?.entry,
+    entries: () => listSessionEntriesReadOnly({ ...scope, clone: false }),
+  };
 }
 
 /**

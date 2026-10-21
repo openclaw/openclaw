@@ -13,7 +13,7 @@ import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.t
 
 /** One observation retains its physical sources; every read still fetches current rows. */
 export function captureSessionObserverRead(
-  deps: Pick<SessionObserverDeps, "getConfig">,
+  deps: Pick<SessionObserverDeps, "getConfig" | "readSession" | "persistDigest">,
   sessionKey: string,
   agentId: string,
 ): SessionObserverRead {
@@ -29,6 +29,11 @@ export function captureSessionObserverRead(
     assertCurrent,
     async withRead(consume) {
       assertCurrent();
+      if (deps.readSession) {
+        const entry = deps.readSession(sessionKey, agentId);
+        assertCurrent();
+        return consume(entry);
+      }
       const consumeRead = (
         loaded: GatewaySessionStoreTargetWithStore,
         assertReadCurrent: () => void,
@@ -74,6 +79,9 @@ export function captureSessionObserverRead(
     },
     async persist(params) {
       assertCurrent();
+      if (deps.persistDigest) {
+        return deps.persistDigest(params);
+      }
       if (!target) {
         // Legacy event admission is synchronous; its asynchronous write still prepares the source.
         await reader.withRead(() => undefined);

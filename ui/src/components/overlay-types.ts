@@ -1,11 +1,4 @@
 export type OverlayPhase = "opening" | "open" | "closing" | "hidden";
-
-declare global {
-  interface Document {
-    openClawModalLayers?: Set<HTMLElement>;
-  }
-}
-
 export type OverlayFocusIntent = "first" | "last" | "return" | "none";
 export type OverlayLifecycleEvent =
   | "overlay-show"
