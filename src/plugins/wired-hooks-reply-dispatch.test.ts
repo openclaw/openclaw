@@ -1,5 +1,3 @@
-// Covers wired plugin hook dispatch before replies.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -43,10 +41,6 @@ const replyDispatchCtx = {
   recordProcessed: () => {},
   markIdle: () => {},
 };
-
-function firstErrorLog(logger: { error: ReturnType<typeof vi.fn> }) {
-  return logger.error.mock.calls[0];
-}
 
 function createRegisteredReplyHook(eligibleDispatchKinds: unknown) {
   const builder = createTestPluginRegistry();
@@ -246,16 +240,14 @@ describe("reply_dispatch hook runner", () => {
   it("honors per-hook registration timeouts and continues to the next handler", async () => {
     vi.useFakeTimers();
     try {
-      const logger = {
-        warn: vi.fn(),
-        error: vi.fn(),
-      };
+      const logger = { warn: vi.fn(), error: vi.fn() };
       const slow = vi.fn(() => new Promise(() => {}));
-      const succeeding = vi.fn().mockResolvedValue({
+      const result = {
         handled: true,
         queuedFinal: false,
         counts: { tool: 1, block: 0, final: 0 },
-      });
+      };
+      const succeeding = vi.fn().mockResolvedValue(result);
       const { registry, runner } = createHookRunnerWithRegistry(
         [
           { hookName: "reply_dispatch", handler: slow },
@@ -268,15 +260,10 @@ describe("reply_dispatch hook runner", () => {
       const run = runner.runReplyDispatch(replyDispatchEvent, replyDispatchCtx);
       await vi.advanceTimersByTimeAsync(5);
 
-      await expect(run).resolves.toEqual({
-        handled: true,
-        queuedFinal: false,
-        counts: { tool: 1, block: 0, final: 0 },
-      });
-      expect(logger.error).toHaveBeenCalledTimes(1);
-      expect(firstErrorLog(logger)).toEqual([
+      await expect(run).resolves.toEqual(result);
+      expect(logger.error).toHaveBeenCalledExactlyOnceWith(
         "[hooks] reply_dispatch handler from test-plugin failed: timed out after 5ms",
-      ]);
+      );
       expect(succeeding).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();

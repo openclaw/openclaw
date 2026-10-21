@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
 import type * as Metadata from "./plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
-import type { PluginWebFetchProviderEntry, PluginWebSearchProviderEntry } from "./types.js";
 import type * as Explicit from "./web-provider-public-artifacts.explicit.js";
 
 const mocks = vi.hoisted(() => ({
@@ -44,19 +44,12 @@ const {
 const { loadSearch, loadFetch } = mocks;
 
 function createProvider(pluginId: string, id = pluginId) {
-  return {
-    id,
+  return createWebSearchTestProvider({
     pluginId,
-    label: id,
-    hint: `${id} fixture`,
-    envVars: [],
-    placeholder: "fixture-key",
-    signupUrl: "https://example.com",
+    id,
     credentialPath: `plugins.entries.${pluginId}.config.apiKey`,
-    getCredentialValue: () => undefined,
-    setCredentialValue: () => {},
     createTool: () => null,
-  } satisfies PluginWebSearchProviderEntry & PluginWebFetchProviderEntry;
+  });
 }
 
 const searchProvider = createProvider("fallback-search");

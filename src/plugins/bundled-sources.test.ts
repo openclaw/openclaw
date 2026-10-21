@@ -9,11 +9,7 @@ import { setCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata
 import { resetPluginCache } from "./plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 
-const APP_ROOT = "/app";
-
-function appBundledPluginRoot(pluginId: string): string {
-  return bundledPluginRootAt(APP_ROOT, pluginId);
-}
+const appBundledPluginRoot = (pluginId: string) => bundledPluginRootAt("/app", pluginId);
 
 const discoverOpenClawPluginsMock = vi.fn();
 const loadPluginManifestMock = vi.fn();
@@ -41,18 +37,16 @@ function createBundledCandidate(
   };
 }
 
-function setBundledDiscoveryCandidates(candidates: unknown[]) {
-  discoverOpenClawPluginsMock.mockReturnValue({
-    candidates,
-    diagnostics: [],
-  });
-}
-
-function setBundledManifestIdsByRoot(
+function fixture(
   manifestIds: Record<string, string | { id: string; required?: string[] }>,
+  candidates = Object.keys(manifestIds).map((id) => createBundledCandidate(id)),
 ) {
+  discoverOpenClawPluginsMock.mockReturnValue({ candidates, diagnostics: [] });
+  const manifestsByRoot = Object.fromEntries(
+    Object.entries(manifestIds).map(([id, manifest]) => [appBundledPluginRoot(id), manifest]),
+  );
   loadPluginManifestMock.mockImplementation((rootDir: string) => {
-    const value = manifestIds[rootDir];
+    const value = manifestsByRoot[rootDir];
     return value === undefined
       ? { ok: false, error: "invalid manifest", manifestPath: `${rootDir}/openclaw.plugin.json` }
       : {
@@ -65,17 +59,6 @@ function setBundledManifestIdsByRoot(
                   configSchema: { type: "object", required: value.required },
                 },
         };
-  });
-}
-
-function setBundledLookupFixture() {
-  setBundledDiscoveryCandidates([
-    createBundledCandidate("feishu"),
-    createBundledCandidate("diffs"),
-  ]);
-  setBundledManifestIdsByRoot({
-    [appBundledPluginRoot("feishu")]: "feishu",
-    [appBundledPluginRoot("diffs")]: "diffs",
   });
 }
 
@@ -116,17 +99,12 @@ describe("bundled plugin sources", () => {
   });
 
   it("resolves bundled sources keyed by plugin id", () => {
-    setBundledDiscoveryCandidates([
+    fixture({ feishu: "feishu", msteams: "msteams" }, [
       createBundledCandidate("feishu", "global", "/global/feishu"),
       createBundledCandidate("feishu"),
       createBundledCandidate("feishu", "bundled", appBundledPluginRoot("feishu-dup")),
       createBundledCandidate("msteams"),
     ]);
-    setBundledManifestIdsByRoot({
-      [appBundledPluginRoot("feishu")]: "feishu",
-      [appBundledPluginRoot("msteams")]: "msteams",
-    });
-
     const map = resolveBundledPluginSources({});
 
     expect(Array.from(map.keys())).toEqual(["feishu", "msteams"]);
@@ -140,7 +118,7 @@ describe("bundled plugin sources", () => {
     ["localPath", appBundledPluginRoot("diffs"), "diffs"],
     ["pluginId", "not-found", undefined],
   ] as const)("looks up %s %s", (kind, value, expectedId) => {
-    setBundledLookupFixture();
+    fixture({ feishu: "feishu", diffs: "diffs" });
     const resolved = findBundledPluginSource({ lookup: { kind, value } });
     if (expectedId) {
       expect(resolved).toMatchObject({
@@ -153,9 +131,8 @@ describe("bundled plugin sources", () => {
   });
 
   it("marks bundled sources that require plugin config before activation", () => {
-    setBundledDiscoveryCandidates([createBundledCandidate("memory-lancedb")]);
-    setBundledManifestIdsByRoot({
-      [appBundledPluginRoot("memory-lancedb")]: {
+    fixture({
+      "memory-lancedb": {
         id: "memory-lancedb",
         required: ["embedding"],
       },

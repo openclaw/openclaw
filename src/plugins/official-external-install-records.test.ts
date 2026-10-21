@@ -42,6 +42,8 @@ function clawhubInstall(
 describe("official plugin install trust", () => {
   const packageName = "@openclaw/fish-audio-speech";
   const npmRecord = npmInstall(packageName, "2026.7.2");
+  const trusts = (record: PluginInstallRecord) =>
+    isTrusted({ pluginId: "fish-audio-speech", packageName, record });
 
   it("binds the declared legacy id to the actual official package", () => {
     expect(isTrusted({ pluginId: "fish-audio", packageName, record: npmRecord })).toBe(true);
@@ -69,13 +71,7 @@ describe("official plugin install trust", () => {
   ] satisfies Partial<PluginInstallRecord>[])(
     "rejects unsupported npm provenance %j",
     (override) => {
-      expect(
-        isTrusted({
-          pluginId: "fish-audio-speech",
-          packageName,
-          record: { ...npmRecord, ...override },
-        }),
-      ).toBe(false);
+      expect(trusts({ ...npmRecord, ...override })).toBe(false);
     },
   );
 
@@ -136,34 +132,20 @@ describe("trusted official npm install records", () => {
       ...expected,
       replacementPluginId: "openclaw-qqbot",
     });
-    expect(
-      isReplacement({
-        expectedPluginId: "qqbot",
-        expectedReplacementPluginId: "openclaw-qqbot",
-      }),
-    ).toBe(true);
-    expect(
-      isReplacement({
-        expectedPluginId: "fish-audio",
-        expectedReplacementPluginId: "fish-audio-speech",
-      }),
-    ).toBe(false);
+    const replacement = (expectedPluginId: string, expectedReplacementPluginId: string) =>
+      isReplacement({ expectedPluginId, expectedReplacementPluginId });
+    expect(replacement("qqbot", "openclaw-qqbot")).toBe(true);
+    expect(replacement("fish-audio", "fish-audio-speech")).toBe(false);
   });
 
-  it("fails closed when a legacy npm package identity is mixed with another package", () => {
+  it.each([
+    ["openclaw-qqbot", { resolvedName: "@vendor/qqbot" }],
+    ["qqbot", { sourcePath: "/tmp/openclaw-qqbot" }],
+  ] as const)("rejects %s migration with invalid provenance %j", (pluginId, override) => {
     expect(
       resolveNpm({
-        pluginId: "openclaw-qqbot",
-        record: npmInstall("@openclaw/qqbot", "1.9.0", { resolvedName: "@vendor/qqbot" }),
-      }),
-    ).toBeUndefined();
-  });
-
-  it("rejects local source path provenance before migrating a legacy npm package", () => {
-    expect(
-      resolveNpm({
-        pluginId: "qqbot",
-        record: npmInstall("@openclaw/qqbot", "1.9.0", { sourcePath: "/tmp/openclaw-qqbot" }),
+        pluginId,
+        record: npmInstall("@openclaw/qqbot", "1.9.0", override),
       }),
     ).toBeUndefined();
   });
@@ -191,11 +173,7 @@ describe("trusted official npm install records", () => {
   });
 
   it("never accepts the legacy Fish Audio id through ClawHub", () => {
-    expect(
-      resolveClawHub({
-        pluginId: "fish-audio",
-        record: clawhubInstall("@openclaw/fish-audio-speech"),
-      }),
-    ).toBeUndefined();
+    const record = clawhubInstall("@openclaw/fish-audio-speech");
+    expect(resolveClawHub({ pluginId: "fish-audio", record })).toBeUndefined();
   });
 });

@@ -2,30 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveManifestDeclaredWebProviderCandidatePluginIds } from "./web-provider-resolution-shared.js";
 
 const mocks = vi.hoisted(() => ({
-  loadPluginRegistrySnapshot: vi.fn(),
-  loadPluginManifestRegistryForInstalledIndex: vi.fn(),
   loadPluginMetadataSnapshot: vi.fn(),
   resolvePluginMetadataSnapshot: vi.fn(),
 }));
 
-vi.mock("./plugin-registry.js", () => ({
-  loadPluginRegistrySnapshot: (...args: unknown[]) => mocks.loadPluginRegistrySnapshot(...args),
-  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
-    mocks.loadPluginManifestRegistryForInstalledIndex({
-      ...(args[0] && typeof args[0] === "object" ? args[0] : {}),
-      index: mocks.loadPluginRegistrySnapshot(...args),
-    }),
-}));
-
-vi.mock("./manifest-registry-installed.js", () => ({
-  loadPluginManifestRegistryForInstalledIndex: (...args: unknown[]) =>
-    mocks.loadPluginManifestRegistryForInstalledIndex(...args),
-}));
-
 vi.mock("./plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.loadPluginMetadataSnapshot(...args),
-  resolvePluginMetadataSnapshot: (...args: unknown[]) =>
-    mocks.resolvePluginMetadataSnapshot(...args),
+  loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
 describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
@@ -37,25 +20,20 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
     });
 
   beforeEach(() => {
-    mocks.loadPluginRegistrySnapshot.mockReset().mockReturnValue({ plugins: [] });
-    mocks.loadPluginManifestRegistryForInstalledIndex.mockReset().mockReturnValue({
+    vi.resetAllMocks();
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
       plugins: [
         { id: "alpha", origin: "bundled", configSchema: { properties: { webSearch: {} } } },
         { id: "beta", origin: "bundled", contracts: { webSearchProviders: ["beta-search"] } },
       ],
       diagnostics: [],
     });
-    mocks.loadPluginMetadataSnapshot.mockReset().mockImplementation((...args: unknown[]) => ({
-      plugins: mocks.loadPluginManifestRegistryForInstalledIndex(...args).plugins,
-    }));
-    mocks.resolvePluginMetadataSnapshot.mockReset().mockImplementation((...args: unknown[]) => ({
-      plugins: mocks.loadPluginManifestRegistryForInstalledIndex(...args).plugins,
-    }));
   });
 
   it("treats explicit empty plugin scopes as scoped-empty", () => {
     expect(resolve({ onlyPluginIds: [] })).toStrictEqual([]);
-    expect(mocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+    expect(mocks.resolvePluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(mocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   it("keeps scoped plugins with no declared web candidates scoped-empty", () => {
@@ -64,7 +42,7 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
   });
 
   it("keeps origin filters with no declared web candidates scoped-empty", () => {
-    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
       plugins: [{ id: "workspace-tool", origin: "workspace", configSchema: { properties: {} } }],
       diagnostics: [],
     });
@@ -73,7 +51,7 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
   });
 
   it("limits sandboxed web fetch candidates to bundled and trusted official installs", () => {
-    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
       plugins: [
         ["bundled-fetch", "bundled", false],
         ["firecrawl", "global", true],
@@ -100,6 +78,5 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
   it("derives provider candidates from a single manifest-registry read", () => {
     expect(resolve()).toEqual(["alpha", "beta"]);
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledTimes(1);
-    expect(mocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(1);
   });
 });

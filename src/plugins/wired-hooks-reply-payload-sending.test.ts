@@ -125,28 +125,21 @@ describe("reply_payload_sending hook runner", () => {
     expect(second).not.toHaveBeenCalled();
   });
 
-  it("does not expose trusted local media to plugins", async () => {
+  it.each([false, true])("keeps media trust host-owned (trusted=%s)", async (trusted) => {
     const handler = editPayload((payload) => ({
       ...payload,
       text: "plugin changed",
       trustedLocalMedia: true,
     }));
-    const result = await send(createRunner([handler]));
+    const payload = trusted
+      ? ({ text: "hello", trustedLocalMedia: true } as unknown as PluginHookReplyPayload)
+      : replyPayloadSendingEvent.payload;
+    const result = await send(createRunner([handler]), payload);
 
     expect(handler).toHaveBeenCalledTimes(1);
-    expect((result?.payload as ReplyPayload | undefined)?.trustedLocalMedia).toBeUndefined();
-    expect(result?.payload).toMatchObject({ text: "plugin changed" });
-  });
-
-  it("preserves runtime-owned trusted local media across plugin edits", async () => {
-    const handler = editPayload((payload) => ({ ...payload, text: "plugin changed" }));
-    const result = await send(createRunner([handler]), {
-      text: "hello",
-      trustedLocalMedia: true,
-    } as unknown as PluginHookReplyPayload);
-
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect((result?.payload as ReplyPayload | undefined)?.trustedLocalMedia).toBe(true);
+    expect((result?.payload as ReplyPayload | undefined)?.trustedLocalMedia).toBe(
+      trusted ? true : undefined,
+    );
     expect(result?.payload).toMatchObject({ text: "plugin changed" });
   });
 

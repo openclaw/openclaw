@@ -19,6 +19,7 @@ import { adoptProcessPluginCache, createPluginCache, withPluginCache } from "./p
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { loadPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
+import { writeArtifact } from "./public-surface.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord } from "./registry-types.js";
 import { resetPluginRuntimeStateForTest, stageActivePluginRegistry } from "./runtime.js";
@@ -59,23 +60,47 @@ afterEach(async () => {
 
 function writeSource(root: string, version: string, extension: "ts" | "js" = "ts", size = 1) {
   const annotation = extension === "ts" ? ": string" : "";
-  fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
-  fs.writeFileSync(
-    path.join(root, `state.${extension}`),
+  write(root, "package.json", '{"type":"module"}');
+  write(
+    root,
+    `state.${extension}`,
     `let value = ${JSON.stringify(version)};
     export const read = () => value;
     export const set = (next${annotation}) => { value = next; };
     export const view = { read, frozen: Object.freeze(Array.from({ length: ${size} }, () => read)) };`,
   );
-  fs.writeFileSync(
-    path.join(root, `index.${extension}`),
+  write(
+    root,
+    `index.${extension}`,
     `import { set } from "./state.js";
     export default { register(value${annotation}) { set(value); } };`,
   );
-  fs.writeFileSync(path.join(root, `api.${extension}`), 'export { read, view } from "./state.js";');
-  fs.writeFileSync(
-    path.join(root, `runtime-api.${extension}`),
-    'export { read, view } from "./state.js";',
+  for (const name of ["api", "runtime-api"]) {
+    write(root, `${name}.${extension}`, 'export { read, view } from "./state.js";');
+  }
+}
+
+function write(root: string, name: string, contents: string) {
+  return writeArtifact(path.join(root, name), contents);
+}
+function loadApi(pluginRoot: string, pluginId?: string) {
+  return loadPluginPublicArtifactModuleSync<PublicApi>({
+    pluginRoot,
+    pluginId,
+    artifactBasename: "api.js",
+  });
+}
+function loadFacade(dirName: string, artifactBasename = "runtime-api.js") {
+  return loadBundledPluginPublicSurfaceModuleSyncCore<PublicApi>({ dirName, artifactBasename });
+}
+function inRequest<T>(
+  pluginRegistry: ReturnType<typeof createEmptyPluginRegistry>,
+  run: () => T,
+  pluginId?: string,
+) {
+  return withPluginRuntimeGatewayRequestScope(
+    { pluginRegistry, pluginId, isWebchatConnect: () => false },
+    run,
   );
 }
 
@@ -134,7 +159,7 @@ describe("managed plugin public surfaces", () => {
         getCredentialValue: read, setCredentialValue() {}, createTool() { return null; },
       });
     `;
-    fs.writeFileSync(path.join(stock, "web-search-contract-api.js"), providerModule);
+    write(stock, "web-search-contract-api.js", providerModule);
     const overlayArtifact = path.join(overlay, "web-search-contract-api.ts");
     fs.writeFileSync(overlayArtifact, providerModule);
     const active = prepare(overlay, pluginId, "bundled");
@@ -197,11 +222,7 @@ describe("managed plugin public surfaces", () => {
       }
       winner.registry.plugins.unshift(first.record, second.record);
       winner.publish();
-      const load = () =>
-        loadBundledPluginPublicSurfaceModuleSyncCore<Pick<PublicApi, "read">>({
-          dirName,
-          artifactBasename: "api.js",
-        });
+      const load = () => loadFacade(dirName, "api.js");
       expect(load().read()).toBe("winner");
 
       winner.registry.plugins.push(
@@ -219,8 +240,7 @@ describe("managed plugin public surfaces", () => {
     writeSource(root, "library");
     fs.rmSync(path.join(root, "api.ts"));
     fs.rmSync(path.join(root, "runtime-api.ts"));
-    fs.mkdirSync(path.join(root, "dist"));
-    fs.writeFileSync(path.join(root, "dist/api.js"), 'export { read } from "../state.js";');
+    write(root, "dist/api.js", 'export { read } from "../state.js";');
     const active = prepare(root, "native-dist-fixture");
     active.entry.default.register("registered");
     active.publish();
@@ -239,27 +259,19 @@ describe("managed plugin public surfaces", () => {
     const first = prepare(root);
     first.entry.default.register("registered-one");
     first.publish();
-    const loadApi = () =>
-      loadPluginPublicArtifactModuleSync<PublicApi>({
-        pluginRoot: root,
-        artifactBasename: "api.js",
-      });
-    const loadFacade = () =>
-      loadBundledPluginPublicSurfaceModuleSyncCore<PublicApi>({
-        dirName: first.record.id,
-        artifactBasename: "runtime-api.js",
-      });
-    const lazy = createLazyFacadeObjectValue(() => loadFacade().view);
-    const frozen = createLazyFacadeObjectValue(() => loadFacade().view.frozen);
+    const api = () => loadApi(root);
+    const facade = () => loadFacade(first.record.id);
+    const lazy = createLazyFacadeObjectValue(() => facade().view);
+    const frozen = createLazyFacadeObjectValue(() => facade().view.frozen);
 
     // Neither public entry has executed yet. The captured graph survives source deletion.
     fs.rmSync(path.join(root, "api.ts"));
     fs.rmSync(path.join(root, "runtime-api.ts"));
     fs.writeFileSync(path.join(root, "state.ts"), 'export const read = () => "uncommitted edit";');
-    const originalApi = loadApi();
+    const originalApi = api();
     const originalRead = originalApi.read;
     expect(originalRead()).toBe("registered-one");
-    expect(loadFacade().read()).toBe("registered-one");
+    expect(facade().read()).toBe("registered-one");
     expect(lazy.read()).toBe("registered-one");
     const retainedLazyRead = lazy.read;
     for (const [property, descriptor] of [
@@ -296,7 +308,7 @@ describe("managed plugin public surfaces", () => {
       vi.spyOn(fs, "statSync"),
       vi.spyOn(fs, "openSync"),
     ];
-    expect(loadApi()).toBe(originalApi);
+    expect(api()).toBe(originalApi);
     expect(lazy.read()).toBe("registered-one");
     for (const probe of probes) {
       expect(probe).not.toHaveBeenCalled();
@@ -308,25 +320,20 @@ describe("managed plugin public surfaces", () => {
     const second = prepare(root);
     second.entry.default.register("registered-two");
     second.publish();
-    expect(loadApi().read()).toBe("registered-two");
+    expect(api().read()).toBe("registered-two");
     expect(lazy.read()).toBe("registered-two");
     expect(frozen.length).toBe(2);
     expect(Object.keys(frozen)).toEqual(["0", "1"]);
     expect(frozen[1]?.()).toBe("registered-two");
     expect(originalRead).toThrow(/reloaded|disabled|retiring/);
     expect(retainedLazyRead).toThrow(/reloaded|disabled|retiring/);
-    expect(() =>
-      withPluginRuntimeGatewayRequestScope(
-        { pluginRegistry: first.registry, isWebchatConnect: () => false },
-        loadApi,
-      ),
-    ).toThrow(MissingPublicSurfaceError);
+    expect(() => inRequest(first.registry, api)).toThrow(MissingPublicSurfaceError);
 
-    const retained = loadApi();
+    const retained = api();
     const nextRegistry = createEmptyPluginRegistry();
     nextRegistry.plugins.push(second.record);
     stageActivePluginRegistry(nextRegistry, "unrelated-change", "default");
-    expect(loadApi()).toBe(retained);
+    expect(api()).toBe(retained);
     expect(lazy.read()).toBe("registered-two");
   });
 
@@ -338,11 +345,11 @@ describe("managed plugin public surfaces", () => {
       fs.mkdirSync(root);
       writeSource(root, "source");
       const dependency = path.join(root, "node_modules", "captured-dependency");
-      fs.mkdirSync(dependency, { recursive: true });
-      fs.writeFileSync(path.join(dependency, "package.json"), '{"main":"index.cjs"}');
-      fs.writeFileSync(path.join(dependency, "index.cjs"), 'exports.value = "dependency";');
-      fs.writeFileSync(
-        path.join(root, "package.json"),
+      write(dependency, "package.json", '{"main":"index.cjs"}');
+      write(dependency, "index.cjs", 'exports.value = "dependency";');
+      write(
+        root,
+        "package.json",
         JSON.stringify({
           type: "module",
           dependencies: { "captured-dependency": "1.0.0" },
@@ -351,15 +358,17 @@ describe("managed plugin public surfaces", () => {
       if (mapping === "tsconfig") {
         vi.stubEnv("JITI_TSCONFIG_PATHS", "true");
         // Jiti configuration remains available; only captured plugin code is removed.
-        fs.writeFileSync(
-          path.join(parent, "tsconfig.json"),
+        write(
+          parent,
+          "tsconfig.json",
           JSON.stringify({
             compilerOptions: { baseUrl: ".", paths: { "@fixture/state": ["./plugin/state.ts"] } },
           }),
         );
       }
-      fs.writeFileSync(
-        path.join(root, "api.ts"),
+      write(
+        root,
+        "api.ts",
         `
         import { read as readState } from ${JSON.stringify(mapping === "tsconfig" ? "@fixture/state" : "./state.js")};
         import { value } from "captured-dependency";
@@ -370,10 +379,7 @@ describe("managed plugin public surfaces", () => {
       active.entry.default.register("registered");
       active.publish();
       fs.rmSync(root, { recursive: true });
-      const api = loadPluginPublicArtifactModuleSync<Pick<PublicApi, "read">>({
-        pluginRoot: root,
-        artifactBasename: "api.js",
-      });
+      const api = loadApi(root);
       expect(api.read()).toBe("registered:dependency");
     },
   );
@@ -387,21 +393,11 @@ describe("managed plugin public surfaces", () => {
     second.entry.default.register("second-instance");
     second.registry.plugins.unshift(first.record);
     second.publish();
-    const load = (pluginId?: string) =>
-      loadPluginPublicArtifactModuleSync<PublicApi>({
-        pluginRoot: root,
-        artifactBasename: "api.js",
-        pluginId,
-      });
+    const load = (pluginId?: string) => loadApi(root, pluginId);
     expect(() => load()).toThrow(/ambiguous runtime ownership/);
     expect(load("first").read()).toBe("first-instance");
     expect(load("second").read()).toBe("second-instance");
-    expect(
-      withPluginRuntimeGatewayRequestScope(
-        { pluginRegistry: second.registry, pluginId: "first", isWebchatConnect: () => false },
-        () => load().read(),
-      ),
-    ).toBe("first-instance");
+    expect(inRequest(second.registry, () => load().read(), "first")).toBe("first-instance");
   });
 
   it.each([
@@ -424,12 +420,12 @@ describe("managed plugin public surfaces", () => {
         fs.renameSync(path.join(root, "index.ts"), path.join(root, "index.mts"));
       }
       if (extension === "js" && buildDirectory === "dist" && entryDirectory === ".") {
-        fs.writeFileSync(path.join(root, "index.js"), 'export { default } from "./dist/index.js";');
+        write(root, "index.js", 'export { default } from "./dist/index.js";');
       }
       if (entryDirectory === "src") {
-        fs.mkdirSync(path.join(root, "src"));
-        fs.writeFileSync(
-          path.join(root, "src", "index.ts"),
+        write(
+          root,
+          "src/index.ts",
           'import { set } from "../state.js"; export default { register(value: string) { set(value); } };',
         );
       }
@@ -439,14 +435,8 @@ describe("managed plugin public surfaces", () => {
 
       // Resolve both previously unexecuted APIs from the captured inventory.
       fs.rmSync(root, { recursive: true });
-      const api = loadPluginPublicArtifactModuleSync<PublicApi>({
-        pluginRoot: root,
-        artifactBasename: "api.js",
-      });
-      const runtime = loadBundledPluginPublicSurfaceModuleSyncCore<PublicApi>({
-        dirName: active.record.id,
-        artifactBasename: "runtime-api.js",
-      });
+      const api = loadApi(root);
+      const runtime = loadFacade(active.record.id);
       expect(api.read()).toBe("registered-graph");
       expect(runtime.read()).toBe("registered-graph");
       expect(runtime.view).toBe(api.view);
@@ -460,11 +450,7 @@ describe("managed plugin public surfaces", () => {
       writeSource(root, "active");
       const active = prepare(root);
       active.publish();
-      const load = () =>
-        loadPluginPublicArtifactModuleSync<PublicApi>({
-          pluginRoot: root,
-          artifactBasename: "api.js",
-        });
+      const load = () => loadApi(root);
       const lazy = createLazyFacadeObjectValue(() => load().view);
       expect(lazy.read()).toBe("active");
       const registry = createEmptyPluginRegistry();
@@ -484,12 +470,7 @@ describe("managed plugin public surfaces", () => {
       // Keep the package installed, as disable and uninstall --keep-files do.
       writeSource(root, "must-not-execute");
       expect(() => lazy.read()).toThrow(/disabled or uninstalled/);
-      expect(() =>
-        withPluginRuntimeGatewayRequestScope(
-          { pluginRegistry: registry, isWebchatConnect: () => false },
-          load,
-        ),
-      ).toThrow(/no active runtime owner/);
+      expect(() => inRequest(registry, load)).toThrow(/no active runtime owner/);
     },
   );
 
@@ -504,12 +485,7 @@ describe("managed plugin public surfaces", () => {
     active.publish();
     fs.rmSync(path.join(root, "api.ts"));
     for (const pluginRoot of [root, alias]) {
-      expect(
-        loadPluginPublicArtifactModuleSync<PublicApi>({
-          pluginRoot,
-          artifactBasename: "api.js",
-        }).read(),
-      ).toBe("captured");
+      expect(loadApi(pluginRoot).read()).toBe("captured");
     }
   });
 

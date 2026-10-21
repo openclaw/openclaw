@@ -56,23 +56,19 @@ const readMatrix = () =>
 
 describe("bundled package channel metadata", () => {
   it("reads doctor capabilities from the resolved bundled plugin dir", () => {
-    fixture({
-      id: "matrix",
-      label: "Matrix",
-      docsPath: "/channels/matrix",
-      doctorCapabilities: {
-        dmAllowFromMode: "nestedOnly",
-        groupModel: "sender",
-        groupAllowFromFallbackToAllowFrom: false,
-        warnOnEmptyGroupSenderAllowlist: true,
-      },
-    });
-    expect(readMatrix()?.doctorCapabilities).toEqual({
+    const doctorCapabilities = {
       dmAllowFromMode: "nestedOnly",
       groupModel: "sender",
       groupAllowFromFallbackToAllowFrom: false,
       warnOnEmptyGroupSenderAllowlist: true,
+    } satisfies PluginPackageChannel["doctorCapabilities"];
+    fixture({
+      id: "matrix",
+      label: "Matrix",
+      docsPath: "/channels/matrix",
+      doctorCapabilities,
     });
+    expect(readMatrix()?.doctorCapabilities).toEqual(doctorCapabilities);
   });
 
   it("reflects package channel metadata edits after the metadata lifecycle is cleared", () => {
