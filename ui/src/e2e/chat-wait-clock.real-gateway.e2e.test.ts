@@ -17,6 +17,7 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { observeBackgroundWorkRpc } from "./background-work.real-gateway.test-support.ts";
+import { callGateway, runGatewayCli } from "./chat-real-gateway.test-support.ts";
 import {
   createWaitClockInstance,
   startWaitClockProvider,
@@ -83,15 +84,8 @@ const suite = createControlUiE2eSuite({
   },
 });
 
-async function runCli(args: string[]) {
-  const result = await instance.cli(args);
-  expect(result.code, result.stderr).toBe(0);
-  return result.stdout;
-}
 async function call(method: string, params: Record<string, unknown>) {
-  return JSON.parse(
-    await runCli(["gateway", "call", method, "--json", "--params", JSON.stringify(params)]),
-  );
+  return JSON.parse(await callGateway(instance, method, params));
 }
 async function rows() {
   const result: SessionsListResult = await call("sessions.list", { agentId: "main", limit: 50 });
@@ -208,7 +202,7 @@ suite.define(() => {
             agentId: "main",
             label: fixture.label,
           });
-          await pairControlUiPage(page, runCli);
+          await pairControlUiPage(page, (args) => runGatewayCli(instance, args));
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, fixture.key));
           await waitForControlUiGatewayReady(page);
           const parent = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
