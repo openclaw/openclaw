@@ -60,6 +60,7 @@ describe("session observer audience", () => {
 
     harness.subscribers.unsubscribe("conn-1", "agent:main:session-1");
     await vi.advanceTimersByTimeAsync(12_000);
+    await flushObserver();
 
     expect(harness.prepareModel).not.toHaveBeenCalled();
     expect(harness.completeModel).not.toHaveBeenCalled();

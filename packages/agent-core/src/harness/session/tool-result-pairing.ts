@@ -133,6 +133,7 @@ export function makeMissingToolResult(params: {
   toolCallId: string;
   toolName?: string;
   text?: string;
+  timestamp?: number;
 }): ToolResultMessage {
   return {
     role: "toolResult",
@@ -141,7 +142,7 @@ export function makeMissingToolResult(params: {
     content: [{ type: "text", text: params.text ?? DEFAULT_MISSING_TOOL_RESULT_TEXT }],
     details: { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true, reason: "missing_tool_result" },
     isError: true,
-    timestamp: Date.now(),
+    timestamp: params.timestamp ?? Date.now(),
   };
 }
 

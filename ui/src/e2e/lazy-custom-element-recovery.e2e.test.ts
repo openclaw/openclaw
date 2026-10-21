@@ -157,7 +157,7 @@ const focusedCases = [
       sessionKey,
       tab: { target: "host", profile: "work", targetId: "existing" },
     }),
-    modulePath: "ui/src/components/browser/browser-document.ts",
+    modulePath: "ui/src/components/browser/browser-document.tsx",
     gateway: {
       featureMethods: ["browser.request"],
       operatorScopes: ["operator.read"],

@@ -192,40 +192,32 @@ async function resolveMSTeamsGroupAllowlist(params: {
       accountId: params.accountId,
       entries: params.entries,
     });
-    const resolvedChannels = lookups.filter(
-      (entry) => entry.resolved && entry.teamId && entry.channelId,
+    const resolvedChannels = lookups.flatMap((entry) =>
+      entry.resolved && entry.teamId && entry.channelId
+        ? [{ teamKey: entry.teamId, channelKey: entry.channelId }]
+        : [],
     );
-    const resolvedTeams = lookups.filter(
-      (entry) => entry.resolved && entry.teamId && !entry.channelId,
+    const resolvedTeams = lookups.flatMap((entry) =>
+      entry.resolved && entry.teamId && !entry.channelId ? [{ teamKey: entry.teamId }] : [],
     );
     const unresolved = lookups.filter((entry) => !entry.resolved).map((entry) => entry.input);
     resolvedEntries = [
-      ...resolvedChannels.flatMap((entry) =>
-        entry.teamId && entry.channelId
-          ? [{ teamKey: entry.teamId, channelKey: entry.channelId }]
-          : [],
-      ),
-      ...resolvedTeams.flatMap((entry) => (entry.teamId ? [{ teamKey: entry.teamId }] : [])),
+      ...resolvedChannels,
+      ...resolvedTeams,
       ...unresolved.map((entry) => parseMSTeamsTeamEntry(entry)).filter((entry) => entry !== null),
     ];
     const summary: string[] = [];
     if (resolvedChannels.length > 0) {
       summary.push(
         t("wizard.msteams.resolvedChannels", {
-          entries: resolvedChannels
-            .map((entry) => entry.channelId)
-            .filter(Boolean)
-            .join(", "),
+          entries: resolvedChannels.map((entry) => entry.channelKey).join(", "),
         }),
       );
     }
     if (resolvedTeams.length > 0) {
       summary.push(
         t("wizard.msteams.resolvedTeams", {
-          entries: resolvedTeams
-            .map((entry) => entry.teamId)
-            .filter(Boolean)
-            .join(", "),
+          entries: resolvedTeams.map((entry) => entry.teamKey).join(", "),
         }),
       );
     }

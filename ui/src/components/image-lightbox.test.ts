@@ -22,6 +22,7 @@ vi.mock("@panzoom/panzoom", () => ({
   })),
 }));
 
+import "../lib/toast-host.tsx";
 import "./image-lightbox.tsx";
 
 type Lightbox = HTMLElementTagNameMap["openclaw-image-lightbox"];
@@ -298,6 +299,52 @@ it("retires detached work and reconnects without downloading", async () => {
   expect(modal.querySelector(".download-image")).not.toBeNull();
   expect(fetchImage).not.toHaveBeenCalled();
 });
+
+it.each(["open", "closed", "reopened"] as const)(
+  "reports failed downloads only in their mounted view: %s",
+  async (state) => {
+    const toast = container.appendChild(document.createElement("openclaw-toast-host"));
+    toast.toast = null;
+    toast.active = false;
+    const original = createDeferred<Blob>();
+    const readOriginalBlob = vi.fn(() => original.promise);
+    const { modal } = await renderLightbox({ readOriginalBlob });
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      toast.remove();
+      vi.useRealTimers();
+    });
+    const download = button(modal, ".download-image");
+    download.click();
+    expect(readOriginalBlob).toHaveBeenCalledOnce();
+    if (state !== "open") {
+      modal.addEventListener("image-lightbox-close", () => modal.remove());
+      button(modal, ".close").click();
+      expect(modal.isConnected).toBe(false);
+      await Promise.resolve();
+      if (state === "reopened") {
+        container.append(modal);
+        await modal.updateComplete;
+        const replacement = button(modal, ".download-image");
+        expect(replacement).not.toBe(download);
+        expect(replacement.disabled).toBe(false);
+      }
+    }
+    original.reject(new Error("Image unavailable"));
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(toast.active).toBe(state === "open");
+    expect(toast.toast).toEqual(
+      state === "open"
+        ? expect.objectContaining({ message: "Could not download this image. Try again." })
+        : null,
+    );
+    if (state === "open") {
+      expect(download.disabled).toBe(false);
+      expect(download.hasAttribute("aria-busy")).toBe(false);
+    }
+  },
+);
 
 it.each([
   ["data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'></svg>", "image/svg+xml", false],

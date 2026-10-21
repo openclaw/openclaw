@@ -20,8 +20,9 @@ import {
 } from "./workspace-skill-loader.js";
 
 // Plugin command discovery owns separate storage; this regression measures Library reads.
-vi.mock("../../plugins/bundle-commands.js", () => ({
-  loadEnabledClaudeBundleCommands: () => [],
+vi.mock("../../plugins/plugin-registry-contributions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/plugin-registry-contributions.js")>()),
+  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
 }));
 
 const dirs = useStateDatabaseTempDirs();

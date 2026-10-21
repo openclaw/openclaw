@@ -26,6 +26,13 @@ vi.mock("./rfb-preauth.js", async (original) => ({
 import { handleDesktopAudioUpgrade, mintDesktopAudioObserver } from "./audio-bridge.js";
 import { handleDesktopObserveUpgrade, mintDesktopObserverToken } from "./observe-bridge.js";
 
+const observerDefaults = {
+  sourceKey: "desktop:fixture",
+  ownerEpoch: 1,
+  control: false,
+  attachment: { kind: "stream" as const, streamId: "fixture-stream" },
+};
+
 it("rechecks ingress authority before publishing after observer authentication", async () => {
   const authentication = createDeferred();
   peers.authenticate.mockImplementation(() => authentication.promise);
@@ -51,10 +58,7 @@ it("rechecks ingress authority before publishing after observer authentication",
   });
   peers.next = peer;
   const ticket = mintDesktopObserverToken({
-    sourceKey: "desktop:fixture",
-    ownerEpoch: 1,
-    control: false,
-    attachment: { kind: "stream", streamId: "fixture-stream" },
+    ...observerDefaults,
     preauth: { auth: "vnc-password", credentials: { password: "fixture-password" } },
     requester: { isCurrent: () => true, remoteIngressPrincipal: context.resolvePrincipal() },
   });
@@ -104,19 +108,10 @@ it.each(["observe", "audio"] as const)(
             },
           })
         : undefined;
-    const path =
-      audio?.descriptor.wsPath ??
-      `/desktop/observe?token=${
-        mintDesktopObserverToken({
-          sourceKey: "desktop:fixture",
-          ownerEpoch: 1,
-          control: false,
-          attachment: { kind: "stream", streamId: "fixture-stream" },
-          requester,
-        }).token
-      }`;
     const req = new IncomingMessage(new Socket());
-    req.url = path;
+    req.url =
+      audio?.descriptor.wsPath ??
+      `/desktop/observe?token=${mintDesktopObserverToken({ ...observerDefaults, requester }).token}`;
     markGatewayIngressTransport(req, { kind: "remote-forwarded", context: destination });
     const transport = new PassThrough();
     const chunks: Buffer[] = [];

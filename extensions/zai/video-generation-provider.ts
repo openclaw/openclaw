@@ -187,7 +187,7 @@ export function buildZaiVideoGenerationProvider(): VideoGenerationProvider {
         deadline,
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         fetchFn: fetch,
-        allowPrivateNetwork,
+        ssrfPolicy: { allowPrivateNetwork },
         dispatcherPolicy,
         maxAttempts: 120,
         pollIntervalMs: POLL_INTERVAL_MS,

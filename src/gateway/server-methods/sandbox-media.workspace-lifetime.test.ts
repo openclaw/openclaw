@@ -75,9 +75,8 @@ it.for(["staged", "read-failed", "aborted", "retired"] as const)(
       const failure = new Error("attachment source read failed");
       const reading = createDeferred();
       const releaseRead = createDeferred();
-      const read = fsSafe.readLocalFileSafely;
-      vi.spyOn(fsSafe, "readLocalFileSafely").mockImplementation(async (params) => {
-        const result = await read(params);
+      const open = fsSafe.openLocalFileSafely;
+      vi.spyOn(fsSafe, "openLocalFileSafely").mockImplementation(async (params) => {
         if (params.filePath === source) {
           reading.resolve();
           await releaseRead.promise;
@@ -85,7 +84,7 @@ it.for(["staged", "read-failed", "aborted", "retired"] as const)(
             throw failure;
           }
         }
-        return result;
+        return open(params);
       });
       const pending = stageSandboxMedia({
         ctx,

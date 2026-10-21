@@ -1,15 +1,12 @@
-// Tlon tests cover channel runtime behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./urbit/auth.js";
 import { urbitFetch } from "./urbit/fetch.js";
 
-vi.mock("./urbit/auth.js", () => ({
-  authenticate: vi.fn(),
-}));
+// mock-isolation: Supply login outcomes without creating real Urbit sessions.
+vi.mock("./urbit/auth.js", () => ({ authenticate: vi.fn() }));
 
-vi.mock("./urbit/fetch.js", () => ({
-  urbitFetch: vi.fn(),
-}));
+// mock-isolation: Inspect runtime requests without making network calls.
+vi.mock("./urbit/fetch.js", () => ({ urbitFetch: vi.fn() }));
 
 import { probeTlonAccount, tlonRuntimeOutbound } from "./channel.runtime.js";
 
@@ -38,107 +35,74 @@ describe("tlonRuntimeOutbound", () => {
       name: "one inherited named account field",
       cfg: {
         channels: {
-          tlon: {
-            ship: "~zod",
-            url: "https://example.com",
-            accounts: { work: { code: "" } },
-          },
+          tlon: { ship: "~zod", url: "https://example.com", accounts: { work: { code: "" } } },
         },
       },
       accountId: "work",
       expected: "Tlon account work not configured (missing code)",
     },
   ])("reports $name when outbound setup is incomplete", async ({ cfg, accountId, expected }) => {
-    await expect(
-      sendText({
-        cfg,
-        to: "~sampel-palnet",
-        text: "hello",
-        accountId,
-      }),
-    ).rejects.toThrow(expected);
+    await expect(sendText({ cfg, to: "~sampel-palnet", text: "hello", accountId })).rejects.toThrow(
+      expected,
+    );
   });
 });
 
-function responseWithCancelableBody(
-  status: number,
-  cancelBody: () => void | PromiseLike<void>,
-): Response {
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      cancel: cancelBody,
-    }),
-    { status },
-  );
+function mockProbeResponse(response: Response, events: string[]) {
+  const release = vi.fn(async () => {
+    void response.body?.cancel().catch(() => undefined);
+    events.push("release");
+  });
+  vi.mocked(urbitFetch).mockResolvedValue({
+    response,
+    finalUrl: "https://example.com/~/name",
+    release,
+    refreshTimeout: vi.fn(),
+  });
+  return release;
+}
+
+function expectCleanup(cancel: unknown, release: unknown, events: string[]) {
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(release).toHaveBeenCalledOnce();
+  expect(events).toEqual(["cancel", "release"]);
 }
 
 describe("probeTlonAccount", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
   beforeEach(() => {
-    vi.mocked(authenticate).mockReset();
+    vi.mocked(authenticate).mockReset().mockResolvedValue("urbauth-~zod=fake-cookie");
     vi.mocked(urbitFetch).mockReset();
-    vi.mocked(authenticate).mockResolvedValue("urbauth-~zod=fake-cookie");
   });
 
   it.each([
-    { status: 200, expected: { ok: true } },
-    { status: 503, expected: { ok: false, error: "Name request failed: 503" } },
-  ])("cancels a $status response before releasing the guard", async ({ status, expected }) => {
-    const events: string[] = [];
-    const cancelBody = vi.fn(() => {
-      events.push("cancel");
-    });
-    const response = responseWithCancelableBody(status, cancelBody);
-    const release = vi.fn(async () => {
-      void response.body?.cancel().catch(() => undefined);
-      events.push("release");
-    });
-    vi.mocked(urbitFetch).mockResolvedValue({
-      response,
-      finalUrl: "https://example.com/~/name",
-      release,
-      refreshTimeout: vi.fn(),
-    });
+    { status: 200, cancelFails: false, expected: { ok: true } },
+    { status: 503, cancelFails: false, expected: { ok: false, error: "Name request failed: 503" } },
+    { status: 200, cancelFails: true, expected: { ok: true } },
+  ])(
+    "releases a $status response guard (cancelFails=$cancelFails)",
+    async ({ status, cancelFails, expected }) => {
+      const events: string[] = [];
+      const cancelBody = vi.fn(() => {
+        events.push("cancel");
+        if (cancelFails) {
+          throw new Error("cancel failed");
+        }
+      });
+      const response = new Response(new ReadableStream<Uint8Array>({ cancel: cancelBody }), {
+        status,
+      });
+      const release = mockProbeResponse(response, events);
 
-    await expect(probeTlonAccount(account)).resolves.toEqual({
-      ...expected,
-      elapsedMs: expect.any(Number),
-    });
+      await expect(probeTlonAccount(account)).resolves.toEqual({
+        ...expected,
+        elapsedMs: expect.any(Number),
+      });
 
-    expect(cancelBody).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
-    expect(events).toEqual(["cancel", "release"]);
-  });
-
-  it("still releases the guard when response cancellation fails", async () => {
-    const events: string[] = [];
-    const response = new Response(new ReadableStream<Uint8Array>());
-    const cancel = vi.spyOn(response.body!, "cancel").mockImplementationOnce(async () => {
-      events.push("cancel");
-      throw new Error("cancel failed");
-    });
-    const release = vi.fn(async () => {
-      void response.body?.cancel().catch(() => undefined);
-      events.push("release");
-    });
-    vi.mocked(urbitFetch).mockResolvedValue({
-      response,
-      finalUrl: "https://example.com/~/name",
-      release,
-      refreshTimeout: vi.fn(),
-    });
-
-    await expect(probeTlonAccount(account)).resolves.toEqual({
-      ok: true,
-      elapsedMs: expect.any(Number),
-    });
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
-    expect(events).toEqual(["cancel", "release"]);
-  });
+      expectCleanup(cancelBody, release, events);
+    },
+  );
 
   it("honors the status adapter timeout", async () => {
     vi.useFakeTimers();

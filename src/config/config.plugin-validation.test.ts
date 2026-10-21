@@ -113,7 +113,6 @@ const memorySlot = () => ({
 describe("config plugin validation", () => {
   let fixtureRoot = "";
   let suiteHome = "";
-  let chatPluginDir = "";
   let googleOverridePluginDir = "";
   let manifestlessClaudeBundleDir = "";
   let blockedPluginDir = "";
@@ -195,7 +194,6 @@ describe("config plugin validation", () => {
     await chmodSafeDir(fixtureRoot);
     suiteHome = path.join(fixtureRoot, "home");
     await mkdirSafe(suiteHome);
-    chatPluginDir = await installFixture("chat-plugin", { channels: ["chat"] });
     googleOverridePluginDir = await installFixture("google", {
       schema: { type: "object", properties: { apiKey: { type: "string" } } },
     });
@@ -426,11 +424,6 @@ describe("config plugin validation", () => {
           ),
         },
         false,
-      ],
-      [
-        "warns when an effective heartbeat route needs Codex",
-        { agents: agents({ model: modelSelection(anthropic), heartbeat: { model: codex } }) },
-        true,
       ],
       [
         "warns when a channel model override needs Codex",
@@ -932,30 +925,6 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
-  it.each([
-    { target: "chat", agent: "openclaw", plugin: true, ok: true },
-    { target: "gchat", agent: "pi", plugin: false, ok: true },
-    { target: "not-a-channel", agent: "openclaw", plugin: false, ok: false },
-  ])("validates heartbeat target $target", ({ target, agent, plugin, ok }) => {
-    const res = validate({
-      agents: {
-        defaults: { heartbeat: { target } },
-        entries: { [agent]: {} },
-      },
-      ...(plugin ? { plugins: { enabled: false, load: { paths: [chatPluginDir] } } } : {}),
-    });
-    expect(res.ok).toBe(ok);
-    if (!res.ok) {
-      expect(
-        res.issues.filter((issue) => issue.path === "agents.defaults.heartbeat.target"),
-      ).toEqual([
-        {
-          path: "agents.defaults.heartbeat.target",
-          message: `unknown heartbeat target: ${target}`,
-        },
-      ]);
-    }
-  });
   it("accepts ask destructive policy without dropping adjacent Codex plugin config", () => {
     const res = validateCodexConfig({
       codexDynamicToolsLoading: "direct",

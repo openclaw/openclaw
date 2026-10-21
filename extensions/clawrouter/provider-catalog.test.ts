@@ -256,6 +256,70 @@ describe("ClawRouter provider catalog", () => {
     );
   });
 
+  it("validates catalog prices and limits while retaining the first supported duplicate", async () => {
+    const fetchGuard: LiveModelCatalogFetchGuard = async () => ({
+      response: Response.json({
+        providers: [
+          null,
+          {
+            ...catalogProvider("invalid", "Invalid", "model", ["llm.chat"]),
+            nativeBaseUrl: "/wrong",
+          },
+          {
+            ...catalogProvider("openai", "OpenAI", "model", ["llm.responses"]),
+            models: [
+              null,
+              { id: "missing-upstream", capabilities: ["llm.responses"] },
+              { id: "duplicate", upstream: "model", capabilities: ["audio.speech"] },
+              {
+                id: "duplicate",
+                upstream: "model",
+                displayName: "First",
+                capabilities: ["llm.responses"],
+                pricing: {
+                  inputMicrosPerMillion: -1,
+                  outputMicrosPerMillion: "3000000",
+                  cachedInputMicrosPerMillion: 0,
+                  cacheWrite5mInputMicrosPerMillion: -1,
+                  cacheWrite1hInputMicrosPerMillion: 2_000_000,
+                  maxInputTokens: 1.5,
+                  defaultMaxOutputTokens: 0,
+                  serviceTiers: [{ id: " priority " }, null, { id: "priority" }, { id: "default" }],
+                },
+              },
+              {
+                id: "duplicate",
+                upstream: "model",
+                displayName: "Later",
+                capabilities: ["llm.responses"],
+              },
+              { id: "defaults", upstream: "model", capabilities: ["llm.chat"], pricing: null },
+            ],
+          },
+        ],
+      }),
+      finalUrl: "https://clawrouter.example/v1/catalog",
+      release: async () => undefined,
+    });
+
+    const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key", fetchGuard });
+
+    expect(provider.models.map((model) => model.id)).toEqual(["defaults", "duplicate"]);
+    expect(provider.models[1]).toMatchObject({
+      name: "First",
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 2 },
+      contextWindow: 200_000,
+      maxTokens: 32_768,
+      params: { clawrouterRoute: { serviceTiers: ["priority", "priority", "default"] } },
+    });
+    expect(provider.models[0]).toMatchObject({
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 32_768,
+    });
+    expect(provider.models[0]?.params?.clawrouterRoute).not.toHaveProperty("serviceTiers");
+  });
+
   it("reuses granted models for an hour without mixing credentials or endpoints", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     const fetchGuard = buildFetchGuard();

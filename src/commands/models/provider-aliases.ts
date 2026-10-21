@@ -34,7 +34,6 @@ function buildProviderAliasMap(params: ProviderAliasSource): ReadonlyMap<string,
 }
 
 export function createModelCatalogProviderAliasCanonicalizer(params: ProviderAliasSource): {
-  provider: (provider: string) => string;
   ref: <TRef extends { provider: string }>(ref: TRef) => TRef;
 } {
   const aliases = buildProviderAliasMap(params);
@@ -43,7 +42,6 @@ export function createModelCatalogProviderAliasCanonicalizer(params: ProviderAli
     return aliases.get(normalizedProvider) ?? normalizedProvider;
   };
   return {
-    provider,
     ref: (ref) => {
       const canonicalProvider = provider(ref.provider);
       return canonicalProvider === ref.provider ? ref : { ...ref, provider: canonicalProvider };

@@ -592,15 +592,14 @@ describe("npm rollback content diagnostics", () => {
           await fs.symlink("../dist/index.js", cache);
         } else if (change === "cache during scan") {
           const lstat = fs.lstat.bind(fs);
-          let parentReads = 0;
+          let cacheReads = 0;
           vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-            const stat = await lstat(...args);
-            if (String(args[0]) === path.dirname(cache) && ++parentReads === 2) {
-              // Replace after the parent's final observation; only the entry recheck can catch it.
+            if (String(args[0]) === cache && ++cacheReads === 2) {
+              // Substitute before this entry's recheck, independent of sibling IO order.
               await fs.unlink(cache);
               await fs.symlink("../dist/index.js", cache);
             }
-            return stat;
+            return lstat(...args);
           });
         } else {
           const before = await fs.stat(entry);

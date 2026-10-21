@@ -887,6 +887,10 @@
   height: 18px;
 }
 
+.chat-send-btn--stop rect {
+  rx: 3px;
+}
+
 .chat-send-btn--stop:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 18%, transparent);
   color: color-mix(in srgb, var(--danger) 82%, var(--text-strong));

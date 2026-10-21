@@ -47,28 +47,24 @@ it("admits plugin-only repair before executing setup or doctor modules", async (
   const marker = (name: string) => path.join(root, `${name}.marker`);
   const writeMarker = (name: string) =>
     `require("node:fs").writeFileSync(${JSON.stringify(marker(name))}, "executed");`;
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name: packageName,
-      version: "1.0.0",
-      openclaw: {
-        extensions: ["./dist/index.js"],
-        setupEntry: "./dist/setup-entry.cjs",
-        setupFeatures: { legacySessionSurfaces: true },
-        channel: { id: "fixture-chat" },
-      },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: pluginId,
-      channels: ["fixture-chat"],
-      doctorContract: { stateMigrations: true, resolveSessionStoreAgentIds: true },
-      configSchema: { type: "object" },
-    }),
-  );
+  const writeJson = (name: string, value: unknown) =>
+    fs.writeFileSync(path.join(pluginDir, name), JSON.stringify(value));
+  writeJson("package.json", {
+    name: packageName,
+    version: "1.0.0",
+    openclaw: {
+      extensions: ["./dist/index.js"],
+      setupEntry: "./dist/setup-entry.cjs",
+      setupFeatures: { legacySessionSurfaces: true },
+      channel: { id: "fixture-chat" },
+    },
+  });
+  writeJson("openclaw.plugin.json", {
+    id: pluginId,
+    channels: ["fixture-chat"],
+    doctorContract: { stateMigrations: true, resolveSessionStoreAgentIds: true },
+    configSchema: { type: "object" },
+  });
   fs.writeFileSync(
     path.join(pluginDir, "dist", "setup-entry.cjs"),
     `${writeMarker("setup")}

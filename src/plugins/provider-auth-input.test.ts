@@ -111,14 +111,11 @@ it("retains the storage reference while resolving through the staged workspace a
   expect(text).not.toHaveBeenCalled();
 });
 
-describe("normalizeApiKeyInput", () => {
-  it("strips shell syntax, pasted line breaks, and non-header-safe artifacts", () => {
-    expect(normalizeApiKeyInput("export OPENAI_API_KEY='sk-\r\nabc│';")).toBe("sk-abc");
-  });
-
-  it("preserves ordinary interior spaces in bearer-style values", () => {
-    expect(normalizeApiKeyInput('TOKEN="Bearer demo token"')).toBe("Bearer demo token");
-  });
+it.each([
+  ["export OPENAI_API_KEY='sk-\r\nabc│';", "sk-abc"],
+  ['TOKEN="Bearer demo token"', "Bearer demo token"],
+])("normalizes pasted key %j without losing ordinary spaces", (input, expected) => {
+  expect(normalizeApiKeyInput(input)).toBe(expected);
 });
 
 it("rejects a pasted OpenClaw onboarding command", () => {
@@ -208,51 +205,39 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
   });
 });
 
-describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
-  it("uses opts token and skips note/env/prompt", async () => {
+it.each([
+  [" DEMO-PROVIDER ", "demo-provider", "opts-key", undefined],
+  ["other-provider", "minimax", "env-key", "plaintext"],
+] as const)(
+  "resolves option provider %s before environment/prompt",
+  async (tokenProvider, provider, expected, mode) => {
+    if (mode) {
+      setMinimaxEnv("env-key");
+    }
     const { options, confirm, note, text, setCredential } = inputFixture();
-
-    const result = await ensureApiKeyFromOptionEnvOrPrompt({
-      ...options,
-      token: "  opts-key  ",
-      tokenProvider: " DEMO-PROVIDER ",
-      expectedProviders: ["demo-provider"],
-      provider: "demo-provider",
-      envLabel: "DEMO_TOKEN",
-      noteMessage: "Demo note",
-      noteTitle: "Demo",
-    });
-
-    expect(result).toBe("opts-key");
-    expect(setCredential).toHaveBeenCalledWith("opts-key", undefined);
-    expect(note).not.toHaveBeenCalled();
-    expect(confirm).not.toHaveBeenCalled();
+    expect(
+      await ensureApiKeyFromOptionEnvOrPrompt({
+        ...options,
+        token: "  opts-key  ",
+        tokenProvider,
+        provider,
+        expectedProviders: [provider],
+        envLabel: provider === "minimax" ? "MINIMAX_API_KEY" : "DEMO_TOKEN",
+        noteMessage: "Demo provider note",
+        noteTitle: "Demo provider",
+      }),
+    ).toBe(expected);
+    expect(setCredential).toHaveBeenCalledWith(expected, mode);
     expect(text).not.toHaveBeenCalled();
-  });
-
-  it("falls back to env flow and shows note when opts provider does not match", async () => {
-    setMinimaxEnv("env-key");
-
-    const { options, confirm, note, text, setCredential } = inputFixture();
-
-    const result = await ensureApiKeyFromOptionEnvOrPrompt({
-      ...options,
-      token: "opts-key",
-      tokenProvider: "other-provider",
-      expectedProviders: ["minimax"],
-      provider: "minimax",
-      envLabel: "MINIMAX_API_KEY",
-      noteMessage: "Demo provider note",
-      noteTitle: "Demo provider",
-    });
-
-    expect(result).toBe("env-key");
-    expect(note).toHaveBeenCalledWith("Demo provider note", "Demo provider");
-    expect(confirm).toHaveBeenCalled();
-    expect(text).not.toHaveBeenCalled();
-    expect(setCredential).toHaveBeenCalledWith("env-key", "plaintext");
-  });
-});
+    if (mode) {
+      expect(note).toHaveBeenCalledWith("Demo provider note", "Demo provider");
+      expect(confirm).toHaveBeenCalled();
+    } else {
+      expect(note).not.toHaveBeenCalled();
+      expect(confirm).not.toHaveBeenCalled();
+    }
+  },
+);
 
 it.each([
   ["a😀b", "a…b"],

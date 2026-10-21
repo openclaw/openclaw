@@ -40,7 +40,7 @@ export class PaletteSessionDraft {
     };
   };
   private rejectedOpen: (() => void) | undefined;
-  private coldSubmit: { readSignal?: AbortSignal } | undefined;
+  private coldSubmit: { readSignal?: AbortSignal; failureCount: number } | undefined;
   private owner: { gateway: ApplicationContext["gateway"]; url: string; scope: string } | undefined;
   private readonly connectMachine: ConnectMachineSetupState;
   private static nextId = 0;
@@ -173,11 +173,12 @@ export class PaletteSessionDraft {
     if (!this.read().open || this.messageLocked || !props) {
       return;
     }
+    const failureCount = props.attachmentReads?.failureCount ?? 0;
     const admitted = appendChatAttachmentFiles(files, props);
     if (submitRequested && admitted === files.length) {
       // The loader accepted Send before the readers existed. Carry that one
       // intent across preparation, but never across dismissal or invalidation.
-      this.submitCold(props.readSignal);
+      this.submitCold(props.readSignal, failureCount);
     }
   }
 
@@ -270,8 +271,11 @@ export class PaletteSessionDraft {
     await this.draft.submission.submit(undefined, true);
   }
 
-  submitCold(readSignal?: AbortSignal) {
-    this.coldSubmit = { readSignal };
+  submitCold(
+    readSignal?: AbortSignal,
+    failureCount = this.draft?.submission.attachmentDraft.reads.failureCount ?? 0,
+  ) {
+    this.coldSubmit = { readSignal, failureCount };
     this.callbacks.changed();
   }
 
@@ -325,10 +329,7 @@ export class PaletteSessionDraft {
     ) {
       const failed =
         pending.readSignal &&
-        (pending.readSignal.aborted ||
-          attachmentDraft.reads
-            .project(attachmentDraft.attachments)
-            .some((entry) => entry.state === "error"));
+        (pending.readSignal.aborted || attachmentDraft.reads.failureCount !== pending.failureCount);
       if (failed || draft.gateway.placementPolicyReady) {
         this.coldSubmit = undefined;
         this.callbacks.changed();

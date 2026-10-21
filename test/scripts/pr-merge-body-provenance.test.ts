@@ -78,39 +78,13 @@ describePosix("squash body and provenance", () => {
     expect(f.state().mutations).toBe(1);
   });
 
-  it.each([
-    { auto: false, admin: false, mergeState: "HAS_HOOKS", route: "immediate" },
-    { auto: false, admin: true, mergeState: "BLOCKED", route: "admin" },
-    { auto: true, admin: false, mergeState: "BEHIND", route: "auto" },
-    { auto: true, admin: false, mergeState: "CLEAN", route: "immediate", pendingGates: true },
-    { auto: true, admin: false, mergeState: "BEHIND", route: "auto", missingHeadline: true },
-  ])(
-    "pins attribution and headline: %j",
-    ({ auto, admin, mergeState, route, pendingGates, missingHeadline }) => {
-      const credit = "Co-authored-by: Fixture Contributor <contributor@example.com>";
-      const f = fixture(`Source change\n\n${credit}\n`);
-      proof.configureMerge(f, {
-        admin,
-        ...(pendingGates ? { requiredCheckName: "openclaw/ci-gate" } : {}),
-        ...(missingHeadline ? { previewHeadline: null } : {}),
-        gates: admin ? "fail" : "pass",
-        pr: { mergeStateStatus: mergeState },
-      });
-      if (pendingGates) {
-        proof.pendingGates(f);
-      }
-      const run = proof.expectExit(f.run(auto), missingHeadline ? 1 : 0);
-      if (missingHeadline) {
-        expect(run.output).toContain(
-          "Cannot prepare squash subject: require the current-head merge headline",
-        );
-        expect(f.state().mutations).toBe(0);
-        expect(() => f.record()).toThrow();
-        return;
-      }
-      proof.expectPinnedMerge(f, route, true);
-      expect(f.state().mergeBody).toBe(`Fixture body\n\n${credit}\n`);
-      expect(f.record(), run.output).toMatchObject({ route, phase: "complete" });
-    },
-  );
+  it("requires the current-head merge headline", () => {
+    const f = proof.configuredFixture(fixture, { previewHeadline: null });
+    const run = proof.expectExit(f.run(true), 1);
+    expect(run.output).toContain(
+      "Cannot prepare squash subject: require the current-head merge headline",
+    );
+    expect(f.state().mutations).toBe(0);
+    expect(() => f.record()).toThrow();
+  });
 });

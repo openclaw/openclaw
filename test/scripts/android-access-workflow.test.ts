@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
+import {
+  evaluateWorkflowRunner,
+  expectIncludes as containsAll,
+} from "./ci-workflow.test-support.js";
 
 const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 const job = workflow.jobs["android-access-native"];
@@ -11,6 +14,12 @@ const step = job.steps.find(
   (entry: { name?: string }) => entry.name === "Run packaged Access crypto on Android",
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const pageSizes = [
+  { "page-size": 4096, image: "google_apis" },
+  { "page-size": 16384, image: "google_apis_ps16k" },
+];
+const invalidReports = ["empty", "wrong-class", "failed", "skipped"];
+const invalidApks = ["missing-abi", "wrong-variant", "ambiguous-output", "outside-output"];
 
 function verifyReports(mode: string) {
   const root = tempDirs.make("openclaw-access-reports-");
@@ -18,11 +27,7 @@ function verifyReports(mode: string) {
   if (!verification) {
     throw new Error("Missing native report verification");
   }
-  return spawnSync(
-    "python3",
-    [
-      "-c",
-      String.raw`
+  const fixture = String.raw`
 from pathlib import Path
 import json, sys, zipfile
 mode = sys.argv[1]
@@ -42,74 +47,57 @@ abis = ['armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64']
 if mode == 'missing-abi': abis.pop()
 with zipfile.ZipFile(apk, 'w') as archive:
     for abi in abis: archive.writestr(f'lib/{abi}/libsodium.so', b'test-only')
-` + verification,
-      mode,
-    ],
-    { cwd: root, encoding: "utf8" },
-  );
+`;
+  return spawnSync("python3", ["-c", fixture + verification, mode], {
+    cwd: root,
+    encoding: "utf8",
+  });
 }
 
-describe("Android Access native workflow", () => {
-  it("runs the packaged class on current Android targets and includes its result in CI", () => {
-    expect(job.permissions).toEqual({ contents: "read" });
-    expect(evaluateWorkflowRunner(job["runs-on"], { eventName: "pull_request" })).toBe(
-      "ubuntu-24.04",
-    );
-    expect(workflow.jobs.preflight.outputs.run_android_access_native).toBe(
-      "${{ steps.manifest.outputs.run_android_access_native }}",
-    );
-    expect(job.if).toBe("needs.preflight.outputs.run_android_access_native == 'true'");
-    expect(step.run).toContain(":app:connectedPlayDebugAndroidTest");
-    expect(step.run).toContain(
-      "-Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest",
-    );
-    const zipalignVersion = step.run.match(/\/build-tools\/([^/]+)\/zipalign"/)?.[1];
-    expect(zipalignVersion).toBeDefined();
-    expect(readFileSync(".github/actions/setup-android-toolchain/action.yml", "utf8")).toContain(
-      `"build-tools;${zipalignVersion}"`,
-    );
-    expect(step.run).toContain('zipalign" -c -P 16 -v 4 "$apk"');
-    expect(workflow.jobs["ci-gate"].needs).toContain("android-access-native");
-    const aggregate = workflow.jobs["ci-gate"].steps.find(
-      (entry: { name?: string }) => entry.name === "Verify selected CI lanes",
-    );
-    expect(aggregate.env.JOB_RESULTS).toContain(
-      "android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}",
-    );
-  });
+it("runs the packaged class with pinned Android tooling", () => {
+  expect(job.permissions).toEqual({ contents: "read" });
+  expect(evaluateWorkflowRunner(job["runs-on"], { eventName: "pull_request" })).toBe(
+    "ubuntu-24.04",
+  );
+  expect(workflow.jobs.preflight.outputs.run_android_access_native).toBe(
+    "${{ steps.manifest.outputs.run_android_access_native }}",
+  );
+  containsAll(step.run, [
+    ":app:connectedPlayDebugAndroidTest",
+    "-Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest",
+    'zipalign" -c -P 16 -v 4 "$apk"',
+  ]);
+  const zipalignVersion = step.run.match(/\/build-tools\/([^/]+)\/zipalign"/)?.[1];
+  expect(zipalignVersion).toBeDefined();
+  expect(readFileSync(".github/actions/setup-android-toolchain/action.yml", "utf8")).toContain(
+    `"build-tools;${zipalignVersion}"`,
+  );
+});
 
-  it("requires ordinary and strict simulated 16 KiB packaged execution", () => {
-    expect(job.strategy).toEqual({
-      "fail-fast": false,
-      matrix: {
-        include: [
-          { "page-size": 4096, image: "google_apis" },
-          { "page-size": 16384, image: "google_apis_ps16k" },
-        ],
-      },
-    });
-    expect(step.env.EXPECTED_PAGE_SIZE).toBe("${{ matrix.page-size }}");
-    expect(step.env.SYSTEM_IMAGE).toBe("system-images;android-36;${{ matrix.image }};x86_64");
-    expect(step.run).toContain(
-      '-Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE"',
-    );
-    const guard = step.run.slice(
-      step.run.indexOf('test "$(adb -s emulator-5554 shell getconf PAGE_SIZE'),
-      step.run.indexOf("node --import ./scripts/tsx.mjs"),
-    );
-    expect(guard).toContain("setprop bionic.linker.16kb.app_compat.enabled false");
-    expect(guard).toContain("setprop pm.16kb.app_compat.disabled true");
-    for (const [pageSize, linker, packageManager, passes] of [
-      [16384, "false", "true", true],
-      [4096, "false", "true", false],
-      [16384, "true", "true", false],
-      [16384, "false", "false", false],
-    ] as const) {
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          `set -euo pipefail
+it("requires ordinary and strict simulated 16 KiB packaged execution", () => {
+  expect(job.strategy).toEqual({ "fail-fast": false, matrix: { include: pageSizes } });
+  expect(step.env).toMatchObject({
+    EXPECTED_PAGE_SIZE: "${{ matrix.page-size }}",
+    SYSTEM_IMAGE: "system-images;android-36;${{ matrix.image }};x86_64",
+  });
+  expect(step.run).toContain(
+    '-Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE"',
+  );
+  const guard = step.run.slice(
+    step.run.indexOf('test "$(adb -s emulator-5554 shell getconf PAGE_SIZE'),
+    step.run.indexOf("node --import ./scripts/tsx.mjs"),
+  );
+  containsAll(guard, [
+    "setprop bionic.linker.16kb.app_compat.enabled false",
+    "setprop pm.16kb.app_compat.disabled true",
+  ]);
+  for (const [pageSize, linker, packageManager, passes] of [
+    [16384, "false", "true", true],
+    [4096, "false", "true", false],
+    [16384, "true", "true", false],
+    [16384, "false", "false", false],
+  ] as const) {
+    const fixture = `set -euo pipefail
 EXPECTED_PAGE_SIZE=16384
 adb() {
   case "$*" in
@@ -118,25 +106,15 @@ adb() {
     *"getprop pm.16kb.app_compat.disabled") echo ${packageManager} ;;
   esac
 }
-${guard}`,
-        ],
-        { encoding: "utf8" },
-      );
-      expect(result.status === 0, result.stderr).toBe(passes);
-    }
-  });
+${guard}`;
+    const result = spawnSync("bash", ["-c", fixture], { encoding: "utf8" });
+    expect(result.status === 0, result.stderr).toBe(passes);
+  }
+});
 
-  it.each([
-    "passed",
-    "empty",
-    "wrong-class",
-    "failed",
-    "skipped",
-    "missing-abi",
-    "wrong-variant",
-    "ambiguous-output",
-    "outside-output",
-  ])("validates %s native evidence independently of Gradle's exit code", (mode) => {
+it.each(["passed", ...invalidReports, ...invalidApks])(
+  "validates %s native evidence independently of Gradle's exit code",
+  (mode) => {
     const result = verifyReports(mode);
     if (mode === "passed") {
       expect(result.status, result.stderr).toBe(0);
@@ -146,5 +124,5 @@ ${guard}`,
     } else {
       expect(result.status, result.stderr).not.toBe(0);
     }
-  });
-});
+  },
+);

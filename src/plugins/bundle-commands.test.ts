@@ -11,31 +11,25 @@ const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn: mocks.warn }),
-}));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      warn: mocks.warn,
+      debug: vi.fn(),
+      trace: vi.fn(),
+    }),
+  };
+});
 
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistryCore: () => ({ diagnostics: [], plugins: mocks.plugins }),
-}));
-
-vi.mock("./plugin-registry-contributions.js", () => ({
+vi.mock("./plugin-registry-contributions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-registry-contributions.js")>()),
   loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: mocks.plugins }),
 }));
 
-vi.mock("./config-state.js", () => ({
-  hasExplicitPluginConfig: (plugins?: { entries?: Record<string, unknown> }) =>
-    Boolean(plugins?.entries && Object.keys(plugins.entries).length > 0),
-  normalizePluginsConfig: (plugins?: unknown) => plugins,
-  resolveEffectivePluginActivationState: (params: {
-    config?: { entries?: Record<string, { enabled?: boolean }> };
-    id: string;
-  }) => ({
-    activated: params.config?.entries?.[params.id]?.enabled !== false,
-  }),
-}));
-
-const { loadEnabledClaudeBundleCommands } = await import("./bundle-commands.js");
+const { buildWorkspaceSkillCommandSpecs } = await import("../skills/discovery/command-specs.js");
 
 const tempDirs = createTempDirTracker();
 
@@ -85,13 +79,13 @@ function markdown(body: string, ...frontmatter: string[]) {
 }
 
 function loadCommands(workspaceDir: string, pluginId: string) {
-  return loadEnabledClaudeBundleCommands({
-    workspaceDir,
-    cfg: { plugins: { entries: { [pluginId]: { enabled: true } } } },
+  return buildWorkspaceSkillCommandSpecs(workspaceDir, {
+    entries: [],
+    config: { plugins: { entries: { [pluginId]: { enabled: true } } } },
   });
 }
 
-describe("loadEnabledClaudeBundleCommands", () => {
+describe("Claude bundle command discovery", () => {
   it("loads enabled Claude bundle markdown commands and honors invocation policy", async () => {
     const homeDir = tempDirs.make("openclaw-bundle-commands-home-");
     const workspaceDir = tempDirs.make("openclaw-bundle-commands-workspace-");
@@ -129,14 +123,16 @@ describe("loadEnabledClaudeBundleCommands", () => {
         const commands = loadCommands(workspaceDir, "compound-bundle");
 
         const command = (
-          rawName: string,
+          name: string,
+          skillName: string,
           file: string,
           promptTemplate: string,
           description = promptTemplate,
         ) => ({
-          pluginId: "compound-bundle",
-          rawName,
+          name,
+          skillName,
           description,
+          modelVisible: false,
           promptTemplate,
           sourceFilePath: path.join(
             resolveBundlePluginRoot(homeDir, "compound-bundle"),
@@ -145,28 +141,31 @@ describe("loadEnabledClaudeBundleCommands", () => {
           ),
         });
         expect(commands).toEqual([
-          command("model-hidden", "model-hidden.md", "Manual only."),
+          command("model_hidden", "model-hidden", "model-hidden.md", "Manual only."),
           command(
+            "not_frontmatter",
             "not-frontmatter",
             "not-frontmatter.md",
             "---not\nname: nope\n---not\nTreat this as Markdown.",
             "---not",
           ),
           command(
+            "office_hours",
             "office-hours",
             "office-hours.MD",
             "Give direct engineering advice.",
             "Help with scoping and architecture",
           ),
-          command("user-enabled", "user-enabled.md", "User enabled."),
+          command("user_enabled", "user-enabled", "user-enabled.md", "User enabled."),
           command(
+            "workflows_review",
             "workflows:review",
             "workflows/review.md",
             "Review the code. $ARGUMENTS",
             "Run a structured review",
           ),
         ]);
-        const rawNames = commands.map((entry) => entry.rawName);
+        const rawNames = commands.map((entry) => entry.skillName);
         expect(rawNames).not.toContain("user-hidden");
         expect(rawNames).not.toContain("user-hidden-false");
       },
@@ -196,7 +195,7 @@ describe("loadEnabledClaudeBundleCommands", () => {
 
     const commands = loadCommands(workspaceDir, "oversized-test");
 
-    expect(commands.map((entry) => entry.rawName)).toEqual(["normal"]);
+    expect(commands.map((entry) => entry.skillName)).toEqual(["normal"]);
     expect(mocks.warn).toHaveBeenCalledOnce();
     const warning = String(mocks.warn.mock.calls[0]?.[0]);
     expect(warning).toContain(oversizedFilePath);

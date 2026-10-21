@@ -272,7 +272,7 @@ suite.define(() => {
         if (colorScheme === "light") {
           await page.getByRole("button", { name: "People", exact: true }).click();
           await peopleModule.request;
-          await host.getByRole("status").filter({ hasText: "Loading" }).waitFor();
+          await host.getByRole("status", { name: "Loading…", exact: true }).waitFor();
           await captureUiProof(suite, page, "mobile-people-loading-light.png");
           peopleModule.release();
           await host.getByRole("group", { name: "People", exact: true }).waitFor();
@@ -285,7 +285,7 @@ suite.define(() => {
         const sharing = host.locator('[data-mobile-page="sharing"]');
         if (sharingModule) {
           const moduleUrl = await sharingModule.request;
-          await sharing.getByRole("status").filter({ hasText: "Loading" }).waitFor();
+          await sharing.getByRole("status", { name: "Loading…", exact: true }).waitFor();
           await captureUiProof(suite, page, "mobile-sharing-pending-dark.png");
           const retiringPane = page.locator(".chat-split-view__cell--active openclaw-chat-pane");
           const retiringElement = await retiringPane.elementHandle();

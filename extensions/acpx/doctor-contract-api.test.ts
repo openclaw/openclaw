@@ -1,4 +1,3 @@
-// ACPX tests cover doctor repair of legacy config and runtime state.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,10 +7,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type {
-  OpenKeyedStoreOptions,
-  PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -27,34 +23,21 @@ vi.mock("./runtime-api.js", () => {
 
 describe("acpx doctor config repair", () => {
   it("flags both retired config keys for openclaw doctor --fix", () => {
-    expect(legacyConfigRules).toEqual([
-      expect.objectContaining({
-        path: ["plugins", "entries", "acpx", "config", "strictWindowsCmdWrapper"],
-        message: expect.stringContaining("openclaw doctor --fix"),
-      }),
-      expect.objectContaining({
-        path: ["plugins", "entries", "acpx", "config", "queueOwnerTtlSeconds"],
-        message: expect.stringContaining("openclaw doctor --fix"),
-      }),
-    ]);
+    expect(legacyConfigRules).toEqual(
+      ["strictWindowsCmdWrapper", "queueOwnerTtlSeconds"].map((key) =>
+        expect.objectContaining({
+          path: ["plugins", "entries", "acpx", "config", key],
+          message: expect.stringContaining("openclaw doctor --fix"),
+        }),
+      ),
+    );
   });
 
   it("removes retired config before strict plugin validation", () => {
-    const config = {
-      plugins: {
-        entries: {
-          acpx: {
-            enabled: true,
-            config: {
-              cwd: "/tmp/acpx",
-              strictWindowsCmdWrapper: false,
-              queueOwnerTtlSeconds: 30,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
+    const legacy = { cwd: "/tmp/acpx", strictWindowsCmdWrapper: false, queueOwnerTtlSeconds: 30 };
+    const config: OpenClawConfig = {
+      plugins: { entries: { acpx: { enabled: true, config: { ...legacy } } } },
+    };
     const result = normalizeCompatibilityConfig({ cfg: config });
 
     expect(result.changes).toEqual([
@@ -67,28 +50,13 @@ describe("acpx doctor config repair", () => {
     expect(
       AcpxPluginConfigSchema.safeParse(result.config.plugins?.entries?.acpx?.config).success,
     ).toBe(true);
-    expect(config.plugins?.entries?.acpx?.config).toEqual({
-      cwd: "/tmp/acpx",
-      strictWindowsCmdWrapper: false,
-      queueOwnerTtlSeconds: 30,
-    });
+    expect(config.plugins?.entries?.acpx?.config).toEqual(legacy);
     expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
       config: result.config,
       changes: [],
     });
   });
 });
-
-function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
-  return {
-    openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
-      return createPluginStateKeyedStoreForTests<T>("acpx", {
-        ...options,
-        env: options.env ?? env,
-      });
-    },
-  };
-}
 
 describe("acpx doctor state migration", () => {
   let stateDir = "";
@@ -106,39 +74,34 @@ describe("acpx doctor state migration", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  function migrationParams() {
-    return {
-      config: {},
-      env,
-      stateDir,
-      oauthDir: path.join(stateDir, "oauth"),
-      context: createDoctorContext(env),
-    };
-  }
-
-  it.each(["missing", "empty"])(
-    "does not load runtime helpers or inspect claims when the legacy directory is %s",
-    async (directoryState) => {
-      if (directoryState === "empty") {
-        await fs.mkdir(path.join(stateDir, "acpx", "sessions"), { recursive: true });
-      }
-      const migration = expectDefined(
-        stateMigrations.find((entry) => entry.id === "acpx-session-owner-resources"),
-        "ACP session owner migration",
-      );
-      await expect(
-        migration.detectLegacyState({
-          ...migrationParams(),
-          serviceWorkspaceDir: stateDir,
-          context: {
-            ...createDoctorContext(env),
-            async inspectAcpSessionClaims() {
-              throw new Error("No record requires canonical ownership evidence");
-            },
+  it.each(["missing", "empty"])("ignores %s legacy directories", async (directoryState) => {
+    if (directoryState === "empty") {
+      await fs.mkdir(path.join(stateDir, "acpx", "sessions"), { recursive: true });
+    }
+    const migration = expectDefined(
+      stateMigrations.find((entry) => entry.id === "acpx-session-owner-resources"),
+      "ACP session owner migration",
+    );
+    await expect(
+      migration.detectLegacyState({
+        config: {},
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        serviceWorkspaceDir: stateDir,
+        context: {
+          openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
+            return createPluginStateKeyedStoreForTests<T>("acpx", {
+              ...options,
+              env: options.env ?? env,
+            });
           },
-        }),
-      ).resolves.toBeNull();
-      expect(await fs.readdir(stateDir)).toEqual(directoryState === "empty" ? ["acpx"] : []);
-    },
-  );
+          async inspectAcpSessionClaims() {
+            throw new Error("No record requires canonical ownership evidence");
+          },
+        },
+      }),
+    ).resolves.toBeNull();
+    expect(await fs.readdir(stateDir)).toEqual(directoryState === "empty" ? ["acpx"] : []);
+  });
 });

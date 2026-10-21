@@ -64,6 +64,8 @@ type InternalReplySessionOptions = {
   queuedFollowupAbortSignal?: AbortSignal;
   /** Host-minted original operator authority; never restored from session metadata. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Live channel policy retained from ingress through awaited lifecycle mutations. */
+  assertChannelAuthority?: () => void;
   extractedFileImages?: ExtractedFileImage[];
   /** Rechecks the live Gateway caller before a chat login has a durable effect. */
   assertProviderLoginAuthority?: () => void;

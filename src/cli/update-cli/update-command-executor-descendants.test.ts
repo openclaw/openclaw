@@ -1,9 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
+import { assert, beforeEach, expect, it, vi } from "vitest";
 import type { ManagedHandoffLease } from "../../infra/update-managed-service-handoff-lease.js";
 import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
@@ -13,17 +11,13 @@ import {
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
 } from "./update-command-executor.js";
+import { useExecutorFixture } from "./update-command-executor.test-support.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+const fixture = useExecutorFixture("update-executor-descendants-");
 let root: string;
 beforeEach(() => {
-  root = fs.realpathSync(dirs.make("update-executor-descendants-"));
-  const temporary = path.join(root, "private-tmp");
-  fs.mkdirSync(temporary, { mode: 0o700 });
-  // Only the database location is isolated; lease ownership and process probes stay real.
-  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(temporary);
+  ({ root } = fixture());
 });
-afterEach(() => vi.restoreAllMocks());
 
 it.skipIf(process.platform === "win32").each([false, true])(
   "does not release either installation while a candidate descendant is alive (changed root=%s)",

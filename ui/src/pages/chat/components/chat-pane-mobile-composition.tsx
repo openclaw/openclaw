@@ -6,7 +6,6 @@ import {
   createMemo,
   createSignal,
   merge,
-  onCleanup,
   onSettled,
   Show,
   type Element,
@@ -25,8 +24,10 @@ import type { SessionPlacementPresentation } from "../../../components/session-p
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { closeMenusWithin } from "../../../components/solid/menu.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending } from "../../../lib/session-display.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { MobileHostDestination } from "../chat-mobile-host.ts";
@@ -44,8 +45,10 @@ import {
 } from "./chat-pane-placement.tsx";
 import type { HeaderMenuSessionAction } from "./chat-quick-action.tsx";
 import { createChatSessionSharingMobileAdapter } from "./chat-session-sharing-mobile-adapter.tsx";
-import { ChatSessionSharingOptions } from "./chat-session-sharing-options.tsx";
 import "./chat-pane-mobile-composition.css";
+import { ChatSessionSharingOptions } from "./chat-session-sharing-options.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 /** Composition only: destinations and resources remain owned by the pane's native host. */
 export function ChatPaneMobileComposition(props: {
@@ -60,9 +63,6 @@ export function ChatPaneMobileComposition(props: {
   ) => Element;
 }) {
   let disposed = false;
-  onCleanup(() => {
-    disposed = true;
-  });
   // The destination's first visit mounts its content under this retained header owner.
   const retainPage = (render: () => Element) => {
     const opened = createMemo<boolean>(
@@ -99,7 +99,13 @@ export function ChatPaneMobileComposition(props: {
             />
           )}
         >
-          <Loading fallback={<p role="status">{t("common.loading")}</p>}>{render()}</Loading>
+          <Loading
+            fallback={
+              <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+            }
+          >
+            {render()}
+          </Loading>
         </Errored>
       </Show>
     );
@@ -209,7 +215,7 @@ export function ChatPaneMobileComposition(props: {
       render: retainPage(() => (
         <div id={peopleId()}>
           <Show when={props.header.mobilePeopleMentions?.status === "loading"}>
-            <p role="status">{t("common.loading")}</p>
+            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
           </Show>
           <Show
             when={
@@ -366,7 +372,10 @@ export function ChatPaneMobileComposition(props: {
       ? request
       : undefined;
   };
-  onCleanup(() => moveRequest()?.cancel());
+  onSettled(() => () => {
+    disposed = true;
+    moveRequest()?.cancel();
+  });
   const layoutProps = merge(
     () => props.header,
     () => ({ mobile: props.header.mergedChrome }),
@@ -377,7 +386,6 @@ export function ChatPaneMobileComposition(props: {
   const desktopViewActions = () =>
     layoutModel().actions.filter((action) => action.id === "close-pane");
   const desktopSessionActions = (): HeaderMenuSessionAction[] => [
-    ...(layoutModel().createClawAction ? [layoutModel().createClawAction!] : []),
     ...(props.header.sessionMenuAction?.sessionActions ?? []),
     ...(!props.header.mergedChrome
       ? layoutModel().actions.flatMap((action) =>
@@ -391,7 +399,6 @@ export function ChatPaneMobileComposition(props: {
     return source ? companionClearAction(source) : undefined;
   });
   const nativeActions = createMemo((): HeaderMenuSessionAction[] => [
-    ...(layoutModel().createClawAction ? [layoutModel().createClawAction!] : []),
     ...(clearSideChat() ? [clearSideChat()!] : []),
     ...(props.header.runAction
       ? [

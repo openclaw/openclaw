@@ -129,6 +129,8 @@ extra-path details before showing indexing progress. The completion message
 reports the indexed file count. An empty corpus is a successful no-op: the
 command reports the resolved workspace path and that nothing was indexed, and
 leaves the missing `memory/` directory for the first memory write to create.
+An index request that joins an active pass also processes newly observed
+memory-file changes before reporting completion.
 Internal Active Memory recall, dreaming-narrative, cron, and heartbeat session transcripts are
 excluded from indexing, including retained compressed narrative archives whose
 original sessions are no longer active. Sessions previously selected by
@@ -144,6 +146,10 @@ Historical transcripts without a recognizable helper identity remain eligible.
 
 Full rebuilds wait for temporary database cleanup before reporting completion.
 File removal runs asynchronously so cleanup does not block the Gateway event loop.
+SQLite background rebuilds retain completed work when foreground activity interrupts
+indexing. The next sync resumes the rebuild, incorporating source changes before
+publishing the complete index. Closing the memory owner or restarting the Gateway
+discards this unfinished work. PostgreSQL rebuilds restart after an interruption.
 
 When an embedding provider rate-limits indexing, each embedding operation gets
 up to five attempts. Retries honor valid provider cooldown hints, capped at

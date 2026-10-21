@@ -7,6 +7,17 @@ import {
   isSetupAdmissionBusyError,
 } from "./gateway-errors.ts";
 
+function requestError(code: string, message: string, details?: Record<string, unknown>) {
+  return new GatewayRequestError({ code, message, details });
+}
+function missingScope(scope: string, message = `missing scope: ${scope}`) {
+  return requestError("FORBIDDEN", message, {
+    code: "MISSING_SCOPE",
+    missingScope: scope,
+    requiredScopes: [scope],
+  });
+}
+
 describe("gateway error helpers", () => {
   it.each([
     [isWizardNotFoundError, "INVALID_REQUEST", "WIZARD_NOT_FOUND"],
@@ -14,21 +25,9 @@ describe("gateway error helpers", () => {
   ] as const)(
     "classifies structured %s %s %s without parsing copy",
     (classify, code, detailCode) => {
-      expect(
-        classify(
-          new GatewayRequestError({
-            code,
-            message: "localized or changed public copy",
-            details: { code: detailCode },
-          }),
-        ),
-      ).toBe(true);
-      expect(
-        classify({
-          gatewayCode: code,
-          details: { code: detailCode },
-        }),
-      ).toBe(true);
+      const details = { code: detailCode };
+      expect(classify(requestError(code, "localized or changed public copy", details))).toBe(true);
+      expect(classify({ gatewayCode: code, details })).toBe(true);
     },
   );
 
@@ -56,27 +55,14 @@ describe("gateway error helpers", () => {
 
   it("classifies structured read-scope failures without message parsing", () => {
     expect(
-      isMissingOperatorReadScopeError(
-        new GatewayRequestError({
-          code: "FORBIDDEN",
-          message: "permission denied",
-          details: {
-            code: "MISSING_SCOPE",
-            missingScope: "operator.read",
-            requiredScopes: ["operator.read"],
-          },
-        }),
-      ),
+      isMissingOperatorReadScopeError(missingScope("operator.read", "permission denied")),
     ).toBe(true);
   });
 
   it("uses the shared client's missing-scope message reader", () => {
     expect(
       isMissingOperatorReadScopeError(
-        new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "missing scope: operator.read",
-        }),
+        requestError("INVALID_REQUEST", "missing scope: operator.read"),
       ),
     ).toBe(true);
   });
@@ -84,28 +70,12 @@ describe("gateway error helpers", () => {
   it("does not treat connect authorization errors as missing read scope", () => {
     expect(
       isMissingOperatorReadScopeError(
-        new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "unauthorized",
-          details: { code: "AUTH_UNAUTHORIZED" },
-        }),
+        requestError("INVALID_REQUEST", "unauthorized", { code: "AUTH_UNAUTHORIZED" }),
       ),
     ).toBe(false);
   });
 
   it("does not confuse another missing scope with operator.read", () => {
-    expect(
-      isMissingOperatorReadScopeError(
-        new GatewayRequestError({
-          code: "FORBIDDEN",
-          message: "missing scope: operator.questions",
-          details: {
-            code: "MISSING_SCOPE",
-            missingScope: "operator.questions",
-            requiredScopes: ["operator.questions"],
-          },
-        }),
-      ),
-    ).toBe(false);
+    expect(isMissingOperatorReadScopeError(missingScope("operator.questions"))).toBe(false);
   });
 });

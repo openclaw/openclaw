@@ -101,6 +101,37 @@ describe("exec approval card", () => {
     expect(card?.classList.contains("exec-approval-card--severity-danger")).toBe(true);
   });
 
+  it("opens a retained sidebar session link through the current callback", () => {
+    const original = vi.fn((event: MouseEvent) => event.preventDefault());
+    const open = vi.fn((event: MouseEvent) => event.preventDefault());
+    const [updated, setUpdated] = createSignal(false);
+    const request = approval({ expiresAtMs: Date.now() + 60_000 });
+    const view = mountSolid(
+      () =>
+        createComponent(SidebarApprovalRow, {
+          approval: request,
+          busy: false,
+          connected: true,
+          canGrant: true,
+          error: null,
+          openSessionHref: "/chat/synthetic-session",
+          onDecision: vi.fn(),
+          get onOpenSession() {
+            return updated() ? open : original;
+          },
+        }),
+      { container },
+    );
+    const link = container.querySelector<HTMLAnchorElement>(".sidebar-approval-row__open-session")!;
+    setUpdated(true);
+    flush();
+    expect(container.querySelector(".sidebar-approval-row__open-session")).toBe(link);
+    link.click();
+    expect(open).toHaveBeenCalledExactlyOnceWith(expect.any(MouseEvent));
+    expect(original).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
   it.each(["add", "update"] as const)(
     "presents a native %s watcher proposal without hiding execution details",
     (operation) => {
@@ -431,6 +462,32 @@ describe("exec approval card", () => {
     flush();
     expect(container.querySelector<HTMLDetailsElement>("details")!.open).toBe(false);
     expect(view.getByRole<HTMLButtonElement>("button", { name: "Allow once" }).disabled).toBe(true);
+  });
+
+  it("cancels an active pointer-triggered mobile disclosure animation on unmount", () => {
+    const view = renderSurface(
+      approval({
+        kind: "exec",
+        request: { command: "echo review", host: "gateway", cwd: "/workspace" },
+        expiresAtMs: Date.now() + 60_000,
+      }),
+      "inline",
+      undefined,
+      "mobile",
+    );
+    const disclosure = container.querySelector<HTMLDetailsElement>("details")!;
+    const cancel = vi.fn();
+    // JSDOM lacks Web Animations; retain the resource returned to the real click handler.
+    const animate = vi.fn(() => ({ cancel, onfinish: null }));
+    Object.defineProperty(disclosure, "animate", { configurable: true, value: animate });
+    disclosure
+      .querySelector("summary")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+    expect(disclosure.open).toBe(true);
+    expect(animate).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+    view.unmount();
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it.each([

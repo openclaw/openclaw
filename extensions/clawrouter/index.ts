@@ -32,15 +32,16 @@ import {
   normalizeFastMode,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { normalizeClawRouterApiBaseUrl, normalizeClawRouterRootUrl } from "./base-url.js";
 import { buildClawRouterDecisionProvider } from "./decision-provider.js";
+import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
+import { listClawRouterImageModelCatalog } from "./image-model-catalog.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
   buildClawRouterProviderConfig,
   CLAWROUTER_REASONING_EFFORT_LEVELS,
-  normalizeClawRouterApiBaseUrl,
   normalizeClawRouterReasoningEfforts,
-  normalizeClawRouterRootUrl,
   normalizeClawRouterResolvedModel,
   prepareClawRouterRequestModel,
 } from "./provider-catalog.js";
@@ -409,6 +410,12 @@ export default defineSingleProviderPluginEntry({
   register(api) {
     api.registerSpeechProvider(buildClawRouterSpeechProvider);
     api.registerDecisionProvider(buildClawRouterDecisionProvider());
+    api.registerImageGenerationProvider(buildClawRouterImageGenerationProvider());
+    api.registerModelCatalogProvider({
+      provider: "clawrouter",
+      kinds: ["image_generation"],
+      liveCatalog: listClawRouterImageModelCatalog,
+    });
     api.registerGatewayMethod(
       "clawrouter.pool.get",
       async (request) => {

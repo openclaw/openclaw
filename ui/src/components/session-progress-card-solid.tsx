@@ -1,5 +1,5 @@
 import type { ProgressCard, SessionRunStatus } from "@openclaw/gateway-protocol";
-import { createMemo, createUniqueId, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createUniqueId, onSettled, Show } from "solid-js";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { CardActivity, StepMarker, Steps } from "./session-progress-card-content.tsx";
@@ -410,7 +410,7 @@ function DetailsCard(props: CardProps) {
     onSettled(() => finishMotion);
     return null;
   }
-  onCleanup(finishMotion);
+  onSettled(() => finishMotion);
   return (
     <details
       ref={(value) => {

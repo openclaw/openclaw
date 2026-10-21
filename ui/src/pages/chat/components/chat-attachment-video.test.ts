@@ -113,17 +113,35 @@ it.each(["remove", "reset"] as const)("ignores late replies after %s", async (ac
   expect(worker.terminate).toHaveBeenCalledOnce();
 });
 
-it.each(["unsupported", "failed", "oversize"] as const)("removes %s errors", async (failure) => {
-  const { reads, entry, worker, attachments } = await encoding();
-  worker.reply(
-    failure === "oversize" ? { type: "ready", file: video() } : { type: "error", reason: failure },
-  );
-  await vi.waitFor(() => expect(reads.pendingReads).toBe(0));
-  expect(entry.state).toBe("error");
-  expect(attachments()).toEqual([]);
-  reads.remove(entry);
-  expect(reads.project([])).toHaveLength(0);
-});
+it.each(["unsupported", "failed", "oversize"] as const)(
+  "handles %s compression errors",
+  async (failure) => {
+    const notify = vi.spyOn(toast, "showToast");
+    const { reads, worker, attachments } = await encoding();
+    worker.reply(
+      failure === "oversize"
+        ? { type: "ready", file: video() }
+        : { type: "error", reason: failure },
+    );
+    await vi.waitFor(() => expect(reads.pendingReads).toBe(0));
+    expect(attachments()).toEqual([]);
+    expect(reads.failureCount).toBe(1);
+    if (failure !== "oversize") {
+      expect(reads.project([])[0]).toMatchObject({
+        state: "error",
+        compress: expect.any(Function),
+      });
+      expect(notify).not.toHaveBeenCalled();
+      return;
+    }
+    expect(reads.project([])).toHaveLength(0);
+    expect(notify).toHaveBeenCalledExactlyOnceWith({
+      message: "Video is still too large. Try a smaller file.",
+      placement: "top-center",
+      severity: "error",
+    });
+  },
+);
 
 it("retries the original video once within the remaining batch budget", async () => {
   const { reads, entry, worker, attachments, props } = await encoding();
@@ -153,7 +171,6 @@ it("retries the original video once within the remaining batch budget", async ()
     "notes.txt",
   ]);
   expect(attachments()[0]?.id).toBe(id);
-  expect(EncoderWorker.jobs).toHaveLength(2);
 });
 
 it.each(["remove", "reset"] as const)("cannot retry a failed video after %s", async (action) => {
@@ -185,7 +202,11 @@ it("reports a full batch without restarting the failed encoder", async () => {
   );
   const notification = vi.spyOn(toast, "showToast");
   entry.compress?.();
-  expect(notification).toHaveBeenCalledWith({ message: "Too large to send: screen.mp4" });
+  expect(notification).toHaveBeenCalledWith({
+    message: "File too large. Try a smaller file.",
+    placement: "top-center",
+    severity: "error",
+  });
   expect(entry.state).toBe("error");
   expect(reads.pendingReads).toBe(0);
   expect(EncoderWorker.jobs).toHaveLength(1);

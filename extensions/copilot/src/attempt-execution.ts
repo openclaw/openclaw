@@ -327,7 +327,6 @@ export async function runCopilotExecution(context: {
       hookContext,
       modelRef,
       messages,
-      operation: deps.operation,
       poolAcquire,
       ringZeroSystemAgentRun,
       promptToolPolicy,

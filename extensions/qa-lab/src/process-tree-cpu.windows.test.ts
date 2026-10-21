@@ -1,18 +1,35 @@
-// Qa Lab tests cover Windows process tree sampling command selection.
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return {
-    ...actual,
-    spawnSync: spawnSyncMock,
-  };
+  return { ...actual, spawnSync: spawnSyncMock };
 });
 
 import { readProcessTreeCpuMs, readProcessTreeRssBytes } from "./process-tree-cpu.js";
+
+beforeEach(() => vi.spyOn(process, "platform", "get").mockReturnValue("win32"));
+
+function processEntry(overrides: Record<string, string | number> = {}) {
+  return {
+    ProcessId: 100,
+    ParentProcessId: 50,
+    KernelModeTime: "20000",
+    UserModeTime: 30_000,
+    WorkingSetSize: "1048576",
+    ...overrides,
+  };
+}
+
+function useSnapshot(value: unknown) {
+  spawnSyncMock.mockReturnValue({ status: 0, stdout: JSON.stringify(value) });
+}
+
+function expectMetrics(pid: number, cpu: number | null, rss: number | null) {
+  expect([readProcessTreeCpuMs(pid), readProcessTreeRssBytes(pid)]).toEqual([cpu, rss]);
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -22,49 +39,24 @@ afterEach(() => {
 
 describe("readProcessTreeCpuMs on Windows", () => {
   it("parses single-process Windows CPU and RSS counters", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    spawnSyncMock.mockReturnValue({
-      status: 0,
-      stdout: JSON.stringify({
-        ProcessId: 100,
-        ParentProcessId: 50,
-        KernelModeTime: "20000",
-        UserModeTime: 30_000,
-        WorkingSetSize: "1048576",
-      }),
-    });
-
-    expect(readProcessTreeCpuMs(100)).toBe(5);
-    expect(readProcessTreeRssBytes(100)).toBe(1_048_576);
+    useSnapshot(processEntry());
+    expectMetrics(100, 5, 1_048_576);
   });
 
   it("parses process tree CPU and RSS metrics through the trusted PowerShell path", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.stubEnv("SystemRoot", "D:\\Windows");
-    spawnSyncMock.mockReturnValue({
-      status: 0,
-      stdout: JSON.stringify([
-        {
-          ProcessId: 100,
-          ParentProcessId: 50,
-          KernelModeTime: "10000",
-          UserModeTime: "20000",
-          WorkingSetSize: "1000",
-        },
-        {
-          ProcessId: 101,
-          ParentProcessId: 100,
-          KernelModeTime: "30000",
-          UserModeTime: "40000",
-          WorkingSetSize: "2000",
-        },
-      ]),
-    });
-
-    expect(readProcessTreeCpuMs(100)).toBe(10);
-    expect(readProcessTreeCpuMs(101)).toBe(7);
-    expect(readProcessTreeRssBytes(100)).toBe(3_000);
-    expect(readProcessTreeRssBytes(101)).toBe(2_000);
+    useSnapshot([
+      processEntry({ KernelModeTime: "10000", UserModeTime: "20000", WorkingSetSize: "1000" }),
+      processEntry({
+        ProcessId: 101,
+        ParentProcessId: 100,
+        KernelModeTime: "30000",
+        UserModeTime: "40000",
+        WorkingSetSize: "2000",
+      }),
+    ]);
+    expectMetrics(100, 10, 3_000);
+    expectMetrics(101, 7, 2_000);
     expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(
       path.win32.join("D:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
     );
@@ -78,47 +70,23 @@ describe("readProcessTreeCpuMs on Windows", () => {
   });
 
   it("rejects non-decimal Windows process counters", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    spawnSyncMock.mockReturnValue({
-      status: 0,
-      stdout: JSON.stringify({
-        ProcessId: 100,
-        ParentProcessId: 50,
-        KernelModeTime: "0x10",
-        UserModeTime: "30000",
-        WorkingSetSize: "0x1000",
-      }),
-    });
-
-    expect(readProcessTreeCpuMs(100)).toBeNull();
-    expect(readProcessTreeRssBytes(100)).toBeNull();
+    useSnapshot(
+      processEntry({ KernelModeTime: "0x10", UserModeTime: "30000", WorkingSetSize: "0x1000" }),
+    );
+    expectMetrics(100, null, null);
   });
 
   it("skips Windows process entries with non-decimal process ids", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    spawnSyncMock.mockReturnValue({
-      status: 0,
-      stdout: JSON.stringify({
-        ProcessId: "0x64",
-        ParentProcessId: 50,
-        KernelModeTime: "10000",
-        UserModeTime: "20000",
-        WorkingSetSize: "1000",
-      }),
-    });
-
-    expect(readProcessTreeCpuMs(100)).toBeNull();
-    expect(readProcessTreeRssBytes(100)).toBeNull();
+    useSnapshot(processEntry({ ProcessId: "0x64" }));
+    expectMetrics(100, null, null);
   });
 
   it("rejects malformed Windows process snapshots", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     spawnSyncMock.mockReturnValue({
       status: 0,
       stdout: "not json",
     });
 
-    expect(readProcessTreeCpuMs(100)).toBeNull();
-    expect(readProcessTreeRssBytes(100)).toBeNull();
+    expectMetrics(100, null, null);
   });
 });

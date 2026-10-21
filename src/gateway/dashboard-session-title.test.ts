@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 
 const mocks = vi.hoisted(() => ({
   generate: vi.fn(),
@@ -125,6 +126,20 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   });
 
   afterEach(() => vi.useRealTimers());
+
+  it.each(Object.entries(INTERNAL_WAKE_TRANSCRIPT_PROMPTS))(
+    "does not generate a title from a %s wake",
+    async (_kind, userMessage) => {
+      await expect(
+        prepareDashboardSessionTitle({ cfg, agentId: "main", userMessage }),
+      ).resolves.toBeNull();
+      await expect(
+        maybeGenerateDashboardSessionTitle({ ...titleParams(), userMessage }),
+      ).resolves.toBe(false);
+      expect(mocks.generate).not.toHaveBeenCalled();
+      expect(mocks.patch).not.toHaveBeenCalled();
+    },
+  );
 
   it("routes both attempts through the effective session model and auth profile", async () => {
     mocks.utility.mockReturnValue("anthropic/claude-haiku-4-5@work");

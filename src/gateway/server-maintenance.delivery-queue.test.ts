@@ -40,7 +40,6 @@ function startMaintenance() {
     ...createGatewayMaintenanceStateForTest(),
     scheduler,
     isNixMode: true,
-    runWorktreeGc: vi.fn(async () => undefined),
     runDeliveryQueueMediaGc: undefined,
   });
 }

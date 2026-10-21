@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, onSettled } from "solid-js";
+import { createEffect, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SystemAgentSetupActivateParams,
@@ -62,7 +62,6 @@ export function createModelSetup(
       projection.invalidate();
     }
   };
-  const stopAfterRender = projection.subscribe(() => onSettled(afterRender));
   const actionsDisabled = (): boolean =>
     login.busy ||
     nativeModels.saving ||
@@ -92,9 +91,9 @@ export function createModelSetup(
     pageState: () => state.pageState,
     activationState: () => state.activationState,
     actionsDisabled: () => actionsDisabled() || state.detectionRequest !== null,
-    canUseSetup: (client) => canUseSetup(client),
-    canVerify: (client) => canVerify(client),
-    verify: (modelTarget) => verifyConnection(modelTarget),
+    canUseSetup,
+    canVerify,
+    verify: verifyConnection,
     setVerifyState: (next) => (state.verifyState = next),
     setActivationState: (next) => (state.activationState = next),
     setRefreshWarning: (warning) => (state.setupRefreshWarning = warning),
@@ -102,13 +101,13 @@ export function createModelSetup(
       wizard.restore(recovery, observer);
       void runWizardMutation(() => wizard.resume());
     },
-    closeWizard: () => closeWizard(),
-    notify: () => notify(),
+    closeWizard,
+    notify,
   });
   const nativeModels = createNativeModelSetup({
     getContext: () => context,
     getConnection: () => observedConnection,
-    canUseSetup: (client) => canUseSetup(client),
+    canUseSetup,
     blocked: () => {
       projection.read();
       return activationBlocked();
@@ -131,11 +130,11 @@ export function createModelSetup(
     canStart: () =>
       canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved && !actionsDisabled(),
     canContinue: () => canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved,
-    refresh: () => detect(),
+    refresh: detect,
   });
   const wizard = new ModelSetupWizardRunner({
-    getClient: () => context?.gateway.snapshot.client ?? null,
-    getAgentId: () => agentSelection().state.selectedId ?? null,
+    getClient: () => context.gateway.snapshot.client,
+    getAgentId: () => agentSelection().state.selectedId,
     onChange: (next) => {
       if (next.phase !== "starting" && next.phase !== "done") {
         state.activationState = { phase: "idle" };
@@ -226,11 +225,11 @@ export function createModelSetup(
     firstRun.start();
   }
 
-  function synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]): void {
-    const routeData = props.routeData;
+  function synchronizeGateway(routeData: ModelSetupPageProps["routeData"]): void {
     if (!connected || !routeData) {
       return;
     }
+    const snapshot = context.gateway.snapshot;
     const previous = observedConnection;
     const observation = reconcileModelSetupConnection(
       previous,
@@ -678,16 +677,16 @@ export function createModelSetup(
         state.wizardMode = "prepare";
         void runWizardMutation(() => wizard.start(option.id, "openclaw.setup.prepare.start"));
       },
-      onManualProviderChange: (providerId: string) => selectManualProvider(providerId),
+      onManualProviderChange: selectManualProvider,
       onManualApiKeyChange: (apiKey: string) => {
         state.manualApiKey = apiKey;
         state.manualError = null;
       },
-      onManualConnect: () => connectManual(),
+      onManualConnect: connectManual,
       onMoreSignInToggle: (open: boolean) => {
         state.moreSignInOpen = open;
       },
-      onIconError: (iconUrl: string) => iconLoader.invalidate(iconUrl),
+      onIconError: iconLoader.invalidate,
       onOpenChat: () => (props.embedded ? props.onClose?.() : firstRun.continueSetup()),
       onOpenSetupAssistant: () => firstRun.continueSetup("utility"),
       onSuccessClose: () => {
@@ -704,46 +703,42 @@ export function createModelSetup(
       onWizardAnswer: (value: unknown, includeValue?: boolean): void =>
         void runWizardMutation(() => wizard.answer(value, includeValue)),
       onWizardCancel: (): void => void cancelWizard(),
-      onWizardClose: () => closeWizard(),
+      onWizardClose: closeWizard,
     };
+  };
+  const synchronizeCurrentGateway = () => {
+    synchronizeGateway(props.routeData);
+    notify();
   };
   createEffect(
     () => [props.routeData, agentSelection()],
-    ([, selection]) => {
+    ([routeData, selection]) => {
       // Selection receipts retire wizard ownership before another setup action can run.
-      const stop = selection.subscribe(() => {
-        synchronizeGateway(context.gateway.snapshot);
-        notify();
-      });
-      synchronizeGateway(context.gateway.snapshot);
+      const stop = selection.subscribe(synchronizeCurrentGateway);
+      synchronizeGateway(routeData);
       notify();
       return stop;
     },
   );
   onSettled(() => {
+    const stopAfterRender = projection.subscribe(() => onSettled(afterRender));
     connected = true;
     // Connection authority changes synchronously suspend or retire the admitted wizard.
-    const stopGateway = context.gateway.subscribe(() => {
-      synchronizeGateway(context.gateway.snapshot);
-      notify();
-    });
+    const stopGateway = context.gateway.subscribe(synchronizeCurrentGateway);
     // Receipt-clear events retire restored wizard work before another activation can start.
     const stopFirstRun = firstRun.subscribe(notify);
-    synchronizeGateway(context.gateway.snapshot);
-    notify();
+    synchronizeCurrentGateway();
     return () => {
+      disposed = true;
+      stopAfterRender();
+      connected = false;
       stopGateway();
       stopFirstRun();
+      firstRun.dispose();
+      retireWizardMutation();
+      iconLoader.reset();
+      void wizard.cancel();
     };
-  });
-  onCleanup(() => {
-    disposed = true;
-    stopAfterRender();
-    connected = false;
-    firstRun.dispose();
-    retireWizardMutation();
-    iconLoader.reset();
-    void wizard.cancel();
   });
   return {
     view,

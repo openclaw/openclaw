@@ -195,7 +195,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
             </div>
           </Show>
           <Show when={!rendered()}>
-            <HtmlPreviewLoading desktop={props.desktop} />
+            <HtmlPreviewLoading />
           </Show>
           <iframe
             ref={(element) => (frame = element)}
@@ -259,7 +259,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
       );
       return (
         <Errored fallback={(reason) => <ErrorNotice message={formatUiError(reason())} />}>
-          <Show when={view()} keyed fallback={<HtmlPreviewLoading desktop={props.desktop} />}>
+          <Show when={view()} keyed fallback={<HtmlPreviewLoading />}>
             {(preview) => (
               <Show when={props.embedSandboxMode} keyed>
                 {(mode) => renderFrame(preview, mode)}

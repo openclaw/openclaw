@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   findPreferredDmConversationByUserId,
@@ -21,10 +21,6 @@ const MSTEAMS_CONVERSATIONS_NAMESPACE = "conversations";
 const MSTEAMS_MAX_CONVERSATIONS = 1000;
 const MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS = MSTEAMS_MAX_CONVERSATIONS + 1000;
 const MSTEAMS_CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
-
-function buildMSTeamsConversationStateKey(conversationId: string): string {
-  return crypto.createHash("sha256").update(conversationId).digest("hex");
-}
 
 function getStoredConversationId(reference: StoredConversationReference): string | null {
   const rawId = reference.conversation?.id;
@@ -53,7 +49,7 @@ export function createMSTeamsConversationStoreState(params?: {
     conversationId: string,
   ): Promise<StoredConversationReference | null> => {
     const normalizedId = normalizeMSTeamsConversationId(conversationId);
-    const value = await conversationStore.lookup(buildMSTeamsConversationStateKey(normalizedId));
+    const value = await conversationStore.lookup(sha256Hex(normalizedId));
     return value && !isExpired(value) ? value : null;
   };
 
@@ -78,7 +74,7 @@ export function createMSTeamsConversationStoreState(params?: {
   ): Promise<void> => {
     const normalizedId = normalizeMSTeamsConversationId(conversationId);
     await conversationStore.register(
-      buildMSTeamsConversationStateKey(normalizedId),
+      sha256Hex(normalizedId),
       toPluginJsonValue({
         ...reference,
         conversation: { ...reference.conversation, id: normalizedId },
@@ -134,7 +130,7 @@ export function createMSTeamsConversationStoreState(params?: {
   const remove = async (conversationId: string): Promise<boolean> => {
     const normalizedId = normalizeMSTeamsConversationId(conversationId);
     return await withMSTeamsSqliteMutationLock(namespace, async () => {
-      return await conversationStore.delete(buildMSTeamsConversationStateKey(normalizedId));
+      return await conversationStore.delete(sha256Hex(normalizedId));
     });
   };
 

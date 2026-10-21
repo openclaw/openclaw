@@ -180,6 +180,7 @@ describe("one-shot CLI engine selection", () => {
       ["gateway", "--dev", "--reset"],
       ["doctor", "--session-sqlite", "inspect", "--session-sqlite-store", "/selected/store"],
       ["doctor", "--post-upgrade"],
+      ["doctor", "--client-credentials", "--repair", "--non-interactive"],
       ["update", "admit", "--context", "/selected/context"],
       ["update", "migrate"],
       ["update", "restore"],
@@ -296,6 +297,28 @@ describe("one-shot CLI engine selection", () => {
         expect(getDatabaseEngineSelection()).toBeUndefined();
       },
     );
+  });
+
+  it("leaves malformed config untouched for the local credential owner", async () => {
+    await withOpenClawTestState({ label: "doctor-credentials-invalid-config" }, async (state) => {
+      const raw = '{"database":{"engine":"postgres"}, broken';
+      await fs.writeFile(state.configPath, raw);
+      expect(
+        await prepareCliDatabaseEngine([
+          "node",
+          "openclaw",
+          "doctor",
+          "--client-credentials",
+          "--repair",
+          "--non-interactive",
+        ]),
+      ).toBe(false);
+      expect(getDatabaseEngineSelection()).toBeUndefined();
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(raw);
+      await expect(fs.access(state.statePath("state", "openclaw.sqlite"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
   });
 
   it("keeps storage unopened when prefix repair leaves a PostgreSQL credential unresolved", async () => {

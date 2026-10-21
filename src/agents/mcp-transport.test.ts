@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
@@ -15,6 +17,14 @@ type OAuthBearerParams = {
   identity: McpOAuthIdentity;
 };
 
+type EnterpriseBearerParams = {
+  fetchFn: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  createAuthenticatedFetches: (assertCurrent: () => void) => {
+    resourceFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    authFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  };
+};
+
 type SseTransportOptions = {
   eventSourceInit?: { fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> };
 };
@@ -23,12 +33,14 @@ const {
   lookupMock,
   runtimeFetchMock,
   oauthBearerMock,
+  enterpriseBearerMock,
   streamableTransportConstructorMock,
   sseTransportConstructorMock,
 } = vi.hoisted(() => ({
   lookupMock: vi.fn(),
   runtimeFetchMock: vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(),
   oauthBearerMock: vi.fn((params: OAuthBearerParams) => params.fetchFn),
+  enterpriseBearerMock: vi.fn((params: EnterpriseBearerParams) => params.fetchFn),
   streamableTransportConstructorMock:
     vi.fn<(url: URL, options?: StreamableTransportOptions) => void>(),
   sseTransportConstructorMock: vi.fn<(url: URL, options?: SseTransportOptions) => void>(),
@@ -36,6 +48,8 @@ const {
 
 // mock-isolation: OAuth fetch is fixture-owned; never read real credentials in transport tests.
 vi.mock("./mcp-oauth-fetch.js", () => ({ withMcpOAuthBearer: oauthBearerMock }));
+// mock-isolation: Inspect transport wiring here; the composed test runs the real enterprise bearer owner.
+vi.mock("./mcp-enterprise-fetch.js", () => ({ withMcpEnterpriseBearer: enterpriseBearerMock }));
 vi.mock("node:dns/promises", () => ({ lookup: lookupMock }));
 
 // mock-isolation: Keep transport requests on the synthetic fetch and agent fixtures.
@@ -78,6 +92,7 @@ describe("resolveMcpTransport", () => {
     lookupMock.mockReset().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     runtimeFetchMock.mockReset();
     oauthBearerMock.mockClear();
+    enterpriseBearerMock.mockClear();
     streamableTransportConstructorMock.mockClear();
     sseTransportConstructorMock.mockClear();
   });
@@ -149,6 +164,52 @@ describe("resolveMcpTransport", () => {
       }),
     );
   });
+
+  it.each(["resource", "authorization"] as const)(
+    "rechecks the enterprise credential at final %s HTTP dispatch after DNS preparation",
+    async (destination) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      lookupMock.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return [{ address: "93.184.216.34", family: 4 }];
+      });
+      resolveHttp({
+        auth: "enterprise",
+        enterprise: {
+          identity: "shared",
+          idpIssuer: "https://idp.example.com",
+          idpClientId: "fixture-idp-client",
+          resourceIssuer: "https://auth.example.com",
+          resourceClientId: "fixture-resource-client",
+          scope: "mcp.read",
+          redirectUrl: "http://localhost:3097/callback",
+        },
+      });
+      const params = enterpriseBearerMock.mock.calls.at(-1)?.[0];
+      expect(params).toBeDefined();
+      let current = true;
+      const { resourceFetch, authFetch } = params!.createAuthenticatedFetches(() => {
+        if (!current) {
+          throw new Error("enterprise credential changed");
+        }
+      });
+      const pending =
+        destination === "resource"
+          ? resourceFetch(resourceUrl)
+          : authFetch("https://idp.example.com/token");
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        pending,
+        "Enterprise HTTP dispatch settled before DNS preparation finished",
+      );
+      current = false;
+      release.resolve();
+      await expect(pending).rejects.toThrow("enterprise credential changed");
+      expect(runtimeFetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("selects distinct requester OAuth identities for the same configured server", () => {
     const server = {

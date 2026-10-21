@@ -417,6 +417,12 @@ Explicitly select `agentRuntime.id: "openclaw"` for the models you use.
 API-key access uses OpenAI Platform billing, separate from a ChatGPT/Codex subscription.
 See [OpenAI setup](/providers/openai/setup) and [runtime selection](/providers/openai/runtimes#implicit-agent-runtime).
 
+The installer creates a new prefix with mode `0700`, including under `umask 0002`.
+On Linux, Gateway service installation also tightens an existing owned state
+directory to `0700` if it is group- or world-writable. Service status checks do
+not change permissions. Foreign-owned directories and unsafe service directories
+still require operator repair before service installation.
+
 With `--node-only`, `install-cli.sh` stops after provisioning Node into `<prefix>/tools/node-v<version>` and updating the `<prefix>/tools/node` alias. It skips Git, OpenClaw installation, onboarding, and Gateway service work. This mode refuses musl Linux and FreeBSD. Update their system Node packages manually.
 
 With `--runtime-only`, the script installs Node and the CLI but skips Gateway

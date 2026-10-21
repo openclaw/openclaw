@@ -501,10 +501,9 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
       : undefined;
     const dispatch = dispatchEventHandler<AgentEventRuntimePayload>({
       // An extra async hop lets empty queued finalization overtake reply buffer capture.
-      loadHandler: () =>
-        terminalPreparation
-          ? terminalPreparation.then(agentEventHandlerLoader.load)
-          : agentEventHandlerLoader.load(),
+      loadHandler: terminalPreparation
+        ? () => terminalPreparation.then(agentEventHandlerLoader.load)
+        : agentEventHandlerLoader.load,
       isDeliveryCurrent,
       event: evt,
       log: params.log,

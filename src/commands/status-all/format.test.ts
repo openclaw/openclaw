@@ -9,6 +9,7 @@ import {
   buildStatusOverviewSurfaceRows,
   buildStatusUpdateSurface,
   buildGatewayStatusJsonPayload,
+  redactStatusSecrets,
 } from "./format.js";
 
 function row(item: string, overrides: Parameters<typeof getStatusOverviewRowValue>[1]) {
@@ -26,6 +27,22 @@ const offlineGateway = {
 };
 
 describe("status-all format", () => {
+  it("masks complete credential values before terminal cleanup", () => {
+    for (const [input, expected] of [
+      ["token=synthetic-secret next", "token=*** next"],
+      ['password="synthetic horse battery" next', "password=*** next"],
+      ['{"token": "synthetic-secret", "safe": true}', '{"token": ***, "safe": true}'],
+      ["password=synthetic,secret next", "password=*** next"],
+      ["token=Bearer ~synthetic+secret/== next", "token=*** next"],
+      ["Authorization: Bearer ~synthetic+secret/== next", "Authorization: Bearer *** next"],
+      ['secret="synthetic\nsecret" next', "secret=*** next"],
+      ["token=synthetic\u001b[31msecret next", "token=*** next"],
+      ["ordinary status message", "ordinary status message"],
+    ] as const) {
+      expect(redactStatusSecrets(input)).toBe(expected);
+    }
+  });
+
   it("formats gateway self summary consistently", () => {
     row("Gateway self", {
       gatewaySelf: { host: "gateway-host", ip: "100.64.0.1", version: "1.2.3", platform: "linux" },

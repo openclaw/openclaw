@@ -7,7 +7,6 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { removeDraftAttachment } from "./chat-attachment-draft.ts";
-import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { AttachmentRemove, CompactAttachmentFile } from "./chat-attachment-file.tsx";
 import type { AttachmentPreviewEntry } from "./chat-attachments.tsx";
 import { ComposerPastedText } from "./chat-composer-pasted-text.tsx";
@@ -146,8 +145,6 @@ function AttachmentTile(props: {
                 "chat-attachment-thumb",
                 {
                   "chat-attachment-thumb--preparation": preparing(),
-                  "chat-attachment-thumb--preparation-error":
-                    failed() && preparing() && !props.entry.read.compress,
                   "chat-attachment-thumb--video": att().mimeType.startsWith("video/"),
                   "chat-attachment-thumb--file": !att().mimeType.startsWith("image/"),
                   "chat-attachment-thumb--error": failed(),
@@ -156,108 +153,50 @@ function AttachmentTile(props: {
               aria-busy={reading() && props.entry.preparation !== "offer" ? "true" : "false"}
             >
               {preparing() ? (
-                failed() && !props.entry.read.compress ? (
-                  <div class="chat-attachment-preparation">
-                    <span class="chat-attachment-file__name" title={att().fileName ?? ""}>
-                      {att().fileName}
-                    </span>
-                    <span class="chat-attachment-file__meta" role="status">
-                      {failureLabel()}
-                    </span>
-                  </div>
-                ) : (
-                  <CompactAttachmentFile
-                    attachment={att()}
-                    preview={
-                      <span class="chat-attachment-file__preview" aria-hidden="true">
-                        {props.entry.preparation === "compressing" ? (
-                          <svg class="chat-attachment-compression-progress" viewBox="0 0 32 32">
-                            <circle
-                              class="chat-attachment-compression-progress__track"
-                              cx="16"
-                              cy="16"
-                              r="13"
-                            />
-                            <circle
-                              cx="16"
-                              cy="16"
-                              r="13"
-                              pathLength="100"
-                              stroke-dasharray={`${(props.entry.progress ?? 0) * 100} 100`}
-                            />
-                          </svg>
-                        ) : (
-                          <>
-                            <Icon name="play" />
-                            <span
-                              class={[
-                                "chat-attachment-preparation-badge",
-                                { "chat-attachment-preparation-badge--error": failed() },
-                              ]}
-                            >
-                              <Icon name="alertTriangle" />
-                            </span>
-                          </>
-                        )}
+                <CompactAttachmentFile
+                  attachment={att()}
+                  videoPreparation={{
+                    state: failed() ? "error" : (props.entry.preparation ?? "offer"),
+                    progress: props.entry.progress,
+                  }}
+                  metadata={
+                    props.entry.preparation === "compressing" ? (
+                      <span class="chat-attachment-file__type" role="status">
+                        {t("chat.attachments.compressing", {
+                          progress: String(Math.floor((props.entry.progress ?? 0) * 100)),
+                        })}
                       </span>
-                    }
-                    metadata={
-                      props.entry.preparation === "compressing" ? (
-                        <span class="chat-attachment-file__type" role="status">
-                          {t("chat.attachments.compressing", {
-                            progress: String(Math.floor((props.entry.progress ?? 0) * 100)),
-                          })}
-                        </span>
-                      ) : (
-                        <span class="chat-attachment-file__type">
-                          {failed() && (
-                            <span class="sr-only" role="status">
-                              {failureLabel()}
-                            </span>
-                          )}
-                          <button
-                            type="button"
-                            class={[
-                              "chat-attachment-compress",
-                              { "chat-attachment-compress--retry": failed() },
-                            ]}
-                            title={
-                              failed() ? failureLabel() : t("chat.attachments.compressionHint")
-                            }
-                            disabled={props.controls.disabled}
-                            onClick={() => props.entry.read.compress?.()}
-                          >
-                            {failed() && <Icon name="refresh" />}
-                            <span>
-                              {t(
-                                failed()
-                                  ? "chat.attachments.retryCompression"
-                                  : "chat.attachments.compressToFit",
-                              )}
-                            </span>
-                            {!failed() && <Icon name="chevronRight" />}
-                          </button>
-                        </span>
-                      )
-                    }
-                  />
-                )
-              ) : failed() ? (
-                <openclaw-tooltip prop:content={failureLabel()}>
-                  <span
-                    class="chat-attachment-error"
-                    tabindex="0"
-                    role="img"
-                    aria-label={failureLabel()}
-                  >
-                    <AttachmentFileIcon
-                      filename={att().fileName ?? ""}
-                      mimeType={att().mimeType}
-                      mode="large-placeholder"
-                      unavailable
-                    />
-                  </span>
-                </openclaw-tooltip>
+                    ) : (
+                      <span class="chat-attachment-file__type">
+                        {failed() && (
+                          <span class="sr-only" role="status">
+                            {failureLabel()}
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          class={[
+                            "chat-attachment-compress",
+                            { "chat-attachment-compress--retry": failed() },
+                          ]}
+                          title={failed() ? failureLabel() : t("chat.attachments.compressionHint")}
+                          disabled={props.controls.disabled}
+                          onClick={() => props.entry.read.compress?.()}
+                        >
+                          {failed() && <Icon name="refresh" />}
+                          <span>
+                            {t(
+                              failed()
+                                ? "chat.attachments.retryCompression"
+                                : "chat.attachments.compressToFit",
+                            )}
+                          </span>
+                          {!failed() && <Icon name="chevronRight" />}
+                        </button>
+                      </span>
+                    )
+                  }
+                />
               ) : reading() ? undefined : att().mimeType.startsWith("image/") &&
                 getChatAttachmentPreviewUrl(att()) ? (
                 <AttachmentImage

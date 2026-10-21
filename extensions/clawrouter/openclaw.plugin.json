@@ -15,6 +15,7 @@
     "clawrouter"
   ],
   "contracts": {
+    "imageGenerationProviders": ["clawrouter"],
     "speechProviders": ["clawrouter"],
     "usageProviders": [
       "clawrouter"
@@ -22,6 +23,9 @@
     "decisionProviders": [
       "clawrouter"
     ]
+  },
+  "imageGenerationProviderMetadata": {
+    "clawrouter": { "authSignals": [{ "provider": "clawrouter" }] }
   },
   "setup": {
     "providers": [
@@ -65,6 +69,8 @@
     ]
   },
   "modelCatalog": {
+    "discovery": { "clawrouter": "runtime" },
+    "runtimeAugment": true,
     "providers": {
       "clawrouter": {
         "baseUrl": "https://clawrouter.openclaw.ai/v1",

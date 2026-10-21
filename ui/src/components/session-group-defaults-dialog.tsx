@@ -1,5 +1,5 @@
 import { readMissingScopeError } from "@openclaw/gateway-client/browser";
-import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, onSettled } from "solid-js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
@@ -15,7 +15,7 @@ import { PlaceBrowser } from "../pages/new-session/place-browser.tsx";
 import "../styles/new-session.css";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { Icon } from "./solid/icon.tsx";
-import { Menu } from "./solid/menu.tsx";
+import { Menu, type MenuEntry } from "./solid/menu.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 
 registerEnglishCatalog(registerSessionOrganizationEnglish);
@@ -49,21 +49,20 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     let repositoryRequestToken = 0;
     // Admission stays synchronous while the signals publish the visible status.
     let submitting = false;
-    const [saving, setSaving] = createSignal(false);
+    const [saving, setSaving] = createOptimistic(false);
     const [failure, setFailure] = createSignal<string | null>(null);
     const [browserVisible, setBrowserVisible] = createSignal(false);
     let folderPopover: PopoverHandle | undefined;
     const browser = new PlaceBrowserState(options.listDirectory, () => publishBrowser(browser));
     const [browserView, publishBrowser] = createSignal(browser, { equals: false });
 
-    const handleSubmit = async (event: Event) => {
+    const handleSubmit = action(async function* (event: Event) {
       event.preventDefault();
       if (submitting || (repositoryStatus !== "git" && repositoryStatus !== "not_git")) {
         return;
       }
       submitting = true;
       setSaving(true);
-      setFailure(null);
       let errorMessage: string | null;
       try {
         errorMessage = await options.submit({
@@ -73,6 +72,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       } catch (error) {
         errorMessage = formatUiError(error);
       }
+      yield;
       if (modal.settled) {
         return;
       }
@@ -81,9 +81,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         return;
       }
       submitting = false;
-      setSaving(false);
       setFailure(errorMessage);
-    };
+    });
 
     const closePicker = () => {
       folderPopover?.overlay.request(false, "return");
@@ -140,7 +139,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     function Dialog() {
       let folderAnchor!: HTMLButtonElement;
       let rootButton!: HTMLButtonElement;
-      onCleanup(() => {
+      onSettled(() => () => {
         browser.reset();
         repositoryRequestToken += 1;
       });
@@ -164,6 +163,35 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         },
       ]);
       const selectedEnvironment = () => environmentOptions()[worktree() ? 1 : 0]!;
+      const environmentItems = createMemo<MenuEntry[]>(() =>
+        environmentOptions().map((option) => ({
+          id: option.value,
+          label: `${option.label}, ${option.description}`,
+          type: "radio" as const,
+          checked: option.value === selectedEnvironment().value,
+          disabled: saving(),
+          class: "session-group-defaults__mode-option",
+          attributes: {
+            "data-environment-mode": option.value,
+            "data-selected": option.value === selectedEnvironment().value ? "" : undefined,
+            "data-initial-focus": option.value === selectedEnvironment().value ? "" : undefined,
+          },
+          icon: (
+            <span
+              class="new-session-page__target-icon session-group-defaults__mode-option-icon"
+              aria-hidden="true"
+            >
+              <Icon name={option.icon} />
+            </span>
+          ),
+          content: (
+            <span class="session-group-defaults__resolved-copy">
+              <strong>{option.label}</strong>
+              <small>{option.description}</small>
+            </span>
+          ),
+        })),
+      );
       const environmentState = () =>
         repository() === "checking"
           ? "checking"
@@ -329,35 +357,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                       label={`${t("sessionsView.groupDefaultsMode")}: ${selectedEnvironment().label}`}
                       disabled={saving()}
                       onSelect={(item) => selectWorktree(item.id === "worktree")}
-                      items={environmentOptions().map((option) => ({
-                        id: option.value,
-                        label: `${option.label}, ${option.description}`,
-                        type: "radio" as const,
-                        checked: option.value === selectedEnvironment().value,
-                        disabled: saving(),
-                        class: "session-group-defaults__mode-option",
-                        attributes: {
-                          "data-environment-mode": option.value,
-                          "data-selected":
-                            option.value === selectedEnvironment().value ? "" : undefined,
-                          "data-initial-focus":
-                            option.value === selectedEnvironment().value ? "" : undefined,
-                        },
-                        icon: (
-                          <span
-                            class="new-session-page__target-icon session-group-defaults__mode-option-icon"
-                            aria-hidden="true"
-                          >
-                            <Icon name={option.icon} />
-                          </span>
-                        ),
-                        content: (
-                          <span class="session-group-defaults__resolved-copy">
-                            <strong>{option.label}</strong>
-                            <small>{option.description}</small>
-                          </span>
-                        ),
-                      }))}
+                      items={environmentItems()}
                       trigger={
                         <>
                           <span class="new-session-page__target-icon" aria-hidden="true">
@@ -402,7 +402,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                 </div>
               </div>
             </div>
-            {failure() ? (
+            {failure() && !saving() ? (
               <div class="exec-approval-error" role="alert">
                 {failure()}
               </div>

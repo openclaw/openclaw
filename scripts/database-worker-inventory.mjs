@@ -784,13 +784,13 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/config/sessions/session-accessor.sqlite-transcript-reports.kernel.ts",
+    "src/config/sessions/session-transcript-report-read.ts",
     [
       {
         tier: "W",
-        operations: ["readReportEvent"],
+        operations: ["readTranscriptReportEvent"],
         evidence:
-          "Only session-accessor.sqlite-transcript-reports.worker.ts invokes prepareTranscriptReportSelection and appendAbortedSessionTranscriptPartialInTransaction, the two callers of this reader. The host report facade uses only prepareCustomTranscriptReport serialization.",
+          "The report kernel calls this reader only through prepareTranscriptReportSelection and appendAbortedSessionTranscriptPartialInTransaction, invoked by session-accessor.sqlite-transcript-reports.worker.ts. The other caller is readSessionTranscriptMaintenance, invoked only by session-transcript-hydration-read.worker.ts. The host report facade uses only prepareCustomTranscriptReport serialization.",
       },
     ],
   ],
@@ -1215,9 +1215,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readAuthProfileRows"],
+        operations: ["readAuthProfileRows", "readAuthProfileJsonCellTexts"],
         evidence:
-          "Only auth-profiles/store.worker.ts, plugin-model-catalog.worker.ts, and sqlite-readonly-native-payload.ts's auth-profile-rows worker call this batched reader; synchronous SDK cell readers remain T1.",
+          "Auth-profile inspection workers and the shared/agent usage workers call these paired readers; synchronous SDK cell readers remain T1.",
       },
     ],
   ],
@@ -2676,18 +2676,7 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: ["readScratchStateFromDatabase", "readHeartbeatMonitorScratchFromDatabase"],
         evidence:
-          "Doctor-only native reads: src/commands/doctor-heartbeat-scratch-migration.ts:516,567,588 and doctor-heartbeat-task-migration.ts:94,411 → scratch-store.ts:33,42,52. Worker sibling src/cron/store/read-command.ts:54.",
-      },
-    ],
-  ],
-  [
-    "src/cron/scratch-store.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["deleteCronJobScratch"],
-        evidence:
-          "Sole native caller src/commands/doctor-heartbeat-scratch-migration.ts:625: revision-guarded migration compensation.",
+          "Native maintenance reads: Doctor scratch migration, task scratch, and scratch preflight call readScratchStateFromDatabase, directly or through scratch-store.ts. Worker snapshots, including the private legacy-heartbeat selector, enter through src/cron/store/read-command.ts.",
       },
     ],
   ],
@@ -2696,9 +2685,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["writeCronJobScratchInDatabase", "writeCronJobScratchForMaintenance"],
+        operations: ["writeCronJobScratchInDatabase"],
         evidence:
-          "Doctor migration/compensation at src/commands/doctor-heartbeat-scratch-migration.ts:570,617; worker sibling src/cron/store/scratch.worker.ts:28.",
+          "Doctor scratch migration calls writeCronJobScratchInDatabase inside its existing transaction; runtime writes enter through src/cron/store/scratch.worker.ts. Synchronous fixture maintenance lives in test/helpers/cron/scratch-store.ts.",
       },
     ],
   ],
@@ -3854,10 +3843,8 @@ function findCalls(source) {
   return calls;
 }
 
-export function inventory(root = defaultRoot, ref = "", staged = false) {
-  using parser = createNativeTypeScriptParser({ cwd: root });
+export function loadInventorySources(root = defaultRoot, ref = "", staged = false) {
   const roots = ["src", "extensions", "packages", "scripts"];
-  const pattern = new RegExp([...primitives.keys()].join("|"));
   const snapshot = ref !== "" || staged;
   const result = spawnSync(
     snapshot ? "git" : "rg",
@@ -3885,9 +3872,19 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
         !excluded.test(file) &&
         !testSuites.has(file),
     );
-  const texts = snapshot
+  return snapshot
     ? loadRatchetSources(root, sourceFiles, ref)
     : new Map(sourceFiles.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]));
+}
+
+export function inventory(
+  root = defaultRoot,
+  ref = "",
+  staged = false,
+  texts = loadInventorySources(root, ref, staged),
+) {
+  using parser = createNativeTypeScriptParser({ cwd: root });
+  const pattern = new RegExp([...primitives.keys()].join("|"));
   const compatibility = inspectDatabaseWorkerBoundaries(
     root,
     texts,
@@ -3902,7 +3899,7 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
         compatibility.violations.join("\n"),
     );
   }
-  const files = sourceFiles.filter((file) => pattern.test(texts.get(file)));
+  const files = [...texts.keys()].filter((file) => pattern.test(texts.get(file)));
   const sources = parser.parseSourceFiles(
     files.map((fileName) => ({ fileName, text: texts.get(fileName) })),
   );

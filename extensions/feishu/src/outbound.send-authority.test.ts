@@ -74,6 +74,18 @@ type SendContext = Pick<
   "cfg" | "to" | "text" | "signal" | "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
 >;
 
+type TransportFixture = Parameters<Parameters<typeof withFeishuTransport>[0]>[0];
+function sendText(
+  fixture: TransportFixture,
+  options: Partial<Parameters<ReturnType<typeof preferredTextSend>>[0]> = {},
+) {
+  return preferredTextSend()({ cfg: fixture.cfg, to: TARGET, text: "A reply.", ...options });
+}
+
+function requestPaths(fixture: TransportFixture) {
+  return fixture.requests.map((request) => request.path);
+}
+
 function createSender() {
   let current = true;
   return {
@@ -203,7 +215,7 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
         sender.retire();
         release.resolve();
         expect(await result).toHaveProperty("error");
-        expect(fixture.requests.map((request) => request.path)).toEqual([AUTH_PATH]);
+        expect(requestPaths(fixture)).toEqual([AUTH_PATH]);
         expect(sender.onPlatformSendDispatch).not.toHaveBeenCalled();
       });
     },
@@ -229,10 +241,7 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
           fixture.intercept(MESSAGE_PATH, wait);
         }
         const result = fixture.track(
-          preferredTextSend()({
-            cfg: fixture.cfg,
-            to: TARGET,
-            text: "Cancelled before transport.",
+          sendText(fixture, {
             signal: abort.signal,
             ...(waitAt === "dispatch refresh" ? { onPlatformSendDispatch: wait } : {}),
           }).catch((cause: unknown) => cause),
@@ -241,9 +250,7 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
         abort.abort();
         release.resolve();
         expectRetired(await result);
-        expect(fixture.requests.map((request) => request.path)).toEqual(
-          waitAt === "proxy preparation" ? [] : [AUTH_PATH],
-        );
+        expect(requestPaths(fixture)).toEqual(waitAt === "proxy preparation" ? [] : [AUTH_PATH]);
       });
     },
   );
@@ -259,12 +266,9 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
       });
       const retired = createSender();
       const active = createSender();
-      const context = { cfg: fixture.cfg, to: TARGET, text: "Independent send." };
-      const first = fixture.track(
-        preferredTextSend()({ ...context, ...retired }).catch((cause: unknown) => cause),
-      );
+      const first = fixture.track(sendText(fixture, retired).catch((cause: unknown) => cause));
       await started.promise;
-      const second = fixture.track(preferredTextSend()({ ...context, ...active }));
+      const second = fixture.track(sendText(fixture, active));
       retired.retire();
       release.resolve();
       expectRetired(await first);
@@ -289,11 +293,8 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
           }
           return false;
         });
-        const error = await preferredTextSend()({
+        const error = await sendText(fixture, {
           ...sender,
-          cfg: fixture.cfg,
-          to: TARGET,
-          text: "Do not retry a retired sender.",
           ...(failure === "withdrawn reply" ? { replyToId: "om_withdrawn" } : {}),
         }).catch((cause: unknown) => cause);
         expectRetired(error);
@@ -329,17 +330,12 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
           }
           return false;
         });
-        const error = await preferredTextSend()({
+        const error = await sendText(fixture, {
           ...sender,
-          cfg: fixture.cfg,
-          to: TARGET,
-          text: "A redirected send.",
           ...(marker ? {} : { onPlatformSendDispatch: undefined }),
         }).catch((cause: unknown) => cause);
         expect(error).toBeInstanceOf(Error);
-        expect(fixture.requests.map((request) => request.path)).toEqual(
-          visible ? [AUTH_PATH, MESSAGE_PATH] : [AUTH_PATH],
-        );
+        expect(requestPaths(fixture)).toEqual(visible ? [AUTH_PATH, MESSAGE_PATH] : [AUTH_PATH]);
         if (visible) {
           expect(errorCauses(error)).not.toEqual(
             expect.arrayContaining([
@@ -364,10 +360,7 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
     "preserves retryable=%s when dispatch refresh fails before transport",
     async (retryable) => {
       await withFeishuTransport(async (fixture) => {
-        const error = await preferredTextSend()({
-          cfg: fixture.cfg,
-          to: TARGET,
-          text: "No request before refresh succeeds.",
+        const error = await sendText(fixture, {
           onPlatformSendDispatch: async () => {
             throw retryable
               ? new Error("Temporary persistence failure")
@@ -385,7 +378,7 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
             }),
           ]),
         );
-        expect(fixture.requests.map((request) => request.path)).toEqual([AUTH_PATH]);
+        expect(requestPaths(fixture)).toEqual([AUTH_PATH]);
       });
     },
   );
@@ -407,7 +400,7 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
     await withFeishuTransport(async (fixture) => {
       mockAttachmentLoading();
       const marker = vi.fn(async () => {
-        expect(fixture.requests.map((request) => request.path)).toEqual([AUTH_PATH, FILE_PATH]);
+        expect(requestPaths(fixture)).toEqual([AUTH_PATH, FILE_PATH]);
       });
       const result = await sendMedia({
         cfg: fixture.cfg,
@@ -417,11 +410,7 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
       });
       expect(result.receipt?.platformMessageIds).toEqual(["om_accepted"]);
       expect(marker).toHaveBeenCalledOnce();
-      expect(fixture.requests.map((request) => request.path)).toEqual([
-        AUTH_PATH,
-        FILE_PATH,
-        MESSAGE_PATH,
-      ]);
+      expect(requestPaths(fixture)).toEqual([AUTH_PATH, FILE_PATH, MESSAGE_PATH]);
     });
   });
 
@@ -434,17 +423,12 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
         }
         return false;
       });
-      const error = await preferredTextSend()({
+      const error = await sendText(fixture, {
         ...sender,
-        cfg: fixture.cfg,
         to: COMMENT_TARGET,
-        text: "A document reply.",
       }).catch((cause: unknown) => cause);
       expectRetired(error);
-      expect(fixture.requests.map((request) => request.path)).toEqual([
-        AUTH_PATH,
-        `${COMMENT_PATH}/batch_query`,
-      ]);
+      expect(requestPaths(fixture)).toEqual([AUTH_PATH, `${COMMENT_PATH}/batch_query`]);
       expect(sender.onPlatformSendDispatch).not.toHaveBeenCalled();
     });
   });
@@ -458,7 +442,7 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
         const createPath = "/open-apis/drive/v1/files/doc_fixture/new_comments";
         const dispatchRequests: string[][] = [];
         sender.onPlatformSendDispatch.mockImplementation(async () => {
-          dispatchRequests.push(fixture.requests.map((request) => request.path));
+          dispatchRequests.push(requestPaths(fixture));
         });
         fixture.respond(async (request, response) => {
           if (mode === "fallback" && request.path === replyPath) {
@@ -482,11 +466,9 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
           }
           return false;
         });
-        const result = await preferredTextSend()({
+        const result = await sendText(fixture, {
           ...sender,
-          cfg: fixture.cfg,
           to: COMMENT_TARGET,
-          text: "An accepted document reply.",
         });
         expect(result.receipt?.platformMessageIds).toEqual([
           mode === "reply" ? "reply_accepted" : "comment_accepted",
@@ -563,7 +545,7 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
             ],
           });
           expect(result.status).toBe(expectedResult);
-          expect(fixture.requests.map((request) => request.path)).toEqual([
+          expect(requestPaths(fixture)).toEqual([
             AUTH_PATH,
             ...(scenario === "upload" ? [FILE_PATH] : messages ? [MESSAGE_PATH] : []),
           ]);

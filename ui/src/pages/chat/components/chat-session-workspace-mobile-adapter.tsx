@@ -1,6 +1,7 @@
 import { createSignal, createMemo, Show } from "solid-js";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
 import { WorkspaceTranscriptAttachments } from "./chat-session-workspace-attachments.tsx";
@@ -13,6 +14,8 @@ import {
 } from "./chat-session-workspace-mobile.tsx";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 import { hasTranscriptAttachments } from "./chat-transcript-attachments.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type File = SessionWorkspaceListResult["files"][number];
 

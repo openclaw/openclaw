@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   fixtureReceiptClientSource,
@@ -25,6 +24,7 @@ import {
   acquireGatewayE2ePortBlock,
   startClaimedGateway,
 } from "../gateway/test-helpers.listener.js";
+import { createWorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -59,7 +59,7 @@ describe("scheduled cron session retirement through the Gateway", () => {
   let setup: Awaited<ReturnType<typeof setupGatewayTempHome>> | undefined;
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   let control: string;
-  let stateDatabasePath: string;
+  let placements: ReturnType<typeof createWorkerSessionPlacementStore>;
   let sessionStorePath: string;
   let receipts: FixtureReceiptChannel;
 
@@ -67,14 +67,8 @@ describe("scheduled cron session retirement through the Gateway", () => {
     callGateway<T>({ method, params, timeoutMs: 15_000 });
   const entry = (sessionKey: string) =>
     loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })?.entry;
-  const placement = (sessionId: string) => {
-    using database = new DatabaseSync(stateDatabasePath, { readOnly: true });
-    return database
-      .prepare(
-        "SELECT session_key, state, turn_claim_id FROM worker_session_placements WHERE session_id = ?",
-      )
-      .get(sessionId);
-  };
+  // Plain-local placements and turn claims live with the in-process Gateway placement owner.
+  const placement = (sessionId: string) => placements.getAsync(sessionId);
   const history = async (id: string) =>
     (await call<{ entries: CronRunLogEntry[] }>("cron.runs", { id })).entries;
   const marker = (id: string, event: string) => path.join(control, `${id}.${event}`);
@@ -149,7 +143,6 @@ describe("scheduled cron session retirement through the Gateway", () => {
       },
       cron: { enabled: true },
     };
-    stateDatabasePath = path.join(setup.tempHome, ".openclaw", "state", "openclaw.sqlite");
     server = await startClaimedGateway(claim, async () => {
       await fs.writeFile(configPath, JSON.stringify(config));
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
@@ -158,6 +151,7 @@ describe("scheduled cron session retirement through the Gateway", () => {
       sessionStorePath = resolveDefaultSessionStorePath("main");
       return await startGatewayServer(claim.port, { controlUiEnabled: false });
     });
+    placements = createWorkerSessionPlacementStore();
   }, 120_000);
 
   afterAll(async () => receipts.close());
@@ -220,10 +214,10 @@ describe("scheduled cron session retirement through the Gateway", () => {
         expect(entry(baseKey)).toMatchObject({ sessionId });
         expect(await history(job.id)).toEqual([]);
         expect(existsSync(marker(id, "cancelled"))).toBe(false);
-        expect(placement(sessionId)).toMatchObject({
-          session_key: runKey,
+        expect(await placement(sessionId)).toMatchObject({
+          sessionKey: runKey,
           state: "local",
-          turn_claim_id: expect.any(String),
+          turnClaim: { claimId: expect.any(String) },
         });
 
         if (!oneShot) {
@@ -233,12 +227,12 @@ describe("scheduled cron session retirement through the Gateway", () => {
           });
           // Removal must drain the backend still held at the file barrier before deleting its row.
           expect(entry(baseKey)?.sessionId).toBe(sessionId);
-          expect(placement(sessionId)?.turn_claim_id).toEqual(expect.any(String));
+          expect((await placement(sessionId))?.turnClaim?.claimId).toEqual(expect.any(String));
         }
         await release(id);
 
         await expect
-          .poll(() => ({ base: entry(baseKey), placement: placement(sessionId) }), {
+          .poll(async () => ({ base: entry(baseKey), placement: await placement(sessionId) }), {
             timeout: 60_000,
           })
           .toEqual({ base: undefined, placement: undefined });

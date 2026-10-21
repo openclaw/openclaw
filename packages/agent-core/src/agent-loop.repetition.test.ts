@@ -3,6 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { runAgentLoop } from "./agent-loop.js";
 import {
   config,
+  captureAgentLoop,
   createTurnSequenceStream,
   makeAssistantMessage,
   makeCall,
@@ -10,12 +11,36 @@ import {
   reply,
   user,
 } from "./agent-loop.test-support.js";
-import { createAssistantMessageEventStream, type AssistantMessage, type Message } from "./llm.js";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+  type Message,
+} from "./llm.js";
 import { distinctRecordOutputs, variedRows } from "./repetition-guard.test-fixtures.js";
-import type { AgentEvent, AgentToolCall, StreamFn } from "./types.js";
+import type { AgentToolCall, StreamFn } from "./types.js";
 
 const loop = "Please provide more input. ".repeat(800);
 const marker = "[Repetitive output stopped]";
+
+function expectResponse(
+  { result, events, requests }: Awaited<ReturnType<typeof runResponse>>,
+  content: AssistantMessage["content"],
+  stopped = false,
+) {
+  expect(requests).toBe(1);
+  expect(result.at(-1)).toMatchObject({
+    stopReason: stopped ? "error" : "stop",
+    content,
+    ...(stopped ? { errorCode: "openclaw_repetitive_output" } : {}),
+  });
+  if (stopped) {
+    expect(result.at(-1)).toHaveProperty("providerReplay", undefined);
+  }
+  expect(events.findLast((event) => event.type === "message_end")).toMatchObject({
+    message: { content, ...(stopped ? { providerReplay: undefined } : {}) },
+  });
+}
 
 async function runResponse(
   content: AssistantMessage["content"],
@@ -24,19 +49,10 @@ async function runResponse(
   initialText?: string,
   incrementalText = false,
 ) {
-  const events: AgentEvent[] = [];
-  let aborted = false;
   let requests = 0;
-  const streamFn: StreamFn = (_model, _context, options) => {
+  const streamFn: StreamFn = () => {
     requests += 1;
-    options?.signal?.addEventListener(
-      "abort",
-      () => {
-        aborted = true;
-      },
-      { once: true },
-    );
-    const response = createAssistantMessageEventStream();
+    const events: AssistantMessageEvent[] = [];
     const message = makeAssistantMessage(content);
     message.providerReplay = {
       v: 1,
@@ -46,106 +62,91 @@ async function runResponse(
       provider: message.provider,
       model: message.model,
     };
-    queueMicrotask(() => {
-      if (!terminalOnly || initialText !== undefined) {
-        response.push({ type: "start", partial: makeAssistantMessage([]) });
+    if (!terminalOnly || initialText !== undefined) {
+      events.push({ type: "start", partial: makeAssistantMessage([]) });
+    }
+    if (initialText !== undefined) {
+      events.push({
+        type: "text_delta",
+        contentIndex: 0,
+        delta: initialText,
+        partial: makeAssistantMessage([{ type: "text", text: initialText }]),
+      });
+    }
+    for (const [contentIndex, block] of (terminalOnly ? [] : content).entries()) {
+      const snapshot = { contentIndex, partial: message };
+      if (block.type === "text" && incrementalText) {
+        for (let offset = 0; offset < block.text.length; offset += 1024) {
+          events.push({
+            type: "text_delta",
+            contentIndex,
+            delta: block.text.slice(offset, offset + 1024),
+          });
+        }
+      } else if (block.type === "text") {
+        events.push({ type: "text_delta", ...snapshot, delta: block.text });
+      } else if (block.type === "thinking") {
+        events.push({ type: "thinking_delta", ...snapshot, delta: block.thinking });
       }
-      if (initialText !== undefined) {
-        response.push({
-          type: "text_delta",
-          contentIndex: 0,
-          delta: initialText,
-          partial: makeAssistantMessage([{ type: "text", text: initialText }]),
-        });
-      }
-      if (!terminalOnly) {
-        content.forEach((block, contentIndex) => {
-          if (block.type === "text") {
-            if (incrementalText) {
-              for (let offset = 0; offset < block.text.length; offset += 1024) {
-                response.push({
-                  type: "text_delta",
-                  contentIndex,
-                  delta: block.text.slice(offset, offset + 1024),
-                });
-              }
-            } else {
-              response.push({
-                type: "text_delta",
-                contentIndex,
-                delta: block.text,
-                partial: message,
-              });
-            }
-          } else if (block.type === "thinking") {
-            response.push({
-              type: "thinking_delta",
-              contentIndex,
-              delta: block.thinking,
-              partial: message,
-            });
-          }
-        });
-      }
-      response.push({ type: "done", reason: "stop", message });
-      response.end();
-    });
-    return response;
+    }
+    return reply(message, events);
   };
-  const loopConfig = { ...config, repetitionGuard: () => enabled };
-  const result = await runAgentLoop(
+  const run = captureAgentLoop(
     [user()],
     { systemPrompt: "", messages: [], tools: [] },
-    loopConfig,
-    (event) => {
-      events.push(event);
-    },
+    { ...config, repetitionGuard: () => enabled },
     undefined,
     streamFn,
   );
-  return { result, events, aborted, requests };
+  return { result: await run.result, events: run.events, requests };
 }
 
 describe("repetition stop at the stream owner", () => {
   it.each(distinctRecordOutputs)("delivers $name without truncation", async ({ text }) => {
     const content: AssistantMessage["content"] = [{ type: "text", text }];
-    const { result, events, requests } = await runResponse(content);
-    expect(requests).toBe(1);
-    expect(result.at(-1)).toMatchObject({ stopReason: "stop", content });
-    expect(events.findLast((event) => event.type === "message_end")).toMatchObject({
-      message: { content },
-    });
+    expectResponse(await runResponse(content), content);
   });
 
-  it.each(["text", "incremental text", "thinking", "terminal"])(
-    "quarantines a repetitive %s block before persistence and replay",
-    async (kind) => {
+  it.each<{
+    kind: string;
+    terminalOnly?: boolean;
+    initialLength?: number;
+    incrementalText?: boolean;
+    thinking?: boolean;
+  }>([
+    { kind: "text" },
+    { kind: "incremental text", incrementalText: true },
+    { kind: "thinking", thinking: true },
+    { kind: "terminal", terminalOnly: true },
+    { kind: "shorter final", initialLength: loop.length + 1, terminalOnly: true },
+    { kind: "same-length final", initialLength: loop.length, terminalOnly: true },
+    { kind: "longer final", initialLength: 16_000, terminalOnly: true },
+    { kind: "streamed", initialLength: loop.length, terminalOnly: false },
+  ])(
+    "quarantines a repetitive $kind block before persistence and replay",
+    async ({ terminalOnly, initialLength, incrementalText, thinking }) => {
+      const prefix: AssistantMessage["content"] =
+        initialLength === undefined ? [{ type: "text", text: "Earlier answer stays intact." }] : [];
       const content: AssistantMessage["content"] = [
-        { type: "text", text: "Earlier answer stays intact." },
-        kind === "thinking" ? { type: "thinking", thinking: loop } : { type: "text", text: loop },
+        ...prefix,
+        thinking ? { type: "thinking", thinking: loop } : { type: "text", text: loop },
       ];
-      const { result, events, requests } = await runResponse(
+      const response = await runResponse(
         content,
         true,
-        kind === "terminal",
-        undefined,
-        kind === "incremental text",
+        terminalOnly,
+        initialLength === undefined ? undefined : variedRows.slice(0, initialLength),
+        incrementalText,
       );
-      const expected = [content[0], { type: "text", text: marker }];
-      expect(result.at(-1)).toMatchObject({
-        stopReason: "error",
-        errorCode: "openclaw_repetitive_output",
-        content: expected,
-      });
-      expect(result.at(-1)).toHaveProperty("providerReplay", undefined);
-      expect(events.findLast((event) => event.type === "message_end")).toMatchObject({
-        message: { content: expected },
-      });
-      expect(requests).toBe(1);
+      const expected: AssistantMessage["content"] = [...prefix, { type: "text", text: marker }];
+      expectResponse(response, expected, true);
+      if (initialLength !== undefined) {
+        return;
+      }
       const replay: Message[][] = [];
       await runAgentLoop(
         [user("try a shorter request")],
-        { systemPrompt: "", messages: result, tools: [] },
+        { systemPrompt: "", messages: response.result, tools: [] },
         config,
         () => {},
         undefined,
@@ -158,31 +159,7 @@ describe("repetition stop at the stream owner", () => {
 
   it("leaves the same response untouched when the policy is off", async () => {
     const content: AssistantMessage["content"] = [{ type: "text", text: loop }];
-    const { result } = await runResponse(content, false);
-    expect(result.at(-1)).toMatchObject({ stopReason: "stop", content });
-  });
-
-  it.each([
-    { kind: "shorter final", initialLength: loop.length + 1, terminalOnly: true },
-    { kind: "same-length final", initialLength: loop.length, terminalOnly: true },
-    { kind: "longer final", initialLength: 16_000, terminalOnly: true },
-    { kind: "streamed", initialLength: loop.length, terminalOnly: false },
-  ])("checks a $kind replacement snapshot", async ({ initialLength, terminalOnly }) => {
-    const { result, events, requests } = await runResponse(
-      [{ type: "text", text: loop }],
-      true,
-      terminalOnly,
-      variedRows.slice(0, initialLength),
-    );
-    expect(result.at(-1)).toMatchObject({
-      stopReason: "error",
-      errorCode: "openclaw_repetitive_output",
-      content: [{ type: "text", text: marker }],
-    });
-    expect(events.findLast((event) => event.type === "message_end")).toMatchObject({
-      message: { content: [{ type: "text", text: marker }], providerReplay: undefined },
-    });
-    expect(requests).toBe(1);
+    expectResponse(await runResponse(content, false), content);
   });
 
   it("checks snapshot-only text before persisting and admitting an async tool", async () => {
@@ -204,12 +181,10 @@ describe("repetition stop at the stream owner", () => {
         if (++requests > 1) {
           return reply(makeAssistantMessage([{ type: "text", text: "Unexpected retry." }]));
         }
-        const response = createAssistantMessageEventStream();
-        response.push({ type: "start", partial: makeAssistantMessage([]) });
-        response.push({ type: "toolcall_end", contentIndex: 1, toolCall, partial: message });
-        response.push({ type: "done", reason: "toolUse", message });
-        response.end();
-        return response;
+        return reply(message, [
+          { type: "start", partial: makeAssistantMessage([]) },
+          { type: "toolcall_end", contentIndex: 1, toolCall, partial: message },
+        ]);
       },
     );
     expect(executed).toEqual([]);
@@ -227,26 +202,17 @@ describe("repetition stop at the stream owner", () => {
       const response = createAssistantMessageEventStream();
       const started = createDeferred();
       const finish = createDeferred();
-      const toolFinished = createDeferred();
-      let requestAborted = false;
-      let requests = 0;
-      let toolAborted = false;
+      const observed = { requests: 0, toolAborted: false };
+      let requestSignal: AbortSignal | undefined;
       const executed: string[] = [];
       const kept: AgentToolCall = { ...makeCall("kept"), async: true };
       const discarded = makeCall("discarded");
       const streamFn: StreamFn = (_model, _context, options) => {
-        requests++;
-        if (requests > 1) {
+        if (++observed.requests > 1) {
           return reply(makeAssistantMessage([{ type: "text", text: "Unexpected retry." }]));
         }
-        options?.signal?.addEventListener(
-          "abort",
-          () => {
-            requestAborted = true;
-            finish.resolve();
-          },
-          { once: true },
-        );
+        requestSignal = options?.signal;
+        requestSignal?.addEventListener("abort", () => finish.resolve(), { once: true });
         return response;
       };
       const run = runAgentLoop(
@@ -261,8 +227,7 @@ describe("repetition stop at the stream owner", () => {
                 executed.push("kept");
                 started.resolve();
                 await finish.promise;
-                toolAborted = signal?.aborted ?? false;
-                toolFinished.resolve();
+                observed.toolAborted = signal?.aborted ?? false;
                 return { content: [{ type: "text", text: "Saved." }], details: {} };
               },
             },
@@ -299,10 +264,8 @@ describe("repetition stop at the stream owner", () => {
       }
       response.end();
       const result = await run;
-      expect(requests).toBe(1);
-      expect(requestAborted).toBe(true);
-      expect(toolAborted).toBe(false);
-      await toolFinished.promise;
+      expect(observed).toEqual({ requests: 1, toolAborted: false });
+      expect(requestSignal?.aborted).toBe(true);
       expect(executed).toEqual(["kept"]);
       expect(result.filter((message) => message.role === "toolResult")).toMatchObject([
         { toolCallId: "kept", content: [{ type: "text", text: "Saved." }] },

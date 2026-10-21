@@ -5,6 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConsoleMessage, Frame, Page, Request } from "playwright";
 import { agentRouteFromPath, isRouteId, pathForRoute } from "../app-route-paths.ts";
 import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
+import type { TooltipElement } from "../components/tooltip.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
 import type { ControlUiMockGateway } from "./control-ui-e2e-contract.ts";
 import { captureControlUiE2eRendererStall } from "./control-ui-e2e-renderer-stall.ts";
@@ -360,6 +361,27 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
           ? (agentsState.agentsList as { agents?: unknown })
           : null;
       const send = document.querySelector<HTMLButtonElement>(".chat-send-btn--send");
+      const stop = document.querySelector<HTMLButtonElement>(".chat-send-btn--stop");
+      // Structural facts identify keyboard/overlay ownership without exposing content or IDs.
+      const describeElement = (element: Element | null) =>
+        element
+          ? {
+              kind:
+                element instanceof HTMLTextAreaElement
+                  ? "textarea"
+                  : element instanceof HTMLButtonElement
+                    ? "button"
+                    : element instanceof HTMLInputElement
+                      ? "input"
+                      : element === document.body
+                        ? "body"
+                        : "other",
+              inComposer: Boolean(element.closest(".agent-chat__input")),
+              isStop: element === stop,
+              isSend: element === send,
+            }
+          : null;
+      const openTooltips = [...document.querySelectorAll<TooltipElement>("openclaw-tooltip[open]")];
       const sendLabel = send?.getAttribute("aria-label");
       // Submit-disabled labels can contain server errors. Only known static UI copy
       // may reach CI logs; private reports retain the existing detailed state.
@@ -490,11 +512,33 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
                 length: text?.length ?? 0,
               };
             }),
+          activeElement: describeElement(document.activeElement),
+          tooltips: {
+            openCount: openTooltips.length,
+            entries: openTooltips.slice(0, 8).map((tooltip) => {
+              const trigger =
+                tooltip.anchor ?? tooltip.querySelector("button, input, textarea, [tabindex]");
+              return {
+                trigger: describeElement(trigger),
+                hovered: tooltip.matches(":hover") || (trigger?.matches(":hover") ?? false),
+                containsFocus:
+                  tooltip.contains(document.activeElement) ||
+                  (trigger?.contains(document.activeElement) ?? false),
+              };
+            }),
+          },
           composer: textarea
             ? {
                 draftLength: textarea.value.length,
                 nonempty: textarea.value.length > 0,
                 disabled: textarea.disabled,
+                stop: stop
+                  ? {
+                      visible: stop.checkVisibility({ visibilityProperty: true }),
+                      disabled: stop.disabled,
+                      focused: stop === document.activeElement,
+                    }
+                  : null,
                 send: send
                   ? {
                       label: safeValue(sendLabel, [

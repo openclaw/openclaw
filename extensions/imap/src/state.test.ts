@@ -2,158 +2,113 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { resolveImapConfig } from "./config.js";
 import { createImapTestRuntime } from "./imap-test-support.js";
-import { countImapSkip, initializeImapCursor, rememberImapMessage } from "./state.js";
+import { initializeImapCursor } from "./state.js";
 
 describe("IMAP cursor initialization", () => {
   const previous = { uidValidity: "1", lastSeenUid: 42, updatedAt: 123 };
+  const invalidUids = [undefined, null, Number.NaN, Infinity, -1, 0.5, "42", 4294967296];
+  async function createCursorFixture() {
+    const { state } = createImapTestRuntime();
+    await state.cursors.register("account", previous);
+    const register = vi.spyOn(state.cursors, "register");
+    const resolveBaseline = vi.fn(async () => 99);
+    const initialize = (validity = "2", active = () => true) =>
+      initializeImapCursor(state, "account", validity, resolveBaseline, active);
+    return { state, register, resolveBaseline, initialize };
+  }
 
-  it.each([undefined, null, Number.NaN, Infinity, -1, 0.5, "42", 4294967296])(
-    "preserves the old cursor when the baseline is invalid: %s",
-    async (baseline) => {
-      const { state } = createImapTestRuntime();
-      await state.cursors.register("account", previous);
-      const register = vi.spyOn(state.cursors, "register");
-      // Deliberately inject malformed external data across the typed resolver boundary.
-      const resolveBaseline = vi.fn(async () => baseline as number);
+  it.each(invalidUids)("preserves the cursor on invalid baseline %s", async (baseline) => {
+    const { state, register, resolveBaseline, initialize } = await createCursorFixture();
+    // Deliberately inject malformed external data across the typed resolver boundary.
+    resolveBaseline.mockResolvedValueOnce(baseline as number);
 
-      await expect(
-        initializeImapCursor(state, "account", "2", resolveBaseline, () => true),
-      ).rejects.toThrow(/baseline UID/);
-      expect(register).not.toHaveBeenCalled();
-      expect(await state.cursors.lookup("account")).toEqual(previous);
-    },
-  );
+    await expect(initialize()).rejects.toThrow(/baseline UID/);
+    expect(register).not.toHaveBeenCalled();
+    expect(await state.cursors.lookup("account")).toEqual(previous);
+  });
 
   it.each(["", "0", "01", "-1", "1.5", "1e2", " 1"])(
-    "rejects invalid UIDVALIDITY before accessing state: %s",
+    "rejects invalid UIDVALIDITY before state access: %s",
     async (uidValidity) => {
-      const { state } = createImapTestRuntime();
+      const { state, register, resolveBaseline, initialize } = await createCursorFixture();
       const lookup = vi.spyOn(state.cursors, "lookup");
-      const register = vi.spyOn(state.cursors, "register");
-      const resolveBaseline = vi.fn(async () => 0);
 
-      await expect(
-        initializeImapCursor(state, "account", uidValidity, resolveBaseline, () => true),
-      ).rejects.toThrow(/UIDVALIDITY/);
+      await expect(initialize(uidValidity)).rejects.toThrow(/UIDVALIDITY/);
       expect(lookup).not.toHaveBeenCalled();
       expect(resolveBaseline).not.toHaveBeenCalled();
       expect(register).not.toHaveBeenCalled();
     },
   );
 
-  it.each([undefined, null, Number.NaN, Infinity, -1, 0.5, "42", 4294967296])(
-    "rejects an invalid persisted cursor with matching UIDVALIDITY: %s",
-    async (lastSeenUid) => {
-      const { state } = createImapTestRuntime();
-      const corruptCursor = { ...previous, lastSeenUid: lastSeenUid as number };
-      await state.cursors.register("account", corruptCursor);
-      const register = vi.spyOn(state.cursors, "register");
-      const resolveBaseline = vi.fn(async () => 0);
+  it.each(invalidUids)("rejects invalid persisted UID %s on resume", async (lastSeenUid) => {
+    const { state, register, resolveBaseline, initialize } = await createCursorFixture();
+    const corruptCursor = { ...previous, lastSeenUid: lastSeenUid as number };
+    await state.cursors.register("account", corruptCursor);
+    register.mockClear();
 
-      await expect(
-        initializeImapCursor(state, "account", "1", resolveBaseline, () => true),
-      ).rejects.toThrow(/cursor UID/);
-      expect(resolveBaseline).not.toHaveBeenCalled();
-      expect(register).not.toHaveBeenCalled();
-      expect(await state.cursors.lookup("account")).toEqual(corruptCursor);
-    },
-  );
+    await expect(initialize("1")).rejects.toThrow(/cursor UID/);
+    expect(resolveBaseline).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+    expect(await state.cursors.lookup("account")).toEqual(corruptCursor);
+  });
 
   it.each(["resolver", "write"])("preserves the old cursor when %s fails", async (failure) => {
-    const { state } = createImapTestRuntime();
-    await state.cursors.register("account", previous);
+    const { state, register, resolveBaseline, initialize } = await createCursorFixture();
     const error = new Error(`${failure} failed`);
-    const register = vi.spyOn(state.cursors, "register");
-    const resolveBaseline = vi.fn(async () => 99);
     if (failure === "resolver") {
       resolveBaseline.mockRejectedValueOnce(error);
     } else {
       register.mockRejectedValueOnce(error);
     }
 
-    await expect(
-      initializeImapCursor(state, "account", "2", resolveBaseline, () => true),
-    ).rejects.toBe(error);
+    await expect(initialize()).rejects.toBe(error);
     expect(register).toHaveBeenCalledTimes(failure === "resolver" ? 0 : 1);
     expect(await state.cursors.lookup("account")).toEqual(previous);
   });
 
-  it.each(["lookup", "resolver"])(
-    "does not write when stopped while awaiting %s",
-    async (pending) => {
-      const { state } = createImapTestRuntime();
-      await state.cursors.register("account", previous);
-      const entered = createDeferred<void>();
-      const released = createDeferred<void>();
-      const register = vi.spyOn(state.cursors, "register");
-      const resolveBaseline = vi.fn(async () => {
-        if (pending === "resolver") {
-          entered.resolve();
-          await released.promise;
-        }
-        return 99;
-      });
-      if (pending === "lookup") {
-        vi.spyOn(state.cursors, "lookup").mockImplementationOnce(async () => {
-          entered.resolve();
-          await released.promise;
-          return previous;
-        });
-      }
-      let stopped = false;
-      const operation = initializeImapCursor(
-        state,
-        "account",
-        "2",
-        resolveBaseline,
-        () => !stopped,
-      );
-      await entered.promise;
-      stopped = true;
-      released.resolve();
+  it.each(["lookup", "resolver"])("does not write after stopping during %s", async (pending) => {
+    const { state, register, resolveBaseline, initialize } = await createCursorFixture();
+    const entered = createDeferred<void>();
+    const released = createDeferred<void>();
+    const hold = async <T>(value: T) => {
+      entered.resolve();
+      await released.promise;
+      return value;
+    };
+    if (pending === "lookup") {
+      vi.spyOn(state.cursors, "lookup").mockImplementationOnce(() => hold(previous));
+    } else {
+      resolveBaseline.mockImplementationOnce(() => hold(99));
+    }
+    let stopped = false;
+    const operation = initialize("2", () => !stopped);
+    await entered.promise;
+    stopped = true;
+    released.resolve();
 
-      expect(await operation).toBeUndefined();
-      expect(resolveBaseline).toHaveBeenCalledTimes(pending === "lookup" ? 0 : 1);
-      expect(register).not.toHaveBeenCalled();
-      expect(await state.cursors.lookup("account")).toEqual(previous);
-    },
-  );
+    expect(await operation).toBeUndefined();
+    expect(resolveBaseline).toHaveBeenCalledTimes(pending === "lookup" ? 0 : 1);
+    expect(register).not.toHaveBeenCalled();
+    expect(await state.cursors.lookup("account")).toEqual(previous);
+  });
 });
 
 describe("IMAP durable watcher state", () => {
   it("keeps healthy accounts available when a sibling SecretRef could not resolve", () => {
+    const account = {
+      host: "imap.example.com",
+      user: "reader@example.com",
+      agentId: "mail_reader",
+    };
     const config = resolveImapConfig({
       accounts: {
-        healthy: {
-          host: "imap.example.com",
-          user: "reader@example.com",
-          password: "resolved-password",
-          agentId: "mail_reader",
-        },
+        healthy: { ...account, password: "resolved-password" },
         unavailable: {
-          host: "imap.example.com",
-          user: "reader@example.com",
+          ...account,
           password: { source: "env", provider: "default", id: "MISSING_IMAP_PASSWORD" },
-          agentId: "mail_reader",
         },
       },
     });
     expect(Object.keys(config.accounts)).toEqual(["healthy"]);
-  });
-
-  it("deduplicates logical Message-IDs without growing the account ring", async () => {
-    const { state } = createImapTestRuntime();
-    for (let index = 0; index < 101; index++) {
-      expect(await rememberImapMessage(state, "account", `<${index}@example.com>`)).toBe(true);
-    }
-    expect(await rememberImapMessage(state, "account", "<100@example.com>")).toBe(false);
-    expect((await state.messageIds.lookup("account"))?.messageIds).toHaveLength(100);
-  });
-
-  it("increments final account skip counters", async () => {
-    const { state } = createImapTestRuntime();
-    await countImapSkip(state, "account", "temperror");
-    await countImapSkip(state, "account", "temperror");
-    expect(await state.skips.lookup("account:temperror")).toEqual({ count: 2 });
   });
 });

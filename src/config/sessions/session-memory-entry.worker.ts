@@ -1,3 +1,4 @@
+import { channel as diagnosticsChannel } from "node:diagnostics_channel";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { projectSessionEntryRecord } from "../../../packages/memory-host-sdk/src/host/session-entry-projection.js";
 import {
@@ -37,6 +38,7 @@ const snapshots = new LruCache<Snapshot>(16, {
   maxBytes: 8 * 1024 * 1024,
   sizeOf: (snapshot) => snapshot.stats.sizeBytes,
 });
+diagnosticsChannel("openclaw.memory.critical").subscribe(() => snapshots.clear());
 const MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 
 /** The export worker retains projected rows; transcript rewrite identity replaces the prefix. */

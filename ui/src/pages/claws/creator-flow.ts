@@ -263,6 +263,7 @@ export class ClawCreatorFlow {
       this.reviewCurrent = true;
       this.choices ??= {
         name: result.name.split("/").at(-1) ?? result.name,
+        displayName: result.displayName,
         description: result.description,
         excluded: result.items.filter((item) => !item.included).map((item) => item.id),
       };

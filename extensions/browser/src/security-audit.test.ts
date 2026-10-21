@@ -1,50 +1,38 @@
-// Browser tests cover security audit plugin behavior.
 import { describe, expect, it } from "vitest";
 import { collectBrowserSecurityAuditFindings } from "./security-audit.js";
 
-function collectFindings(
+const collectFindings = (
   config: Parameters<typeof collectBrowserSecurityAuditFindings>[0]["config"],
-) {
-  return collectBrowserSecurityAuditFindings({
+) =>
+  collectBrowserSecurityAuditFindings({
     config,
     sourceConfig: config,
-    env: {} as NodeJS.ProcessEnv,
+    env: {},
     stateDir: "/tmp/openclaw-state",
     configPath: "/tmp/openclaw.json",
   });
-}
 
-function findingByCheckId(
+const expectFinding = (
   findings: ReturnType<typeof collectBrowserSecurityAuditFindings>,
   checkId: string,
-) {
-  const finding = findings.find((candidate) => candidate.checkId === checkId);
-  if (!finding) {
-    throw new Error(`expected browser security finding ${checkId}`);
-  }
-  return finding;
-}
+  expected: Partial<ReturnType<typeof collectBrowserSecurityAuditFindings>[number]>,
+) => expect(findings.find((candidate) => candidate.checkId === checkId)).toMatchObject(expected);
 
 describe("browser security audit collector", () => {
   it("warns while legacy extension relay auth remains enabled", () => {
     const findings = collectFindings({
-      browser: {
-        extensionRelay: { allowLegacyAuth: true },
-      },
+      browser: { extensionRelay: { allowLegacyAuth: true } },
     });
-
-    const finding = findingByCheckId(findings, "browser.extension_relay_legacy_auth");
-    expect(finding.severity).toBe("warn");
-    expect(finding.remediation).toContain("allowLegacyAuth=false");
+    expectFinding(findings, "browser.extension_relay_legacy_auth", {
+      severity: "warn",
+      remediation: expect.stringContaining("allowLegacyAuth=false"),
+    });
   });
 
   it("does not warn when legacy extension relay auth is disabled", () => {
     const findings = collectFindings({
-      browser: {
-        extensionRelay: { allowLegacyAuth: false },
-      },
+      browser: { extensionRelay: { allowLegacyAuth: false } },
     });
-
     expect(
       findings.some((finding) => finding.checkId === "browser.extension_relay_legacy_auth"),
     ).toBe(false);
@@ -52,41 +40,27 @@ describe("browser security audit collector", () => {
 
   it("flags browser control without auth", () => {
     const findings = collectFindings({
-      gateway: {
-        controlUi: { enabled: false },
-        auth: {},
-      },
-      browser: {
-        enabled: true,
-      },
+      gateway: { controlUi: { enabled: false }, auth: {} },
+      browser: { enabled: true },
     });
-
-    const finding = findingByCheckId(findings, "browser.control_no_auth");
-    expect(finding.severity).toBe("critical");
+    expectFinding(findings, "browser.control_no_auth", { severity: "critical" });
   });
 
   it("warns on remote http CDP profiles", () => {
     const findings = collectFindings({
       browser: {
         profiles: {
-          remote: {
-            cdpUrl: "http://example.com:9222",
-            color: "#0066CC",
-          },
+          remote: { cdpUrl: "http://example.com:9222", color: "#0066CC" },
         },
       },
     });
-
-    const finding = findingByCheckId(findings, "browser.remote_cdp_http");
-    expect(finding.severity).toBe("warn");
+    expectFinding(findings, "browser.remote_cdp_http", { severity: "warn" });
   });
 
   it("redacts private-host CDP URLs in findings", () => {
     const findings = collectFindings({
       browser: {
-        ssrfPolicy: {
-          dangerouslyAllowPrivateNetwork: true,
-        },
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
         profiles: {
           remote: {
             cdpUrl:
@@ -96,9 +70,9 @@ describe("browser security audit collector", () => {
         },
       },
     });
-
-    const finding = findingByCheckId(findings, "browser.remote_cdp_private_host");
-    expect(finding.severity).toBe("warn");
-    expect(finding.detail).toContain("token=supers…7890");
+    expectFinding(findings, "browser.remote_cdp_private_host", {
+      severity: "warn",
+      detail: expect.stringContaining("token=supers…7890"),
+    });
   });
 });

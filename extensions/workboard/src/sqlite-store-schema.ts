@@ -32,30 +32,22 @@ const schemaAdmission: SqliteDatabaseAdmissionKey<true> = {
   read: (value) => (value === true ? true : undefined),
 };
 
-function tableColumns(db: DatabaseSync, tableName: string): Set<string> {
-  return new Set(
-    db
-      .prepare(`PRAGMA table_info(${tableName})`)
-      .all()
-      .flatMap((row) => (typeof row.name === "string" ? [row.name] : [])),
-  );
-}
-
-function ensureColumn(db: DatabaseSync, tableName: string, columnName: string, definition: string) {
-  if (tableColumns(db, tableName).has(columnName)) {
-    return;
-  }
-  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${definition}`);
-}
-
 function ensureWorkboardSchema(db: DatabaseSync): void {
   if (getSqliteDatabaseAdmission(db, schemaAdmission)) {
     return;
   }
   db.exec(WORKBOARD_SCHEMA_SQL);
-  ensureColumn(db, "workboard_boards", "automation_job_id", "automation_job_id TEXT");
-  ensureColumn(db, "workboard_boards", "kind", "kind TEXT");
-  ensureColumn(db, "workboard_boards", "sessions_spec", "sessions_spec TEXT");
+  const columns = new Set(
+    db
+      .prepare("PRAGMA table_info(workboard_boards)")
+      .all()
+      .flatMap((row) => (typeof row.name === "string" ? [row.name] : [])),
+  );
+  for (const column of ["automation_job_id", "kind", "sessions_spec"]) {
+    if (!columns.has(column)) {
+      db.exec(`ALTER TABLE workboard_boards ADD COLUMN ${column} TEXT`);
+    }
+  }
   const migrationId = `schema-${SCHEMA_VERSION}`;
   const current = db
     .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = ?")

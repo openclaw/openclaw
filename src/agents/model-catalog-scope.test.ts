@@ -34,7 +34,7 @@ describe("resolveModelCatalogScope", () => {
         cfg,
         provider: "tui-pty-mock",
         model: "gpt-5.5",
-      }).modelRefs,
+      }),
     ).toEqual(["tui-pty-mock/gpt-5.5"]);
   });
 
@@ -44,7 +44,7 @@ describe("resolveModelCatalogScope", () => {
         cfg: {},
         provider: "openai",
         model: "gpt-5.4",
-      }).modelRefs,
+      }),
     ).toEqual(["openai/gpt-5.4", "gpt-5.4"]);
   });
 });

@@ -6,6 +6,7 @@ import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.
 import { createDeferredCore } from "../../shared/deferred.js";
 import { expectCallCount, withRunLoopCleanup } from "./run-loop-cleanup.test-support.js";
 import { registerGatewayForcedRestartTests } from "./run-loop-force.test-support.js";
+import { gatewayWorkAdmissionActual as admission } from "./run-loop-mocks.test-support.js";
 import {
   createActiveWorkSnapshot,
   createCloseMock,
@@ -118,9 +119,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
       const consumed = createDeferredCore<null>();
       consumeIntent.mockReturnValueOnce(consumed.promise);
       await withRunningGateway(async ({ captureSignal, close, exited }) => {
-        const admission = await vi.importActual<
-          typeof import("../../process/gateway-work-admission.js")
-        >("../../process/gateway-work-admission.js");
         restartProcess.mockReturnValue({ mode: "supervised" });
         expect(admission.isGatewayWorkAdmissionClosed()).toBe(false);
 
@@ -144,9 +142,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
     authorizeRestart.mockReturnValueOnce(false);
     consumeIntent.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     await withRunningGateway(async ({ captureSignal, exited }) => {
-      const admission = await vi.importActual<
-        typeof import("../../process/gateway-work-admission.js")
-      >("../../process/gateway-work-admission.js");
       captureSignal("SIGUSR2")();
       captureSignal("SIGTERM")();
       const lateRoot = admission.beginGatewayRootWorkAdmissionWhenOpen("test:queued-stop").then(

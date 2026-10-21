@@ -65,6 +65,24 @@ export async function prepareLocalSandboxWorkspace(params: {
     assertCurrent,
     workerAuthority: { ...owner.workerAuthority, assertCurrent },
   };
+  let pendingCheckpoint: Promise<void> | undefined;
+  const checkpoint = (): Promise<void> => {
+    if (pendingCheckpoint) {
+      return pendingCheckpoint;
+    }
+    const pending = withLocalWorkspaceProjection(owner, (state) => {
+      // Quiescence is now held. Later requests need their own capture; only
+      // requests waiting together for custody can share this checkpoint.
+      pendingCheckpoint = undefined;
+      return state.synchronize("canonical");
+    }).finally(() => {
+      if (pendingCheckpoint === pending) {
+        pendingCheckpoint = undefined;
+      }
+    });
+    pendingCheckpoint = pending;
+    return pending;
+  };
   try {
     assertCurrent();
     markManagedWorktreePreparation();
@@ -131,15 +149,13 @@ export async function prepareLocalSandboxWorkspace(params: {
         try {
           await withLocalWorkspaceProjection(owner, run, { provision: true });
           // TERM handlers may write after an already-running final checkpoint has completed.
-          await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+          await checkpoint();
         } finally {
           release();
         }
       },
-      checkpoint: async () => {
-        // Stop closes execution admission; accepted output still settles under its workspace owner.
-        await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
-      },
+      // Stop closes execution admission; accepted output still settles under its workspace owner.
+      checkpoint,
       [Symbol.dispose]: () => {
         disposed = true;
         releaseOwner();

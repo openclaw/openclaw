@@ -1,9 +1,8 @@
 import { normalizeModelCatalogProviderRows } from "@openclaw/model-catalog-core/model-catalog-normalize";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { finalizePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { buildPreparedModelCatalogSnapshot, loadManifestModelCatalog } from "./model-catalog.js";
@@ -14,97 +13,81 @@ const augment = vi.hoisted(() => vi.fn(async () => []));
 vi.mock("../plugins/provider-runtime.runtime.js", () => ({
   augmentModelCatalogWithProviderPlugins: augment,
 }));
+let config: OpenClawConfig;
 
-function fixture(discovery: "static" | "runtime", ...modelIds: string[]) {
-  return finalizePluginMetadataSnapshot(
+function catalog(discovery: "static" | "runtime", ...modelIds: string[]) {
+  const provider = "catalog-fixture";
+  const models = modelIds.map((id) => ({ id, name: id }));
+  const modelCatalog = {
+    providers: { [provider]: { api: "openai-responses" as const, models } },
+    discovery: { [provider]: discovery },
+  };
+  const metadataSnapshot = finalizePluginMetadataSnapshot(
     createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "catalog-fixture",
-          origin: "bundled",
-          providers: ["catalog-fixture"],
-          modelCatalog: {
-            providers: {
-              "catalog-fixture": {
-                api: "openai-responses",
-                models: modelIds.map((id) => ({ id, name: id })),
-              },
-            },
-            discovery: { "catalog-fixture": discovery },
-          },
-        },
-      ],
+      plugins: [{ id: provider, origin: "bundled", providers: [provider], modelCatalog }],
     }),
   );
+  const params = { config, metadataSnapshot };
+  const agentDir = "/tmp/model-catalog-planning-test";
+  return {
+    load: () => loadManifestModelCatalog(params),
+    build: () =>
+      buildPreparedModelCatalogSnapshot({
+        ...params,
+        agentDir,
+        authCredentials: {},
+        readOnly: true,
+        models: [],
+      }),
+    scope: (run: () => Promise<void>) => withPluginRuntimeGenerationScope(params, run),
+  };
 }
+const plan = vi.mocked(planEffectiveModelCatalogRows);
+const normalize = vi.mocked(normalizeModelCatalogProviderRows);
 
-async function build(
-  params: { config: OpenClawConfig; metadataSnapshot: PluginMetadataSnapshot },
-  observed: string[] = [],
-) {
-  return await buildPreparedModelCatalogSnapshot({
-    ...params,
-    agentDir: "/tmp/model-catalog-planning-test",
-    authCredentials: {},
-    readOnly: true,
-    models: observed.map((id) => ({ provider: "catalog-fixture", id, name: id })),
+beforeEach(() => {
+  config = { plugins: { enabled: false } };
+  augment.mockClear();
+  plan.mockReset();
+  normalize.mockReset();
+});
+
+it("plans manifest rows once without expanding entitlement", async () => {
+  const runtime = catalog("runtime", "allowed", "denied");
+  config.models = { catalogRefresh: { enabled: false } };
+  await runtime.scope(async () => {
+    plan.mockClear();
+    normalize.mockClear();
+    const snapshot = await runtime.build();
+    expect([snapshot.entries, snapshot.routeVariants]).toEqual([[], []]);
+    const firstRead = runtime.load();
+    expect(firstRead.map((row) => row.id)).toEqual(["allowed", "denied"]);
+    expect(runtime.load()).toBe(firstRead);
+    expect(augment).not.toHaveBeenCalled();
+    expect(planEffectiveModelCatalogRows).toHaveBeenCalledTimes(1);
+    expect(
+      normalize.mock.results.map(({ type, value }) => (type === "return" ? value.length : type)),
+    ).toEqual([2]);
   });
-}
+});
 
-describe("prepared catalog planning and declaration cache", () => {
-  beforeEach(() => {
-    augment.mockClear();
-    vi.mocked(planEffectiveModelCatalogRows).mockReset();
-    vi.mocked(normalizeModelCatalogProviderRows).mockReset();
-  });
-
-  it("plans manifest rows once without expanding entitlement", async () => {
-    const config: OpenClawConfig = {
-      plugins: { enabled: false },
-      models: { catalogRefresh: { enabled: false } },
-    };
-    const metadataSnapshot = fixture("runtime", "allowed", "denied");
-    const params = { config, metadataSnapshot };
-    await withPluginRuntimeGenerationScope({ metadataSnapshot }, async () => {
-      vi.mocked(planEffectiveModelCatalogRows).mockClear();
-      vi.mocked(normalizeModelCatalogProviderRows).mockClear();
-      const snapshot = await build(params);
-      for (const rows of [snapshot.entries, snapshot.routeVariants]) {
-        expect(rows.map((row) => row.id)).toEqual([]);
-        expect(rows.every((row) => row.provider === "catalog-fixture")).toBe(true);
-      }
-      const firstRead = loadManifestModelCatalog(params);
-      expect(firstRead.map((row) => row.id)).toEqual(["allowed", "denied"]);
-      expect(loadManifestModelCatalog(params)).toBe(firstRead);
-      expect(augment).not.toHaveBeenCalled();
-      expect(planEffectiveModelCatalogRows).toHaveBeenCalledTimes(1);
-      const normalizations = vi.mocked(normalizeModelCatalogProviderRows).mock.results;
-      expect(
-        normalizations.map(({ type, value }) => (type === "return" ? value.length : type)),
-      ).toEqual([2]);
+it("keeps the old declaration cache when replacement planning fails", async () => {
+  const initial = catalog("static", "initial");
+  const replacement = catalog("static", "replacement");
+  const planningError = new Error("catalog planning failed");
+  const originalRows = initial.load();
+  await replacement.scope(async () => {
+    plan.mockImplementationOnce(() => {
+      throw planningError;
     });
-  });
-
-  it("keeps the old declaration cache when replacement planning fails", async () => {
-    const config: OpenClawConfig = { plugins: { enabled: false } };
-    const initial = fixture("static", "initial");
-    const replacement = fixture("static", "replacement");
-    const planningError = new Error("catalog planning failed");
-    const originalRows = loadManifestModelCatalog({ config, metadataSnapshot: initial });
-    const params = { config, metadataSnapshot: replacement };
-    await withPluginRuntimeGenerationScope({ metadataSnapshot: replacement }, async () => {
-      vi.mocked(planEffectiveModelCatalogRows).mockImplementationOnce(() => {
-        throw planningError;
-      });
-      await expect(build(params)).rejects.toBe(planningError);
-      expect(loadManifestModelCatalog({ config, metadataSnapshot: initial })).toBe(originalRows);
-      const snapshot = await build(params);
-      expect(snapshot.entries.map((row) => row.id)).toEqual(["replacement"]);
-      const replacementRows = loadManifestModelCatalog(params);
-      expect(replacementRows.map((row) => row.id)).toEqual(["replacement"]);
-      expect(replacementRows).not.toBe(originalRows);
-      expect(loadManifestModelCatalog(params)).toBe(replacementRows);
-      expect(originalRows.map((row) => row.id)).toEqual(["initial"]);
-    });
+    await expect(replacement.build()).rejects.toBe(planningError);
+    expect(initial.load()).toBe(originalRows);
+    const snapshot = await replacement.build();
+    expect(snapshot.entries.map((row) => row.id)).toEqual(["replacement"]);
+    const replacementRows = replacement.load();
+    expect(replacementRows.map((row) => row.id)).toEqual(["replacement"]);
+    expect(replacementRows).not.toBe(originalRows);
+    expect(replacement.load()).toBe(replacementRows);
+    expect(originalRows.map((row) => row.id)).toEqual(["initial"]);
   });
 });

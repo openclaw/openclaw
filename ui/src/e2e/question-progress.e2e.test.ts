@@ -25,6 +25,12 @@ suite.define(() => {
     async ({ width, progress }) => {
       const context = await suite.newBrowserContext({ viewport: { width, height: 900 } });
       const page = await context.newPage();
+      const expectAtEnd = async () => {
+        await waitForChatScrollIdle(page);
+        await expect
+          .poll(() => chatThreadDistanceFromBottom(page))
+          .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      };
       const scenario = progressSubmitScenario(true);
       const gateway = await installMockGateway(page, {
         ...scenario,
@@ -77,10 +83,7 @@ suite.define(() => {
         }
         await page.locator(".chat-thread").hover({ position: { x: 4, y: 80 } });
         await page.mouse.wheel(0, 10_000);
-        await waitForChatScrollIdle(page);
-        await expect
-          .poll(() => chatThreadDistanceFromBottom(page))
-          .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+        await expectAtEnd();
 
         await requestQuestion("question-progress-follow");
         const panel = page.locator(".chat-question-panel");
@@ -92,10 +95,7 @@ suite.define(() => {
           mobile || progress === "absent" ? 0 : 1,
         );
         expect(await panel.evaluate((element) => document.activeElement === element)).toBe(true);
-        await waitForChatScrollIdle(page);
-        await expect
-          .poll(() => chatThreadDistanceFromBottom(page))
-          .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+        await expectAtEnd();
         await page.keyboard.press("3");
         expect(
           await panel.getByRole("radio", { name: /Summarize/ }).getAttribute("aria-checked"),
@@ -111,10 +111,7 @@ suite.define(() => {
           answers: { answers: { next_step: ["Summarize"] } },
         });
         await composer.waitFor();
-        await waitForChatScrollIdle(page);
-        await expect
-          .poll(() => chatThreadDistanceFromBottom(page))
-          .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+        await expectAtEnd();
         expect(await composer.inputValue()).toBe("Keep this draft.");
         expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
 

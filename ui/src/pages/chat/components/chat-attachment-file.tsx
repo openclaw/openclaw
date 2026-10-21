@@ -32,20 +32,69 @@ export function AttachmentRemove(props: {
   );
 }
 
-function AttachmentVideoPreview(props: { attachment: ChatAttachment }) {
+type VideoPreparation = { state: "offer" | "compressing" | "error"; progress?: number };
+
+function AttachmentVideoPreview(props: {
+  attachment: ChatAttachment;
+  preparation?: VideoPreparation;
+}) {
   const poster = createMemo(
     async () => (await getChatAttachmentVideoPosterUrl(props.attachment)) ?? undefined,
   );
   return (
     <span class="chat-attachment-file__preview" aria-hidden="true">
-      <Loading on={props.attachment} fallback={<Icon name="play" />}>
-        <Show when={poster()} fallback={<Icon name="play" />}>
-          <img src={poster()} alt="" />
-          <span class="chat-attachment-video__play">
-            <Icon name="play" />
-          </span>
-        </Show>
-      </Loading>
+      <Show
+        when={props.preparation}
+        fallback={
+          <Loading on={props.attachment} fallback={<Icon name="play" />}>
+            <Show when={poster()} fallback={<Icon name="play" />}>
+              <img src={poster()} alt="" />
+              <span class="chat-attachment-video__play">
+                <Icon name="play" />
+              </span>
+            </Show>
+          </Loading>
+        }
+      >
+        {(preparation) => (
+          <>
+            <span class="chat-attachment-video__placeholder">
+              {preparation().state === "compressing" ? (
+                <svg class="chat-attachment-compression-progress" viewBox="0 0 32 32">
+                  <circle
+                    class="chat-attachment-compression-progress__track"
+                    cx="16"
+                    cy="16"
+                    r="13"
+                  />
+                  <circle
+                    cx="16"
+                    cy="16"
+                    r="13"
+                    pathLength="100"
+                    stroke-dasharray={`${(preparation().progress ?? 0) * 100} 100`}
+                  />
+                </svg>
+              ) : (
+                <Icon name="play" />
+              )}
+            </span>
+            <Show when={preparation().state !== "compressing"}>
+              <span
+                class={[
+                  "chat-attachment-video__play",
+                  {
+                    "chat-attachment-video__play--warning": preparation().state === "offer",
+                    "chat-attachment-video__play--error": preparation().state === "error",
+                  },
+                ]}
+              >
+                <Icon name="alertTriangle" />
+              </span>
+            </Show>
+          </>
+        )}
+      </Show>
     </span>
   );
 }
@@ -54,7 +103,7 @@ export function CompactAttachmentFile(props: {
   attachment: ChatAttachment;
   label?: string;
   metadata?: JSX.Element;
-  preview?: JSX.Element;
+  videoPreparation?: VideoPreparation;
   onOpen?: () => void;
 }) {
   let openButton: HTMLButtonElement | undefined;
@@ -73,14 +122,16 @@ export function CompactAttachmentFile(props: {
         }
       }}
     >
-      {props.preview ??
-        (icon().family === "video" ? (
-          <AttachmentVideoPreview attachment={props.attachment} />
-        ) : (
-          <span class="chat-attachment-file__icon" data-family={icon().family}>
-            <Icon name={icon().family === "audio" ? "music" : "fileText"} />
-          </span>
-        ))}
+      {icon().family === "video" ? (
+        <AttachmentVideoPreview
+          attachment={props.attachment}
+          preparation={props.videoPreparation}
+        />
+      ) : (
+        <span class="chat-attachment-file__icon" data-family={icon().family}>
+          <Icon name={icon().family === "audio" ? "music" : "fileText"} />
+        </span>
+      )}
       <span class="chat-attachment-file__body">
         {props.onOpen ? (
           <button

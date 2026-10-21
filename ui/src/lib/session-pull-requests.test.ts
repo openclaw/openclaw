@@ -48,8 +48,47 @@ afterEach(() => {
 });
 
 describe("session pull request snapshot store", () => {
+  it("clears own imported PR facts after a keyless identity withdrawal", async () => {
+    const { harness, store, owner } = createStoreHarness();
+    harness.setSnapshot({
+      ...harness.gateway.snapshot,
+      hello: createHello(["operator.sessions.write"]),
+    });
+    const key = "agent:main:own-import";
+    store.watch(owner, [key], { foreground: true });
+    await flushSync();
+    expectSubscription(harness, [key]);
+    emitReadySnapshot(harness, key, [{ number: 7, state: "open" }]);
+    expect(store.get(key)?.pullRequests).toHaveLength(1);
+    harness.emit({ reason: "profile-identity" }, "sessions.changed");
+    expect(store.get(key)).toBeUndefined();
+    await flushSync();
+    expectSubscription(harness, [key], [key]);
+    store.unwatch(owner);
+  });
+  it("retires broad snapshots and passive reads when only own-session reads remain", async () => {
+    const { harness, store, owner } = createStoreHarness();
+    const key = "agent:main:own-import";
+    const passiveOwner = {};
+    store.watch(owner, [key], { foreground: true });
+    store.watch(passiveOwner, ["agent:main:other"], { passive: true });
+    await flushSync();
+    emitReadySnapshot(harness, key, [{ number: 42, state: "open" }]);
+    harness.setSnapshot({
+      ...harness.gateway.snapshot,
+      hello: createHello(["operator.sessions.write"]),
+    });
+    expect(store.get(key)).toBeUndefined();
+    await flushSync();
+    expectSubscription(harness, [key]);
+    emitReadySnapshot(harness, key, [{ number: 7, state: "open" }]);
+    expect(store.get(key)?.pullRequests).toEqual([{ number: 7, state: "open" }]);
+    store.unwatch(owner);
+    store.unwatch(passiveOwner);
+  });
+
   it.each([false, true])(
-    "requires operator.read and retires cached facts (cached: %s)",
+    "requires session reading and retires cached facts (cached: %s)",
     async (cached) => {
       vi.useFakeTimers();
       const { harness, store, owner } = createStoreHarness();
@@ -62,7 +101,7 @@ describe("session pull request snapshot store", () => {
       }
       harness.setSnapshot({
         ...harness.gateway.snapshot,
-        hello: createHello(["operator.sessions.read", "operator.sessions.write"]),
+        hello: createHello(["operator.approvals"]),
       });
       store.watch(owner, [key], { foreground: true });
       await flushSync();
@@ -206,6 +245,7 @@ describe("session pull request snapshot store", () => {
       branch?: typeof branch & { additions?: number };
       rateLimited: boolean;
       status: string;
+      discardPrevious?: true;
     };
     const snapshot = (fields: Partial<Snapshot> = {}): Snapshot => ({
       pullRequests: [],
@@ -228,6 +268,17 @@ describe("session pull request snapshot store", () => {
         repository?: Snapshot["repository"] | null;
       }>;
     }> = [
+      {
+        name: "withdrawn imported association without reviving previous facts",
+        initial: snapshot({ repository, pullRequests: open }),
+        updates: [
+          {
+            received: snapshot({ status: "unavailable", discardPrevious: true }),
+            expected: snapshot({ status: "unavailable", discardPrevious: true }),
+            repository: null,
+          },
+        ],
+      },
       {
         name: "populated unavailable facts and later branch enrichment",
         initial: snapshot({

@@ -1,7 +1,7 @@
 import "../subagents/registry/subagent-registry.mocks.shared.js";
 import assert from "node:assert/strict";
 import os from "node:os";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
@@ -29,7 +29,7 @@ import { observeRootWork } from "../subagents/registry/subagent-registry.browser
 import { resetSubagentRegistryForTests } from "../subagents/registry/subagent-registry.test-helpers.js";
 import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { testing as spawnTesting } from "../subagents/spawn/subagent-spawn.test-support.js";
-import { testing as swarmSchedulerTesting } from "../subagents/swarm/swarm-scheduler.test-support.js";
+import { observeSwarmSchedulerWork } from "../subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
@@ -79,15 +79,20 @@ async function testContextEngine(): Promise<ContextEngine> {
 const tempDirs = createTempDirTracker();
 const completionResolvers = new Map<string, () => void>();
 const collectorRunIds = new Set<string>();
+let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
+
+beforeEach(() => {
+  schedulerWork = observeSwarmSchedulerWork();
+});
 
 afterEach(async () => {
+  await schedulerWork.close();
   spawnTesting.setDepsForTest();
   await resetSubagentRegistryForTests({ persist: false });
   for (const runId of collectorRunIds) {
     consumeSwarmStructuredOutput(runId);
   }
   collectorRunIds.clear();
-  swarmSchedulerTesting.reset();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   clearRuntimeConfigSnapshot();
@@ -98,7 +103,6 @@ afterEach(async () => {
 
 it("spawns text and structured collectors with explicit collection guidance and drains them in completion order", async () => {
   await resetSubagentRegistryForTests({ persist: false });
-  swarmSchedulerTesting.reset();
   const settleRootWork = observeRootWork();
   const waitsStarted = createDeferred();
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-swarm-tools-"));

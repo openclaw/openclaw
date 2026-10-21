@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, createSignal, onCleanup } from "solid-js";
+import { For, createSignal, onSettled } from "solid-js";
 import {
   validateApprovalHistoryResult,
   type ApprovalHistoryResult,
@@ -198,7 +198,7 @@ export function ApprovalsPage() {
       applyGatewaySnapshot(snapshot);
     },
   });
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
     stopEvents?.();
     resetHistory(false);

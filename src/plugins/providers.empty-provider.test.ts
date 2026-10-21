@@ -6,149 +6,107 @@ import {
   resolveOwningPluginIdsForProviderRef,
 } from "./providers.js";
 
-describe("provider references without runtime declarations", () => {
-  it.each(["manifest", "snapshot"] as const)(
-    "requires an alias receiver while preserving CLI and model ownership through %s",
-    (source) => {
-      const emptyOwner = {
-        id: "empty-owner",
-        providers: [],
-        cliBackends: ["shared-ref"],
-        providerAuthAliases: { "shared-ref": "target" },
-        modelCatalog: { aliases: { "catalog-ref": { provider: "target" } } },
-        modelSupport: { modelPrefixes: ["synthetic-prefix-"] },
-        setup: { providers: [{ id: "target" }] },
-      };
-      const empty = createPluginMetadataSnapshotFixture({ plugins: [emptyOwner] });
-      const lookup =
-        source === "manifest"
-          ? { manifestRegistry: empty.manifestRegistry }
-          : { metadataSnapshot: empty };
+type Plugins = NonNullable<Parameters<typeof createPluginMetadataSnapshotFixture>[0]>["plugins"];
 
-      expect(
-        resolveOwningPluginIdsForProvider({ ...lookup, provider: "shared-ref" }),
-      ).toBeUndefined();
-      expect(
-        resolveOwningPluginIdsForProvider({ ...lookup, provider: "catalog-ref" }),
-      ).toBeUndefined();
-      expect(resolveOwningPluginIdsForProviderRef({ ...lookup, provider: " SHARED-REF " })).toEqual(
-        ["empty-owner"],
-      );
-      expect(
+describe.each(["manifest", "snapshot"] as const)("provider ownership through %s", (source) => {
+  function lookup(plugins: Plugins) {
+    const snapshot = createPluginMetadataSnapshotFixture({ plugins });
+    const scope =
+      source === "manifest"
+        ? { manifestRegistry: snapshot.manifestRegistry }
+        : { metadataSnapshot: snapshot };
+    return {
+      provider: (provider: string) => resolveOwningPluginIdsForProvider({ ...scope, provider }),
+      ref: (provider: string) => resolveOwningPluginIdsForProviderRef({ ...scope, provider }),
+      model: (model: string) =>
         resolveOwningPluginIdsForModelRef({
-          model: "synthetic-prefix-model",
-          manifestRegistry: empty.manifestRegistry,
+          model,
+          manifestRegistry: snapshot.manifestRegistry,
         }),
-      ).toEqual(["empty-owner"]);
+    };
+  }
 
-      const populated = createPluginMetadataSnapshotFixture({
-        plugins: [
-          emptyOwner,
-          {
-            id: "runtime-owner",
-            providers: ["TARGET"],
-            providerAuthAliases: { "shared-ref": "target" },
-            modelCatalog: { aliases: { "catalog-ref": { provider: "target" } } },
-          },
-        ],
-      });
-      const nextLookup =
-        source === "manifest"
-          ? { manifestRegistry: populated.manifestRegistry }
-          : { metadataSnapshot: populated };
-      for (const provider of [" SHARED-REF ", "catalog-ref"]) {
-        expect(resolveOwningPluginIdsForProvider({ ...nextLookup, provider })).toEqual([
-          "runtime-owner",
-        ]);
-        expect(resolveOwningPluginIdsForProviderRef({ ...nextLookup, provider })).toEqual([
-          "runtime-owner",
-        ]);
-      }
-    },
-  );
-});
+  it("requires an alias receiver while preserving CLI and model ownership", () => {
+    const owner = {
+      id: "empty-owner",
+      providers: [],
+      cliBackends: ["shared-ref"],
+      providerAuthAliases: { "shared-ref": "target" },
+      modelCatalog: { aliases: { "catalog-ref": { provider: "target" } } },
+      modelSupport: { modelPrefixes: ["synthetic-prefix-"] },
+      setup: { providers: [{ id: "target" }] },
+    };
+    const empty = lookup([owner]);
+    expect([empty.provider("shared-ref"), empty.provider("catalog-ref")]).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(empty.ref(" SHARED-REF ")).toEqual(["empty-owner"]);
+    expect(empty.model("synthetic-prefix-model")).toEqual(["empty-owner"]);
 
-describe("provider ownership registry lifetime", () => {
-  it.each(["manifest", "snapshot"] as const)(
-    "publishes sorted, deduplicated owners with provider precedence through %s",
-    (source) => {
-      const snapshot = createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "z-owner",
-            providers: ["TARGET", "target"],
-            cliBackends: ["cli-ref", "CLI-REF"],
-          },
-          { id: "a-owner", providers: ["target"], cliBackends: ["cli-ref"] },
-          { id: "cli-only", providers: [], cliBackends: ["target"] },
-        ],
-      });
-      const lookup =
-        source === "manifest"
-          ? { manifestRegistry: snapshot.manifestRegistry }
-          : { metadataSnapshot: snapshot };
-      const providerOwners = resolveOwningPluginIdsForProvider({ ...lookup, provider: "target" });
-      expect(providerOwners).toEqual(["a-owner", "z-owner"]);
-      for (const provider of [" TARGET ", "cli-ref"]) {
-        const owners = resolveOwningPluginIdsForProviderRef({ ...lookup, provider });
-        expect(owners).toEqual(["a-owner", "z-owner"]);
-        expect(Object.isFrozen(owners)).toBe(true);
-        expect(resolveOwningPluginIdsForProviderRef({ ...lookup, provider })).toBe(owners);
-      }
-      expect(resolveOwningPluginIdsForProviderRef({ ...lookup, provider: "target" })).toBe(
-        providerOwners,
-      );
-    },
-  );
+    const populated = lookup([
+      owner,
+      {
+        id: "runtime-owner",
+        providers: ["TARGET"],
+        providerAuthAliases: owner.providerAuthAliases,
+        modelCatalog: owner.modelCatalog,
+      },
+    ]);
+    for (const ref of [" SHARED-REF ", "catalog-ref"]) {
+      expect([populated.provider(ref), populated.ref(ref)]).toEqual([
+        ["runtime-owner"],
+        ["runtime-owner"],
+      ]);
+    }
+  });
 
-  it.each(["manifest", "snapshot"] as const)(
-    "shares immutable owner results and replaces them with the %s generation",
-    (source) => {
-      const makeSnapshot = (id: string) =>
-        createPluginMetadataSnapshotFixture({
-          plugins: [
-            {
-              id,
-              providers: ["TARGET", "target"],
-              providerAuthAliases: { " AUTH-REF ": " target ", orphan: "absent" },
-              modelCatalog: {
-                aliases: {
-                  "catalog-ref": { provider: "target" },
-                  "orphan-catalog": { provider: "absent" },
-                },
-              },
+  it("publishes sorted, deduplicated owners with provider precedence", () => {
+    const index = lookup([
+      { id: "z-owner", providers: ["TARGET", "target"], cliBackends: ["cli-ref", "CLI-REF"] },
+      { id: "a-owner", providers: ["target"], cliBackends: ["cli-ref"] },
+      { id: "cli-only", providers: [], cliBackends: ["target"] },
+    ]);
+    const providerOwners = index.provider("target");
+    expect(providerOwners).toEqual(["a-owner", "z-owner"]);
+    for (const ref of [" TARGET ", "cli-ref"]) {
+      const owners = index.ref(ref);
+      expect(owners).toEqual(["a-owner", "z-owner"]);
+      expect(Object.isFrozen(owners)).toBe(true);
+      expect(index.ref(ref)).toBe(owners);
+    }
+    expect(index.ref("target")).toBe(providerOwners);
+  });
+
+  it("shares immutable owner results and replaces them with the generation", () => {
+    const generation = (id: string) =>
+      lookup([
+        {
+          id,
+          providers: ["TARGET", "target"],
+          providerAuthAliases: { " AUTH-REF ": " target ", orphan: "absent" },
+          modelCatalog: {
+            aliases: {
+              "catalog-ref": { provider: "target" },
+              "orphan-catalog": { provider: "absent" },
             },
-            { id: "cli-owner", providers: [], setup: { cliBackends: ["auth-ref", "cli-ref"] } },
-          ],
-        });
-      const first = makeSnapshot("first-owner");
-      const lookup = (snapshot: typeof first, provider: string) =>
-        resolveOwningPluginIdsForProviderRef({
-          provider,
-          ...(source === "manifest"
-            ? { manifestRegistry: snapshot.manifestRegistry }
-            : { metadataSnapshot: snapshot }),
-        });
-      for (const ref of ["target", "auth-ref", "catalog-ref", "cli-ref"]) {
-        const owners = lookup(first, ref);
-        expect(owners).toEqual([ref === "cli-ref" ? "cli-owner" : "first-owner"]);
-        expect(lookup(first, ` ${ref.toUpperCase()} `)).toBe(owners);
-        expect(Object.isFrozen(owners)).toBe(true);
-        expect(
-          resolveOwningPluginIdsForModelRef({
-            model: `${ref}/synthetic-model`,
-            manifestRegistry: first.manifestRegistry,
-          }),
-        ).toBe(owners);
-      }
-      for (const ref of ["orphan", "orphan-catalog", "missing"]) {
-        expect(lookup(first, ref)).toBeUndefined();
-      }
-      const replacement = makeSnapshot("replacement-owner");
-      expect(lookup(replacement, "target")).toEqual(["replacement-owner"]);
-      expect(lookup(first, "target")).toEqual(["first-owner"]);
-      const empty = createPluginMetadataSnapshotFixture({ plugins: [] });
-      expect(lookup(empty, "target")).toBeUndefined();
-    },
-  );
+          },
+        },
+        { id: "cli-owner", providers: [], setup: { cliBackends: ["auth-ref", "cli-ref"] } },
+      ]);
+    const first = generation("first-owner");
+    for (const ref of ["target", "auth-ref", "catalog-ref", "cli-ref"]) {
+      const owners = first.ref(ref);
+      expect(owners).toEqual([ref === "cli-ref" ? "cli-owner" : "first-owner"]);
+      expect(first.ref(` ${ref.toUpperCase()} `)).toBe(owners);
+      expect(Object.isFrozen(owners)).toBe(true);
+      expect(first.model(`${ref}/synthetic-model`)).toBe(owners);
+    }
+    for (const ref of ["orphan", "orphan-catalog", "missing"]) {
+      expect(first.ref(ref)).toBeUndefined();
+    }
+    expect(generation("replacement-owner").ref("target")).toEqual(["replacement-owner"]);
+    expect(first.ref("target")).toEqual(["first-owner"]);
+    expect(lookup([]).ref("target")).toBeUndefined();
+  });
 });

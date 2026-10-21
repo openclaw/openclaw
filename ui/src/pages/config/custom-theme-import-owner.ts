@@ -2,13 +2,12 @@ import type { ImportedCustomTheme } from "../../app/custom-theme.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import type { RuntimeConfigState } from "../../lib/config/config-state-model.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 
 type CustomThemeImportViewState = {
   url: string;
-  busy: boolean;
   message: { kind: "success" | "error"; text: string } | null;
   expanded: boolean;
+  completion?: Promise<void>;
 };
 
 type ImportMessages = {
@@ -18,11 +17,10 @@ type ImportMessages = {
 
 /** Keeps delayed imports scoped to their page and the latest import URL. */
 export class CustomThemeImportOwner {
-  private currentImport: object | null = null;
+  private currentImport: { resolve: () => void } | null = null;
   private gatewayScope = "";
   private state: CustomThemeImportViewState = {
     url: "",
-    busy: false,
     message: null,
     expanded: false,
   };
@@ -31,6 +29,10 @@ export class CustomThemeImportOwner {
 
   get snapshot(): CustomThemeImportViewState {
     return this.state;
+  }
+
+  get completedImport(): Promise<void> | undefined {
+    return this.currentImport ? undefined : this.state.completion;
   }
 
   connect(scope: string): void {
@@ -56,7 +58,7 @@ export class CustomThemeImportOwner {
   }
 
   setUrl(url: string): void {
-    if (url !== this.state.url) {
+    if (url !== this.state.url || (!this.currentImport && this.state.completion)) {
       this.retireImport();
     }
     this.update({
@@ -66,64 +68,66 @@ export class CustomThemeImportOwner {
   }
 
   retireForConfigMutation(message: string): void {
-    if (!this.state.busy) {
+    if (!this.currentImport) {
       return;
     }
     this.retireImport();
     this.update({ message: { kind: "error", text: message } });
   }
 
-  async import(params: {
+  import(params: {
     config: RuntimeConfigState;
     hasCustomTheme: boolean;
     readTheme: () => ThemeName;
     load: (url: string) => Promise<ImportedCustomTheme>;
     apply: (theme: ImportedCustomTheme, activate: boolean) => void;
     messages: ImportMessages;
-  }): Promise<void> {
+  }): Promise<void> | undefined {
     const blockedReason = this.blockedReason(params.config);
     if (blockedReason) {
       this.update({
         expanded: true,
+        completion: undefined,
         message: { kind: "error", text: params.messages.blocked(blockedReason) },
       });
-      return;
+      return undefined;
     }
-    const ticket = {};
+    const ticket = Promise.withResolvers<void>();
     const startingTheme = params.readTheme();
     this.currentImport = ticket;
     const importUrl = this.state.url;
-    this.update({ expanded: true, busy: true, message: null });
-    try {
-      const theme = await params.load(importUrl);
-      if (this.currentImport !== ticket) {
-        return;
+    const completion = (async () => {
+      try {
+        const theme = await params.load(importUrl);
+        if (this.currentImport !== ticket) {
+          return;
+        }
+        // Equal-valued server selection edges are best effort; the displayed choice wins.
+        const currentTheme = params.readTheme();
+        params.apply(
+          theme,
+          !params.hasCustomTheme && (currentTheme === startingTheme || currentTheme === "custom"),
+        );
+        this.update({
+          url: "",
+          message: { kind: "success", text: params.messages.imported(theme.label) },
+        });
+      } catch (error) {
+        if (this.currentImport !== ticket) {
+          return;
+        }
+        throw error;
+      } finally {
+        if (this.currentImport === ticket) {
+          this.currentImport = null;
+          this.update({});
+        }
       }
-      // Equal-valued server selection edges are best effort; the displayed choice wins.
-      const currentTheme = params.readTheme();
-      params.apply(
-        theme,
-        !params.hasCustomTheme && (currentTheme === startingTheme || currentTheme === "custom"),
-      );
-      this.update({
-        url: "",
-        message: { kind: "success", text: params.messages.imported(theme.label) },
-      });
-    } catch (error) {
-      if (this.currentImport !== ticket) {
-        return;
-      }
-      this.update({
-        message: {
-          kind: "error",
-          text: formatUiError(error),
-        },
-      });
-    } finally {
-      if (this.currentImport === ticket) {
-        this.update({ busy: false });
-      }
-    }
+    })();
+    // Retired transports may settle later; release their presentation immediately.
+    const admitted = Promise.race([completion, ticket.promise]);
+    this.update({ expanded: true, message: null, completion: admitted });
+    return admitted;
   }
 
   clear(params: { apply: () => void; message: string }): void {
@@ -133,9 +137,10 @@ export class CustomThemeImportOwner {
   }
 
   retireImport(): void {
-    this.currentImport = null;
-    if (this.state.busy) {
-      this.update({ busy: false });
+    if (this.currentImport || this.state.completion) {
+      this.currentImport?.resolve();
+      this.currentImport = null;
+      this.update({ completion: undefined });
     }
   }
 

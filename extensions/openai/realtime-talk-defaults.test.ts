@@ -1,4 +1,5 @@
 import { resolveConfiguredRealtimeVoiceProviderAsync } from "openclaw/plugin-sdk/realtime-voice";
+import type { InternalRealtimeVoiceBrowserSessionCreateRequest } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { buildOpenAIRealtimeVoiceProvider as createProvider } from "./realtime-voice-provider-factory.js";
@@ -51,30 +52,12 @@ describe("OpenAI Talk account defaults", () => {
   });
 
   it.each([
-    {
-      account: "Platform profile",
-      apiProfile: true,
-      oauth: false,
-      configuredKey: false,
-      model: "gpt-live-1",
-    },
-    {
-      account: "ChatGPT profile",
-      apiProfile: false,
-      oauth: true,
-      configuredKey: false,
-      model: "gpt-live-1-codex",
-    },
-    {
-      account: "configured Platform key with ChatGPT",
-      apiProfile: false,
-      oauth: true,
-      configuredKey: true,
-      model: "gpt-live-1",
-    },
-  ])(
-    "starts audio-only browser Talk with the $account default and matching auth",
-    async ({ apiProfile, oauth, configuredKey, model }) => {
+    ["Platform profile", true, false, false, "gpt-live-1"],
+    ["ChatGPT profile", false, true, false, "gpt-live-1-codex"],
+    ["configured Platform key with ChatGPT", false, true, true, "gpt-live-1"],
+  ] as const)(
+    "starts browser Talk with the %s default and matching auth",
+    async (_account, apiProfile, oauth, configuredKey, model) => {
       const cfg = {
         agents: { entries: { "voice-agent": { agentDir: "/tmp/openclaw-voice-agent" } } },
       };
@@ -110,19 +93,12 @@ describe("OpenAI Talk account defaults", () => {
       });
 
       expect(providerConfig.model).toBe(model);
-      expect(
-        await readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilitiesAsync(
-          {
-            cfg,
-            agentId: "voice-agent",
-            providerConfig,
-          },
-        ),
-      ).toMatchObject({ handlesAgentConsult: true, supportsToolCalls: false });
-      const request = {
-        cfg,
-        providerConfig,
-        agentId: "voice-agent",
+      const sessionContext = { cfg, agentId: "voice-agent", providerConfig };
+      const api = readInternalRealtimeVoiceProviderApi(provider);
+      const capabilities = await api.resolveBrowserSessionCapabilitiesAsync(sessionContext);
+      expect(capabilities).toMatchObject({ handlesAgentConsult: true, supportsToolCalls: false });
+      const request: InternalRealtimeVoiceBrowserSessionCreateRequest = {
+        ...sessionContext,
         workspaceDir: "/tmp/openclaw-voice-workspace",
         initialItems: [],
         runAgentConsult: async () => ({ text: "Done" }),
@@ -138,35 +114,17 @@ describe("OpenAI Talk account defaults", () => {
   );
 
   it.each([
-    {
-      name: "manual replies",
-      context: { autoRespondToAudio: false },
-      rawConfig: {},
-      model: "gpt-realtime-2.1",
-    },
-    {
-      name: "video",
-      context: { requiredCapabilities: { supportsVideoFrames: true } },
-      rawConfig: {},
-      model: "gpt-realtime-2.1",
-    },
-    {
-      name: "Azure",
-      context: {},
-      rawConfig: { azureDeployment: "voice-deployment" },
-      model: "gpt-realtime-2.1",
-    },
-  ])("preserves $name when resolving Talk defaults", async ({ context, rawConfig, model }) => {
+    ["manual replies", { autoRespondToAudio: false }, {}],
+    ["video", { requiredCapabilities: { supportsVideoFrames: true } }, {}],
+    ["Azure", {}, { azureDeployment: "voice-deployment" }],
+  ] as const)("preserves %s when resolving Talk defaults", async (_name, context, rawConfig) => {
     const provider = buildOpenAIRealtimeVoiceProvider();
-    expect(
-      (
-        await provider.resolveConfigAsync?.({
-          cfg: {},
-          rawConfig: { apiKey: "test-api-key-platform", ...rawConfig },
-          surface: "gateway-relay",
-          ...context,
-        })
-      )?.model,
-    ).toBe(model);
+    const config = await provider.resolveConfigAsync?.({
+      cfg: {},
+      rawConfig: { apiKey: "test-api-key-platform", ...rawConfig },
+      surface: "gateway-relay",
+      ...context,
+    });
+    expect(config?.model).toBe("gpt-realtime-2.1");
   });
 });

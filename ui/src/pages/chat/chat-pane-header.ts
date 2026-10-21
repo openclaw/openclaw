@@ -11,6 +11,7 @@ import { personActivityRouting } from "../../components/person-activity-link.ts"
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   projectPresenceViewers,
@@ -50,8 +51,8 @@ import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { projectSubagentStatus } from "./chat-subagent-wait.ts";
 import { isChatRunWorking } from "./components/chat-composer.tsx";
 import type { ChatDetails, ChatDetailsViewProps } from "./components/chat-details.tsx";
-import type { HeaderPanelAction } from "./components/chat-header-panel-actions.tsx";
 import "./components/chat-header-session-menu.ts";
+import type { HeaderPanelAction } from "./components/chat-header-panel-actions.tsx";
 import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
@@ -68,7 +69,14 @@ import type {
 } from "./components/chat-pane-header.types.ts";
 import { canManageChatSessionSharing } from "./components/chat-session-sharing.solid.tsx";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
-import { isSidebarSlotVisible, type SidebarLayout, type SidebarSlotId } from "./sidebar-layout.ts";
+import {
+  isSidebarSlotVisible,
+  sidebarMainPanel,
+  type SidebarLayout,
+  type SidebarSlotId,
+} from "./sidebar-layout.ts";
+
+registerChatSessionEnglish();
 
 type PaneControls = Pick<
   ReturnType<typeof createChatPaneRails>,
@@ -221,7 +229,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         })
       : null;
     const renameDisabledReason = !renameAccess
-      ? t("sessionsView.actionRequiresConnection")
+      ? sharingSnapshot.phase !== "connected"
+        ? t("sessionsView.actionRequiresConnection")
+        : undefined
       : renameAccess.allowed
         ? undefined
         : renameAccess.reason;
@@ -550,15 +560,18 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onToggleSidePanel: toggleSidePanel,
       onCloseSidePanel: (slot) => panelControls?.closePanelSlot(slot),
       // Desktop retains the native Details trigger even when a panel occupies main.
-      // Keep the layout's external-trigger signal below for the Show chat action.
+      // Other main panels retain their separate Show chat action below.
       detailsControl:
         detailsControl && this.sessionPresentation === "desktop"
           ? { ...detailsControl, externalTrigger: false }
           : detailsControl,
       onOpenDetails: detailsControl ? this.onHeaderDetails : undefined,
       conversationVisible: detailsControl?.conversationVisible,
+      // Dashboard reveals its retained conversation through the frame's Panels control.
       onToggleConversation:
-        currentLayout && detailsControl?.externalTrigger
+        currentLayout &&
+        detailsControl?.externalTrigger &&
+        sidebarMainPanel(currentLayout)?.slot !== "dashboard"
           ? () => this.toggleConversationPanel(currentLayout)
           : undefined,
       runAction: subagentStop,

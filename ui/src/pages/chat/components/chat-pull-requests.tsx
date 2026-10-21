@@ -1,9 +1,10 @@
-import { Errored, Loading, Show, lazy, onCleanup, useContext } from "solid-js";
+import { Errored, Loading, Show, lazy, onSettled, useContext } from "solid-js";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
 } from "../../../app/stale-chunk-reload.ts";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
@@ -21,7 +22,7 @@ export function ChatPullRequests(props: ChatPullRequestsProps) {
       <Errored
         fallback={(error, reset) => {
           let active = true;
-          onCleanup(() => {
+          onSettled(() => () => {
             active = false;
           });
           const retry = () => {
@@ -65,8 +66,8 @@ export function ChatPullRequests(props: ChatPullRequestsProps) {
       >
         <Loading
           fallback={
-            <div class="chat-prs" role="status">
-              {t("common.loading")}
+            <div class="chat-prs">
+              <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
             </div>
           }
         >

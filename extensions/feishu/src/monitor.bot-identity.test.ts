@@ -50,7 +50,6 @@ describe("Feishu bot identity recovery", () => {
       .mockResolvedValueOnce({ botOpenId: "ou_cached", source: "cache" })
       .mockResolvedValueOnce({
         botOpenId: "ou_provider",
-        botName: "OpenClaw QA",
         source: "provider",
       });
     const runtime = createRuntimeSpies() satisfies RuntimeEnv;

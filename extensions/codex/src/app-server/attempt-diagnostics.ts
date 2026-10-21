@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
   type DiagnosticModelCallContent,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { CodexUsageProjection } from "./event-projector-usage.js";
 
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
@@ -20,11 +20,7 @@ export function utf8JsonByteLength(value: unknown): number | undefined {
 }
 
 function fingerprintCodexLogValue(namespace: string, value: string): string {
-  const hash = createHash("sha256");
-  hash.update(namespace);
-  hash.update("\0");
-  hash.update(value);
-  return `sha256:${hash.digest("hex").slice(0, 16)}`;
+  return `sha256:${sha256Hex(`${namespace}\0${value}`).slice(0, 16)}`;
 }
 
 type CodexModelCallFailureKind = "aborted" | "timeout";
@@ -44,10 +40,8 @@ export function createCodexModelCallDiagnosticEmitter(params: {
   tools: readonly CodexModelCallDiagnosticTool[];
   buildInputMessages: () => unknown;
   buildSystemPrompt: () => string | undefined;
-  now?: () => number;
   onErrorDiagnostic?: (error: unknown) => void;
 }) {
-  const now = params.now ?? (() => Date.now());
   const toolDefinitions = params.capture.toolDefinitions
     ? params.tools.map((tool) => ({
         name: tool.name,
@@ -55,7 +49,7 @@ export function createCodexModelCallDiagnosticEmitter(params: {
         parameters: tool.inputSchema ?? tool.parameters,
       }))
     : undefined;
-  let startedAt = now();
+  let startedAt = Date.now();
   let started = false;
   let terminalEmitted = false;
   let requestPayloadBytes: number | undefined;
@@ -82,7 +76,7 @@ export function createCodexModelCallDiagnosticEmitter(params: {
     terminalEmitted = true;
     const event = {
       ...params.baseFields,
-      durationMs: Math.max(0, now() - startedAt),
+      durationMs: Math.max(0, Date.now() - startedAt),
       ...fields,
       ...(requestPayloadBytes !== undefined ? { requestPayloadBytes } : {}),
     };
@@ -100,7 +94,7 @@ export function createCodexModelCallDiagnosticEmitter(params: {
       requestPayloadBytes = bytes;
     },
     emitStarted(): void {
-      startedAt = now();
+      startedAt = Date.now();
       started = true;
       emitTrustedDiagnosticEventWithPrivateData(
         {
