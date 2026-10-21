@@ -91,7 +91,9 @@ function afterEffect(
   observe: (...args: Parameters<RecordEffect>) => void,
 ) {
   const wrap =
-    (record: (...args: Parameters<RecordEffect>) => void | Promise<void>): RecordEffect =>
+    (
+      record: (...args: Parameters<RecordEffect>) => void | Promise<void>,
+    ): ((...args: Parameters<RecordEffect>) => Promise<void>) =>
     async (effect, observed) => {
       await record(effect, observed);
       observe(effect, observed);
