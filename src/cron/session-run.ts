@@ -122,7 +122,10 @@ export async function runCronSessionTurn(
         return commandBody;
       },
       executionIdentity: params.executionIdentity,
-      deliveryAttemptFence: params.deliveryAttemptFence,
+      deliveryAttemptFence:
+        requestedChat && route && params.deliveryAttemptFence
+          ? { ...params.deliveryAttemptFence, beforeAttempt: beforeDeliver }
+          : params.deliveryAttemptFence,
       assertCurrent,
       beforeDeliver,
       sourceDelivery: delivery.sourceDelivery,

@@ -19,11 +19,15 @@ import {
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { buildEmbeddedAttemptToolRunContext } from "../../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
+import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
+import { createMessageTool } from "../../agents/tools/message-tool-execution.js";
 import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/outbound.types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
@@ -34,9 +38,18 @@ import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { captureCronInferenceBinding } from "../../cron/inference-binding.runtime.js";
 import { runCronSessionTurn } from "../../cron/session-run.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as routedReplies from "./route-reply.js";
@@ -706,6 +719,178 @@ it("rebuilds queued Gmail content under the readmitted external-content policy",
     },
   );
 });
+
+it.for(["changed", "unchanged", "no-delivery"] as const)(
+  "revalidates the scheduled message destination with a %s implicit route",
+  async (scenario, { signal }) => {
+    await withOpenClawTestState(
+      { label: "scheduled-message-route", env: { OPENCLAW_TEST_FAST: "0" } },
+      async (state) => {
+        const config = completionConfig(state.workspaceDir);
+        setRuntimeConfigSnapshot(config);
+        await state.writeConfig(config);
+        openOpenClawStateDatabase();
+        const registry = captureActivePluginRegistrySnapshot();
+        const currentRegistry = expectDefined(registry.activeRegistry, "active plugin registry");
+        const sendText = vi
+          .fn<NonNullable<ChannelOutboundAdapter["sendText"]>>()
+          .mockResolvedValue({
+            channel: "telegram",
+            messageId: "scheduled-message",
+          });
+        const channels = createTestRegistry([
+          {
+            pluginId: "telegram",
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({ id: "telegram" }),
+              messaging: {
+                normalizeTarget: (raw) => raw,
+                targetResolver: { looksLikeId: (raw) => /^-10000[12]$/.test(raw) },
+              },
+              actions: { describeMessageTool: () => ({ actions: ["send"] }) },
+              outbound: { deliveryMode: "direct", sendText },
+            } satisfies ChannelPlugin,
+          },
+        ]);
+        setActivePluginRegistry({
+          ...currentRegistry,
+          channels: [
+            ...currentRegistry.channels.filter((entry) => entry.plugin.id !== "telegram"),
+            ...channels.channels,
+          ],
+          channelSetups: [
+            ...currentRegistry.channelSetups.filter((entry) => entry.plugin.id !== "telegram"),
+            ...channels.channelSetups,
+          ],
+        });
+        const scope = { agentId: "main", sessionKey: "agent:main:scheduled-message-route" };
+        const route = { channel: "telegram", to: "-100001", accountId: "default" };
+        await replaceSessionEntry(scope, {
+          sessionId: "scheduled-message-route",
+          lifecycleRevision: "original",
+          permissionMode: "full",
+          delivery: normalizeSessionDeliveryState({ context: route }),
+          updatedAt: Date.now(),
+        });
+        const firstStarted = createDeferred();
+        const releaseFirst = createDeferred();
+        const queued = createDeferred();
+        let nativeCalls = 0;
+        let messageError: unknown;
+        runEmbeddedAgentMock
+          .mockReset()
+          .mockImplementation(async (params: RunEmbeddedAgentInternalParams) => {
+            await startRun(params);
+            if (++nativeCalls === 1) {
+              firstStarted.resolve();
+              await releaseFirst.promise;
+            } else {
+              const tool = createMessageTool({
+                config: params.config,
+                agentId: params.agentId,
+                runId: params.runId,
+                sessionId: params.sessionId,
+                agentSessionKey: params.sessionKey,
+                agentAccountId: route.accountId,
+                currentChannelProvider: route.channel,
+                messageActionTurnCapability: params.messageActionTurnCapability,
+                requireExplicitTarget: true,
+              });
+              try {
+                await tool.execute("scheduled-send", {
+                  action: "send",
+                  channel: route.channel,
+                  target: route.to,
+                  message: "Scheduled report",
+                });
+              } catch (error) {
+                messageError = error;
+              }
+            }
+            return {
+              payloads: [{ text: "NO_REPLY" }],
+              meta: { durationMs: 1 },
+              didSendViaMessagingTool: sendText.mock.calls.length > 0,
+              messagingToolSentTargets: sendText.mock.calls.map(([sent]) => ({
+                tool: "message",
+                provider: "telegram",
+                to: sent.to,
+                accountId: sent.accountId ?? undefined,
+              })),
+            };
+          });
+        const first = enqueueSessionEventForHost("First admitted work", {
+          ...scope,
+          source: "task",
+          expectedTarget: await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey),
+          abortSignal: signal,
+          deliver: false,
+        });
+        let scheduled: ReturnType<typeof runCronSessionTurn> | undefined;
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              firstStarted.promise,
+              first.settled,
+              "first turn never started",
+            ),
+            signal,
+          );
+          scheduled = runCronSessionTurn({
+            ...scope,
+            cfg: config,
+            job: makeCronJob({
+              sessionTarget: `session:${scope.sessionKey}`,
+              delivery: { mode: scenario === "no-delivery" ? "none" : "announce" },
+            }),
+            text: "Send the scheduled report",
+            admissionSource: "operator-schedule",
+            deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent() {} },
+            abortSignal: signal,
+            assertCurrent() {},
+            onLaneWait(info) {
+              if (info?.waiting) {
+                queued.resolve();
+              }
+            },
+          });
+          await withinTest(
+            awaitGateBeforeSettlement(queued.promise, scheduled, "scheduled turn never queued"),
+            signal,
+          );
+          if (scenario !== "unchanged") {
+            await patchSessionEntryCore(scope, () => ({
+              delivery: normalizeSessionDeliveryState({ context: { ...route, to: "-100002" } }),
+            }));
+          }
+          releaseFirst.resolve();
+          await first.settled;
+          const outcome = await scheduled;
+          expect(nativeCalls).toBe(2);
+          if (scenario === "changed") {
+            expect(outcome.delivered).toBe(false);
+            expect(sendText).not.toHaveBeenCalled();
+            expect(String(messageError)).toContain("Automation delivery policy or route changed");
+          } else {
+            expect(messageError).toBeUndefined();
+            expect(sendText).toHaveBeenCalledOnce();
+            expect(sendText.mock.calls[0]?.[0].to).toBe(route.to);
+            if (scenario === "unchanged") {
+              expect(outcome.delivered).toBe(true);
+            }
+          }
+        } finally {
+          releaseFirst.resolve();
+          await Promise.allSettled([first.settled, scheduled]);
+          await drainGlobalSingletonLifecycleState("restart");
+          resetSystemEventsForTest();
+          restoreActivePluginRegistrySnapshot(registry);
+        }
+      },
+    );
+  },
+);
 
 it.for(["transport", "agent", "context-overflow"] as const)(
   "records a scheduled %s failure with its cause and available usage",
