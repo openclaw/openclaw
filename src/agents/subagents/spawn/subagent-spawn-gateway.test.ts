@@ -29,6 +29,18 @@ vi.mock("../../tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 
 afterEach(() => spawnTesting.setDepsForTest());
 
+function installSocket(runId: string) {
+  const callGateway = vi.fn<() => void>();
+  spawnTesting.setDepsForTest({
+    callGateway: async <T>() => {
+      callGateway();
+      return { runId, status: "accepted" } as T;
+    },
+  });
+  return callGateway;
+}
+const request = { method: "agent", params: { message: "start", idempotencyKey: "child" } };
+
 describe("native subagent Gateway transport ownership", () => {
   it("caps Gateway timer delays without shortening semantic run durations", () => {
     const thirtyDaysSeconds = 30 * 24 * 60 * 60;
@@ -40,34 +52,24 @@ describe("native subagent Gateway transport ownership", () => {
   it.each(["caller", "captured", "scoped"])(
     "rejects a retired %s binding without opening a socket",
     async (binding) => {
-      const callGateway = vi.fn<() => void>();
-      spawnTesting.setDepsForTest({
-        callGateway: async <T>() => {
-          callGateway();
-          return { runId: "wrong-gateway", status: "accepted" } as T;
-        },
-      });
+      const callGateway = installSocket("wrong-gateway");
       const resolver = () => undefined;
-      const launch = () =>
-        callNativeSubagentGateway(
-          {
-            method: "agent",
-            params: { message: "must not launch", idempotencyKey: "closed-owner" },
-          },
-          { gatewayContextResolver: binding === "captured" ? resolver : undefined },
-        );
+      const dispatch = () =>
+        callNativeSubagentGateway(request, {
+          gatewayContextResolver: binding === "captured" ? resolver : undefined,
+        });
       const result =
         binding === "caller"
           ? withGatewayToolCallerIdentity(
               { agentId: "main", sessionKey: "agent:main:main", gatewayContextResolver: resolver },
-              launch,
+              dispatch,
             )
           : binding === "scoped"
             ? withPluginRuntimeGatewayRequestScope(
                 { resolveGatewayContext: resolver, isWebchatConnect: () => false },
-                launch,
+                dispatch,
               )
-            : launch();
+            : dispatch();
 
       await expect(result).rejects.toThrow("instance binding");
       expect(callGateway).not.toHaveBeenCalled();
@@ -93,31 +95,15 @@ describe("native subagent Gateway transport ownership", () => {
       },
     });
     await expect(
-      callNativeSubagentGateway({
-        method: "agent",
-        params: { message: "start", idempotencyKey: "accepted-child" },
-        assertDispatchCurrent,
-      }),
+      callNativeSubagentGateway({ ...request, assertDispatchCurrent }),
     ).resolves.toMatchObject({
       response: { runId: "accepted-child" },
     });
   });
 
   it("keeps socket dispatch available when no Gateway owner was bound", async () => {
-    const callGateway = vi.fn<() => void>();
-    spawnTesting.setDepsForTest({
-      callGateway: async <T>() => {
-        callGateway();
-        return { runId: "remote-run", status: "accepted" } as T;
-      },
-    });
-
-    await expect(
-      callNativeSubagentGateway({
-        method: "agent",
-        params: { message: "standalone", idempotencyKey: "remote-run" },
-      }),
-    ).resolves.toEqual({
+    const callGateway = installSocket("remote-run");
+    await expect(callNativeSubagentGateway(request)).resolves.toEqual({
       response: { runId: "remote-run", status: "accepted" },
       registrationRequired: false,
     });

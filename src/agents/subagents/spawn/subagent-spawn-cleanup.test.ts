@@ -19,58 +19,65 @@ function sessionChangedError(): Error {
   });
 }
 
-describe("subagent spawn cleanup identity", () => {
-  it("retains its physical RPC source across cleanup and refuses a same-ID successor", async () => {
-    const childSessionKey = "agent:main:subagent:cleanup-child";
-    const runId = "cleanup-run";
-    const response = createDeferredCore<{ aborted: boolean; runIds: string[] }>();
-    const dispatchSessionMethod = vi.fn(() => response.promise);
-    const context = Object.assign({} as GatewayRequestContext, {
-      recoveryRuntime: { dispatchSessionMethod },
-    });
-    const target = captureSessionTarget({
-      storeScope: "/synthetic/spawn-cleanup.db",
-      sessionKey: childSessionKey,
-      incarnation: "child-session",
-    });
-    const resolveGatewayContext = () => context;
-    const register = () =>
-      withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
-        registerChatAbortController({
-          target,
-          runId,
-          sessionId: "child-session",
-          sessionKey: childSessionKey,
-          timeoutMs: 60_000,
-        }),
-      );
-    const original = register();
-    const foreign = withPluginRuntimeGatewayContextResolver(undefined, () =>
+const childSessionKey = "agent:main:subagent:child";
+const runId = "gateway-run";
+const identity = { expectedSessionId: "session-id", expectedLifecycleRevision: "session-revision" };
+
+function terminate(options: Partial<Parameters<typeof terminateAcceptedCollectorRun>[0]>) {
+  return terminateAcceptedCollectorRun({
+    childSessionKey,
+    gatewayRunId: runId,
+    ...options,
+  });
+}
+
+function setupCleanup(dispatchSessionMethod: () => Promise<unknown>) {
+  const context = Object.assign({} as GatewayRequestContext, {
+    recoveryRuntime: { dispatchSessionMethod },
+  });
+  const target = captureSessionTarget({
+    storeScope: "/synthetic/spawn-cleanup.db",
+    sessionKey: childSessionKey,
+    incarnation: identity.expectedSessionId,
+  });
+  const resolveGatewayContext = () => context;
+  const register = (foreign = false) =>
+    withPluginRuntimeGatewayContextResolver(foreign ? undefined : resolveGatewayContext, () =>
       registerChatAbortController({
-        target: captureSessionTarget({ ...target, storeScope: "/synthetic/foreign-cleanup.db" }),
+        target: foreign
+          ? captureSessionTarget({ ...target, storeScope: "/synthetic/foreign-cleanup.db" })
+          : target,
         runId,
-        sessionId: "child-session",
+        sessionId: identity.expectedSessionId,
         sessionKey: childSessionKey,
         timeoutMs: 60_000,
       }),
     );
-    const cleanup = bindSubagentSpawnCleanup({
-      childSessionKey,
-      target,
-      resolveGatewayContext,
-      isCurrent: () => true,
-      canAbortAcceptedRun: () => true,
-      getSessionIdentity: () => ({
-        expectedSessionId: "child-session",
-        expectedLifecycleRevision: "revision",
-      }),
-    });
+  const cleanup = bindSubagentSpawnCleanup({
+    childSessionKey,
+    target,
+    resolveGatewayContext,
+    isCurrent: () => true,
+    canAbortAcceptedRun: () => true,
+    getSessionIdentity: () => identity,
+  });
+  return { cleanup, register };
+}
+
+describe("subagent spawn cleanup identity", () => {
+  it("retains its physical RPC source across cleanup and refuses a same-ID successor", async () => {
+    const response = createDeferredCore<{ aborted: boolean; runIds: string[] }>();
+    const dispatchSessionMethod = vi.fn(() => response.promise);
+    const { cleanup, register } = setupCleanup(dispatchSessionMethod);
+    const original = register();
+    const foreign = register(true);
     cleanup.bindAcceptedRun(runId);
     expect(cleanup.isCurrent()).toBe(true);
-    const request = cleanup.callGateway({
+    const abortRequest = {
       method: "chat.abort",
       params: { sessionKey: childSessionKey, runId },
-    });
+    };
+    const request = cleanup.callGateway(abortRequest);
     original.cleanup();
     const successor = register();
     try {
@@ -83,12 +90,9 @@ describe("subagent spawn cleanup identity", () => {
       expect(dispatchSessionMethod).toHaveBeenCalledOnce();
       expect(successor.controller.signal.aborted).toBe(false);
       expect(foreign.controller.signal.aborted).toBe(false);
-      await expect(
-        cleanup.callGateway({
-          method: "chat.abort",
-          params: { sessionKey: childSessionKey, runId },
-        }),
-      ).rejects.toThrow("Subagent spawn no longer owns this cleanup");
+      await expect(cleanup.callGateway(abortRequest)).rejects.toThrow(
+        "Subagent spawn no longer owns this cleanup",
+      );
       expect(dispatchSessionMethod).toHaveBeenCalledOnce();
     } finally {
       response.resolve({ aborted: false, runIds: [] });
@@ -113,47 +117,18 @@ describe("subagent spawn cleanup identity", () => {
   });
 
   it("reports uncertain termination while retaining the accepted child", async () => {
-    const childSessionKey = "agent:main:subagent:cancelled-cleanup";
-    const runId = "cancelled-cleanup-run";
     const failure = new Error("gateway unavailable");
     const dispatchSessionMethod = vi.fn(async () => {
       throw failure;
     });
-    const context = Object.assign({} as GatewayRequestContext, {
-      recoveryRuntime: { dispatchSessionMethod },
-    });
-    const target = captureSessionTarget({
-      storeScope: "/synthetic/cancelled-cleanup.db",
-      sessionKey: childSessionKey,
-      incarnation: "cancelled-cleanup-session",
-    });
-    const resolveGatewayContext = () => context;
-    const source = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
-      registerChatAbortController({
-        target,
-        runId,
-        sessionId: "cancelled-cleanup-session",
-        sessionKey: childSessionKey,
-        timeoutMs: 60_000,
-      }),
-    );
+    const { cleanup, register } = setupCleanup(dispatchSessionMethod);
+    const source = register();
     if (!source.registered) {
       throw new Error("Cancelled cleanup proof requires a registered controller source");
     }
     let inputSettled = false;
     void source.entry.input.settlement.promise.then(() => {
       inputSettled = true;
-    });
-    const cleanup = bindSubagentSpawnCleanup({
-      childSessionKey,
-      target,
-      resolveGatewayContext,
-      isCurrent: () => true,
-      canAbortAcceptedRun: () => true,
-      getSessionIdentity: () => ({
-        expectedSessionId: "cancelled-cleanup-session",
-        expectedLifecycleRevision: "revision",
-      }),
     });
     cleanup.bindAcceptedRun(runId);
     try {
@@ -176,13 +151,7 @@ describe("subagent spawn cleanup identity", () => {
       .mockResolvedValueOnce({ ok: true, aborted: false, runIds: [] })
       .mockResolvedValueOnce({ deleted: true });
 
-    await terminateAcceptedCollectorRun({
-      childSessionKey: "agent:main:subagent:child",
-      gatewayRunId: "gateway-run",
-      expectedSessionId: "session-id",
-      expectedLifecycleRevision: "session-revision",
-      callGateway,
-    });
+    await terminate({ ...identity, callGateway });
 
     expect(callGateway).toHaveBeenNthCalledWith(2, {
       method: "sessions.delete",
@@ -199,33 +168,19 @@ describe("subagent spawn cleanup identity", () => {
   });
 
   it("does not delete after chat.abort confirms the matching run", async () => {
-    const callGateway = vi.fn(async () => ({
-      ok: true,
-      aborted: true,
-      runIds: ["gateway-run"],
-    }));
+    const callGateway = vi
+      .fn()
+      .mockResolvedValue({ ok: true, aborted: true, runIds: ["gateway-run"] });
 
-    await terminateAcceptedCollectorRun({
-      childSessionKey: "agent:main:subagent:child",
-      gatewayRunId: "gateway-run",
-      expectedSessionId: "session-id",
-      expectedLifecycleRevision: "session-revision",
-      callGateway,
-    });
+    await terminate({ ...identity, callGateway });
 
     expect(callGateway).toHaveBeenCalledOnce();
   });
 
   it("stops without deleting a durable session when the accepted run already ended", async () => {
-    const callGateway = vi.fn(async () => ({
-      ok: true,
-      aborted: false,
-      runIds: [],
-    }));
+    const callGateway = vi.fn().mockResolvedValue({ ok: true, aborted: false, runIds: [] });
 
-    await terminateAcceptedCollectorRun({
-      childSessionKey: "agent:main:subagent:child",
-      gatewayRunId: "gateway-run",
+    await terminate({
       sessionCleanup: "preserve",
       callGateway,
     });
@@ -237,9 +192,7 @@ describe("subagent spawn cleanup identity", () => {
     const failure = new Error("gateway unavailable");
     const callGateway = vi.fn().mockRejectedValue(failure);
     await expect(
-      terminateAcceptedCollectorRun({
-        childSessionKey: "agent:main:subagent:child",
-        gatewayRunId: "gateway-run",
+      terminate({
         sessionCleanup: "preserve",
         callGateway,
       }),
@@ -253,15 +206,7 @@ describe("subagent spawn cleanup identity", () => {
       .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["different-run"] })
       .mockRejectedValueOnce(sessionChangedError());
 
-    await expect(
-      terminateAcceptedCollectorRun({
-        childSessionKey: "agent:main:subagent:child",
-        gatewayRunId: "gateway-run",
-        expectedSessionId: "session-id",
-        expectedLifecycleRevision: "session-revision",
-        callGateway,
-      }),
-    ).resolves.toBeUndefined();
+    await expect(terminate({ ...identity, callGateway })).resolves.toBeUndefined();
 
     expect(callGateway).toHaveBeenCalledTimes(2);
   });
