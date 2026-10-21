@@ -45,7 +45,8 @@ it.each([true, false])(
   "retains the canonical receipt after acceptance=%s until outcome",
   async (accepted) => {
     const first = source("first");
-    const lifecycle = { onAdopted: async () => {}, onSettled: vi.fn(), onAbandoned: vi.fn() };
+    const onAbandoned = vi.fn();
+    const lifecycle = { onAdopted: async () => {}, onSettled: vi.fn(), onAbandoned };
     first.turnAdoptionLifecycle = lifecycle;
     const reservation = await queue.admit(first);
     const input = first.controllerInput!;
@@ -71,7 +72,7 @@ it.each([true, false])(
     await expect(nextAdmission).resolves.toBe(true);
     await settleSource(input);
     expect(receiptSettled).toHaveBeenCalledWith(true);
-    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
+    expect(onAbandoned).not.toHaveBeenCalled();
     expect(lifecycle.onSettled).toHaveBeenCalledOnce();
     const nextReceipt = next.injection;
     reservation.fallback();
@@ -206,7 +207,8 @@ it.each(["summarize", "new", "old"] as const)(
     }
     const disposition = vi.fn();
     newer.onQueueDisposition = disposition;
-    const lifecycle = { onAdopted: () => undefined, onAbandoned: vi.fn(), onSettled: vi.fn() };
+    const onAbandoned = vi.fn();
+    const lifecycle = { onAdopted: () => undefined, onAbandoned, onSettled: vi.fn() };
     newer.turnAdoptionLifecycle = lifecycle;
     const { gate, drained, delivered } = recordDelivery(dropPolicy === "summarize" ? 3 : 2, active);
     queue.enqueue(active);
@@ -228,7 +230,7 @@ it.each(["summarize", "new", "old"] as const)(
       expect(disposition.mock.calls).toEqual(dropPolicy === "new" ? [["queue-cap-new"]] : []);
       if (dropPolicy === "new") {
         expect(newerInput).toMatchObject({ phase: "consumed", payload: "unbound" });
-        expect(lifecycle.onAbandoned).toHaveBeenCalledOnce();
+        expect(onAbandoned).toHaveBeenCalledOnce();
         expect(lifecycle.onSettled).toHaveBeenCalledOnce();
         await expect(newerSettlement).resolves.toBeUndefined();
       }

@@ -8,11 +8,6 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  closeHttpServer,
-  listenLoopback,
-  readRequestText,
-} from "../../../test/helpers/gateway-integration-fixtures.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { tlonPlugin } from "./channel.js";
 
@@ -26,6 +21,22 @@ type CapturedPoke = {
   json: unknown;
 };
 
+async function listen(server: http.Server): Promise<number> {
+  return await new Promise<number>((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      resolve((server.address() as { port: number }).port);
+    });
+  });
+}
+
+async function readBody(request: http.IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 let server: http.Server;
 let baseUrl: string;
 const pokes: CapturedPoke[] = [];
@@ -38,7 +49,7 @@ beforeEach(async () => {
   );
   server = http.createServer((request, response) => {
     void (async () => {
-      const body = await readRequestText(request);
+      const body = await readBody(request);
       if (request.method === "POST" && request.url === "/~/login") {
         expect(body).toBe("password=test-code");
         response.writeHead(200, {
@@ -61,13 +72,16 @@ beforeEach(async () => {
       response.writeHead(500, { Connection: "close" }).end(String(error));
     });
   });
-  baseUrl = await listenLoopback(server);
+  baseUrl = `http://127.0.0.1:${await listen(server)}`;
 });
 
 afterEach(async () => {
   resetPluginRuntimeStateForTest();
   vi.restoreAllMocks();
-  await closeHttpServer(server);
+  server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
 });
 
 it("sanitizes DM, group, and media-caption text before the Urbit poke", async () => {

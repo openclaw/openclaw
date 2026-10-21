@@ -6,6 +6,7 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { WizardCancelledError } from "openclaw/plugin-sdk/setup";
 import { Agent, EnvHttpProxyAgent, ProxyAgent } from "undici";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +14,15 @@ import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import plugin from "./index.js";
 
 const discoveryFetch = vi.fn();
+const servedModel: ModelDefinitionConfig = {
+  id: "local-qwen",
+  name: "Authored local model",
+  reasoning: true,
+  input: ["text", "image"],
+  cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+  contextWindow: 32768,
+  maxTokens: 2048,
+};
 function unexpectedAuth(): never {
   throw new Error("Unexpected browser/OAuth auth");
 }
@@ -47,13 +57,14 @@ function createPrompter(params: { baseUrl?: string; manualModel?: string } = {})
 
 async function configure(
   params: {
+    config?: OpenClawConfig;
     prompter?: WizardPrompter;
     ref?: boolean;
     credentialOnly?: boolean;
     assertCurrent?: () => void;
   } = {},
 ) {
-  const config = {};
+  const config = params.config ?? {};
   const provider = requireRegisteredProvider(
     capturePluginRegistration(plugin).providers,
     "litellm",
@@ -182,6 +193,35 @@ describe("LiteLLM discovery-backed onboarding", () => {
       },
     ]);
   });
+
+  it.each(["merge", "replace"] as const)(
+    "preserves authored metadata from a case-variant row in %s mode",
+    async (mode) => {
+      const { config } = await configure({
+        config: {
+          models: {
+            mode,
+            providers: {
+              LiteLLM: {
+                baseUrl: "http://127.0.0.1:4000/v1",
+                apiKey: "authored-key",
+                request: { allowPrivateNetwork: false, headers: { "X-Proxy-Tenant": "fixture" } },
+                models: [structuredClone(servedModel)],
+              },
+            },
+          },
+        },
+      });
+
+      expect(Object.keys(config.models?.providers ?? {})).toEqual(["litellm"]);
+      expect(config.models?.providers?.litellm).toMatchObject({
+        apiKey: "authored-key",
+        request: { allowPrivateNetwork: false, headers: { "X-Proxy-Tenant": "fixture" } },
+        models: [servedModel],
+      });
+      expect(config.agents?.defaults?.model).toEqual({ primary: "litellm/local-qwen" });
+    },
+  );
 
   it("keeps credential-only connections out of model discovery", async () => {
     const prompter = createPrompter();

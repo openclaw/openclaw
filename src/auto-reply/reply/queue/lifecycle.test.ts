@@ -85,6 +85,7 @@ it.each(["admitted", "completed", "aborted"] as const)(
     const lifecycle = {
       admission: "exclusive" as const,
       abortSignal: abort.signal,
+      onAdopted: vi.fn(),
       onDeferredHeartbeat: vi.fn(),
       deferredHeartbeatIntervalMs: 100,
     };
