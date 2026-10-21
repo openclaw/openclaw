@@ -1,9 +1,25 @@
-import { describe, expect, it } from "vitest";
+import type { WorkboardCard } from "@openclaw/workboard-contract";
+import { expect, it } from "vitest";
 import { syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
 type Store = ReturnType<typeof createWorkboardSqliteTestStore>;
 type Prepared = Awaited<ReturnType<Store["prepareExecutionLaunch"]>>;
+function sync(store: Store, card: WorkboardCard, now = card.updatedAt + 1, done = false) {
+  return store.syncLifecycle(card.id, {
+    targetStatus: "review",
+    executionStatus: done ? "done" : "review",
+    sourceUpdatedAt: now,
+    stale: undefined,
+    now,
+    association: {
+      expectedSessionKey: card.sessionKey,
+      expectedRunId: card.runId,
+      sessionKey: card.sessionKey!,
+      ...(done ? { runId: card.runId } : {}),
+    },
+  });
+}
 function accept(store: Store, prepared: Prepared, sessionKey: string, runId: string) {
   return store.acceptExecutionLaunch(prepared.card.id, {
     expectedLaunch: prepared.launch,
@@ -42,123 +58,85 @@ async function createBlockedManagedCard() {
   return { store, blocked, prepared, sessionKey, runId };
 }
 
-describe("Workboard shared-session attempts", () => {
-  it.each([undefined, "shared-run"])(
-    "persists terminal attempts for two cards sharing a session and run %s",
-    async (runId) => {
-      const store = createWorkboardSqliteTestStore();
-      const sessionKey = "agent:main:shared-worker";
-      const cards = [];
-      for (let index = 0; index < 2; index += 1) {
-        cards.push(
-          await store.create({ title: "Shared worker", status: "running", sessionKey, runId }),
-        );
-      }
-      const now = Math.max(...cards.map((card) => card.updatedAt)) + 1;
-      for (const card of cards) {
-        await store.syncLifecycle(card.id, {
-          targetStatus: "review",
-          executionStatus: "done",
-          sourceUpdatedAt: now,
-          stale: undefined,
-          now,
-          association: {
-            expectedSessionKey: sessionKey,
-            expectedRunId: runId,
-            sessionKey,
-            runId,
-          },
-        });
-      }
-      const attempts = [];
-      for (const card of cards) {
-        const persisted = await store.get(card.id);
-        expect(persisted?.status).toBe("review");
-        expect(persisted?.metadata?.attempts).toEqual([
-          expect.objectContaining({
-            id: expect.any(String),
-            status: "succeeded",
-            sessionKey,
-            ...(runId ? { runId } : {}),
-          }),
-        ]);
-        attempts.push(persisted?.metadata?.attempts?.[0]?.id);
-      }
-      expect(new Set(attempts).size).toBe(2);
+it.each([undefined, "shared-run"])(
+  "persists terminal attempts for two cards sharing a session and run %s",
+  async (runId) => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = "agent:main:shared-worker";
+    const cards = [];
+    for (let index = 0; index < 2; index += 1) {
+      cards.push(
+        await store.create({ title: "Shared worker", status: "running", sessionKey, runId }),
+      );
+    }
+    const now = Math.max(...cards.map((card) => card.updatedAt)) + 1;
+    for (const card of cards) {
+      await sync(store, card, now, true);
+    }
+    const attempts = [];
+    const identity = runId ? { sessionKey, runId } : { sessionKey };
+    const attempt = { id: expect.any(String), status: "succeeded", ...identity };
+    for (const card of cards) {
+      const persisted = await store.get(card.id);
+      expect(persisted).toMatchObject({ status: "review", metadata: { attempts: [attempt] } });
+      attempts.push(persisted?.metadata?.attempts?.[0]?.id);
+    }
+    expect(new Set(attempts).size).toBe(2);
+  },
+);
+it("keeps a released managed attempt blocked after its card is requeued", async () => {
+  const { store, blocked: card, prepared, sessionKey, runId } = await createBlockedManagedCard();
+  await store.unblock(card.id);
+  const requeued = await store.promote(card.id);
+
+  await expect(end(store, sessionKey, runId, requeued.updatedAt + 1)).resolves.toBe(0);
+  // Recovery sweeps have session identity but no run ID.
+  await expect(
+    sync(store, { ...requeued, sessionKey, runId }, requeued.updatedAt + 2),
+  ).resolves.toBe(false);
+  await expect(store.get(card.id)).resolves.toEqual(requeued);
+  await expect(store.get(card.id)).resolves.toMatchObject({
+    status: "ready",
+    execution: { status: "blocked", runId },
+    metadata: {
+      failureCount: 1,
+      attempts: [{ status: "blocked", runId, error: "Work remains unfinished." }],
     },
-  );
-  it("keeps a released managed attempt blocked after its card is requeued", async () => {
-    const { store, blocked: card, prepared, sessionKey, runId } = await createBlockedManagedCard();
-    await store.unblock(card.id);
-    const requeued = await store.promote(card.id);
-
-    await expect(end(store, sessionKey, runId, requeued.updatedAt + 1)).resolves.toBe(0);
-    // Recovery sweeps have session identity but no run ID.
-    await expect(
-      store.syncLifecycle(card.id, {
-        targetStatus: "review",
-        executionStatus: "review",
-        sourceUpdatedAt: requeued.updatedAt + 2,
-        stale: undefined,
-        now: requeued.updatedAt + 2,
-        association: { expectedSessionKey: sessionKey, expectedRunId: runId, sessionKey },
-      }),
-    ).resolves.toBe(false);
-    await expect(store.get(card.id)).resolves.toEqual(requeued);
-    await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "ready",
-      execution: { status: "blocked", runId },
-      metadata: {
-        failureCount: 1,
-        attempts: [
-          expect.objectContaining({ status: "blocked", runId, error: "Work remains unfinished." }),
-        ],
-      },
-    });
-    expect(card.metadata?.claim).toBeUndefined();
-    const retryClaim = await store.claim(card.id, { ownerId: "workboard-dispatcher" });
-    expect(retryClaim.card.status).toBe("running");
-    const retry = await store.prepareExecutionLaunch(card.id, {
-      requestedSessionKey: prepared.launch.requestedSessionKey,
-      now: retryClaim.card.updatedAt + 1,
-      scope: { ownerId: "workboard-dispatcher", token: retryClaim.token },
-    });
-    // A pending retry still carries a provisional run ID; the old hook must not adopt it.
-    await expect(end(store, sessionKey, runId, retry.card.updatedAt + 1)).resolves.toBe(0);
-    await expect(store.get(card.id)).resolves.toEqual(retry.card);
-    await accept(store, retry, sessionKey, "retry-run");
-    await expect(
-      end(store, sessionKey, "retry-run", (await store.get(card.id))!.updatedAt + 1),
-    ).resolves.toBe(1);
-    await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "review",
-      metadata: {
-        attempts: [
-          expect.objectContaining({ status: "blocked", runId, error: "Work remains unfinished." }),
-          expect.objectContaining({ status: "succeeded", runId: "retry-run" }),
-        ],
-      },
-    });
   });
+  expect(card.metadata?.claim).toBeUndefined();
+  const retryClaim = await store.claim(card.id, { ownerId: "workboard-dispatcher" });
+  expect(retryClaim.card.status).toBe("running");
+  const retry = await store.prepareExecutionLaunch(card.id, {
+    requestedSessionKey: prepared.launch.requestedSessionKey,
+    now: retryClaim.card.updatedAt + 1,
+    scope: { ownerId: "workboard-dispatcher", token: retryClaim.token },
+  });
+  // A pending retry still carries a provisional run ID; the old hook must not adopt it.
+  await expect(end(store, sessionKey, runId, retry.card.updatedAt + 1)).resolves.toBe(0);
+  await expect(store.get(card.id)).resolves.toEqual(retry.card);
+  await accept(store, retry, sessionKey, "retry-run");
+  await expect(
+    end(store, sessionKey, "retry-run", (await store.get(card.id))!.updatedAt + 1),
+  ).resolves.toBe(1);
+  await expect(store.get(card.id)).resolves.toMatchObject({
+    status: "review",
+    metadata: {
+      attempts: [
+        { status: "blocked", runId, error: "Work remains unfinished." },
+        { status: "succeeded", runId: "retry-run" },
+      ],
+    },
+  });
+});
 
-  it("synchronizes an explicitly linked replacement session after a managed attempt blocks", async () => {
-    const { store, blocked } = await createBlockedManagedCard();
-    const sessionKey = "agent:main:replacement-session";
-    const linked = await store.update(blocked.id, { sessionKey, status: "todo" });
-    await expect(
-      store.syncLifecycle(blocked.id, {
-        targetStatus: "review",
-        executionStatus: "review",
-        sourceUpdatedAt: linked.updatedAt + 1,
-        stale: undefined,
-        now: linked.updatedAt + 1,
-        association: { expectedSessionKey: sessionKey, expectedRunId: linked.runId, sessionKey },
-      }),
-    ).resolves.toBe(true);
-    await expect(store.get(blocked.id)).resolves.toMatchObject({
-      status: "review",
-      sessionKey,
-      execution: { sessionKey, status: "review" },
-    });
+it("synchronizes an explicitly linked replacement session after a managed attempt blocks", async () => {
+  const { store, blocked } = await createBlockedManagedCard();
+  const sessionKey = "agent:main:replacement-session";
+  const linked = await store.update(blocked.id, { sessionKey, status: "todo" });
+  await expect(sync(store, linked)).resolves.toBe(true);
+  await expect(store.get(blocked.id)).resolves.toMatchObject({
+    status: "review",
+    sessionKey,
+    execution: { sessionKey, status: "review" },
   });
 });
