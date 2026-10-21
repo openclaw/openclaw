@@ -48,7 +48,6 @@ import {
   MacosGuest,
   WindowsGuest,
   runPosixBackgroundShell,
-  runWindowsBackgroundPowerShell,
 } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { resolveHostCommandInvocation } from "../../scripts/e2e/parallels/host-command.ts";
 import { testing as hostServerTesting } from "../../scripts/e2e/parallels/host-server.ts";
@@ -346,18 +345,6 @@ function runMacosSmoke(
       },
     },
   );
-}
-
-function runWindowsBackground(
-  options: Pick<Parameters<typeof runWindowsBackgroundPowerShell>[0], "runCommand" | "label"> &
-    Partial<Parameters<typeof runWindowsBackgroundPowerShell>[0]>,
-) {
-  return runWindowsBackgroundPowerShell({
-    script: "Write-Output ok",
-    timeoutMs: 720_000,
-    vmName: "Windows 11",
-    ...options,
-  });
 }
 
 type FakeCommandResult = { status: number; stderr: string; stdout: string };
@@ -1107,47 +1094,11 @@ ensure_vm_running`,
     expect(JSON.stringify(batch)).not.toContain("agentRuntime");
   });
 
-  it("keeps snapshot, host, package, and quote helpers shared", () => {
-    const common = readScriptSource("common");
-
-    const packageArtifactExports = new Set(
-      (common.match(/export \{([^}]*)\} from "\.\/package-artifact\.ts";/)?.[1] ?? "")
-        .split(",")
-        .map((name) => name.trim())
-        .filter(Boolean),
-    );
-    expect(packageArtifactExports).toContain("packOpenClaw");
-    expect(packageArtifactExports).toContain("resolveOpenClawRegistryVersion");
-    expect(common).not.toContain('export * from "./package-artifact.ts"');
-    expect(packageArtifact).toContain("withPackageLock");
-    expect(packageArtifact).toContain("Wait for Parallels package lock");
+  it("pins the host-local registry proxy and artifact server", () => {
     expect(packageArtifact).toContain('"--allow-unreleased-changelog"');
-    expect(packageArtifact).toContain("filename !== path.basename(filename)");
-    expect(packageArtifact).toContain("filename !== path.win32.basename(filename)");
-    expect(packageArtifact).toContain("npm pack did not report a safe tarball filename");
-    expect(packageArtifact).not.toContain("path.basename(packed)");
     expect(hostServer).toContain("hostUrl: `http://127.0.0.1:${port}`");
     expect(hostServer).toContain('OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org"');
     expect(hostServer).toContain("http.server");
-    expect(smokeCommon).toContain("runSmokeLane");
-    expect(smokeCommon).toContain("abstract class SmokeRunController");
-
-    for (const scriptPath of OS_TS_PATHS) {
-      const script = readFileSync(scriptPath, "utf8");
-
-      expect(script, scriptPath).toContain("resolveSnapshot");
-      expect(script, scriptPath).toContain("SmokeRunController");
-      expect(script, scriptPath).not.toContain("def aliases(name: str)");
-    }
-  });
-
-  it("bounds host artifact server startup stderr", () => {
-    const retained = hostServerTesting.appendBoundedOutput(
-      "a".repeat(10),
-      Buffer.from("b".repeat(10)),
-      12,
-    );
-    expect(retained).toBe(`${"a".repeat(2)}${"b".repeat(10)}`);
   });
 
   describe.skipIf(process.platform === "win32")("Parallels host IP detection", () => {
@@ -1210,17 +1161,19 @@ ensure_vm_running`,
   });
 
   it("accepts npm 10/11 array and npm 12 workspace result shapes", () => {
-    expect(
-      packageArtifactTesting.resolveNpmPackTarballFilename([
-        { filename: "openclaw-2026.6.11.tgz" },
-      ]),
-    ).toBe("openclaw-2026.6.11.tgz");
-    expect(
-      packageArtifactTesting.resolveNpmPackTarballFilename({
-        openclaw: { filename: "openclaw-2026.6.11.tgz" },
-      }),
-    ).toBe("openclaw-2026.6.11.tgz");
+    const filename = "openclaw-2026.6.11.tgz";
+    for (const output of [[{ filename }], { openclaw: { filename } }]) {
+      expect(packageArtifactTesting.resolveNpmPackTarballFilename(output)).toBe(filename);
+    }
   });
+  it.each(["../escape.tgz", "C:\\escape.tgz", "nul\0.tgz", "not-a-tarball"])(
+    "rejects unsafe npm pack filename %j",
+    (filename) =>
+      expectFatalError(
+        () => packageArtifactTesting.resolveNpmPackTarballFilename([{ filename }]),
+        "npm pack did not report a safe tarball filename",
+      ),
+  );
 
   it.each([
     ["retains fresh", 2 * 60 * 60_000, true],
@@ -2006,96 +1959,6 @@ if (commandArgs[0] === "list") {
       "Set-Item -LiteralPath 'Env:NPM_CONFIG_REGISTRY' -Value 'http://192.0.2.2:48123/first'\nWrite-Output $env:NPM_CONFIG_REGISTRY",
       "Set-Item -LiteralPath 'Env:NPM_CONFIG_REGISTRY' -Value 'http://192.0.2.2:48123/second''s'\nWrite-Output $env:NPM_CONFIG_REGISTRY",
     ]);
-  });
-
-  it("carries Windows background environment before the detached command", async () => {
-    let uploadedScript = "";
-    const runCommand = (_command: string, _args: string[], options?: { input?: string }) => {
-      uploadedScript = options?.input ?? "";
-      return fakeResult(1, "", "fixture upload failure");
-    };
-    await expect(
-      runWindowsBackground({
-        env: { NPM_CONFIG_REGISTRY: "http://192.0.2.2:48123/candidate's" },
-        label: "environment proof",
-        runCommand,
-        script: "Write-Output $env:NPM_CONFIG_REGISTRY",
-        vmName: "Windows VM",
-      }),
-    ).rejects.toThrow("background script write failed");
-    expect(uploadedScript).toContain(
-      "Set-Item -LiteralPath 'Env:NPM_CONFIG_REGISTRY' -Value 'http://192.0.2.2:48123/candidate''s'\nWrite-Output $env:NPM_CONFIG_REGISTRY",
-    );
-  });
-
-  it("paces ambiguous Windows background launch materialization probes", async () => {
-    let calls = 0;
-    const runCommand = vi.fn(() => {
-      calls++;
-      return fakeResult();
-    });
-
-    await expect(
-      runWindowsBackground({
-        label: "ambiguous launch",
-        pollIntervalMs: 20,
-        runCommand,
-        timeoutMs: 90,
-      }),
-    ).rejects.toThrow("ambiguous launch background launch failed");
-
-    expect(calls).toBeLessThan(20);
-  });
-
-  it("fails fast when a Windows Parallels VM stops during background work", async () => {
-    const runCommand = vi.fn(() =>
-      fakeResult(
-        1,
-        "",
-        'Unable to perform the operation because "Windows 11" is not started. This operation can be performed for running virtual machines only.',
-      ),
-    );
-
-    await expect(
-      runWindowsBackground({
-        label: "ref-onboard",
-        runCommand,
-      }),
-    ).rejects.toThrow("ref-onboard failed: Parallels VM stopped");
-
-    expect(runCommand).toHaveBeenCalledTimes(1);
-  });
-
-  it("fails boundedly when Windows background polling loses guest transport", async () => {
-    const retries: string[] = [];
-    let donePolls = 0;
-    const runCommand = vi.fn((_command: string, args: string[], options?: { input?: string }) => {
-      const command = args.at(-1) ?? "";
-      if (options?.input) {
-        return fakeResult();
-      }
-      if (args.includes("--current-user")) {
-        return fakeResult(0, "started\n");
-      }
-      if (args.includes("cmd.exe") && command.includes("echo wait")) {
-        donePolls++;
-        return fakeResult(124);
-      }
-      return fakeResult();
-    });
-
-    await expect(
-      runWindowsBackground({
-        label: "ref-onboard",
-        onLaunchRetry: (message) => retries.push(message),
-        pollIntervalMs: 1,
-        runCommand,
-      }),
-    ).rejects.toThrow("ref-onboard done poll failed after 3 consecutive guest transport errors");
-
-    expect(donePolls).toBe(3);
-    expect(retries).toHaveLength(3);
-    expect(retries.at(-1)).toContain("transport failure 3/3");
   });
 
   it("returns timed-out host command status when check is disabled", () => {

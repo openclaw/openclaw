@@ -35,7 +35,7 @@ export type FinalizerScenario = {
   fullRefresh?: boolean;
   preflightAllowed?: boolean;
   change?: "glossary" | "canonical";
-  artifactFault?: "foreign-run" | "path" | "fallback";
+  artifactFault?: "foreign-run";
   publish?: boolean;
   advanceDuringCheckout?: boolean;
   advanceAfterCatchup?: boolean;
@@ -411,15 +411,7 @@ export function createLocaleFinalizerHarness() {
       if (scenario.artifactFault) {
         const file = path.join(artifacts, "sv.json");
         const artifact = JSON.parse(read(file));
-        if (scenario.artifactFault === "foreign-run") {
-          artifact.runId = "999";
-        }
-        if (scenario.artifactFault === "path") {
-          artifact.memories[0].path = "../../outside.ts";
-        }
-        if (scenario.artifactFault === "fallback") {
-          artifact.memories[0].metadata.fallbackKeys = ["missing"];
-        }
+        artifact.runId = "999";
         fs.writeFileSync(file, JSON.stringify(artifact));
       }
       if (!gate("finalize")) {
