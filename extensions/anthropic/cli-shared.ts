@@ -5,7 +5,6 @@ import {
 } from "openclaw/plugin-sdk/claude-model-runtime";
 import type {
   CliBackendConfig,
-  CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
@@ -128,13 +127,11 @@ export function supportsClaudeDynamicSystemPromptSections(
   return true;
 }
 
-function isOpenClawRequestedYolo(
-  context?: Pick<CliBackendNormalizeConfigContext, "config" | "agentId">,
-): boolean {
-  const agentExec = context?.agentId
+function isOpenClawRequestedYolo(context: CliBackendResolveExecutionArgsContext): boolean {
+  const agentExec = context.agentId
     ? resolveAgentConfig(context.config ?? {}, context.agentId)?.tools?.exec
     : undefined;
-  const exec = agentExec ?? context?.config?.tools?.exec;
+  const exec = agentExec ?? context.config?.tools?.exec;
   return (
     resolveExecModePolicy({
       mode: exec?.mode,
@@ -145,11 +142,10 @@ function isOpenClawRequestedYolo(
 }
 
 /** Keep filesystem settings user-scoped and normalize native permission flags together. */
-function normalizeClaudeBackendArgs(args?: string[]): string[] | undefined {
-  if (!args) {
-    return args;
-  }
+function normalizeClaudeBackendArgs(context: CliBackendResolveExecutionArgsContext): string[] {
+  const args = context.baseArgs;
   const normalized: string[] = [];
+  let hasPermissionMode = false;
   let hasSettingSources = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] ?? "";
@@ -164,6 +160,7 @@ function normalizeClaudeBackendArgs(args?: string[]): string[] | undefined {
         !maybeValue.startsWith("-")
       ) {
         if (arg === CLAUDE_PERMISSION_MODE_ARG) {
+          hasPermissionMode = true;
           normalized.push(arg, maybeValue);
         } else {
           hasSettingSources = true;
@@ -176,6 +173,7 @@ function normalizeClaudeBackendArgs(args?: string[]): string[] | undefined {
     if (arg.startsWith(`${CLAUDE_PERMISSION_MODE_ARG}=`)) {
       const maybeValue = arg.slice(`${CLAUDE_PERMISSION_MODE_ARG}=`.length).trim();
       if (maybeValue.length > 0 && !maybeValue.startsWith("-")) {
+        hasPermissionMode = true;
         normalized.push(`${CLAUDE_PERMISSION_MODE_ARG}=${maybeValue}`);
       }
       continue;
@@ -190,29 +188,14 @@ function normalizeClaudeBackendArgs(args?: string[]): string[] | undefined {
   if (!hasSettingSources) {
     normalized.push(CLAUDE_SETTING_SOURCES_ARG, CLAUDE_SAFE_SETTING_SOURCES);
   }
-  return normalized;
-}
-
-function addClaudePermissionMode(args: readonly string[], permissionMode?: string): string[] {
-  const normalized = [...args];
-  if (!permissionMode) {
-    return normalized;
+  // Root cannot compact in bypass mode; explicit permission modes still take precedence.
+  if (
+    !hasPermissionMode &&
+    context.controlOperation !== "compact" &&
+    isOpenClawRequestedYolo(context)
+  ) {
+    normalized.push(CLAUDE_PERMISSION_MODE_ARG, "bypassPermissions");
   }
-  for (let index = 0; index < normalized.length; index += 1) {
-    const arg = normalized[index] ?? "";
-    if (arg === CLAUDE_PERMISSION_MODE_ARG) {
-      const value = normalized[index + 1];
-      if (typeof value === "string" && value.trim().length > 0 && !value.startsWith("-")) {
-        return normalized;
-      }
-    } else if (arg.startsWith(`${CLAUDE_PERMISSION_MODE_ARG}=`)) {
-      const value = arg.slice(`${CLAUDE_PERMISSION_MODE_ARG}=`.length).trim();
-      if (value.length > 0 && !value.startsWith("-")) {
-        return normalized;
-      }
-    }
-  }
-  normalized.push(CLAUDE_PERMISSION_MODE_ARG, permissionMode);
   return normalized;
 }
 
@@ -458,13 +441,7 @@ export function resolveClaudeCliExecutionArgs(
   context: CliBackendResolveExecutionArgsContext,
   options: { excludeDynamicSystemPromptSections?: boolean } = {},
 ): string[] {
-  // Keep the exec-policy projection for normal turns. Native /compact must use
-  // Claude Code's default mode because Gateway can run as root.
-  const permissionMode =
-    context.controlOperation === "compact" || !isOpenClawRequestedYolo(context)
-      ? undefined
-      : "bypassPermissions";
-  const normalizedArgs = addClaudePermissionMode(context.baseArgs, permissionMode);
+  const normalizedArgs = normalizeClaudeBackendArgs(context);
   const baseArgs = context.hostOwnedTools?.includes("exec")
     ? [
         ...stripClaudeArgs(normalizedArgs, {
@@ -486,16 +463,11 @@ export function resolveClaudeCliExecutionArgs(
     : resolvedArgs;
 }
 
-export function normalizeClaudeBackendConfig(
-  config: CliBackendConfig,
-  _context?: CliBackendNormalizeConfigContext,
-): CliBackendConfig {
+export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
   const output = config.output ?? "jsonl";
   const input = config.input ?? "stdin";
   return {
     ...config,
-    args: normalizeClaudeBackendArgs(config.args),
-    resumeArgs: normalizeClaudeBackendArgs(config.resumeArgs),
     output,
     liveSession:
       config.liveSession ?? (output === "jsonl" && input === "stdin" ? "claude-stdio" : undefined),
