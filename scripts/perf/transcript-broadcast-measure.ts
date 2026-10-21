@@ -112,6 +112,7 @@ const { values } = parseArgs({
     "session-census": { type: "boolean", default: false },
     "fingerprint-retention": { type: "boolean", default: false },
     "session-row-deltas": { type: "boolean", default: false },
+    "presence-deltas": { type: "boolean", default: false },
     "session-envelope-refs": { type: "boolean", default: false },
     "start-at": { type: "string" },
     "list-interval-ms": { type: "string", default: "0" },
@@ -584,7 +585,10 @@ const authorityChannel = "openclaw-operator-authority-bench";
 const authorityEmail = "operator@authority.example.test";
 const authorityOrigin = "https://authority.example.test";
 const fixtureDirectPassword = "synthetic-connected-github-local-caller";
-const trustedProxyScenario = values["operator-access-policy"] || values["github-options-connected"];
+const trustedProxyScenario =
+  values["operator-access-policy"] ||
+  values["github-options-connected"] ||
+  values["presence-deltas"];
 const clientConnection = {
   url: `ws://127.0.0.1:${port}`,
   ...(trustedProxyScenario
@@ -1898,6 +1902,7 @@ const connectParams = {
     "chat-only-assistant-text",
     ...(exactClients < clientCount ? ["roster-message-bodies-optional"] : []),
     ...(values["session-row-deltas"] ? ["session-row-deltas"] : []),
+    ...(values["presence-deltas"] ? ["presence-deltas"] : []),
     ...(values["session-envelope-refs"] ? ["session-event-field-refs"] : []),
   ],
 };
@@ -4097,6 +4102,7 @@ try {
     limit,
     rowMode,
     sessionRowDeltas: values["session-row-deltas"],
+    presenceDeltas: values["presence-deltas"],
     sessionEnvelopeRefs: values["session-envelope-refs"],
     listIntervalMs,
     mixedRpc: values["mixed-rpc"],

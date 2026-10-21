@@ -2,7 +2,7 @@
 // the Gateway schedule DTO owns runtime status.
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, For, Show } from "solid-js";
+import { action, createMemo, createOptimistic, For, Show } from "solid-js";
 import { isAcknowledgedAbandonedUpdateRun } from "../../../../src/infra/update-run-record.ts";
 import {
   classifyUpdateOutcome,
@@ -411,6 +411,11 @@ function CommitList(props: UpdatesViewProps) {
 }
 
 export function Updates(props: UpdatesViewProps) {
+  const [holdingCampaignId, setHoldingCampaignId] = createOptimistic<string | null>(null);
+  const holdUpdate = action(function* (campaignId: string) {
+    setHoldingCampaignId(campaignId);
+    yield props.onHoldUpdate();
+  });
   const run = () => (props.update.updateRun?.status === "running" ? props.update.updateRun : null);
   const step = () => {
     const currentRun = run();
@@ -574,8 +579,12 @@ export function Updates(props: UpdatesViewProps) {
                   <button
                     type="button"
                     class="btn btn--sm"
-                    disabled={props.updateBusy || props.update.updateStatusRefreshing}
-                    onClick={() => void props.onHoldUpdate()}
+                    disabled={
+                      props.updateBusy ||
+                      props.update.updateStatusRefreshing ||
+                      holdingCampaignId() === campaign()?.id
+                    }
+                    onClick={() => void holdUpdate(campaign()!.id)}
                   >
                     {t("updates.holdOneHour")}
                   </button>
