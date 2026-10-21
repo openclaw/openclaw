@@ -293,19 +293,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("caps project-level parallelism when the Vitest worker budget is conservative", () => {
-    expect(
-      resolveParallelFullSuiteConcurrency(58, {
-        OPENCLAW_VITEST_MAX_WORKERS: "1",
-      }),
-    ).toBe(1);
-
-    expect(
-      resolveParallelFullSuiteConcurrency(58, {
-        OPENCLAW_TEST_WORKERS: "1",
-      }),
-    ).toBe(1);
-  });
+  it.each(["OPENCLAW_VITEST_MAX_WORKERS", "OPENCLAW_TEST_WORKERS"])(
+    "caps project-level parallelism for conservative %s",
+    (key) => expect(resolveParallelFullSuiteConcurrency(58, { [key]: "1" })).toBe(1),
+  );
 
   it("keeps conservative local full-suite runs on leaf project configs", () => {
     withEnv(

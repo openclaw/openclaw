@@ -75,6 +75,12 @@ function writeExecutable(file: string, source: string) {
   writeFileSync(file, source, { mode: 0o755 });
 }
 
+function writeCommands(bin: string, commands: Record<string, string>) {
+  for (const [name, source] of Object.entries(commands)) {
+    writeExecutable(join(bin, name), source);
+  }
+}
+
 function writeFiles(root: string, files: Record<string, string>) {
   for (const [name, source] of Object.entries(files)) {
     const file = join(root, name);
@@ -349,24 +355,20 @@ function runInstallSmokeInstallerPipelineFixture(params: {
   const installerSourcePath = join(root, "installer.sh");
   const timeoutArgsPath = join(root, "timeout-args.txt");
   const installUrl = "https://installer.example.test/install.sh?channel=beta&trace=1";
-  writeExecutable(
-    join(bin, "timeout"),
-    `#!/usr/bin/env bash
+  writeCommands(bin, {
+    timeout: `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\0' "$@" >"$TIMEOUT_ARGS_PATH"
 shift 2
 exec "$@"
 `,
-  );
-  writeExecutable(
-    join(bin, "curl"),
-    `#!/usr/bin/env bash
+    curl: `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\0' "$@" >"$CURL_ARGS_PATH"
 cat "$FAKE_INSTALLER_SOURCE"
 exit "$FAKE_CURL_EXIT"
 `,
-  );
+  });
   writeFileSync(
     installerSourcePath,
     `#!/usr/bin/env bash
@@ -563,11 +565,8 @@ describe("test-install-sh-docker", () => {
       const receipts = join(root, "served.jsonl");
       symlinkSync(testNodeExecPath, join(bin, "node"));
       expect(spawnSync("mkfifo", [ready]).status).toBe(0);
-      const writeCommand = (name: string, source: string) =>
-        writeExecutable(join(bin, name), source);
-      writeCommand(
-        "npm",
-        `#!/usr/bin/env node
+      writeCommands(bin, {
+        npm: `#!/usr/bin/env node
 const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
@@ -584,10 +583,7 @@ if (pack >= 0) {
   throw new Error("Unexpected npm invocation: " + args.join(" "));
 }
 `,
-      );
-      writeCommand(
-        "python3",
-        `#!/usr/bin/env node
+        python3: `#!/usr/bin/env node
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
@@ -601,15 +597,9 @@ http.createServer((request, response) => {
   fs.writeFileSync(process.env.SERVER_READY, "ready\\n");
 });
 `,
-      );
-      // Join actual listener readiness instead of spending the runner's startup sleep.
-      writeCommand(
-        "sleep",
-        '#!/bin/bash\nIFS= read -r ready < "$SERVER_READY"\n[[ "$ready" == ready ]]\n',
-      );
-      writeCommand(
-        "docker",
-        `#!/usr/bin/env node
+        // Join actual listener readiness instead of spending the runner's startup sleep.
+        sleep: '#!/bin/bash\nIFS= read -r ready < "$SERVER_READY"\n[[ "$ready" == ready ]]\n',
+        docker: `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] !== "run") throw new Error("Unexpected Docker invocation");
@@ -636,7 +626,7 @@ for (let index = 0; index < args.length; index++) {
   }
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 `,
-      );
+      });
 
       const result = runCommand("bash", [SCRIPT_PATH], {
         timeout: 30_000,
@@ -1443,14 +1433,10 @@ printf 'command-status=%s\\n' "$command_result"
       writeFileSync(versionFile, "2026.8.2");
       writeFileSync(callsFile, "");
       symlinkSync(testNodeExecPath, join(bin, "node"));
-      writeExecutable(
-        join(bin, "npm"),
-        '#!/bin/bash\nif [[ " $* " == *" root -g "* ]]; then printf "%s\\n" "$FAKE_GLOBAL_ROOT"; fi\n',
-      );
-      writeExecutable(join(bin, "timeout"), '#!/bin/bash\nshift 2\nexec "$@"\n');
-      writeExecutable(
-        join(bin, "openclaw"),
-        `#!${testNodeExecPath}
+      writeCommands(bin, {
+        npm: '#!/bin/bash\nif [[ " $* " == *" root -g "* ]]; then printf "%s\\n" "$FAKE_GLOBAL_ROOT"; fi\n',
+        timeout: '#!/bin/bash\nshift 2\nexec "$@"\n',
+        openclaw: `#!${testNodeExecPath}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
@@ -1472,7 +1458,7 @@ if (args[0] === "--version") {
   }));
 }
 `,
-      );
+      });
       // Simulate native /proc and service files; execute the complete shell runner and CLI boundary.
       writeFileSync(
         preload,

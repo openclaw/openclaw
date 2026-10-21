@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assert, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
 import {
   readRuntimeWorkerDescriptorReads as readDescriptorUses,
@@ -85,6 +85,157 @@ describe("Windows CI partitions", () => {
       configFile("tooling"),
       configFile("infra"),
     ]);
+  });
+});
+
+describe("package directory planning", () => {
+  afterEach(() => vi.restoreAllMocks());
+  function selectedPackageFiles(plans: ReturnType<typeof planRuns>): string[] {
+    return plans.flatMap((plan) => plan.includePatterns ?? plan.forwardedArgs);
+  }
+  function withPackageFiles(files: string[], test: (cwd: string) => void) {
+    withTinyFileTree(Object.fromEntries(files.map((file) => [file, "export {};\n"])), test);
+  }
+
+  const fast = "packages/memory-host-sdk/src/host/batch-http.test.ts";
+  const worker = "packages/memory-host-sdk/src/host/session-memory-sync.test.ts";
+  const markdown = "packages/markdown-core/src/ir.test.ts";
+  const gateway = "packages/gateway-client/src/timeouts.test.ts";
+  const protocol = "packages/gateway-protocol/src/frame-guards.test.ts";
+  const boundary = "src/infra/fs-safe-import-boundary.test.ts";
+
+  it("routes mixed package owners once beside explicit boundary and E2E leaves", () => {
+    const ordinary = "packages/example/src/value.test.ts";
+    const e2e = "packages/gateway-client/src/example.e2e.test.ts";
+    const files = [ordinary, fast, worker, markdown, gateway, protocol, boundary, e2e];
+    withPackageFiles(files, (cwd) => {
+      expect(selectedPackageFiles(planRuns(["packages", boundary], cwd)).toSorted()).toEqual(
+        files.filter((file) => file !== e2e).toSorted(),
+      );
+      const plans = planRuns(["packages", gateway, boundary, e2e], cwd);
+
+      expect(selectedPackageFiles(plans).toSorted()).toEqual(files.toSorted());
+      expect(
+        files.map(
+          (file) => plans.find((plan) => selectedPackageFiles([plan]).includes(file))?.config,
+        ),
+      ).toEqual(
+        [
+          "unit",
+          "unit-fast-isolated",
+          "infra",
+          "unit-fast",
+          "gateway-client",
+          "gateway-client",
+          "infra",
+          "e2e",
+        ].map((owner) => `test/vitest/vitest.${owner}.config.ts`),
+      );
+      expect(
+        plans.find((plan) => plan.config === "test/vitest/vitest.e2e.config.ts"),
+      ).toMatchObject({
+        forwardedArgs: [e2e],
+      });
+    });
+  });
+
+  it.each(["relative", "absolute", "trailing slash", "watch", "glob"])(
+    "keeps %s directory selection bounded",
+    (spelling) => {
+      const native = spelling === "watch" || spelling === "glob";
+      const directory = native ? "packages/gateway-client" : "packages/example/src";
+      const selected = [`${directory}/one.test.ts`, `${directory}/nested/two.test.ts`];
+      withPackageFiles(
+        [...selected, "packages/example/other.test.ts", "packages/elsewhere/other.test.ts"],
+        (cwd) => {
+          const target =
+            spelling === "absolute"
+              ? path.join(cwd, directory)
+              : spelling === "trailing slash"
+                ? `./${directory}/`
+                : directory;
+          const args =
+            spelling === "watch"
+              ? ["--watch", target]
+              : [spelling === "glob" ? `${target}/**/*.test.ts` : target];
+          const plans = planRuns(args, cwd);
+          if (native) {
+            expectRun(plans, "gateway-client", {
+              includePatterns: [`${directory}/**/*.test.ts`],
+              watchMode: spelling === "watch",
+            });
+          } else {
+            expect(selectedPackageFiles(plans).toSorted()).toEqual(selected.toSorted());
+          }
+        },
+      );
+    },
+  );
+
+  it("excludes opt-in files and prunes excluded trees, including explicit roots", () => {
+    const directory = "packages/example";
+    const selected = `${directory}/value.test.ts`;
+    const excluded = ["node_modules", "vendor", "._private"].map((name) => `${directory}/${name}`);
+    withPackageFiles(
+      [
+        selected,
+        ...excluded.map((root) => `${root}/hidden.test.ts`),
+        ...[
+          "value.live.test.ts",
+          "value.e2e.test.ts",
+          "._value.test.ts",
+          "value.spec.ts",
+          "value.test.js",
+        ].map((name) => `${directory}/${name}`),
+      ],
+      (cwd) => {
+        const reads = vi.spyOn(fs, "readdirSync");
+
+        expect(selectedPackageFiles(planRuns([directory], cwd)).toSorted()).toEqual([selected]);
+        for (const root of excluded) {
+          expect(selectedPackageFiles(planRuns([root], cwd)).toSorted()).toEqual([
+            `${root}/**/*.test.ts`,
+          ]);
+        }
+        const enumerated = reads.mock.calls.map(([root]) =>
+          path.relative(cwd, String(root)).split(path.sep).join("/"),
+        );
+        expect(enumerated).toContain(directory);
+        expect(
+          enumerated.some((root) => excluded.some((excludedRoot) => root.startsWith(excludedRoot))),
+        ).toBe(false);
+      },
+    );
+  });
+
+  it.each([{ included: [protocol] }, { included: [] }])(
+    "narrows directory discoveries to inherited includes $included while retaining the explicit boundary",
+    ({ included }) => {
+      withPackageFiles([fast, gateway, protocol, boundary], (cwd) => {
+        const includeFile = path.join(cwd, "includes.json");
+        fs.writeFileSync(includeFile, JSON.stringify(included));
+        const specs = runSpecs(["packages", boundary], {
+          cwd,
+          baseEnv: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
+        });
+        expect(specs.flatMap((spec) => spec.includePatterns ?? []).toSorted()).toEqual(
+          [...included, boundary].toSorted(),
+        );
+        expect(fs.readFileSync(includeFile, "utf8")).toBe(JSON.stringify(included));
+      });
+    },
+  );
+
+  it.each([
+    { target: "packages/empty", reason: "target-matched-no-test-files" },
+    { target: "packages/missing", reason: "path-does-not-exist" },
+  ])("keeps $target bounded and reports its missing tests", ({ target, reason }) => {
+    withPackageFiles(["packages/empty/README.md"], (cwd) => {
+      expectRun(planRuns([target], cwd), "unit", { includePatterns: [`${target}/**/*.test.ts`] });
+      expect(unmatchedTargets([target], cwd)).toEqual([
+        expect.objectContaining({ target, reason }),
+      ]);
+    });
   });
 });
 
