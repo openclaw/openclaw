@@ -1,4 +1,3 @@
-// Shared web-search tests cover HTTP error ownership and module-local cache isolation.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UnresolvedSecretInputError } from "../../config/types.secrets.js";
 import { redactLogRecordForTransport, redactToolPayloadText } from "../../logging/redact.js";
@@ -6,12 +5,24 @@ import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { withEnv } from "../../test-utils/env.js";
 import {
   postTrustedWebToolsJson,
-  readWebSearchApiKey,
-  readWebSearchQueryAndCount,
+  readWebSearchApiKey as readKey,
+  readWebSearchQueryAndCount as readQuery,
   throwWebSearchApiError,
 } from "./web-search-provider-common.js";
 
 const realFetch = globalThis.fetch;
+// Only routing is injected; the guarded owner consumes the real HTTP response.
+function routeFetch(baseUrl: string, received?: () => void) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_input, init) => {
+      const response = await realFetch(baseUrl, init);
+      received?.();
+      return response;
+    }),
+  );
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -21,10 +32,10 @@ describe("web search input boundaries", () => {
   it("keeps configured credentials ahead of ordered environment fallbacks", () => {
     withEnv({ TEST_SEARCH_PRIMARY: "  primary  ", TEST_SEARCH_SECONDARY: "secondary" }, () => {
       const envVars = ["TEST_SEARCH_PRIMARY", "TEST_SEARCH_SECONDARY"];
-      expect(readWebSearchApiKey(" configured ", "test.apiKey", envVars)).toBe("configured");
-      expect(readWebSearchApiKey(undefined, "test.apiKey", envVars)).toBe("primary");
+      expect(readKey(" configured ", "test.apiKey", envVars)).toBe("configured");
+      expect(readKey(undefined, "test.apiKey", envVars)).toBe("primary");
       withEnv({ TEST_SEARCH_PRIMARY: " " }, () => {
-        expect(readWebSearchApiKey(" ", "test.apiKey", envVars)).toBe("secondary");
+        expect(readKey(" ", "test.apiKey", envVars)).toBe("secondary");
       });
     });
   });
@@ -34,36 +45,28 @@ describe("web search input boundaries", () => {
     (source) => {
       withEnv({ TEST_SEARCH_PRIMARY: "ambient" }, () => {
         expect(() =>
-          readWebSearchApiKey(
-            { source, provider: "default", id: "TEST_SEARCH_REFERENCE" },
-            "test.apiKey",
-            ["TEST_SEARCH_PRIMARY"],
-          ),
+          readKey({ source, provider: "default", id: "TEST_SEARCH_REFERENCE" }, "test.apiKey", [
+            "TEST_SEARCH_PRIMARY",
+          ]),
         ).toThrow(UnresolvedSecretInputError);
       });
     },
   );
 
   it("reads a required query and keeps count fallback resolution with the caller", () => {
-    expect(readWebSearchQueryAndCount({ query: "  test  ", count: 2 }, { maxResults: 7 })).toEqual({
+    expect(readQuery({ query: "  test  ", count: 2 }, { maxResults: 7 })).toEqual({
       query: "test",
       count: 2,
     });
-    expect(readWebSearchQueryAndCount({ query: "test" }, { maxResults: 7 })).toEqual({
-      query: "test",
-      count: 7,
-    });
-    expect(readWebSearchQueryAndCount({ query: "test" })).toEqual({
-      query: "test",
-      count: undefined,
-    });
-    expect(() => readWebSearchQueryAndCount({})).toThrow("query required");
+    expect(readQuery({ query: "test" }, { maxResults: 7 })).toEqual({ query: "test", count: 7 });
+    expect(readQuery({ query: "test" })).toEqual({ query: "test", count: undefined });
+    expect(() => readQuery({})).toThrow("query required");
   });
 
   it.each([0, -1, 1.5, 11, "invalid"])(
     "rejects invalid count %s rather than using config",
     (count) => {
-      expect(() => readWebSearchQueryAndCount({ query: "test", count }, { maxResults: 7 })).toThrow(
+      expect(() => readQuery({ query: "test", count }, { maxResults: 7 })).toThrow(
         "count must be an integer from 1 to 10.",
       );
     },
@@ -103,11 +106,7 @@ describe("web provider HTTP errors", () => {
           response.end(body.replace("$key", apiKey));
         },
         async (baseUrl) => {
-          // Only routing is injected: the guarded owner consumes a real HTTP response body.
-          vi.stubGlobal(
-            "fetch",
-            vi.fn((_input, init) => realFetch(baseUrl, init)),
-          );
+          routeFetch(baseUrl);
           const error = await postSearch({ apiKey, maxErrorBytes }).catch(
             (cause: unknown) => cause,
           );
@@ -136,14 +135,7 @@ describe("web provider HTTP errors", () => {
         response.write("partial diagnostic");
       },
       async (baseUrl) => {
-        vi.stubGlobal(
-          "fetch",
-          vi.fn(async (_input, init) => {
-            const response = await realFetch(baseUrl, init);
-            controller.abort(reason);
-            return response;
-          }),
-        );
+        routeFetch(baseUrl, () => controller.abort(reason));
         await expect(postSearch({ signal: controller.signal })).rejects.toBe(reason);
       },
     );
@@ -154,10 +146,7 @@ describe("web provider HTTP errors", () => {
     await withServer(
       (_request, response) => response.end('{"answer":"Bearer tokens"}'),
       async (baseUrl) => {
-        vi.stubGlobal(
-          "fetch",
-          vi.fn((_input, init) => realFetch(baseUrl, init)),
-        );
+        routeFetch(baseUrl);
         await expect(postSearch()).resolves.toEqual({ answer: "Bearer tokens" });
       },
     );
@@ -184,8 +173,7 @@ describe("web_search shared cache", () => {
   });
 
   it("keeps cache entries module-local instead of exposing them on a global symbol", async () => {
-    // Cache state should die with the module instance; a global symbol would
-    // leak search payloads across tests, sessions, and plugin reloads.
+    // A global cache would leak payloads across module lifetimes.
     vi.resetModules();
     delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.web-search.cache")];
 
