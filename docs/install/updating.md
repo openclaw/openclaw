@@ -58,6 +58,10 @@ that were never installed.
 These preparation changes require the installed updater to contain the fix;
 staging a newer candidate cannot change an older updater's initial install.
 
+Source candidates bound the native declaration compiler with the shared Go runtime
+policy used by local checks. Node's heap limit does not cover that compiler.
+Explicit `GOMEMLIMIT`, `GOGC`, and `GOMAXPROCS` tuning remains in effect.
+
 Managed update helpers route diagnostic logs to stderr so debug logging cannot
 interrupt their control handshake. This applies to the installed updater; a newer
 candidate cannot change an older updater's pre-activation handshake.
