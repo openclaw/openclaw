@@ -45,13 +45,9 @@ export function createStaticCatalogSnapshotFixture(params: {
       env,
       ...(options?.readOnly ? { readOnly: true } : {}),
     };
-    let current = true;
     const retirement = new AbortController();
-    const isCurrent = () => current;
-    const supersede = () => {
-      current = false;
-      retirement.abort();
-    };
+    const isCurrent = () => !retirement.signal.aborted;
+    const supersede = () => retirement.abort();
     retireAfterTest(supersede);
     const loadedMetadataSnapshot = options?.metadataWorkspace
       ? loadPluginMetadataSnapshot({

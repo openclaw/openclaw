@@ -15,12 +15,9 @@ export async function startPromptCacheMcpServer(signal: AbortSignal) {
     signal,
     createListener: () =>
       http.createServer((request, response) => {
-        if (request.method === "DELETE") {
-          response.writeHead(204).end();
-          return;
-        }
+        const finish = (status: number, body?: string) => response.writeHead(status).end(body);
         if (request.method !== "POST") {
-          response.writeHead(405).end();
+          finish(request.method === "DELETE" ? 204 : 405);
           return;
         }
         let body = "";
@@ -35,9 +32,8 @@ export async function startPromptCacheMcpServer(signal: AbortSignal) {
               params?: { protocolVersion?: string };
             };
             const reply = (result: unknown) => {
-              response.setHeader("content-type", "application/json");
               response
-                .writeHead(200)
+                .writeHead(200, { "content-type": "application/json" })
                 .end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
             };
             if (message.method === "initialize") {
@@ -48,19 +44,18 @@ export async function startPromptCacheMcpServer(signal: AbortSignal) {
               }
               activeSessionId = `cache-mcp-${generation}`;
               response.setHeader("mcp-session-id", activeSessionId);
-              reply({
+              return reply({
                 protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
                 capabilities: { tools: {} },
                 serverInfo: { name: "cache-fixture", version: "1" },
               });
-              return;
             }
             if (request.headers["mcp-session-id"] !== activeSessionId || !activeSessionId) {
-              response.writeHead(404).end("Session not found");
+              finish(404, "Session not found");
               return;
             }
             if (message.method === "notifications/initialized") {
-              response.writeHead(202).end();
+              finish(202);
             } else if (message.method === "tools/list") {
               reply({
                 tools: [
@@ -77,12 +72,10 @@ export async function startPromptCacheMcpServer(signal: AbortSignal) {
             } else if (message.method === "tools/call") {
               reply({ content: [{ type: "text", text: "synthetic MCP result" }] });
             } else {
-              response.writeHead(405).end();
+              finish(405);
             }
           };
-          void respond().catch(() => {
-            response.writeHead(500).end("Invalid synthetic MCP request");
-          });
+          void respond().catch(() => finish(500, "Invalid synthetic MCP request"));
         });
       }),
   });
