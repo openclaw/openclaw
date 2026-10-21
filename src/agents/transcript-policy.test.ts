@@ -12,6 +12,7 @@ import {
 import type { AgentMessage } from "./runtime/index.js";
 import { resolveTranscriptPolicy } from "./transcript-policy.js";
 
+// mock-isolation: Keep synthetic replay policies independent of plugin runtime discovery.
 vi.mock("../plugins/provider-hook-runtime.js", async () => {
   const { buildAnthropicReplayPolicyForModel } = await vi.importActual<
     typeof import("../plugins/provider-replay-helpers.js")
