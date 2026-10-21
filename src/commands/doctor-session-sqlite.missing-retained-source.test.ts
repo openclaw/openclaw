@@ -63,7 +63,7 @@ it.each(["import", "recover"] as const)(
       const receipt = readDeferredPluginSessionImport(receiptParams)!;
       expect(receipt.sources.some((source) => source.path === transcript)).toBe(false);
       expect(
-        receipt.settledSources.map(({ path: sourcePath, reason }) => [sourcePath, reason]),
+        receipt.settledSources?.map(({ path: sourcePath, reason }) => [sourcePath, reason]),
       ).toContainEqual([transcript, expect.stringContaining("SHA-256")]);
       expect(readTranscript()).toEqual(extended);
 

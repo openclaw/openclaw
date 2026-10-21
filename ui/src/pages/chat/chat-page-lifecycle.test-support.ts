@@ -26,7 +26,7 @@ export function createChatPageFixture(sessionKey = "agent:main:current") {
     page,
     navigation,
     settle,
-    async mount() {
+    mount: async () => {
       document.body.append(page);
       await settle();
     },

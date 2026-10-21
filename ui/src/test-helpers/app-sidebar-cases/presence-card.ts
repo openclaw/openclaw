@@ -101,7 +101,7 @@ it("AppSidebar person activity card projects authorized facts and keeps links st
   expect(view.text(".person-activity-card__status")?.trim()).toBe("Online");
   const facts = view.all("dd");
   expect([...facts[0]!.querySelectorAll("span")].map((node) => node.textContent)).toEqual(
-    [...new Set(devices.map(([label]) => label))].toSorted(),
+    [...new Set(devices.map(([label]) => label))].toSorted((a, b) => a.localeCompare(b)),
   );
   expect(facts[0]?.querySelector("small")?.textContent).toBe("Reported time zone: Europe/Paris");
   expect(facts[1]?.textContent?.trim()).toBe("Activity unavailable");

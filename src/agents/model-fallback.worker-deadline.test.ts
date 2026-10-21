@@ -44,6 +44,7 @@ async function runPoolTaskWithDeadline(
 }
 
 const fallbackOptions = {
+  cfg: undefined,
   provider: "fixture-primary",
   model: "fixture-model",
   manifestPlugins: [],

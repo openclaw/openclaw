@@ -43,8 +43,8 @@ describe("tool-images log context", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let png: Buffer;
 
-  beforeAll(async () => {
-    png = await createSolidPngBuffer(2001, 8, { r: 0x7f, g: 0x7f, b: 0x7f });
+  beforeAll(() => {
+    png = createSolidPngBuffer(2001, 8, { r: 0x7f, g: 0x7f, b: 0x7f });
   });
 
   beforeEach(() => {

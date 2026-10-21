@@ -149,9 +149,11 @@ describe("timeout cooldown availability", () => {
         });
         const run = async (name: string) => {
           const work = new AsyncWorkScope();
-          return work
-            .run(() => runEmbeddedEntryFallback(workspace, name, cfg))
-            .finally(() => work.drain());
+          try {
+            return await work.run(() => runEmbeddedEntryFallback(workspace, name, cfg));
+          } finally {
+            await work.drain();
+          }
         };
 
         await run(`timeout-${scenario}`).catch(() => undefined);

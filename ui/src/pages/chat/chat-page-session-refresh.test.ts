@@ -29,7 +29,7 @@ function watchRenders(settlePage: () => Promise<void>) {
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
   return {
     render,
-    async settle() {
+    settle: async () => {
       frames.splice(0).forEach((frame) => frame(0));
       await settlePage();
     },

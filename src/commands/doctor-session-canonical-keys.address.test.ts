@@ -11,7 +11,10 @@ import { resolveSessionStoreKey } from "../gateway/session-store-key.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createCanonicalRepairFixture } from "./doctor-session-repair-fixture.test-support.js";
 
-type Target = Parameters<typeof persistSessionTranscriptTurn>[0] & { sessionId: string };
+type Target = Parameters<typeof persistSessionTranscriptTurn>[0] & {
+  sessionId: string;
+  sessionKey: string;
+};
 
 async function seed(target: Target, content: string, extra: Partial<SessionEntry> = {}) {
   replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1, ...extra });

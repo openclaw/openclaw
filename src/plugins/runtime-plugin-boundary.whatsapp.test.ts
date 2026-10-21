@@ -92,7 +92,7 @@ afterEach(() => {
 describe("runtime plugin boundary whatsapp seam", () => {
   it("shares listener state between staged light and heavy runtime modules", () => {
     const runtimePluginDir = createBundledWhatsAppRuntimeFixture();
-    const load = <T extends object>(artifact: string) =>
+    const load = <T extends object>(artifact: string): T =>
       loadFacadeModuleAtLocationSync<T>({
         location: {
           modulePath: path.join(runtimePluginDir, artifact),

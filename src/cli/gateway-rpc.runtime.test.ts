@@ -65,7 +65,7 @@ const timeoutCase = (
   ["cron.status", { timeout }, undefined, { defaultTimeoutMs }],
   { method: "cron.status", timeoutMs },
 ];
-it.each([
+const forwardingCases: Forwarding[] = [
   timeoutCase(undefined, undefined, 30_000),
   timeoutCase(undefined, 10_000, 10_000),
   timeoutCase("15000", 600_000, 15_000),
@@ -74,7 +74,8 @@ it.each([
   [["sessions.history", {}, message], { method: "sessions.history", params: message }, "subagent"],
   [["health", {}, message], { method: "health", params: message }, "exec"],
   [["sessions.create", {}, { key: "agent:main:empty", message: " ", attachments: [] }], {}, "exec"],
-] satisfies Forwarding[])("forwards %j with source=%s", async (args, expected, source) => {
+];
+it.for(forwardingCases)("forwards %j", async ([args, expected, source]) => {
   vi.stubEnv("OPENCLAW_SHELL", source === "exec" ? "exec" : undefined);
   vi.stubEnv("OPENCLAW_SUBAGENT_EXEC", source === "subagent" ? "1" : undefined);
   await call(...args);

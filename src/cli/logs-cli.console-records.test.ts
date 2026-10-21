@@ -98,7 +98,11 @@ it.each(["sqlite", "postgres"])(
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
       await expect(fs.access(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
-      await releaseListener().finally(() => claim.release());
+      try {
+        await releaseListener();
+      } finally {
+        await claim.release();
+      }
     }
   },
   180_000,
