@@ -34,6 +34,7 @@ export const pluginArrays = [
   "memoryPromptSupplements",
   "widgetPresenters",
   "mcpServerConnectionResolvers",
+  "mcpServerRequestHeaderProviders",
   "cliRegistrars",
   "reloads",
   "nodeHostCommands",

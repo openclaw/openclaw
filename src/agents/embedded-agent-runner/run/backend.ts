@@ -1,6 +1,7 @@
 import { mergeAcceptedSessionSpawnsForRun } from "../../accepted-session-spawn.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { runAgentHarnessAttempt } from "../../harness/selection.js";
+import { bindMcpRequestRun } from "../../mcp-request-context.js";
 import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { copyCoreTtsAttemptResultProvenance } from "../../tools/tts-tool-result-provenance.js";
 import { prepareAgentWorkspaceAttachments } from "../../workspace-access.js";
@@ -49,15 +50,23 @@ export async function runEmbeddedAttemptWithBackend(
   const preparedParams = attachmentMedia?.length
     ? { ...params, inputAttachmentMedia: attachmentMedia }
     : params;
-  const result = await runAgentHarnessAttempt(
-    attachmentNote
-      ? {
-          ...preparedParams,
-          prompt: `${params.prompt}\n\n${attachmentNote}`,
-          transcriptPrompt: params.transcriptPrompt ?? params.prompt,
-        }
-      : preparedParams,
-    nativeSessionRuntime,
+  const result = await bindMcpRequestRun(
+    {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+    },
+    () =>
+      runAgentHarnessAttempt(
+        attachmentNote
+          ? {
+              ...preparedParams,
+              prompt: `${params.prompt}\n\n${attachmentNote}`,
+              transcriptPrompt: params.transcriptPrompt ?? params.prompt,
+            }
+          : preparedParams,
+        nativeSessionRuntime,
+      ),
   );
   // Only the logical run can settle its full child batch after all retries.
   const {

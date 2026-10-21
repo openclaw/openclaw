@@ -35,6 +35,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerHttpRoute() {},
     registerWidgetPresenter() {},
     registerMcpServerConnectionResolver() {},
+    registerMcpServerRequestHeaderProvider() {},
     registerChannel() {},
     registerGatewayMethod() {},
     registerGatewayAccessPolicy() {},

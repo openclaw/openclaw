@@ -17,6 +17,7 @@ const noops = {
   registerHttpRoute: () => {},
   registerWidgetPresenter: () => {},
   registerMcpServerConnectionResolver: () => {},
+  registerMcpServerRequestHeaderProvider: () => {},
   registerChannel: () => {},
   registerGatewayMethod: () => {},
   registerGatewayAccessPolicy: () => {},
