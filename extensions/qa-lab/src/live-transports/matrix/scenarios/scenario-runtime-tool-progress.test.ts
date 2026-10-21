@@ -74,61 +74,38 @@ describe.skipIf(process.platform === "win32")("Matrix mention progress gate", ()
     return { gate, gatePath, published: published.promise };
   }
 
-  async function consumeGate(gatePath: string, published: Promise<void>, signal: AbortSignal) {
-    await withinTest(published, signal);
-    expect((await stat(gatePath)).isDirectory()).toBe(true);
-    expect(await readdir(gatePath)).toEqual([]);
-    await rm(gatePath, { recursive: true });
-  }
+  it.each(["cleanup", "concurrent releases"])(
+    "waits for consumption during %s",
+    async (mode, { signal }) => {
+      const { gate, gatePath, published } = await prepareGate();
+      const pending =
+        mode === "cleanup" ? gate.cleanup() : Promise.all([gate.release(), gate.release()]);
+      try {
+        await withinTest(published, signal);
+        expect((await stat(gatePath)).isDirectory()).toBe(true);
+        expect(await readdir(gatePath)).toEqual([]);
+        await rm(gatePath, { recursive: true });
+        await withinTest(pending, signal);
+      } finally {
+        await rm(gatePath, { recursive: true, force: true });
+        await gate.cleanup();
+        await pending;
+      }
+      await expect(stat(gatePath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 
-  it("waits for failure cleanup to release and consume the gate", async ({ signal }) => {
-    const { gate, gatePath, published } = await prepareGate();
-
-    const cleanupPromise = gate.cleanup();
-    try {
-      await consumeGate(gatePath, published, signal);
-      await withinTest(cleanupPromise, signal);
-    } finally {
-      await rm(gatePath, { recursive: true, force: true });
-      await cleanupPromise;
-    }
-
-    await expect(stat(gatePath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("creates the release directory idempotently and waits for consumption", async ({ signal }) => {
-    const { gate, gatePath, published } = await prepareGate();
-
-    const releases = Promise.all([gate.release(), gate.release()]);
-    try {
-      await consumeGate(gatePath, published, signal);
-      await withinTest(releases, signal);
-    } finally {
-      await rm(gatePath, { recursive: true, force: true });
-      await gate.cleanup();
-      await releases;
-    }
-
-    await expect(stat(gatePath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("removes an unconsumed gate after bounded cleanup", async () => {
+  it.each([false, true])("cleans an unconsumed gate with pending release: %s", async (release) => {
     const { gate, gatePath } = await prepareGate(10);
-
-    await gate.cleanup();
-
-    await expect(stat(gatePath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(gate.release()).rejects.toThrow("has already been cleaned up");
-  });
-
-  it("does not mistake cleanup removal for command consumption", async () => {
-    const { gate, gatePath } = await prepareGate(10);
-
-    const releasePromise = gate.release();
+    const releasePromise = release ? gate.release() : undefined;
     const cleanupPromise = gate.cleanup();
-
-    await expect(releasePromise).rejects.toThrow("did not consume its release gate");
+    if (releasePromise) {
+      await expect(releasePromise).rejects.toThrow("did not consume its release gate");
+    }
     await cleanupPromise;
     await expect(stat(gatePath)).rejects.toMatchObject({ code: "ENOENT" });
+    if (!release) {
+      await expect(gate.release()).rejects.toThrow("has already been cleaned up");
+    }
   });
 });
