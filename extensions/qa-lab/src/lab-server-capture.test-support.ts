@@ -30,13 +30,11 @@ export function createQaLabCaptureMock() {
       events.push({ ...event });
     },
     async listSessions(limit: number) {
-      return sessions
-        .slice(0, limit)
-        .map((session) =>
-          Object.assign({}, session, {
-            eventCount: events.filter((event) => event.sessionId === session.id).length,
-          }),
-        );
+      return sessions.slice(0, limit).map((session) =>
+        Object.assign({}, session, {
+          eventCount: events.filter((event) => event.sessionId === session.id).length,
+        }),
+      );
     },
     async getSessionEvents(sessionId: string, limit: number) {
       return events.filter((event) => event.sessionId === sessionId).slice(0, limit);
