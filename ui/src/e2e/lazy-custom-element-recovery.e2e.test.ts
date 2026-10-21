@@ -77,18 +77,6 @@ async function withHeldModule(
   }
 }
 
-async function visitNativeShell(page: Page) {
-  const response = await page.goto(suite.server.baseUrl, { waitUntil: "domcontentloaded" });
-  expect(response?.status()).toBe(200);
-  await page.locator(".sidebar-rail").waitFor({ state: "attached" });
-}
-
-async function openNewSession(page: Page) {
-  await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
-  await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-  await page.locator(".new-session-page__message").waitFor({ state: "visible" });
-}
-
 async function installChunkFailure(
   page: Page,
   modulePath: string,
@@ -454,7 +442,9 @@ suite.define(() => {
   }
 
   it("restores the command-palette action after a real stale-chunk reload", async () => {
-    await suite.withPage(pageOptions, async ({ page }) => {
+    const context = await suite.newBrowserContext(pageOptions);
+    try {
+      const page = await context.newPage();
       const failure = await installChunkFailure(page, "ui/src/components/command-palette.tsx");
       await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -475,7 +465,9 @@ suite.define(() => {
 
       await expect.poll(failure.chunkDocumentCount).toBe(2);
       expect(await page.locator("openclaw-command-palette").count()).toBe(1);
-    });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
   });
 
   it.each(["new", "chat"] as const)(
@@ -694,7 +686,9 @@ suite.define(() => {
         page,
         controlUiE2eBuiltModuleRequest(nativeTitlebarModule),
         async (held) => {
-          await visitNativeShell(page);
+          const response = await page.goto(suite.server.baseUrl, { waitUntil: "domcontentloaded" });
+          expect(response?.status()).toBe(200);
+          await page.locator(".sidebar-rail").waitFor({ state: "attached" });
           await held.request;
           const element = page.locator("openclaw-macos-titlebar-controls");
           expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
@@ -719,7 +713,9 @@ suite.define(() => {
           await expect
             .poll(() => toolbar.getByRole("button", { name: "Forward" }).isDisabled())
             .toBe(true);
-          await openNewSession(page);
+          await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
+          await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+          await page.locator(".new-session-page__message").waitFor({ state: "visible" });
           expect(held.requests()).toBe(1);
           expect(errors).toEqual([]);
         },
@@ -737,7 +733,11 @@ suite.define(() => {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
       });
       const documentRequests = observeDocuments(page);
-      await visitNativeShell(page);
+      const response = await page.goto(suite.server.baseUrl, {
+        waitUntil: "domcontentloaded",
+      });
+      expect(response?.status()).toBe(200);
+      await page.locator(".sidebar-rail").waitFor({ state: "attached" });
       const error = await expectRealChunkFailure(page, "openclaw-macos-titlebar-controls");
       await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
       expect(failure.chunkDocumentCount()).toBe(1);
@@ -761,7 +761,9 @@ suite.define(() => {
       const toolbar = page.locator(".macos-titlebar-controls");
       await toolbar.waitFor({ state: "visible" });
       await page.locator(".sidebar-session-toolbar__collapse").click();
-      await openNewSession(page);
+      await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       expect(await error.count()).toBe(0);
       expect(failure.chunkDocumentCount()).toBe(2);
       expect(documentRequests()).toBe(2);
