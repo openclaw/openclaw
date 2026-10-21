@@ -77,29 +77,15 @@ describe("cron tool creator cap", () => {
   });
 
   it("uses Gateway replacement semantics for stream schedule updates", () => {
+    const source = { kind: "stream", command: ["node", "events.mjs"] };
     const current = {
       enabled: true,
-      schedule: { kind: "stream", command: ["node", "events.mjs"], cwd: "/workspace" },
+      schedule: { ...source, cwd: "/workspace" },
     };
-
-    expect(
-      cronUpdateRequiresStreamExecAuthority(
-        {
-          schedule: {
-            kind: "stream",
-            command: ["node", "events.mjs"],
-            cwd: "/workspace",
-          },
-        },
-        current,
-      ),
-    ).toBe(false);
-    expect(
-      cronUpdateRequiresStreamExecAuthority(
-        { schedule: { kind: "stream", command: ["node", "events.mjs"] } },
-        current,
-      ),
-    ).toBe(true);
+    expect(cronUpdateRequiresStreamExecAuthority({ schedule: current.schedule }, current)).toBe(
+      false,
+    );
+    expect(cronUpdateRequiresStreamExecAuthority({ schedule: source }, current)).toBe(true);
     expect(
       cronUpdateRequiresStreamExecAuthority(
         { schedule: { command: ["node", "replacement.mjs"] } },
@@ -169,33 +155,22 @@ describe("cron tool creator cap", () => {
       message: "work",
       toolsAllow: ["read"],
     };
-    const narrower = readyPatch({
-      patch: { payload: { message: "updated" } },
-      creatorToolAllowlist: ["read", "exec", "cron"],
-      currentJob: { payload: storedNarrowerPayload },
-    });
-    const storedDefaultPayload = { ...storedNarrowerPayload, toolsAllowIsDefault: true };
-    const storedDefault = readyPatch({
-      patch: { payload: { message: "updated" } },
-      creatorToolAllowlist: ["read", "cron"],
-      currentJob: { payload: storedDefaultPayload },
-    });
-
-    expect(narrower).toEqual({ payload: { kind: "agentTurn", message: "updated" } });
-    expect(mergeCronPayload(storedNarrowerPayload, narrower.payload as CronPayloadPatch)).toEqual({
-      kind: "agentTurn",
-      message: "updated",
-      toolsAllow: ["read"],
-    });
-    expect(storedDefault).toEqual({ payload: { kind: "agentTurn", message: "updated" } });
-    expect(
-      mergeCronPayload(storedDefaultPayload, storedDefault.payload as CronPayloadPatch),
-    ).toEqual({
-      kind: "agentTurn",
-      message: "updated",
-      toolsAllow: ["read"],
-      toolsAllowIsDefault: true,
-    });
+    for (const isDefault of [false, true]) {
+      const payload = {
+        ...storedNarrowerPayload,
+        ...(isDefault ? { toolsAllowIsDefault: true } : {}),
+      };
+      const patch = readyPatch({
+        patch: { payload: { message: "updated" } },
+        creatorToolAllowlist: isDefault ? ["read", "cron"] : ["read", "exec", "cron"],
+        currentJob: { payload },
+      });
+      expect(patch).toEqual({ payload: { kind: "agentTurn", message: "updated" } });
+      expect(mergeCronPayload(payload, patch.payload as CronPayloadPatch)).toEqual({
+        ...payload,
+        message: "updated",
+      });
+    }
   });
 
   it("inherits kind for kind-less patches independently of creator policy", () => {
@@ -223,75 +198,47 @@ describe("cron tool creator cap", () => {
   const makeAlias = (ask?: "always") => gatewayExecAlias(testTool("exec"), ask);
   const read = { name: "read" };
   const processTool = { name: "process" };
-  it.each([
-    {
-      name: "canonicalizes a host-created alias",
-      tools: [makeAlias("always"), testTool("read")],
-      expected: [{ ...aliased, execTarget: pin }, read],
-      target: pin,
-    },
-    {
-      name: "keeps unregistered names literal",
-      tools: [testTool("gateway_exec")],
-      expected: [{ name: "gateway_exec" }],
-    },
-    {
-      name: "drops pins with a later unpinned grant",
-      tools: [makeAlias(), testTool("exec")],
-      expected: [aliased],
-    },
-    {
-      name: "drops pins with an earlier unpinned grant",
-      tools: [testTool("exec"), makeAlias()],
-      expected: [aliased],
-    },
-    {
-      name: "keeps alias pins alongside native shell",
-      tools: [makeAlias("always")],
-      options: { canonicalToolNames: ["exec", "process"] },
-      expected: [{ ...aliased, execTarget: pin }, processTool],
-      target: pin,
-    },
-    {
-      name: "pins native shell only with owner attestation",
-      tools: [testTool("read")],
-      options: {
+  const pinned = { ...aliased, execTarget: pin };
+  const nativeTools = { canonicalToolNames: ["exec", "process"] };
+  const pinnedNative = { ...native, execTarget: { host: "gateway" as const } };
+  it.each<
+    [
+      name: string,
+      tools: AnyAgentTool[],
+      expected: CronCreatorToolAllowlistEntry[],
+      options?: Parameters<typeof capture>[1],
+      target?: { host: "gateway"; ask?: "always" },
+    ]
+  >([
+    ["canonical alias", [makeAlias("always"), testTool("read")], [pinned, read], undefined, pin],
+    ["unregistered literal", [testTool("gateway_exec")], [{ name: "gateway_exec" }]],
+    ["later unpinned grant", [makeAlias(), testTool("exec")], [aliased]],
+    ["earlier unpinned grant", [testTool("exec"), makeAlias()], [aliased]],
+    ["alias beside native shell", [makeAlias("always")], [pinned, processTool], nativeTools, pin],
+    [
+      "attested native shell",
+      [testTool("read")],
+      [read, pinnedNative, processTool, { name: "web_fetch" }],
+      {
         canonicalToolNames: ["exec", "process", "read", "web_fetch"],
         nativeExecTarget: { host: "gateway" },
       },
-      expected: [
-        read,
-        { ...native, execTarget: { host: "gateway" } },
-        processTool,
-        { name: "web_fetch" },
-      ],
-      target: { host: "gateway" },
-    },
-    {
-      name: "leaves native shell without attestation unpinned",
-      tools: [testTool("read")],
-      options: { canonicalToolNames: ["exec", "process"] },
-      expected: [read, native, processTool],
-    },
-    {
-      name: "does not let native attestation pin an OpenClaw grant",
-      tools: [testTool("exec")],
-      options: { canonicalToolNames: ["exec"], nativeExecTarget: { host: "gateway" } },
-      expected: [direct],
-    },
-    {
-      name: "captures native question authority",
-      tools: [testTool("read")],
-      options: { canonicalToolNames: ["read", "ask_user"] },
-      expected: [read, { name: "ask_user" }],
-    },
-  ] satisfies {
-    name: string;
-    tools: AnyAgentTool[];
-    options?: Parameters<typeof capture>[1];
-    expected: CronCreatorToolAllowlistEntry[];
-    target?: { host: "gateway"; ask?: "always" };
-  }[])("$name", ({ tools, options, expected, target }) => {
+      { host: "gateway" },
+    ],
+    ["unattested native shell", [testTool("read")], [read, native, processTool], nativeTools],
+    [
+      "native attestation cannot pin OpenClaw",
+      [testTool("exec")],
+      [direct],
+      { canonicalToolNames: ["exec"], nativeExecTarget: { host: "gateway" } },
+    ],
+    [
+      "native question",
+      [testTool("read")],
+      [read, { name: "ask_user" }],
+      { canonicalToolNames: ["read", "ask_user"] },
+    ],
+  ])("captures %s", (_name, tools, expected, options, target) => {
     const captured = capture(tools, options);
     expect(captured).toEqual(expected);
     expect(resolveCronCreatorExecToolTarget(captured)).toEqual(target);

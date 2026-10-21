@@ -263,8 +263,14 @@ describe("cron stream agent authority final effects", () => {
         if (!created) {
           throw new Error("authorized stream was not persisted");
         }
+        const readJob = () => cliJson<CronJob>(instance, ["cron", "get", created.id]);
+        const denyUpdate = (
+          tool: ReturnType<typeof createCronTool>,
+          job: Record<string, unknown>,
+          methods?: string[],
+        ) => deny(tool, { action: "update", jobId: created.id, job }, methods);
         const firstPid = await waitForPid(pidPath, undefined, async () => {
-          const current = await cliJson<CronJob>(instance, ["cron", "get", created.id]);
+          const current = await readJob();
           return `job=${JSON.stringify(current)}\ngateway logs:\n${instance.logs()}`;
         });
 
@@ -294,12 +300,12 @@ describe("cron stream agent authority final effects", () => {
         await cliJson(instance, ["cron", "disable", created.id]);
         await waitForDead(firstPid);
         await withWeakManagementTool(async (management) => {
-          await deny(management, { action: "update", jobId: created.id, job: { enabled: true } });
+          await denyUpdate(management, { enabled: true });
         });
-        expect((await cliJson<CronJob>(instance, ["cron", "get", created.id])).enabled).toBe(false);
+        expect((await readJob()).enabled).toBe(false);
 
-        await deny(weak, { action: "update", jobId: created.id, job: { enabled: true } });
-        expect((await cliJson<CronJob>(instance, ["cron", "get", created.id])).enabled).toBe(false);
+        await denyUpdate(weak, { enabled: true });
+        expect((await readJob()).enabled).toBe(false);
 
         await strong.execute("allowed-enable", {
           action: "update",
@@ -308,22 +314,14 @@ describe("cron stream agent authority final effects", () => {
           job: { enabled: true },
         });
         const secondPid = await waitForPid(pidPath, firstPid);
-        expect((await cliJson<CronJob>(instance, ["cron", "get", created.id])).enabled).toBe(true);
+        expect((await readJob()).enabled).toBe(true);
 
-        await deny(
+        await denyUpdate(
           createAuthorityTool(["read"]),
-          {
-            action: "update",
-            jobId: created.id,
-            job: { schedule: { kind: "stream", command: streamInput.schedule.command } },
-          },
+          { schedule: { kind: "stream", command: streamInput.schedule.command } },
           ["cron.get"],
         );
-        const afterOmittedFieldDenial = await cliJson<CronJob>(instance, [
-          "cron",
-          "get",
-          created.id,
-        ]);
+        const afterOmittedFieldDenial = await readJob();
         expect(afterOmittedFieldDenial.schedule).toEqual(streamInput.schedule);
         expect(Number(await fs.readFile(pidPath, "utf8"))).toBe(secondPid);
         process.kill(secondPid, 0);
@@ -357,9 +355,7 @@ describe("cron stream agent authority final effects", () => {
         }
         const thirdPid = await waitForPid(pidPath, secondPid);
         expect(injectedConflict).toBe(true);
-        expect((await cliJson<CronJob>(instance, ["cron", "get", created.id])).schedule).toEqual(
-          conflictSchedule,
-        );
+        expect((await readJob()).schedule).toEqual(conflictSchedule);
 
         const exhaustionRaceGatewayMethods: string[] = [];
         let injectedExhaustion = false;
@@ -395,30 +391,26 @@ describe("cron stream agent authority final effects", () => {
         }
         expect(exhaustionRaceGatewayMethods).toEqual(["cron.get"]);
         await waitForDead(thirdPid);
-        const racedExhausted = await cliJson<CronJob>(instance, ["cron", "get", created.id]);
+        const racedExhausted = await readJob();
         expect(racedExhausted.state.streamRestartExhausted).toBe(true);
         expect(Number(await fs.readFile(pidPath, "utf8"))).toBe(thirdPid);
 
         await instance.stopGateway();
         seedRestartExhaustedStream(instance, created.id);
         await instance.startGateway();
-        const exhausted = await cliJson<CronJob>(instance, ["cron", "get", created.id]);
+        const exhausted = await readJob();
         expect(exhausted.enabled).toBe(true);
         expect(exhausted.state.streamRestartExhausted).toBe(true);
         expect(Number(await fs.readFile(pidPath, "utf8"))).toBe(thirdPid);
 
-        await deny(
+        await denyUpdate(
           createAuthorityTool(["read"]),
-          {
-            action: "update",
-            jobId: created.id,
-            job: { state: { streamRestartExhausted: false } },
-          },
+          { state: { streamRestartExhausted: false } },
           ["cron.get"],
         );
 
-        await deny(weak, { action: "update", jobId: created.id, job: { enabled: true } });
-        const stillExhausted = await cliJson<CronJob>(instance, ["cron", "get", created.id]);
+        await denyUpdate(weak, { enabled: true });
+        const stillExhausted = await readJob();
         expect(stillExhausted.enabled).toBe(true);
         expect(stillExhausted.state.streamRestartExhausted).toBe(true);
         expect(Number(await fs.readFile(pidPath, "utf8"))).toBe(thirdPid);
