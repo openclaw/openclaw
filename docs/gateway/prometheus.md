@@ -1052,10 +1052,12 @@ individual worker heap usage for each label set. It is a gauge for context, not 
 byte counter or a sum of simultaneous worker heaps. It can miss peaks between
 samples, and remains visible after the last worker exits.
 
-Workers report through the existing periodic memory channel and piggyback final
-task measurements on replies, without another per-task round trip. Collection
-requires enabled diagnostics and an interested consumer. Tasks before activation
-are not backfilled. Forced termination, crashes, or cancellation before a reply
+Workers report through the existing periodic memory channel. Task replies carry
+only a completion marker, without a heap read or another per-task round trip.
+Healthy retirement flushes the last GC batch and heap sample over the same channel
+before stopping the worker, with a 100 ms best-effort limit. Collection requires
+enabled diagnostics and an interested consumer. Tasks before activation are not
+backfilled. Forced termination, crashes, cancellation, or a retirement flush timeout
 can lose the unfinished interval; periodic reports preserve earlier observations.
 Bun does not provide native GC samples, so its GC counters are absent. The existing
 GC histogram remains available for duration distributions.
@@ -1077,7 +1079,18 @@ sum(rate(openclaw_worker_tasks_completed_total{worker_class="compute",script="pr
 
 Use windows with completed tasks; an empty denominator does not establish zero
 cost. A task is not necessarily an agent turn, so use a matching turn counter
-when the workload can issue multiple tasks per turn. Compare the retained heap
+when the workload can issue multiple tasks per turn. For GC seconds per created
+agent turn, align both sides to the same Gateway and workload window:
+
+```promql
+sum by (instance) (increase(openclaw_worker_gc_duration_seconds_total{worker_class="compute",script="provider-prompt-state.worker.js"}[30m]))
+/
+sum by (instance) (increase(openclaw_session_turn_created_total[30m]))
+```
+
+Replace the numerator with `openclaw_worker_gc_reclaimed_bytes_total` for reclaimed
+bytes per created turn. Keep the same traffic mix and allow in-flight turns and
+worker retirement to settle at window boundaries. Compare the retained heap
 high-water separately with
 `openclaw_worker_heap_used_high_water_bytes{worker_class="compute",script="provider-prompt-state.worker.js"}`;
 do not apply `rate()` to that gauge. Before/after windows must both have these

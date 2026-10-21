@@ -15,6 +15,7 @@ import {
 import {
   attributeWorkerToPool,
   createCpuTrackedWorker,
+  flushWorkerDiagnostics,
   markWorkerRetirement,
   receiveWorkerMemoryPort,
   isWorkerGcObservationEnabled,
@@ -182,6 +183,7 @@ export function createWorkerTaskHost(
       }
       markWorkerRetirement(worker, reason);
     },
+    flushWorkerDiagnostics,
     computeCapacity: getWorkerComputeCapacity(),
     pools: liveWorkerTaskPools,
   };

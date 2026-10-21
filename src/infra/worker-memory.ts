@@ -9,8 +9,6 @@ import {
   type GcSample,
 } from "./gc-observer.js";
 
-type WorkerTaskSample = { heapUsed: number; gc?: GcSample[] };
-
 export type WorkerGcStorm = {
   workerId?: string;
   runId?: string;
@@ -62,14 +60,13 @@ export function serveWorkerMemorySamples(
   const heapSizeLimitBytes = process.versions.bun ? undefined : getHeapStatistics().heap_size_limit;
   let gc: GcSample[] | undefined;
   let taskMetrics = false;
-  let collectingTask = false;
   const flushGc = () => {
     if (gc) {
       port1.postMessage({ gc });
       gc = undefined;
     }
   };
-  const sample = () => {
+  const sample = (flushed?: true) => {
     const { heapUsed, heapTotal, external, arrayBuffers } = process.memoryUsage();
     const heapSpaces = process.versions.bun
       ? undefined
@@ -87,6 +84,7 @@ export function serveWorkerMemorySamples(
       heapSpaces,
       retainedData: retainedData?.(),
       gc,
+      flushed,
     });
     gc = undefined;
   };
@@ -96,7 +94,7 @@ export function serveWorkerMemorySamples(
       stopGc ??= observeGcSamples((samples) => {
         (gc ??= []).push(...samples);
         // Pool workers can retire between heartbeats. Use the existing native sampler's cadence.
-        if (!collectingTask && (taskMetrics || gc.length >= MAX_PENDING_GC_SAMPLES)) {
+        if (taskMetrics || gc.length >= MAX_PENDING_GC_SAMPLES) {
           flushGc();
         }
       });
@@ -108,7 +106,14 @@ export function serveWorkerMemorySamples(
   };
   port1.on(
     "message",
-    (request: { gc: boolean } | { captureGcProfile: WorkerGcStorm } | undefined) => {
+    (
+      request: { gc: boolean } | { flush: true } | { captureGcProfile: WorkerGcStorm } | undefined,
+    ) => {
+      if (request && "flush" in request) {
+        flushGcSamples();
+        sample(true);
+        return;
+      }
       if (request && "captureGcProfile" in request) {
         const storm = request.captureGcProfile;
         void import("../logging/diagnostic-worker-gc-profile.js")
@@ -149,19 +154,8 @@ export function serveWorkerMemorySamples(
       taskMetrics = enabled;
       setGcEnabled(enabled);
     },
-    collectTask(): WorkerTaskSample | undefined {
-      if (!taskMetrics) {
-        return undefined;
-      }
-      collectingTask = true;
-      try {
-        flushGcSamples();
-        const taskSample = { heapUsed: getHeapStatistics().used_heap_size, gc };
-        gc = undefined;
-        return taskSample;
-      } finally {
-        collectingTask = false;
-      }
+    collectTask(): true | undefined {
+      return taskMetrics ? true : undefined;
     },
     close(this: void) {
       diagnosticPort = undefined;

@@ -2317,9 +2317,9 @@ node --import ./scripts/tsx.mjs scripts/perf/worker-task-metrics-measure.ts \
   --start-at <future-epoch-ms> --output /path/to/result.json
 ```
 
-Each phase has four concurrent clients and four bursts of 500 timed tasks,
-providing 2,000 samples for p50/p95/p99; every percentile includes its sample count.
-Each burst first warms 100 tasks, and then retires its workers with `pool.rotate()`.
+Each phase has four concurrent clients and four bursts of 5,000 timed tasks,
+providing 20,000 samples for p50/p95/p99; every percentile includes its sample count.
+Each burst first warms 500 tasks, and then retires its workers with `pool.rotate()`.
 Task latency and phase CPU/elapsed exclude warmup and rotation; rotation times are
 reported separately. The first warmup completes before the shared start deadline;
 subsequent bursts and the second phase run sequentially. Missed startup deadlines,

@@ -21,8 +21,8 @@ const startAt = Number(values["start-at"]);
 assert.ok(Number.isSafeInteger(startAt) && startAt >= 0, "--start-at must be epoch milliseconds");
 const clients = 4,
   bursts = 4,
-  tasksPerBurst = 500,
-  warmupPerBurst = 100;
+  tasksPerBurst = 5000,
+  warmupPerBurst = 500;
 const pool = new WorkerTaskPool<PromptPreparationTask, PromptPreparationResult>({
   workerUrl: new URL(
     "../../src/agents/embedded-agent-runner/provider-prompt-state.worker.ts",

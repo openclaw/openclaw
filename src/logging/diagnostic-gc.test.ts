@@ -81,9 +81,25 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
 });
 
-it("drains short-task GC into the reply before a heartbeat and never counts the batch twice", () => {
+it("drains final short-task GC on retirement without sampling each task or counting a batch twice", async () => {
   const parent = new MessageChannel();
+  const attached = once(parent.port1, "message");
   const memory = serveWorkerMemorySamples(parent.port2);
+  const [{ port }] = (await attached) as [{ port: MessagePort }];
+  await once(port, "message");
+  const samples: unknown[] = [];
+  port.on("message", (sample) => samples.push(sample));
+  const flush = () =>
+    new Promise<void>((resolve) => {
+      const receive = (sample: { flushed?: boolean }) => {
+        if (sample.flushed) {
+          port.off("message", receive);
+          resolve();
+        }
+      };
+      port.on("message", receive);
+      port.postMessage({ flush: true });
+    });
   try {
     memory.setTaskMetrics(true);
     native.collect([
@@ -94,20 +110,29 @@ it("drains short-task GC into the reply before a heartbeat and never counts the 
         afterGC: { heapStatistics: { usedHeapSize: 512 }, heapSpaceStatistics: [] },
       },
     ]);
-    expect(memory.collectTask()?.gc).toEqual([
-      {
-        kind: "scavenge",
-        reason: "other",
-        durationMs: 2,
-        heapUsedBeforeBytes: 2048,
-        reclaimedBytes: 1536,
-      },
-    ]);
-    expect(memory.collectTask()?.gc).toBeUndefined();
+    expect(memory.collectTask()).toBe(true);
+    expect(samples).toEqual([]);
+    await flush();
+    expect(samples).toContainEqual({
+      gc: [
+        {
+          kind: "scavenge",
+          reason: "other",
+          durationMs: 2,
+          heapUsedBeforeBytes: 2048,
+          reclaimedBytes: 1536,
+        },
+      ],
+    });
+    samples.length = 0;
+    await flush();
+    expect(samples).toHaveLength(1);
+    expect(samples[0]).toMatchObject({ flushed: true, gc: undefined });
     memory.setTaskMetrics(false);
     expect(memory.collectTask()).toBeUndefined();
   } finally {
     memory.close();
+    port.close();
     parent.port1.close();
     parent.port2.close();
   }

@@ -2,9 +2,10 @@ import "../../worker-heap-flag.mjs";
 import { channel } from "node:diagnostics_channel";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isMainThread, MessagePort, Worker } from "node:worker_threads";
+import { isMainThread, MessagePort, receiveMessageOnPort, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
 import type { GcSample } from "./gc-observer.js";
@@ -32,6 +33,7 @@ type WorkerMemorySample = Pick<
   heapSpaces?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["heapSpaces"];
   retainedData?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["retainedData"];
   gc?: GcSample[];
+  flushed?: true;
 };
 
 type WorkerCpuHandle = {
@@ -65,6 +67,7 @@ type WorkerSource = {
   memoryPort?: MessagePort;
   memoryPending?: boolean;
   memoryUnavailable?: boolean;
+  memoryFlush?: ReturnType<typeof createRetainedOperation<void>>;
 };
 
 export type { WorkerRetirementReason } from "@openclaw/worker-runtime";
@@ -208,6 +211,7 @@ function forgetWorker(worker: WorkerCpuHandle): void {
   const counts = countWorkerStart(source);
   const reason = source.retirementReason ?? "exit";
   counts.retired.set(reason, (counts.retired.get(reason) ?? 0) + 1);
+  source.memoryFlush?.resolve();
   source.memoryPort?.close();
   trackedWorkers.workers.delete(worker);
   trackedWorkers.revision++;
@@ -235,6 +239,44 @@ export function markWorkerRetirement(
   if (source) {
     source.retirementReason ??= reason;
   }
+}
+
+/** Best effort final sample: optional telemetry must never hold native retirement open. */
+export function flushWorkerDiagnostics(worker: WorkerCpuHandle, reason: WorkerRetirementReason) {
+  const source = trackedWorkers.workers.get(worker);
+  if (source?.memoryFlush) {
+    return source.memoryFlush.operation;
+  }
+  const port = source?.memoryPort;
+  if (
+    !source?.taskMetrics ||
+    !port ||
+    !trackedWorkers.gcObserver ||
+    ["failure", "cancelled", "crash", "gc-thrash", "gc-storm", "exit"].includes(reason)
+  ) {
+    return undefined;
+  }
+  const deadline = performance.now() + 100;
+  const completion = createRetainedOperation<void>(() => {
+    // Retained cleanup may run without Promise reactions or port event callbacks.
+    for (let next = receiveMessageOnPort(port); next; next = receiveMessageOnPort(port)) {
+      port.emit("message", next.message);
+    }
+    if (performance.now() >= deadline) {
+      completion.resolve();
+    }
+  });
+  source.memoryFlush = completion;
+  // Keep async close alive until the response or deadline, even when the worker is unref'ed.
+  const timeout = setTimeout(() => completion.resolve(), 100);
+  void completion.operation.result.then(() => clearTimeout(timeout));
+  try {
+    port.postMessage({ flush: true });
+    recordWorkerMessage("memory", "to_worker", 1);
+  } catch {
+    completion.resolve();
+  }
+  return completion.operation;
 }
 
 function canObserveWorkerMessages(worker: Worker): boolean {
@@ -447,27 +489,12 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
   if (
     isRecord(message) &&
     (message.status === "ok" || message.status === "failed") &&
-    isRecord(message.diagnostics)
+    message.diagnostics === true
   ) {
     const source = trackedWorkers.workers.get(worker);
-    if (source) {
+    if (source?.taskMetrics) {
       // Host telemetry is attached by the served worker, never taken from the task result.
-      const sample = message.diagnostics;
-      if (Array.isArray(sample.gc)) {
-        recordWorkerGc(source, sample.gc);
-      }
-      if (
-        source.taskMetrics &&
-        typeof sample.heapUsed === "number" &&
-        Number.isFinite(sample.heapUsed) &&
-        sample.heapUsed >= 0
-      ) {
-        source.taskMetrics.tasksCompleted++;
-        source.taskMetrics.heapUsedHighWaterBytes = Math.max(
-          source.taskMetrics.heapUsedHighWaterBytes,
-          sample.heapUsed,
-        );
-      }
+      source.taskMetrics.tasksCompleted++;
     }
     return false;
   }
@@ -486,6 +513,7 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     source.memoryPort = undefined;
     source.memoryPending = false;
     source.memoryUnavailable = true;
+    source.memoryFlush?.resolve();
     port.close();
   };
   port.on(
@@ -591,6 +619,9 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
       };
       source.memoryPending = false;
       source.memoryUnavailable = false;
+      if (record.flushed) {
+        source.memoryFlush?.resolve();
+      }
     },
   );
   port.once("close", close);
