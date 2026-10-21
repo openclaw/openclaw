@@ -151,6 +151,28 @@ describe("install-cli.sh", () => {
     },
   );
 
+  it("preserves the mode of an existing custom install prefix", () => {
+    const root = tempDirs.make("openclaw-install-cli-custom-prefix-mode-");
+    const prefix = join(root, "custom-prefix");
+    const cli = join(root, "cli");
+    mkdirSync(prefix, { recursive: true });
+    chmodSync(prefix, 0o775);
+    writeShell(cli, "printf 'OpenClaw 2026.10.5\\n'");
+
+    const result = runInstallCliShell(
+      `
+      umask 0002
+      install_node() { :; }
+      install_openclaw() { mkdir -p "$PREFIX/bin"; cp "$FIXTURE_CLI" "$PREFIX/bin/openclaw"; }
+      main --json --npm --onboard --runtime-only --prefix "$FIXTURE_PREFIX"
+      `,
+      { HOME: root, FIXTURE_CLI: cli, FIXTURE_PREFIX: prefix },
+    );
+
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(lstatSync(prefix).mode & 0o777).toBe(0o775);
+  });
+
   it("keeps runtime-only installation free of service and onboarding effects", () => {
     const root = tempDirs.make("openclaw-browser-runtime-install-");
     const prefix = join(root, "prefix"),
