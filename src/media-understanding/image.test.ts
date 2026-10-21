@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
+import type { ProviderStreamOptions } from "../llm/types.js";
 import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -30,6 +31,7 @@ const {
   fetchMock,
   resolveModelAsyncMock,
   unwrapSecretSentinelsForProviderEgressMock,
+  registerProviderStreamForModelMock,
 } = imageRuntimeMocks;
 
 const {
@@ -55,6 +57,40 @@ function mockOpenAi() {
 function openAiCompletion(text: string) {
   return imageCompletion("openai-responses", openai.provider, openai.model, text);
 }
+const opencode = {
+  provider: "opencode-go",
+  model: "gemini-3-flash",
+  baseUrl: "https://opencode.ai/zen/go/v1",
+};
+const sessionHeader = "x-opencode-session";
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const opencodeCompletion = () =>
+  imageCompletion("openai-completions", opencode.provider, opencode.model, "vision ok");
+function stubProviderStream(result = vi.fn(async () => opencodeCompletion())) {
+  const stream = vi.fn((_model: unknown, _context: unknown, _options: ProviderStreamOptions) => ({
+    result,
+  }));
+  registerProviderStreamForModelMock.mockReturnValue(stream);
+  return {
+    stream,
+    options(index: number) {
+      const options = expectDefined(
+        stream.mock.calls.at(index),
+        `provider stream call ${index}`,
+      )[2];
+      return { sessionId: options.sessionId, header: options.headers?.[sessionHeader] };
+    },
+  };
+}
+function requestOpencode(
+  { provider, model, baseUrl } = opencode,
+  extras: Record<string, unknown> = {},
+) {
+  mockImageModel({ provider, id: model, api: "openai-completions", baseUrl, ...extras });
+  return describeImageWithModelCore(
+    request({ provider, model }, { prompt: "Describe the image." }),
+  );
+}
 function mockUnknownMinimax() {
   resolveModelAsyncMock.mockResolvedValue({
     authStorage: preparedAuthStorage,
@@ -75,6 +111,53 @@ async function describeCn(providers: Providers, workspaceDir?: string) {
 
 describe("describeImageWithModelCore", () => {
   installImageRuntimeTestHooks({ apiKey: "test-api-key" });
+
+  it("uses a fresh routing identity for each image request", async () => {
+    const { options } = stubProviderStream();
+    await requestOpencode();
+    await requestOpencode();
+    const first = options(0);
+    const second = options(1);
+    const expected = { sessionId: undefined, header: expect.stringMatching(uuidPattern) };
+    expect([first, second]).toEqual([expected, expected]);
+    expect(first.header).not.toBe(second.header);
+  });
+
+  it("reuses one routing identity across the reasoning-only retry", async () => {
+    const { stream, options } = stubProviderStream(
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ...opencodeCompletion(),
+          content: [
+            {
+              type: "thinking",
+              thinking: "examining the image",
+              thinkingSignature: "reasoning_content",
+            },
+          ],
+        })
+        .mockResolvedValueOnce(opencodeCompletion()),
+    );
+    await requestOpencode();
+    expect(stream).toHaveBeenCalledTimes(2);
+    const first = options(0).header;
+    expect(first).toMatch(uuidPattern);
+    expect(options(1).header).toBe(first);
+  });
+
+  it.each([
+    [
+      "unrelated provider",
+      { provider: "openai", model: "gpt-5-mini", baseUrl: "https://api.openai.com/v1" },
+      {},
+    ],
+    ["model-level header", opencode, { headers: { "X-OpenCode-Session": "model-session" } }],
+  ] as const)("does not inject routing identity for %s", async (_name, endpoint, extras) => {
+    const { options } = stubProviderStream();
+    await requestOpencode(endpoint, extras);
+    expect(options(0)).toEqual({ sessionId: undefined, header: undefined });
+  });
 
   it("does not start another MiniMax request after caller cancellation", async () => {
     const controller = new AbortController();

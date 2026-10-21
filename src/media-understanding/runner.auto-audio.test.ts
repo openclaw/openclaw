@@ -93,6 +93,9 @@ describe("runCapability audio", () => {
       outputs: [{ text: "subscription transcript", model: "transcription-default" }],
     });
     expect(transcribeAudioWithContext).toHaveBeenCalledTimes(1);
+    expect(formatDecisionSummary(result.decision)).toBe(
+      "audio: success (1/1) via openai/transcription-default",
+    );
   });
 
   it.each([

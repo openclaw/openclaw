@@ -2,13 +2,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it as baseIt, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { MsgContext } from "../auto-reply/templating.js";
+import { toInboundMediaFacts } from "../channels/inbound-event/media.js";
+import type { OpenClawConfig } from "../config/types.js";
 import * as fsSafe from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import * as logger from "../logger.js";
+import { saveMediaBuffer } from "../media/store.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { applyMediaUnderstanding } from "./apply.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import { resolveMediaAttachmentLocalRoots } from "./runner.attachments.js";
+import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 
 const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 
@@ -37,9 +43,17 @@ const request = { attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 };
 const pngRequest = { ...request, maxBytes: PNG_1X1.length };
 const remoteAttachment = { index: 0, url: "https://example.com/photo.png" };
 const caches: MediaAttachmentCache[] = [];
-const it = baseIt.extend<{ base: string }>({
+const it = baseIt.extend<{ base: string; stateDir: string; saved: { id: string; path: string } }>({
   base: async ({ task: _task }, use) => {
     await withTestDir({ prefix: "openclaw-media-cache-" }, use);
+  },
+  stateDir: async ({ base }, use) => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: base, PATH: "" }, () => use(base));
+  },
+  saved: async ({ stateDir: _stateDir }, use) => {
+    await use(
+      await saveMediaBuffer(createSafeAudioFixtureBuffer(2048, 0x52), "audio/ogg", "inbound"),
+    );
   },
 });
 function createCache(...args: ConstructorParameters<typeof MediaAttachmentCache>) {
@@ -90,6 +104,76 @@ const test = it.extend<{ cache: MediaAttachmentCache }>({
     await cache.cleanup();
     expect(await fs.readdir(base)).toEqual([]);
   },
+});
+const storeRequest = { ...request, maxBytes: 4096 };
+function storedCache(saved: { id: string; path: string }, sourcePath: string) {
+  return localCache(sourcePath, path.dirname(saved.path), `media://inbound/${saved.id}`);
+}
+const urlDisabledFileCfg: OpenClawConfig = {
+  plugins: { enabled: false },
+  tools: {
+    media: { audio: { enabled: false }, image: { enabled: false }, video: { enabled: false } },
+  },
+  gateway: { http: { endpoints: { responses: { files: { allowUrl: false } } } } },
+};
+async function extractDocument(url: string, contentType: string) {
+  const ctx: MsgContext = {
+    Body: "<media:document>",
+    media: toInboundMediaFacts([{ url, contentType, kind: "document" }]),
+  };
+  await applyMediaUnderstanding({ ctx, cfg: urlDisabledFileCfg });
+  return ctx.Body;
+}
+
+it("extracts a stored document when remote URLs are disabled", async ({ stateDir: _stateDir }) => {
+  const fetchSpy = vi.spyOn(globalThis, "fetch");
+  const saved = await saveMediaBuffer(Buffer.from("stored document text"), "text/plain", "inbound");
+  expect(await extractDocument(`media://inbound/${saved.id}`, "text/plain")).toContain(
+    "stored document text",
+  );
+  expect(fetchSpy).not.toHaveBeenCalled();
+  expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
+});
+it("never renders signed URL query credentials as attachment names", async () => {
+  const fetchSpy = vi.spyOn(globalThis, "fetch");
+  const body = await extractDocument(
+    "https://cdn.example.test/docs/report.docx?X-Amz-Signature=SECRETSIG&X-Amz-Credential=AKIA123",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  );
+  expect(body).toContain("[Attachment skipped: URL file sources are disabled]");
+  expect(body).toContain('name="report.docx"');
+  expect(body).not.toContain("SECRETSIG");
+  expect(body).not.toContain("AKIA123");
+  expect(fetchSpy).not.toHaveBeenCalled();
+  expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
+});
+it("prefers the media:// alias when the supplied path is blocked", async ({ saved, base }) => {
+  const blocked = await mediaFile(base, "blocked.ogg", "blocked");
+  expect((await storedCache(saved, blocked).getBuffer(storeRequest)).buffer).toEqual(
+    createSafeAudioFixtureBuffer(2048, 0x52),
+  );
+  expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
+});
+it("returns the stored path after a stale path fails", async ({ saved }) => {
+  const cache = storedCache(saved, `${saved.path}.missing`);
+  expect(await cache.getPath(storeRequest)).toBe(await fs.realpath(saved.path));
+  await cache.cleanup();
+  expect((await fs.stat(saved.path)).isFile()).toBe(true);
+});
+it("does not bypass a path maxBytes failure through the media:// alias", async ({ saved }) => {
+  const oversized = await mediaFile(
+    path.dirname(saved.path),
+    "oversized.ogg",
+    createSafeAudioFixtureBuffer(8192, 0x41),
+  );
+  await expect(storedCache(saved, oversized).getBuffer(storeRequest)).rejects.toMatchObject({
+    reason: "maxBytes",
+  });
+});
+it("rejects malformed media:// aliases without attempting a remote fetch", async () => {
+  const cache = createCache([{ index: 0, url: "media://inbound/%" }]);
+  await expect(cache.getBuffer(storeRequest)).rejects.toMatchObject({ reason: "empty" });
+  expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
 });
 
 it.for(["canonical", "directory alias"] as const)(

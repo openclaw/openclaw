@@ -178,16 +178,6 @@ describe("media understanding attachments SSRF", () => {
     },
   );
 
-  it("blocks local attachments outside configured roots", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const cache = new MediaAttachmentCache([{ index: 0, path: "/etc/passwd" }], {
-      localPathRoots: ["/Users/*/Library/Messages/Attachments"],
-    });
-    await expect(read(cache)).rejects.toThrow(/outside allowed roots/i);
-  });
-
   it.each([
     ["directory", /not a regular file/i],
     ["symlink", /outside allowed roots/i],

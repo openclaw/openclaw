@@ -51,12 +51,12 @@ async function runAudioEntry(
   return result;
 }
 
-function withCompressedAudio(run: (fixture: Fixture) => Promise<void>) {
+function withCompressedAudio(run: (fixture: Fixture) => Promise<void>, extension = "mp3") {
   return withMediaFixture(
     {
       filePrefix: "openclaw-cli-compressed",
-      extension: "mp3",
-      mediaType: "audio/mpeg",
+      extension,
+      mediaType: extension === "ogg" ? "audio/ogg" : "audio/mpeg",
       fileContents: createSafeAudioFixtureBuffer(),
     },
     run,
@@ -297,9 +297,13 @@ it.each([
   { command: "whisper-cli", language: "fr", expected: "fr" },
   { command: "whisper-cli", language: "fr", request: { language: "pt-BR" }, expected: "pt" },
   { command: "whisper-cli", expected: undefined },
-])("forwards auto-discovered Whisper language: %j", async (options) => {
+  { command: "whisper-cli", converted: true, expected: undefined },
+  { command: "sherpa-onnx-offline", expected: undefined },
+])("runs auto-discovered audio tools with language: %j", async (options) => {
   await withTestDir({ prefix: "openclaw-auto-language-" }, async (dir) => {
     const command = options.command ?? "whisper";
+    const sherpa = command === "sherpa-onnx-offline";
+    const sherpaFiles = ["tokens.txt", "encoder.onnx", "decoder.onnx", "joiner.onnx"];
     await fs.writeFile(
       path.join(dir, `${command}${process.platform === "win32" ? ".cmd" : ""}`),
       "synthetic executable",
@@ -307,6 +311,15 @@ it.each([
     );
     const model = path.join(dir, "model.bin");
     await fs.writeFile(model, "synthetic model");
+    if (sherpa) {
+      await Promise.all(sherpaFiles.map((name) => fs.writeFile(path.join(dir, name), "model")));
+    }
+    if (options.converted) {
+      runFfmpegMock.mockImplementation(async (args: string[]) => {
+        await fs.writeFile(expectDefined(args.at(-1), "wav output"), "RIFF");
+        return "";
+      });
+    }
     runExecMock.mockImplementation(async (_executable, args: string[]) => {
       if (command === "whisper") {
         await fs.writeFile(
@@ -317,13 +330,19 @@ it.each([
           "fixture transcript",
         );
       } else if (args.includes("-of")) {
-        await fs.writeFile(`${args[args.indexOf("-of") + 1]}.txt`, "fixture transcript");
+        await fs.writeFile(`${args[args.indexOf("-of") + 1]}.txt`, "fixture transcript\n");
       }
-      return { stdout: "", stderr: "" };
+      return { stdout: sherpa ? '{"text":"fixture transcript"}' : "", stderr: "" };
     });
-    await withAudioFixture("openclaw-auto-language", async ({ ctx, media, cache }) => {
+    let mediaPath = "";
+    const fixture = options.converted
+      ? (run: (fixture: Fixture) => Promise<void>) => withCompressedAudio(run, "ogg")
+      : (run: (fixture: Fixture) => Promise<void>) =>
+          withAudioFixture("openclaw-auto-language", run);
+    await fixture(async ({ ctx, media, cache, mediaPath: inputPath }) => {
+      mediaPath = await fs.realpath(inputPath);
       const result = await withEnvAsync(
-        { PATH: dir, WHISPER_CPP_MODEL: model, SHERPA_ONNX_MODEL_DIR: undefined },
+        { PATH: dir, WHISPER_CPP_MODEL: model, SHERPA_ONNX_MODEL_DIR: sherpa ? dir : undefined },
         () =>
           runCapability({
             capability: "audio",
@@ -343,6 +362,27 @@ it.each([
         executable === path.join(dir, command) || executable === path.join(dir, `${command}.cmd`),
     )?.[1];
     expect(args).toBeDefined();
+    if (sherpa) {
+      expect(args).toEqual([
+        ...sherpaFiles.map((name) => `--${name.split(".")[0]}=${path.join(dir, name)}`),
+        mediaPath,
+      ]);
+    }
+    if (options.converted) {
+      expect(runFfmpegMock.mock.calls[0]?.[0]).toEqual([
+        "-y",
+        "-i",
+        mediaPath,
+        ..."-ac 1 -ar 16000 -c:a pcm_s16le -f wav".split(" "),
+        expect.stringMatching(/\.wav.*\.part$/),
+      ]);
+      expect(path.basename(runFfmpegMock.mock.calls[0]?.[0].at(-1))).toContain(
+        `${path.parse(mediaPath).name}.wav`,
+      );
+      expect(args.slice(0, 4)).toEqual(["-m", model, "-otxt", "-of"]);
+      expect(args[5]).toBe("-nt");
+      expect(path.basename(args[6])).toBe(`${path.parse(mediaPath).name}.wav`);
+    }
     if (options.expected === undefined) {
       expect(args).not.toContain("--language");
     } else {

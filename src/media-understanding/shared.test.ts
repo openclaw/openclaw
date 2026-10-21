@@ -427,11 +427,20 @@ describe("fetchWithTimeoutGuarded", () => {
       allowPrivateNetwork: true,
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
-
     expect(getFirstGuardedFetchCall().policy).toEqual({
       allowPrivateNetwork: true,
       allowRfc2544BenchmarkRange: true,
     });
+  });
+
+  it.each([
+    ["pinDns", postMultipartRequest, { pinDns: false }, false],
+    ["mode", postTranscriptionRequest, {}, "trusted_env_proxy"],
+    ["mode", postTranscriptionRequest, { mode: "strict" }, "strict"],
+  ] as const)("forwards multipart %s (case %#)", async (field, send, options, expected) => {
+    usesProxy.mockReturnValue(true);
+    await send({ ...postOptions(), body: "audio-bytes", ...options });
+    expect(getFirstGuardedFetchCall()[field]).toEqual(expected);
   });
 
   it("does not retry JSON POST requests by default", async () => {
@@ -464,29 +473,6 @@ describe("fetchWithTimeoutGuarded", () => {
     expect(secondRelease).not.toHaveBeenCalled();
     expect(sleep).toHaveBeenCalledWith(0, undefined);
   });
-
-  it("forwards explicit pinDns overrides for multipart POST requests", async () => {
-    await postMultipartRequest({
-      ...postOptions(),
-      body: "audio-bytes",
-      pinDns: false,
-    });
-
-    expect(getFirstGuardedFetchCall().pinDns).toBe(false);
-  });
-
-  it.each([undefined, "strict"] as const)(
-    "uses transcription mode %s with a configured env proxy",
-    async (mode) => {
-      usesProxy.mockReturnValue(true);
-      await postTranscriptionRequest({
-        ...postOptions(),
-        body: "audio-bytes",
-        mode,
-      });
-      expect(getFirstGuardedFetchCall().mode).toBe(mode ?? "trusted_env_proxy");
-    },
-  );
 
   it("does not auto-upgrade when caller passes explicit dispatcherPolicy", async () => {
     // Auto-upgrade would discard the caller's explicit dispatcher overrides.
