@@ -45,7 +45,7 @@ import * as backupTarWalk from "./backup-tar-walk.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
-const withState = backupCase({ prefix: "openclaw-backup-" });
+const withState = backupCase({ prefix: "openclaw-backup-fixture-" });
 
 function createStateArchive(output: string): Promise<BackupCreateResult> {
   return createBackupArchive({
