@@ -140,6 +140,7 @@ it.each(["owner", "tile"] as const)(
     expect(notify).toHaveBeenCalledExactlyOnceWith({
       message: "Could not attach file. Try again.",
       placement: "top-center",
+      severity: "error",
     });
     expect(status()?.textContent?.trim()).toBe("");
 

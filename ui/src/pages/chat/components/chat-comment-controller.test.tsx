@@ -304,7 +304,9 @@ describe("comment actions outside the transcript", () => {
     expect(fixture.attachments()).toEqual([fixture.attachment, file]);
     expect(getChatAttachmentDataUrl(fixture.attachment)).toBe(originalPayload);
     await waitForSolid(() =>
-      expect(fixture.toast.textContent).toContain("Too large to send: selection-comment.txt"),
+      expect(fixture.toast.querySelector(".app-toast__message")?.textContent).toBe(
+        "File too large. Try a smaller file.",
+      ),
     );
 
     fixture.input()!.value = "Replaced comment";

@@ -128,5 +128,6 @@ it.each(["unsupported", "failed", "oversize"] as const)("removes %s errors", asy
           ? "Video is still too large. Try a smaller file."
           : "Could not compress video. Try again.",
     placement: "top-center",
+    severity: "error",
   });
 });
