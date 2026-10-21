@@ -1,45 +1,34 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createMatrixClient } from "./create-client.js";
 
-const ensureMatrixSdkLoggingConfiguredMock = vi.hoisted(() => vi.fn());
-const resolveValidatedMatrixHomeserverUrlMock = vi.hoisted(() => vi.fn());
-const maybeMigrateLegacyStorageMock = vi.hoisted(() => vi.fn(async () => undefined));
-const resolveMatrixStoragePathsMock = vi.hoisted(() => vi.fn());
-const writeStorageMetaMock = vi.hoisted(() => vi.fn());
-const createSyncStoreMock = vi.hoisted(() => vi.fn());
-const preparedSyncStore = vi.hoisted(() => ({}));
-const MatrixClientMock = vi.hoisted(() => vi.fn());
-const stateRuntimeMock = vi.hoisted(() => ({
-  resolveStateDir: vi.fn(),
+const mocks = vi.hoisted(() => ({
+  ensureMatrixSdkLoggingConfigured: vi.fn(),
+  resolveValidatedMatrixHomeserverUrl: vi.fn(),
+  maybeMigrateLegacyStorage: vi.fn(async () => undefined),
+  resolveMatrixStoragePaths: vi.fn(),
+  writeStorageMeta: vi.fn(),
+  createSyncStore: vi.fn(),
+  MatrixClient: vi.fn(),
+  state: { resolveStateDir: vi.fn() },
 }));
-
-vi.mock("../../runtime.js", () => ({
-  getMatrixRuntime: () => ({ state: stateRuntimeMock }),
-}));
-
+const preparedSyncStore = {};
+vi.mock("../../runtime.js", () => ({ getMatrixRuntime: () => ({ state: mocks.state }) }));
 vi.mock("./logging.js", () => ({
-  ensureMatrixSdkLoggingConfigured: ensureMatrixSdkLoggingConfiguredMock,
+  ensureMatrixSdkLoggingConfigured: mocks.ensureMatrixSdkLoggingConfigured,
 }));
-
 vi.mock("./config.js", () => ({
-  resolveValidatedMatrixHomeserverUrl: resolveValidatedMatrixHomeserverUrlMock,
+  resolveValidatedMatrixHomeserverUrl: mocks.resolveValidatedMatrixHomeserverUrl,
 }));
-
 vi.mock("./storage.js", () => ({
-  maybeMigrateLegacyStorage: maybeMigrateLegacyStorageMock,
-  resolveMatrixStoragePaths: resolveMatrixStoragePathsMock,
-  writeStorageMeta: writeStorageMetaMock,
+  maybeMigrateLegacyStorage: mocks.maybeMigrateLegacyStorage,
+  resolveMatrixStoragePaths: mocks.resolveMatrixStoragePaths,
+  writeStorageMeta: mocks.writeStorageMeta,
 }));
-
 vi.mock("./file-sync-store.js", () => ({
-  SqliteBackedMatrixSyncStore: { create: createSyncStoreMock },
+  SqliteBackedMatrixSyncStore: { create: mocks.createSyncStore },
 }));
-
-vi.mock("../sdk.js", () => ({
-  MatrixClient: MatrixClientMock,
-}));
-
-let createMatrixClient: typeof import("./create-client.js").createMatrixClient;
+vi.mock("../sdk.js", () => ({ MatrixClient: mocks.MatrixClient }));
 
 describe("createMatrixClient", () => {
   const storagePaths = {
@@ -70,41 +59,36 @@ describe("createMatrixClient", () => {
     autoBootstrapCrypto: undefined,
     ssrfPolicy: undefined,
     dispatcherPolicy: undefined,
-    stateRuntime: stateRuntimeMock,
+    stateRuntime: mocks.state,
   };
-
-  beforeAll(async () => {
-    ({ createMatrixClient } = await import("./create-client.js"));
-  });
+  const expectClient = (options: { [K in keyof typeof clientOptions]?: unknown } = {}) =>
+    expect(mocks.MatrixClient).toHaveBeenCalledWith(auth.homeserver, auth.accessToken, {
+      ...clientOptions,
+      ...options,
+    });
 
   beforeEach(() => {
     vi.clearAllMocks();
-    createSyncStoreMock.mockResolvedValue(preparedSyncStore);
-    ensureMatrixSdkLoggingConfiguredMock.mockReturnValue(undefined);
-    resolveValidatedMatrixHomeserverUrlMock.mockResolvedValue("https://matrix.example.org");
-    resolveMatrixStoragePathsMock.mockReturnValue(storagePaths);
-    MatrixClientMock.mockImplementation(function MockMatrixClient() {
-      return {
-        stop: vi.fn(),
-      };
+    mocks.createSyncStore.mockResolvedValue(preparedSyncStore);
+    mocks.resolveValidatedMatrixHomeserverUrl.mockResolvedValue(auth.homeserver);
+    mocks.resolveMatrixStoragePaths.mockReturnValue(storagePaths);
+    mocks.MatrixClient.mockImplementation(function MockMatrixClient() {
+      return { stop: vi.fn() };
     });
   });
 
   it("persists storage metadata by default", async () => {
-    await createMatrixClient({
-      ...auth,
-    });
+    await createMatrixClient(auth);
 
-    expect(writeStorageMetaMock).toHaveBeenCalledWith({
+    expect(mocks.writeStorageMeta).toHaveBeenCalledWith({
       storagePaths,
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
       accountId: undefined,
       deviceId: undefined,
     });
-    expect(resolveMatrixStoragePathsMock).toHaveBeenCalledTimes(1);
-    expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
-      ...clientOptions,
+    expect(mocks.resolveMatrixStoragePaths).toHaveBeenCalledTimes(1);
+    expectClient({
       syncStore: preparedSyncStore,
       recoveryKeyPath: storagePaths.recoveryKeyPath,
       idbSnapshotPath: storagePaths.idbSnapshotPath,
@@ -114,17 +98,13 @@ describe("createMatrixClient", () => {
 
   it("loads persisted sync state before constructing or returning the client", async () => {
     const hydration = createDeferred<typeof preparedSyncStore>();
-    createSyncStoreMock.mockReturnValue(hydration.promise);
-    const pending = createMatrixClient({
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      accessToken: "tok",
-    });
-    await vi.waitFor(() => expect(createSyncStoreMock).toHaveBeenCalled());
-    expect(MatrixClientMock).not.toHaveBeenCalled();
+    mocks.createSyncStore.mockReturnValue(hydration.promise);
+    const pending = createMatrixClient(auth);
+    await vi.waitFor(() => expect(mocks.createSyncStore).toHaveBeenCalled());
+    expect(mocks.MatrixClient).not.toHaveBeenCalled();
     hydration.resolve(preparedSyncStore);
     await pending;
-    expect(MatrixClientMock).toHaveBeenCalledWith(
+    expect(mocks.MatrixClient).toHaveBeenCalledWith(
       "https://matrix.example.org",
       "tok",
       expect.objectContaining({ syncStore: preparedSyncStore }),
@@ -138,10 +118,7 @@ describe("createMatrixClient", () => {
       allowPrivateNetwork: true,
     });
 
-    expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
-      ...clientOptions,
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
+    expectClient({ ssrfPolicy: { allowPrivateNetwork: true } });
   });
 
   it("prefers explicit ssrfPolicy over allowPrivateNetwork", async () => {
@@ -153,22 +130,14 @@ describe("createMatrixClient", () => {
       ssrfPolicy: explicitPolicy as never,
     });
 
-    expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
-      ...clientOptions,
-      ssrfPolicy: explicitPolicy,
-    });
+    expectClient({ ssrfPolicy: explicitPolicy });
   });
 
   it("skips persistent storage wiring when persistence is disabled", async () => {
-    await createMatrixClient({
-      ...auth,
-      persistStorage: false,
-    });
+    await createMatrixClient({ ...auth, persistStorage: false });
 
-    expect(resolveMatrixStoragePathsMock).not.toHaveBeenCalled();
-    expect(writeStorageMetaMock).not.toHaveBeenCalled();
-    expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
-      ...clientOptions,
-    });
+    expect(mocks.resolveMatrixStoragePaths).not.toHaveBeenCalled();
+    expect(mocks.writeStorageMeta).not.toHaveBeenCalled();
+    expectClient();
   });
 });

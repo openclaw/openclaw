@@ -1,6 +1,6 @@
 import http from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getMatrixRuntime } from "../../runtime.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import {
@@ -18,7 +18,31 @@ vi.mock("../credentials.js", () => ({
   saveMatrixCredentials: async () => {},
 }));
 
+const identity = { user_id: "@fixture:example.org", device_id: "FIXTURE" };
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+beforeEach(() => {
+  vi.clearAllMocks();
+  installMatrixTestRuntime({ logging: { getChildLogger: () => logger } });
+});
 afterEach(() => vi.restoreAllMocks());
+
+async function listen(server: http.Server) {
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Expected loopback fixture address");
+  }
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function close(server: http.Server) {
+  server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
 
 it("authenticates identity, login, and probe outcomes without opening probe state (#61317)", async () => {
   let requests = 0;
@@ -32,51 +56,25 @@ it("authenticates identity, login, and probe outcomes without opening probe stat
       JSON.stringify(
         rejected
           ? { error: "Invalid credentials" }
-          : {
-              user_id: "@fixture:example.org",
-              device_id: "FIXTURE",
-              ...(login ? { access_token: "synthetic-token" } : {}),
-            },
+          : { ...identity, ...(login ? { access_token: "synthetic-token" } : {}) },
       ),
     );
   });
-  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  installMatrixTestRuntime({ logging: { getChildLogger: () => logger } });
   try {
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected loopback fixture address");
-    }
-    const auth = await resolveMatrixAuth({
-      cfg: {
-        channels: {
-          matrix: {
-            homeserver: `http://127.0.0.1:${address.port}`,
-            accessToken: "synthetic-token",
-            network: { dangerouslyAllowPrivateNetwork: true },
-          },
-        },
-      },
-      env: {},
-    });
-    expect(auth).toMatchObject({
-      userId: "@fixture:example.org",
-      deviceId: "FIXTURE",
+    const homeserver = await listen(server);
+    const matrix = { homeserver, network: { dangerouslyAllowPrivateNetwork: true } };
+    await expect(
+      resolveMatrixAuth({
+        cfg: { channels: { matrix: { ...matrix, accessToken: "synthetic-token" } } },
+        env: {},
+      }),
+    ).resolves.toMatchObject({
+      userId: identity.user_id,
+      deviceId: identity.device_id,
       allowPrivateNetwork: true,
     });
-    const homeserver = `http://127.0.0.1:${address.port}`;
     const loginConfig = {
-      channels: {
-        matrix: {
-          homeserver,
-          userId: "@fixture:example.org",
-          password: "synthetic-password",
-          network: { dangerouslyAllowPrivateNetwork: true },
-        },
-      },
+      channels: { matrix: { ...matrix, userId: identity.user_id, password: "synthetic-password" } },
     };
     await expect(resolveMatrixAuth({ cfg: loginConfig, env: {} })).resolves.toMatchObject({
       userId: "@fixture:example.org",
@@ -115,10 +113,7 @@ it("authenticates identity, login, and probe outcomes without opening probe stat
     }
     expect(requests).toBe(6);
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await close(server);
   }
 });
 
@@ -132,22 +127,14 @@ it("cancels an in-flight whoami request and joins backfill on monitor retirement
     });
     received.resolve();
   });
-  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  installMatrixTestRuntime({ logging: { getChildLogger: () => logger } });
   const runner = createMatrixMonitorTaskRunner({ logger, logVerboseMessage: () => {} });
   let task: Promise<void> | undefined;
   try {
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected loopback fixture address");
-    }
+    const homeserver = await listen(server);
     task = runner.runDetachedTask("deviceId backfill", async () => {
       const result = await backfillMatrixAuthDeviceIdAfterStartup({
         auth: {
-          homeserver: `http://127.0.0.1:${address.port}`,
+          homeserver,
           userId: "@fixture:example.org",
           accountId: "default",
           accessToken: "synthetic-token",
@@ -172,8 +159,6 @@ it("cancels an in-flight whoami request and joins backfill on monitor retirement
     runner.close();
     server.closeAllConnections();
     await task;
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await close(server);
   }
 });

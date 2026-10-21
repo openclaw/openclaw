@@ -1,4 +1,3 @@
-// Matrix tests cover logging plugin behavior.
 import { logger as matrixJsSdkRootLogger } from "matrix-js-sdk/lib/logger.js";
 import { describe, expect, it, vi } from "vitest";
 import { LogService, setMatrixConsoleLogging } from "../sdk/logger.js";
@@ -16,17 +15,19 @@ type MatrixJsSdkTestLogger = typeof matrixJsSdkRootLogger & {
   setLevel?: (level: number | string, persist?: boolean) => void;
 };
 
+const capture = (method: "debug" | "info" | "warn" | "error" | "trace") =>
+  vi.spyOn(console, method).mockImplementation(() => {});
+
 describe("Matrix SDK logging", () => {
   it("applies quiet mode at configuration and restores the SDK logger level afterward", () => {
     const logger = matrixJsSdkRootLogger as MatrixJsSdkTestLogger;
     const originalLevel = logger.getLevel?.();
     const originalMethodFactory = logger.methodFactory;
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const info = vi.spyOn(console, "info").mockImplementation(() => {});
-    const trace = vi.spyOn(console, "trace").mockImplementation(() => {});
+    const warn = capture("warn"),
+      error = capture("error"),
+      info = capture("info"),
+      trace = capture("trace");
     const clientLogger = createMatrixJsSdkClientLogger("MatrixHttpClient").getChild("requests");
-    const missing = { errcode: "M_NOT_FOUND" };
     try {
       setMatrixConsoleLogging(true);
       logger.setLevel?.("warn", false);
@@ -52,10 +53,9 @@ describe("Matrix SDK logging", () => {
         reason: "synthetic-private-tool-reason",
         code: "synthetic-private-tool-code",
       });
-      expect(info.mock.calls).toEqual([
-        ["[MatrixHttpClient.requests] Cancelling verification request"],
-      ]);
-      clientLogger.error(missing);
+      const cancellation = ["[MatrixHttpClient.requests] Cancelling verification request"];
+      expect(info.mock.calls).toEqual([cancellation]);
+      clientLogger.error({ errcode: "M_NOT_FOUND" });
       clientLogger.error("real error");
       expect(error).toHaveBeenCalledTimes(1);
       expect(error).toHaveBeenCalledWith("[MatrixHttpClient.requests] real error");
@@ -82,20 +82,15 @@ describe("Matrix SDK logging", () => {
         logger.warn("root sync warning", { phase: "sync" });
       }
       expect(info.mock.calls).toEqual([
-        ["[MatrixHttpClient.requests] Cancelling verification request"],
-        ["root sync started", { phase: "sync" }],
-        ["root sync started", { phase: "sync" }],
+        cancellation,
+        ...Array.from({ length: 2 }, () => ["root sync started", { phase: "sync" }]),
       ]);
-      expect(trace.mock.calls).toEqual([
-        ["membership event with membership undefined"],
-        ["membership event with membership undefined"],
-        ["membership event with membership undefined"],
-        ["membership event with membership undefined"],
-      ]);
-      expect(warn.mock.calls.slice(3)).toEqual([
-        ["root sync warning", { phase: "sync" }],
-        ["root sync warning", { phase: "sync" }],
-      ]);
+      expect(trace.mock.calls).toEqual(
+        Array.from({ length: 4 }, () => ["membership event with membership undefined"]),
+      );
+      expect(warn.mock.calls.slice(3)).toEqual(
+        Array.from({ length: 2 }, () => ["root sync warning", { phase: "sync" }]),
+      );
     } finally {
       if (typeof originalLevel === "string" || typeof originalLevel === "number") {
         logger.setLevel?.(originalLevel, false);
@@ -104,18 +99,17 @@ describe("Matrix SDK logging", () => {
       logger.rebuild?.();
       setMatrixSdkLogMode("default");
       setMatrixConsoleLogging(false);
-      warn.mockRestore();
-      error.mockRestore();
-      info.mockRestore();
-      trace.mockRestore();
+      for (const spy of [warn, error, info, trace]) {
+        spy.mockRestore();
+      }
     }
   });
 
   it("quiets and restores real SDK children created before and during quiet mode", () => {
-    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
-    const info = vi.spyOn(console, "info").mockImplementation(() => {});
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const debug = capture("debug"),
+      info = capture("info"),
+      warn = capture("warn"),
+      error = capture("error");
     try {
       ensureMatrixSdkLoggingConfigured();
       const beforeQuiet = matrixJsSdkRootLogger.getChild("[before quiet]");
@@ -128,6 +122,13 @@ describe("Matrix SDK logging", () => {
       const duringQuiet = matrixJsSdkRootLogger.getChild("[during quiet]");
       const nestedDuringQuiet = beforeQuiet.getChild("[nested quiet]");
       const children = [beforeQuiet, duringQuiet, nestedDuringQuiet];
+      const labels = ["[before quiet]", "[during quiet]", "[before quiet][nested quiet]"];
+      const expectOutput = (spy: typeof debug, mode: "quiet" | "default", ...args: unknown[]) => {
+        expect(spy.mock.calls).toEqual(
+          mode === "quiet" ? [] : labels.map((label) => Array.of<unknown>(label).concat(args)),
+        );
+        spy.mockClear();
+      };
 
       for (const mode of ["quiet", "default", "quiet", "default"] as const) {
         setMatrixSdkLogMode(mode);
@@ -142,34 +143,15 @@ describe("Matrix SDK logging", () => {
           [warn, "warning"],
           [error, "failure"],
         ] as const) {
-          expect(spy.mock.calls).toEqual(
-            mode === "quiet"
-              ? []
-              : [
-                  ["[before quiet]", message],
-                  ["[during quiet]", message],
-                  ["[before quiet][nested quiet]", message],
-                ],
-          );
-          spy.mockClear();
+          expectOutput(spy, mode, message);
         }
-        expect(debug.mock.calls).toEqual(
-          mode === "quiet"
-            ? []
-            : [
-                ["[before quiet]", "diagnostic", { phase: "sync" }],
-                ["[during quiet]", "diagnostic", { phase: "sync" }],
-                ["[before quiet][nested quiet]", "diagnostic", { phase: "sync" }],
-              ],
-        );
-        debug.mockClear();
+        expectOutput(debug, mode, "diagnostic", { phase: "sync" });
       }
     } finally {
       setMatrixSdkLogMode("default");
-      debug.mockRestore();
-      info.mockRestore();
-      warn.mockRestore();
-      error.mockRestore();
+      for (const spy of [debug, info, warn, error]) {
+        spy.mockRestore();
+      }
     }
   });
 });
