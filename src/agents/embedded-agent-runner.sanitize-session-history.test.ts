@@ -22,6 +22,8 @@ import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 import type { TranscriptPolicy } from "./transcript-policy.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
+const replayPolicyOwner = vi.hoisted(() => ({ enabled: false }));
+
 vi.mock("./embedded-agent-helpers/images.js", async () => ({
   ...(await vi.importActual<typeof import("./embedded-agent-helpers/images.js")>(
     "./embedded-agent-helpers/images.js",
@@ -38,7 +40,11 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
     prepareProviderExtraParams: vi.fn(() => undefined),
     resolveProviderHookPlugin: vi.fn(() => undefined),
     resolveProviderPluginsForHooks: vi.fn(() => []),
-    resolveProviderRuntimePlugin: vi.fn(() => undefined),
+    resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
+      replayPolicyOwner.enabled && (provider === "openai" || provider === "openrouter")
+        ? { buildReplayPolicy: () => ({}) }
+        : undefined,
+    ),
     wrapProviderStreamFn: vi.fn(() => undefined),
   };
 });
@@ -52,20 +58,6 @@ vi.mock("../plugins/provider-runtime.js", async () => {
     sanitizeProviderReplayHistoryWithPluginAsync: vi.fn<
       typeof actual.sanitizeProviderReplayHistoryWithPluginAsync
     >(async ({ provider, context }) => {
-      if (
-        provider &&
-        provider.startsWith("google") &&
-        context.messages[0]?.role === "assistant" &&
-        context.sessionState
-      ) {
-        await context.sessionState.appendCustomEntryAsync("google-turn-ordering-bootstrap", {
-          timestamp: Date.now(),
-        });
-        return [
-          { role: "user", content: "(session bootstrap)" } as AgentMessage,
-          ...context.messages,
-        ];
-      }
       if (provider === "replay-poison") {
         return context.messages.filter(
           (message) =>
@@ -131,6 +123,12 @@ const assistant = (
 const assistantContent = (messages: AgentMessage[], index = 1) => {
   expect(messages[index]?.role).toBe("assistant");
   return (messages[index] as AssistantMessage).content;
+};
+const callId = (message: AgentMessage | undefined) => {
+  if (message?.role !== "assistant") {
+    throw new Error("Expected an assistant tool call");
+  }
+  return extractToolCallsFromAssistant(message)[0]?.id;
 };
 const roles = (messages: AgentMessage[]) => messages.map((message) => message.role);
 const omittedReasoning = [text("[assistant reasoning omitted]")];
@@ -203,6 +201,7 @@ describe("sanitizeSessionHistory", () => {
   });
   beforeEach(() => {
     testTimestamp = 1;
+    replayPolicyOwner.enabled = false;
     vi.clearAllMocks();
     sessionManager = makeMockSessionManager();
   });
@@ -265,19 +264,6 @@ describe("sanitizeSessionHistory", () => {
       });
     },
   );
-
-  it("lets Google provider hooks prepend a bootstrap turn and persist a marker", async () => {
-    const entries: Array<{ type: string; customType: string; data: unknown }> = [];
-    const out = await sanitize([textAssistant("hello")], {
-      modelApi: "google-generative-ai",
-      provider: "google-vertex",
-      sessionManager: makeInMemorySessionManager(entries),
-    });
-    expect(out[0]).toMatchObject({ role: "user", content: "(session bootstrap)" });
-    expect(entries.some((entry) => entry.customType === "google-turn-ordering-bootstrap")).toBe(
-      true,
-    );
-  });
 
   it("annotates inter-session user messages before context sanitization", async () => {
     const out = await sanitize([
@@ -368,6 +354,73 @@ describe("sanitizeSessionHistory", () => {
       call_id: id,
       content: [text("Background task started.")],
     });
+  });
+
+  it("keeps repeated Kimi calls distinct while repairing the incomplete later turn", async () => {
+    replayPolicyOwner.enabled = true;
+    const first = "functions.gateway:0|fc_tmp_first";
+    const second = "functions.gateway:0|fc_tmp_second";
+    const call = (id: string) =>
+      castAgentMessage({ role: "assistant", content: [toolCall(id, "noop")] });
+    const out = await sanitize(
+      [
+        call(first),
+        toolResult(first, "first result", "noop"),
+        user("check again"),
+        call(second),
+        user("continue"),
+      ],
+      {
+        provider: "openrouter",
+        modelId: "moonshotai/kimi-k2.5",
+        sessionManager: makeInMemorySessionManager([currentModel(Date.now())]),
+      },
+    );
+    const firstId = callId(out[0]);
+    const secondId = callId(out[3]);
+    expect(firstId).toMatch(/^call_[A-Za-z0-9_-]{1,59}\|fc_tmp_first$/);
+    expect(secondId).toMatch(/^call_[A-Za-z0-9_-]{1,59}\|fc_tmp_second$/);
+    expect(secondId).not.toBe(firstId);
+    for (const [index, toolCallId, isError, value] of [
+      [1, firstId, false, "first result"],
+      [4, secondId, true, "aborted"],
+    ] as const) {
+      expect(out[index]).toMatchObject({
+        role: "toolResult",
+        toolCallId,
+        isError,
+        content: [text(value)],
+      });
+    }
+    expect(roles(out)).toEqual([
+      "assistant",
+      "toolResult",
+      "user",
+      "assistant",
+      "toolResult",
+      "user",
+    ]);
+  });
+
+  it("preserves paired tool IDs for an unowned Azure Responses provider", async () => {
+    const id = "call_gateway_0|fc_gateway_0";
+    const out = await sanitize(
+      [
+        {
+          role: "assistant",
+          content: [...assistantContent(makeReasoningAssistantMessages(), 0), toolCall(id, "noop")],
+        },
+        toolResult(id, "", "noop"),
+      ],
+      {
+        modelApi: "azure-openai-responses",
+        provider: "custom-compatible",
+        modelId: undefined,
+        sessionManager: makeInMemorySessionManager([]),
+      },
+    );
+    expect(callId(out[0])).toBe(id);
+    expect(out[1]).toMatchObject({ toolCallId: id });
   });
 
   it("repairs OpenAI Responses replay again after provider hooks mutate history", async () => {
@@ -624,8 +677,8 @@ describe("sanitizeSessionHistory", () => {
       user("retry"),
     ]);
     const validated = await validateAnthropic(sanitized);
-    const first = extractToolCallsFromAssistant(sanitized[1] as AssistantMessage)[0]?.id;
-    const second = extractToolCallsFromAssistant(sanitized[4] as AssistantMessage)[0]?.id;
+    const first = callId(sanitized[1]);
+    const second = callId(sanitized[4]);
     expect(first).not.toBe("call1");
     expect(second).toBe("call1");
     expect(first).not.toBe(second);

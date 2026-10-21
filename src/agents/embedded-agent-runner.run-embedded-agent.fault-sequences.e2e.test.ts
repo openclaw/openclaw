@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { installScriptedRunnerMocks } from "./embedded-agent-runner.mock-test-support.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
@@ -17,16 +18,11 @@ import type {
 } from "./embedded-agent-runner/run/types.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { isFailoverError } from "./failover-error.js";
+import { model as modelDefinition } from "./model-catalog-fixtures.test-support.js";
 import {
   buildEmbeddedRunnerAssistant,
-  createResolvedEmbeddedRunnerModel,
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import {
-  installEmbeddedRunnerBackoffE2eMocks,
-  installEmbeddedRunnerBaseE2eMocks,
-  installEmbeddedRunnerFastRunE2eMocks,
-} from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 import { drainScenarioDatabase } from "./test-helpers/embedded-run-scenario.test-support.js";
 
 type ProviderFault =
@@ -73,18 +69,13 @@ let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeCon
 
 beforeAll(async () => {
   vi.resetModules();
-  installEmbeddedRunnerBaseE2eMocks();
-  installEmbeddedRunnerFastRunE2eMocks({
+  installScriptedRunnerMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
+    backoff: {
+      computeBackoff: () => 0,
+      sleepWithAbort: (ms, abortSignal) => sleepWithAbortMock(ms, abortSignal),
+    },
   });
-  installEmbeddedRunnerBackoffE2eMocks({
-    computeBackoff: () => 0,
-    sleepWithAbort: (ms, abortSignal) => sleepWithAbortMock(ms, abortSignal),
-  });
-  vi.doMock("./embedded-agent-runner/model.js", () => ({
-    resolveModelAsync: async (provider: string, modelId: string) =>
-      createResolvedEmbeddedRunnerModel(provider, modelId),
-  }));
 
   ({ createOpenClawDatabaseMaintenanceScope } =
     await import("../state/openclaw-state-db-async-lifecycle.js"));
@@ -109,15 +100,9 @@ function makeProviderConfig(fallbacks: string[]): OpenClawConfig {
     api: "openai-responses" as const,
     apiKey: "test-key",
     baseUrl: "https://example.test",
-    models: modelIds.map((id) => ({
-      id,
-      name: id,
-      reasoning: false,
-      input: ["text" as const],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 16_000,
-      maxTokens: 2_048,
-    })),
+    models: modelIds.map((id) =>
+      modelDefinition(id, id, { contextWindow: 16_000, maxTokens: 2_048 }),
+    ),
   });
   return {
     agents: {
@@ -494,7 +479,7 @@ it.each([false, true])("walks the mixed fault chain (exhausted=%s)", async (exha
     ],
     { openai: 2, groq: true },
     ["groq/mock-2", "groq/mock-3"],
-    ({ outcome: raw, observations, usageStats }) => {
+    ({ outcome: raw, observations, usageStats, startedAt }) => {
       expect(attemptRoutes(observations)).toEqual([
         ["openai", "mock-1", "openai:p1"],
         ["openai", "mock-1", "openai:p2"],
@@ -516,7 +501,15 @@ it.each([false, true])("walks the mixed fault chain (exhausted=%s)", async (exha
           { provider: "groq", model: "mock-2", reason: "server_error" },
           { provider: "groq", model: "mock-3", reason: "billing" },
         ]);
-        expect(usageStats["groq:p1"]?.disabledReason).toBe("billing");
+        expect(error.message).toContain("returned a billing error");
+        expect(error.message).toContain(
+          "check your account's balance and usage limits before trying again.",
+        );
+        const billing = usageStats["groq:p1"];
+        expect(billing).toMatchObject({ disabledReason: "billing", failureCounts: { billing: 1 } });
+        expect(billing?.disabledUntil).toBeGreaterThanOrEqual(startedAt + 10 * 60 * 1_000);
+        expect(billing?.disabledUntil).toBeLessThanOrEqual(Date.now() + 10 * 60 * 1_000);
+        expect(billing?.cooldownUntil).toBeUndefined();
       } else {
         const outcome = expectResult(raw);
         expect(outcome).toMatchObject({
@@ -573,35 +566,6 @@ it.each(["model fallback", "auth profile", "exhausted profiles"] as const)(
     );
   },
 );
-
-it("persists a ten-minute initial billing disable and surfaces billing copy for 402", async () => {
-  await withFaults(
-    "billing-402",
-    [{ status: 402 }],
-    { openai: 1 },
-    [],
-    ({ outcome, observations, usageStats, startedAt }) => {
-      const error = expectError(outcome);
-
-      expect(observations).toMatchObject([
-        { provider: "openai", model: "mock-1", profileId: "openai:p1", fault: { status: 402 } },
-      ]);
-      expect(error.message).toContain("returned a billing error");
-      expect(error.message).toContain(
-        "check your account's balance and usage limits before trying again.",
-      );
-      expect(usageStats["openai:p1"]?.disabledReason).toBe("billing");
-      expect(usageStats["openai:p1"]?.failureCounts?.billing).toBe(1);
-      expect(usageStats["openai:p1"]?.disabledUntil).toBeGreaterThanOrEqual(
-        startedAt + 10 * 60 * 1_000,
-      );
-      expect(usageStats["openai:p1"]?.disabledUntil).toBeLessThanOrEqual(
-        Date.now() + 10 * 60 * 1_000,
-      );
-      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
-    },
-  );
-});
 
 it.each([false, true])("surfaces blocked oversized input (request ceiling=%s)", async (ceiling) => {
   const runId = ceiling ? "request-size-ceiling" : "context-overflow";

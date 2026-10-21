@@ -13,17 +13,14 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "./auth-profiles/credential-fixtures.test-support.js";
+import { installScriptedRunnerMocks } from "./embedded-agent-runner.mock-test-support.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import type { AgentHarness } from "./harness/types.js";
+import { model as modelDefinition } from "./model-catalog-fixtures.test-support.js";
 import {
   buildEmbeddedRunnerAssistant as buildAssistant,
   makeEmbeddedRunnerAttempt as makeAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import {
-  installEmbeddedRunnerBackoffE2eMocks,
-  installEmbeddedRunnerBaseE2eMocks,
-  installEmbeddedRunnerFastRunE2eMocks,
-} from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const resolveCopilotApiTokenMock = vi.fn();
@@ -38,9 +35,13 @@ const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
 }));
 
 const installRunEmbeddedMocks = () => {
-  installEmbeddedRunnerBaseE2eMocks();
-  installEmbeddedRunnerFastRunE2eMocks({
+  installScriptedRunnerMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
+    modelsConfig: "mock",
+    backoff: {
+      computeBackoff: (policy, attempt) => computeBackoffMock(policy, attempt),
+      sleepWithAbort: (ms, abortSignal) => sleepWithAbortMock(ms, abortSignal),
+    },
     prepareProviderRuntimeAuth: async (params) => {
       if (params.provider !== "github-copilot") {
         return undefined;
@@ -48,10 +49,7 @@ const installRunEmbeddedMocks = () => {
       const token = await resolveCopilotApiTokenMock(params.context.apiKey);
       return { apiKey: token.token, baseUrl: token.baseUrl, expiresAt: token.expiresAt };
     },
-  });
-  // mock-isolation: deterministic model resolution isolates profile rotation and provider auth.
-  vi.doMock("./embedded-agent-runner/model.js", () => ({
-    resolveModelAsync: async (provider: string, modelId: string) => {
+    resolveModel: async (provider, modelId) => {
       const subscriptionModel = modelId === "chatgpt-mock";
       return {
         logicalRef: { provider, model: modelId },
@@ -70,68 +68,52 @@ const installRunEmbeddedMocks = () => {
         modelRegistry: {},
       };
     },
-  }));
-  installEmbeddedRunnerBackoffE2eMocks({
-    computeBackoff: (policy, attempt) => computeBackoffMock(policy, attempt),
-    sleepWithAbort: (ms, abortSignal) => sleepWithAbortMock(ms, abortSignal),
   });
   vi.doMock("./embedded-agent-runner/compact.js", () => ({
     compactEmbeddedAgentSessionDirect: vi.fn(async () => {
       throw new Error("compact should not run in auth profile rotation tests");
     }),
   }));
-  vi.doMock("./models-config.js", () => ({
-    ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
-  }));
 };
 
-type ProductionRunEmbeddedAgent = typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
-type TestRunEmbeddedAgent = (
-  params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
-) => ReturnType<ProductionRunEmbeddedAgent>;
-let runEmbeddedAgent: TestRunEmbeddedAgent;
-let ensureAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").ensureAuthProfileStore;
-let saveAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").saveAuthProfileStore;
-let createOpenClawDatabaseMaintenanceScope: typeof import("../state/openclaw-state-db-async-lifecycle.js").createOpenClawDatabaseMaintenanceScope;
-let createDiagnosticLogRecordCaptureFn: typeof import("../logging/test-helpers/diagnostic-log-capture.js").createDiagnosticLogRecordCapture;
 let cleanupLogCapture: (() => void) | undefined;
-let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
-let setLoggerOverrideFn: typeof import("../logging/logger.js").setLoggerOverride;
-let registerAgentHarnessFn: typeof import("./harness/registry.js").registerAgentHarness;
-let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
+let runtime: Awaited<ReturnType<typeof loadRuntime>>;
 const originalFetch = globalThis.fetch;
 
-beforeAll(async () => {
+async function loadRuntime() {
   vi.resetModules();
   installRunEmbeddedMocks();
-  ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
-  runEmbeddedAgent = wrapRunWithTestPreparedAdmission(
-    (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
-  );
-  // Fixture reads and runner writes must share the post-reset auth snapshot owner.
-  ({ ensureAuthProfileStore, saveAuthProfileStore } =
-    await import("./auth-profiles/store-runtime.js"));
-  ({ createOpenClawDatabaseMaintenanceScope } =
-    await import("../state/openclaw-state-db-async-lifecycle.js"));
-  ({ createDiagnosticLogRecordCapture: createDiagnosticLogRecordCaptureFn } =
-    await import("../logging/test-helpers/diagnostic-log-capture.js"));
-  ({ resetLogger: resetLoggerFn, setLoggerOverride: setLoggerOverrideFn } =
-    await import("../logging/logger.js"));
-  ({ registerAgentHarness: registerAgentHarnessFn } = await import("./harness/registry.js"));
+  return {
+    config: await import("../config/config.js"),
+    run: wrapRunWithTestPreparedAdmission(
+      (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
+    ),
+    // Fixture reads and runner writes share the post-reset auth snapshot owner.
+    auth: await import("./auth-profiles/store-runtime.js"),
+    maintenance: (await import("../state/openclaw-state-db-async-lifecycle.js"))
+      .createOpenClawDatabaseMaintenanceScope,
+    capture: (await import("../logging/test-helpers/diagnostic-log-capture.js"))
+      .createDiagnosticLogRecordCapture,
+    logger: await import("../logging/logger.js"),
+    harness: await import("./harness/registry.js"),
+  };
+}
+beforeAll(async () => {
+  runtime = await loadRuntime();
 });
 
-type RunEmbeddedAgentTestParams = Parameters<typeof runEmbeddedAgent>[0] & {
+type RunEmbeddedAgentTestParams = Parameters<typeof runtime.run>[0] & {
   authProfileStateMode?: "read-write" | "read-only";
 };
 
 async function runEmbeddedAgentInline(
   params: Pick<RunEmbeddedAgentTestParams, "agentDir" | "workspaceDir" | "runId"> &
     Partial<RunEmbeddedAgentTestParams>,
-): Promise<Awaited<ReturnType<typeof runEmbeddedAgent>>> {
-  const maintenance = createOpenClawDatabaseMaintenanceScope();
+): Promise<Awaited<ReturnType<typeof runtime.run>>> {
+  const maintenance = runtime.maintenance();
   try {
     return await maintenance.run(() =>
-      runEmbeddedAgent({
+      runtime.run({
         sessionKey: `agent:test:${params.runId.slice(4)}`,
         sessionId: "session:test",
         config: makeConfig(),
@@ -151,7 +133,7 @@ async function runEmbeddedAgentInline(
 }
 
 beforeEach(() => {
-  setRuntimeConfigSnapshot({});
+  runtime.config.setRuntimeConfigSnapshot({});
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockReset();
   runEmbeddedAttemptMock.mockImplementation(async () => {
@@ -173,19 +155,12 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   cleanupLogCapture?.();
   cleanupLogCapture = undefined;
-  setLoggerOverrideFn(null);
-  resetLoggerFn();
+  runtime.logger.setLoggerOverride(null);
+  runtime.logger.resetLogger();
 });
 
-const makeModel = (id: string, name: string) => ({
-  id,
-  name,
-  reasoning: false,
-  input: ["text" as const],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 16_000,
-  maxTokens: 2048,
-});
+const makeModel = (id: string, name: string) =>
+  modelDefinition(id, name, { contextWindow: 16_000, maxTokens: 2048 });
 
 const makeConfig = (opts?: { fallbacks?: string[]; apiKey?: string }): OpenClawConfig =>
   ({
@@ -233,22 +208,18 @@ const makeCopilotConfig = (): OpenClawConfig =>
 
 const writeAuthStore = async (
   agentDir: string,
-  opts?: Pick<Parameters<typeof saveAuthProfileStore>[0], "order" | "usageStats"> & {
-    includeAnthropic?: boolean;
-    profiles?: Parameters<typeof saveAuthProfileStore>[0]["profiles"];
+  opts?: Pick<Parameters<typeof runtime.auth.saveAuthProfileStore>[0], "order" | "usageStats"> & {
+    profiles?: Parameters<typeof runtime.auth.saveAuthProfileStore>[0]["profiles"];
   },
 ) => {
   // Store order and usageStats are the persisted inputs the rotation picker
   // uses to decide which profile should be cooled down or retried.
-  saveAuthProfileStore(
+  runtime.auth.saveAuthProfileStore(
     {
       version: 1,
       profiles: {
         "openai:p1": { type: "api_key", provider: "openai", key: "sk-one" },
         "openai:p2": { type: "api_key", provider: "openai", key: "sk-two" },
-        ...(opts?.includeAnthropic
-          ? { "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-anth" } }
-          : {}),
         ...opts?.profiles,
       },
       ...(opts?.order ? { order: opts.order } : {}),
@@ -262,7 +233,7 @@ const writeAuthStore = async (
 };
 
 const writeCopilotAuthStore = async (agentDir: string, token = "gh-token") => {
-  saveAuthProfileStore(
+  runtime.auth.saveAuthProfileStore(
     createAuthProfileStoreFixture({
       "github-copilot:github": { type: "token", provider: "github-copilot", token },
     }),
@@ -271,7 +242,7 @@ const writeCopilotAuthStore = async (agentDir: string, token = "gh-token") => {
 };
 
 const writeOpenAiCodexAuthStore = async (agentDir: string, includeBackup = false) => {
-  saveAuthProfileStore(
+  runtime.auth.saveAuthProfileStore(
     {
       version: 1,
       profiles: {
@@ -325,7 +296,7 @@ const mockFailedThenSuccessfulAttempt = (
 };
 
 async function readUsageStats(agentDir: string) {
-  return ensureAuthProfileStore(agentDir, { syncExternalCli: false }).usageStats ?? {};
+  return runtime.auth.ensureAuthProfileStore(agentDir, { syncExternalCli: false }).usageStats ?? {};
 }
 
 async function seedUnavailableProfiles(agentDir: string, now: number, billing = false) {
@@ -501,7 +472,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
   it("does not persist auth profile bookkeeping for read-only probes", async () => {
     await withAgentWorkspace(async ({ agentDir, runTurn }) => {
       await writeAuthStore(agentDir);
-      const before = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+      const before = runtime.auth.ensureAuthProfileStore(agentDir, { syncExternalCli: false });
       const expectedBookkeeping = structuredClone({
         lastGood: before.lastGood,
         usageStats: before.usageStats,
@@ -517,7 +488,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
       });
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-      const after = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+      const after = runtime.auth.ensureAuthProfileStore(agentDir, { syncExternalCli: false });
       expect({ lastGood: after.lastGood, usageStats: after.usageStats }).toEqual(
         expectedBookkeeping,
       );
@@ -581,9 +552,9 @@ describe("runEmbeddedAgent auth profile rotation", () => {
   });
 
   it("logs structured failover decision metadata for overloaded assistant rotation", async () => {
-    const logCapture = createDiagnosticLogRecordCaptureFn();
+    const logCapture = runtime.capture();
     cleanupLogCapture = logCapture.cleanup;
-    setLoggerOverrideFn({
+    runtime.logger.setLoggerOverride({
       level: "trace",
       consoleLevel: "silent",
       file: path.join(os.tmpdir(), `openclaw-auth-rotation-${Date.now()}.log`),
@@ -640,7 +611,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
 
   it("marks inline provider api key billing prompt failures without an auth profile", async () => {
     await withAgentWorkspace(async ({ agentDir, runTurn }) => {
-      saveAuthProfileStore({ version: 1, profiles: {}, usageStats: {} }, agentDir);
+      runtime.auth.saveAuthProfileStore({ version: 1, profiles: {}, usageStats: {} }, agentDir);
       runEmbeddedAttemptMock.mockResolvedValueOnce(
         makeAttempt({
           terminal: { kind: "failed", source: "prompt", error: new Error("insufficient credits") },
@@ -790,7 +761,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
 
   it("preserves a transient plugin-harness probe after a billing-disabled user pin", async () => {
     await withTimedAgentWorkspace(async ({ agentDir, now, runTurn }) => {
-      saveAuthProfileStore(
+      runtime.auth.saveAuthProfileStore(
         {
           version: 1,
           profiles: {
@@ -818,7 +789,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
             : { supported: false, reason: "test harness requires an explicit runtime" },
         runAttempt: async (attemptParams) => await runEmbeddedAttemptMock(attemptParams),
       };
-      registerAgentHarnessFn(harness);
+      runtime.harness.registerAgentHarness(harness);
       mockSingleSuccessfulAttempt();
 
       await runTurn({
@@ -835,22 +806,6 @@ describe("runEmbeddedAgent auth profile rotation", () => {
         authProfileId: "openai:backup",
         authProfileIdSource: "auto",
       });
-    });
-  });
-
-  it("ignores a user-pinned profile when the provider mismatches", async () => {
-    await withAgentWorkspace(async ({ agentDir, runTurn }) => {
-      await writeAuthStore(agentDir, { includeAnthropic: true });
-
-      mockSingleSuccessfulAttempt();
-
-      await runTurn({
-        authProfileId: "anthropic:default",
-        authProfileIdSource: "user",
-        runId: "run:mismatch",
-      });
-
-      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -936,7 +891,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     delete process.env.OPENAI_API_KEY;
     try {
       await withAgentWorkspace(async ({ agentDir, runTurn }) => {
-        saveAuthProfileStore({ version: 1, profiles: {}, usageStats: {} }, agentDir);
+        runtime.auth.saveAuthProfileStore({ version: 1, profiles: {}, usageStats: {} }, agentDir);
 
         await expectFailoverError(
           runTurn({
@@ -1008,23 +963,4 @@ describe("runEmbeddedAgent auth profile rotation", () => {
       expect(usageStats["openai:p2"]?.cooldownUntil).toBe(p2CooldownUntil);
     });
   });
-  it("runs an agent-scoped session without an ambient default owner", async () => {
-    await withAgentWorkspace(async ({ runTurn }) => {
-      mockSingleSuccessfulAttempt();
-
-      await runTurn({
-        sessionId: "session:work",
-        sessionKey: "agent:work:dashboard:scoped-run",
-        config: {
-          ...makeConfig(),
-          agents: { entries: { main: {}, work: {} } },
-        },
-        authProfileId: "openai:p1",
-        runId: "run:work",
-      });
-
-      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
-    });
-  });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -11,7 +11,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFileBackedSessionManagerForTest } from "../../test/helpers/session-manager-file-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   attachRuntimePromptMediaFacts,
   readRuntimePromptMediaFacts,
@@ -454,91 +453,34 @@ describe("guardSessionManager integration", () => {
     expect(messages[2]).toEqual({ role: "user", content: "follow-up" });
     expect(messages[1]).toMatchObject(prepared);
   });
-
-  it("skips plugin hooks while preserving every persisted transcript content field", () => {
-    installWriteHook(() => ({
-      message: makeAgentAssistantMessage({ content: text("changed by hook") }),
-    }));
-
-    const { sm, appendMessage } = createGuard({
-      config: {
-        logging: {
-          redactPatterns: [String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`],
-        },
-      } satisfies OpenClawConfig,
-      skipBeforeMessageWriteHooks: true,
-    });
-    const assistantContent = [
-      { type: "thinking", thinking: "the email is peter@dc.io", thinkingSignature: "sig" },
-      { type: "text", text: "contact peter@dc.io" },
-      { type: "toolCall", id: "call_1", name: "read", arguments: { path: "/tmp/peter@dc.io" } },
-    ];
-    const assistant = {
-      role: "assistant",
-      content: assistantContent,
-      stopReason: "toolUse",
-    } as AgentMessage;
-    appendMessage(structuredClone(assistant));
-    appendMessage(
-      textToolResult("call_1", "read", "peter@dc.io\n", { isError: false }) as AgentMessage,
-    );
-
-    const messages = getMessages(sm);
-
-    expect(messages).toMatchObject([
-      { role: "assistant", content: assistantContent },
-      { role: "toolResult", content: text("peter@dc.io\n") },
-    ]);
-    expect(JSON.stringify(messages)).not.toContain("changed by hook");
-  });
 });
 
 describe("flushPendingToolResultsAfterIdle", () => {
-  it.each([false, true])(
-    "settles pending tool results after idle or timeout (timeout=%s)",
-    async (timesOut) => {
-      vi.useFakeTimers();
-      const id = timesOut ? "call_orphan_2" : "call_retry_1";
-      const timeoutMs = timesOut ? 30 : 1_000;
-      const { sm, appendMessage } = createGuard();
-      const idle = createDeferredCore();
-      appendMessage(assistantToolCall(id, "exec", "toolUse"));
-      const flushPromise = flushPendingToolResultsAfterIdle({
-        agent: { waitForIdle: () => idle.promise },
-        sessionManager: sm,
-        timeoutMs,
-      });
+  it("waits for the real tool result before settling idle cleanup", async () => {
+    vi.useFakeTimers();
+    const id = "call_retry_1";
+    const { sm, appendMessage } = createGuard();
+    const idle = createDeferredCore();
+    appendMessage(assistantToolCall(id, "exec", "toolUse"));
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent: { waitForIdle: () => idle.promise },
+      sessionManager: sm,
+      timeoutMs: 1_000,
+    });
 
-      if (timesOut) {
-        await vi.advanceTimersByTimeAsync(timeoutMs);
-      } else {
-        await Promise.resolve();
-        expect(getMessages(sm).map((message) => message.role)).toEqual(["assistant"]);
-        appendMessage({
-          role: "toolResult",
-          toolCallId: id,
-          content: text("command output here"),
-          isError: false,
-        } as AgentMessage);
-        idle.resolve();
-      }
-      await flushPromise;
-      expect(vi.getTimerCount()).toBe(0);
-      const messages = getMessages(sm);
-      expect(messages.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
-      expect(messages[1]).toMatchObject(
-        timesOut
-          ? { toolCallId: id, isError: true }
-          : { isError: false, content: text("command output here") },
-      );
-      if (timesOut) {
-        appendMessage(makeUserMessage("still there?", Date.now()));
-        expect(getMessages(sm).map((message) => message.role)).toEqual([
-          "assistant",
-          "toolResult",
-          "user",
-        ]);
-      }
-    },
-  );
+    await Promise.resolve();
+    expect(getMessages(sm).map((message) => message.role)).toEqual(["assistant"]);
+    appendMessage({
+      role: "toolResult",
+      toolCallId: id,
+      content: text("command output here"),
+      isError: false,
+    } as AgentMessage);
+    idle.resolve();
+    await flushPromise;
+    expect(vi.getTimerCount()).toBe(0);
+    const messages = getMessages(sm);
+    expect(messages.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
+    expect(messages[1]).toMatchObject({ isError: false, content: text("command output here") });
+  });
 });

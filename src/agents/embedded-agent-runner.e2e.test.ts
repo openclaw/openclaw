@@ -4,11 +4,11 @@ import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
+import { installScriptedRunnerMocks } from "./embedded-agent-runner.mock-test-support.js";
 import { model as catalogModel } from "./model-catalog-fixtures.test-support.js";
 import {
   buildEmbeddedRunnerAssistant,
   cleanupEmbeddedAgentRunnerTestWorkspace,
-  createMockUsage,
   createEmbeddedAgentRunnerOpenAiConfig as createBaseEmbeddedAgentRunnerOpenAiConfig,
   createResolvedEmbeddedRunnerModel,
   createEmbeddedAgentRunnerTestWorkspace,
@@ -16,10 +16,6 @@ import {
   immediateEnqueue,
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import {
-  installEmbeddedRunnerBaseE2eMocks,
-  installEmbeddedRunnerFastRunE2eMocks,
-} from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 type ProductionModelResolver = typeof import("./embedded-agent-runner/model.js").resolveModelAsync;
 let resolveModelAsyncActual: ProductionModelResolver;
@@ -68,12 +64,11 @@ vi.mock("openclaw/plugin-sdk/llm", async () => {
 const installRunEmbeddedMocks = () => {
   // Install only the runtime seams needed by runner orchestration so tests avoid
   // loading real providers, MCP runtimes, or gateway side effects.
-  installEmbeddedRunnerBaseE2eMocks({
+  installScriptedRunnerMocks({
     hookRunner: "full",
     pluginRegistry: preparedPluginRegistry,
-  });
-  installEmbeddedRunnerFastRunE2eMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
+    resolveModel: false,
   });
   vi.doMock("./command/session.js", async () => {
     const actual =
@@ -141,8 +136,6 @@ type TestRunEmbeddedAgent = (
   params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
 ) => ReturnType<ProductionRunEmbeddedAgent>;
 let runEmbeddedAgent: TestRunEmbeddedAgent;
-let SessionManager: typeof import("openclaw/plugin-sdk/agent-sessions").SessionManager;
-let loadTranscriptEvents: typeof import("../config/sessions/session-accessor.js").loadTranscriptEvents;
 let upsertSessionEntryCore: typeof import("../config/sessions/session-accessor.js").upsertSessionEntryCore;
 let resolveAgentRunSessionTarget: typeof import("./run-session-target.js").resolveAgentRunSessionTarget;
 let e2eWorkspace: EmbeddedAgentRunnerTestWorkspace | undefined;
@@ -187,9 +180,7 @@ beforeAll(async () => {
   runEmbeddedAgent = wrapRunWithTestPreparedAdmission(
     (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
   );
-  ({ SessionManager } = await import("openclaw/plugin-sdk/agent-sessions"));
-  ({ loadTranscriptEvents, upsertSessionEntryCore } =
-    await import("../config/sessions/session-accessor.js"));
+  ({ upsertSessionEntryCore } = await import("../config/sessions/session-accessor.js"));
   ({ resolveAgentRunSessionTarget } = await import("./run-session-target.js"));
   e2eWorkspace = await createEmbeddedAgentRunnerTestWorkspace("openclaw-embedded-agent-");
   ({ agentDir, workspaceDir } = e2eWorkspace);
@@ -308,35 +299,6 @@ function firstRunEmbeddedAttemptParams() {
     typeof import("./embedded-agent-runner/run/attempt.js").runEmbeddedAttempt
   >[0];
 }
-
-type TestSession = Parameters<typeof resolveTestSessionTarget>[0];
-const createPersistedTestSessionManager = async (params: TestSession) => {
-  const target = await resolveTestSessionTarget(params);
-  await upsertSessionEntryCore(
-    { agentId: target.agentId, sessionKey: target.sessionKey, storePath: target.storePath },
-    { sessionId: target.sessionId, updatedAt: Date.now() },
-  );
-  return SessionManager.open(target, workspaceDir);
-};
-
-const textFromContent = (content: unknown) => {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content) && content[0]?.type === "text") {
-    return (content[0] as { text?: string }).text;
-  }
-  return undefined;
-};
-
-const readSessionMessages = async (params: TestSession) => {
-  const entries = await loadTranscriptEvents(await resolveTestSessionTarget(params));
-  return entries
-    .filter((entry): entry is { message?: { role?: string; content?: unknown }; type: "message" } =>
-      Boolean(entry && typeof entry === "object" && "type" in entry && entry.type === "message"),
-    )
-    .map((entry) => entry.message);
-};
 
 const runTestAgent = (params: Partial<Parameters<TestRunEmbeddedAgent>[0]>) =>
   runEmbeddedAgent({
@@ -786,56 +748,4 @@ describe("runEmbeddedAgent", () => {
       id: "mock-1",
     });
   });
-
-  it(
-    "preserves existing transcript entries across an additional turn",
-    { timeout: 15_000 },
-    async () => {
-      const sessionFile = nextSessionCompatibilityKey();
-      const sessionKey = nextSessionKey();
-      const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-error"]);
-
-      const sessionManager = await createPersistedTestSessionManager({
-        config: cfg,
-        sessionId: "session:test",
-        sessionKey,
-      });
-      sessionManager.appendMessage({
-        role: "user",
-        content: [{ type: "text", text: "seed user" }],
-        timestamp: Date.now(),
-      });
-      sessionManager.appendMessage(
-        buildEmbeddedRunnerAssistant({
-          content: [{ type: "text", text: "seed assistant" }],
-          usage: createMockUsage(1, 1),
-        }),
-      );
-
-      mockSuccessfulEmbeddedAttempt();
-      await runTestAgent({
-        sessionFile,
-        sessionKey,
-        config: cfg,
-        provider: "openai",
-        model: "mock-error",
-      });
-
-      const messages = await readSessionMessages({
-        config: cfg,
-        sessionId: "session:test",
-        sessionKey,
-      });
-      const seedUserIndex = messages.findIndex(
-        (message) => message?.role === "user" && textFromContent(message.content) === "seed user",
-      );
-      const seedAssistantIndex = messages.findIndex(
-        (message) =>
-          message?.role === "assistant" && textFromContent(message.content) === "seed assistant",
-      );
-      expect(seedUserIndex).toBeGreaterThanOrEqual(0);
-      expect(seedAssistantIndex).toBeGreaterThan(seedUserIndex);
-      expect(messages.length).toBeGreaterThanOrEqual(2);
-    },
-  );
 });

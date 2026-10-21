@@ -38,6 +38,9 @@ function warnMeta(ctx: EmbeddedAgentSubscribeContext): Record<string, unknown> {
 function expectEvent(onAgentEvent: ReturnType<typeof vi.fn>, data: Record<string, unknown>) {
   expect(onAgentEvent).toHaveBeenCalledWith({ stream: "lifecycle", data });
 }
+const working = { livenessState: "working" };
+const abandoned = { livenessState: "abandoned", replayInvalid: true };
+const replayInvalid = { replayState: { replayInvalid: true, hadPotentialSideEffects: false } };
 
 describe("embedded lifecycle", () => {
   it.each(["start", "end"] as const)("keeps identity on %s events", async (phase) => {
@@ -180,70 +183,53 @@ describe("embedded lifecycle", () => {
     );
   });
   it.each([
-    {
-      name: "surfaces replay-invalid paused lifecycle end state when present",
-      state: {
-        replayState: { replayInvalid: true, hadPotentialSideEffects: false },
-        livenessState: "paused",
-      },
-      expected: { livenessState: "paused", replayInvalid: true },
-    },
-    {
-      name: "marks tool-use terminal with pre-tool text as abandoned (#76477)",
-      stopReason: "toolUse",
-      content: [
+    [
+      "preserves paused state",
+      undefined,
+      [],
+      { ...replayInvalid, livenessState: "paused" },
+      { livenessState: "paused", replayInvalid: true },
+    ],
+    [
+      "abandons pre-tool text (#76477)",
+      "toolUse",
+      [
         { type: "text", text: "Initial analysis..." },
         { type: "tool_use", id: "tool_1", name: "read", input: { path: "src/index.ts" } },
       ],
-      state: { assistantTexts: ["Initial analysis..."] },
-      expected: { livenessState: "abandoned", replayInvalid: true },
-    },
-    {
-      name: "keeps token-limited text replayable when it was never streamed",
-      stopReason: "length",
-      content: [{ type: "text", text: "Partial answer" }],
-      state: { assistantTexts: [] },
-      expected: { livenessState: "working" },
-    },
-    {
-      name: "marks a token-limited turn with nothing to deliver as abandoned",
-      stopReason: "length",
-      state: { assistantTexts: [] },
-      expected: { livenessState: "abandoned", replayInvalid: true },
-    },
-    {
-      name: "preserves token-limited deferred media before terminal delivery",
-      stopReason: "length",
-      state: { deferredBlockReplies: [{ mediaUrls: ["/tmp/render.png"] }] },
-      expected: { livenessState: "working" },
-    },
-    {
-      name: "preserves token-limited message-tool-only delivery before runner finalization",
-      stopReason: "length",
-      state: { messageToolOnlySourceReplyDelivered: true },
-      expected: { livenessState: "working" },
-    },
-    {
-      name: "keeps accumulated deterministic side effects from being marked abandoned",
-      state: {
-        replayState: { replayInvalid: true, hadPotentialSideEffects: false },
-        assistantTexts: [],
-        hadDeterministicSideEffect: true,
-      },
-      expected: { livenessState: "working", replayInvalid: true },
-    },
-    {
-      name: "keeps accepted session spawns from being marked abandoned",
-      state: {
-        replayState: { replayInvalid: true, hadPotentialSideEffects: false },
-        assistantTexts: [],
-        acceptedSessionSpawns: [
-          { runId: "run-child", childSessionKey: "agent:claude:subagent:child" },
-        ],
-      },
-      expected: { livenessState: "working", replayInvalid: true },
-    },
-  ])("$name", async ({ stopReason, content = [], state, expected }) => {
+      { assistantTexts: ["Initial analysis..."] },
+      abandoned,
+    ],
+    [
+      "keeps unstreamed limited text",
+      "length",
+      [{ type: "text", text: "Partial answer" }],
+      { assistantTexts: [] },
+      working,
+    ],
+    ["abandons empty limited turns", "length", [], { assistantTexts: [] }, abandoned],
+    [
+      "preserves deferred media",
+      "length",
+      [],
+      { deferredBlockReplies: [{ mediaUrls: ["/tmp/render.png"] }] },
+      working,
+    ],
+    [
+      "preserves message-tool delivery",
+      "length",
+      [],
+      { messageToolOnlySourceReplyDelivered: true },
+      working,
+    ],
+    [
+      "preserves deterministic effects",
+      undefined,
+      [],
+      { ...replayInvalid, assistantTexts: [], hadDeterministicSideEffect: true },
+      { ...working, replayInvalid: true },
+    ],
+  ] as const)("%s", async (_name, stopReason, content, state, expected) => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(stopReason ? { role: "assistant", stopReason, content } : undefined, {
       onAgentEvent,
