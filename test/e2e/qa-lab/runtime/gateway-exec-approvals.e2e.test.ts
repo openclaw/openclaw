@@ -18,12 +18,7 @@ import { readExecApprovalsSnapshot } from "../../../../src/infra/exec-approvals.
 
 type Cleanup = () => Promise<void> | void;
 
-type ExecApprovalListEntry = {
-  id: string;
-  request: {
-    command?: string;
-  };
-};
+type ExecApprovalListEntry = { id: string; request: { command?: string } };
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -52,46 +47,33 @@ describe("gateway exec approvals QA", () => {
     });
     cleanup.push(() => server.close());
 
-    const requesterIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(
-        stateDir,
-        "test-device-identities",
-        "exec-requester",
-        "client",
-        "credentials.sqlite",
-      ),
-    });
-    const reviewerIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(
-        stateDir,
-        "test-device-identities",
-        "exec-reviewer",
-        "client",
-        "credentials.sqlite",
-      ),
-    });
+    const connect = async (name: string, scope: string) => {
+      const identity = loadOrCreateDeviceIdentity({
+        path: path.join(
+          stateDir,
+          "test-device-identities",
+          `exec-${name}`,
+          "client",
+          "credentials.sqlite",
+        ),
+      });
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token,
+        clientDisplayName: `exec approval ${name}`,
+        deviceIdentity: identity,
+        scopes: [scope],
+        timeoutMs: 60_000,
+      });
+      cleanup.push(() => disconnectGatewayClient(client));
+      return { client, identity };
+    };
+    const { client: requester, identity: requesterIdentity } = await connect(
+      "requester",
+      APPROVALS_SCOPE,
+    );
+    const { client: reviewer, identity: reviewerIdentity } = await connect("reviewer", ADMIN_SCOPE);
     expect(reviewerIdentity.deviceId).not.toBe(requesterIdentity.deviceId);
-
-    const url = `ws://127.0.0.1:${port}`;
-    const requester = await connectGatewayClient({
-      url,
-      token,
-      clientDisplayName: "exec approval requester",
-      deviceIdentity: requesterIdentity,
-      scopes: [APPROVALS_SCOPE],
-      timeoutMs: 60_000,
-    });
-    cleanup.push(() => disconnectGatewayClient(requester));
-
-    const reviewer = await connectGatewayClient({
-      url,
-      token,
-      clientDisplayName: "exec approval reviewer",
-      deviceIdentity: reviewerIdentity,
-      scopes: [ADMIN_SCOPE],
-      timeoutMs: 60_000,
-    });
-    cleanup.push(() => disconnectGatewayClient(reviewer));
 
     const initial = await reviewer.request<ExecApprovalsSnapshot>("exec.approvals.get", {});
     const storedInitial = readExecApprovalsSnapshot();

@@ -38,6 +38,16 @@ const NODE_PERMISSIONS = {
   camera: true,
   location: true,
 };
+const IOS_NODE_OPTIONS = {
+  role: "node",
+  clientName: GATEWAY_CLIENT_NAMES.IOS_APP,
+  clientDisplayName: NODE_DISPLAY_NAME,
+  mode: GATEWAY_CLIENT_MODES.NODE,
+  platform: "ios",
+  deviceFamily: "iPhone",
+  scopes: [],
+  permissions: NODE_PERMISSIONS,
+} satisfies Partial<Parameters<typeof connectClient>[0]>;
 const FIXTURE_PLUGIN_ID = "qa-gateway-node-rolling-compat";
 const FIXTURE_CAPABILITY = "qa-rolling-surface";
 const FIXTURE_COMMAND = "qa.rolling.echo";
@@ -84,6 +94,14 @@ type StoppableClient = Pick<GatewayClient, "stopAndWait">;
 type StoppableFixture = {
   stop: () => Promise<void>;
 };
+const request = <T = unknown>(client: GatewayClient, method: string, params: unknown) =>
+  client.request<T>(method, params, { timeoutMs: REQUEST_TIMEOUT_MS });
+const nodeEnvelope = (legacy: boolean) => ({
+  platform: legacy ? "darwin" : "macos",
+  ...(legacy ? {} : { deviceFamily: "Mac" }),
+  minProtocol: legacy ? MIN_NODE_PROTOCOL_VERSION : PROTOCOL_VERSION,
+  maxProtocol: legacy ? MIN_NODE_PROTOCOL_VERSION : PROTOCOL_VERSION,
+});
 
 describe("Gateway node control plane", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -181,127 +199,74 @@ describe("Gateway node control plane", () => {
           },
         });
 
+        const expectedNode = {
+          nodeId: identity.deviceId,
+          displayName: NODE_DISPLAY_NAME,
+          platform: "ios",
+          deviceFamily: "iPhone",
+          approvalState: "approved",
+          paired: true,
+          connected: true,
+          permissions: NODE_PERMISSIONS,
+        };
         const listed = await waitForApprovedNode(operator, identity.deviceId, gateway.logs);
-        expect(listed).toMatchObject({
+        const described = await request<NodeRead>(operator, "node.describe", {
           nodeId: identity.deviceId,
-          displayName: NODE_DISPLAY_NAME,
-          platform: "ios",
-          deviceFamily: "iPhone",
-          approvalState: "approved",
-          paired: true,
-          connected: true,
-          permissions: NODE_PERMISSIONS,
         });
-        expect(listed.caps?.toSorted()).toEqual(NODE_CAPS);
-        expect(listed.commands?.toSorted()).toEqual(NODE_COMMANDS);
+        for (const nodeRead of [listed, described]) {
+          expect(nodeRead).toMatchObject(expectedNode);
+          expect(nodeRead.caps?.toSorted()).toEqual(NODE_CAPS);
+          expect(nodeRead.commands?.toSorted()).toEqual(NODE_COMMANDS);
+        }
 
-        const described = await operator.request<NodeRead>(
-          "node.describe",
-          { nodeId: identity.deviceId },
-          { timeoutMs: REQUEST_TIMEOUT_MS },
-        );
-        expect(described).toMatchObject({
-          nodeId: identity.deviceId,
-          displayName: NODE_DISPLAY_NAME,
-          platform: "ios",
-          deviceFamily: "iPhone",
-          approvalState: "approved",
-          paired: true,
-          connected: true,
-          permissions: NODE_PERMISSIONS,
-        });
-        expect(described.caps?.toSorted()).toEqual(NODE_CAPS);
-        expect(described.commands?.toSorted()).toEqual(NODE_COMMANDS);
-
-        const cameraParams = { includeUnavailable: false };
-        const cameraResult = await operator.request<{
-          ok: boolean;
-          nodeId: string;
-          command: string;
-          payload: unknown;
-        }>(
-          "node.invoke",
+        const probes = [
           {
-            nodeId: identity.deviceId,
             command: "camera.list",
-            params: cameraParams,
-            timeoutMs: REQUEST_TIMEOUT_MS,
-            idempotencyKey: randomUUID(),
+            params: { includeUnavailable: false },
+            payload: { cameras: [{ id: "back-wide", position: "back" }] },
           },
-          { timeoutMs: REQUEST_TIMEOUT_MS },
-        );
-        expect(cameraResult).toMatchObject({
-          ok: true,
-          nodeId: identity.deviceId,
-          command: "camera.list",
-          payload: {
-            cameras: [{ id: "back-wide", position: "back" }],
-            received: cameraParams,
-          },
-        });
-
-        const locationParams = { accuracy: "balanced" };
-        const locationResult = await operator.request<{
-          ok: boolean;
-          nodeId: string;
-          command: string;
-          payload: unknown;
-        }>(
-          "node.invoke",
           {
-            nodeId: identity.deviceId,
             command: "location.get",
-            params: locationParams,
-            timeoutMs: REQUEST_TIMEOUT_MS,
-            idempotencyKey: randomUUID(),
+            params: { accuracy: "balanced" },
+            payload: { latitude: 37.3318, longitude: -122.0312 },
           },
-          { timeoutMs: REQUEST_TIMEOUT_MS },
+        ];
+        for (const { command, params, payload } of probes) {
+          await expect(
+            invokeNodeCommand({
+              operator,
+              nodeId: identity.deviceId,
+              command,
+              params,
+            }),
+          ).resolves.toMatchObject({
+            ok: true,
+            nodeId: identity.deviceId,
+            command,
+            payload: { ...payload, received: params },
+          });
+        }
+        expect(invocations).toMatchObject(
+          probes.map(({ command, params }) => ({
+            nodeId: identity.deviceId,
+            command,
+            params,
+          })),
         );
-        expect(locationResult).toMatchObject({
-          ok: true,
-          nodeId: identity.deviceId,
-          command: "location.get",
-          payload: {
-            latitude: 37.3318,
-            longitude: -122.0312,
-            received: locationParams,
-          },
-        });
-        expect(invocations).toMatchObject([
-          {
-            nodeId: identity.deviceId,
-            command: "camera.list",
-            params: cameraParams,
-          },
-          {
-            nodeId: identity.deviceId,
-            command: "location.get",
-            params: locationParams,
-          },
-        ]);
         await Promise.all(invocationResponses);
         expect(handlerErrors).toEqual([]);
 
         const aliveSentAtMs = Date.now();
-        const aliveResult = await node.request<{
-          ok: boolean;
-          event: string;
-          handled: boolean;
-          reason?: string;
-        }>(
-          "node.event",
-          {
-            event: "node.presence.alive",
-            payload: {
-              trigger: "manual",
-              sentAtMs: aliveSentAtMs,
-              displayName: NODE_DISPLAY_NAME,
-              platform: "ios",
-              deviceFamily: "iPhone",
-            },
+        const aliveResult = await request(node, "node.event", {
+          event: "node.presence.alive",
+          payload: {
+            trigger: "manual",
+            sentAtMs: aliveSentAtMs,
+            displayName: NODE_DISPLAY_NAME,
+            platform: "ios",
+            deviceFamily: "iPhone",
           },
-          { timeoutMs: REQUEST_TIMEOUT_MS },
-        );
+        });
         expect(aliveResult).toMatchObject({
           ok: true,
           event: "node.presence.alive",
@@ -317,10 +282,10 @@ describe("Gateway node control plane", () => {
               lastSeenReason: "manual",
             });
             expect(afterAlive?.lastSeenAtMs).toBeGreaterThanOrEqual(aliveSentAtMs);
-            const describedAfterAlive = await connectedOperator.request<NodeRead>(
+            const describedAfterAlive = await request<NodeRead>(
+              connectedOperator,
               "node.describe",
               { nodeId: identity.deviceId },
-              { timeoutMs: REQUEST_TIMEOUT_MS },
             );
             expect(describedAfterAlive).toMatchObject({
               lastSeenReason: "manual",
@@ -432,19 +397,8 @@ describe("Gateway node control plane", () => {
 
         expect(helloProtocols).toEqual([MIN_NODE_PROTOCOL_VERSION]);
         expect(fixture.connectFrames).toMatchObject([
-          {
-            clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-            platform: "macos",
-            deviceFamily: "Mac",
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
-          },
-          {
-            clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-            platform: "darwin",
-            minProtocol: MIN_NODE_PROTOCOL_VERSION,
-            maxProtocol: MIN_NODE_PROTOCOL_VERSION,
-          },
+          { clientName: GATEWAY_CLIENT_NAMES.NODE_HOST, ...nodeEnvelope(false) },
+          { clientName: GATEWAY_CLIENT_NAMES.NODE_HOST, ...nodeEnvelope(true) },
         ]);
         expect(fixture.connectFrames[1]).not.toHaveProperty("deviceFamily");
 
@@ -458,17 +412,8 @@ describe("Gateway node control plane", () => {
           },
         );
         expect(fixture.connectFrames.slice(-2)).toMatchObject([
-          {
-            platform: "darwin",
-            minProtocol: MIN_NODE_PROTOCOL_VERSION,
-            maxProtocol: MIN_NODE_PROTOCOL_VERSION,
-          },
-          {
-            platform: "macos",
-            deviceFamily: "Mac",
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
-          },
+          nodeEnvelope(true),
+          nodeEnvelope(false),
         ]);
 
         fixture.setProtocol(MIN_NODE_PROTOCOL_VERSION);
@@ -486,17 +431,8 @@ describe("Gateway node control plane", () => {
           },
         );
         expect(fixture.connectFrames.slice(-2)).toMatchObject([
-          {
-            platform: "macos",
-            deviceFamily: "Mac",
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
-          },
-          {
-            platform: "darwin",
-            minProtocol: MIN_NODE_PROTOCOL_VERSION,
-            maxProtocol: MIN_NODE_PROTOCOL_VERSION,
-          },
+          nodeEnvelope(false),
+          nodeEnvelope(true),
         ]);
       } finally {
         await stopProtocolEnvelopeFixture(node, fixture);
@@ -602,17 +538,10 @@ describe("Gateway node control plane", () => {
 
         let currentHello: HelloOk | undefined;
         node = await connectClient({
+          ...IOS_NODE_OPTIONS,
           gateway,
-          role: "node",
-          clientName: GATEWAY_CLIENT_NAMES.IOS_APP,
-          clientDisplayName: NODE_DISPLAY_NAME,
-          mode: GATEWAY_CLIENT_MODES.NODE,
-          platform: "ios",
-          deviceFamily: "iPhone",
-          scopes: [],
           caps: declaredCaps,
           commands: declaredCommands,
-          permissions: NODE_PERMISSIONS,
           deviceIdentity: identity,
           minProtocol: PROTOCOL_VERSION,
           maxProtocol: PROTOCOL_VERSION,
@@ -633,10 +562,11 @@ describe("Gateway node control plane", () => {
         });
         expect(fixtureSurfaceResponse.status).toBe(204);
         await expectNoPendingPairing(operator, identity.deviceId);
-        const currentListed = await waitForConnectedApprovedNode(
+        const currentListed = await waitForApprovedNode(
           operator,
           identity.deviceId,
           gateway.logs,
+          false,
         );
         expect(currentListed.caps?.toSorted()).toEqual(declaredCaps.toSorted());
         expect(currentListed.commands?.toSorted()).toEqual(declaredCommands.toSorted());
@@ -737,17 +667,10 @@ async function connectPairedNode(params: {
 }): Promise<GatewayClient> {
   const connect = () =>
     connectClient({
+      ...IOS_NODE_OPTIONS,
       gateway: params.gateway,
-      role: "node",
-      clientName: GATEWAY_CLIENT_NAMES.IOS_APP,
-      clientDisplayName: NODE_DISPLAY_NAME,
-      mode: GATEWAY_CLIENT_MODES.NODE,
-      platform: "ios",
-      deviceFamily: "iPhone",
-      scopes: [],
       caps: params.caps ?? NODE_CAPS,
       commands: params.commands ?? NODE_COMMANDS,
-      permissions: NODE_PERMISSIONS,
       deviceIdentity: params.identity,
       minProtocol: params.minProtocol,
       maxProtocol: params.maxProtocol,
@@ -786,6 +709,7 @@ async function connectClient(params: {
   onEvent?: (event: { event: string; payload?: unknown }) => void;
   onHelloOk?: (hello: HelloOk) => void;
 }): Promise<GatewayClient> {
+  const { gateway, ...options } = params;
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
     const finish = (error?: Error) => {
@@ -802,25 +726,13 @@ async function connectClient(params: {
       resolve(client);
     };
     const client = new GatewayClient({
-      url: params.gateway.wsUrl,
-      token: params.gateway.token,
-      env: params.gateway.runtimeEnv,
-      role: params.role,
-      clientName: params.clientName,
-      clientDisplayName: params.clientDisplayName,
+      ...options,
+      url: gateway.wsUrl,
+      token: gateway.token,
+      env: gateway.runtimeEnv,
       clientVersion: "1.0.0",
       platform: params.platform ?? process.platform,
-      deviceFamily: params.deviceFamily,
-      mode: params.mode,
-      scopes: params.scopes,
-      caps: params.caps,
-      commands: params.commands,
-      permissions: params.permissions,
-      deviceIdentity: params.deviceIdentity,
-      minProtocol: params.minProtocol,
-      maxProtocol: params.maxProtocol,
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
-      onEvent: params.onEvent,
       onHelloOk: (hello) => {
         params.onHelloOk?.(hello);
         finish();
@@ -840,7 +752,7 @@ async function connectClient(params: {
       },
     });
     const timeout = setTimeout(
-      () => finish(new Error(`Gateway client connection timed out:\n${params.gateway.logs()}`)),
+      () => finish(new Error(`Gateway client connection timed out:\n${gateway.logs()}`)),
       REQUEST_TIMEOUT_MS,
     );
     timeout.unref();
@@ -857,78 +769,43 @@ function isPairingRequired(error: unknown): boolean {
 }
 
 async function approvePendingNodePairing(operator: GatewayClient, nodeId: string): Promise<void> {
-  let deviceRequestId: string | undefined;
-  await vi.waitFor(
-    async () => {
-      const devices = await operator.request<{
-        pending?: Array<{ requestId?: string; deviceId?: string; role?: string }>;
-      }>("device.pair.list", {}, { timeoutMs: REQUEST_TIMEOUT_MS });
-      const pendingDevice = devices.pending?.find(
-        (entry) => entry.deviceId === nodeId || entry.role === "node",
-      );
-      expect(pendingDevice?.requestId).toBeTruthy();
-      deviceRequestId = pendingDevice?.requestId;
-    },
-    { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
-  );
-  await operator.request(
-    "device.pair.approve",
-    { requestId: deviceRequestId },
-    { timeoutMs: REQUEST_TIMEOUT_MS },
-  );
-
-  let nodeRequestId: string | undefined;
-  await vi.waitFor(
-    async () => {
-      const nodes = await operator.request<{
-        pending?: Array<{ requestId?: string; nodeId?: string }>;
-      }>("node.pair.list", {}, { timeoutMs: REQUEST_TIMEOUT_MS });
-      const pendingNode = nodes.pending?.find((entry) => entry.nodeId === nodeId);
-      expect(pendingNode?.requestId).toBeTruthy();
-      nodeRequestId = pendingNode?.requestId;
-    },
-    { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
-  );
-  await operator.request(
-    "node.pair.approve",
-    { requestId: nodeRequestId },
-    { timeoutMs: REQUEST_TIMEOUT_MS },
-  );
+  for (const kind of ["device", "node"] as const) {
+    let requestId: string | undefined;
+    await vi.waitFor(
+      async () => {
+        const { pending } = await request<{
+          pending?: Array<{
+            requestId?: string;
+            deviceId?: string;
+            nodeId?: string;
+            role?: string;
+          }>;
+        }>(operator, `${kind}.pair.list`, {});
+        requestId = pending?.find((entry) =>
+          kind === "device"
+            ? entry.deviceId === nodeId || entry.role === "node"
+            : entry.nodeId === nodeId,
+        )?.requestId;
+        expect(requestId).toBeTruthy();
+      },
+      { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
+    );
+    await request(operator, `${kind}.pair.approve`, { requestId });
+  }
 }
 
 async function waitForApprovedNode(
   operator: GatewayClient,
   nodeId: string,
   logs: () => string,
+  approve = true,
 ): Promise<NodeRead> {
   let approved: NodeRead | undefined;
   await vi.waitFor(
     async () => {
-      await approvePendingNodeSurface(operator, nodeId);
-      approved = await readNode(operator, nodeId);
-      expect(approved, logs()).toMatchObject({
-        nodeId,
-        approvalState: "approved",
-        connected: true,
-        paired: true,
-      });
-    },
-    { timeout: REQUEST_TIMEOUT_MS, interval: 100 },
-  );
-  if (!approved) {
-    throw new Error(`approved node never became visible:\n${logs()}`);
-  }
-  return approved;
-}
-
-async function waitForConnectedApprovedNode(
-  operator: GatewayClient,
-  nodeId: string,
-  logs: () => string,
-): Promise<NodeRead> {
-  let approved: NodeRead | undefined;
-  await vi.waitFor(
-    async () => {
+      if (approve) {
+        await approvePendingNodeSurface(operator, nodeId);
+      }
       approved = await readNode(operator, nodeId);
       expect(approved, logs()).toMatchObject({
         nodeId,
@@ -948,11 +825,7 @@ async function waitForConnectedApprovedNode(
 async function approvePendingNodeSurface(operator: GatewayClient, nodeId: string): Promise<void> {
   for (const pending of await readPendingNodePairings(operator)) {
     if (pending.nodeId === nodeId && pending.requestId) {
-      await operator.request(
-        "node.pair.approve",
-        { requestId: pending.requestId },
-        { timeoutMs: REQUEST_TIMEOUT_MS },
-      );
+      await request(operator, "node.pair.approve", { requestId: pending.requestId });
     }
   }
 }
@@ -960,17 +833,17 @@ async function approvePendingNodeSurface(operator: GatewayClient, nodeId: string
 async function readPendingNodePairings(
   operator: GatewayClient,
 ): Promise<Array<{ requestId?: string; nodeId?: string }>> {
-  const nodes = await operator.request<{
+  const nodes = await request<{
     pending?: Array<{ requestId?: string; nodeId?: string }>;
-  }>("node.pair.list", {}, { timeoutMs: REQUEST_TIMEOUT_MS });
+  }>(operator, "node.pair.list", {});
   return nodes.pending ?? [];
 }
 
 async function expectNoPendingPairing(operator: GatewayClient, nodeId: string): Promise<void> {
   const [devices, nodes] = await Promise.all([
-    operator.request<{
+    request<{
       pending?: Array<{ deviceId?: string }>;
-    }>("device.pair.list", {}, { timeoutMs: REQUEST_TIMEOUT_MS }),
+    }>(operator, "device.pair.list", {}),
     readPendingNodePairings(operator),
   ]);
   const devicePending = devices.pending?.some((entry) => entry.deviceId === nodeId) ?? false;
@@ -980,11 +853,7 @@ async function expectNoPendingPairing(operator: GatewayClient, nodeId: string): 
 }
 
 async function readNode(operator: GatewayClient, nodeId: string): Promise<NodeRead | undefined> {
-  const result = await operator.request<{ nodes?: NodeRead[] }>(
-    "node.list",
-    {},
-    { timeoutMs: REQUEST_TIMEOUT_MS },
-  );
+  const result = await request<{ nodes?: NodeRead[] }>(operator, "node.list", {});
   return result.nodes?.find((entry) => entry.nodeId === nodeId);
 }
 
