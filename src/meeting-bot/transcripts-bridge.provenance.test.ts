@@ -65,26 +65,25 @@ it("retains provenance on existing utterance rows and subscriber replay, not on 
   });
   const { session } = await runtime.join({ url: TEST_MEETING_URL, agentId: "operator" });
   const delivered = vi.fn<(utterance: TranscriptUtterance) => void>();
-  const subscriber = (sessionId: string) => ({
-    session: {
-      sessionId,
-      startedAt: session.createdAt,
-      source: { providerId: "test-meeting", agentId: "operator", meetingUrl: TEST_MEETING_URL },
-    },
-    onUtterance: delivered,
-  });
+  const subscribe = (
+    sessionId: string,
+    onUtterance: (utterance: TranscriptUtterance) => void = delivered,
+  ) =>
+    expect(
+      runtime.startTranscriptSource({
+        session: {
+          sessionId,
+          startedAt: session.createdAt,
+          source: { providerId: "test-meeting", agentId: "operator", meetingUrl: TEST_MEETING_URL },
+        },
+        onUtterance,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+  const metadata = { agentId: "operator", meetingSessionId: session.id };
   const expectedMetadata = [
-    {
-      agentId: "operator",
-      meetingSessionId: session.id,
-      meetingObservationProvenance: committed.provenance,
-    },
-    {
-      agentId: "operator",
-      meetingSessionId: session.id,
-      meetingObservationProvenance: ineligible.provenance,
-    },
-    { agentId: "operator", meetingSessionId: session.id },
+    { ...metadata, meetingObservationProvenance: committed.provenance },
+    { ...metadata, meetingObservationProvenance: ineligible.provenance },
+    metadata,
   ];
   try {
     const descriptor = await store.readSession(session.id);
@@ -96,15 +95,8 @@ it("retains provenance on existing utterance rows and subscriber replay, not on 
         provenance.speaker = "Subscriber-local edit";
       }
     });
-    await expect(
-      runtime.startTranscriptSource({
-        ...subscriber("editing-subscriber"),
-        onUtterance: editingSubscriber,
-      }),
-    ).resolves.toMatchObject({ ok: true });
-    await expect(
-      runtime.startTranscriptSource(subscriber("live-subscriber")),
-    ).resolves.toMatchObject({ ok: true });
+    await subscribe("editing-subscriber", editingSubscriber);
+    await subscribe("live-subscriber");
 
     snapshot = { ...snapshot, lines: [committed, ineligible, legacy], pendingLines: [] };
     await runtime.transcript(session.id);
@@ -125,29 +117,15 @@ it("retains provenance on existing utterance rows and subscriber replay, not on 
     expect(sourceId).toBeTruthy();
 
     // A new observation envelope on the same committed row is not a new utterance or action source.
-    snapshot = {
-      ...snapshot,
-      lines: [
-        {
-          ...committed,
-          provenance: testMeetingObservation({ observationId: "later-observation" }),
-        },
-        ineligible,
-        legacy,
-      ],
-    };
+    const provenance = testMeetingObservation({ observationId: "later-observation" });
+    snapshot = { ...snapshot, lines: [{ ...committed, provenance }, ineligible, legacy] };
     await runtime.transcript(session.id);
     expect(await store.readUtterancesForSession(descriptor!)).toEqual(stored);
     expect(runtime.participationContext(session.id).sources[0]?.sourceId).toBe(sourceId);
     expect(delivered).toHaveBeenCalledTimes(3);
 
     const replayed = vi.fn<(utterance: TranscriptUtterance) => void>();
-    await expect(
-      runtime.startTranscriptSource({
-        ...subscriber("replay-subscriber"),
-        onUtterance: replayed,
-      }),
-    ).resolves.toMatchObject({ ok: true });
+    await subscribe("replay-subscriber", replayed);
     expect(replayed.mock.calls.map(([row]) => row.metadata)).toEqual(expectedMetadata);
   } finally {
     await runtime.leave(session.id);

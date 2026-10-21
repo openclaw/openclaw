@@ -1,11 +1,11 @@
 import { setImmediate } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { MeetingBrowserRequestParams } from "./platform-adapter-contract.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import { createBrowserMeetingRealtimeAudioTransport } from "./realtime-browser-audio-transport.js";
 
-function setup() {
+async function setup(received = vi.fn(), fatal = vi.fn()) {
   let nativeInput: ((audio: Buffer) => void) | undefined;
   const nativeTransport = {
     onFatal: vi.fn(),
@@ -34,6 +34,20 @@ function setup() {
       }),
     };
   });
+  const transport = await createBrowserMeetingRealtimeAudioTransport({
+    nativeTransport,
+    hasConfiguredInputCommand: false,
+    callBrowser,
+    buildCaptureScript: JSON.stringify,
+    meetingSessionId: "session-1",
+    meetingUrl: "https://meet.google.com/abc-defg-hij",
+    targetId: "tab-1",
+    audioFormat: "pcm16-24khz",
+    logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+  });
+  transport.onFatal(fatal);
+  transport.startInput(received);
+  await setImmediate();
   return {
     resolvePull(result: Record<string, unknown>) {
       const pending = pulls.shift();
@@ -43,33 +57,20 @@ function setup() {
       pending.resolve(result);
     },
     nativeTransport,
-    callBrowser,
     nativeInput: (audio: Buffer) => nativeInput?.(audio),
-    create: () =>
-      createBrowserMeetingRealtimeAudioTransport({
-        nativeTransport,
-        hasConfiguredInputCommand: false,
-        callBrowser,
-        buildCaptureScript: JSON.stringify,
-        meetingSessionId: "session-1",
-        meetingUrl: "https://meet.google.com/abc-defg-hij",
-        targetId: "tab-1",
-        audioFormat: "pcm16-24khz",
-        logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
-      }),
+    transport,
+    received,
+    fatal,
   };
 }
 
 describe("isolated meeting browser audio transport", () => {
+  beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
   it("feeds remote playback to the provider while native microphone injection stays out", async () => {
-    vi.useFakeTimers();
-    const fixture = setup();
-    const transport = await fixture.create();
-    const received = vi.fn();
-    transport.startInput(received);
-    await setImmediate();
+    const fixture = await setup();
+    const { transport, received } = fixture;
     const assistant = Buffer.from([1, 0, 2, 0]);
     const remote = Buffer.from([3, 0, 4, 0]);
     await transport.writeOutput(assistant);
@@ -83,14 +84,8 @@ describe("isolated meeting browser audio transport", () => {
   });
 
   it("discards a pull after stop and rejects an expired browser capture", async () => {
-    vi.useFakeTimers();
-    const fixture = setup();
-    const transport = await fixture.create();
-    const received = vi.fn();
-    const fatal = vi.fn();
-    transport.onFatal(fatal);
-    transport.startInput(received);
-    await setImmediate();
+    const fixture = await setup();
+    const { transport, received, fatal } = fixture;
     // Browser evaluations are serialized, so stop retires the host immediately while
     // waiting for the in-flight page read to leave the tab lock.
     const stopping = transport.stop();
@@ -99,16 +94,12 @@ describe("isolated meeting browser audio transport", () => {
     expect(received).not.toHaveBeenCalled();
     expect(fatal).not.toHaveBeenCalled();
 
-    const next = setup();
-    const nextTransport = await next.create();
-    nextTransport.onFatal(fatal);
-    nextTransport.startInput(received);
-    await setImmediate();
+    const next = await setup(received, fatal);
     next.resolvePull({ closed: true });
     await setImmediate();
     expect(fatal).toHaveBeenCalledOnce();
     expect(received).not.toHaveBeenCalled();
     expect(next.nativeTransport.stop).toHaveBeenCalledOnce();
-    await nextTransport.stop();
+    await next.transport.stop();
   });
 });

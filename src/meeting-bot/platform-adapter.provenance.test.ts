@@ -10,32 +10,31 @@ const parseTranscript = (payload: unknown) =>
   TEST_MEETING_PLATFORM_ADAPTER.browser.captions.parseTranscript({
     result: JSON.stringify(payload),
   });
+const observedLine = (
+  text: string,
+  overrides: Parameters<typeof testMeetingObservation>[0] = {},
+) => ({ text, provenance: testMeetingObservation(overrides) });
+const captionLine = { ...observedLine("Caption"), source: TEST_CAPTION_SOURCE };
+const datedCaption = { ...captionLine, at: "2026-09-01T00:00:00.000Z", speaker: "Alice" };
 
 describe("meeting observation provenance parsing", () => {
   it("preserves committed, pending, and source-ineligible row facts through browser forwarding", async () => {
     const committed = {
-      at: "2026-09-01T00:00:00.000Z",
-      speaker: "Alice",
+      ...datedCaption,
       text: "Please share the recap",
-      source: TEST_CAPTION_SOURCE,
-      provenance: testMeetingObservation(),
     };
-    const own = {
-      text: "My own caption",
-      provenance: testMeetingObservation({ observationId: "own-observation", self: "self" }),
-    };
-    const ambiguous = {
-      text: "An ambiguous or capacity-limited row",
-      provenance: testMeetingObservation({ observationId: "unknown-observation", self: "unknown" }),
-    };
-    const stale = {
-      text: "A retained row from an older epoch",
-      provenance: testMeetingObservation({ observationId: "stale-observation", epoch: "old-page" }),
-    };
+    const own = observedLine("My own caption", { observationId: "own-observation", self: "self" });
+    const ambiguous = observedLine("An ambiguous or capacity-limited row", {
+      observationId: "unknown-observation",
+      self: "unknown",
+    });
+    const stale = observedLine("A retained row from an older epoch", {
+      observationId: "stale-observation",
+      epoch: "old-page",
+    });
     const pending = {
-      text: "Please wait",
+      ...observedLine("Please wait", { observationId: "pending-observation" }),
       source: { ...TEST_CAPTION_SOURCE, revision: "3", finalized: false },
-      provenance: testMeetingObservation({ observationId: "pending-observation" }),
     };
     const result = await readTestMeetingTranscript({
       urlMatched: true,
@@ -83,14 +82,10 @@ describe("meeting observation provenance parsing", () => {
       const source = { ...TEST_CAPTION_SOURCE, ownEcho: true };
       const parsed = parseTranscript({
         epoch: "epoch-1",
-        lines: [
-          { at: "2026-09-01T00:00:00.000Z", speaker: "Alice", text: "Caption", source, provenance },
-        ],
+        lines: [{ ...datedCaption, source, provenance }],
       });
       expect(parsed.lines[0]).toEqual({
-        at: "2026-09-01T00:00:00.000Z",
-        speaker: "Alice",
-        text: "Caption",
+        ...datedCaption,
         source,
         provenance: {
           observer: "test-meeting",
@@ -104,16 +99,11 @@ describe("meeting observation provenance parsing", () => {
   );
 
   const malformedLine = { at: "invalid-time", speaker: "x".repeat(513), text: "Still retained" };
-  const captionLine = {
-    text: "Caption",
-    source: TEST_CAPTION_SOURCE,
-    provenance: testMeetingObservation(),
-  };
   const legacyLine = { text: "Legacy provider without observation metadata" };
-  it.each([
-    {
-      name: "malformed identity and fallback",
-      payload: {
+  it.each<[string, unknown, unknown]>([
+    [
+      "malformed identity and fallback",
+      {
         epoch: "x".repeat(513),
         lines: [
           {
@@ -123,32 +113,28 @@ describe("meeting observation provenance parsing", () => {
           },
         ],
       },
-      expected: {
+      {
         droppedLines: 0,
         epoch: "x".repeat(513),
         lines: [{ ...malformedLine, provenance: { observer: "test-meeting", self: "unknown" } }],
       },
-    },
-    {
-      name: "invalid caption rows",
-      payload: {
+    ],
+    [
+      "invalid caption rows",
+      {
         epoch: "epoch-1",
         lines: [null, 42, { text: " " }, { ...captionLine, at: 42, speaker: false }],
         pendingLines: [false, { text: 42 }, captionLine],
       },
-      expected: {
+      {
         droppedLines: 0,
         epoch: "epoch-1",
         lines: [captionLine],
         pendingLines: [captionLine],
       },
-    },
-    {
-      name: "legacy provider rows",
-      payload: { lines: [legacyLine] },
-      expected: { droppedLines: 0, lines: [legacyLine] },
-    },
-  ])("normalizes $name without manufacturing attribution", ({ payload, expected }) => {
+    ],
+    ["legacy provider rows", { lines: [legacyLine] }, { droppedLines: 0, lines: [legacyLine] }],
+  ])("normalizes %s without manufacturing attribution", (_name, payload, expected) => {
     expect(parseTranscript(payload)).toEqual(expected);
   });
 
@@ -157,7 +143,7 @@ describe("meeting observation provenance parsing", () => {
     const health = TEST_MEETING_PLATFORM_ADAPTER.browser.parseStatus({
       result: JSON.stringify({
         recentTranscript: [
-          { text: "Current", provenance, source: TEST_CAPTION_SOURCE },
+          { ...captionLine, text: "Current" },
           null,
           { text: " " },
           { text: "Unknown", speaker: "Bob", provenance: null },
@@ -183,13 +169,7 @@ describe("meeting observation provenance parsing", () => {
         readTestMeetingTranscript({
           [gate]: false,
           epoch: "epoch-1",
-          lines: [
-            {
-              text: "Do not accept this page",
-              source: TEST_CAPTION_SOURCE,
-              provenance: testMeetingObservation(),
-            },
-          ],
+          lines: [captionLine],
         }),
       ).rejects.toThrow(gate === "urlMatched" ? "meeting URL" : "another OpenClaw meeting session");
     },
