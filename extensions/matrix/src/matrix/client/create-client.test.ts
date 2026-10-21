@@ -13,21 +13,27 @@ const mocks = vi.hoisted(() => ({
   state: { resolveStateDir: vi.fn() },
 }));
 const preparedSyncStore = {};
+// mock-isolation: Client construction uses a synthetic runtime rather than shared Gateway state.
 vi.mock("../../runtime.js", () => ({ getMatrixRuntime: () => ({ state: mocks.state }) }));
+// mock-isolation: Constructor wiring must not reconfigure the process-wide SDK logger.
 vi.mock("./logging.js", () => ({
   ensureMatrixSdkLoggingConfigured: mocks.ensureMatrixSdkLoggingConfigured,
 }));
+// mock-isolation: Homeserver validation is controlled without resolving external hosts.
 vi.mock("./config.js", () => ({
   resolveValidatedMatrixHomeserverUrl: mocks.resolveValidatedMatrixHomeserverUrl,
 }));
+// mock-isolation: Observe migration and metadata wiring without persisting account state.
 vi.mock("./storage.js", () => ({
   maybeMigrateLegacyStorage: mocks.maybeMigrateLegacyStorage,
   resolveMatrixStoragePaths: mocks.resolveMatrixStoragePaths,
   writeStorageMeta: mocks.writeStorageMeta,
 }));
+// mock-isolation: Hydration is explicitly gated without opening a real sync database.
 vi.mock("./file-sync-store.js", () => ({
   SqliteBackedMatrixSyncStore: { create: mocks.createSyncStore },
 }));
+// mock-isolation: Observe constructor options without starting real SDK transports.
 vi.mock("../sdk.js", () => ({ MatrixClient: mocks.MatrixClient }));
 
 const storagePaths = {

@@ -15,6 +15,7 @@ vi.mock("../credentials-read.js", () => ({
   loadMatrixCredentialsAsync: async () => null,
   credentialsMatchConfig: () => false,
 }));
+// mock-isolation: Loopback auth probes must not persist their synthetic credentials.
 vi.mock("../credentials.js", () => ({ saveMatrixCredentials: async () => {} }));
 
 const identity = { user_id: "@fixture:example.org", device_id: "FIXTURE" };

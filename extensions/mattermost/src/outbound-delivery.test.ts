@@ -13,6 +13,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const sendMessageMattermostMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Assert channel dispatch and hooks without making Mattermost API requests.
 vi.mock("./mattermost/send.js", () => ({ sendMessageMattermost: sendMessageMattermostMock }));
 
 import { mattermostPlugin } from "./channel.js";
