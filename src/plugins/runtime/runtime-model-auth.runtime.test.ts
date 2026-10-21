@@ -52,21 +52,21 @@ it("returns provider-prepared runtime auth when the provider transforms credenti
   hoisted.prepareProviderRuntimeAuth.mockResolvedValue(prepared);
 
   await expect(resolveAuth()).resolves.toEqual({ ...raw, ...prepared });
-  expect(hoisted.prepareProviderRuntimeAuth).toHaveBeenCalledWith({
-    provider: "github-copilot",
+  const scope = {
+    provider: MODEL.provider,
     config: undefined,
     workspaceDir: undefined,
     env: process.env,
+  };
+  expect(hoisted.prepareProviderRuntimeAuth).toHaveBeenCalledWith({
+    ...scope,
     context: {
-      config: undefined,
-      workspaceDir: undefined,
-      env: process.env,
-      provider: "github-copilot",
-      modelId: "github-copilot/gpt-4o",
+      ...scope,
+      modelId: MODEL.id,
       model: MODEL,
-      apiKey: "github-device-token",
-      authMode: "token",
-      profileId: "github-copilot:github",
+      apiKey: raw.apiKey,
+      authMode: raw.mode,
+      profileId: raw.profileId,
     },
   });
 });

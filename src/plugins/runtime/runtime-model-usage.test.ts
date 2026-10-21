@@ -18,6 +18,10 @@ const preparedBilling: PreparedDecisionBillingFacts = {
   model: "native",
   billing: { unit: "tokens", source: "provider-docs", usdPerMillion: { input: 2, output: 0 } },
 };
+const requestBilling: PreparedDecisionBillingFacts = {
+  ...preparedBilling,
+  billing: { unit: "requests", source: "provider-docs" },
+};
 const finalize = (rawUsage: unknown, facts: PreparedDecisionBillingFacts | undefined) =>
   finalizePluginModelUsage({ cfg: {}, estimate: "none", target, preparedBilling: facts, rawUsage });
 
@@ -28,15 +32,7 @@ it.each([
   ["rewritten model", { ...preparedBilling, model: "other" }, {}, undefined],
   ["unknown route", undefined, {}, undefined],
   ["native units", preparedBilling, { units: { unit: "decision-units", amount: 5 } }, undefined],
-  [
-    "request billing",
-    {
-      ...preparedBilling,
-      billing: { unit: "requests", source: "provider-docs" },
-    } satisfies PreparedDecisionBillingFacts,
-    {},
-    undefined,
-  ],
+  ["request billing", requestBilling, {}, undefined],
 ] as const)(
   "records accepted usage without inventing token prices: %s",
   (_name, facts, usage, cost) => {
