@@ -41,14 +41,6 @@ export const boundaryShard = {
   shardName: "changed-boundary",
 };
 
-export function includedFiles(groups: readonly { includePatterns?: string[] }[]) {
-  return groups.flatMap((group) => group.includePatterns ?? []);
-}
-
-export function groupConfigs(groups: readonly { configs: string[] }[]) {
-  return groups.flatMap((group) => group.configs);
-}
-
 export function fullOwnerPlan(runnerBackend?: string, changedPaths?: string[]) {
   return createNodeTestShardBundles({
     compactMode: "pull-request",
@@ -56,11 +48,6 @@ export function fullOwnerPlan(runnerBackend?: string, changedPaths?: string[]) {
     changedPaths,
     includeReleaseOnlyPluginShards: false,
   });
-}
-
-export function expectFiles(shards: FileSelection, files: readonly string[], label?: string) {
-  expect(shards, label).not.toBeNull();
-  expect(selectedFiles(shards).toSorted(), label).toEqual([...files].toSorted());
 }
 
 export function expectSameFields<K extends PropertyKey>(
@@ -71,33 +58,6 @@ export function expectSameFields<K extends PropertyKey>(
   for (const key of keys) {
     expect(actual[key], String(key)).toEqual(expected[key]);
   }
-}
-
-export function canonicalOwner(jobs: CompactNodeTestShard[], shardName: string) {
-  const job = expectDefined(
-    jobs.find((candidate) => candidate.groups.some((group) => group.shard_name === shardName)),
-    `canonical job for ${shardName}`,
-  );
-  const group = expectDefined(
-    job.groups.find((candidate) => candidate.shard_name === shardName),
-    "canonical group",
-  );
-  return { job, group };
-}
-
-export function expectCanonicalJob(
-  job: NonNullable<Shards>[number],
-  ownerJob: CompactNodeTestShard,
-  owner: CompactNodeTestShard["groups"][number],
-) {
-  const serialProjection = isSerialNodeTestProjection(job.groups, ownerJob);
-  expect(job.planConcurrency).toBe(serialProjection ? 1 : ownerJob.planConcurrency);
-  expect(job.env).toEqual(
-    serialProjection && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
-      ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
-      : ownerJob.env,
-  );
-  expectSameFields(job, ownerJob, ["runner", "timeoutMinutes"]);
 }
 
 export const gatewayCallsitesGuard = "src/gateway/client-callsites.guard.test.ts";
