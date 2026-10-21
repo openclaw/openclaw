@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
@@ -57,61 +56,14 @@ function createRegisteredReplyHook(eligibleDispatchKinds: unknown) {
 }
 
 describe("reply_dispatch hook runner", () => {
-  it("closes native requester custody at timeout before advancing to another hook", async () => {
-    vi.useFakeTimers();
-    const late = createDeferred();
-    const spawn = vi.fn().mockResolvedValue({
-      runId: "child",
-      childSessionKey: "agent:test:subagent:child",
-      completionMode: "collect" as const,
-    });
-    let detached: Promise<unknown> | undefined;
-    const { registry, runner } = createHookRunnerWithRegistry(
-      [
-        {
-          hookName: "reply_dispatch",
-          handler: async () =>
-            withNativeSubagentRuntimeGuard({ pluginId: "slow", assertCurrent() {} }, async () => {
-              detached = late.promise.then(() =>
-                nativeSubagentRuntime.spawn({ requestId: "late", task: "must not start" }),
-              );
-              await new Promise(() => {});
-            }),
-        },
-        {
-          hookName: "reply_dispatch",
-          handler: async () =>
-            withNativeSubagentRuntimeGuard({ pluginId: "next", assertCurrent() {} }, async () => {
-              await nativeSubagentRuntime.spawn({ requestId: "current", task: "current request" });
-              return { handled: true, queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-            }),
-        },
-      ],
-      { logger: { error: vi.fn(), warn: vi.fn() } },
-    );
-    expectDefined(registry.typedHooks[0], "slow handler").timeoutMs = 5;
-    try {
-      const work = runner.runReplyDispatch(replyDispatchEvent, { ...replyDispatchCtx }, (invoke) =>
-        withNativeSubagentRequest(
-          () => ({ spawn, collect: async () => ({ completed: [], pending: [] }) }),
-          invoke,
-        ),
-      );
-      await vi.advanceTimersByTimeAsync(5);
-      await expect(work).resolves.toMatchObject({ handled: true });
-      late.resolve();
-      await expect(detached).rejects.toThrow("requester-bound");
-      expect(spawn).toHaveBeenCalledExactlyOnceWith({
-        requestId: "current",
-        task: "current request",
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-  it.each(["timeout", "declined", "rejected"] as const)(
-    "cannot reopen native requester custody from a captured context after %s",
-    async (outcome) => {
+  it.each([
+    { outcome: "timeout", captured: false },
+    { outcome: "timeout", captured: true },
+    { outcome: "declined", captured: true },
+    { outcome: "rejected", captured: true },
+  ])(
+    "closes native requester custody after $outcome (captured admission=$captured)",
+    async ({ outcome, captured }) => {
       vi.useFakeTimers();
       const late = createDeferred();
       const nextStarted = createDeferred();
@@ -133,17 +85,22 @@ describe("reply_dispatch hook runner", () => {
               withNativeSubagentRuntimeGuard(
                 { pluginId: "first", assertCurrent() {} },
                 async () => {
-                  await nativeSubagentRuntime.spawn({
-                    requestId: "first",
-                    task: "active first hook",
-                  });
+                  if (captured) {
+                    await nativeSubagentRuntime.spawn({
+                      requestId: "first",
+                      task: "active first hook",
+                    });
+                  }
                   detached = late.promise.then(() => {
                     const invoke = () =>
                       nativeSubagentRuntime.spawn({
                         requestId: "reopened",
                         task: "must not start",
                       });
-                    // Exercise the capability that a plugin could retain from the public context.
+                    if (!captured) {
+                      return invoke();
+                    }
+                    // A plugin can retain the admission capability from its public context.
                     if (!context || typeof context !== "object") {
                       throw new Error("reply hook context was not supplied");
                     }
@@ -167,9 +124,14 @@ describe("reply_dispatch hook runner", () => {
             pluginId: "next",
             handler: async () =>
               withNativeSubagentRuntimeGuard({ pluginId: "next", assertCurrent() {} }, async () => {
-                await nativeSubagentRuntime.spawn({ requestId: "next", task: "active next hook" });
+                await nativeSubagentRuntime.spawn({
+                  requestId: "current",
+                  task: "current request",
+                });
                 nextStarted.resolve();
-                await releaseNext.promise;
+                if (captured) {
+                  await releaseNext.promise;
+                }
                 return {
                   handled: true,
                   queuedFinal: false,
@@ -182,7 +144,9 @@ describe("reply_dispatch hook runner", () => {
       );
       const work = runner.runReplyDispatch(
         replyDispatchEvent,
-        withClaimingHookAdmission({ ...replyDispatchCtx }, { assertCurrent() {} }),
+        captured
+          ? withClaimingHookAdmission({ ...replyDispatchCtx }, { assertCurrent() {} })
+          : { ...replyDispatchCtx },
         (invoke) =>
           withNativeSubagentRequest(
             () => ({ spawn, collect: async () => ({ completed: [], pending: [] }) }),
@@ -192,9 +156,15 @@ describe("reply_dispatch hook runner", () => {
       try {
         await vi.advanceTimersByTimeAsync(5);
         await nextStarted.promise;
+        if (!captured) {
+          await expect(work).resolves.toMatchObject({ handled: true });
+        }
         late.resolve();
         await expect(detached).rejects.toThrow("requester-bound");
-        expect(spawn.mock.calls.map(([params]) => params.requestId)).toEqual(["first", "next"]);
+        expect(spawn.mock.calls).toEqual([
+          ...(captured ? [[{ requestId: "first", task: "active first hook" }]] : []),
+          [{ requestId: "current", task: "current request" }],
+        ]);
         releaseNext.resolve();
         await expect(work).resolves.toMatchObject({ handled: true });
       } finally {
@@ -248,15 +218,13 @@ describe("reply_dispatch hook runner", () => {
         counts: { tool: 1, block: 0, final: 0 },
       };
       const succeeding = vi.fn().mockResolvedValue(result);
-      const { registry, runner } = createHookRunnerWithRegistry(
+      const { runner } = createHookRunnerWithRegistry(
         [
-          { hookName: "reply_dispatch", handler: slow },
+          { hookName: "reply_dispatch", handler: slow, timeoutMs: 5 },
           { hookName: "reply_dispatch", handler: succeeding },
         ],
         { logger },
       );
-      expectDefined(registry.typedHooks[0], "registry.typedHooks[0] test invariant").timeoutMs = 5;
-
       const run = runner.runReplyDispatch(replyDispatchEvent, replyDispatchCtx);
       await vi.advanceTimersByTimeAsync(5);
 

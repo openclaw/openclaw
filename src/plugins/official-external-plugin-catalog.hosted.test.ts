@@ -3,6 +3,11 @@ import crypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import {
+  createSigningKey,
+  signCatalogEnvelope,
+  legacyCatalogEnvelope,
+} from "./official-external-catalog-signing.test-support.js";
 import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
 import {
   getOfficialExternalPluginCatalogManifest as manifest,
@@ -33,7 +38,6 @@ function sqliteStore() {
 }
 
 const FEED_URL = "https://packages.acme.example/openclaw/feed";
-const HOSTED_CATALOG_PAYLOAD_TYPE = "openclaw.official-external-plugin-catalog-feed.v1";
 const originalFetch = globalThis.fetch;
 
 type LoadParams = NonNullable<Parameters<typeof loadHostedCatalogImpl>[0]> & {
@@ -82,37 +86,13 @@ function signFeed(params: {
   feed: OfficialExternalPluginCatalogFeed;
   privateKeyPem?: string;
   keyId?: string;
-}): { body: string; privateKeyPem: string; publicKeyPem: string } {
-  const privateKeyPem =
-    params.privateKeyPem ??
-    crypto.generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" });
-  const publicKeyPem = crypto
-    .createPublicKey(privateKeyPem)
-    .export({ type: "spki", format: "pem" });
-  const payloadBytes = Buffer.from(JSON.stringify(params.feed), "utf8");
-  const payloadTypeBytes = Buffer.from(HOSTED_CATALOG_PAYLOAD_TYPE, "utf8");
-  const signingInput = Buffer.concat([
-    Buffer.from(
-      `DSSEv1 ${payloadTypeBytes.length} ${HOSTED_CATALOG_PAYLOAD_TYPE} ${payloadBytes.length} `,
-      "utf8",
-    ),
-    payloadBytes,
-  ]);
+}) {
+  const key = createSigningKey(params.keyId ?? "acme-root", params.privateKeyPem);
   return {
-    body: JSON.stringify({
-      payloadType: HOSTED_CATALOG_PAYLOAD_TYPE,
-      payload: payloadBytes.toString("base64url"),
-      signatures: [
-        {
-          keyid: params.keyId ?? "acme-root",
-          sig: crypto
-            .sign(null, signingInput, crypto.createPrivateKey(privateKeyPem))
-            .toString("base64url"),
-        },
-      ],
-    }),
-    privateKeyPem,
-    publicKeyPem,
+    body: JSON.stringify(signCatalogEnvelope(params.feed, [key])),
+    keyId: key.keyId,
+    privateKeyPem: key.privateKey.export({ type: "pkcs8", format: "pem" }),
+    publicKeyPem: key.publicKey.export({ type: "spki", format: "pem" }),
   };
 }
 
@@ -125,21 +105,8 @@ function signedFeed(
 }
 
 function toLegacyBetaSignedEnvelope(body: string): string {
-  const envelope = JSON.parse(body) as {
-    payloadType: string;
-    payload: string;
-    signatures: Array<{ keyid: string; sig: string }>;
-  };
-  return JSON.stringify({
-    payloadType: envelope.payloadType,
-    payload: envelope.payload,
-    schemaVersion: 1,
-    signatures: envelope.signatures.map((signature) => ({
-      keyId: signature.keyid,
-      algorithm: "ed25519",
-      signature: signature.sig,
-    })),
-  });
+  const envelope: ReturnType<typeof signCatalogEnvelope> = JSON.parse(body);
+  return JSON.stringify(legacyCatalogEnvelope(envelope));
 }
 
 function signedCatalogConfig(publicKeyPem: string, keyId = "acme-root"): CatalogConfig {
@@ -160,18 +127,17 @@ function signedCatalogConfig(publicKeyPem: string, keyId = "acme-root"): Catalog
   };
 }
 
-function snapshot(params: {
-  body: string;
-  savedAt?: string;
-  monotonic?: { sequence: number; generatedAt: string };
-}): HostedOfficialExternalPluginCatalogSnapshot {
-  const savedAt = params.savedAt ?? "2026-06-22T00:00:10.000Z";
+function snapshot(
+  body: string,
+  monotonic?: { sequence: number; generatedAt: string },
+  savedAt = "2026-06-22T00:00:10.000Z",
+): HostedOfficialExternalPluginCatalogSnapshot {
   return {
-    body: params.body,
+    body,
     metadata: {
       url: FEED_URL,
       status: 200,
-      checksum: `sha256:${crypto.createHash("sha256").update(params.body).digest("hex")}`,
+      checksum: `sha256:${crypto.createHash("sha256").update(body).digest("hex")}`,
     },
     savedAt,
     trust: {
@@ -181,8 +147,17 @@ function snapshot(params: {
       threshold: 1,
       verifiedAt: savedAt,
     },
-    monotonic: params.monotonic ? { mode: "signed-feed", ...params.monotonic } : undefined,
+    monotonic: monotonic
+      ? { mode: "signed-feed", sequence: monotonic.sequence, generatedAt: monotonic.generatedAt }
+      : undefined,
   };
+}
+
+function unsignedSnapshot(body: string, url = FEED_URL, savedAt?: string) {
+  const value = snapshot(body, undefined, savedAt);
+  delete value.trust;
+  value.metadata.url = url;
+  return value;
 }
 
 function dsseResponse(body: BodyInit | null, init: ResponseInit = {}): Response {
@@ -194,7 +169,7 @@ function dsseResponse(body: BodyInit | null, init: ResponseInit = {}): Response 
 function loadSigned(signed: ReturnType<typeof signFeed>, params: LoadParams = {}) {
   return loadHostedCatalog({
     feedProfile: "acme",
-    catalogConfig: signedCatalogConfig(signed.publicKeyPem),
+    catalogConfig: signedCatalogConfig(signed.publicKeyPem, signed.keyId),
     fetchImpl: fetchBody(signed.body, {}, true),
     snapshotStore: null,
     ...params,
@@ -301,18 +276,8 @@ describe("official external plugin catalog", () => {
 
   it("replaces unsigned snapshots without losing a neighboring feed", async () => {
     const snapshotStore = sqliteStore();
-    const snapshotFor = (pluginName: string, url = FEED_URL) => {
-      const body = JSON.stringify(makeFeed({ sequence: 1, pluginName }));
-      return {
-        body,
-        metadata: {
-          url,
-          status: 200,
-          checksum: `sha256:${crypto.createHash("sha256").update(body).digest("hex")}`,
-        },
-        savedAt: "2026-06-22T00:00:10.000Z",
-      };
-    };
+    const snapshotFor = (pluginName: string, url = FEED_URL) =>
+      unsignedSnapshot(JSON.stringify(makeFeed({ sequence: 1, pluginName })), url);
     const first = snapshotFor("@fixture/first");
     const neighbor = snapshotFor("@fixture/neighbor", `${FEED_URL}/neighbor`);
     const replacement = snapshotFor("@fixture/replacement");
@@ -330,12 +295,9 @@ describe("official external plugin catalog", () => {
     const older = signedFeed(9, "@openclaw/signed-v9", { privateKeyPem: newer.privateKeyPem });
     const snapshotStore = sqliteStore();
     const snapshotFor = (body: string, sequence: number) =>
-      snapshot({
-        body,
-        monotonic: {
-          sequence,
-          generatedAt: `2026-06-22T00:00:${String(sequence).padStart(2, "0")}.000Z`,
-        },
+      snapshot(body, {
+        sequence,
+        generatedAt: `2026-06-22T00:00:${String(sequence).padStart(2, "0")}.000Z`,
       });
 
     const [newerWrite, olderWrite] = await Promise.allSettled([
@@ -361,21 +323,8 @@ describe("official external plugin catalog", () => {
     const valid = signFeed({ feed: validFeed });
     const snapshotStore = sqliteStore();
 
-    await snapshotStore.write(
-      snapshot({
-        body: malformedBody,
-        monotonic: { sequence: 10, generatedAt: "not-a-date" },
-      }),
-    );
-    await snapshotStore.write(
-      snapshot({
-        body: valid.body,
-        monotonic: {
-          sequence: validFeed.sequence,
-          generatedAt: validFeed.generatedAt,
-        },
-      }),
-    );
+    await snapshotStore.write(snapshot(malformedBody, { sequence: 10, generatedAt: "not-a-date" }));
+    await snapshotStore.write(snapshot(valid.body, validFeed));
 
     await expect(snapshotStore.read(FEED_URL)).resolves.toMatchObject({ body: valid.body });
   });
@@ -392,7 +341,6 @@ describe("official external plugin catalog", () => {
       keyId: "acme-rotated",
     });
     const snapshotStore = sqliteStore();
-    const catalogConfig = signedCatalogConfig(resigned.publicKeyPem, "acme-rotated");
 
     const initial = await loadSigned(accepted, {
       fetchImpl: vi.fn(async (_url, init) => {
@@ -405,12 +353,9 @@ describe("official external plugin catalog", () => {
     });
     expectSource(initial, "hosted");
     expect(resigned.body).not.toBe(accepted.body);
-    expectSource(await loadSigned(resigned, { catalogConfig, snapshotStore }), "hosted");
+    expectSource(await loadSigned(resigned, { snapshotStore }), "hosted");
 
-    const result = await loadSigned(conflicting, {
-      catalogConfig,
-      snapshotStore,
-    });
+    const result = await loadSigned(conflicting, { snapshotStore });
 
     expectSource(
       result,
@@ -429,7 +374,7 @@ describe("official external plugin catalog", () => {
     const lower = signedFeed(9, "@openclaw/lower-current", {
       privateKeyPem: malformed.privateKeyPem,
     });
-    const snapshotStore = memoryStore([snapshot({ body: malformed.body })]);
+    const snapshotStore = memoryStore([snapshot(malformed.body)]);
 
     const rejected = await loadSigned(lower, { snapshotStore });
 
@@ -445,7 +390,7 @@ describe("official external plugin catalog", () => {
   it("does not replace a signed snapshot that fails current trust verification", async () => {
     const current = signedFeed(10, "@openclaw/current-key");
     const candidate = signedFeed(9, "@openclaw/new-key");
-    const snapshotStore = memoryStore([snapshot({ body: current.body })]);
+    const snapshotStore = memoryStore([snapshot(current.body)]);
     const writeSpy = vi.spyOn(snapshotStore, "write");
 
     const result = await loadSigned(candidate, { snapshotStore });
@@ -461,14 +406,12 @@ describe("official external plugin catalog", () => {
     const snapshotStore = sqliteStore();
 
     const acceptedPrevious = await loadSigned(previous, {
-      catalogConfig: signedCatalogConfig(previous.publicKeyPem, "acme-root-2026-q2"),
       now: () => new Date("2026-06-22T00:00:08.000Z"),
       snapshotStore,
     });
     expectSource(acceptedPrevious, "hosted");
 
     const acceptedCurrent = await loadSigned(current, {
-      catalogConfig: signedCatalogConfig(current.publicKeyPem, "acme-root-2026-q3"),
       now: () => new Date("2026-06-22T00:00:09.000Z"),
       snapshotStore,
     });
@@ -481,7 +424,6 @@ describe("official external plugin catalog", () => {
 
     const rolledBack = signedFeed(7, "@openclaw/signed-v7", { keyId: "acme-root-2026-q4" });
     const rejectedRollback = await loadSigned(rolledBack, {
-      catalogConfig: signedCatalogConfig(rolledBack.publicKeyPem, "acme-root-2026-q4"),
       now: () => new Date("2026-06-22T00:00:10.000Z"),
       snapshotStore,
     });
@@ -491,12 +433,7 @@ describe("official external plugin catalog", () => {
     expect(rejectedRollback.error).toContain("signed feed sequence is older");
     expect(rejectedRollback.error).toContain("snapshot fallback failed");
 
-    const retainedCurrent = await loadHostedCatalog({
-      feedProfile: "acme",
-      catalogConfig: signedCatalogConfig(current.publicKeyPem, "acme-root-2026-q3"),
-      offline: true,
-      snapshotStore,
-    });
+    const retainedCurrent = await loadSigned(current, { offline: true, snapshotStore });
     expectSource(retainedCurrent, "hosted-snapshot", ["@openclaw/signed-v9"]);
   });
 
@@ -513,19 +450,13 @@ describe("official external plugin catalog", () => {
     const snapshotStore = sqliteStore();
 
     await snapshotStore.write(
-      snapshot({
-        body: malformed.body,
-        monotonic: { sequence: 10, generatedAt: "not-a-date" },
-      }),
+      snapshot(malformed.body, { sequence: 10, generatedAt: "not-a-date" }),
     );
     await expect(snapshotStore.read(FEED_URL)).resolves.toMatchObject({
       monotonic: { mode: "signed-feed", sequence: 10 },
     });
 
-    const result = await loadSigned(repaired, {
-      catalogConfig: signedCatalogConfig(repaired.publicKeyPem, "acme-root-2026-q3"),
-      snapshotStore,
-    });
+    const result = await loadSigned(repaired, { snapshotStore });
 
     expect(result.source, JSON.stringify(result)).toBe("hosted");
     expect(result.entries.map((entry) => entry.name)).toEqual(["@openclaw/repaired-current"]);
@@ -546,10 +477,7 @@ describe("official external plugin catalog", () => {
     expectSource(unsigned, "bundled-fallback", [], "signed envelope is malformed");
 
     const signedSnapshot = memoryStore([
-      snapshot({
-        body: signed.body,
-        savedAt: "2026-06-22T00:00:08.000Z",
-      }),
+      snapshot(signed.body, undefined, "2026-06-22T00:00:08.000Z"),
     ]);
     const offline = await loadSigned(signed, {
       offline: true,
@@ -558,20 +486,12 @@ describe("official external plugin catalog", () => {
 
     expectSource(offline, "hosted-snapshot", ["@openclaw/signed-offline"]);
 
-    const unsignedSnapshot = memoryStore([
-      {
-        body: unsignedBody,
-        metadata: {
-          url: FEED_URL,
-          status: 200,
-          checksum: `sha256:${crypto.createHash("sha256").update(unsignedBody).digest("hex")}`,
-        },
-        savedAt: "2026-06-22T00:00:08.000Z",
-      },
+    const unsignedStore = memoryStore([
+      unsignedSnapshot(unsignedBody, FEED_URL, "2026-06-22T00:00:08.000Z"),
     ]);
     const rejectedSnapshot = await loadSigned(signed, {
       offline: true,
-      snapshotStore: unsignedSnapshot,
+      snapshotStore: unsignedStore,
     });
 
     expectSource(rejectedSnapshot, "bundled-fallback", undefined, "signed envelope is malformed");
@@ -583,14 +503,13 @@ describe("official external plugin catalog", () => {
 
     const live = await loadSigned(signed, {
       fetchImpl: fetchBody(legacyBody, {}, true),
-      snapshotStore: null,
     });
 
     expectSource(live, "bundled-fallback", undefined, "signed envelope is malformed");
 
     const offline = await loadSigned(signed, {
       offline: true,
-      snapshotStore: memoryStore([snapshot({ body: legacyBody })]),
+      snapshotStore: memoryStore([snapshot(legacyBody)]),
     });
 
     expectSource(offline, "hosted-snapshot", ["@openclaw/legacy-snapshot"]);
@@ -620,9 +539,7 @@ describe("official external plugin catalog", () => {
     const signed = signFeed({ feed });
     const catalogConfig = signedCatalogConfig(signed.publicKeyPem);
     const snapshotStore = memoryStore();
-    const seeded = await loadHostedCatalog({
-      feedProfile: "acme",
-      catalogConfig,
+    const seeded = await loadSigned(signed, {
       fetchImpl: fetchBody(signed.body, { headers: { etag: '"expiring"' } }, true),
       now: () => new Date("2026-06-22T00:00:30.000Z"),
       snapshotStore,
@@ -631,9 +548,7 @@ describe("official external plugin catalog", () => {
     expect(install(seeded.entries[0]!, { catalogConfig })).not.toBeNull();
 
     const expiredFresh = await loadSigned(signed, {
-      catalogConfig,
       now: () => new Date("2026-06-22T00:01:01.000Z"),
-      snapshotStore: null,
     });
     expectSource(expiredFresh, "bundled-fallback", [], "signed feed expired");
 
@@ -644,9 +559,7 @@ describe("official external plugin catalog", () => {
       { offline: true },
       { fetchImpl: fetchBody(null, { status: 503 }) },
     ] satisfies LoadParams[]) {
-      const expiredSnapshot = await loadHostedCatalog({
-        feedProfile: "acme",
-        catalogConfig,
+      const expiredSnapshot = await loadSigned(signed, {
         now: () => new Date("2026-06-22T00:01:01.000Z"),
         snapshotStore,
         ...scenario,
@@ -692,7 +605,7 @@ describe("official external plugin catalog", () => {
     const legacy = signFeed({ feed: legacyFeed });
     const newer = signedFeed(9, "@openclaw/current", { privateKeyPem: legacy.privateKeyPem });
     const snapshotStore = memoryStore([
-      snapshot({ body: legacy.body, savedAt: "2026-06-22T00:00:08.000Z" }),
+      snapshot(legacy.body, undefined, "2026-06-22T00:00:08.000Z"),
     ]);
     const catalogConfig = signedCatalogConfig(legacy.publicKeyPem);
 
@@ -706,7 +619,6 @@ describe("official external plugin catalog", () => {
     expect(stale.error).toContain("has no expiresAt");
 
     const updated = await loadSigned(newer, {
-      catalogConfig,
       now: () => new Date("2026-06-22T00:00:30.000Z"),
       snapshotStore,
     });
@@ -714,23 +626,11 @@ describe("official external plugin catalog", () => {
   });
 
   it.each([
-    ["off-allowlist hosts", FEED_URL, "hostname is not allowed"],
-    [
-      "credential-bearing URLs",
-      "https://user:test-auth-token@clawhub.ai/v1/feeds/plugins",
-      "must not include credentials",
-    ],
-    [
-      "query-bearing URLs",
-      "https://clawhub.ai/v1/feeds/plugins?query=test-value",
-      "must not include query strings or fragments",
-    ],
-    [
-      "fragment-bearing URLs",
-      "https://clawhub.ai/v1/feeds/plugins#fragment",
-      "must not include query strings or fragments",
-    ],
-  ])("rejects direct hosted feed overrides with %s", async (_label, feedUrl, expectedError) => {
+    [FEED_URL, "hostname is not allowed"],
+    ["https://user:password@clawhub.ai/", "must not include credentials"],
+    ["https://clawhub.ai/?q=value", "must not include query strings or fragments"],
+    ["https://clawhub.ai/#fragment", "must not include query strings or fragments"],
+  ])("rejects direct hosted feed override %s", async (feedUrl, expectedError) => {
     const fetchImpl = fetchBody("{}");
     const result = await loadHostedCatalog({ feedUrl, fetchImpl, snapshotStore: null });
 
@@ -743,12 +643,9 @@ describe("official external plugin catalog", () => {
     const catalogConfig = signedCatalogConfig(signed.publicKeyPem);
     delete catalogConfig.feeds?.acme?.feedId;
 
-    const result = await loadHostedCatalog({
-      feedProfile: "acme",
+    const result = await loadSigned(signed, {
       feedUrl: "https://clawhub.ai/v1/feeds/plugins",
       catalogConfig,
-      fetchImpl: fetchBody(signed.body, {}, true),
-      snapshotStore: null,
     });
 
     expectSource(result, "hosted");
@@ -764,7 +661,6 @@ describe("official external plugin catalog", () => {
     const result = await loadSigned(signed, {
       feedUrl: "https://clawhub.ai/v1/feeds/plugins",
       fetchImpl: fetchBody(unsignedBody, {}, true),
-      snapshotStore: null,
     });
 
     expectSource(result, "bundled-fallback", undefined, "signed envelope is malformed");

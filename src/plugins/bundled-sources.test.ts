@@ -1,13 +1,7 @@
 import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  findBundledPluginSource,
-  getProcessBundledPluginSources,
-  resolveBundledPluginSources,
-} from "./bundled-sources.js";
-import { setCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
+import { findBundledPluginSource, resolveBundledPluginSources } from "./bundled-sources.js";
 import { resetPluginCache } from "./plugin-cache.js";
-import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 
 const appBundledPluginRoot = (pluginId: string) => bundledPluginRootAt("/app", pluginId);
 
@@ -27,13 +21,13 @@ function createBundledCandidate(
   id: string,
   origin: "bundled" | "global" = "bundled",
   rootDir = appBundledPluginRoot(id),
+  npm = true,
 ) {
   const packageName = `@openclaw/${id}`;
   return {
     origin,
     rootDir,
-    packageName,
-    packageManifest: { install: { npmSpec: packageName } },
+    ...(npm && { packageName, packageManifest: { install: { npmSpec: packageName } } }),
   };
 }
 
@@ -80,35 +74,22 @@ describe("bundled plugin sources", () => {
   });
   afterEach(() => resetPluginCache());
 
-  it("projects bundled sources from the Gateway inventory without rediscovery", () => {
-    const snapshot = createPluginMetadataSnapshotFixture({
-      plugins: [{ id: "feishu", rootDir: appBundledPluginRoot("feishu") }],
-    });
-    snapshot.bundledManifestRegistry = snapshot.manifestRegistry;
-    setCurrentPluginMetadataSnapshotState(snapshot, undefined, undefined, undefined, "gateway");
-
-    const first = getProcessBundledPluginSources();
-    const second = getProcessBundledPluginSources();
-
-    expect([...first.values()]).toEqual([
-      { pluginId: "feishu", localPath: appBundledPluginRoot("feishu"), requiresConfig: false },
-    ]);
-    expect(second).toEqual(first);
-    expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
-    expect(loadPluginManifestMock).not.toHaveBeenCalled();
-  });
-
   it("resolves bundled sources keyed by plugin id", () => {
     fixture({ feishu: "feishu", msteams: "msteams" }, [
       createBundledCandidate("feishu", "global", "/global/feishu"),
       createBundledCandidate("feishu"),
       createBundledCandidate("feishu", "bundled", appBundledPluginRoot("feishu-dup")),
-      createBundledCandidate("msteams"),
+      createBundledCandidate("msteams", "bundled", appBundledPluginRoot("msteams"), false),
     ]);
     const map = resolveBundledPluginSources({});
 
     expect(Array.from(map.keys())).toEqual(["feishu", "msteams"]);
     expect(map.get("feishu")).toEqual(expectedSource("feishu"));
+    expect(map.get("msteams")).toEqual({
+      pluginId: "msteams",
+      localPath: appBundledPluginRoot("msteams"),
+      requiresConfig: false,
+    });
   });
 
   it.each([

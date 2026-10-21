@@ -19,7 +19,7 @@ import { adoptProcessPluginCache, createPluginCache, withPluginCache } from "./p
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { loadPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
-import { writeArtifact } from "./public-surface.test-support.js";
+import { writeArtifact, writeArtifacts } from "./public-surface.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord } from "./registry-types.js";
 import { resetPluginRuntimeStateForTest, stageActivePluginRegistry } from "./runtime.js";
@@ -60,24 +60,17 @@ afterEach(async () => {
 
 function writeSource(root: string, version: string, extension: "ts" | "js" = "ts", size = 1) {
   const annotation = extension === "ts" ? ": string" : "";
-  write(root, "package.json", '{"type":"module"}');
-  write(
-    root,
-    `state.${extension}`,
-    `let value = ${JSON.stringify(version)};
+  writeArtifacts(root, {
+    "package.json": { type: "module" },
+    [`state.${extension}`]: `let value = ${JSON.stringify(version)};
     export const read = () => value;
     export const set = (next${annotation}) => { value = next; };
     export const view = { read, frozen: Object.freeze(Array.from({ length: ${size} }, () => read)) };`,
-  );
-  write(
-    root,
-    `index.${extension}`,
-    `import { set } from "./state.js";
+    [`index.${extension}`]: `import { set } from "./state.js";
     export default { register(value${annotation}) { set(value); } };`,
-  );
-  for (const name of ["api", "runtime-api"]) {
-    write(root, `${name}.${extension}`, 'export { read, view } from "./state.js";');
-  }
+    [`api.${extension}`]: 'export { read, view } from "./state.js";',
+    [`runtime-api.${extension}`]: 'export { read, view } from "./state.js";',
+  });
 }
 
 function write(root: string, name: string, contents: string) {
@@ -133,7 +126,10 @@ function prepare(
     record,
     instance,
     entry,
-    publish: () => {
+    publish: (value?: string) => {
+      if (value !== undefined) {
+        entry.default.register(value);
+      }
       adoptProcessPluginCache(cache);
       stageActivePluginRegistry(registry, pluginId, "default");
     },
@@ -147,8 +143,6 @@ describe("managed plugin public surfaces", () => {
     const bundledDir = path.join(parent, "stock");
     const stock = path.join(bundledDir, pluginId);
     const overlay = path.join(parent, "overlay", pluginId);
-    fs.mkdirSync(stock, { recursive: true });
-    fs.mkdirSync(overlay, { recursive: true });
     writeSource(stock, "packaged-peer", "js");
     writeSource(overlay, "source");
     const providerModule = `
@@ -160,11 +154,9 @@ describe("managed plugin public surfaces", () => {
       });
     `;
     write(stock, "web-search-contract-api.js", providerModule);
-    const overlayArtifact = path.join(overlay, "web-search-contract-api.ts");
-    fs.writeFileSync(overlayArtifact, providerModule);
+    write(overlay, "web-search-contract-api.ts", providerModule);
     const active = prepare(overlay, pluginId, "bundled");
-    active.entry.default.register("registered-overlay");
-    active.publish();
+    active.publish("registered-overlay");
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
     vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "0");
@@ -199,7 +191,6 @@ describe("managed plugin public surfaces", () => {
       const dirName = "runtime-selected";
       const prepareOwner = (name: string, folder: string, id: string) => {
         const root = path.join(parent, name, folder);
-        fs.mkdirSync(root, { recursive: true });
         writeSource(root, name, "js");
         const active = prepare(root, id, "global", "js");
         active.record.channelIds.push(dirName);
@@ -242,8 +233,7 @@ describe("managed plugin public surfaces", () => {
     fs.rmSync(path.join(root, "runtime-api.ts"));
     write(root, "dist/api.js", 'export { read } from "../state.js";');
     const active = prepare(root, "native-dist-fixture");
-    active.entry.default.register("registered");
-    active.publish();
+    active.publish("registered");
     const api = loadPluginPublicArtifactModuleSync<{ read(): string }>({
       pluginRoot: root,
       artifactBasename: "api.js",
@@ -257,8 +247,7 @@ describe("managed plugin public surfaces", () => {
     const root = fs.realpathSync(temp.make("openclaw-public-generation-"));
     writeSource(root, "source-one");
     const first = prepare(root);
-    first.entry.default.register("registered-one");
-    first.publish();
+    first.publish("registered-one");
     const api = () => loadApi(root);
     const facade = () => loadFacade(first.record.id);
     const lazy = createLazyFacadeObjectValue(() => facade().view);
@@ -318,8 +307,7 @@ describe("managed plugin public surfaces", () => {
     await first.instance.dispose();
     writeSource(root, "source-two", "ts", 2);
     const second = prepare(root);
-    second.entry.default.register("registered-two");
-    second.publish();
+    second.publish("registered-two");
     expect(api().read()).toBe("registered-two");
     expect(lazy.read()).toBe("registered-two");
     expect(frozen.length).toBe(2);
@@ -342,19 +330,15 @@ describe("managed plugin public surfaces", () => {
     (mapping) => {
       const parent = fs.realpathSync(temp.make("openclaw-public-dependencies-"));
       const root = path.join(parent, "plugin");
-      fs.mkdirSync(root);
       writeSource(root, "source");
       const dependency = path.join(root, "node_modules", "captured-dependency");
-      write(dependency, "package.json", '{"main":"index.cjs"}');
-      write(dependency, "index.cjs", 'exports.value = "dependency";');
-      write(
-        root,
-        "package.json",
-        JSON.stringify({
-          type: "module",
-          dependencies: { "captured-dependency": "1.0.0" },
-        }),
-      );
+      writeArtifacts(dependency, {
+        "package.json": { main: "index.cjs" },
+        "index.cjs": 'exports.value = "dependency";',
+      });
+      writeArtifacts(root, {
+        "package.json": { type: "module", dependencies: { "captured-dependency": "1.0.0" } },
+      });
       if (mapping === "tsconfig") {
         vi.stubEnv("JITI_TSCONFIG_PATHS", "true");
         // Jiti configuration remains available; only captured plugin code is removed.
@@ -376,8 +360,7 @@ describe("managed plugin public surfaces", () => {
       `,
       );
       const active = prepare(root);
-      active.entry.default.register("registered");
-      active.publish();
+      active.publish("registered");
       fs.rmSync(root, { recursive: true });
       const api = loadApi(root);
       expect(api.read()).toBe("registered:dependency");
@@ -413,7 +396,6 @@ describe("managed plugin public surfaces", () => {
     (extension, buildDirectory, entryDirectory) => {
       const root = fs.realpathSync(temp.make("openclaw-public-mixed-source-"));
       const buildRoot = path.join(root, buildDirectory);
-      fs.mkdirSync(buildRoot, { recursive: true });
       writeSource(buildRoot, "stale-build", "js");
       writeSource(root, "source");
       if (extension === "mts") {
@@ -430,8 +412,7 @@ describe("managed plugin public surfaces", () => {
         );
       }
       const active = prepare(root, "surface-fixture", "global", extension, entryDirectory);
-      active.entry.default.register("registered-graph");
-      active.publish();
+      active.publish("registered-graph");
 
       // Resolve both previously unexecuted APIs from the captured inventory.
       fs.rmSync(root, { recursive: true });
@@ -500,7 +481,6 @@ describe("managed plugin public surfaces", () => {
       const directory = fs.realpathSync(temp.make("openclaw-public-bundled-"));
       const pluginId = "bundled-surface-fixture";
       const root = path.join(directory, pluginId);
-      fs.mkdirSync(root);
       writeSource(root, "library", extension);
       fs.writeFileSync(path.join(root, "openclaw.plugin.json"), JSON.stringify({ id: pluginId }));
       vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", directory);
@@ -512,8 +492,7 @@ describe("managed plugin public surfaces", () => {
         ),
       ).toBe("library");
       const active = prepare(root, pluginId, "bundled", extension);
-      active.entry.default.register("registered");
-      active.publish();
+      active.publish("registered");
       stageActivePluginRegistry(active.registry, "bundled", "gateway-bindable");
       facadeRuntimeTesting.setFacadeActivationCheckRuntimeForTest(
         await import("../plugin-sdk/facade-activation-check.runtime.js"),

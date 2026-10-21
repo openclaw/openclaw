@@ -29,26 +29,25 @@ beforeEach(() => {
   schemaWarn.mockClear();
 });
 
-function fixture(
-  params: {
-    manifest?: Record<string, unknown>;
-    packageOpenClaw?: Record<string, unknown>;
-    built?: boolean;
-  } = {},
-) {
+function fixture(config?: object, built = false, preferOver?: readonly string[]) {
   const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-");
-  const root = params.built ? path.join(tempRoot, "dist") : tempRoot;
+  const root = built ? path.join(tempRoot, "dist") : tempRoot;
   const pluginDir = path.join(root, "extensions", "alpha");
   writeJson(path.join(pluginDir, "package.json"), {
     name: "@openclaw/alpha",
-    openclaw: { extensions: ["./index.ts"], ...params.packageOpenClaw },
+    openclaw: {
+      extensions: ["./index.ts"],
+      ...(config
+        ? { channel: { ...channel, ...(preferOver && { preferOver }) } }
+        : { setupEntry: "./setup-entry.ts" }),
+    },
   });
   writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
     id: "alpha",
-    configSchema: { type: "object" },
-    ...params.manifest,
+    configSchema: built ? { type: "object", properties: {} } : { type: "object" },
+    ...(config && { channels: ["alpha"], channelConfigs: { alpha: config } }),
   });
-  writeModule(pluginDir, params.built ? "index.js" : "index.ts", "export {};\n");
+  writeModule(pluginDir, built ? "index.js" : "index.ts", "export {};\n");
   return { root, pluginDir, tempRoot };
 }
 
@@ -65,18 +64,6 @@ function channelConfig(rootDir: string) {
       | Record<string, unknown>
       | undefined
   )?.alpha;
-}
-
-function channelFixture(config: object, built = false, preferOver?: string[]) {
-  return fixture({
-    built,
-    packageOpenClaw: { channel: { ...channel, ...(preferOver && { preferOver }) } },
-    manifest: {
-      ...(built && { configSchema: { type: "object", properties: {} } }),
-      channels: ["alpha"],
-      channelConfigs: { alpha: config },
-    },
-  });
 }
 
 const expectedConfig = (field: string, extra: object = {}, type = "string") => ({
@@ -102,32 +89,45 @@ function writeChannelSchema(pluginDir: string, file: string, field: string, hint
 }
 
 describe("bundled plugin public surfaces", () => {
-  it("merges runtime channel schema metadata with manifest-owned channel config fields", () => {
-    const { root, pluginDir } = channelFixture(
-      {
-        schema: schema("stale", "boolean"),
-        label: "Manifest Label",
-        uiHints: explicitHints,
-      },
+  it.each([
+    [
+      "source",
       false,
-      ["alpha-legacy"],
-    );
-    writeChannelSchema(pluginDir, "src/config-schema.js", "generated", "generated hint");
-    expect(channelConfig(root)).toEqual(
-      expectedConfig("generated", {
-        label: "Manifest Label",
-        preferOver: ["alpha-legacy"],
-        uiHints: {
-          "channels.alpha.generatedOnly": { help: "generated hint" },
-          ...explicitHints,
+      "src/config-schema.js",
+      "generated",
+      { label: "Manifest Label", preferOver: ["alpha-legacy"] },
+    ],
+    ["built", true, "channel-config-api.js", "built", {}],
+  ] as const)(
+    "merges %s channel schema metadata with manifest-owned fields",
+    (_name, built, file, field, overrides) => {
+      const { preferOver, ...manifestFields } =
+        "preferOver" in overrides ? overrides : { preferOver: undefined };
+      const { root, pluginDir } = fixture(
+        {
+          schema: schema("stale", "boolean"),
+          uiHints: explicitHints,
+          ...manifestFields,
         },
-      }),
-    );
-    expect(schemaWarn).not.toHaveBeenCalled();
-  });
+        built,
+        preferOver,
+      );
+      writeChannelSchema(pluginDir, file, field, `${field} hint`);
+      expect(channelConfig(root)).toEqual(
+        expectedConfig(field, {
+          ...overrides,
+          uiHints: {
+            "channels.alpha.generatedOnly": { help: `${field} hint` },
+            ...explicitHints,
+          },
+        }),
+      );
+      expect(schemaWarn).not.toHaveBeenCalled();
+    },
+  );
 
   it("warns when selected channel schema evaluation fails and retains manifest metadata", () => {
-    const { root, pluginDir } = channelFixture({
+    const { root, pluginDir } = fixture({
       schema: schema("manifest", "boolean"),
       uiHints: explicitHints,
     });
@@ -147,9 +147,7 @@ describe("bundled plugin public surfaces", () => {
   });
 
   it("captures top-level public surface artifacts without duplicating the primary entrypoints", () => {
-    const { root, pluginDir } = fixture({
-      packageOpenClaw: { setupEntry: "./setup-entry.ts" },
-    });
+    const { root, pluginDir } = fixture();
     for (const filename of ["setup-entry.ts", "api.ts", "runtime-api.ts"]) {
       writeModule(pluginDir, filename, "export {};\n");
     }
@@ -159,30 +157,8 @@ describe("bundled plugin public surfaces", () => {
     });
   });
 
-  it("loads channel config metadata from built public surfaces in dist-only roots", () => {
-    const { root, pluginDir } = channelFixture(
-      {
-        schema: schema("stale", "boolean"),
-        uiHints: explicitHints,
-      },
-      true,
-    );
-    writeChannelSchema(pluginDir, "channel-config-api.js", "built", "built hint");
-    expect(channelConfig(root)).toEqual(
-      expectedConfig("built", {
-        uiHints: {
-          "channels.alpha.generatedOnly": { help: "built hint" },
-          ...explicitHints,
-        },
-      }),
-    );
-  });
-
   it("does not probe broad runtime public surfaces for channel config metadata", () => {
-    const { root, pluginDir, tempRoot } = channelFixture(
-      { schema: schema("manifest", "boolean") },
-      true,
-    );
+    const { root, pluginDir, tempRoot } = fixture({ schema: schema("manifest", "boolean") }, true);
     const markerPath = path.join(tempRoot, "runtime-api-loaded");
 
     for (const [file, field] of [
