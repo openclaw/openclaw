@@ -66,7 +66,8 @@ export function defineGatewayModuleBoundaryTests(
             await expect.poll(() => retry.isDisabled()).toBe(false);
             const socketCount = await gateway.getSocketCount();
             await retry.click();
-            await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+            await expect.poll(() => gateway.getSocketCount()).toBe(socketCount + 1);
+            expect(await retry.isDisabled()).toBe(true);
             await gateway.setOnline(true);
             await page.clock.resume();
             await waitForControlUiGatewayReady(page);
