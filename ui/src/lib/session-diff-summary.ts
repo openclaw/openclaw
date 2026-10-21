@@ -6,7 +6,7 @@ import { listen } from "./reactive/listener.ts";
 
 type Summary = { fileCount: number; additions: number; deletions: number; truncated: boolean };
 type Snapshot = { summary: Summary | null; stale: boolean; unavailable: boolean };
-type Entry = Snapshot & { checkedAt?: number };
+type Entry = Snapshot & { checkedAt?: number; computing?: boolean };
 type Input = {
   gateway: ApplicationGateway | undefined;
   sessionKey: string;
@@ -73,7 +73,7 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
     ) {
       return;
     }
-    const interval = input.runActive ? 5_000 : 30_000;
+    const interval = current.computing ? 500 : input.runActive ? 5_000 : 30_000;
     const delay =
       current.checkedAt === undefined ? 0 : Math.max(0, current.checkedAt + interval - Date.now());
     timer = setTimeout(() => {
@@ -102,6 +102,7 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
       ...(input.agentId ? { agentId: input.agentId } : {}),
       scope: "all",
       summaryOnly: true,
+      poll: true,
     };
     const connectionOwner = lifecycle;
     const isCurrent = () =>
@@ -114,6 +115,10 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
     try {
       const result = await connection.client.request<SessionsDiffResult>("sessions.diff", target);
       if (!isCurrent()) {
+        return;
+      }
+      owner.computing = result.computing === true;
+      if (owner.computing) {
         return;
       }
       if (result.unavailableReason) {
@@ -133,6 +138,7 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
       if (!isCurrent()) {
         return;
       }
+      owner.computing = false;
       owner.unavailable = true;
       owner.stale = owner.summary !== null;
     } finally {

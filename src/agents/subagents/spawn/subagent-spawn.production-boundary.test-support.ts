@@ -41,6 +41,7 @@ import {
 } from "../../admitted-run-context.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
+import type { RequesterOrigin } from "../../requester-origin.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -126,6 +127,7 @@ export async function createSpawnBoundaryParent(params: {
   parentSessionKey: string;
   parentRunId: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  requesterOrigin?: RequesterOrigin;
 }) {
   const { stateDir, parentSessionKey, parentRunId, operatorAuthority } = params;
   const cfg = await captureRuntimeConfigAsyncReader()();
@@ -190,6 +192,7 @@ export async function createSpawnBoundaryParent(params: {
     execution,
     parentSessionKey,
     parentRunId,
+    requesterOrigin: params.requesterOrigin,
   };
 }
 
@@ -323,6 +326,7 @@ export function createBoundSpawnInvocation(
     admittedRunContext: bound.admitted,
     agentId: "main",
     sessionKey: parentSessionKey,
+    requesterOrigin: bound.requesterOrigin,
   });
   return (toolCallId = "spawn-production-boundary") =>
     withPluginRuntimeGatewayRequestScope(

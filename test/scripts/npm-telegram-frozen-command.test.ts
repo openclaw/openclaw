@@ -17,71 +17,39 @@ const explicit =
   "                  textIncludes: You are not authorized to use this command.\n" +
   "                  timeoutMs: 60000\n";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const read = (file: string) => readFileSync(file, "utf8");
+const gitIdentity = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test"];
+const resolver = path.join(
+  repoRoot,
+  "scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts",
+);
 
-function fixture(source: string) {
+function resolveFixture(source: string, selectedSha?: string) {
   const root = tempDirs.make("telegram-frozen-command-");
   const target = path.join(root, "target");
   const file = path.join(target, scenarioPath);
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, source);
-  execFileSync("git", ["init", "-q", target]);
-  execFileSync("git", ["-C", target, "add", "."]);
-  execFileSync("git", [
-    "-C",
-    target,
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.test",
-    "commit",
-    "-qm",
-    "target",
-  ]);
-  const sha = execFileSync("git", ["-C", target, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", target, ...args], { encoding: "utf8" }).trim();
+  git("init", "-q");
+  git("add", ".");
+  git(...gitIdentity, "commit", "-qm", "target");
+  const sha = git("rev-parse", "HEAD");
   const output = path.join(root, "github.env");
-  return {
-    root,
-    sha,
-    resolve: (selectedSha = sha) => {
-      execFileSync(
-        process.execPath,
-        [
-          path.join(repoRoot, "scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts"),
-          target,
-        ],
-        {
-          env: { ...process.env, OPENCLAW_SELECTED_SHA: selectedSha, GITHUB_ENV: output },
-          stdio: "pipe",
-        },
-      );
-      return Object.fromEntries(
-        readFileSync(output, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => {
-            const equal = line.indexOf("=");
-            return [line.slice(0, equal), line.slice(equal + 1)];
-          }),
-      );
-    },
-  };
+  execFileSync(process.execPath, [resolver, target], {
+    env: { ...process.env, OPENCLAW_SELECTED_SHA: selectedSha ?? sha, GITHUB_ENV: output },
+    stdio: "pipe",
+  });
+  const lines = read(output).trim().split("\n");
+  return { sha, env: Object.fromEntries(lines.map((line) => line.split(/[=](.*)/su, 2))) };
 }
 
 function captureSuiteMounts(overlay?: string) {
-  const script = readFileSync(
-    path.join(repoRoot, "scripts/e2e/npm-telegram-live-docker.sh"),
-    "utf8",
-  );
-  const mountCall = script.slice(
-    script.indexOf("command_scenario_mount_args=()"),
-    script.indexOf(" bash -s <<'EOF'", script.indexOf("command_scenario_mount_args=()")),
-  );
-  return execFileSync(
-    "/bin/bash",
-    [
-      "-eu",
-      "-c",
-      `
+  const script = read(path.join(repoRoot, "scripts/e2e/npm-telegram-live-docker.sh"));
+  const start = script.indexOf("command_scenario_mount_args=()");
+  const mountCall = script.slice(start, script.indexOf(" bash -s <<'EOF'", start));
+  const capture = `
 docker_env=(-e FIXTURE=1)
 prepublish_registry_mount_args=()
 ROOT_DIR=/trusted
@@ -92,27 +60,24 @@ npm_prefix_host=/npm
 IMAGE_NAME=fixture
 run_logged_print_heartbeat() { printf '%s\\n' "$@"; }
 ${mountCall}
-`,
-    ],
-    {
-      encoding: "utf8",
-      env: { ...process.env, OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO: overlay ?? "" },
-    },
-  )
+`;
+  return execFileSync("/bin/bash", ["-eu", "-c", capture], {
+    encoding: "utf8",
+    env: { ...process.env, OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO: overlay ?? "" },
+  })
     .trim()
     .split("\n");
 }
 
 it("mounts a source-qualified trusted denial action without changing restored command proof", () => {
   // Frozen YAML selects the contract but must never supply executable expressions.
-  const f = fixture(
+  const { sha, env } = resolveFixture(
     trusted.replace(silent, explicit).replace("title:", "# target-only-untrusted-content\ntitle:"),
   );
-  const env = f.resolve();
   const overlay = env.OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO;
   assert.ok(overlay);
-  const actual = readFileSync(overlay, "utf8");
-  expect(actual).toContain(`# Frozen package source ${f.sha}: explicit authorization denial.`);
+  const actual = read(overlay);
+  expect(actual).toContain(`# Frozen package source ${sha}: explicit authorization denial.`);
   expect(actual).not.toContain("target-only-untrusted-content");
   expect(YAML.parse(actual)).toEqual(YAML.parse(trusted.replace(silent, explicit)));
   expect(env.OPENCLAW_NPM_TELEGRAM_OMIT_DEFAULT_SCENARIOS).not.toContain(
@@ -125,13 +90,13 @@ it("mounts a source-qualified trusted denial action without changing restored co
 });
 
 it("keeps current silent denial on the normal trusted scenario mount", () => {
-  const env = fixture(trusted).resolve();
+  const { env } = resolveFixture(trusted);
   expect(env.OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO).toBeUndefined();
   expect(captureSuiteMounts().filter((arg) => arg.includes(scenarioPath))).toEqual([]);
 });
 
 it("refuses unknown source contracts and mismatched selected source identities", () => {
-  expect(() => fixture(trusted.replace(silent, "")).resolve()).toThrow();
-  expect(() => fixture(trusted.replace(silent, explicit)).resolve("0".repeat(40))).toThrow();
+  expect(() => resolveFixture(trusted.replace(silent, ""))).toThrow();
+  expect(() => resolveFixture(trusted.replace(silent, explicit), "0".repeat(40))).toThrow();
   expect(() => captureSuiteMounts("/missing/frozen-scenario.yaml")).toThrow();
 });

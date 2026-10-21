@@ -69,6 +69,36 @@ Stopping with `/stop`, deleting, resetting, or archiving a session cancels only 
 the selected conversation. Another agent's active turn and queued messages are
 preserved even when the agents use the same session key.
 
+## Creators and assigned owners
+
+New delegated sessions and automations retain the verified human who initiated
+the work as their creator. This is normal behavior; no Labs switch is required.
+The assigned owner remains separate: reassignment alone does not transfer
+creator rights for sharing, public-link management, archive, or restore. Existing
+creator/admin authorization rules still apply. Existing records are not
+retroactively reassigned.
+
+A selected tool user supplies execution authority, not evidence that they
+initiated the task. Autonomous work without a retained human stays
+agent/system-created. Creator attribution affects discovery, creator controls,
+and the personal-profile fallback when no human owner is assigned; it does not
+change the executing agent, model/tool permissions, or required sandbox identity.
+
+Public links still require explicit publication. Attribution does not publish
+sessions automatically, change their anonymous read-only view, or expose private
+isolation metadata. Content exclusions, revocation, and future-message behavior
+are unchanged.
+
+Attribution is stored alongside the original actor inside the existing creation
+record. Original actor fields and database schema versions are unchanged. A
+compatible older runtime ignores the additional attribution and uses its original
+creator rules; it retains the record when writing sessions, so returning to this
+runtime restores the attributed creator without changing sandbox identity.
+Retain the ordinary [rollback safeguards](/install/updating/rollback-and-recovery):
+this feature does not make unrelated database-format changes readable by older
+binaries. An incompatible binary remains blocked rather than silently restoring
+an old backup and losing later writes.
+
 ## Automatic session names
 
 Interactive chat sessions without an explicit name generate a topic title in the

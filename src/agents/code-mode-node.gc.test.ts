@@ -35,6 +35,7 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 }));
 // mock-isolation: Drive exact GC windows without starting a native observer.
 vi.mock("../infra/gc-observer.js", () => ({
+  getOldGenerationAfterGcBytes: () => undefined,
   observeGcSamples: (observe: (samples: GcSample[]) => void) => {
     fixture.observe = observe;
     return () => {};

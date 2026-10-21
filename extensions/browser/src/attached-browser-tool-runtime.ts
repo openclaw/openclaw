@@ -27,25 +27,6 @@ export type CreateAttachedBrowserToolRuntimeParams = {
   workspaceDir: string;
 };
 
-async function persistAttachedScreenshot(params: {
-  sourcePath: string;
-  workspaceDir: string;
-  type: "png" | "jpeg";
-}): Promise<string> {
-  const extension = params.type === "jpeg" ? "jpg" : "png";
-  const fileName = `screenshot-${randomBytes(8).toString("hex")}.${extension}`;
-  const result = await writeExternalFileWithinRoot({
-    rootDir: params.workspaceDir,
-    path: path.join(".artifacts", "cloud-worker-browser", fileName),
-    fallbackFileName: fileName,
-    write: async (stagedPath) => {
-      await copyFile(params.sourcePath, stagedPath);
-      await chmod(stagedPath, 0o600);
-    },
-  });
-  return result.path;
-}
-
 function normalizeAttachedCdpUrl(raw: string): string {
   const parsed = URL.parse(raw);
   if (
@@ -121,12 +102,21 @@ export async function createAttachedBrowserToolRuntime(
       // Worker transcript frames are bounded and inference is Gateway-proxied.
       // Persist proof in the managed workspace, then return only a bounded receipt.
       screenshotResultMode: "path",
-      persistScreenshot: async ({ sourcePath, type }) =>
-        await persistAttachedScreenshot({
-          sourcePath,
-          workspaceDir: params.workspaceDir,
-          type,
-        }),
+      persistScreenshot: async ({ sourcePath, type }) => {
+        const { workspaceDir } = params;
+        const extension = type === "jpeg" ? "jpg" : "png";
+        const fileName = `screenshot-${randomBytes(8).toString("hex")}.${extension}`;
+        const result = await writeExternalFileWithinRoot({
+          rootDir: workspaceDir,
+          path: path.join(".artifacts", "cloud-worker-browser", fileName),
+          fallbackFileName: fileName,
+          write: async (stagedPath) => {
+            await copyFile(sourcePath, stagedPath);
+            await chmod(stagedPath, 0o600);
+          },
+        });
+        return result.path;
+      },
     });
     return {
       tool,

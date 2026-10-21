@@ -12,7 +12,10 @@ import {
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
+  isGatewayRestartDrainError,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import type { CommandLane } from "../../process/lanes.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import {
@@ -313,7 +316,7 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(
       return false;
     },
     onError: (error, finalAttempt) => {
-      if (finalAttempt) {
+      if (finalAttempt && !isGatewayRestartDrainError(error)) {
         mainSessionRecoveryLog.warn(`main-session owner-release recovery failed: ${String(error)}`);
       }
     },
@@ -475,9 +478,11 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
         ) {
           return;
         }
-        mainSessionRecoveryLog.warn(
-          `main-session exhaustion reconciliation failed: ${String(error)}`,
-        );
+        if (!isGatewayRestartDrainError(error)) {
+          mainSessionRecoveryLog.warn(
+            `main-session exhaustion reconciliation failed: ${String(error)}`,
+          );
+        }
       }
     }
   };
@@ -512,11 +517,13 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
         return true;
       },
       onError: async (err, finalAttempt) => {
+        if (!isGatewayRestartDrainError(err)) {
+          mainSessionRecoveryLog.warn(
+            `main-session restart recovery ${finalAttempt ? "gave up" : "failed"}: ${String(err)}`,
+          );
+        }
         if (finalAttempt) {
-          mainSessionRecoveryLog.warn(`main-session restart recovery gave up: ${String(err)}`);
           await reconcileExhaustedTargets(exhaustedTargets.values());
-        } else {
-          mainSessionRecoveryLog.warn(`main-session restart recovery failed: ${String(err)}`);
         }
       },
     });
@@ -577,7 +584,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
         return result.failed === 0;
       },
       onError: (error, finalAttempt) => {
-        if (finalAttempt) {
+        if (finalAttempt && !isGatewayRestartDrainError(error)) {
           mainSessionRecoveryLog.warn(`main-session preparation recovery failed: ${String(error)}`);
         }
       },

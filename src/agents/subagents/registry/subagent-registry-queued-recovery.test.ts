@@ -25,6 +25,7 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { isSwarmRunActive, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
@@ -86,6 +87,7 @@ afterAll(async () => {
   await state.cleanup();
 });
 beforeEach(() => {
+  vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
   vi.mocked(getRuntimeConfig).mockReturnValue({});
   vi.mocked(applySessionEntryExactReplacements).mockClear();
   subagentRuns.clear();
@@ -172,7 +174,7 @@ function createRestorer(
     cleanupCollectorLaunchResources: async () => true,
     settleFailedQueuedSubagentLaunch: async () => true,
     completeCollectorLaunchCleanup: async () => {},
-    warn: () => {},
+    warn: subagentRegistryLog.warn,
     ...options,
   });
 }
@@ -861,14 +863,12 @@ it.each(["current", "during hydration"] as const)(
     const ensureListener = vi.fn();
     const startSweeper = vi.fn();
     const resumeRun = vi.fn();
-    const warn = vi.fn();
     const restorer = createRestorer({
       getGatewayContextResolver: () => resolver,
       settleRequesterTurn,
       ensureListener,
       startSweeper,
       resumeRun,
-      warn,
     });
     try {
       if (owner === "during hydration") {

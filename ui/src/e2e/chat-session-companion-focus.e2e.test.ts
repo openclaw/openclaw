@@ -106,13 +106,17 @@ suite.define(() => {
       await side.waitFor();
       await typeFocused(page, main, "Keep typing here");
       expect(await side.inputValue()).toBe("");
-      await page.getByRole("button", { name: "Close Side chat", exact: true }).click();
+      const close = page.getByRole("button", { name: "Close Side chat", exact: true });
+      await close.click();
+      await close.waitFor({ state: "hidden" });
       await openChatSidePanelType(page, "Side chat");
     } else {
       const tab = page.getByRole("tab", { name: "Side chat", exact: true });
       await tab.waitFor();
       if (action === "close") {
-        await page.getByRole("button", { name: "Close Side chat", exact: true }).click();
+        const close = page.getByRole("button", { name: "Close Side chat", exact: true });
+        await close.click();
+        await close.waitFor({ state: "hidden" });
       } else if (action === "minimize") {
         await selectChatLayoutAction(page, "Minimize side panel");
       } else {

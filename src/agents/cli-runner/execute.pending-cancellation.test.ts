@@ -10,10 +10,7 @@ import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
 import { executeDeps } from "./execute-deps.js";
 import { buildContext } from "./execute-events.tool-result-args.test-support.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
-import {
-  setCliRunnerExecuteTestDeps,
-  wrapPreparedCliRunWithTestAdmission,
-} from "./execute.test-support.js";
+import { wrapPreparedCliRunWithTestAdmission } from "./execute.test-support.js";
 import * as cliHelpers from "./helpers.js";
 import { buildCliSupervisorScopeKey } from "./reliability.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -157,7 +154,6 @@ function startFencedProcess(
 }
 
 describe("CLI execution cancellation", () => {
-  const restoreProcessSupervisor = executeDeps.getProcessSupervisor;
   let supervisor: ReturnType<typeof createProcessSupervisor>;
   let context: PreparedCliRunContext;
   let controller: AbortController;
@@ -167,7 +163,7 @@ describe("CLI execution cancellation", () => {
   beforeEach(() => {
     createChildAdapterMock.mockReset();
     supervisor = createProcessSupervisor();
-    setCliRunnerExecuteTestDeps({ getProcessSupervisor: () => supervisor });
+    vi.spyOn(executeDeps, "getProcessSupervisor").mockImplementation(() => supervisor);
     spawn = vi.spyOn(supervisor, "spawn");
     cancel = vi.spyOn(supervisor, "cancel");
     context = createRunContext();
@@ -177,7 +173,6 @@ describe("CLI execution cancellation", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    setCliRunnerExecuteTestDeps({ getProcessSupervisor: restoreProcessSupervisor });
     vi.restoreAllMocks();
   });
 
@@ -188,6 +183,7 @@ describe("CLI execution cancellation", () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       context.backendResolved.parseJsonlEvent = (line) => {
         if (JSON.parse(line).type === "parser-failure") {
+          controller.abort();
           throw new Error("Unrelated parser failure");
         }
         return null;

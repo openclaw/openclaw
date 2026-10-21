@@ -29,7 +29,6 @@ export const page = definePage({
       renderSolid: (props: SolidRouteProps<UsageRouteData>) =>
         createComponent(ShellLayoutBoundary, {
           traits: {
-            toolbarHeader: true,
             settingsPage: true,
             settingsWide: true,
             settingsWorkspace: true,

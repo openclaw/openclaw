@@ -699,6 +699,7 @@ function createLeaseStore(
     withDatabase,
     processState,
     reclaimable,
+    childAliases,
   });
   return Object.assign(store, { prepareRepair });
 }

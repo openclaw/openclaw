@@ -170,6 +170,8 @@ export function resolveCronMutationCommitGuard(
 
 export type CronCallerScope = {
   kind: "agentTool";
+  /** Attribution from the existing live creator grant, not management entitlement. */
+  creatorProfileId?: string;
   agentId: string;
   sessionKey?: string;
   accountId: string;
@@ -245,6 +247,9 @@ export function readCronCallerScope(
     : authenticatedRequesterProvenance;
   return {
     kind: "agentTool",
+    ...(grantProvenance?.creatorProfileId
+      ? { creatorProfileId: grantProvenance.creatorProfileId }
+      : {}),
     agentId: normalizeAgentId(identity.agentId),
     sessionKey: identity.sessionKey?.trim() || undefined,
     accountId: normalizeAccountId(identity.turnSourceAccountId),

@@ -5,6 +5,7 @@ export type SolidSidebarProbeOwner = {
   readonly hostElement: HTMLElement;
   readonly isConnected: boolean;
   sessionData: SessionDataProbeOwner;
+  shouldPublishSessionData: (this: SolidSidebarProbeOwner) => boolean;
   invalidate(): void;
   prepareRender(): void;
   commitRender(): void;
@@ -26,8 +27,10 @@ export type ChatOwnerRecord = {
 
 export type ColdLoadProbeInput = {
   ownerProbes?: boolean;
+  sidebarCounters?: boolean;
   latencyMs: number;
   methodLatencyMs?: Record<string, number>;
+  connectNotBeforeMs?: number;
   frameGapMs: number;
   events: Array<{ event: string; payload: unknown }>;
   liveEvents?: Array<{

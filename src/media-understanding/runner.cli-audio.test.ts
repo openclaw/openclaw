@@ -289,7 +289,10 @@ it.each([
   { language: "fr", config: { language: "de" }, expected: "de" },
   { expected: undefined },
   { language: "fr", request: { language: "" }, expected: undefined },
-  { command: "whisper-cli", language: "fr", expected: undefined },
+  { language: "pt-BR", expected: "pt" },
+  { command: "whisper-cli", language: "fr", expected: "fr" },
+  { command: "whisper-cli", language: "fr", request: { language: "pt-BR" }, expected: "pt" },
+  { command: "whisper-cli", expected: undefined },
 ])("forwards auto-discovered Whisper language: %j", async (options) => {
   await withTestDir({ prefix: "openclaw-auto-language-" }, async (dir) => {
     const command = options.command ?? "whisper";

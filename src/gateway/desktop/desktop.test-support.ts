@@ -60,9 +60,7 @@ export function createSocketServer(
     accept(socket);
   });
   cleanup.push(async () => {
-    for (const peer of peers) {
-      peer.destroy();
-    }
+    peers.forEach((peer) => peer.destroy());
     await closeServer(server);
   });
   return { server, peers };
@@ -94,9 +92,7 @@ export function setupDesktopDiagnostics(
         expect(vi.getTimerCount()).toBe(0);
       }
     } finally {
-      for (const capture of captures.splice(0)) {
-        capture.cleanup();
-      }
+      captures.splice(0).forEach((capture) => capture.cleanup());
       resetLogger();
       if (!restoreBeforeCleanup) {
         vi.restoreAllMocks();

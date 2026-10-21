@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createContext, createSignal, onCleanup, useContext } from "solid-js";
+import { createContext, createMemo, createStore, onCleanup, useContext } from "solid-js";
 
 export type SessionBackgroundLayoutTarget = {
   kind: "composer" | "welcome" | "scroll";
@@ -13,12 +13,23 @@ export const SessionBackgroundLayoutContext = createContext<{
 
 /** Each draft owns the geometry used by its background. */
 export function SessionBackgroundLayoutScope(props: { children: JSX.Element }) {
-  const [targets, setTargets] = createSignal<readonly SessionBackgroundLayoutTarget[]>([]);
+  // Geometry consumers read immutable registrations outside reactive computations.
+  const [targets, setTargets] = createStore<Record<number, SessionBackgroundLayoutTarget>>(
+    {},
+    { shallow: true },
+  );
+  let nextRegistration = 0;
   const scope = {
-    targets,
+    targets: createMemo(() => Object.values(targets)),
     register(target: SessionBackgroundLayoutTarget) {
-      setTargets((current) => [...current, target]);
-      return () => setTargets((current) => current.filter((entry) => entry !== target));
+      const registration = nextRegistration++;
+      setTargets((draft) => {
+        draft[registration] = target;
+      });
+      return () =>
+        setTargets((draft) => {
+          delete draft[registration];
+        });
     },
   };
   return (

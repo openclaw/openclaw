@@ -316,7 +316,7 @@ it("delivers nested event rows identical to the full list for each viewer and cl
         projection.state.rowContext.projectedAgentRuns,
       );
       const present = (index: number) =>
-        publication(peers[index]!.client, projectRun).present(captured, request);
+        publication(peers[index]!.client, projectRun).presentation.present(captured, request);
       publishPreview(preview);
       const stringify = vi.spyOn(JSON, "stringify");
       try {

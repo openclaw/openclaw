@@ -16,52 +16,42 @@ describe.runIf(process.platform === "darwin")("bundled browser sign-in helper", 
     "verifies cached and downloaded payloads before staging: %s",
     async (scenario) => {
       const root = tempDirs.make("openclaw-cloudflared-stage-");
-      const scripts = path.join(root, "scripts");
-      const cache = path.join(root, "apps/macos/.build/cloudflared/2026.8.3");
-      const fixture = path.join(root, "fixture");
-      const tools = path.join(root, "tools");
-      const destination = path.join(root, "resources/cloudflared");
+      const dir = (relative: string) => {
+        const absolute = path.join(root, relative);
+        mkdirSync(absolute, { recursive: true });
+        return absolute;
+      };
+      const scripts = dir("scripts");
+      const cache = dir("apps/macos/.build/cloudflared/2026.8.3");
+      const fixture = dir("fixture");
+      const tools = dir("tools");
+      const destination = dir("resources/cloudflared");
       const arch = scenario === "x86_64" ? "x86_64" : "arm64";
-      for (const directory of [
-        path.join(scripts, "lib"),
-        cache,
-        fixture,
-        tools,
-        path.join(destination, arch),
-      ]) {
-        mkdirSync(directory, { recursive: true });
-      }
+      dir("scripts/lib");
+      dir(`resources/cloudflared/${arch}`);
       copyFileSync(
         "scripts/stage-cloudflared-macos.sh",
         path.join(scripts, "stage-cloudflared-macos.sh"),
       );
       // lipo reads the actual Mach-O architecture; the inert fixture is never executed.
       const binary = Buffer.alloc(32);
-      binary.writeUInt32LE(0xfeedfacf, 0);
-      binary.writeUInt32LE(
-        arch === "x86_64" || scenario === "wrong-architecture" ? 0x01000007 : 0x0100000c,
-        4,
+      const x64 = arch === "x86_64" || scenario === "wrong-architecture";
+      [0xfeedfacf, x64 ? 0x01000007 : 0x0100000c, x64 ? 3 : 0, 2].forEach((value, index) =>
+        binary.writeUInt32LE(value, index * 4),
       );
-      binary.writeUInt32LE(arch === "x86_64" || scenario === "wrong-architecture" ? 3 : 0, 8);
-      binary.writeUInt32LE(2, 12);
       writeFileSync(path.join(fixture, "cloudflared"), binary);
       const asset = `cloudflared-darwin-${arch === "arm64" ? "arm64" : "amd64"}.tgz`;
       const archive = path.join(cache, asset);
       await tar.c({ file: archive, gzip: true, cwd: fixture }, ["cloudflared"]);
       const license = "Cloudflared license fixture\n";
       writeFileSync(path.join(cache, "LICENSE"), license);
+      const sha256 = scenario === "wrong-checksum" ? "0".repeat(64) : digest(readFileSync(archive));
       writeFileSync(
         path.join(scripts, "lib/cloudflared-macos.json"),
         JSON.stringify({
           version: "2026.8.3",
           licenseSha256: digest(license),
-          artifacts: {
-            [arch]: {
-              asset,
-              sha256:
-                scenario === "wrong-checksum" ? "0".repeat(64) : digest(readFileSync(archive)),
-            },
-          },
+          artifacts: { [arch]: { asset, sha256 } },
         }),
       );
       // A corrupt cache must be downloaded and checked again, never copied into the app.
@@ -103,9 +93,8 @@ exit 2
         expect(readFileSync(staged)).toEqual(binary);
         expect(statSync(staged).mode & 0o777).toBe(0o755);
         expect(readFileSync(path.join(destination, "LICENSE"), "utf8")).toBe(license);
-        expect(
-          JSON.parse(readFileSync(path.join(destination, "manifest.json"), "utf8")).version,
-        ).toBe("2026.8.3");
+        const manifest = JSON.parse(readFileSync(path.join(destination, "manifest.json"), "utf8"));
+        expect(manifest).toMatchObject({ version: "2026.8.3" });
       }
     },
   );

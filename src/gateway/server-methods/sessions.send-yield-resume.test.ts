@@ -6,7 +6,7 @@ import {
 } from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
@@ -45,6 +45,28 @@ afterEach(() => {
   setSubagentAnnounceDeliveryDepsForTest();
   vi.useRealTimers();
 });
+
+function interceptRegistryWrites(afterWrite: () => Promise<void>) {
+  return vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementation((context, operation, options) =>
+      runSubagentStateWorkerOperation(
+        context,
+        (scope) =>
+          operation({
+            ...scope,
+            execute: async (...args) => {
+              const result = await scope.execute(...args);
+              if (args[0].type === "subagents.persistChanges") {
+                await afterWrite();
+              }
+              return result;
+            },
+          }),
+        options,
+      ),
+    );
+}
 
 async function createInitialYieldFixture(label: string) {
   const requesterSessionKey = "agent:main:main";
@@ -173,38 +195,22 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   });
   const acknowledgedIntent = createDeferred();
   const releaseIntent = createDeferred();
-  const runWorker = runSubagentStateWorkerOperation;
   let registryWrites = 0;
-  const worker = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementation((stateContext, operation, options) =>
-      runWorker(
-        stateContext,
-        (scope) =>
-          operation({
-            ...scope,
-            execute: async (...args) => {
-              const result = await scope.execute(...args);
-              if (args[0].type === "subagents.persistChanges" && ++registryWrites === 1) {
-                acknowledgedIntent.resolve();
-                await releaseIntent.promise;
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-    );
+  const worker = interceptRegistryWrites(async () => {
+    if (++registryWrites === 1) {
+      acknowledgedIntent.resolve();
+      await releaseIntent.promise;
+    }
+  });
   const hostSql = observeParentSqlite();
   try {
     await withRequesterTestAuthority(requesterTurnRunId, requesterSessionKey, async () => {
       const yielding = yieldTool.execute("yield-parent", {});
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         acknowledgedIntent.promise,
-        yielding.then(() => {
-          throw new Error("Yield completed before the native acknowledgement handoff");
-        }),
-      ]);
+        yielding,
+        "Yield completed before the native acknowledgement handoff",
+      );
       expect(onYield).not.toHaveBeenCalled();
       expect(children.map((child) => subagentRuns.get(child.runId)?.requesterTurnYielded)).toEqual([
         undefined,
@@ -306,13 +312,7 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   const resumed = expectDefined(subagentRuns.get(nextRunId), "resumed child");
   expect(resumed).toMatchObject({ task: followup, taskRunId: previousRunId, requesterSessionKey });
   expect(resumed.pauseReason).toBeUndefined();
-  for (const runId of [nextRunId, siblingRunId]) {
-    expect(subagentRuns.get(runId)?.requesterSettleWake).toMatchObject({
-      batchRunIds: [nextRunId, siblingRunId].toSorted(),
-      requesterYieldBatch: true,
-      rearmGeneration: 1,
-    });
-  }
+  expectSharedRequesterCohort([nextRunId, siblingRunId], [nextRunId, siblingRunId]);
 
   chatSend.mockImplementation(async ({ respond }) => {
     respond(true, { runId: nextRunId, status: "started" }, undefined, { cached: true });
@@ -353,36 +353,19 @@ it.each(["runtime owner", "state source"] as const)(
     let committed = false;
     let writes = 0;
     let closing: Promise<void> | undefined;
-    const runWorker = runSubagentStateWorkerOperation;
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((stateContext, operation, options) =>
-        runWorker(
-          stateContext,
-          (scope) =>
-            operation({
-              ...scope,
-              execute: async (...args) => {
-                const result = await scope.execute(...args);
-                if (args[0].type === "subagents.persistChanges") {
-                  writes += 1;
-                }
-                if (!committed && args[0].type === "subagents.persistChanges") {
-                  committed = true;
-                  if (retirement === "runtime owner") {
-                    retireRequester();
-                  } else {
-                    closing = closeOpenClawStateDatabaseAsync();
-                  }
-                  acknowledged.resolve();
-                  await releaseAcknowledgement.promise;
-                }
-                return result;
-              },
-            }),
-          options,
-        ),
-      );
+    const worker = interceptRegistryWrites(async () => {
+      writes += 1;
+      if (!committed) {
+        committed = true;
+        if (retirement === "runtime owner") {
+          retireRequester();
+        } else {
+          closing = closeOpenClawStateDatabaseAsync();
+        }
+        acknowledged.resolve();
+        await releaseAcknowledgement.promise;
+      }
+    });
     const first = withRequesterTestAuthority(
       requesterTurnRunId,
       requesterSessionKey,
@@ -395,12 +378,11 @@ it.each(["runtime owner", "state source"] as const)(
       (error: unknown) => ({ error }),
     );
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         acknowledged.promise,
-        first.then(() => {
-          throw new Error("Initial write did not reach its held native acknowledgement");
-        }),
-      ]);
+        first,
+        "Initial write did not reach its held native acknowledgement",
+      );
       releaseAcknowledgement.resolve();
       const outcome = await first;
       expect(outcome).toMatchObject({

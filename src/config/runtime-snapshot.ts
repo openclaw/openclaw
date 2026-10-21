@@ -102,7 +102,6 @@ export type RuntimeConfigWriteNotification = {
   revision: number;
   fingerprint: string;
   sourceFingerprint: string | null;
-  writtenAtMs: number;
   afterWrite?: ConfigWriteAfterWrite;
   runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
   preparedCandidate?: RuntimeConfigWritePreparedCandidate;

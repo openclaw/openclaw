@@ -140,14 +140,23 @@ type FreeTextControlProps = QuestionFreeTextProps & {
 
 function FreeTextTextarea(props: FreeTextControlProps) {
   let textarea!: HTMLTextAreaElement;
+  let getTranscriptElement: QuestionFreeTextProps["getTranscriptElement"];
   const value = createMemo(() => props.value);
   onSettled(() => {
-    observeTextareaOverflow(textarea, () => props.getTranscriptElement?.() ?? null);
+    getTranscriptElement = props.getTranscriptElement;
+    observeTextareaOverflow(textarea, () => getTranscriptElement?.() ?? null);
     adjustTextareaHeight(textarea);
     return () => disconnectTextareaOverflowObserver(textarea);
   });
   // Keep the native textarea's measured height in sync with its committed answer.
-  createEffect(value, () => adjustTextareaHeight(textarea), { defer: true });
+  createEffect(
+    () => ({ value: value(), getTranscriptElement: props.getTranscriptElement }),
+    (next) => {
+      getTranscriptElement = next.getTranscriptElement;
+      adjustTextareaHeight(textarea);
+    },
+    { defer: true },
+  );
   return (
     <textarea
       ref={(element) => {

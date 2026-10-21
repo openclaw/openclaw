@@ -12,6 +12,7 @@ import { raceWithTimeoutAndAbort, waitForAbortableDelay } from "./async.js";
 import { createFeishuClient } from "./client.js";
 import {
   encodeQuery,
+  formatFeishuApiError,
   parseCommentContentElements,
   type FeishuDriveCommentCard,
   type FeishuDriveCommentReply,
@@ -294,16 +295,9 @@ async function fetchDriveCommentPages<T extends DriveCommentPageTarget>(
         : `${commentsUrl}/${encodeURIComponent(params.commentId)}/replies`;
     const query = {
       file_type: params.fileType,
-      ...(params.kind === "whole-comments"
-        ? {
-            is_whole: "true",
-            page_size: String(FEISHU_COMMENT_PAGE_SIZE),
-            page_token: pageToken,
-          }
-        : {
-            page_token: pageToken,
-            page_size: String(FEISHU_COMMENT_PAGE_SIZE),
-          }),
+      ...(params.kind === "whole-comments" ? { is_whole: "true" } : {}),
+      page_size: String(FEISHU_COMMENT_PAGE_SIZE),
+      page_token: pageToken,
       user_id_type: "open_id",
     };
     const response = await requestFeishuOpenApi<
@@ -340,26 +334,6 @@ async function requestFeishuOpenApi<T>(params: {
   logger?: (message: string) => void;
   errorLabel: string;
 }): Promise<T | null> {
-  const formatErrorDetails = (error: unknown): string => {
-    if (!isRecord(error)) {
-      return typeof error === "string" ? error : JSON.stringify(error);
-    }
-    const response = isRecord(error.response) ? error.response : undefined;
-    const responseData = isRecord(response?.data) ? response?.data : undefined;
-    const details = {
-      message: typeof error.message === "string" ? error.message : JSON.stringify(error),
-      code: readString(error.code),
-      method: readString(isRecord(error.config) ? error.config.method : undefined),
-      url: readString(isRecord(error.config) ? error.config.url : undefined),
-      http_status: typeof response?.status === "number" ? response.status : undefined,
-      feishu_code:
-        typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
-      feishu_msg: readString(responseData?.msg),
-      feishu_log_id: readString(responseData?.log_id),
-    };
-    return JSON.stringify(details);
-  };
-
   const result = await raceWithTimeoutAndAbort(
     params.client.request<T>({
       method: params.method,
@@ -371,7 +345,7 @@ async function requestFeishuOpenApi<T>(params: {
   )
     .then((resolved) => (resolved.status === "resolved" ? resolved.value : null))
     .catch((error: unknown) => {
-      params.logger?.(`${params.errorLabel}: ${formatErrorDetails(error)}`);
+      params.logger?.(`${params.errorLabel}: ${formatFeishuApiError(error)}`);
       return null;
     });
   if (!result) {

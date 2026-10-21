@@ -67,7 +67,12 @@ vi.mock("../infra/ports-probe.js", async (original) => ({
   ...(await original<typeof import("../infra/ports-probe.js")>()),
   probePortUsage: async () => "free",
 }));
-vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.task }));
+// mock-isolation: Backup compensation mutates only the fixture's task registration and policy.
+vi.mock("./schtasks-exec.js", () => ({
+  execSchtasks: native.task,
+  execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
+    native.task(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+}));
 vi.mock("./schtasks-state-probe.js", async (original) => ({
   ...(await original<typeof import("./schtasks-state-probe.js")>()),
   probeScheduledTaskExists: () => true,

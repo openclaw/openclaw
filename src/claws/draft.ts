@@ -191,6 +191,7 @@ export async function prepareClawDraft(params: {
       version: proposal.version,
       scope: proposal.scope,
       description: selected.description,
+      displayName: selected.displayName,
       items: selected.items,
       revision: draft.revision,
       integrity: built.integrity,

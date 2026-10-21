@@ -18,6 +18,7 @@ import { registerMenuShortcuts } from "../menu-shortcuts.ts";
 import type { OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed, registryFor } from "../overlay-registry.ts";
+import { Icon } from "./icon.tsx";
 import { MENU_FORM_CONTROL_SELECTOR, useMenuMachine, type MenuBinding } from "./menu-machine.ts";
 import { useOverlayControl } from "./overlay-control.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
@@ -74,7 +75,14 @@ export type MenuItem = {
 export type MenuEntry =
   | MenuItem
   | { kind: "content"; id: string; content: JSX.Element }
-  | { kind: "group"; id: string; class?: string; items: readonly MenuEntry[] };
+  | {
+      kind: "group";
+      id: string;
+      class?: string;
+      items: readonly MenuEntry[];
+      /** Custom layout retains the native item bindings and this group's lifetime. */
+      render?: (children: JSX.Element) => JSX.Element;
+    };
 
 export type MenuHandle = {
   overlay: Overlay;
@@ -427,9 +435,28 @@ export function Menu(props: BranchProps): JSX.Element {
           const current = entry();
           return current.kind === "group" ? current : undefined;
         };
+        const groupMount = createMemo<
+          { id: string; render?: (children: JSX.Element) => JSX.Element } | undefined
+        >((previous) => {
+          const current = group();
+          if (!current) {
+            return undefined;
+          }
+          // The keyed group keeps its renderer while its rows and presentation update.
+          return previous?.id === current.id
+            ? previous
+            : { id: current.id, render: current.render };
+        });
         const fallback = (
-          <Show when={group()} fallback={content()}>
-            {(section) => <div class={section().class}>{renderEntries(() => section().items)}</div>}
+          <Show when={groupMount()} keyed fallback={content()}>
+            {(mount) => {
+              const children = renderEntries(() => group()?.items ?? []);
+              return mount.render ? (
+                mount.render(children)
+              ) : (
+                <div class={group()?.class}>{children}</div>
+              );
+            }}
           </Show>
         );
         return (
@@ -660,7 +687,7 @@ export function Menu(props: BranchProps): JSX.Element {
         <span class="oc-menu-item__label">{props.trigger ?? props.label}</span>
         <Show when={initialIdentity.parent}>
           <span class="oc-menu-item__submenu-icon" aria-hidden="true">
-            ›
+            <Icon name="chevronRight" />
           </span>
         </Show>
       </button>

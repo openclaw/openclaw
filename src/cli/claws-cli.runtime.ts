@@ -31,7 +31,7 @@ import { resolveConfigPath } from "../config/paths.js";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { sleep } from "../utils/sleep.js";
 import {
@@ -66,10 +66,10 @@ function addPlanSkillWarnings(plan: ClawAddPlan): ClawCliSkillWarning[] {
 const CLAW_AGENT_RELOAD_TIMEOUT_MS = 15_000;
 const CLAW_AGENT_RELOAD_POLL_MS = 100;
 
-function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
+function logClawAddPlanSummary(plan: ClawAddPlan): void {
   runtime.log(`Agent: ${plan.agent.finalId}`);
   runtime.log(`Workspace: ${plan.agent.workspace}`);
-  logClawAgentConfiguration(plan, runtime);
+  logClawAgentConfiguration(plan);
   runtime.log(`Actions: ${plan.summary.totalActions}`);
   runtime.log(`Packages: ${plan.summary.packageActions}`);
   for (const action of plan.actions.filter((candidate) => candidate.kind === "package")) {
@@ -118,11 +118,10 @@ function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
 export async function runClawsInspectCommand(
   sourcePath: string,
   opts: ClawsInspectOptions,
-  runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   const result = await readClawManifestFile(sourcePath);
   if (!result.ok) {
-    emitClawFailure(runtime, opts.json, formatClawDiagnostics(result.diagnostics), {
+    emitClawFailure(opts.json, formatClawDiagnostics(result.diagnostics), {
       schemaVersion: CLAW_INSPECT_RESULT_SCHEMA_VERSION,
       stability: CLAW_OUTPUT_STABILITY,
       valid: false,
@@ -184,11 +183,7 @@ export async function runClawsInspectCommand(
 }
 
 // Add's planning and application both read or mutate Gateway-owned state.
-export async function runClawsAddCommand(
-  sourcePath: string,
-  opts: ClawsAddOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-): Promise<void> {
+export async function runClawsAddCommand(sourcePath: string, opts: ClawsAddOptions): Promise<void> {
   return await runWithLocalStateOwner({
     method: "claws.add",
     params: {},
@@ -197,7 +192,7 @@ export async function runClawsAddCommand(
     runLocal: async () => {
       const config = getRuntimeConfig();
       if (!isClawsLabsEnabled(config)) {
-        emitClawFailure(runtime, opts.json, CLAWS_LABS_DISABLED_MESSAGE, {
+        emitClawFailure(opts.json, CLAWS_LABS_DISABLED_MESSAGE, {
           schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
           stability: CLAW_OUTPUT_STABILITY,
           ok: false,
@@ -208,7 +203,7 @@ export async function runClawsAddCommand(
 
       const result = await readClawManifestFile(sourcePath);
       if (!result.ok) {
-        emitClawFailure(runtime, opts.json, formatClawDiagnostics(result.diagnostics), {
+        emitClawFailure(opts.json, formatClawDiagnostics(result.diagnostics), {
           schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
           stability: CLAW_OUTPUT_STABILITY,
           valid: false,
@@ -249,7 +244,7 @@ export async function runClawsAddCommand(
         if (opts.json) {
           writeRuntimeJson(runtime, plan);
         } else {
-          logClawAddPlanSummary(plan, runtime);
+          logClawAddPlanSummary(plan);
           runtime.error(formatClawDiagnostics(plan.blockers));
         }
         runtime.exit(1);
@@ -261,7 +256,7 @@ export async function runClawsAddCommand(
           writeRuntimeJson(runtime, plan);
         } else {
           runtime.log(`Claw add preview: ${plan.claw.name}@${plan.claw.version}`);
-          logClawAddPlanSummary(plan, runtime);
+          logClawAddPlanSummary(plan);
         }
         return;
       }
@@ -287,7 +282,7 @@ export async function runClawsAddCommand(
         if (!riskApproved) {
           const message =
             "ClawHub trust warnings require --acknowledge-clawhub-risk or interactive confirmation.";
-          emitClawFailure(runtime, opts.json, message, {
+          emitClawFailure(opts.json, message, {
             schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
             stability: CLAW_OUTPUT_STABILITY,
             status: "failed",
@@ -311,7 +306,7 @@ export async function runClawsAddCommand(
       ) {
         const message =
           "Plugin capabilities require --accept-capabilities in a non-interactive Add.";
-        emitClawFailure(runtime, opts.json, message, {
+        emitClawFailure(opts.json, message, {
           schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
           stability: CLAW_OUTPUT_STABILITY,
           status: "failed",
@@ -437,7 +432,7 @@ export async function runClawsAddCommand(
               ? error.code
               : "add_failed";
         const message = error instanceof Error ? error.message : String(error);
-        emitClawFailure(runtime, opts.json, message, {
+        emitClawFailure(opts.json, message, {
           schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
           stability: CLAW_OUTPUT_STABILITY,
           status: "failed",

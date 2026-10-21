@@ -8,12 +8,12 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
-  assertSessionSectionCountAlignment,
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { assertSessionSectionCountAlignment } from "../test-helpers/control-ui-session-section-layout.ts";
 import { readTextTone } from "../test-helpers/rendered-colors.ts";
 import {
   createControlUiE2eSuite,

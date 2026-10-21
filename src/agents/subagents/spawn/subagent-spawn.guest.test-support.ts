@@ -96,12 +96,20 @@ export function registerGuestSpawnCases(
       const failures: unknown[] = [];
       await collectFailure(failures, async () => {
         const result = await createBoundSpawnInvocation(bound, hiddenSpawn)();
-        const details = expectDefined(acceptedSpawn(result), "accepted child");
+        const details = expectDefined(
+          acceptedSpawn(result),
+          `accepted child: ${JSON.stringify(result.details)}`,
+        );
         childRunId = details.runId;
         await options.waitForEmbeddedRun(bound, details.runId, started.promise);
         expect(readSession(details.childSessionKey)).toMatchObject({
           spawnedBy: bound.parentSessionKey,
-          createdActor: { type: "human", source: "profile", id: source.authority.profileId },
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: source.authority.profileId,
+            delegatedBy: { type: "human", source: "profile", id: source.authority.profileId },
+          },
           sandbox: "required",
         });
         expect(

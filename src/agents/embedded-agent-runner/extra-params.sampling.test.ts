@@ -147,6 +147,14 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(callOptions?.responseFormat).toEqual(responseFormat);
   });
 
+  it("projects configured prompt cache TTL with request precedence and rejects invalid values", () => {
+    const cfg = modelConfig("openai/gpt-5.4", { promptCacheTtl: "12h" });
+    expect(sample(undefined, cfg)?.promptCacheTtl).toBe("12h");
+    expect(sample(undefined, cfg, { promptCacheTtl: undefined })?.promptCacheTtl).toBe("12h");
+    expect(sample(undefined, cfg, { promptCacheTtl: "30m" })?.promptCacheTtl).toBe("30m");
+    expect(sample({ promptCacheTtl: "24h" })?.promptCacheTtl).toBeUndefined();
+  });
+
   it("preserves configured cache retention with an own undefined request option", () => {
     const { underlying, agent } = createStreamAgent();
 

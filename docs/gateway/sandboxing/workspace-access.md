@@ -111,7 +111,9 @@ If you are a guest, you can ask the agent:
 
 Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
 current selected repository base into this session's existing local managed
-workspace. The Gateway fetches with its host identity and prepares any missing
+workspace. This action is offered only in sessions with a writable managed sandbox;
+sessions running directly on the host merge the base with git in their workspace,
+then publish. The Gateway fetches with its host identity and prepares any missing
 file contents from the selected repository before offline merge and snapshot
 operations, including the ancestor versions needed to merge diverged branches.
 This also works when a partial clone already knows the base commit. A
@@ -186,6 +188,8 @@ return to a supporting version before continuing guest work.
 With the OpenShell backend, `mirror` mode still uses the local workspace as the source of truth between exec turns, and `remote` mode uses the remote OpenShell workspace as the source of truth after the initial seed. The same access rules apply: `none` permits private workspace writes, while `ro` disables writes.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
+Later conversation turns load retained images from that same staged copy.
+Missing copies and paths outside the active sandbox remain unavailable.
 For a managed project session, attachments on follow-up messages use that
 session's private checkout, including after its worktree has been created.
 Attachment staging retains the managed workspace owner until the copy settles.

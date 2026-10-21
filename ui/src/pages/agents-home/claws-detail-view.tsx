@@ -8,6 +8,7 @@ import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "../plugins/detail-shell.tsx";
 import { PluginInstallAction } from "../plugins/install-action.tsx";
 import { renderPluginCapabilitySection, renderPublisherIdentity } from "../plugins/overview.tsx";
+import { ClawArtwork } from "./claw-artwork.tsx";
 import type { ClawAddReviewPlan } from "./claws-catalog-client.ts";
 import type { ClawsCatalogViewProps } from "./claws-catalog-view-props.ts";
 import { renderClawTrustWarning } from "./claws-trust-warning.tsx";
@@ -216,7 +217,7 @@ export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
                 backHref={pathForRoute("agents-home", view().basePath)}
                 backLabel="Agents"
                 onBack={view().onBack}
-                icon={<Icon name="box" />}
+                icon={<ClawArtwork src={detail() ? detail()?.iconUrl : selected().iconUrl} />}
                 identity={renderPublisherIdentity({
                   name:
                     publisher().ownerHandle === "openclaw" ? "OpenClaw" : publisher().ownerHandle,
@@ -241,7 +242,11 @@ export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
                     <Show when={view().detailError}>
                       <div class="callout danger" role="alert">
                         {view().detailError}
-                        <button type="button" class="btn btn--sm" onClick={view().onRetryDetail}>
+                        <button
+                          type="button"
+                          class="btn btn--sm"
+                          onClick={() => view().onRetryDetail()}
+                        >
                           {t("clawsCatalog.retry")}
                         </button>
                       </div>
@@ -268,7 +273,7 @@ export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
                           <button
                             type="button"
                             class="btn btn--sm"
-                            onClick={view().onRetryOpenChat}
+                            onClick={() => view().onRetryOpenChat()}
                           >
                             {t("clawsCatalog.openChat")}
                           </button>
@@ -282,14 +287,18 @@ export function ClawsDetailView(props: { view: ClawsCatalogViewProps }) {
                       <section class="claws-add-consent" aria-label={t("clawsCatalog.trustReview")}>
                         {renderClawTrustWarning(view().consentWarning!)}
                         <div class="claws-add-consent__actions">
-                          <button type="button" class="btn" onClick={view().onCancelConsent}>
+                          <button
+                            type="button"
+                            class="btn"
+                            onClick={() => view().onCancelConsent()}
+                          >
                             {t("common.cancel")}
                           </button>
                           <button
                             type="button"
                             class="btn primary"
                             disabled={view().applying}
-                            onClick={view().onConfirmConsent}
+                            onClick={() => view().onConfirmConsent()}
                           >
                             {t("clawsCatalog.addAnyway")}
                           </button>

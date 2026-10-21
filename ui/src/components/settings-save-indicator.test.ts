@@ -4,6 +4,7 @@ import { createComponent, createStore, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { saveIndicatorProps } from "./settings-save-indicator.test-support.ts";
 import {
   SettingsSaveIndicator,
   type SettingsSaveIndicatorProps,
@@ -13,25 +14,14 @@ let indicator: HTMLElement;
 let view: ReturnType<typeof mountSolid>;
 let setProps: (next: SettingsSaveIndicatorProps) => void;
 
-function props(overrides: Partial<SettingsSaveIndicatorProps> = {}): SettingsSaveIndicatorProps {
-  return {
-    status: "idle",
-    lastError: null,
-    needsApply: false,
-    applying: false,
-    applyDisabled: false,
-    onRetry: vi.fn(),
-    onSave: vi.fn(),
-    onReload: vi.fn(),
-    onApply: vi.fn(),
-    ...overrides,
-  };
-}
-
-async function update(next: SettingsSaveIndicatorProps): Promise<void> {
+async function update(overrides: Partial<SettingsSaveIndicatorProps> = {}) {
+  const next = saveIndicatorProps(overrides);
   setProps(next);
   flush();
+  return next;
 }
+
+const part = (name: string) => indicator.querySelector(`.settings-save-indicator__${name}`);
 
 function button(label: string): HTMLButtonElement | undefined {
   return [...indicator.querySelectorAll<HTMLButtonElement>("button")].find(
@@ -41,7 +31,7 @@ function button(label: string): HTMLButtonElement | undefined {
 
 beforeEach(async () => {
   await i18n.setLocale("en");
-  const [state, setState] = createStore(props());
+  const [state, setState] = createStore(saveIndicatorProps());
   setProps = (next) => setState((draft) => Object.assign(draft, next));
   view = mountSolid(() => createComponent(SettingsSaveIndicator, state));
   indicator = view.container;
@@ -54,119 +44,86 @@ afterEach(() => {
 
 describe("settings save indicator", () => {
   it("stays empty while idle", async () => {
-    await update(props());
-
+    await update();
     expect(indicator.textContent?.trim()).toBe("");
     expect(indicator.querySelector('[role="status"]')).toBeNull();
-    await update(props({ status: "saved" }));
+    await update({ status: "saved" });
     expect(indicator.textContent?.trim()).toBe("");
   });
 
   it("renders the shared working claw while saving", async () => {
-    await update(props({ status: "saving" }));
-
+    await update({ status: "saving" });
     expect(indicator.textContent?.trim()).toBe("Saving…");
-    expect(
-      indicator.querySelector(".settings-save-indicator__claw--saving svg .claw-icon__jaw"),
-    ).not.toBeNull();
-    expect(
-      indicator.querySelector(".settings-save-indicator__claw")?.getAttribute("aria-hidden"),
-    ).toBe("true");
+    expect(part("claw--saving svg .claw-icon__jaw")).not.toBeNull();
+    expect(part("claw")).toMatchObject({ ariaHidden: "true" });
   });
 
-  it("shows saved for two seconds after saving, then returns to apply", async () => {
+  it.each(["elapsed", "unmounted"] as const)("retires the saved timer when %s", async (end) => {
     vi.useFakeTimers();
-    await update(props({ status: "saving" }));
-    await update(props({ status: "saved", needsApply: true }));
-
+    const needsApply = end === "elapsed";
+    await update({ status: "saving" });
+    expect(vi.getTimerCount()).toBe(0);
+    await update({ status: "saved", needsApply });
     expect(indicator.textContent).toContain("Saved");
-    expect(indicator.querySelector(".settings-save-indicator__claw--saved")).not.toBeNull();
-    expect(indicator.querySelector(".settings-save-indicator__check")).not.toBeNull();
-
-    // Shell refreshes replace the props object without changing the save status.
-    await update(props({ status: "saved", needsApply: true }));
+    expect(part("claw--saved")).not.toBeNull();
+    expect(part("check")).not.toBeNull();
+    // Shell refreshes replace props without restarting the saved window.
+    await update({ status: "saved", needsApply });
     expect(vi.getTimerCount()).toBe(1);
-    await vi.advanceTimersByTimeAsync(1_999);
-    expect(indicator.textContent).toContain("Saved");
-    await vi.advanceTimersByTimeAsync(1);
-    flush();
-    expect(indicator.textContent?.trim()).toBe("Apply changes");
+    if (end === "unmounted") {
+      view.unmount();
+      await Promise.resolve();
+      expect(vi.getTimerCount()).toBe(0);
+    } else {
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(indicator.textContent).toContain("Saved");
+      await vi.advanceTimersByTimeAsync(1);
+      flush();
+      expect(indicator.textContent?.trim()).toBe("Apply changes");
+    }
   });
 
-  it("surfaces save errors and retries with the original message", async () => {
-    const onRetry = vi.fn();
-    await update(props({ status: "error", lastError: "permission denied", onRetry }));
-
-    const status = indicator.querySelector('[role="status"]');
-    expect(status?.textContent).toContain("Save failed");
-    expect(status?.getAttribute("title")).toBe("permission denied");
-    expect(status?.getAttribute("aria-label")).toBe("Save failed: permission denied");
+  it.each([
+    ["error", "permission denied", "Save failed"],
+    ["rejected", "logging.level: Invalid option", "Settings not applied"],
+  ] as const)("explains %s and retries", async (status, lastError, message) => {
+    const { onRetry } = await update({ status, lastError });
+    const feedback = indicator.querySelector('[role="status"]');
+    expect(feedback?.textContent).toContain(message);
+    if (status === "error") {
+      expect(feedback).toMatchObject({ title: lastError, ariaLabel: `${message}: ${lastError}` });
+    } else {
+      expect(indicator.textContent).toContain("Current settings are unchanged.");
+      expect(indicator.querySelector("details")?.textContent).toContain(lastError);
+      expect(indicator.querySelector(".settings-save-indicator--danger")).toBeNull();
+    }
     button("Retry")?.click();
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
-  it("reloads on conflicts instead of offering retry", async () => {
-    const onReload = vi.fn();
-    await update(props({ status: "conflict", onReload }));
-
-    expect(indicator.textContent).toContain("Settings changed elsewhere");
-    expect(button("Retry")).toBeUndefined();
-    button("Reload")?.click();
-    expect(onReload).toHaveBeenCalledOnce();
-  });
-
-  it("explains validation rejection locally with a reason and retry action", async () => {
-    const onRetry = vi.fn();
-    await update(
-      props({ status: "rejected", lastError: "logging.level: Invalid option", onRetry }),
-    );
-
-    expect(indicator.querySelector('[role="status"]')?.textContent).toContain(
-      "Settings not applied",
-    );
-    expect(indicator.textContent).toContain("Current settings are unchanged.");
-    expect(indicator.querySelector("details")?.textContent).toContain(
-      "logging.level: Invalid option",
-    );
-    expect(indicator.querySelector(".settings-save-indicator--danger")).toBeNull();
-    button("Retry")?.click();
-    expect(onRetry).toHaveBeenCalledOnce();
-  });
-
-  it("submits the paused draft through Save instead of retrying a failed patch", async () => {
-    const onSave = vi.fn();
-    const onRetry = vi.fn();
-    await update(props({ status: "paused", onSave, onRetry }));
-
-    button("Save")?.click();
-
-    expect(onSave).toHaveBeenCalledOnce();
-    expect(onRetry).not.toHaveBeenCalled();
+  it.each([
+    ["conflict", "Reload", "onReload"],
+    ["paused", "Save", "onSave"],
+  ] as const)("offers %s recovery through %s, not Retry", async (status, label, handler) => {
+    const next = await update({ status });
+    if (status === "conflict") {
+      expect(indicator.textContent).toContain("Settings changed elsewhere");
+      expect(button("Retry")).toBeUndefined();
+    }
+    button(label)?.click();
+    expect(next[handler]).toHaveBeenCalledOnce();
+    expect(next.onRetry).not.toHaveBeenCalled();
   });
 
   it("applies pending changes and reports the in-flight state", async () => {
-    const onApply = vi.fn();
-    await update(props({ needsApply: true, onApply }));
+    const { onApply } = await update({ needsApply: true });
 
     button("Apply changes")?.click();
     expect(onApply).toHaveBeenCalledOnce();
 
-    await update(props({ needsApply: true, applying: true, onApply }));
+    await update({ needsApply: true, applying: true, onApply });
     expect(indicator.textContent?.trim()).toBe("Applying…");
-    expect(indicator.querySelector(".settings-save-indicator__spinner")).not.toBeNull();
+    expect(part("spinner")).not.toBeNull();
     expect(button("Apply changes")).toBeUndefined();
-  });
-
-  it("cleans the saved timer when unmounted", async () => {
-    vi.useFakeTimers();
-    await update(props({ status: "saving" }));
-    expect(vi.getTimerCount()).toBe(0);
-    await update(props({ status: "saved" }));
-    expect(vi.getTimerCount()).toBe(1);
-
-    view.unmount();
-    await Promise.resolve();
-
-    expect(vi.getTimerCount()).toBe(0);
   });
 });

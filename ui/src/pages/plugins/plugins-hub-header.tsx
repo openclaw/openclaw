@@ -19,19 +19,21 @@ type PluginsHubHeaderProps = {
 export function PluginsHubHeader(props: PluginsHubHeaderProps) {
   return (
     <HubPageHeader<PluginsHubTab>
-      id="plugins"
       active={props.active}
-      tabs={[
-        { value: "plugins", label: t("tabs.plugins") },
-        { value: "skills", label: t("tabs.skills") },
-        { value: "skill-workshop", label: t("tabs.skillWorkshop") },
-      ]}
-      ariaLabel={t("pluginsPage.hubTablistLabel")}
-      panelId={PLUGINS_HUB_PANEL_ID}
+      tabs={{
+        id: "plugins",
+        items: [
+          { value: "plugins", label: t("tabs.plugins") },
+          { value: "skills", label: t("tabs.skills") },
+          { value: "skill-workshop", label: t("tabs.skillWorkshop") },
+        ],
+        ariaLabel: t("pluginsPage.hubTablistLabel"),
+        panelId: PLUGINS_HUB_PANEL_ID,
+        class: "plugins-tabs",
+        onSelect: (tab) => props.onSelect(tab),
+      }}
       docsUrl={PLUGINS_HUB_DOCS_URLS[props.active]}
       class="plugins-hub-header"
-      tabsClass="plugins-tabs"
-      onSelect={props.onSelect}
       actions={
         props.secondaryAction && (
           <button
@@ -42,7 +44,7 @@ export function PluginsHubHeader(props: PluginsHubHeaderProps) {
             ]}
             aria-label={props.secondaryAction.label}
             title={props.secondaryAction.icon ? props.secondaryAction.label : undefined}
-            onClick={props.secondaryAction.onClick}
+            onClick={() => props.secondaryAction?.onClick()}
           >
             {props.secondaryAction.icon ?? props.secondaryAction.label}
           </button>

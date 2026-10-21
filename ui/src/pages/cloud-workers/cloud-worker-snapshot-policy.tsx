@@ -4,6 +4,7 @@ import { parseDurationMs } from "../../../../src/cli/parse-duration.js";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { useCloudWorkerConfig } from "./use-cloud-worker-config.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -99,26 +100,15 @@ export function CloudWorkerSnapshotPolicy() {
             />
           )}
         </For>
-        <SettingsRow
+        <SettingsSelectRow
           title={t("cloudWorkersPage.snapshots.keepPrevious")}
-          control={
-            <select
-              class="settings-select"
-              aria-label={t("cloudWorkersPage.snapshots.keepPrevious")}
-              value={values().keepPrevious}
-              disabled={!canSave()}
-              onChange={(event) =>
-                edit({ keepPrevious: event.currentTarget.value === "1" ? "1" : "0" })
-              }
-            >
-              <option value="0" selected={values().keepPrevious === "0"}>
-                {t("cloudWorkersPage.snapshots.keepNone")}
-              </option>
-              <option value="1" selected={values().keepPrevious === "1"}>
-                {t("cloudWorkersPage.snapshots.keepOne")}
-              </option>
-            </select>
-          }
+          value={values().keepPrevious}
+          disabled={!canSave()}
+          onChange={(value) => edit({ keepPrevious: value === "1" ? "1" : "0" })}
+          options={[
+            { value: "0", label: t("cloudWorkersPage.snapshots.keepNone") },
+            { value: "1", label: t("cloudWorkersPage.snapshots.keepOne") },
+          ]}
         />
         <SettingsRow
           title=""

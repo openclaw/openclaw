@@ -9,6 +9,7 @@ import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { getSessionWorkspace } from "./components/chat-session-workspace-state.ts";
 import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
+import { sidebarMainPanel } from "./sidebar-layout-geometry.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 
 registerFilePreviewEnglish();
@@ -97,7 +98,12 @@ export function sidebarPanelDefinitions(
     definePanel("processes", "terminal"),
     definePanel("detail", "diff", Boolean(data?.detailContent)),
     definePanel("terminal", "terminal", Boolean(state?.terminalAvailable)),
-    definePanel("browser", "globe", Boolean(state?.browserPanelAvailable)),
+    {
+      ...definePanel("browser", "globe", Boolean(state?.browserPanelAvailable)),
+      unavailableReason: state?.browserPanelUnavailableReason
+        ? t(`chat.sidePanel.browserUnavailableReason.${state.browserPanelUnavailableReason}`)
+        : undefined,
+    },
     {
       slot: "link-reader",
       label: t("linkReader.title"),
@@ -110,9 +116,19 @@ export function sidebarPanelDefinitions(
     },
     definePanel("portal", "globe"),
     definePanel("workspace", "fileText"),
-    definePanel("companion", "messageSquarePlus", true, { headerActionView: params }),
+    definePanel("companion", "messageSquarePlus", true, {
+      // The main pane has no closable tab, so it keeps its native reset action.
+      headerActionView:
+        params?.presentation === "desktop" &&
+        state &&
+        sidebarMainPanel(state.sidebarLayout)?.slot !== "companion"
+          ? undefined
+          : params,
+    }),
     definePanel("desktop", "monitor", Boolean(params?.desktopAvailable), {
-      headerLink: panelExternalLink(params?.desktopFocusHref, t("desktop.openWindow")),
+      headerLink: params?.presentation
+        ? undefined
+        : panelExternalLink(params?.desktopFocusHref, t("desktop.openWindow")),
     }),
     definePanel("discussion", "messageSquare", Boolean(params?.discussion), {
       headerLink: panelExternalLink(

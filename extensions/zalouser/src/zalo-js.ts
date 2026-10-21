@@ -424,11 +424,6 @@ async function ensureApi(
   apiInitByProfile.set(profile, initPromise);
   try {
     return await initPromise;
-  } catch (error) {
-    if (apiInitByProfile.get(profile) === initPromise) {
-      apiByProfile.delete(profile);
-    }
-    throw error;
   } finally {
     if (apiInitByProfile.get(profile) === initPromise) {
       apiInitByProfile.delete(profile);
@@ -575,7 +570,6 @@ export function normalizeZaloInboundMessage(
     wasExplicitlyMentioned,
     implicitMention,
     quotedGlobalMsgId: quotedGlobalMsgId || undefined,
-    quotedOwnerId: quoteOwnerId || undefined,
     quotedBody: quotedBody || undefined,
     eventMessage,
     raw: message,

@@ -1,7 +1,4 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -46,15 +43,6 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const transcript = page.locator(".chat-thread-inner");
       await transcript.getByText(backend, { exact: true }).first().waitFor();
-      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          transcript,
-          [transcript.getByText(backend, { exact: true }).first()],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(suite.artifactDir, "voice-transcript.png"), frame.png);
-      }
       const disclosure = transcript.locator("details", {
         has: page.getByText("Voice transcript", { exact: true }),
       });
@@ -64,15 +52,6 @@ suite.define(() => {
       expect(await transcript.getByText(backend, { exact: true }).count()).toBe(2);
       await disclosure.locator("summary").click();
       await transcript.getByText(speech, { exact: true }).waitFor();
-      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          transcript,
-          [transcript.getByText(speech, { exact: true })],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(suite.artifactDir, "voice-transcript-expanded.png"), frame.png);
-      }
       await page.reload();
       await transcript.getByText(backend, { exact: true }).first().waitFor();
       expect(await disclosure.getAttribute("open")).toBeNull();
@@ -87,51 +66,31 @@ suite.define(() => {
 
       // The host marker never asserts that speech replaces a particular run.
       // Speech-only dialogue stays available and unmarked chat-backed/legacy speech stays normal.
-      const casualMessage = message(
-        "assistant",
-        "Happy to help with your next question.",
-        "casual",
-        {
-          ...spoken,
-          __openclaw: { id: "casual", seq: 6, voiceTranscript: "provider-owned" },
-        },
-      );
-      await gateway.setHistoryMessages([...history, casualMessage]);
-      await gateway.emitGatewayEvent("session.message", {
-        sessionKey: "agent:main:main",
-        messageId: "casual",
-        messageSeq: 6,
-        message: casualMessage,
-        session: { key: "agent:main:main", kind: "direct", updatedAt: timestamp },
+      const casualText = "Happy to help with your next question.";
+      const casualMessage = message("assistant", casualText, "casual", {
+        ...spoken,
+        __openclaw: { id: "casual", seq: 6, voiceTranscript: "provider-owned" },
       });
-      const casual = transcript.locator("details", {
-        hasText: "Happy to help with your next question.",
-      });
+      const publish = async (messages: typeof history, messageId: string, messageSeq: number) => {
+        await gateway.setHistoryMessages(messages);
+        await gateway.emitGatewayEvent("session.message", {
+          sessionKey: "agent:main:main",
+          messageId,
+          messageSeq,
+          message: messages.at(-1),
+          session: { key: "agent:main:main", kind: "direct", updatedAt: timestamp },
+        });
+      };
+      await publish([...history, casualMessage], "casual", 6);
+      const casual = transcript.locator("details", { hasText: casualText });
       await expect.poll(() => casual.count()).toBe(1);
       await casual.locator("summary").click();
-      await transcript
-        .getByText("Happy to help with your next question.", { exact: true })
-        .waitFor();
-      const chatBacked = message(
-        "assistant",
-        "Chat-backed speech is the answer.",
-        "chat-backed",
-        spoken,
-      );
-      await gateway.setHistoryMessages([...history, casualMessage, chatBacked]);
-      await gateway.emitGatewayEvent("session.message", {
-        sessionKey: "agent:main:main",
-        messageId: "chat-backed",
-        messageSeq: 7,
-        message: chatBacked,
-        session: { key: "agent:main:main", kind: "direct", updatedAt: timestamp },
-      });
-      await transcript.getByText("Chat-backed speech is the answer.", { exact: true }).waitFor();
-      expect(
-        await transcript
-          .locator("details", { hasText: "Chat-backed speech is the answer." })
-          .count(),
-      ).toBe(0);
+      await transcript.getByText(casualText, { exact: true }).waitFor();
+      const chatBackedText = "Chat-backed speech is the answer.";
+      const chatBacked = message("assistant", chatBackedText, "chat-backed", spoken);
+      await publish([...history, casualMessage, chatBacked], "chat-backed", 7);
+      await transcript.getByText(chatBackedText, { exact: true }).waitFor();
+      expect(await transcript.locator("details", { hasText: chatBackedText }).count()).toBe(0);
       // A vanished audio transport cannot remove the separately retained backend answer.
       const fallbackPage = await context.newPage();
       await installMockGateway(fallbackPage, { historyMessages: history.slice(0, -1) });

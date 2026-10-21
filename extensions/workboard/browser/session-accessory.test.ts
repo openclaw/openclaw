@@ -1,5 +1,5 @@
 import "./test/dom.setup.ts";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { expect, it, vi } from "vitest";
 import { createWorkboardCapability } from "./lib/workboard/capability.ts";
 import { createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";

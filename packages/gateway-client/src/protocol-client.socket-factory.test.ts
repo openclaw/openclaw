@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 import type { GatewayProtocolClientOptions } from "./protocol-client-contract.js";
 import type { GatewayProtocolSocket, GatewayProtocolSocketHandlers } from "./protocol-client.js";
-import { createProtocolClient, stopProtocolClients } from "./protocol-client.test-support.js";
+import {
+  createProtocolClient,
+  createProtocolHarness,
+  receive,
+  stopProtocolClients,
+} from "./protocol-client.test-support.js";
 
 function createSocketFactoryHarness(
   options?: Partial<GatewayProtocolClientOptions<Record<string, never>>> & {
@@ -108,36 +113,66 @@ describe("GatewayProtocolClient socket factory recovery", () => {
     },
   );
 
-  it("does not schedule a retry over a socket restarted by a close callback", async () => {
+  it("retires requests and authority before a synchronous close callback restarts the socket", async () => {
     let recoveredRequest: Promise<{ healthy: boolean }> | undefined;
-    const { client, createSocket } = createSocketFactoryHarness({
-      onClose: () => {
-        client.start();
-        recoveredRequest = client.request("sessions.list", {}, { timeoutMs: null });
+    let connectionSignal: AbortSignal | undefined;
+    const onReconnectScheduled = vi.fn();
+    const onClose = vi.fn(() => {
+      expect(connectionSignal?.aborted).toBe(true);
+      expect(client.connected).toBe(false);
+      expect(client.hasPendingRequests).toBe(false);
+      client.start();
+      recoveredRequest = client.request("sessions.list", {}, { timeoutMs: null });
+    });
+    const { client, connections } = createProtocolHarness({
+      buildConnectPlan: ({ signal }) => {
+        connectionSignal = signal;
+        return {};
       },
+      onReconnectScheduled,
+      onClose,
     });
 
     client.start();
-    createSocket.mock.calls[0]?.[0].close(1012, "service restart");
+    const first = connections[0];
+    assert(first);
+    first.handlers.open();
+    receive(first, { type: "event", event: "connect.challenge", payload: { nonce: "challenge" } });
+    const connect = first.frames[0];
+    assert(connect);
+    receive(first, {
+      type: "res",
+      id: connect.id,
+      ok: true,
+      payload: { type: "hello-ok" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const pending = client
+      .request("before-close", {}, { timeoutMs: null })
+      .catch((error: unknown) => error);
 
-    expect(createSocket).toHaveBeenCalledTimes(2);
+    client.closeSocket(1012, "service restart");
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(await pending).toEqual(new Error("gateway closed (1012): service restart"));
+    expect(connections).toHaveLength(2);
     expect(client.connected).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
+    expect(onReconnectScheduled).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(100);
-    expect(createSocket).toHaveBeenCalledTimes(2);
+    expect(connections).toHaveLength(2);
 
-    const replacementSocket = createSocket.mock.results[1]?.value as GatewayProtocolSocket;
-    const requestFrame = vi.mocked(replacementSocket.send).mock.calls[0]?.[0];
-    expect(requestFrame).toBeDefined();
-    createSocket.mock.calls[1]?.[0].message(
-      JSON.stringify({
-        type: "res",
-        id: JSON.parse(requestFrame ?? "{}").id,
-        ok: true,
-        payload: { healthy: true },
-      }),
-    );
+    const replacement = connections[1];
+    assert(replacement);
+    const request = replacement.frames[0];
+    assert(request);
+    receive(replacement, {
+      type: "res",
+      id: request.id,
+      ok: true,
+      payload: { healthy: true },
+    });
     await expect(recoveredRequest).resolves.toEqual({ healthy: true });
     expect(client.hasPendingRequests).toBe(false);
   });

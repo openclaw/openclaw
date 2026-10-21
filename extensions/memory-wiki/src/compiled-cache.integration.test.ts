@@ -12,14 +12,12 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
 import {
-  activateMemoryWikiCompiledCacheOwner,
   configureMemoryWikiCompiledCacheStore,
   createMemoryWikiCompiledCacheStore,
   deactivateMemoryWikiCompiledCacheOwnersExcept,
   loadMemoryWikiCompiledCache,
   readMemoryWikiDashboardState,
   MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
-  reconcileMemoryWikiCompiledCacheOwner,
   resolveMemoryWikiCompiledCacheOwnerId,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
@@ -35,6 +33,7 @@ import {
   loadMemoryWikiVaultIdentity,
 } from "./log.js";
 import { renderWikiMarkdown } from "./markdown.js";
+import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { createWikiPromptSectionPreparer } from "./prompt-section.js";
 import { getMemoryWikiPage } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
@@ -62,21 +61,6 @@ async function createPersistentVault(
   // tests deliberately switch back to the SQLite-backed plugin Blob test store.
   configureMemoryWikiCompiledCacheStore(createCacheStore());
   return vault;
-}
-
-async function activateVault(config: ReturnType<typeof resolveMemoryWikiConfig>): Promise<void> {
-  const identity = await loadMemoryWikiValidatedVaultIdentity(config.vault.path);
-  if (!identity.vaultGeneration) {
-    throw new Error(`Expected vault generation for ${config.vault.path}`);
-  }
-  activateMemoryWikiCompiledCacheOwner(
-    config,
-    identity.vaultGeneration,
-    identity.compiledCachePublicationId,
-  );
-  await reconcileMemoryWikiCompiledCacheOwner(config, () =>
-    loadMemoryWikiValidatedVaultIdentity(config.vault.path),
-  );
 }
 
 function snapshot(text: string): MemoryWikiCompiledCacheSnapshot {
@@ -345,11 +329,42 @@ describe("Memory Wiki compiled cache lifecycle", () => {
 
     configureMemoryWikiCompiledCacheStore(undefined);
     configureMemoryWikiCompiledCacheStore(createCacheStore());
-    await activateVault(config);
+    const entered = createDeferred<void>();
+    const released = createDeferred<void>();
+    const mutation = withMemoryWikiVaultMutation(rootDir, async () => {
+      entered.resolve();
+      await released.promise;
+    });
+    await entered.promise;
+    const readFile = vi.spyOn(fs, "readFile");
+    const open = vi.spyOn(fs, "open");
+    const activation = activateExistingMemoryWikiVault(config);
+    try {
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(open).not.toHaveBeenCalled();
+      } finally {
+        released.resolve();
+        await mutation;
+        await activation;
+        open.mockRestore();
+      }
+      expect(
+        readFile.mock.calls.filter(([file]) => file === path.join(rootDir, "entities", "alpha.md")),
+      ).toHaveLength(1);
+    } finally {
+      readFile.mockRestore();
+    }
 
     await expect(preparePrompt(config)).resolves.toContain(
       "Alpha uses PostgreSQL for production writes.",
     );
+    await expect(getMemoryWikiPage({ config, lookup: "claim.alpha.db" })).resolves.toMatchObject({
+      path: "entities/alpha.md",
+      title: "Alpha",
+    });
   });
 
   it("bounds dashboard projections below the compiled-cache entry limit", () => {
@@ -453,7 +468,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
 
     configureMemoryWikiCompiledCacheStore(undefined);
     configureMemoryWikiCompiledCacheStore(createCacheStore());
-    await activateVault(config);
+    await activateExistingMemoryWikiVault(config);
 
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
 
@@ -485,7 +500,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     ).rejects.toThrow("vault changed");
 
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
-    await activateVault(config);
+    await activateExistingMemoryWikiVault(config);
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
   });
 
@@ -531,7 +546,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
       ),
     ).rejects.toThrow("vault changed");
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
-    await activateVault(config);
+    await activateExistingMemoryWikiVault(config);
     expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("backup");
   });
 
@@ -601,7 +616,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     await publishSnapshot(config, snapshot("recoverable"));
     configureMemoryWikiCompiledCacheStore(undefined);
     configureMemoryWikiCompiledCacheStore(store);
-    await activateVault(config);
+    await activateExistingMemoryWikiVault(config);
     failNextRead = true;
 
     await expect(readMemoryWikiDashboardState(config)).resolves.toMatchObject({
@@ -621,17 +636,14 @@ describe("Memory Wiki compiled cache lifecycle", () => {
 
     configureMemoryWikiCompiledCacheStore(undefined);
     configureMemoryWikiCompiledCacheStore(createCacheStore());
-    const identity = await loadMemoryWikiValidatedVaultIdentity(rootDir);
-    activateMemoryWikiCompiledCacheOwner(
-      config,
-      identity.vaultGeneration!,
-      identity.compiledCachePublicationId,
-    );
-    await expect(
-      reconcileMemoryWikiCompiledCacheOwner(config, async () => {
-        throw new Error("transient reconciliation failure");
-      }),
-    ).rejects.toThrow("transient reconciliation failure");
+    const open = vi.spyOn(fs, "open").mockRejectedValueOnce(new Error("transient journal failure"));
+    try {
+      await expect(activateExistingMemoryWikiVault(config)).rejects.toThrow(
+        "transient journal failure",
+      );
+    } finally {
+      open.mockRestore();
+    }
 
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();

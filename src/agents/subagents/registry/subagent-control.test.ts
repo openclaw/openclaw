@@ -34,7 +34,6 @@ import {
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
-import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { startControlProducer as startProducer } from "./subagent-control-native.test-support.js";
 import * as killSession from "./subagent-control-session.js";
 import { registerAdmissionDrainControlTests } from "./subagent-control.admission-drain.test-support.js";
@@ -1563,7 +1562,6 @@ describe("killAllControlledSubagentRuns", () => {
         response.resolve();
         await launchDone.promise;
         lease?.release();
-        swarmSchedulerTesting.reset();
       }
     },
   );
@@ -1600,28 +1598,24 @@ describe("killAllControlledSubagentRuns", () => {
         onStartFailure: () => true,
       });
     }
-    try {
-      const result = await killAllControlledSubagentRuns({
-        cfg: cfgWithSessionStore(),
-        controller: {
-          controllerSessionKey: "global",
-          controllerAgentId: "main",
-          callerSessionKey: "global",
-          callerIsSubagent: false,
-          controlScope: "children",
-        },
-        runs: entries,
-        beforeKill: async () => {
-          await Promise.resolve();
-          expect(started).toEqual(["work"]);
-          return true;
-        },
-      });
-      expect(result).toMatchObject({ killed: 1, labels: ["main"] });
-      expect(started).toEqual(["work"]);
-    } finally {
-      swarmSchedulerTesting.reset();
-    }
+    const result = await killAllControlledSubagentRuns({
+      cfg: cfgWithSessionStore(),
+      controller: {
+        controllerSessionKey: "global",
+        controllerAgentId: "main",
+        callerSessionKey: "global",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      runs: entries,
+      beforeKill: async () => {
+        await Promise.resolve();
+        expect(started).toEqual(["work"]);
+        return true;
+      },
+    });
+    expect(result).toMatchObject({ killed: 1, labels: ["main"] });
+    expect(started).toEqual(["work"]);
   });
 
   it("continues channel stop cancellation after one registry persistence failure", async () => {

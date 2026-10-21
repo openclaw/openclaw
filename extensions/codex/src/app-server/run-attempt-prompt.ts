@@ -7,7 +7,6 @@ import {
   resolveAgentHarnessBeforePromptBuildResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildCodexSystemPromptReport,
   prependCodexOpenClawPromptContext,
@@ -147,21 +146,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const prepareFileContext: NonNullable<
     Parameters<typeof projectContextEngineAssemblyForCodex>[0]["prepareFileContext"]
   > = async (message, maxChars) => {
-    // Older hosts retain ordinary text history, but cannot claim restored attachments.
     const prepare = params.hostCapabilities.prepareContextMedia;
     if (!prepare) {
-      const media = asOptionalRecord(Reflect.get(message, "__openclaw"))?.media;
-      if (
-        (Array.isArray(media) && media.length) ||
-        (message.role === "user" &&
-          Array.isArray(message.content) &&
-          message.content.some((part) => part.type === "image"))
-      ) {
-        throw new CodexContextAttachmentError(
-          "Saved attachments require a newer OpenClaw host. Update the Gateway and Codex plugin together, then retry.",
-        );
-      }
-      return { images: [] };
+      throw new CodexContextAttachmentError(
+        "Saved attachments require a newer OpenClaw host. Update the Gateway and Codex plugin together, then retry.",
+      );
     }
     try {
       const files = await prepare({ message, maxChars });

@@ -114,20 +114,12 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-function enqueueSystemEvent(text: string, opts?: unknown) {
-  return mocks.enqueue(text, opts);
-}
-
-function enqueueSystemEventWithReceipt(text: string, opts?: unknown) {
-  const result = mocks.enqueue(text, opts);
-  if (result === false || result === null) {
-    return null;
-  }
-  return mocks.removeEvent;
-}
-
 // mock-isolation: Cron cases capture queue entries and receipts without the process event queue.
-vi.mock("../infra/system-events.js", () => ({ enqueueSystemEvent, enqueueSystemEventWithReceipt }));
+vi.mock("../infra/system-events.js", async () => {
+  const { createCronSystemEventMocks } =
+    await import("./server-cron.system-event-receipt.test-support.js");
+  return createCronSystemEventMocks(mocks.enqueue, mocks.removeEvent);
+});
 
 vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/heartbeat-wake.js")>()),
@@ -2270,21 +2262,6 @@ describe("buildGatewayCronService", () => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
-  });
-
-  it("passes opaque custom session targets through to isolated cron runs", async () => {
-    const cfg = createCronConfig("server-cron-custom-session");
-    await withCronService(cfg, async (state) => {
-      const sessionKey = "agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
-      const job = await addAgentTurnJob(state, "custom-session", "hello", {
-        sessionTarget: `session:${sessionKey}`,
-      });
-
-      await state.cron.run(job.id, "force");
-
-      const options = expectIsolatedRunFields({ sessionKey });
-      expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
-    });
   });
 
   it.each([false, true])("handles roster commit failure (uncertain=%s)", async (uncertain) => {

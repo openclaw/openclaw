@@ -174,7 +174,7 @@ function personalMutation(database: OpenClawStateDatabase, input: PersonalPublic
     case "complete":
     case "recordEffect":
     case "interrupt": {
-      const { values } = githubPublicationEffectFacts(input, "needs_confirmation");
+      const values = githubPublicationEffectFacts(input, "needs_confirmation");
       return [
         personal.writePersonalGitHubPublicationInDatabase(
           database,
@@ -182,8 +182,6 @@ function personalMutation(database: OpenClawStateDatabase, input: PersonalPublic
           input.instanceId,
           input.executionId,
           values,
-          false,
-          admitted,
         ),
       ];
     }
@@ -221,7 +219,7 @@ function repositoryMutation(database: OpenClawStateDatabase, input: RepositoryPu
     case "complete":
     case "recordEffect":
     case "interrupt": {
-      const { values } = githubPublicationEffectFacts(
+      const values = githubPublicationEffectFacts(
         input,
         input.row.owner_profile_id === null ? "requested" : "needs_confirmation",
       );
@@ -232,8 +230,6 @@ function repositoryMutation(database: OpenClawStateDatabase, input: RepositoryPu
           input.instanceId,
           input.executionId,
           values,
-          false,
-          authority,
         ),
       ];
     }

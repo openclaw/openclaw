@@ -1,11 +1,11 @@
 import { errorMonitor, once } from "node:events";
 import http from "node:http";
 import net from "node:net";
-import type { Duplex } from "node:stream";
+import { Duplex } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { normalizeVoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
@@ -14,6 +14,7 @@ import { TwilioProvider } from "./providers/twilio.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 import { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 
 vi.mock("./realtime-transcription.runtime.js", () => ({
   getRealtimeTranscriptionProvider: () => undefined,
@@ -228,5 +229,101 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
       vi.useRealTimers();
     }
     expect(stopped).toBe(true);
+  });
+});
+
+function makeRequest(url: string, host = "gateway.ts.net"): http.IncomingMessage {
+  const req = new http.IncomingMessage(null as never);
+  req.url = url;
+  req.method = "POST";
+  req.headers = host ? { host } : {};
+  return req;
+}
+
+function rejectedUpgradeHarness() {
+  const config = normalizeVoiceCallConfig({ realtime: { enabled: true } });
+  const resolveRegistration = vi.fn((): never => {
+    throw new Error("Rejected upgrades must not acquire a provider");
+  });
+  const streamDisconnectLifecycle = new StreamDisconnectGrace(() => {});
+  const handler = new RealtimeCallHandler(
+    config.realtime,
+    new CallManager(config),
+    resolveRegistration,
+    "/voice/webhook",
+    streamDisconnectLifecycle,
+  );
+  onTestFinished(async () => {
+    try {
+      await handler.close();
+    } finally {
+      streamDisconnectLifecycle.close();
+    }
+  });
+  let flush = () => {};
+  let response = "";
+  const socket = new Duplex({
+    read() {},
+    write(chunk: Buffer, _encoding, callback) {
+      response += chunk.toString();
+      flush = callback;
+    },
+  });
+  return {
+    handler,
+    resolveRegistration,
+    socket,
+    flush: () => flush(),
+    response: () => response,
+    reject: () =>
+      handler.handleWebSocketUpgrade(
+        makeRequest("/voice/stream/realtime/invalid-token"),
+        socket,
+        Buffer.alloc(0),
+      ),
+  };
+}
+
+describe("realtime upgrade rejection", () => {
+  it.each([
+    [401, "Unauthorized"],
+    [503, "Service Unavailable"],
+  ] as const)(
+    "flushes HTTP %s before closing without acquiring a provider",
+    async (status, reason) => {
+      const { handler, resolveRegistration, socket, response, flush, reject } =
+        rejectedUpgradeHarness();
+      const shutdown = createDeferred<void>();
+      const closing = status === 503 ? handler.close(shutdown.promise) : undefined;
+      const closed = once(socket, "close");
+      try {
+        reject();
+        expect(response()).toBe(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
+        expect(socket.destroyed).toBe(false);
+        expect(resolveRegistration).not.toHaveBeenCalled();
+        flush();
+        await closed;
+        expect(socket.destroyed).toBe(true);
+      } finally {
+        flush();
+        socket.destroy();
+        shutdown.resolve();
+        await closing;
+        await handler.close();
+      }
+    },
+  );
+
+  it("owns raw socket errors while rejection bytes are buffered", async () => {
+    const { handler, socket, flush, reject } = rejectedUpgradeHarness();
+    try {
+      reject();
+      expect(() => socket.emit("error", new Error("synthetic raw socket failure"))).not.toThrow();
+      expect(socket.destroyed).toBe(true);
+    } finally {
+      flush();
+      socket.destroy();
+      await handler.close();
+    }
   });
 });

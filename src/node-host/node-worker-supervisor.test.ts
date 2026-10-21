@@ -96,7 +96,7 @@ function evictWorkerCredentialsOnRegistration() {
 
 describe("node worker supervisor", () => {
   it("releases the physical capacity claim when the first turn cannot be journaled", async () => {
-    await using f = fixture({ capacity: 1, capacityWaitMs: 25 });
+    await using f = fixture({ capacity: 1 });
     const { capacities, workspaceDir } = f;
     const input = launchInput(workspaceDir, "turn-claim-failure");
     vi.spyOn(NodeWorkerTurnStore.prototype, "claim").mockRejectedValueOnce(
@@ -157,7 +157,7 @@ describe("node worker supervisor", () => {
   });
 
   it("admits two durable launches and releases one physical slot at a time", async () => {
-    await using f = fixture({ capacity: 2, capacityWaitMs: 5_000 });
+    await using f = fixture({ capacity: 2 });
     const { capacities: capacitySnapshots, env, supervisor, workspaceDir } = f;
     const first = launchInput(workspaceDir, "capacity-a", "wait");
     const second = launchInput(workspaceDir, "capacity-b", "wait");
@@ -217,7 +217,7 @@ describe("node worker supervisor", () => {
   });
 
   it("aborts saturated admission when the supervisor closes", async () => {
-    await using f = fixture({ capacity: 1, capacityWaitMs: 5_000 });
+    await using f = fixture({ capacity: 1 });
     const { supervisor, workspaceDir } = f;
     const running = launchInput(workspaceDir, "capacity-close-running", "wait");
     const waiting = launchInput(workspaceDir, "capacity-close-waiting", "wait");
@@ -407,7 +407,7 @@ describe("node worker supervisor", () => {
   });
 
   it("bounds a blocked cancellation write and stops only its physical owner", async () => {
-    await using f = fixture({ capacity: 2, capacityWaitMs: 25 });
+    await using f = fixture({ capacity: 2 });
     const { capacities, supervisor, workspaceDir } = f;
     const input = launchInput(workspaceDir, "blocked-cancel", "wait");
     const sibling = launchInput(workspaceDir, "unrelated-worker", "wait");

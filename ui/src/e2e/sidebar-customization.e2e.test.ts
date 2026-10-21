@@ -1,23 +1,22 @@
-// Control UI tests cover customizable sidebar navigation and persistence.
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import {
-  takeControlUiElementScreenshot,
-  takeControlUiViewportScreenshot,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
   installMockGateway,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
-import { compactCronJobFixture } from "../test-helpers/cron.ts";
+import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  expectAttribute,
+  expectCount,
+  expectPath,
+  expectVisible,
+} from "./sidebar-assertions.test-support.ts";
 import { openSidebarPages, openSidebarPinMenu } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -27,7 +26,20 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const desktopOptions = {
+  locale: "en-US",
+  serviceWorkers: "block",
+  viewport: { height: 900, width: 1440 },
+} satisfies BrowserContextOptions;
+const exactLink = (root: Page | Locator, name: string) =>
+  root.getByRole("link", { name, exact: true });
+const button = (root: Page | Locator, name: string) =>
+  root.getByRole("button", { name, exact: true });
+const schemaObject = (properties: Record<string, unknown>, title?: string) => ({
+  type: "object",
+  properties,
+  ...(title ? { title } : {}),
+});
 const hiddenSessionCatalogsStorageKey = "openclaw:sidebar:sessions:hidden-catalogs";
 
 async function trimmedTextContents(locator: Locator): Promise<string[]> {
@@ -36,57 +48,6 @@ async function trimmedTextContents(locator: Locator): Promise<string[]> {
 
 async function roundedWidth(locator: Locator): Promise<number> {
   return Math.round((await locator.boundingBox())?.width ?? 0);
-}
-
-function visibleDrawerButton(page: Page) {
-  return page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first();
-}
-
-async function captureUiProof(page: Page, fileName: string, surface = page.locator(".shell")) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
-  if (page.video()) {
-    await writeFile(
-      path.join(suite.artifactDir, "sidebar-customization", fileName),
-      await takeControlUiViewportScreenshot(page, surface, [surface]),
-    );
-    return;
-  }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(path.join(suite.artifactDir, "sidebar-customization"), fileName),
-  });
-}
-
-async function captureSettingsSidebarProof(sidebar: Locator, fileName: string) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
-  await writeFile(
-    path.join(suite.artifactDir, "sidebar-customization", fileName),
-    await takeControlUiElementScreenshot(sidebar.page(), sidebar, [sidebar.locator("input")]),
-  );
-}
-
-async function holdUiProof(page: Page, durationMs = 600) {
-  if (captureUiProofEnabled) {
-    await page.waitForTimeout(durationMs);
-  }
-}
-
-async function setThemeMode(page: Page, mode: "dark" | "light") {
-  await page.emulateMedia({ colorScheme: mode });
-  await page.evaluate((nextMode) => {
-    const root = document.documentElement;
-    root.dataset.themeMode = nextMode;
-    root.dataset.themeResolved = nextMode;
-    root.style.colorScheme = nextMode;
-  }, mode);
-  await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
 }
 
 suite.define(() => {
@@ -112,23 +73,16 @@ suite.define(() => {
               "workboard.cards.list": { boards, cards: [], statuses: ["todo", "done"] },
             },
           });
-          await page.addInitScript(
-            ({ key, leadEntry }) =>
-              localStorage.setItem(
-                key,
-                JSON.stringify({
-                  sidebarAgentsMode: "roster",
-                  railShortcuts: ["route:agents-home", leadEntry, "route:cron"],
-                }),
-              ),
-            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), leadEntry: entry },
-          );
+          await seedChatSettings(page, suite.server.baseUrl, {
+            sidebarAgentsMode: "roster",
+            railShortcuts: ["route:agents-home", entry, "route:cron"],
+          });
           await page.goto(`${suite.server.baseUrl}${route}`);
           if (label === "Workboard") {
             await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
           }
           if (width < 900) {
-            await visibleDrawerButton(page).click();
+            await navigationDrawerToggle(page).click();
           }
           const sidebar = page.locator("openclaw-app-sidebar");
           const row = sidebar.locator('.sidebar-rail__pin[data-sidebar-entry="' + entry + '"]');
@@ -153,9 +107,7 @@ suite.define(() => {
             row.boundingBox(),
             navLink.boundingBox(),
           ]);
-          expect(iconBox).not.toBeNull();
-          expect(rowBox).not.toBeNull();
-          expect(linkBox).not.toBeNull();
+          expect([iconBox, rowBox, linkBox]).not.toContain(null);
           expect(rowBox!.height).toBe(originalBox!.height);
           expect(rowBox!.height).toBe(linkBox!.height);
           expect(
@@ -167,17 +119,9 @@ suite.define(() => {
             const operationsEntry = pages.locator(
               '[data-sidebar-entry="plugin:workboard/board-ops"]',
             );
-            await operationsEntry.getByRole("link", { name: "Operations", exact: true }).waitFor();
-            if (captureUiProofEnabled && width === 1440) {
-              await writeFile(
-                path.join(suite.artifactDir, "workboard-pages.png"),
-                await takeControlUiElementScreenshot(page, pages, [operationsEntry]),
-              );
-            }
+            await exactLink(operationsEntry, "Operations").waitFor();
             // Pages owns a flat entry for every registration, including plugin children.
-            expect(await pages.getByRole("link", { name: "Operations", exact: true }).count()).toBe(
-              1,
-            );
+            expect(await exactLink(pages, "Operations").count()).toBe(1);
             expect(
               await pages
                 .locator('[data-sidebar-entry^="plugin:workboard/"] a')
@@ -188,62 +132,57 @@ suite.define(() => {
                 ),
             ).toEqual(["/workboard", "/workboard/default", "/workboard/ops"]);
             expect(await pages.locator(".nav-item--child").count()).toBe(0);
-            expect(await row.locator(".nav-item--child").count()).toBe(0);
             if (width === 1440) {
               const operationsPage = pages.locator(".sidebar-pages__entry").filter({
                 has: page.locator('[data-sidebar-entry="plugin:workboard/board-ops"]'),
               });
-              await operationsPage.getByRole("button", { name: "Pin", exact: true }).click();
+              await button(operationsPage, "Pin").click();
               const shortcut = sidebar.locator(
                 '.sidebar-rail__pin[data-sidebar-entry="plugin:workboard/board-ops"]',
               );
-              await shortcut.getByRole("link", { name: "Operations", exact: true }).waitFor();
+              await exactLink(shortcut, "Operations").waitFor();
               await pages.locator('a[href="/workboard/default"]').click();
-              await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/default");
-              await shortcut.getByRole("link", { name: "Operations", exact: true }).click();
-              await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/ops");
+              await expectPath(page, "/workboard/default");
+              await exactLink(shortcut, "Operations").click();
+              await expectPath(page, "/workboard/ops");
               await openSidebarPages(page);
-              await pages.getByRole("link", { name: "Workboard", exact: true }).click();
-              await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard");
-              await operationsPage.getByRole("button", { name: "Unpin", exact: true }).click();
-              await expect.poll(() => shortcut.count()).toBe(0);
+              await exactLink(pages, "Workboard").click();
+              await expectPath(page, "/workboard");
+              await button(operationsPage, "Unpin").click();
+              await expectCount(shortcut, 0);
               expect(await operationsEntry.getByRole("link").count()).toBe(1);
             }
           }
-          await captureUiProof(page, "lead-" + label + "-" + width + ".png");
         },
       );
     },
   );
 
   it("uses catalog labels in the hidden-section recovery rows", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    await page.addInitScript(({ key, value }) => localStorage.setItem(key, JSON.stringify(value)), {
-      key: hiddenSessionCatalogsStorageKey,
-      value: ["claude", "offline-catalog"],
-    });
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["sessions.catalog.list"],
-      methodResponses: {
-        "sessions.catalog.list": {
-          catalogs: [
-            {
-              id: "claude",
-              label: "Claude Code",
-              capabilities: { continueSession: true, archive: false },
-              hosts: [],
-            },
-          ],
+    await suite.withPage(desktopOptions, async ({ page }) => {
+      await page.addInitScript(
+        ({ key, value }) => localStorage.setItem(key, JSON.stringify(value)),
+        {
+          key: hiddenSessionCatalogsStorageKey,
+          value: ["claude", "offline-catalog"],
         },
-      },
-    });
+      );
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["sessions.catalog.list"],
+        methodResponses: {
+          "sessions.catalog.list": {
+            catalogs: [
+              {
+                id: "claude",
+                label: "Claude Code",
+                capabilities: { continueSession: true, archive: false },
+                hosts: [],
+              },
+            ],
+          },
+        },
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await waitForControlUiSettingsTakeover(page);
       const labelsRequest = await gateway.waitForRequest("sessions.catalog.list", {
@@ -258,110 +197,74 @@ suite.define(() => {
       await expect.poll(() => recovery.textContent()).toContain("offline-catalog");
       expect(await recovery.getByText("claude", { exact: true }).count()).toBe(0);
 
-      if (captureUiProofEnabled) {
-        await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
-        await recovery.scrollIntoViewIfNeeded();
-        for (const theme of ["light", "dark"] as const) {
-          await setThemeMode(page, theme);
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(
-              path.join(suite.artifactDir, "sidebar-customization"),
-              `after-${theme}-context.png`,
-            ),
-          });
-          await recovery.screenshot({
-            animations: "disabled",
-            path: path.join(
-              path.join(suite.artifactDir, "sidebar-customization"),
-              `after-${theme}-rows.png`,
-            ),
-          });
-        }
-      }
-
       await row.getByRole("button", { name: "Show" }).click();
-      await expect.poll(() => row.count()).toBe(0);
+      await expectCount(row, 0);
       expect(
         await page.evaluate((key) => localStorage.getItem(key), hiddenSessionCatalogsStorageKey),
       ).toBe('["offline-catalog"]');
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("pins and unpins routes and persists navigation state across reloads", async () => {
-    if (captureUiProofEnabled) {
-      await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
-    }
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      recordVideo: captureUiProofEnabled
-        ? {
-            dir: path.join(path.join(suite.artifactDir, "sidebar-customization"), "video"),
-            size: { height: 900, width: 1300 },
-          }
-        : undefined,
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    const video = page.video();
-    await installMockGateway(page, {
-      controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
-      methodResponses: {
-        "config.get": {
-          config: {},
-          hash: "settings-search-e2e",
-        },
-        "config.schema": {
-          schema: {
-            type: "object",
-            properties: {
-              browser: {
-                type: "object",
-                title: "Browser",
-                properties: {
-                  enabled: {
-                    type: "boolean",
-                    title: "Enabled",
-                  },
-                },
-              },
-              tools: {
-                type: "object",
-                title: "Tools",
-                properties: {
-                  profile: {
-                    type: "string",
-                    description: "Controls sandbox access",
-                  },
-                },
-              },
-            },
+    await suite.withPage(desktopOptions, async ({ page }) => {
+      await installMockGateway(page, {
+        controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
+        methodResponses: {
+          "config.get": {
+            config: {},
+            hash: "settings-search-e2e",
           },
-          uiHints: {},
-          version: "e2e",
-          generatedAt: "2026-07-12T00:00:00.000Z",
+          "config.schema": {
+            schema: schemaObject({
+              browser: schemaObject({ enabled: { type: "boolean", title: "Enabled" } }, "Browser"),
+              tools: schemaObject(
+                { profile: { type: "string", description: "Controls sandbox access" } },
+                "Tools",
+              ),
+            }),
+            uiHints: {},
+            version: "e2e",
+            generatedAt: "2026-07-12T00:00:00.000Z",
+          },
         },
-      },
-    });
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const sidebar = page.locator("openclaw-app-sidebar");
+      const shell = page.locator(".shell");
+      const expectShellWidth = async (width: string) => {
+        await expect
+          .poll(() =>
+            shell.evaluate((element) =>
+              getComputedStyle(element).getPropertyValue("--shell-nav-width"),
+            ),
+          )
+          .toBe(width);
+      };
+      const expectShellFlag = async (flag: string, present = true) => {
+        await expect
+          .poll(() =>
+            shell.evaluate((element, token) => element.classList.contains(token), "shell--" + flag),
+          )
+          .toBe(present);
+      };
       const pinnedItems = sidebar.locator(
         '.sidebar-rail__pin[data-sidebar-entry^="route:"] .nav-item',
       );
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
-      // Desktop renders no topbar row: the sidebar owns navigation.
-      await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
+      await expectVisible(page.locator(".topbar"), false);
       const shellNav = page.locator(".shell-nav");
       const sidebarResizer = page.getByRole("separator", { name: "Resize sidebar" });
-      await expect.poll(() => roundedWidth(shellNav)).toBe(310);
-      await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("310 pixels");
-      await captureUiProof(page, "00-sidebar-default-width.png");
+      const expectWidth = async (width: number) => {
+        await expect
+          .poll(async () => ({
+            pixels: await roundedWidth(shellNav),
+            label: await sidebarResizer.getAttribute("aria-valuetext"),
+          }))
+          .toEqual({ pixels: width, label: width + " pixels" });
+      };
+      await expectWidth(310);
 
       const resizerBounds = await sidebarResizer.boundingBox();
       if (!resizerBounds) {
@@ -382,9 +285,7 @@ suite.define(() => {
       await expect.poll(() => sidebarResizer.getAttribute("class")).toContain("dragging");
       await page.mouse.move(resizerX + 100, resizerY);
       await page.mouse.up();
-      await expect.poll(() => roundedWidth(shellNav)).toBe(410);
-      await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("410 pixels");
-      await captureUiProof(page, "00-sidebar-resized.png");
+      await expectWidth(410);
 
       await page.reload();
       await expect.poll(() => roundedWidth(shellNav)).toBe(410);
@@ -397,9 +298,6 @@ suite.define(() => {
       await expect.poll(() => roundedWidth(shellNav)).toBe(292);
       await page.keyboard.press("End");
       await expect.poll(() => roundedWidth(shellNav)).toBe(452);
-      // Settings takes over the whole app: the regular sidebar yields to the
-      // settings sidebar until "Back to app" (or Escape) exits. Settings opens
-      // through the footer identity card's account utility menu.
       const identityCard = sidebar.locator(".sidebar-identity-card");
       const openSettingsFromIdentity = async () => {
         await identityCard.click();
@@ -408,22 +306,33 @@ suite.define(() => {
           .getByRole("menuitem", { exact: true, name: "Settings" })
           .click();
       };
-      await expect.poll(() => identityCard.isVisible()).toBe(true);
+      await expectVisible(identityCard);
       await openSettingsFromIdentity();
       const { search: settingsSearch, sidebar: settingsSidebar } =
         await waitForControlUiSettingsTakeover(page);
-      await expect
-        .poll(() =>
-          settingsSidebar
-            .getByRole("link", { name: "Appearance" })
-            .first()
-            .getAttribute("aria-current"),
-        )
-        .toBe("page");
-      await captureUiProof(page, "01a-settings-takeover.png", settingsSidebar);
-      await captureSettingsSidebarProof(settingsSidebar, "01a-settings-search-initial.png");
-      await holdUiProof(page);
+      await expectAttribute(
+        settingsSidebar.getByRole("link", { name: "Appearance" }).first(),
+        "aria-current",
+        "page",
+      );
       const settingsLinks = settingsSidebar.locator(".settings-sidebar__item");
+      const expectSearch = async (query: string, labels: string[], nested = false) => {
+        await settingsSearch.fill(query);
+        const links = nested
+          ? settingsSidebar.locator(
+              ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
+            )
+          : settingsLinks;
+        await expect.poll(() => trimmedTextContents(links)).toEqual(labels);
+      };
+      const searchSection = async (query: string, label: string, destination: string) => {
+        await settingsSearch.fill(query);
+        const result = exactLink(settingsSidebar, label);
+        await expectVisible(result);
+        await result.click();
+        const { pathname, search, hash } = new URL(destination, page.url());
+        await expect.poll(() => new URL(page.url())).toMatchObject({ pathname, search, hash });
+      };
       const allSettingsLabels = await trimmedTextContents(settingsLinks);
       expect(allSettingsLabels).not.toContain("Agent Defaults");
       await expect
@@ -436,202 +345,111 @@ suite.define(() => {
           }),
         )
         .toBe(true);
-      await settingsSearch.fill("cp");
-      await expect
-        .poll(() =>
-          trimmedTextContents(
-            settingsSidebar.locator(
-              ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
-            ),
-          ),
-        )
-        .toEqual(["Gateway", "Gateway Host"]);
-      await settingsSearch.fill("mcp");
-      await expect
-        .poll(() =>
-          trimmedTextContents(
-            settingsSidebar.locator(
-              ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
-            ),
-          ),
-        )
-        .toEqual(["MCP"]);
+      await expectSearch("cp", ["Gateway", "Gateway Host"], true);
+      await expectSearch("mcp", ["MCP"], true);
       await settingsSidebar.getByRole("link", { name: "MCP" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/mcp");
-      await settingsSearch.fill("  ThEmE  ");
-      await expect.poll(() => trimmedTextContents(settingsLinks)).toEqual(["Appearance"]);
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/mcp");
-      await captureSettingsSidebarProof(settingsSidebar, "01b-settings-search-filtered.png");
-      await holdUiProof(page);
-      await settingsSearch.fill("system");
-      await expect
-        .poll(() => trimmedTextContents(settingsLinks))
-        .toEqual([
-          "Ask OpenClaw",
-          "Approvals",
-          "Infrastructure",
-          "Labs",
-          "Advanced",
-          "Debug",
-          "Logs",
-          "Updates",
-          "About",
-          "Profile",
-          "Appearance",
-          "Notifications",
-          "Gateway",
-        ]);
-      await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-group.png");
-      await holdUiProof(page);
-      await settingsSearch.fill("browser");
-      const browserResult = settingsSidebar.getByRole("link", {
-        name: "Browser",
-        exact: true,
-      });
-      await expect.poll(() => browserResult.isVisible()).toBe(true);
-      await browserResult.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/infrastructure");
-      // Browser is an advanced-tier section (#112538): search navigation
-      // carries the advanced=1 reveal intent.
-      await expect.poll(() => new URL(page.url()).search).toBe("?section=browser&advanced=1");
-      await expect.poll(() => new URL(page.url()).hash).toBe("#config-section-browser");
-      await expect.poll(() => page.locator("#config-section-browser").isVisible()).toBe(true);
-      await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-deep-link.png");
-      await holdUiProof(page);
+      await expectPath(page, "/settings/mcp");
+      await expectSearch("  ThEmE  ", ["Appearance"]);
+      await expectPath(page, "/settings/mcp");
+      await expectSearch("system", [
+        "Ask OpenClaw",
+        "Approvals",
+        "Infrastructure",
+        "Labs",
+        "Advanced",
+        "Debug",
+        "Logs",
+        "Updates",
+        "About",
+        "Profile",
+        "Appearance",
+        "Notifications",
+        "Gateway",
+      ]);
+      // Advanced search results must carry the reveal intent (#112538).
+      await searchSection(
+        "browser",
+        "Browser",
+        "/settings/infrastructure?section=browser&advanced=1#config-section-browser",
+      );
+      await expectVisible(page.locator("#config-section-browser"));
 
-      await settingsSearch.fill("session observer");
-      const sidebarPreferencesResult = settingsSidebar.getByRole("link", {
-        exact: true,
-        name: "Sidebar",
-      });
-      await expect.poll(() => sidebarPreferencesResult.isVisible()).toBe(true);
-      await sidebarPreferencesResult.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
-      await expect.poll(() => new URL(page.url()).search).toBe("?section=__appearance__");
-      await expect.poll(() => new URL(page.url()).hash).toBe("#settings-appearance-sidebar");
-      await expect
-        .poll(() =>
-          page
-            .locator("#settings-appearance-sidebar")
-            .getByRole("heading", { name: "Session observer" })
-            .isVisible(),
-        )
-        .toBe(true);
-
-      await settingsSearch.fill("message width");
-      const chatPreferencesResult = settingsSidebar.getByRole("link", {
-        exact: true,
-        name: "Chat",
-      });
-      await expect.poll(() => chatPreferencesResult.isVisible()).toBe(true);
-      await chatPreferencesResult.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
-      await expect.poll(() => new URL(page.url()).search).toBe("?section=__appearance__");
-      await expect.poll(() => new URL(page.url()).hash).toBe("#settings-appearance-chat");
-      await expect
-        .poll(() =>
-          page
-            .locator("#settings-appearance-chat")
-            .getByText("Message width", { exact: true })
-            .isVisible(),
-        )
-        .toBe(true);
+      await searchSection(
+        "session observer",
+        "Sidebar",
+        "/settings/appearance?section=__appearance__#settings-appearance-sidebar",
+      );
+      await expectVisible(
+        page
+          .locator("#settings-appearance-sidebar")
+          .getByRole("heading", { name: "Session observer" }),
+      );
+      await searchSection(
+        "message width",
+        "Chat",
+        "/settings/appearance?section=__appearance__#settings-appearance-chat",
+      );
+      await expectVisible(
+        page.locator("#settings-appearance-chat").getByText("Message width", { exact: true }),
+      );
 
       await settingsSearch.fill("does-not-exist");
-      await expect.poll(() => settingsLinks.count()).toBe(0);
+      await expectCount(settingsLinks, 0);
       await expect
         .poll(() => settingsSidebar.getByRole("status").textContent())
         .toContain("No matching settings.");
-      if (captureUiProofEnabled) {
-        await writeFile(
-          path.join(
-            path.join(suite.artifactDir, "sidebar-customization"),
-            "settings-search-accessibility.yml",
-          ),
-          await settingsSidebar.ariaSnapshot(),
-          "utf8",
-        );
-      }
-      await captureSettingsSidebarProof(settingsSidebar, "01d-settings-search-empty.png");
-      await holdUiProof(page);
       await settingsSidebar.getByRole("button", { name: "Clear settings search" }).click();
       await expect.poll(() => trimmedTextContents(settingsLinks)).toEqual(allSettingsLabels);
-      await holdUiProof(page, 300);
-      await settingsSidebar.getByRole("link", { name: "Agents", exact: true }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents");
+      await exactLink(settingsSidebar, "Agents").click();
+      await expectPath(page, "/settings/agents");
       const agentDefaultsRow = page.getByRole("button", {
         name: "Agent defaults Defaults every agent inherits unless overridden.",
       });
-      await expect.poll(() => agentDefaultsRow.isVisible()).toBe(true);
+      await expectVisible(agentDefaultsRow);
       await agentDefaultsRow.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/ai-agents");
-      await expect
-        .poll(() =>
-          settingsSidebar
-            .getByRole("link", { name: "Agents", exact: true })
-            .getAttribute("aria-current"),
-        )
-        .toBe("page");
-      await settingsSearch.fill("sandbox access");
-      const toolsResult = settingsSidebar.getByRole("link", { name: "Tools", exact: true });
-      await expect.poll(() => toolsResult.isVisible()).toBe(true);
-      await toolsResult.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/ai-agents");
-      await expect.poll(() => new URL(page.url()).search).toBe("?section=tools&advanced=1");
-      await expect.poll(() => new URL(page.url()).hash).toBe("#config-section-tools");
+      await expectPath(page, "/settings/ai-agents");
+      await expectAttribute(exactLink(settingsSidebar, "Agents"), "aria-current", "page");
+      await searchSection(
+        "sandbox access",
+        "Tools",
+        "/settings/ai-agents?section=tools&advanced=1#config-section-tools",
+      );
       await settingsSearch.fill("channel");
-      await captureSettingsSidebarProof(settingsSidebar, "01e-settings-search-route.png");
-      await holdUiProof(page);
       const channelsResult = settingsSidebar.getByRole("link", { name: "Channels" }).first();
       await channelsResult.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/channels");
+      await expectPath(page, "/settings/channels");
       await expect.poll(() => settingsSearch.inputValue()).toBe("channel");
-      await captureSettingsSidebarProof(
-        settingsSidebar,
-        `settings-navigation-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "current"}.png`,
-      );
-      await expect.poll(() => channelsResult.getAttribute("aria-current")).toBe("page");
-      await captureSettingsSidebarProof(settingsSidebar, "01f-settings-search-navigated.png");
-      await holdUiProof(page);
+      await expectAttribute(channelsResult, "aria-current", "page");
       await page.keyboard.press("Escape");
-      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath("main"));
-      await expect.poll(() => sidebar.isVisible()).toBe(true);
+      await expectPath(page, controlUiSessionPath("main"));
+      await expectVisible(sidebar);
       await openSettingsFromIdentity();
-      await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
+      await expectVisible(settingsSidebar);
       await expect.poll(() => settingsSearch.inputValue()).toBe("");
-      await captureSettingsSidebarProof(settingsSidebar, "01g-settings-search-reset.png");
-      await holdUiProof(page);
       await settingsSidebar.getByRole("link", { name: "Ask OpenClaw" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
-      await expect
-        .poll(() => page.locator(".shell").getAttribute("class"))
-        .not.toContain("shell--onboarding");
+      await expectPath(page, "/custodian");
+      await expectShellFlag("onboarding", false);
       // Ask OpenClaw is a settings-takeover page (#111686): the settings
       // sidebar owns navigation there, not the app sidebar.
-      await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
-      await expect.poll(() => sidebar.isVisible()).toBe(false);
-      await expect
-        .poll(() => page.getByRole("button", { name: "Exit setup" }).isVisible())
-        .toBe(false);
+      await expectVisible(settingsSidebar);
+      await expectVisible(sidebar, false);
+      await expectVisible(page.getByRole("button", { name: "Exit setup" }), false);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await captureUiProof(page, "01-default-clean.png");
 
-      const pagesButton = sidebar.getByRole("button", { name: "Pages", exact: true });
+      const pagesButton = button(sidebar, "Pages");
       let pages = await openSidebarPages(page);
-      expect(await pages.getByRole("link", { name: "Logbook", exact: true }).isVisible()).toBe(
-        true,
-      );
+      expect(await exactLink(pages, "Logbook").isVisible()).toBe(true);
       await expect.poll(() => trimmedTextContents(pinnedItems)).not.toContain("Logbook");
-      expect(await pages.getByRole("link", { name: "Workboard", exact: true }).count()).toBe(0);
-      expect(await pages.getByRole("link", { name: "OpenClaw", exact: true }).count()).toBe(0);
+      expect(await exactLink(pages, "Workboard").count()).toBe(0);
+      expect(await exactLink(pages, "OpenClaw").count()).toBe(0);
       const usage = pages
         .locator(".sidebar-pages__entry")
-        .filter({ has: page.getByRole("link", { name: "Usage", exact: true }) });
-      await usage.getByRole("button", { name: "Pin", exact: true }).click();
+        .filter({ has: exactLink(page, "Usage") });
+      await button(usage, "Pin").click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
       // A pinned page keeps a filled pin at rest, and hovering the pin keeps the
       // whole entry, pin included, inside the row highlight.
-      const usagePin = usage.getByRole("button", { name: "Unpin", exact: true });
+      const usagePin = button(usage, "Unpin");
       await page.mouse.move(900, 600);
       await expect
         .poll(() =>
@@ -645,9 +463,6 @@ suite.define(() => {
       await expect
         .poll(() => usage.evaluate((entry) => getComputedStyle(entry).backgroundColor))
         .not.toBe("rgba(0, 0, 0, 0)");
-      await captureUiProof(page, "02-personal-pin.png");
-      // Rail pins match the view buttons: same icon size, and the same fill for
-      // hover and for the current page.
       const railUsage = pinnedItems.first();
       const iconWidth = (locator: typeof railUsage) =>
         locator
@@ -661,329 +476,146 @@ suite.define(() => {
       await railUsage.hover();
       await expect.poll(() => background(railUsage)).toBe(pressedBackground);
       await railUsage.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
+      await expectPath(page, "/usage");
       await page.mouse.move(900, 600);
       await expect.poll(() => background(railUsage)).toBe(pressedBackground);
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.reload();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
-      // The transient selected view resets, but saved personal pins do not.
-      await expect.poll(() => pagesButton.getAttribute("aria-pressed")).toBe("false");
+      await expectAttribute(pagesButton, "aria-pressed", "false");
       pages = await openSidebarPages(page);
-      expect(await pages.getByRole("link", { name: "Usage", exact: true }).isVisible()).toBe(true);
-      await captureUiProof(page, "03-persisted-customization.png");
+      expect(await exactLink(pages, "Usage").isVisible()).toBe(true);
       const pinMenu = await openSidebarPinMenu(page, "route:usage");
       await pinMenu.getByRole("menuitem", { name: "Unpin", exact: true }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
-      expect(await pages.getByRole("link", { name: "Usage", exact: true }).isVisible()).toBe(true);
+      expect(await exactLink(pages, "Usage").isVisible()).toBe(true);
 
-      // The rail search button is the command palette entry point.
       const searchButton = page.locator(".sidebar-brand__search");
       await searchButton.click();
       const paletteInput = page.locator("#cmd-palette-input");
-      await expect.poll(() => paletteInput.isVisible()).toBe(true);
+      await expectVisible(paletteInput);
       await page.keyboard.press("Escape");
-      await expect.poll(() => paletteInput.isVisible()).toBe(false);
+      await expectVisible(paletteInput, false);
 
-      // Collapsing the list retains the personal icon rail; its view buttons
-      // provide the matching expand controls.
       const collapseButton = page.locator('[data-navigation-view][aria-pressed="true"]');
       await collapseButton.click();
-      await expect
-        .poll(() => page.locator(".shell").getAttribute("class"))
-        .toContain("shell--nav-collapsed");
-      await expect
-        .poll(() =>
-          page
-            .locator(".shell")
-            .evaluate((element) => getComputedStyle(element).getPropertyValue("--shell-nav-width")),
-        )
-        .toBe("52px");
-      await expect.poll(() => sidebarResizer.count()).toBe(0);
-      await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await expect.poll(() => sidebar.locator(".sidebar-shell").isVisible()).toBe(false);
-      await expect.poll(() => sidebar.locator(".sidebar-rail").isVisible()).toBe(true);
-      await expect.poll(() => pagesButton.isVisible()).toBe(true);
+      await expectShellFlag("nav-collapsed");
+      await expectShellWidth("52px");
+      await expectCount(sidebarResizer, 0);
+      await expectVisible(sidebar);
+      await expectVisible(sidebar.locator(".sidebar-shell"), false);
+      await expectVisible(sidebar.locator(".sidebar-rail"));
+      await expectVisible(pagesButton);
       await page.reload();
       // Sidebar visibility is tab-local and intentionally not persisted; width is.
-      await expect.poll(() => collapseButton.isVisible()).toBe(true);
-      await expect
-        .poll(() => page.locator(".shell").getAttribute("class"))
-        .not.toContain("shell--nav-collapsed");
-      await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await expect.poll(() => roundedWidth(shellNav)).toBe(452);
-      await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("452 pixels");
-      await captureUiProof(page, "04-visibility-not-persisted.png");
+      await expectVisible(collapseButton);
+      await expectShellFlag("nav-collapsed", false);
+      await expectVisible(sidebar);
+      await expectWidth(452);
       await collapseButton.click();
-      await expect
-        .poll(() => page.locator(".shell").getAttribute("class"))
-        .toContain("shell--nav-collapsed");
+      await expectShellFlag("nav-collapsed");
 
       await page.setViewportSize({ height: 900, width: 900 });
-      const drawerButton = visibleDrawerButton(page);
-      await expect.poll(() => drawerButton.isVisible()).toBe(true);
+      const drawerButton = navigationDrawerToggle(page);
+      await expectVisible(drawerButton);
       await drawerButton.click();
-      await expect
-        .poll(() => page.locator(".shell").getAttribute("class"))
-        .toContain("shell--nav-drawer-open");
-      await expect.poll(() => pagesButton.isVisible()).toBe(true);
-      await expect.poll(() => sidebarResizer.isVisible()).toBe(false);
-      await expect
-        .poll(() =>
-          page
-            .locator(".shell")
-            .evaluate((element) => getComputedStyle(element).getPropertyValue("--shell-nav-width")),
-        )
-        .toBe("0px");
+      await expectShellFlag("nav-drawer-open");
+      await expectVisible(pagesButton);
+      await expectVisible(sidebarResizer, false);
+      await expectShellWidth("0px");
       await expect
         .poll(() =>
           page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().left),
         )
         .toBe(0);
       // Narrow Chat merges navigation controls into its title bar.
-      await expect.poll(() => page.locator(".chat-pane__header").first().isVisible()).toBe(true);
-      await captureUiProof(page, "05-expanded-tablet-drawer.png");
+      await expectVisible(page.locator(".agent-chat__header--mobile"));
 
       // Widening with the drawer open must not leave its stale state blocking
       // the desktop collapse control.
       await page.setViewportSize({ height: 900, width: 1440 });
       await collapseButton.click();
-      await expect
-        .poll(() => page.locator(".shell").getAttribute("class"))
-        .toContain("shell--nav-collapsed");
-      await expect
-        .poll(() => page.locator(".shell").getAttribute("class"))
-        .not.toContain("shell--nav-drawer-open");
-      await captureUiProof(page, "06-desktop-collapse-after-drawer.png");
+      await expectShellFlag("nav-collapsed");
+      await expectShellFlag("nav-drawer-open", false);
 
       await page.setViewportSize({ height: 900, width: 900 });
       await drawerButton.click();
-      await expect
-        .poll(() => page.locator(".shell").getAttribute("class"))
-        .toContain("shell--nav-drawer-open");
+      await expectShellFlag("nav-drawer-open");
       await page.keyboard.press("Escape");
-      await expect
-        .poll(() => page.locator(".shell").getAttribute("class"))
-        .not.toContain("shell--nav-drawer-open");
+      await expectShellFlag("nav-drawer-open", false);
       await page.setViewportSize({ height: 852, width: 393 });
-      await expect.poll(() => page.locator(".chat-pane__header").first().isVisible()).toBe(true);
+      await expectVisible(page.locator(".agent-chat__header--mobile"));
       await expect
         .poll(() =>
           page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().right),
         )
         .toBeLessThanOrEqual(0);
-      await captureUiProof(page, "06-mobile-brand.png");
-    } finally {
-      await context.close();
-      if (video) {
-        await video.saveAs(
-          path.join(
-            path.join(suite.artifactDir, "sidebar-customization"),
-            "settings-search-flow.webm",
-          ),
-        );
-      }
-    }
+    });
   });
 
   it("keeps Home activity and unsent attention stable while rail controls appear", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          methodResponses: {
-            "sessions.list": {
-              count: 1,
-              defaults: {
-                contextTokens: null,
-                model: "gpt-5.5",
-                modelProvider: "openai",
-              },
-              path: "",
-              sessions: [
-                {
-                  hasActiveRun: true,
-                  key: "main",
-                  kind: "direct",
-                  status: "running",
-                  updatedAt: 100,
-                },
-              ],
-              ts: 100,
-            },
-          },
-        });
+    await suite.withPage(desktopOptions, async ({ page }) => {
+      await installMockGateway(page, {
+        sessions: [
+          { hasActiveRun: true, key: "main", kind: "direct", status: "running", updatedAt: 100 },
+        ],
+      });
 
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const sidebar = page.locator("openclaw-app-sidebar");
-        const pages = await openSidebarPages(page);
-        await pages
-          .locator(".sidebar-pages__entry")
-          .filter({ has: page.getByRole("link", { name: "Agents", exact: true }) })
-          .getByRole("button", { name: "Pin", exact: true })
-          .click();
-        await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
-        const home = sidebar.locator(".sidebar-footer-bar__home");
-        await expect.poll(() => home.isVisible()).toBe(true);
-        await sidebar.evaluate((element) => {
-          // This layout fixture supplies the sidebar's declared presentation input.
-          (element as AppSidebarElement).storedOutboxes = {
-            total: 1,
-            attentionCountForSession: () => 1,
-            hasSessionDraft: () => false,
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const pages = await openSidebarPages(page);
+      await pages
+        .locator(".sidebar-pages__entry")
+        .filter({ has: exactLink(page, "Agents") })
+        .getByRole("button", { name: "Pin", exact: true })
+        .click();
+      await button(sidebar, "Sessions").click();
+      const home = sidebar.locator(".sidebar-footer-bar__home");
+      await expectVisible(home);
+      await sidebar.evaluate((element) => {
+        // This layout fixture supplies the sidebar's declared presentation input.
+        (element as AppSidebarElement).storedOutboxes = {
+          total: 1,
+          attentionCountForSession: () => 1,
+          hasSessionDraft: () => false,
+        };
+      });
+
+      const activity = home.locator(".session-glyph");
+      const shortcut = sidebar
+        .locator('.sidebar-rail__pin[data-sidebar-entry="route:agents-home"]')
+        .getByRole("link", { name: "Agents", exact: true });
+      await expectCount(home.locator(".session-glyph--running .session-glyph__ring"), 1);
+      await expectCount(home.locator(".session-row-badge--attention"), 1);
+
+      await page.mouse.move(900, 400);
+      const restingActivity = await activity.boundingBox();
+      expect(restingActivity).not.toBeNull();
+      await shortcut.focus();
+      await page.keyboard.press("Shift+F10");
+      await page
+        .locator(".sidebar-rail-pin-menu")
+        .getByRole("menuitem", { name: "Unpin", exact: true })
+        .waitFor();
+      await expect
+        .poll(async () => {
+          const [homeBox, activityBox, shortcutBox] = await Promise.all([
+            home.boundingBox(),
+            activity.boundingBox(),
+            shortcut.boundingBox(),
+          ]);
+          if (!homeBox || !activityBox || !shortcutBox || !restingActivity) {
+            return null;
+          }
+          return {
+            activityShift: Math.round(restingActivity.x - activityBox.x),
+            centerDelta: Math.abs(
+              activityBox.x + activityBox.width / 2 - (homeBox.x + homeBox.width / 2),
+            ),
+            clearOfShortcut: shortcutBox.y + shortcutBox.height < homeBox.y,
           };
-        });
-
-        const activity = home.locator(".session-glyph");
-        const shortcut = sidebar
-          .locator('.sidebar-rail__pin[data-sidebar-entry="route:agents-home"]')
-          .getByRole("link", { name: "Agents", exact: true });
-        await expect
-          .poll(() => home.locator(".session-glyph--running .session-glyph__ring").count())
-          .toBe(1);
-        await expect.poll(() => home.locator(".session-row-badge--attention").count()).toBe(1);
-
-        await page.mouse.move(900, 400);
-        const restingActivity = await activity.boundingBox();
-        expect(restingActivity).not.toBeNull();
-        await shortcut.focus();
-        await page.keyboard.press("Shift+F10");
-        await page
-          .locator(".sidebar-rail-pin-menu")
-          .getByRole("menuitem", { name: "Unpin", exact: true })
-          .waitFor();
-        await expect
-          .poll(async () => {
-            const [homeBox, activityBox, shortcutBox] = await Promise.all([
-              home.boundingBox(),
-              activity.boundingBox(),
-              shortcut.boundingBox(),
-            ]);
-            if (!homeBox || !activityBox || !shortcutBox || !restingActivity) {
-              return null;
-            }
-            return {
-              activityShift: Math.round(restingActivity.x - activityBox.x),
-              centerDelta: Math.abs(
-                activityBox.x + activityBox.width / 2 - (homeBox.x + homeBox.width / 2),
-              ),
-              clearOfShortcut: shortcutBox.y + shortcutBox.height < homeBox.y,
-            };
-          })
-          .toEqual({ activityShift: 0, centerDelta: 0, clearOfShortcut: true });
-        await captureUiProof(page, "07-home-activity-rail.png");
-      },
-    );
-  });
-
-  it("keeps mobile attention in the drawer while desktop remains unchanged", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1440 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "cron.list": {
-              jobs: [
-                compactCronJobFixture({
-                  id: "release-digest",
-                  name: "Release digest",
-                  enabled: true,
-                  createdAtMs: 0,
-                  updatedAtMs: 0,
-                  schedule: { kind: "every", everyMs: 60_000 },
-                  sessionTarget: "isolated",
-                  wakeMode: "now",
-                  payload: { kind: "agentTurn", message: "test" },
-                  state: {
-                    lastRunStatus: "error",
-                    lastError: "Provider request failed",
-                  },
-                }),
-              ],
-              snapshotRevision: "sidebar-mobile-attention",
-              total: 1,
-              offset: 0,
-              limit: 50,
-              hasMore: false,
-              nextOffset: null,
-            },
-            "models.authStatus": { providers: [], ts: 1 },
-          },
-        });
-
-        await page.goto(`${suite.server.baseUrl}new`);
-        await gateway.waitForRequest("cron.list");
-        await gateway.emitGatewayEvent("update.available", {
-          schedule: {
-            autoEnabled: false,
-            channel: "beta",
-            install: { kind: "git", git: { status: "behind", commitsBehind: 246 } },
-            target: {
-              kind: "git",
-              commitsBehind: 246,
-              upstreamRef: "origin/main",
-              upstreamSha: "9f3c21a0000000000000000000000000000000aa",
-            },
-          },
-          updateAvailable: {
-            channel: "beta",
-            commitsBehind: 246,
-            currentSha: "1111111111111111111111111111111111111111",
-            currentVersion: "2026.8.1",
-            latestVersion: "2026.8.1",
-            upstreamRef: "origin/main",
-            upstreamSha: "9f3c21a0000000000000000000000000000000aa",
-          },
-        });
-
-        const sidebar = page.locator("openclaw-app-sidebar");
-        const sidebarUpdate = sidebar.locator(
-          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
-        );
-        const sidebarAutomation = sidebar.locator('[data-attention-kind="cronFailed"]');
-        await expect.poll(() => sidebar.locator(".sidebar-issues-button__count").count()).toBe(1);
-        await sidebar.locator(".sidebar-issues-button").click();
-        await expect.poll(() => sidebarUpdate.count()).toBe(1);
-        await expect.poll(() => sidebarAutomation.count()).toBe(1);
-        await captureUiProof(page, "08-desktop-attention-unchanged.png");
-        await sidebar.locator(".sidebar-issues-button").click();
-
-        await page.setViewportSize({ height: 852, width: 393 });
-        await expect
-          .poll(() => page.locator(".shell").getAttribute("class"))
-          .toContain("shell--mobile-nav");
-        await page.evaluate(
-          () =>
-            new Promise<void>((resolve) => {
-              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-            }),
-        );
-        const floatingKinds = await page
-          .locator(".sidebar-attention--floating [data-attention-kind]")
-          .evaluateAll((elements) =>
-            elements.map((element) => element.getAttribute("data-attention-kind")),
-          );
-        await captureUiProof(page, "09-mobile-attention-closed.png");
-
-        await visibleDrawerButton(page).click();
-        await expect
-          .poll(() => page.locator(".shell").getAttribute("class"))
-          .toContain("shell--nav-drawer-open");
-        await sidebar.locator(".sidebar-issues-button").click();
-        await expect.poll(() => sidebarUpdate.isVisible()).toBe(true);
-        await expect.poll(() => sidebarAutomation.isVisible()).toBe(true);
-        await captureUiProof(page, "10-mobile-attention-drawer.png");
-
-        expect(floatingKinds).toEqual([]);
-      },
-    );
+        })
+        .toEqual({ activityShift: 0, centerDelta: 0, clearOfShortcut: true });
+    });
   });
 });

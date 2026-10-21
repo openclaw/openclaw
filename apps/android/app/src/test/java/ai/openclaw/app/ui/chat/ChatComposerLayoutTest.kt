@@ -6115,8 +6115,15 @@ class ChatComposerLayoutTest {
             .fetchSemanticsNode()
             .boundsInRoot
         val assistant = composeRule.onNode(hasContentDescription("OpenClaw") and hasText("I will keep the summary concise.")).fetchSemanticsNode().boundsInRoot
-        if (actual.width > transcriptWidth * 0.78f + 1f || kotlin.math.abs(reference.right - actual.right) > 1f) {
-          geometryFailures += "$label: pending user exceeds text budget or differs from confirmed trailing edge: $actual vs $reference"
+        // Confirmed attachments have their own wider envelope; the 78% budget belongs to text.
+        val textSurface = checkNotNull(composeRule.onNodeWithText(text, useUnmergedTree = true).fetchSemanticsNode().parent)
+        assertTrue("Measure the visible text surface, not the merged message host", SemanticsProperties.Shape in textSurface.config)
+        val textBounds = textSurface.boundsInRoot
+        if (textBounds.width > transcriptWidth * 0.78f + 1f || kotlin.math.abs(reference.right - textBounds.right) > 1f) {
+          geometryFailures += "$label: user text surface exceeds text budget or differs from confirmed trailing edge: $textBounds vs $reference"
+        }
+        if (actual.width > transcriptWidth + 1f || kotlin.math.abs(reference.right - actual.right) > 1f) {
+          geometryFailures += "$label: user message exceeds transcript width or differs from confirmed trailing edge: $actual vs $reference"
         }
         if (model.chatSelectedActiveRunPresentation.value.count > 0 && model.chatStreamingAssistantText.value == null) {
           val typing =

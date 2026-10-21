@@ -167,6 +167,39 @@ Use the same fixture, phases, sampling and machine for both captures.
 Profiling inflates timing: use these tables to prove the hot path runs, then
 measure improvements in separate unprofiled, interleaved runs.
 
+For streaming comparisons, keep both production builds and run complete alternating
+cycles with `--bundle-dir <baseline> --compare-bundle-dir <candidate> --runs 20
+--streaming-reply --transcript-messages 400 --face chat --untraced`. The benchmark
+restores each build's warm state before each run. Streaming comparisons do not
+require the separate `--warm-reload` diagnostics or external probe scripts.
+
+Add `--streaming-allocations` to sample JavaScript allocations during the stream
+with CDP HeapProfiler at a 4 KiB interval, retaining samples collected by both
+major and minor GC. `streaming.allocations` reports estimated bytes and bytes per
+delivered delta; `run-N.streaming.heapprofile` retains the allocation call tree.
+The interval covers the whole renderer, including synthetic delivery and native
+composer input, and excludes reload and report serialization. These are sampled
+allocation estimates, not retained heap sizes or exact array counts. Collect
+timings in separate runs without allocation sampling.
+
+For concurrent paired comparisons, use separate processes and bundle directories
+with the same `--fixture-now-ms` and a future `--live-start-at-ms`, `--runs 1`, and
+distinct `--port` / `--sandbox-port` values. The start barrier supports either
+`--streaming-reply` or `--live-events` and fails if setup misses the requested time.
+
+Use `--streaming-burst-size 5` to enqueue five snapshots every 166.7 ms
+while retaining the average 30 deltas/s. The mock transport still applies
+`--frame-gap-ms`; set it to zero to remove intentional spacing, and inspect
+delivery timestamps before treating a group as one-frame delivery.
+Streaming reports count synchronous
+stream assignments, frame publications, pane render calls/time, forced rail
+observations, and row ResizeObserver deliveries. These are separate boundaries:
+publication is not a rendered commit, and pane render time excludes subsequent
+Solid and Markdown work. The source-mapped CPU profile covers that later work;
+the task/microtask and next-rAF timings do not measure presentation to the screen.
+After timing, each run also checks that the real transcript grew and remains
+within two pixels of its native scroll bottom, without manually requesting a render.
+
 ## Initial baseline
 
 Production UI at `488c0a3850fc`, Blacksmith Testbox, three Sessions reloads with
