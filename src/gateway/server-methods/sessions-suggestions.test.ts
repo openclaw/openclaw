@@ -19,7 +19,6 @@ import {
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import {
@@ -27,7 +26,6 @@ import {
   client,
   context,
   registerSessionSuggestionTestLifecycle,
-  readSuggestionClaim,
   requests,
   responseSuggestionId,
   sessionKey,
@@ -146,7 +144,9 @@ it.each([
             : { code: "FORBIDDEN" },
       ),
     );
-    const stored = readSuggestionClaim(database.db, params.id);
+    const stored = database.db
+      .prepare("SELECT state, dispatch_token FROM session_suggestions WHERE id = ?")
+      .get(params.id);
     expect(stored).toEqual({ state: "pending", dispatch_token: null });
   }),
 );
@@ -224,10 +224,11 @@ it("settles an accepted dispatch after caller revocation while its write waits",
       await reservation;
       expect(mocks.handleChatSend).toHaveBeenCalledOnce();
       expect(respond.mock.calls[0]?.[0]).toBe(true);
-      expect(readSuggestionClaim(database.db, params.id)).toEqual({
-        state: "accepted",
-        dispatch_token: null,
-      });
+      expect(
+        database.db
+          .prepare("SELECT state, dispatch_token FROM session_suggestions WHERE id = ?")
+          .get(params.id),
+      ).toEqual({ state: "accepted", dispatch_token: null });
       hostCurrent = false;
       expect(() => admittedCheck!()).toThrow("host closed");
     } finally {
@@ -240,7 +241,14 @@ it("settles an accepted dispatch after caller revocation while its write waits",
 it("admits bare fixed-store keys only through their persisted owner", () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = state.path("shared-sessions.sqlite");
-    const ownedConfig = fixedStoreOwnershipConfig(storePath);
+    const ownedConfig = {
+      session: { scope: "global", store: storePath },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
     setRuntimeConfigSnapshot(ownedConfig);
     await upsertSessionEntryCore(
       { agentId: "ops", sessionKey: "global", storePath },
@@ -260,7 +268,10 @@ it("admits bare fixed-store keys only through their persisted owner", () =>
     );
     expect(admitted.responses[0]).toMatchObject([true, { role: "owner", suggestions: [] }]);
 
-    const ownerlessConfig = fixedStoreOwnershipConfig(storePath, false);
+    const ownerlessConfig = {
+      ...ownedConfig,
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
     setRuntimeConfigSnapshot(ownerlessConfig);
     const rejected = await call(
       "session.suggestions.list",

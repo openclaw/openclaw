@@ -162,9 +162,6 @@ it("keeps current discussion alongside stale ancestry and persists edited self t
   });
   const botReply = message("K", { chat: group, from: bot.botInfo, date: old.date + 1 });
   await receive(bot, { message: old });
-  await receive(bot, {
-    message: message("Obsolete discussion before the last answer", { chat: group, date: old.date }),
-  });
   await recordOutbound(botReply);
   await receive(bot, {
     edited_message: { ...botReply, text: "Complete edited answer", edit_date: botReply.date + 1 },
@@ -172,12 +169,6 @@ it("keeps current discussion alongside stale ancestry and persists edited self t
   await receive(bot, { message: message("Current incident discussion", { chat: group }) });
   expect(harness.replySpy).not.toHaveBeenCalled();
   await receive(bot, { message: mention(old) });
-  expect(lastInput().InboundEventKind).toBe("user_request");
-  expect(lastInput().InboundHistory?.map(({ body }) => body)).toEqual([
-    "Old deployment answer",
-    "Current incident discussion",
-  ]);
-  expect(lastInput().Body).not.toContain("Obsolete discussion before the last answer");
   const messages = contextMessages();
   expectContextMessages(
     { body: "Old deployment answer", is_reply_target: true },

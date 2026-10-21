@@ -72,7 +72,7 @@ it("binds a Telegram forum admission to the finalized parent and topic scope", a
         });
         assert(gate.allowed, "expected forum admission");
         const sessionKey = "agent:main:telegram:group:forum:topic:99";
-        const ingress = await gate.resolveChannelIngress({
+        const ingress = gate.resolveChannelIngress({
           agentId: "main",
           sessionKey,
           messageId: "7",

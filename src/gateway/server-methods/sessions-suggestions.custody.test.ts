@@ -20,7 +20,6 @@ import { bindChatProfile } from "./chat-send-admission-fixtures.test-support.js"
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
-import { readSuggestionClaim } from "./sessions-suggestions.test-support.js";
 import type { RespondFn } from "./types.js";
 
 installGatewayTestHooks();
@@ -54,7 +53,10 @@ it.each([
   await addSessionSuggestion(fixture.scope, { id: suggestionId, authorId: profile.id, text });
   await initializeSessionReadContext(fixture.context);
   const { db } = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(fixture.scope)));
-  const claim = () => readSuggestionClaim(db, suggestionId);
+  const claim = () =>
+    db
+      .prepare("SELECT state, dispatch_token FROM session_suggestions WHERE id = ?")
+      .get(suggestionId);
   const requestAbort = new AbortController();
   let hostCurrent = true;
   const resolveSuggestion = async (expectedProfileId = profile.id) => {
