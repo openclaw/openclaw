@@ -442,6 +442,47 @@ describe("loadWebMedia", () => {
     );
   });
 
+  it("admits explicitly published HTML without inventing generated provenance", async () => {
+    const root = tempDirs.make("html-publication-");
+    const body = Buffer.from("<!doctype html><h1>Final report</h1>");
+    const file = await writeFile("report.html", body, root);
+    const options = {
+      localRoots: [root],
+      readFile: (source: string) => fs.readFile(source),
+      hostReadCapability: true,
+      htmlPublication: "explicit" as const,
+    };
+    const result = await media.loadWebMedia(file, options);
+    expect(result.buffer).toEqual(body);
+    expect(result.contentType).toBe("text/html");
+    expect(result.trustedGeneratedHtmlSource).toBeUndefined();
+    await expectAccessError(loadWithHostRead(file));
+    await expect(
+      media.loadWebMedia(file, { ...options, maxBytes: body.length - 1 }),
+    ).rejects.toThrow(/exceeds.*limit/i);
+    const deniedRead = vi.fn(options.readFile);
+    await expectAccessError(
+      media.loadWebMedia(file, { ...options, localRoots: [workspaceDir], readFile: deniedRead }),
+    );
+    expect(deniedRead).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "not-html", body: Buffer.from("status,value\nok,1\n") },
+    { name: "binary", body: Buffer.from([0, 0xff, 0x10, 0x80]) },
+  ])("rejects $name bytes during explicit HTML publication", async ({ body }) => {
+    const root = tempDirs.make("html-publication-invalid-");
+    const file = await writeFile("report.html", body, root);
+    await expectAccessError(
+      media.loadWebMedia(file, {
+        localRoots: [root],
+        readFile: (source) => fs.readFile(source),
+        hostReadCapability: true,
+        htmlPublication: "explicit",
+      }),
+    );
+  });
+
   it("keeps the host-read XLSM root boundary and byte limit", async () => {
     const body = await xlsmFixture();
     const file = await writeFile("bounded.xlsm", body);
