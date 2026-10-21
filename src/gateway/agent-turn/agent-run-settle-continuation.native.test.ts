@@ -75,6 +75,31 @@ describe("requester-settle processing survives later user turns", () => {
     __openclaw: { runId },
   });
   type Prepared = Awaited<ReturnType<typeof prepare>>;
+  const dispatch = (turn: Prepared, entry: ReturnType<typeof createTestRpcSource>) => {
+    const controller = testRpcSourceController(entry);
+    const cleanupAbortController = vi.fn(() => {
+      rpcSourceTesting.deleteExpected(runId, entry);
+    });
+    const emitFinal = vi.fn();
+    const execute = () =>
+      dispatchAgentRunFromGateway({
+        admittedRunEntry: entry,
+        ingressOpts: {
+          message: turn.message,
+          sessionKey,
+          allowModelOverride: false,
+          userTurnTranscriptRecorder: turn.recorder,
+          abortSignal: controller.signal,
+        },
+        runId,
+        dedupeKeys: [],
+        abortController: controller,
+        cleanupAbortController,
+        io: { emitAcceptance: vi.fn(), emitFinal },
+        context: createAgentTurnTestContext(),
+      });
+    return { entry, controller, cleanupAbortController, emitFinal, execute };
+  };
   const completion = (turn: Prepared) => turn.recorder!.getProcessingCompletion!();
   const complete = (
     turn: Prepared,
@@ -194,7 +219,6 @@ describe("requester-settle processing survives later user turns", () => {
     const manager = await SessionManager.openAsync(scope(), fixture.sessionsDir());
     await manager.appendMessageAsync(assistant("toolUse"));
     await manager.appendCustomMessageEntryAsync("openclaw.sessions_yield", "", false, { runId });
-    const context = createAgentTurnTestContext();
     const entry = createTestRpcSource(
       {
         sessionKey,
@@ -204,25 +228,8 @@ describe("requester-settle processing survives later user turns", () => {
       runId,
     );
     rpcSourceTesting.set(runId, entry);
-    const emitFinal = vi.fn();
-    await dispatchAgentRunFromGateway({
-      admittedRunEntry: entry,
-      ingressOpts: {
-        message: original.message,
-        sessionKey,
-        allowModelOverride: false,
-        userTurnTranscriptRecorder: original.recorder,
-        abortSignal: entry.input.abortSignal,
-      },
-      runId,
-      dedupeKeys: [],
-      abortController: testRpcSourceController(entry),
-      cleanupAbortController: () => {
-        rpcSourceTesting.deleteExpected(runId, entry);
-      },
-      io: { emitAcceptance: vi.fn(), emitFinal },
-      context,
-    });
+    const { emitFinal, execute } = dispatch(original, entry);
+    await execute();
     expect(emitFinal).toHaveBeenCalledWith(
       [true, expect.objectContaining({ status: "ok", inputProcessingCompleted: true }), undefined],
       { runId },
@@ -351,6 +358,7 @@ describe("requester-settle processing survives later user turns", () => {
         abortSignal: controller.signal,
         getAbortStopReason: () => "timeout",
       });
+      const { cleanupAbortController, emitFinal, execute } = dispatch(original, entry);
       await original.recorder!.persistApproved();
       const producerEntered = createDeferred();
       const finishProducer = createDeferred();
@@ -365,29 +373,9 @@ describe("requester-settle processing survives later user turns", () => {
           },
         };
       });
-      const cleanupAbortController = vi.fn(() => {
-        rpcSourceTesting.deleteExpected(runId, entry);
-      });
-      const emitFinal = vi.fn();
       const execution = withSessionTurn(
         { sessionKey, sessionId, target: entry.input.target, controllerInput: entry.input },
-        () =>
-          dispatchAgentRunFromGateway({
-            admittedRunEntry: entry,
-            ingressOpts: {
-              message: original.message,
-              sessionKey,
-              allowModelOverride: false,
-              userTurnTranscriptRecorder: original.recorder,
-              abortSignal: controller.signal,
-            },
-            runId,
-            dedupeKeys: [],
-            abortController: controller,
-            cleanupAbortController,
-            io: { emitAcceptance: vi.fn(), emitFinal },
-            context: createAgentTurnTestContext(),
-          }),
+        execute,
       );
       try {
         await awaitGateBeforeSettlement(

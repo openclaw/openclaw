@@ -20,19 +20,29 @@ async function runRequest(
   request: PreflightParams["request"],
   getRuntimeConfig: PreflightParams["context"]["getRuntimeConfig"] = () => ({}),
   backend?: boolean,
+  dedupe = new Map<string, DedupeEntry>(),
 ) {
   const respond = vi.fn();
+  const context = { getRuntimeConfig, dedupe };
+  const client = backend
+    ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
+    : backend === false
+      ? undefined
+      : null;
+  const io = createAgentTurnIo(respond);
   const result = await prepareAgentRequestPreflight({
     request,
-    context: { getRuntimeConfig, dedupe: new Map<string, DedupeEntry>() },
-    client: backend
-      ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
-      : backend === false
-        ? undefined
-        : null,
-    io: createAgentTurnIo(respond),
+    context,
+    client,
+    io,
   } as never);
-  return { respond, result };
+  const replay = () =>
+    createAgentTurnService({ context, isWebchatConnect: () => false } as never).startTurn({
+      preflight: result,
+      principal: client ?? null,
+      io,
+    } as never);
+  return { respond, result, replay };
 }
 
 function expectRejected(
@@ -139,23 +149,20 @@ async function runPreflight(
       collectorCompletion: options?.completed ? { status: "done" } : undefined,
     });
   }
-  const respond = vi.fn();
-  const context = {
-    getRuntimeConfig: () =>
-      options?.requesterOnlyEnabled
-        ? {
-            tools: { swarm: false },
-            agents: {
-              entries: { main: { tools: { swarm: true } }, worker: {} },
-            },
-          }
-        : options?.enabled === undefined
-          ? {}
-          : { tools: { swarm: options.enabled } },
-    dedupe: new Map<string, DedupeEntry>(),
-  };
+  const getRuntimeConfig = () =>
+    options?.requesterOnlyEnabled
+      ? {
+          tools: { swarm: false },
+          agents: {
+            entries: { main: { tools: { swarm: true } }, worker: {} },
+          },
+        }
+      : options?.enabled === undefined
+        ? {}
+        : { tools: { swarm: options.enabled } };
+  const dedupe = new Map<string, DedupeEntry>();
   if (options?.cached) {
-    context.dedupe.set("agent:collector-run", {
+    dedupe.set("agent:collector-run", {
       ts: 1,
       ok: true,
       payload: {
@@ -166,30 +173,18 @@ async function runPreflight(
       },
     });
   }
-  const client = options?.backend
-    ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
-    : undefined;
-  const io = createAgentTurnIo(respond);
-  const result = await prepareAgentRequestPreflight({
-    request: {
+  return runRequest(
+    {
       message: "collect",
       sessionKey,
       idempotencyKey: options?.idempotencyKey ?? "collector-run",
       lane: "subagent",
       ...(options?.includeCollectorFields === false ? {} : { swarmCollector, swarmOutputSchema }),
     },
-    io,
-    context,
-    client,
-  } as never);
-  const replay = async () => {
-    await createAgentTurnService({ context, isWebchatConnect: () => false } as never).startTurn({
-      preflight: result,
-      principal: client ?? null,
-      io,
-    } as never);
-  };
-  return { respond, result, replay };
+    getRuntimeConfig,
+    options?.backend ?? false,
+    dedupe,
+  );
 }
 
 function runCollector(options: Parameters<typeof runPreflight>[2] = {}) {

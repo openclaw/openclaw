@@ -601,37 +601,34 @@ it.each([undefined, "agent", "chat"] as const)(
 
 it("retires only its scope's observer without ending the shared run", async () => {
   const { runId, complete, job } = runFixture();
-  const first = new AsyncWorkScope();
-  const second = new AsyncWorkScope();
-  let firstSettled = false;
-  let secondSettled = false;
-  const firstWait = first
-    .track(() => waitForAgentJob({ runId, timeoutMs: 600_000 }))
-    .then((result) => {
-      firstSettled = true;
-      return result;
-    });
-  const secondWait = second
-    .track(() => waitForAgentJob({ runId, timeoutMs: 600_000 }))
-    .then((result) => {
-      secondSettled = true;
-      return result;
-    });
+  const observer = () => {
+    const scope = new AsyncWorkScope();
+    const settled = vi.fn();
+    const wait = scope
+      .track(() => waitForAgentJob({ runId, timeoutMs: 600_000 }))
+      .then((result) => {
+        settled();
+        return result;
+      });
+    return { scope, settled, wait };
+  };
+  const first = observer();
+  const second = observer();
   try {
-    first.beginClose();
+    first.scope.beginClose();
     await nextTurn();
-    expect(firstSettled).toBe(true);
-    expect(secondSettled).toBe(false);
-    expect(await firstWait).toBeNull();
+    expect(first.settled).toHaveBeenCalledOnce();
+    expect(second.settled).not.toHaveBeenCalled();
+    expect(await first.wait).toBeNull();
     complete();
-    await expect(secondWait).resolves.toMatchObject({ status: "ok", endedAt: 200 });
+    await expect(second.wait).resolves.toMatchObject({ status: "ok", endedAt: 200 });
     await expect(job()).resolves.toMatchObject({ status: "ok", endedAt: 200 });
   } finally {
     // The old owner has no shutdown observer: release it without waiting ten minutes.
-    if (!firstSettled || !secondSettled) {
+    if (!first.settled.mock.calls.length || !second.settled.mock.calls.length) {
       complete();
     }
-    await Promise.all([firstWait, secondWait, first.drain(), second.drain()]);
+    await Promise.all([first.wait, second.wait, first.scope.drain(), second.scope.drain()]);
   }
 });
 
