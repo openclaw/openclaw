@@ -7,7 +7,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeClawRouterApiBaseUrl } from "./provider-catalog.js";
+import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
 
 const MODEL = "openai/tts-1";
 const VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
