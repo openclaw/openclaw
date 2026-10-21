@@ -3553,7 +3553,6 @@ try {
     const workloadCpuProfilePath = values["workload-cpu-profile"]
       ? path.join(output, `workload-${round}.cpuprofile`)
       : undefined;
-    measuring = !workloadCpuProfilePath;
     const rpcLatencies: Record<string, number[]> = Object.fromEntries(
       mixedRpcMethods.map((method) => [method, []]),
     );
@@ -3760,18 +3759,38 @@ try {
         await listWork;
       }
     };
-    const measuredWorkload = workloadCpuProfilePath
-      ? async () => {
-          await controlGatewayProfile(measuredGateway, "cpu", "start", workloadCpuProfilePath);
-          measuring = true;
-          try {
-            await workload();
-          } finally {
-            measuring = false;
-            await controlGatewayProfile(measuredGateway, "cpu", "stop", workloadCpuProfilePath);
-          }
+    const measuredWorkload = async () => {
+      if (workloadCpuProfilePath) {
+        await controlGatewayProfile(measuredGateway, "cpu", "start", workloadCpuProfilePath);
+      }
+      try {
+        if (turnScenario) {
+          await drainEvents();
         }
-      : workload;
+        measuring = true;
+        await workload();
+        // Polling RPCs can publish after workload's first drain. Freeze counters
+        // at a quiet boundary, rather than midway through their recipient fanout.
+        if (turnScenario) {
+          const beforeDrain = perClientCounters.map((counts) => Object.fromEntries(counts));
+          const drainStarted = performance.now();
+          await drainEvents();
+          console.log(
+            `FANOUT_BOUNDARY ${JSON.stringify({
+              round,
+              waitMs: performance.now() - drainStarted,
+              before: beforeDrain,
+              after: perClientCounters.map((counts) => Object.fromEntries(counts)),
+            })}`,
+          );
+        }
+      } finally {
+        measuring = false;
+        if (workloadCpuProfilePath) {
+          await controlGatewayProfile(measuredGateway, "cpu", "stop", workloadCpuProfilePath);
+        }
+      }
+    };
     if (values["operator-access-policy"]) {
       await controlAuthorityCounters(gateway, "start");
     }
@@ -3804,7 +3823,6 @@ try {
     if (listIntervalMs && listLatencies.length === 0) {
       throw new Error("No sessions.list samples collected; shorten --list-interval-ms");
     }
-    measuring = false;
     const diagnostics = finishGatewayDiagnostics
       ? { gateway: await finishGatewayDiagnostics(), controller: finishControllerDiagnostics?.() }
       : undefined;
