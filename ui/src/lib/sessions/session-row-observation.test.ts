@@ -12,9 +12,14 @@ import {
 } from "./session-capability.test-support.ts";
 import type { SessionRowEventListener } from "./session-capability.ts";
 
-function change(emit: (event: GatewayEventFrame) => void, payload: unknown) {
-  emit({ type: "event", event: "sessions.changed", payload });
-}
+const frame = (event: string, payload: unknown, seq?: number): GatewayEventFrame => ({
+  type: "event",
+  event,
+  payload,
+  ...(seq === undefined ? {} : { seq }),
+});
+const change = (emit: (event: GatewayEventFrame) => void, payload: unknown) =>
+  emit(frame("sessions.changed", payload));
 
 type DescribeResult = { session: GatewaySessionRow | null };
 
@@ -137,8 +142,6 @@ async function descriptorOwner(
 
   const keepMain = () => {
     expect(sessions.state.result).toBe(primaryResult);
-    expect(sessions.state.result?.sessions).toBe(primaryResult?.sessions);
-    expect(sessions.state.result?.defaults).toBe(primaryResult?.defaults);
     expect(sessions.state.agentId).toBe("main");
     expect(sessions.canonicalListRevision).toBe(revision);
   };
@@ -247,11 +250,8 @@ describe("session row observations", () => {
     });
     try {
       expect(observation.captureReconcile()(workRow)).toMatchObject({ status: "current" });
-      const event = (agentId: string, key = "global") => ({
-        type: "event" as const,
-        event: "sessions.changed",
-        payload: { agentId, key, reason: "patch" },
-      });
+      const event = (agentId: string, key = "global") =>
+        frame("sessions.changed", { agentId, key, reason: "patch" });
       emitEvent(event("main"));
       emitEvent(event("work", "agent:work:unrelated"));
       expect(invalidated).not.toHaveBeenCalled();
@@ -318,12 +318,11 @@ describe("session row observations", () => {
       );
       try {
         armed = true;
-        const first = {
-          type: "event" as const,
-          event: "sessions.changed",
-          payload: { agentId: "main", session: { ...mainRow, updatedAt: 1_000 } },
-          seq: 1,
-        };
+        const first = frame(
+          "sessions.changed",
+          { agentId: "main", session: { ...mainRow, updatedAt: 1_000 } },
+          1,
+        );
         emitEvent(first);
         if (source === "between frames") {
           register();
@@ -423,12 +422,11 @@ describe("session row observations", () => {
       });
       expect(observation.row).toMatchObject(initial);
       const old = observation.captureReconcile();
-      const retiringFrame: GatewayEventFrame = {
-        type: "event",
-        event: "sessions.changed",
-        seq: 1,
-        payload: { agentId: "main", reason: "create", session: successor, ts: 200 },
-      };
+      const retiringFrame = frame(
+        "sessions.changed",
+        { agentId: "main", reason: "create", session: successor, ts: 200 },
+        1,
+      );
       listed = [successor];
       if (source === "primary") {
         await sessions.refresh({ agentId: "main", force: true });
@@ -472,16 +470,15 @@ describe("session row observations", () => {
       } else {
         expect(delivered).not.toHaveBeenCalled();
       }
-      const next: GatewayEventFrame = {
-        type: "event",
-        event: "session.message",
-        seq: 2,
-        payload: {
+      const next = frame(
+        "session.message",
+        {
           agentId: "main",
           sessionKey: initial.key,
           session: { ...successor, updatedAt: 201 },
         },
-      };
+        2,
+      );
       emitEvent(next);
       expect(currentDelivered).toHaveBeenCalledExactlyOnceWith(
         next,
@@ -490,12 +487,11 @@ describe("session row observations", () => {
           admittedRow: expect.objectContaining({ sessionId: successor.sessionId }),
         }),
       );
-      const unrelated: GatewayEventFrame = {
-        type: "event",
-        event: "session.message",
-        seq: 3,
-        payload: { agentId: "main", sessionKey: "agent:main:unrelated", reason: "patch" },
-      };
+      const unrelated = frame(
+        "session.message",
+        { agentId: "main", sessionKey: "agent:main:unrelated", reason: "patch" },
+        3,
+      );
       emitEvent(unrelated);
       expect(delivered).toHaveBeenCalledTimes(source === "event" ? 1 : 0);
       expect(currentDelivered).toHaveBeenLastCalledWith(unrelated, { applied: false });
