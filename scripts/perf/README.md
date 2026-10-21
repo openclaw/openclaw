@@ -267,6 +267,24 @@ also includes transcript projections and SQLite overhead: use the reported
 bounded by transcript batches rather than total payload size. For tens of GB,
 raise this option and verify free disk space first.
 
+For deep histories, add `--long-transcript-entries 2000 --long-transcript-sessions 4`.
+This appends the requested number of alternating user/assistant messages to the
+first selected retained sessions, in addition to the weighted transcript text.
+Each message contains 1 KiB of synthetic text; each assistant message also carries
+a distinct deterministic 16 KiB thinking signature. The selected session count
+defaults to four and is capped by `--sessions`. The combined logical payload,
+including conservative signature/envelope allowance, must fit within 1 GiB when
+this stress shape is enabled.
+
+`--worktree-files 270000 --nested-repository` adds an unchanged tracked inventory
+of empty files and an untracked committed nested Git repository to the first
+registered linked worktree. Other project worktrees retain their small fixture
+shape. These flags require `--projects` greater than zero; the tracked inventory
+is capped at 500,000 files. Writes are sequential. On Linux, generation checks
+dirty memory every 1,000 files and every 2 MiB transcript batch, pauses at 1 GiB,
+and fails at 2 GiB. Generate on the authorized benchmark host and record actual
+database size and dirty-memory observations.
+
 The default seed is 967 and the default reference time is 2026-10-13 12:00 UTC.
 Pass the same `--seed` and `--now` to reproduce logical data. Set `--now` near the
 measurement date when testing retention; a frozen old epoch intentionally makes
@@ -985,8 +1003,67 @@ instead. The report records resets and completed cohorts. It does not exercise
 the image/output-limit recovery of `attempt-retention`. `--rounds` is ignored;
 an admitted cohort drains before the duration ends, so a slow cohort may overrun.
 
+To replay deep foreground histories throughout the soak and across a restart,
+seed the existing offline fixture once, then run with the same `--runs`,
+`--history-turns`, `--verify-history-replay`, and `--mock-port`:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --scenario memory-soak \
+  --runs 16 --history-turns 500 --verify-history-replay --stress-tools \
+  --reset-every-rounds 0 --seed-history \
+  --port 45107 --mock-port 45109
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --scenario memory-soak \
+  --clients 40 --exact-clients 4 --runs 16 --history-turns 500 --verify-history-replay \
+  --chunks 100 --chunk-interval-ms 50 --warmup-ms 0 --duration-ms 1500000 \
+  --round-interval-ms 120000 --memory-interval-ms 15000 --retained-profile-ms 0 \
+  --reset-every-rounds 0 --stress-tools --stress-subagents --mixed-rpc --dashboard-rpc \
+  --list-interval-ms 5000 --poll-seed deep-history --diagnostics --trace-gc \
+  --port 45107 --mock-port 45109
+```
+
+Repeat the run command, without seeding again, to restart the owned Gateway with
+the same foreground history. Deep soaks use a separate `memory-soak-history`
+session namespace and marker, so earlier short-session measurements can coexist.
+Each seed turn appends user, assistant/tool-call, tool-result, and assistant/answer
+messages through `SessionManager`: 500 turns produce 2,003 entries per session,
+including its header and settings. Both assistant messages carry distinct
+deterministic 4 KiB encrypted reasoning items in valid JSON thinking signatures,
+with owner-generated replay metadata bound to the model, mock endpoint, and session.
+Every foreground provider request must replay all seeded reasoning items intact,
+verified by their deterministic ciphertext hashes rather than optional provider IDs;
+each measured cohort reports `historicalReplayRequests`, and the result records
+`historyTurns` and `verifyHistoryReplay`. Missing or compacted history fails the run.
+This mode rejects `--history-last-turns` and `--history-payload-kib`; those options
+remain available for the separate bounded-history stress shape above.
+
+This opt-in shape gives the synthetic model a 2,097,152-token context window and
+a 2,000,000-token input budget. The existing model-context reader allows eight
+serialized bytes per context token, giving the fixture a 16 MB hydration budget.
+This leaves room for continued turns across the two 25-minute commands above;
+it does not change production limits or exercise a real provider's context capacity.
+Repeated campaigns eventually exhaust this finite budget. Keep the replay assertion
+and generate a fresh synthetic fixture when that happens; do not count a failed run
+as a completed soak. The previous 8 MB fixture budget was exhausted by accumulated
+output during an interrupted campaign and its replacement, despite all seeded rows
+remaining in durable storage.
+Retained background histories and live response signatures keep their independent
+sizes. Its mock request-size limit covers the estimated
+seeded history plus 64 MiB for continued turns. Seeding rejects an estimate above
+1 GiB and checks the existing Linux dirty-memory budget at least every 50 history
+turns (2 MiB estimated writes), using sequential appends. Run with
+`--reset-every-rounds 0`; other reset intervals are rejected for deep-history
+soaks. Use matching tool options while seeding and running to retain the fixture
+worktree as the foreground workspace. The existing idle-retention seed format and
+behavior are unchanged.
+
 `memory-samples.jsonl` records Gateway heap, external, ArrayBuffer and RSS memory
 after completed cohorts at the requested interval, including exact timestamps.
+It also records main-isolate heap spaces and explicitly requests the existing worker
+registry's per-thread memory samples, sample ages, and missing workers. Other benchmark
+resource reads omit worker data unless they request it; native preload startup does not
+load the Gateway worker registry. Worker samples do not force GC.
 Periodic samples use natural GC; initial and final settled samples explicitly
 collect garbage. Allocation-churn soaks keep the warmed heap at the initial
 sample (`initialMemoryCollected: false`) instead of forcing a collection before
@@ -1051,6 +1128,52 @@ cleanup restores the fixture file. Connect latency includes WebSocket opening
 and the protocol handshake. The report keeps per-method p50/p95/p99/max and raw
 latencies in `rpcLatencyMs`, plus each cohort's foreground end-to-end
 `streamStart.turnLatencyMs` from admission through successful `agent.wait`.
+
+Add `--dashboard-rpc` to a memory soak with `--mixed-rpc` to include `board.get`,
+`workboard.boards.list`, `workboard.cards.list`, `sessions.github.options`,
+`github.preview`, `models.list`, `models.authStatus`, `sessions.describe`, and
+`controlUi.sessionPullRequests.subscribe` in the same viewer polling rotation.
+Setup enables the bundled GitHub and Workboard plugins, writes one synthetic HTML
+board widget, and creates a synthetic workboard with one card per viewer. Reusing
+the fixture paginates its cards, removes surplus cards, and creates missing cards
+to preserve that count when the viewer count changes. The GitHub preview uses the real plugin with a
+benchmark-only in-process HTTP transport serving one synthetic public issue;
+other non-loopback fetches fail. No GitHub account is connected, so options and
+PR subscriptions exercise disconnected-account reads and subscription admission,
+not remote PR discovery or credential refresh. The model catalog uses the local
+synthetic provider configuration. Board widgets are read through RPC, without a
+browser or renderer.
+Dashboard widgets reserve Gateway port + 1 for their sandbox listener, so this
+mode defaults the synthetic model to Gateway port + 2. An explicit `--mock-port`
+must avoid both Gateway listeners.
+Dashboard polling and its measurements continue between foreground cohorts until
+`--round-interval-ms`, so turn bursts can be paced independently of viewer RPCs.
+Memory samples continue during those intervals without forcing collection.
+
+Dashboard mode also creates a dedicated diff session for every additional
+registered fixture worktree and rotates `sessions.diff` polls across them and the
+existing parent worktree. Setup runs one real synthetic turn per target to capture
+its baseline, then appends a known README line; every poll must return that edit
+from the expected root. `dashboardRpc.diffWorktrees` maps sessions to fixture
+paths, and raw polling requests include `diffSessionKey` for per-checkout latency
+attribution in each sample's `rpcRequests`. `coldSetupRpc` retains initial connection,
+dashboard preflight, and diff-baseline RPC durations separately under the
+`setup/preflight` phase; these precede the main measurement window.
+All paths must be linked worktrees inside the fixture. Cleanup restores
+every README; the existing final edit-visibility control still uses the first
+worktree. Combine this with the fixture's `--worktree-files` and
+`--nested-repository` options to compare the large/nested checkout with small ones.
+
+Every method must return a successful validated response in each measured cohort;
+boards, cards, models, and the described session must be populated. The existing
+`rpcLatencyMs`, RPC response-byte totals, and event frame/byte counters include
+these methods and their emitted events. `dashboardRpc.dashboardFixtureRequests`
+proves that GitHub preview reached the synthetic transport. With forty viewers,
+`--chunks 500 --chunk-interval-ms 10 --list-interval-ms 5000` leaves enough streaming
+time for every method's initial staggered poll. Shorter cohorts may require a
+shorter polling interval. This option does not add automatic mid-soak restarts;
+separate invocations against the same retained fixture start separate Gateways,
+and normal setup still resets the foreground sessions.
 
 Each allocation profile includes collected objects and reports decimal
 `allocatedMbPerTurn`. Allocation soaks keep one continuous sampling window and

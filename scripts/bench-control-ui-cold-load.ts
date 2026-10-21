@@ -2,6 +2,7 @@
 // --cpu-profile: source-mapped reload/live/streaming tables and per-run/median cpu-profile.json.
 // --cpu-profile-compare <baseline cpu-profile.json>: profile and diff against that report.
 // --allocations --untraced --live-events: collected-object renderer bytes per event.
+// --streaming-allocations: sampled allocation bytes including collected objects during deltas.
 // Sampling inflates timings: never compare profiled runs with unprofiled runs.
 // --session-event-duration-ms 135000 --session-event-ancestor-refs extends the native churn.
 // Pair built bundles with --fixture-now-ms and --live-start-at-ms (one run per process).
@@ -221,6 +222,7 @@ const { values } = parseArgs({
     "probe-dir": { type: "string" },
     "live-events": { type: "boolean", default: false },
     "streaming-reply": { type: "boolean", default: false },
+    "streaming-allocations": { type: "boolean", default: false },
     "streaming-burst-size": { type: "string", default: "1" },
     "session-switch": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
@@ -254,6 +256,9 @@ const { values } = parseArgs({
 });
 if (values["streaming-reply"] && values["live-events"]) {
   throw new Error("streaming-reply measures an isolated answer; do not combine with live-events");
+}
+if (values["streaming-allocations"] && !values["streaming-reply"]) {
+  throw new Error("streaming-allocations requires streaming-reply");
 }
 if (values["warm-reload"] && !values["probe-dir"]) {
   throw new Error("warm-reload requires probe-dir with LoAF/mutation and RPC census init scripts");
@@ -417,8 +422,11 @@ if (
 if (sidebarRowTransfer === "interleaved" && (runs < 14 || runs % 2 !== 0)) {
   throw new Error("Interleaved sidebar transfer requires an even run count of at least 14");
 }
-if (liveStartAtMs !== undefined && (runs !== 1 || !values["live-events"])) {
-  throw new Error("live-start-at-ms requires one live-events run");
+if (
+  liveStartAtMs !== undefined &&
+  (runs !== 1 || (!values["live-events"] && !values["streaming-reply"]))
+) {
+  throw new Error("live-start-at-ms requires one live-events or streaming-reply run");
 }
 const artifactDir = path.resolve(values.output, new Date().toISOString().replaceAll(":", "-"));
 await mkdir(artifactDir, { recursive: true });
@@ -1072,6 +1080,15 @@ try {
               assetBaseUrl: new URL("assets/", server.baseUrl).href,
               assetDirectory: path.join(bundleDir, "assets"),
             });
+    if (liveStartAtMs !== undefined) {
+      const remainingMs = liveStartAtMs - Date.now();
+      if (remainingMs < 0) {
+        throw new Error("Missed paired live-start barrier");
+      }
+      await new Promise((resolve) => {
+        setTimeout(resolve, remainingMs);
+      });
+    }
     let streaming;
     if (streamingReply) {
       const composer = page.locator(".agent-chat__composer-combobox textarea").last();
@@ -1086,6 +1103,13 @@ try {
       }> = [];
       if (cpuProfile) {
         await cdp.send("Profiler.start");
+      }
+      if (values["streaming-allocations"]) {
+        await cdp.send("HeapProfiler.startSampling", {
+          samplingInterval: 4096,
+          includeObjectsCollectedByMajorGC: true,
+          includeObjectsCollectedByMinorGC: true,
+        });
       }
       await page.evaluate((input) => Reflect.get(window, "__streamingReply").start(input), {
         ...streamingReply,
@@ -1140,13 +1164,36 @@ try {
         streamingInput.abort();
         await nativeInput;
       }
+      let streamingAllocations;
+      const allocationProfile = values["streaming-allocations"]
+        ? (await cdp.send("HeapProfiler.stopSampling")).profile
+        : undefined;
+      if (allocationProfile) {
+        const bytes = allocationProfile.samples.reduce((sum, sample) => sum + sample.size, 0);
+        streamingAllocations = {
+          measurement:
+            "CDP sampled allocation estimate, including major/minor-GC collected objects; whole renderer during streaming and native input, excluding reload and report serialization. Profiling adds overhead; compare timings in separate unprofiled runs.",
+          samplingInterval: 4096,
+          samples: allocationProfile.samples.length,
+          delivered: previousDelivered,
+          bytes,
+          bytesPerDelta: bytes / previousDelivered,
+        };
+      }
       if (cpuProfile) {
         await recordCpu("streaming", (await cdp.send("Profiler.stop")).profile);
       }
       streaming = {
         ...(await page.evaluate(() => Reflect.get(window, "__streamingReply").finish())),
         cpu,
+        allocations: streamingAllocations,
       };
+      if (allocationProfile) {
+        await writeFile(
+          path.join(artifactDir, `run-${run + 1}.streaming.heapprofile`),
+          JSON.stringify(allocationProfile),
+        );
+      }
       if (!streaming.finalHtml) {
         throw new Error("Streaming reply produced no visible Markdown");
       }
@@ -1213,15 +1260,6 @@ try {
         ],
       );
     if (values["live-events"]) {
-      if (liveStartAtMs !== undefined) {
-        const remainingMs = liveStartAtMs - Date.now();
-        if (remainingMs < 0) {
-          throw new Error("Missed paired live-start barrier");
-        }
-        await new Promise((resolve) => {
-          setTimeout(resolve, Math.max(0, remainingMs));
-        });
-      }
       const before = await readLivePresentation();
       await cdp.send("Performance.enable");
       const cpuBefore = (await cdp.send("Performance.getMetrics")).metrics;
@@ -1579,6 +1617,7 @@ try {
         fixture: fixture.counts,
         sidebarView,
         streamingReply: values["streaming-reply"],
+        streamingAllocations: values["streaming-allocations"],
         sessionSwitch: values["session-switch"],
         sidebarListChurn: values["sidebar-list-churn"],
         sidebarLiveChurn: fixture.sidebarLiveChurn,

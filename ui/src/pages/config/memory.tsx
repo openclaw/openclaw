@@ -115,10 +115,10 @@ type MemoryAddonRow = ReturnType<typeof buildMemoryAddonRows>[number];
 export function buildMemoryAddonRows(
   catalog: MemoryCatalogState,
   state: {
-    busy: ReadonlySet<string>;
-    errors: ReadonlyMap<string, string>;
-    notices: ReadonlyMap<string, { message: string }>;
-    refreshWarnings: ReadonlyMap<string, string>;
+    busy: Readonly<Partial<Record<string, true>>>;
+    errors: Readonly<Partial<Record<string, string>>>;
+    notices: Readonly<Partial<Record<string, { message: string }>>>;
+    refreshWarnings: Readonly<Partial<Record<string, string>>>;
   },
 ) {
   return memoryAddonPresentations.map((addon) => {
@@ -128,10 +128,10 @@ export function buildMemoryAddonRows(
       label: t(addon.labelKey),
       description: entry?.description ?? addon.id,
       state: resolveMemoryPluginState(catalog, entry),
-      busy: state.busy.has(addon.id),
-      error: state.errors.get(addon.id) ?? null,
+      busy: state.busy[addon.id] === true,
+      error: state.errors[addon.id] ?? null,
       notice:
-        [state.notices.get(addon.id)?.message, state.refreshWarnings.get(addon.id)]
+        [state.notices[addon.id]?.message, state.refreshWarnings[addon.id]]
           .filter(Boolean)
           .join(" ") || null,
     };

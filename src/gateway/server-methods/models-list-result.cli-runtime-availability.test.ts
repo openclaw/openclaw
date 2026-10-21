@@ -161,6 +161,49 @@ it("keeps every Claude CLI model listed as needing login before the full catalog
   ).toEqual(pinned.map((id) => ({ id, available: false, unavailableReason: "missing-auth" })));
 });
 
+it.each<{
+  name: string;
+  available: boolean;
+  oauth?: boolean;
+  order?: Record<string, string[]>;
+  disabled?: boolean;
+}>([
+  { name: "saved setup tokens", available: true },
+  { name: "saved OAuth subscription", oauth: true, available: true },
+  { name: "empty CLI account order", order: { "claude-cli": [] }, available: false },
+  { name: "empty provider account order", order: { anthropic: [] }, available: false },
+  { name: "API-key-only account order", order: { anthropic: ["api"] }, available: false },
+  { name: "disabled plugin", disabled: true, available: false },
+])("evaluates unpinned Claude CLI models with $name and no native login", async (testCase) => {
+  const result = await listModels({
+    cfg: {
+      ...config,
+      auth: { order: testCase.order },
+      ...(testCase.disabled ? { plugins: { entries: { anthropic: { enabled: false } } } } : {}),
+    },
+    catalog: [providerCatalogEntry("anthropic", "claude-opus-5")],
+    preparedAuthModes: {},
+    preparedAuthStore: {
+      version: 1,
+      profiles: {
+        first: testCase.oauth ? oauthCredential("anthropic") : token("anthropic"),
+        second: token("anthropic", testCase.oauth),
+        api: { type: "api_key", provider: "anthropic", key: "synthetic-api-key" },
+      },
+    },
+    view: "configured",
+    includeDefaultModels: false,
+  });
+  expect(result.models).toEqual([
+    expect.objectContaining({
+      id: "claude-opus-5",
+      available: testCase.available,
+      agentRuntime: expect.objectContaining({ id: "claude-cli" }),
+    }),
+  ]);
+  expect(result.models[0]?.unavailableReason).toBe(testCase.available ? undefined : "missing-auth");
+});
+
 it.each([
   { selection: "default", expired: false, sharedOrder: false },
   { selection: "draft", expired: false, sharedOrder: true },

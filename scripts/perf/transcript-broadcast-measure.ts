@@ -68,6 +68,7 @@ const { values } = parseArgs({
     "operator-access-policy": { type: "boolean", default: false },
     "stress-subagents": { type: "boolean", default: false },
     "mixed-rpc": { type: "boolean", default: false },
+    "dashboard-rpc": { type: "boolean", default: false },
     "stream-start-diagnostics": { type: "boolean", default: false },
     "stream-start-allocations": { type: "boolean", default: false },
     "active-work-diagnostics": { type: "boolean", default: false },
@@ -80,7 +81,7 @@ const { values } = parseArgs({
     "row-mode": { type: "string", default: "compact" },
     entry: { type: "string", default: "dist/entry.js" },
     port: { type: "string", default: "41033" },
-    "mock-port": { type: "string", default: "41034" },
+    "mock-port": { type: "string" },
     clients: { type: "string", default: "60" },
     "exact-clients": { type: "string" },
     "activity-summaries": { type: "boolean", default: false },
@@ -91,6 +92,7 @@ const { values } = parseArgs({
     "history-turns": { type: "string", default: "0" },
     "history-last-turns": { type: "string", default: "0" },
     "history-payload-kib": { type: "string", default: "0" },
+    "verify-history-replay": { type: "boolean", default: false },
     "seed-history": { type: "boolean", default: false },
     rounds: { type: "string", default: "5" },
     "duration-ms": { type: "string", default: "3600000" },
@@ -118,9 +120,16 @@ if (!values["state-dir"]) {
 const integer = (raw: string, label: string, min = 1) =>
   parseStrictIntegerOption({ raw, label, min, fallback: min });
 const port = integer(values.port, "--port", 40000);
-const mockPort = integer(values["mock-port"], "--mock-port", 40000);
+const mockPort = integer(
+  values["mock-port"] ?? String(values["dashboard-rpc"] ? port + 2 : 41034),
+  "--mock-port",
+  40000,
+);
 if (port > 65535 || mockPort > 65535 || port === mockPort) {
   throw new Error("ports must be distinct and <= 65535");
+}
+if (values["dashboard-rpc"] && mockPort === port + 1) {
+  throw new Error("Dashboard widgets reserve Gateway port + 1; choose a different --mock-port");
 }
 const scenario = values.scenario;
 if (
@@ -149,6 +158,7 @@ const historyTurns = integer(values["history-turns"], "--history-turns", 0);
 const historyLastTurns = integer(values["history-last-turns"], "--history-last-turns", 0);
 const historyPayloadBytes =
   integer(values["history-payload-kib"], "--history-payload-kib", 0) * 1024;
+const verifyHistoryReplay = values["verify-history-replay"];
 if ((historyTurns || values["seed-history"]) && !idleScenario && !soakScenario) {
   throw new Error(
     "--history-turns and --seed-history require session-idle-retention or memory-soak",
@@ -159,6 +169,14 @@ if (values["seed-history"] && !historyTurns) {
 }
 if ((historyLastTurns || historyPayloadBytes) && !historyTurns) {
   throw new Error("--history-last-turns and --history-payload-kib require --history-turns");
+}
+if (verifyHistoryReplay && (!soakScenario || !historyTurns)) {
+  throw new Error("--verify-history-replay requires memory-soak and --history-turns > 0");
+}
+if (verifyHistoryReplay && (historyLastTurns || historyPayloadBytes)) {
+  throw new Error(
+    "--verify-history-replay uses equal-length histories with two 4 KiB reasoning items per turn; omit --history-last-turns and --history-payload-kib",
+  );
 }
 const reasoningScenario = retentionScenario || idleScenario || soakScenario;
 if (
@@ -222,6 +240,20 @@ if (exactClients > clientCount) {
 }
 const runCount = scenario === "chat.send" ? 1 : integer(values.runs, "--runs");
 const sessionCount = idleScenario ? integer(values.sessions, "--sessions") : runCount;
+const historyBytesPerTurn = 16 * 1024;
+const historyReasoningBytes = 4 * 1024;
+function historyReasoningContent(index: number, turn: number, phase: "tool" | "answer") {
+  return createCipheriv(
+    "aes-256-ctr",
+    createHash("sha256").update(`rs_soak_history_${index}_${turn}_${phase}`).digest(),
+    Buffer.alloc(16),
+  )
+    .update(Buffer.alloc(historyReasoningBytes / 2))
+    .toString("hex");
+}
+if (verifyHistoryReplay && historyTurns * sessionCount * historyBytesPerTurn > 1024 ** 3) {
+  throw new Error("Memory-soak history must fit within the 1 GiB estimated seed budget");
+}
 if (
   idleScenario &&
   (exactClients ||
@@ -281,6 +313,9 @@ if (values["mixed-rpc"] && (!listIntervalMs || !turnScenario || clientCount < 4)
     "--mixed-rpc requires a turn scenario, --list-interval-ms, and at least four clients",
   );
 }
+if (values["dashboard-rpc"] && (!soakScenario || !values["mixed-rpc"])) {
+  throw new Error("--dashboard-rpc requires memory-soak and --mixed-rpc");
+}
 const recapBurstRepeats = integer(values["recap-burst-repeats"], "--recap-burst-repeats", 0);
 const recapBurstIntervalMs = integer(
   values["recap-burst-interval-ms"],
@@ -318,6 +353,7 @@ if (values["poll-seed"] !== undefined && !listIntervalMs) {
 }
 const recordListRequests =
   values.diagnostics ||
+  values["dashboard-rpc"] ||
   values["stream-start-diagnostics"] ||
   values["cpu-profile"] ||
   values["poll-seed"] !== undefined;
@@ -364,6 +400,13 @@ if (values["stress-tools"] || values["mixed-rpc"]) {
 }
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
 applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
+if (verifyHistoryReplay) {
+  for (const model of cfg.models.providers.openai.models) {
+    // The synthetic provider must fit the seed plus turns accumulated across restarts.
+    model.contextWindow = 2_097_152;
+    model.contextTokens = 2_000_000;
+  }
+}
 cfg.agents.defaults = {
   ...cfg.agents.defaults,
   maxConcurrent: runCount,
@@ -401,6 +444,47 @@ if (soakScenario) {
   if (values["stress-tools"]) {
     cfg.cron = { ...cfg.cron, enabled: true };
   }
+}
+const dashboardBoardId = "synthetic-soak-board";
+const dashboardPreviewUrl = "https://github.com/openclaw-fixture/soak/issues/1";
+const dashboardPreviewTitle = "Synthetic dashboard issue";
+let dashboardFixtureRequests = 0;
+const dashboardPreload = path.join(output, "dashboard-preload.mjs");
+if (values["dashboard-rpc"]) {
+  for (const id of ["github", "workboard"]) {
+    cfg.plugins.entries[id] = { enabled: true };
+    if (cfg.plugins.allow?.length && !cfg.plugins.allow.includes(id)) {
+      cfg.plugins.allow.push(id);
+    }
+  }
+  writeFileSync(
+    dashboardPreload,
+    `import { MockAgent } from ${JSON.stringify(import.meta.resolve("undici"))};
+const transport = new MockAgent();
+transport.disableNetConnect();
+const github = transport.get('https://api.github.com');
+const repository = '/repos/openclaw-fixture/soak';
+github.intercept({ path: repository, method: 'GET' }).reply(200, {
+  private: false, visibility: 'public', full_name: 'openclaw-fixture/soak',
+}).persist();
+github.intercept({ path: repository + '/issues/1', method: 'GET' }).reply(() => {
+  process.send?.({ channel: 'dashboard-github-fixture' });
+  return { statusCode: 200, data: JSON.stringify({
+    title: ${JSON.stringify(dashboardPreviewTitle)}, state: 'open', number: 1,
+    created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
+    repository_url: 'https://api.github.com' + repository,
+    user: { login: 'synthetic-user' }, comments: 0,
+  }), responseOptions: { headers: { 'content-type': 'application/json' } } };
+}).persist();
+// Startup replaces global agents; bind the synthetic transport on each fetch.
+const nativeFetch = globalThis.fetch;
+globalThis.fetch = async (input, options) => {
+  const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+  if (url.origin === 'https://api.github.com') return nativeFetch(input, { ...options, dispatcher: transport });
+  if (url.hostname !== '127.0.0.1') throw new Error('Benchmark blocked external fetch');
+  return nativeFetch(input, options);
+};\n`,
+  );
 }
 let reloadPluginId: string | undefined;
 if (scenario === "plugins.reload") {
@@ -727,6 +811,7 @@ let recoveredResponses = 0;
 let imageRequests = 0;
 let reasoningResponses = 0;
 let reasoningReplayRequests = 0;
+let historicalReplayRequests = 0;
 let activeWorkCounts: { running: number; queued: number } | undefined;
 async function readActiveWorkCounts() {
   let lastCounts: { running: number; queued: number } | undefined;
@@ -799,13 +884,40 @@ let cohort:
       reject: (error: Error) => void;
     }
   | undefined;
+const expectedHistoricalReasoning =
+  verifyHistoryReplay && !values["seed-history"]
+    ? Array.from(
+        { length: sessionCount },
+        (_, index) =>
+          new Set(
+            Array.from({ length: historyTurns * 2 }, (_unused, ordinal) =>
+              createHash("sha256")
+                .update(
+                  historyReasoningContent(
+                    index,
+                    Math.floor(ordinal / 2),
+                    ordinal % 2 === 0 ? "tool" : "answer",
+                  ),
+                )
+                .digest("hex"),
+            ),
+          ),
+      )
+    : [];
 const mock = createServer((req, res) => {
   if (req.url === "/health") {
     res.end("ok");
     return;
   }
   void (async () => {
-    const body: unknown = JSON.parse(await readBody(req));
+    const body: unknown = JSON.parse(
+      await readBody(
+        req,
+        verifyHistoryReplay
+          ? { requestMaxBytes: historyTurns * historyBytesPerTurn + 64 * 1024 ** 2 }
+          : undefined,
+      ),
+    );
     const facts = summarizeMockInferenceRequest(body);
     if (facts.purpose === "activity-recap") {
       recapRequests++;
@@ -885,6 +997,29 @@ const mock = createServer((req, res) => {
       lastUser !== undefined &&
       stripInboundMetadata(lastUser).trim().split("\n")[0] ===
         `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`;
+    if (verifyHistoryReplay && primary) {
+      const expected = expectedHistoricalReasoning[index - 1]!;
+      const replayed = new Set(
+        (Array.isArray(input) ? input : []).flatMap((item: unknown) => {
+          if (
+            !isRecord(item) ||
+            item.type !== "reasoning" ||
+            typeof item.encrypted_content !== "string" ||
+            item.encrypted_content.length !== historyReasoningBytes
+          ) {
+            return [];
+          }
+          const digest = createHash("sha256").update(item.encrypted_content).digest("hex");
+          return expected.has(digest) ? [digest] : [];
+        }),
+      );
+      if (replayed.size !== historyTurns * 2) {
+        throw new Error(
+          `Deep-history replay lost reasoning items for session ${index - 1}: ${replayed.size}/${historyTurns * 2}`,
+        );
+      }
+      historicalReplayRequests++;
+    }
     if (retentionScenario && (primary || continuation)) {
       const hasImage =
         Array.isArray(input) &&
@@ -1106,6 +1241,14 @@ const representativeFrames = new Map<string, FrameSizes>();
 let initialFullFrame: FrameSizes | undefined;
 const perClientCounters: Map<string, number>[] = [];
 let measuring = false;
+let capturingColdSetup = values["dashboard-rpc"];
+const coldSetupRpc: Array<{
+  phase: "setup/preflight";
+  method: string;
+  startedAtEpochMs: number;
+  durationMs: number;
+  sessionKey?: string;
+}> = [];
 let lastSubscriberEventAt = performance.now();
 let closing = false;
 let subscriberFailure: Error | undefined;
@@ -1192,6 +1335,9 @@ function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, 
   child.stdout?.pipe(log, { end: false });
   child.stderr?.pipe(log, { end: false });
   child.on("message", (message: unknown) => {
+    if (isRecord(message) && message.channel === "dashboard-github-fixture") {
+      dashboardFixtureRequests++;
+    }
     if (
       isRecord(message) &&
       message.channel === GATEWAY_PROFILE_CHANNEL &&
@@ -1271,16 +1417,66 @@ async function ready(targetPort: number, endpoint: string, owned?: ChildProcess)
   }
   throw new Error(`listener ${targetPort} did not become ready; inspect ${output}`);
 }
-const parentKey = "agent:main:transcript-broadcast-measure-parent";
+const parentKey = verifyHistoryReplay
+  ? "agent:main:memory-soak-history-parent"
+  : "agent:main:transcript-broadcast-measure-parent";
+const diffTargets =
+  stressWorktree && diffControlOriginal !== undefined
+    ? [{ sessionKey: parentKey, worktree: stressWorktree, original: diffControlOriginal }]
+    : [];
+if (values["dashboard-rpc"] && Array.isArray(fixture.projectWorktrees)) {
+  for (const [index, item] of fixture.projectWorktrees.slice(1).entries()) {
+    if (!isRecord(item) || typeof item.path !== "string") {
+      throw new Error("Dashboard diffs require registered fixture worktrees");
+    }
+    const worktree = realpathSync(item.path);
+    if (
+      !worktree.startsWith(`${realpathSync(root)}${path.sep}`) ||
+      !readFileSync(path.join(worktree, ".git"), "utf8").startsWith("gitdir: ")
+    ) {
+      throw new Error("Dashboard diff worktree must be linked and inside the synthetic fixture");
+    }
+    diffTargets.push({
+      sessionKey: `agent:main:transcript-broadcast-diff-${index + 1}`,
+      worktree,
+      original: readFileSync(path.join(worktree, "README.md"), "utf8"),
+    });
+  }
+}
+const dashboardRpcShapes = values["dashboard-rpc"]
+  ? [
+      { method: "board.get", params: { sessionKey: parentKey } },
+      { method: "workboard.boards.list", params: {} },
+      { method: "workboard.cards.list", params: { boardId: dashboardBoardId } },
+      { method: "sessions.github.options", params: { sessionKey: parentKey } },
+      { method: "github.preview", params: { url: dashboardPreviewUrl } },
+      { method: "models.list", params: { agentId: "main" } },
+      { method: "models.authStatus", params: { agentId: "main" } },
+      { method: "sessions.describe", params: { key: parentKey } },
+      {
+        method: "controlUi.sessionPullRequests.subscribe",
+        params: { sessionKeys: [parentKey] },
+      },
+    ]
+  : [];
+const mixedRpcMethods = [
+  "sessions.list",
+  "chat.history",
+  "sessions.diff",
+  "connect",
+  ...dashboardRpcShapes.map(({ method }) => method),
+];
 const stressParentKey = "agent:main:transcript-broadcast-measure-native-parent";
-const keys = Array.from(
-  { length: sessionCount },
-  (_, index) => `agent:main:transcript-broadcast-measure-child-${index}`,
+const keys = Array.from({ length: sessionCount }, (_, index) =>
+  verifyHistoryReplay
+    ? `agent:main:memory-soak-history-child-${index}`
+    : `agent:main:transcript-broadcast-measure-child-${index}`,
 );
-const historySeedPath = path.join(root, "reopen-history.json");
+const historyNamespace = verifyHistoryReplay ? "memory-soak-history" : "reopen-history";
+const historySeedPath = path.join(root, `${historyNamespace}.json`);
 if (values["seed-history"]) {
   // Run offline, separately from measurement, using the transcript append owner.
-  mkdirSync(path.join(root, "reopen-history-seed"));
+  mkdirSync(path.join(root, `${historyNamespace}-seed`));
   process.env = { ...env };
   const [
     { SessionManager },
@@ -1289,6 +1485,8 @@ if (values["seed-history"]) {
     agentDb,
     stateDb,
     lifecycle,
+    { waitForTeamShapeWriteBudget },
+    { buildOpenAIResponsesReasoningReplayMetadata },
   ] = await Promise.all([
     import("../../src/agents/sessions/session-manager.js"),
     import("../../src/config/sessions/session-accessor.js"),
@@ -1296,21 +1494,27 @@ if (values["seed-history"]) {
     import("../../src/state/openclaw-agent-db.js"),
     import("../../src/state/openclaw-state-db.js"),
     import("../../src/shared/global-singleton.js"),
+    import("./team-shape-sessions.js"),
+    import("../../packages/ai/src/transports/openai-responses-compaction-replay.js"),
   ]);
   try {
+    if (soakScenario) {
+      await waitForTeamShapeWriteBudget();
+    }
     const timestamp = Number(fixture.now);
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
     const parentTarget = { agentId: "main", sessionKey: parentKey, storePath, env };
     if (loadExactSessionEntry(parentTarget)) {
-      throw new Error("Synthetic reopen parent already exists");
+      throw new Error(`Synthetic ${historyNamespace} parent already exists`);
     }
     await upsertSessionEntryCore(parentTarget, {
-      sessionId: "reopen-history-parent",
+      sessionId: `${historyNamespace}-parent`,
       updatedAt: timestamp,
       createdAt: timestamp,
-      lifecycleRevision: "reopen-history-v1",
+      lifecycleRevision: `${historyNamespace}-v1`,
       createdVia: "operator",
       visibility: "shared",
+      ...(verifyHistoryReplay && stressWorktree ? { spawnedCwd: stressWorktree } : {}),
     });
     const usage = {
       input: 0,
@@ -1321,28 +1525,70 @@ if (values["seed-history"]) {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     };
     for (const [index, sessionKey] of keys.entries()) {
-      const sessionId = `reopen-history-${index}`;
+      const sessionId = `${historyNamespace}-${index}`;
       const target = { agentId: "main", sessionId, sessionKey, storePath, env };
       if (loadExactSessionEntry(target)) {
-        throw new Error(`Synthetic reopen session already exists: ${sessionKey}`);
+        throw new Error(`Synthetic ${historyNamespace} session already exists: ${sessionKey}`);
       }
       await upsertSessionEntryCore(target, {
         sessionId,
         createdAt: timestamp,
         updatedAt: timestamp,
-        lifecycleRevision: "reopen-history-v1",
+        lifecycleRevision: `${historyNamespace}-v1`,
         createdVia: "operator",
         visibility: "shared",
         parentSessionKey: parentKey,
-        parentSessionId: "reopen-history-parent",
-        parentSessionLifecycleRevision: "reopen-history-v1",
+        parentSessionId: `${historyNamespace}-parent`,
+        parentSessionLifecycleRevision: `${historyNamespace}-v1`,
         spawnDepth: 1,
+        ...(verifyHistoryReplay && stressWorktree ? { spawnedCwd: stressWorktree } : {}),
       });
-      const manager = await SessionManager.openAsync(target, path.join(root, "workspace"));
+      const manager = await SessionManager.openAsync(
+        target,
+        verifyHistoryReplay && stressWorktree ? stressWorktree : path.join(root, "workspace"),
+      );
       await manager.appendModelChange("openai", "gpt-4.1");
       await manager.appendThinkingLevelChange("off");
       const turns = index === keys.length - 1 && historyLastTurns ? historyLastTurns : historyTurns;
+      const reasoningReplayMetadata = verifyHistoryReplay
+        ? buildOpenAIResponsesReasoningReplayMetadata(
+            {
+              ...cfg.models.providers.openai.models[0],
+              provider: "openai",
+              baseUrl: cfg.models.providers.openai.baseUrl,
+            },
+            { sessionId },
+          )
+        : undefined;
       for (let turn = 0; turn < turns; turn++) {
+        if (soakScenario && turn % 50 === 0) {
+          await waitForTeamShapeWriteBudget();
+        }
+        const thinking = (phase: "tool" | "answer") => {
+          if (!verifyHistoryReplay && (!historyPayloadBytes || phase === "answer")) {
+            return [];
+          }
+          return [
+            {
+              type: "thinking" as const,
+              thinking: verifyHistoryReplay
+                ? "Inspecting the synthetic history fixture."
+                : `Synthetic reasoning ${turn}.`,
+              ...(verifyHistoryReplay ? { openclawReasoningReplay: reasoningReplayMetadata } : {}),
+              thinkingSignature: JSON.stringify({
+                type: "reasoning",
+                id: verifyHistoryReplay
+                  ? `rs_soak_history_${index}_${turn}_${phase}`
+                  : `rs_fixture_${index}_${turn}`,
+                ...(verifyHistoryReplay ? { status: "completed" } : {}),
+                summary: [],
+                encrypted_content: verifyHistoryReplay
+                  ? historyReasoningContent(index, turn, phase)
+                  : promptContent.update(Buffer.alloc(historyPayloadBytes / 2)).toString("hex"),
+              }),
+            },
+          ];
+        };
         const callId = `fixture-${turn}`;
         const assistant = {
           role: "assistant" as const,
@@ -1361,22 +1607,7 @@ if (values["seed-history"]) {
           ...assistant,
           stopReason: "toolUse",
           content: [
-            ...(historyPayloadBytes
-              ? [
-                  {
-                    type: "thinking" as const,
-                    thinking: `Synthetic reasoning ${turn}.`,
-                    thinkingSignature: JSON.stringify({
-                      type: "reasoning",
-                      id: `rs_fixture_${index}_${turn}`,
-                      summary: [],
-                      encrypted_content: promptContent
-                        .update(Buffer.alloc(historyPayloadBytes / 2))
-                        .toString("hex"),
-                    }),
-                  },
-                ]
-              : []),
+            ...thinking("tool"),
             { type: "toolCall", id: callId, name: "read", arguments: { path: "fixture.txt" } },
           ],
         });
@@ -1400,14 +1631,27 @@ if (values["seed-history"]) {
         await manager.appendMessageAsync({
           ...assistant,
           stopReason: "stop",
-          content: [{ type: "text", text: `Synthetic inspection ${turn} complete.` }],
+          content: [
+            ...thinking("answer"),
+            { type: "text", text: `Synthetic inspection ${turn} complete.` },
+          ],
         });
       }
       console.log(`SEEDED ${index + 1}/${sessionCount}`);
     }
+    if (soakScenario) {
+      await waitForTeamShapeWriteBudget();
+    }
     writeFileSync(
       historySeedPath,
-      JSON.stringify({ sessionCount, historyTurns, historyLastTurns, historyPayloadBytes }),
+      JSON.stringify({
+        sessionCount,
+        historyTurns,
+        historyLastTurns,
+        historyPayloadBytes,
+        verifyHistoryReplay,
+        ...(verifyHistoryReplay ? { modelBaseUrl: cfg.models.providers.openai.baseUrl } : {}),
+      }),
     );
   } finally {
     await agentDb.closeOpenClawAgentDatabasesAsync();
@@ -1425,6 +1669,9 @@ if (historyTurns) {
     (seeded.historyPayloadBytes ?? 0) !== historyPayloadBytes
   ) {
     throw new Error("Run --seed-history with matching session count and history options first");
+  }
+  if (verifyHistoryReplay && seeded.modelBaseUrl !== cfg.models.providers.openai.baseUrl) {
+    throw new Error("Deep-history reasoning replay requires the same --mock-port used to seed it");
   }
 }
 const connectParams = {
@@ -1508,10 +1755,10 @@ function summarizeLatencies(latencies: number[]) {
     latencies,
   };
 }
-function validateDiff(result: unknown, additions = 1) {
+function validateDiff(result: unknown, additions = 1, worktree = stressWorktree) {
   if (
     !isRecord(result) ||
-    result.root !== stressWorktree ||
+    result.root !== worktree ||
     result.unavailableReason !== undefined ||
     !Array.isArray(result.files) ||
     !result.files.some(
@@ -1522,6 +1769,34 @@ function validateDiff(result: unknown, additions = 1) {
     throw new Error(
       `sessions.diff did not return the synthetic worktree control (${additions} added lines): ${JSON.stringify(result)}`,
     );
+  }
+}
+function validateDashboardRpc(method: string, result: unknown) {
+  if (!isRecord(result)) {
+    throw new Error(`${method} returned no dashboard response`);
+  }
+  const hasRows = (field: string) => Array.isArray(result[field]) && result[field].length > 0;
+  const valid =
+    method === "board.get"
+      ? hasRows("widgets")
+      : method === "workboard.boards.list"
+        ? Array.isArray(result.boards) &&
+          result.boards.some((board: unknown) => isRecord(board) && board.id === dashboardBoardId)
+        : method === "workboard.cards.list"
+          ? hasRows("cards")
+          : method === "github.preview"
+            ? result.title === dashboardPreviewTitle && result.url === dashboardPreviewUrl
+            : method === "models.list"
+              ? hasRows("models")
+              : method === "models.authStatus"
+                ? Array.isArray(result.providers)
+                : method === "sessions.describe"
+                  ? isRecord(result.session) && result.session.key === parentKey
+                  : method === "controlUi.sessionPullRequests.subscribe"
+                    ? result.subscribed === true
+                    : "personal" in result && "shared" in result;
+  if (!valid) {
+    throw new Error(`${method} did not return the expected synthetic dashboard data`);
   }
 }
 async function rpc(
@@ -1537,6 +1812,16 @@ async function rpc(
   assertGatewayAlive();
   if (!response.ok) {
     throw new Error(`${method}: ${JSON.stringify(response.error)}`);
+  }
+  if (capturingColdSetup) {
+    const sessionKey = isRecord(params) ? (params.sessionKey ?? params.key) : undefined;
+    coldSetupRpc.push({
+      phase: "setup/preflight",
+      method,
+      startedAtEpochMs: performance.timeOrigin + started,
+      durationMs: rpcDurationMs,
+      ...(typeof sessionKey === "string" ? { sessionKey } : {}),
+    });
   }
   if (
     method === "sessions.messages.subscribe" &&
@@ -2320,8 +2605,8 @@ function cleanup() {
         mock.close((error) => (error ? reject(error) : resolve()));
       });
     }
-    if (stressWorktree && diffControlOriginal !== undefined) {
-      writeFileSync(path.join(stressWorktree, "README.md"), diffControlOriginal);
+    for (const target of diffTargets) {
+      writeFileSync(path.join(target.worktree, "README.md"), target.original);
     }
   })());
 }
@@ -2356,6 +2641,7 @@ try {
         ...(values["worker-memory"] || values["baseline-owners"]
           ? ["--import", "./scripts/perf/transcript-worker-memory-preload.ts"]
           : []),
+        ...(values["dashboard-rpc"] ? ["--import", dashboardPreload] : []),
       ],
       values["operator-access-policy"] ? "trusted-proxy" : "none",
     ),
@@ -2412,15 +2698,68 @@ try {
   if (!sender) {
     throw new Error("no sender client");
   }
+  if (values["dashboard-rpc"]) {
+    await rpc(sender, "board.widget.put", {
+      sessionKey: parentKey,
+      name: "synthetic-status",
+      content: { kind: "html", html: "<p>Synthetic dashboard workload</p>" },
+    });
+    await rpc(sender, "workboard.boards.upsert", { id: dashboardBoardId });
+    const existingCardIds = new Set<string>();
+    let after: unknown;
+    do {
+      const page = await rpc(sender, "workboard.cards.list", {
+        boardId: dashboardBoardId,
+        ...(after === undefined ? {} : { after }),
+      });
+      if (!isRecord(page) || !Array.isArray(page.cards)) {
+        throw new Error("Synthetic workboard cards could not be read");
+      }
+      for (const card of page.cards) {
+        if (
+          !isRecord(card) ||
+          typeof card.id !== "string" ||
+          !card.id ||
+          existingCardIds.has(card.id)
+        ) {
+          throw new Error("Synthetic workboard card pagination returned a missing or repeated ID");
+        }
+        existingCardIds.add(card.id);
+      }
+      after = page.nextCursor;
+    } while (after !== undefined);
+    // Reused fixtures keep exactly the requested viewer/card shape, including shrinking runs.
+    for (const id of [...existingCardIds].slice(clientCount)) {
+      await rpc(sender, "workboard.cards.delete", { id });
+    }
+    for (let index = existingCardIds.size; index < clientCount; index++) {
+      await rpc(sender, "workboard.cards.create", {
+        boardId: dashboardBoardId,
+        title: `Synthetic dashboard card ${index}`,
+      });
+    }
+    for (const { method, params } of dashboardRpcShapes) {
+      validateDashboardRpc(method, await rpc(sender, method, params));
+    }
+  }
   const expectedSidebar =
     scenario === "reconnect"
       ? sidebarIdentity(await rpc(sender, "sessions.list", { limit, rowMode, archived: "all" }))
       : undefined;
-  if (stressWorktree && diffControlOriginal !== undefined) {
+  for (const target of diffTargets) {
+    if (target.sessionKey !== parentKey) {
+      await rpc(sender, "sessions.create", {
+        key: target.sessionKey,
+        cwd: target.worktree,
+        visibility: "shared",
+        displayName: "Synthetic dashboard diff",
+      });
+      await rpc(sender, "sessions.reset", { key: target.sessionKey });
+    }
     // First work captures the baseline; later child announcements must not capture our edit.
     const runId = randomUUID();
     await rpc(sender, "agent", {
-      sessionKey: parentKey,
+      sessionKey: target.sessionKey,
       message: "Acknowledge this synthetic diff baseline preparation.",
       deliver: false,
       idempotencyKey: runId,
@@ -2430,10 +2769,11 @@ try {
       throw new Error(`diff baseline preparation failed: ${JSON.stringify(result)}`);
     }
     writeFileSync(
-      path.join(stressWorktree, "README.md"),
-      `${diffControlOriginal}Synthetic diff control.\n`,
+      path.join(target.worktree, "README.md"),
+      `${target.original}Synthetic diff control.\n`,
     );
   }
+  capturingColdSetup = false;
   if (soakScenario && values["stress-tools"]) {
     const job = await rpc(sender, "cron.add", {
       name: "Synthetic allocation stress cron",
@@ -2619,6 +2959,7 @@ try {
   }
   const initialRetainedResources = reasoningScenario
     ? await readGatewayResources(gateway, {
+        includeWorkers: true,
         collectGarbage: !soakScenario || !values.allocations,
         sessionCensus: values["session-census"],
         ...(idleScenario && values["heap-snapshot"]
@@ -2656,6 +2997,7 @@ try {
   }> = [];
   const sampleMemory = async (collectGarbage = false, phase?: string) => {
     const resources = await readGatewayResources(measuredGateway, {
+      includeWorkers: true,
       collectGarbage,
       sessionCensus: collectGarbage && values["session-census"],
       ...(idleScenario && phase && values["heap-snapshot"]
@@ -2765,6 +3107,7 @@ try {
     imageRequests = 0;
     reasoningResponses = 0;
     reasoningReplayRequests = 0;
+    historicalReplayRequests = 0;
     recapRequests = 0;
     recapReceipts.length = 0;
     recapPhase = undefined;
@@ -2780,12 +3123,9 @@ try {
       ? path.join(output, `workload-${round}.cpuprofile`)
       : undefined;
     measuring = !workloadCpuProfilePath;
-    const rpcLatencies: Record<string, number[]> = {
-      "sessions.list": [],
-      "chat.history": [],
-      "sessions.diff": [],
-      connect: [],
-    };
+    const rpcLatencies: Record<string, number[]> = Object.fromEntries(
+      mixedRpcMethods.map((method) => [method, []]),
+    );
     const listLatencies = rpcLatencies["sessions.list"]!;
     const initialPollPhasesMs: number[] = [];
     let streamStart: Awaited<ReturnType<typeof runRound>> | undefined;
@@ -2797,6 +3137,7 @@ try {
       startedAtEpochMs: number;
       endedAtEpochMs: number;
       durationMs: number;
+      diffSessionKey?: string;
     }> = [];
     const workload = async () => {
       let polling = true;
@@ -2821,15 +3162,24 @@ try {
                   }
                   const started = performance.now();
                   let responseId = "";
+                  let diffSessionKey: string | undefined;
                   const method = values["mixed-rpc"]
-                    ? ["sessions.list", "chat.history", "sessions.diff", "connect"][poll++ % 4]!
+                    ? mixedRpcMethods[poll++ % mixedRpcMethods.length]!
                     : "sessions.list";
+                  const dashboardShape = dashboardRpcShapes.find(
+                    (shape) => shape.method === method,
+                  );
                   const onResponse = recordListRequests
                     ? (id: string) => {
                         responseId = id;
                       }
                     : undefined;
-                  if (method === "connect") {
+                  if (dashboardShape) {
+                    validateDashboardRpc(
+                      method,
+                      await rpc(client, method, dashboardShape.params, onResponse),
+                    );
+                  } else if (method === "connect") {
                     const peer = createGatewayWsClient({ url: `ws://127.0.0.1:${port}` });
                     trackClientFrames(peer);
                     try {
@@ -2863,17 +3213,25 @@ try {
                       );
                     }
                   } else if (method === "sessions.diff") {
+                    const target =
+                      diffTargets[
+                        (round + clientIndex + Math.floor(poll / mixedRpcMethods.length)) %
+                          diffTargets.length
+                      ]!;
+                    diffSessionKey = target.sessionKey;
                     validateDiff(
                       await rpc(
                         client,
                         method,
                         {
-                          sessionKey: parentKey,
+                          sessionKey: target.sessionKey,
                           scope: "all",
                           summaryOnly: true,
                         },
                         onResponse,
                       ),
+                      1,
+                      target.worktree,
                     );
                   } else {
                     const page = await rpc(
@@ -2905,6 +3263,7 @@ try {
                       startedAtEpochMs: performance.timeOrigin + started,
                       endedAtEpochMs: performance.timeOrigin + ended,
                       durationMs: requestDurationMs,
+                      ...(diffSessionKey ? { diffSessionKey } : {}),
                     });
                   }
                   const intervalMs = random ? listIntervalMs * (0.5 + random()) : listIntervalMs;
@@ -2928,6 +3287,21 @@ try {
       try {
         streamStart = await runScenario(round);
         await drainEvents();
+        if (values["dashboard-rpc"]) {
+          // Dashboards keep polling between bursts of agent work.
+          const pacedUntil = Math.min(
+            roundStartedAt + roundIntervalMs,
+            measurementStartedAt + durationMs,
+          );
+          while (Date.now() < pacedUntil) {
+            assertGatewayAlive();
+            if (subscriberFailure) {
+              throw subscriberFailure;
+            }
+            await delay(Math.min(memoryIntervalMs, pacedUntil - Date.now()));
+            await sampleMemory();
+          }
+        }
       } finally {
         polling = false;
         stopPolling();
@@ -3024,6 +3398,11 @@ try {
         `incomplete synthetic reasoning replay: ${JSON.stringify({ reasoningResponses, reasoningReplayRequests })}`,
       );
     }
+    if (verifyHistoryReplay && historicalReplayRequests !== sessionCount) {
+      throw new Error(
+        `Deep history reached only ${historicalReplayRequests}/${sessionCount} foreground turns`,
+      );
+    }
     for (const event of turnScenario ? ["session.message", "sessions.changed"] : []) {
       const expected = perClientCounters[0]?.get(event) ?? 0;
       if (!expected || perClientCounters.some((counts) => counts.get(event) !== expected)) {
@@ -3048,6 +3427,7 @@ try {
     const retainedResources =
       retentionScenario || idleScenario
         ? await readGatewayResources(gateway, {
+            includeWorkers: true,
             collectGarbage: true,
             sessionCensus: values["session-census"],
             ...(idleScenario && values["heap-snapshot"]
@@ -3104,6 +3484,7 @@ try {
           },
         ]),
       ),
+      ...(values["dashboard-rpc"] ? { rpcRequests: listRequests } : {}),
       ...(connectionScenario
         ? {
             handshake: latencySummary(handshakeLatenciesMs),
@@ -3130,6 +3511,8 @@ try {
       toolCalls,
       toolResults,
       ...(reasoningScenario && { reasoningResponses, reasoningReplayRequests }),
+      verifyHistoryReplay,
+      ...(verifyHistoryReplay ? { historicalReplayRequests } : {}),
       recapRequests,
       ...(values["activity-summaries"] ? { recapPhase, recapReceipts: [...recapReceipts] } : {}),
       ...(retentionScenario
@@ -3272,6 +3655,9 @@ try {
     console.log(`FINGERPRINT_RETENTION ${JSON.stringify(fingerprintRetention)}`);
   }
   const wholeSoakDiagnostics = await finishWholeSoakDiagnostics?.();
+  if (values["dashboard-rpc"] && dashboardFixtureRequests === 0) {
+    throw new Error("Dashboard GitHub preview never reached the synthetic transport");
+  }
   let wholeSoakAllocation;
   if (soakAllocationPath) {
     // Stop after the GC/loop window so the profiler's forced collection cannot affect acceptance.
@@ -3377,6 +3763,7 @@ try {
   const result = {
     output,
     scenario,
+    verifyHistoryReplay,
     revision: values.revision ?? null,
     operationsPerRound: turnScenario ? sessionCount : operations,
     rpcConcurrency,
@@ -3394,6 +3781,19 @@ try {
     sessionEnvelopeRefs: values["session-envelope-refs"],
     listIntervalMs,
     mixedRpc: values["mixed-rpc"],
+    ...(values["dashboard-rpc"]
+      ? {
+          dashboardRpc: {
+            methods: dashboardRpcShapes.map(({ method }) => method),
+            dashboardFixtureRequests,
+            diffWorktrees: diffTargets.map(({ sessionKey, worktree }) => ({
+              sessionKey,
+              worktree,
+            })),
+          },
+          coldSetupRpc,
+        }
+      : {}),
     stressTools: values["stress-tools"],
     operatorAccessPolicy: values["operator-access-policy"],
     stressSubagents: values["stress-subagents"],
