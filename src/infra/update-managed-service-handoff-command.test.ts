@@ -3,7 +3,6 @@ import { symlinkSync, unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -17,7 +16,6 @@ import {
   readManagedHandoffArtifacts,
 } from "./update-managed-service-handoff-artifacts.test-support.js";
 import { createReadyManagedServiceChild } from "./update-managed-service-handoff-command.test-support.js";
-import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn());
@@ -442,7 +440,7 @@ describe("managed service update handoff command", () => {
   );
 
   it("confirms native group cleanup after a scope is collected, without stopping a replaced scope", async () => {
-    const { createManagedHandoffLeaseStore, resolveManagedUpdateLeaseDatabasePath } =
+    const { createManagedHandoffLeaseStore } =
       await import("./update-managed-service-handoff-lease.js");
     const store = createManagedHandoffLeaseStore();
     const action = {
@@ -455,47 +453,11 @@ describe("managed service update handoff command", () => {
         placement: { kind: "attached" as const, invocation: "a".repeat(32) },
       },
     };
-    const identity = { pid: 123, startIdentity: "17" };
-    const payloadFields = {
-      version: 2,
-      executor: identity,
-      helper: identity,
-      action,
-    } as const;
-    const payload = JSON.stringify(payloadFields);
-    const lease: ManagedHandoffLease = {
-      ...payloadFields,
-      key: MOCK_INSTALL_ROOT,
-      owner: "synthetic",
-      updatedAt: 1,
-      payload,
-    };
-    const databasePath = resolveManagedUpdateLeaseDatabasePath();
-    await fs.mkdir(path.dirname(databasePath), { recursive: true, mode: 0o700 });
-    const db = new DatabaseSync(databasePath);
-    db.exec(
-      "CREATE TABLE IF NOT EXISTS managed_update_handoffs (install_root TEXT NOT NULL PRIMARY KEY, owner TEXT NOT NULL, payload_json TEXT NOT NULL, updated_at INTEGER NOT NULL) STRICT;",
-    );
-    db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-      lease.key,
-      lease.owner,
-      payload,
-      1,
-    );
-    db.close();
-    if (process.platform !== "win32") {
-      await fs.chmod(databasePath, 0o600);
+    const acquired = store.acquire(MOCK_INSTALL_ROOT, "synthetic", action);
+    if (acquired.kind !== "acquired") {
+      throw new Error("Expected the native scope fixture to acquire its lease");
     }
-    mockedHandoffLeaseCleanups.add(() => {
-      const cleanup = new DatabaseSync(databasePath);
-      try {
-        cleanup
-          .prepare("DELETE FROM managed_update_handoffs WHERE install_root = ? AND owner = ?")
-          .run(lease.key, lease.owner);
-      } finally {
-        cleanup.close();
-      }
-    });
+    const { lease } = acquired;
     spawnSyncMock
       .mockReturnValueOnce({
         status: 0,

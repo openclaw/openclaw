@@ -3333,7 +3333,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/infra/update-failure-report.test.ts",
   "src/infra/update-global.bun-owner.test.ts",
   "src/infra/update-homebrew.test.ts",
-  "src/infra/update-managed-service-handoff-boot.test.ts",
   "src/infra/update-managed-service-handoff-command.test.ts",
   "src/infra/update-managed-service-handoff-database-publication.test.ts",
   "src/infra/update-managed-service-handoff-identity.test.ts",

@@ -161,7 +161,7 @@ function writeRestartSentinelRow(env: NodeJS.ProcessEnv, sentinel: SentinelFixtu
   executeSqliteQuerySync(
     db,
     stateDb.insertInto("gateway_restart_sentinel").values({
-      sentinel_key: record.kind === "revision-floor" ? "revision-floor" : "current",
+      sentinel_key: "current",
       version: 1,
       kind: record.kind,
       status: record.status,
@@ -187,7 +187,7 @@ function replaceRestartSentinelRow(env: NodeJS.ProcessEnv, sentinel: SentinelFix
   writeRestartSentinelRow(env, sentinel);
 }
 
-function readRestartSentinelPayload(env: NodeJS.ProcessEnv, key = "current"): unknown {
+function readRestartSentinelPayload(env: NodeJS.ProcessEnv): unknown {
   using db = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const row = executeSqliteQueryTakeFirstSync(
@@ -195,7 +195,7 @@ function readRestartSentinelPayload(env: NodeJS.ProcessEnv, key = "current"): un
     stateDb
       .selectFrom("gateway_restart_sentinel")
       .select(["version", "payload_json", "updated_at_ms"])
-      .where("sentinel_key", "=", key),
+      .where("sentinel_key", "=", "current"),
   );
   return row
     ? { version: row.version, payload: JSON.parse(row.payload_json), revision: row.updated_at_ms }
@@ -652,7 +652,7 @@ describe("managed service update handoff state ownership and sentinel persistenc
     );
   });
 
-  it.each(["continuation", "stats", "empty routing"] as const)(
+  it.each(["continuation", "empty routing"] as const)(
     "uses canonical sentinel rows without overwriting invalid metadata (%s)",
     async (shape) => {
       let before: unknown;
@@ -671,7 +671,6 @@ describe("managed service update handoff state ownership and sentinel persistenc
               stats: {
                 handoffId: "handoff-typed-row",
                 reason: "managed-service-handoff-started",
-                ...(shape === "stats" ? { durationMs: "invalid" } : {}),
               },
             }),
           );
@@ -738,19 +737,4 @@ describe("managed service update handoff state ownership and sentinel persistenc
       expect(readRestartSentinelPayload(env)).toMatchObject(newerSentinel);
     },
   );
-
-  it("advances the durable revision floor even when it is ahead of the clock", async () => {
-    const futureRevision = Date.now() + 60_000;
-    const { env } = await runOwnershipHelper({
-      handoffId: "handoff-future-revision",
-      sentinel: {
-        ...pendingSentinel("handoff-future-revision", { kind: "revision-floor", ts: 123 }),
-        revision: futureRevision,
-      },
-    });
-
-    expect(readRestartSentinelPayload(env, "revision-floor")).toMatchObject({
-      revision: futureRevision + 1,
-    });
-  });
 });

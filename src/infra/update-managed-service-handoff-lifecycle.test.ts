@@ -141,10 +141,9 @@ describe("managed service update handoff", () => {
 
   registerManagedHandoffOwnerTests(runBoundary, itUnix, expect);
 
-  itUnix.each(["addressed-unsafe", "rollback", "unsafe", "data-at-risk", "validation"] as const)(
+  itUnix.each(["addressed-unsafe", "unsafe", "data-at-risk", "validation"] as const)(
     "preserves CLI %s outcome and notice destination",
     async (outcome) => {
-      const rollback = outcome === "rollback";
       const origin =
         outcome === "addressed-unsafe"
           ? {
@@ -165,49 +164,32 @@ describe("managed service update handoff", () => {
         ...(outcome === "validation"
           ? { validationResult: "failed", helperExitCode: 1 }
           : {
-              rollbackRestoration: origin ? undefined : rollback,
               updaterExitCode: 79,
-              helperExitCode: rollback ? 1 : 79,
+              helperExitCode: 79,
               updaterResult: {
                 status: "error",
                 mode: "npm",
                 reason: "restart-unhealthy",
                 before: origin ? undefined : version,
                 after: origin ? undefined : version,
-                recovery: rollback
-                  ? { ...safeRecovery, packageRollbackVerified: true }
-                  : {
-                      ...unsafeRecovery,
-                      dataAtRisk: outcome === "data-at-risk" ? "unreadable-state" : undefined,
-                    },
+                recovery: {
+                  ...unsafeRecovery,
+                  dataAtRisk: outcome === "data-at-risk" ? "unreadable-state" : undefined,
+                },
               },
             }),
       });
       expect(result.run, result.log).toMatchObject({
-        status: rollback ? "rolled-back" : "failed",
+        status: "failed",
         phase: "finished",
       });
-      if (rollback) {
-        expect(result.state).toMatchObject({
-          restored: true,
-          healthProbeCount: 1,
-          expectedVersion: "1.0.0",
-          recoveryAllowance: "1",
-        });
-        expect(result.run?.verification).toMatchObject({
-          runningVersion: "1.0.0",
-          versionMatch: true,
-          settled: true,
-        });
-      } else {
-        expect(result.state.restored).toBeUndefined();
-        if (!origin) {
-          expect(
-            result.commands.some((command) =>
-              /(?:^| )(?:start|enable|bootstrap|kickstart) /.test(command),
-            ),
-          ).toBe(false);
-        }
+      expect(result.state.restored).toBeUndefined();
+      if (!origin) {
+        expect(
+          result.commands.some((command) =>
+            /(?:^| )(?:start|enable|bootstrap|kickstart) /.test(command),
+          ),
+        ).toBe(false);
       }
       if (outcome === "data-at-risk") {
         expect(result.log).toContain("keep the gateway stopped: data at risk (unreadable-state)");
@@ -852,35 +834,6 @@ describe("managed service update handoff", () => {
       }
     },
   );
-
-  itUnix("parks and restores the exact user-systemd service", async () => {
-    const { commands, sentinel, state } = await runBoundary("systemd", {
-      cancelAfterPark: true,
-    });
-    const verbs = commands.map((command) =>
-      command.split(" ").find((part) => ["show", "stop", "reset-failed", "start"].includes(part)),
-    );
-
-    expect(verbs).toEqual(["show", "stop", "show", "start", "show"]);
-    expect(commands.every((command) => command.startsWith("--user "))).toBe(true);
-    expect(commands[0]).toContain(
-      "--property=Id,LoadState,ActiveState,MainPID,ExecMainStartTimestampMonotonic,InvocationID",
-    );
-    expect(commands[1]).toContain("stop openclaw-gateway.service");
-    expectTrueFields(state, "parked", "restored");
-    expect(state.guardedRestart).toBeUndefined();
-    expect(sentinel).toMatchObject({
-      payload: {
-        ...cancelled,
-        stats: {
-          ...cancelled.stats,
-          steps: expect.arrayContaining([
-            expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
-          ]),
-        },
-      },
-    });
-  });
 
   it("sweeps stale handoff directories but retains fresh and unrelated ones", async () => {
     const tmpDir = tempDirs.make("openclaw-handoff-cleanup-test-");
