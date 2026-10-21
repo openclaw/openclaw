@@ -5,6 +5,7 @@ import {
 } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatForLog } from "../../gateway/ws-log.js";
+import { createInstalledPluginIndexFixture } from "../../plugins/gateway-startup.test-helpers.js";
 import * as installedManifests from "../../plugins/manifest-registry-installed.js";
 import { restorePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -62,7 +63,9 @@ function resolveScope(
     selections: [],
     ...overrides,
   });
-  return scope.resolve({ index: { plugins } as never });
+  const index = createInstalledPluginIndexFixture(makeRegistry([]));
+  index.plugins = plugins;
+  return scope.resolve({ index });
 }
 
 async function unavailable(overrides: Parameters<typeof ensureHarness>[0]) {
@@ -126,22 +129,17 @@ function installedProviderRecord(
     agentHarnesses?: string[];
   } = {},
 ) {
-  return {
-    pluginId,
-    startup: { sidecar: false, memory: false, agentHarnesses: options.agentHarnesses ?? [] },
-    contributions: {
-      providers: options.providers ?? [],
-      modelCatalogProviders: [],
-      modelSupportPrefixes: options.modelSupportPrefixes ?? [],
-      modelSupportPatterns: [],
-      autoEnableProviderIds: [],
-      channels: [],
-      channelConfigs: [],
-      commandAliases: [],
-      contracts: {},
-    },
-    compat: [],
-  };
+  return createInstalledPluginIndexFixture(
+    makeRegistry([
+      {
+        id: pluginId,
+        channels: [],
+        providers: options.providers,
+        activation: { onAgentHarnesses: options.agentHarnesses },
+        modelSupport: { modelPrefixes: options.modelSupportPrefixes },
+      },
+    ]),
+  ).plugins[0]!;
 }
 
 function createMemoryPlanMetadataSnapshot() {

@@ -10,11 +10,11 @@ import {
 import { readResolvedSessionEntryInWorker } from "../../config/sessions/session-accessor.entry.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { revokeMcpLoopbackClientGrant } from "../../gateway/mcp-grant-store.js";
 import {
-  activateMcpLoopbackClientGrantCapture,
-  mintMcpLoopbackClientGrant,
-  revokeMcpLoopbackClientGrant,
-} from "../../gateway/mcp-grant-store.js";
+  captureGrant,
+  request as requestMcp,
+} from "../../gateway/mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   clearMcpLoopbackToolCallCapture,
@@ -184,37 +184,27 @@ async function createCaller(
     const names = projected.tools.map((tool) => tool.name);
     const grantInput = finalizeCliMcpGrant(context, names, false, run)!;
     const runtime = getActiveMcpLoopbackRuntime()!;
-    const grant = mintMcpLoopbackClientGrant({
-      ...grantInput,
-      runtimeOwnerToken: runtime.ownerToken,
-    });
     const captureKey = runId + "-capture";
-    cleanups.push(() => {
-      clearMcpLoopbackToolCallCapture(captureKey);
-      revokeMcpLoopbackClientGrant(grant.token);
-    });
-    expect(
-      activateMcpLoopbackClientGrantCapture({
-        token: grant.token,
-        runtimeOwnerToken: runtime.ownerToken,
-        captureKey,
-      }),
-    ).not.toBe(false);
+    const grant = captureGrant(
+      { ...grantInput, runtimeOwnerToken: runtime.ownerToken },
+      captureKey,
+      (token) =>
+        cleanups.push(() => {
+          clearMcpLoopbackToolCallCapture(captureKey);
+          revokeMcpLoopbackClientGrant(token);
+        }),
+    );
     const request = async (method: string, params?: object) => {
-      const response = await fetch("http://127.0.0.1:" + runtime.port + "/mcp", {
-        method: "POST",
-        headers: {
-          authorization: "Bearer " + grant.token,
-          "content-type": "application/json",
-          "x-openclaw-cli-capture-key": captureKey,
-        },
-        body: JSON.stringify({
+      const response = await requestMcp(
+        runtime,
+        {
           jsonrpc: "2.0",
           id: ++sequence,
           method,
           ...(params ? { params } : {}),
-        }),
-      });
+        },
+        grant,
+      );
       expect(response.status).toBe(200);
       return (await response.json()) as {
         result: {

@@ -42,16 +42,13 @@ const nativeRoute = {
   api: "openai-chatgpt-responses" as const,
   baseUrl: "https://chatgpt.com/backend-api/codex",
 };
+const standardEfforts = ["low", "medium", "high", "xhigh", "max"];
+const reasoningCompat = (efforts = standardEfforts) => ({
+  supportsReasoningEffort: true,
+  supportedReasoningEfforts: [...efforts],
+});
 const snapshot: ModelCatalogSnapshot = {
-  entries: [
-    {
-      ...apiModel,
-      compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-      },
-    },
-  ],
+  entries: [{ ...apiModel, compat: reasoningCompat() }],
   routeVariants: [apiModel],
   staticEntries: [
     {
@@ -62,8 +59,7 @@ const snapshot: ModelCatalogSnapshot = {
       reasoning: true,
       params: { providerFact: "kept", codexAppServerRuntimeModel: "stale-runtime" },
       compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        ...reasoningCompat(),
         supportsTools: false,
       },
     },
@@ -72,10 +68,7 @@ const snapshot: ModelCatalogSnapshot = {
       id: "gpt-5.6-terra",
       name: "GPT-5.6 Terra",
       reasoning: true,
-      compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-      },
+      compat: reasoningCompat([...standardEfforts, "ultra"]),
     },
     row("provider-empty-reasoner", {
       provider: "openai",
@@ -305,8 +298,7 @@ describe("agent harness model catalog", () => {
         reasoning: true,
         params: { codexAppServerRuntimeModel: "gpt-5.6-sol-runtime" },
         compat: {
-          supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["high", "ultra"],
+          ...reasoningCompat(["high", "ultra"]),
           supportsTools: true,
         },
       },

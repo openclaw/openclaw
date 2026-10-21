@@ -101,14 +101,9 @@ describe("structured input compiler", () => {
   it.each(["\u0000", "\u001b", "\u202e", "\u2066"])(
     "still rejects unsafe controls in rich display text (%j)",
     (control) => {
-      expect(
-        compileStructuredInputForm({
-          schema: { type: "object", properties: {} },
-          message: "Reference\n" + control + "hidden text",
-          fallbackMessage: "Reference",
-          options: { ...baseOptions, allowRichForms: true },
-        }).kind,
-      ).toBe("unsupported");
+      expect(compile({}, [], rich, "Reference\n" + control + "hidden text").kind).toBe(
+        "unsupported",
+      );
     },
   );
   it("projects bounded primitive fields and decodes defaults, choices, and multi-select", () => {
