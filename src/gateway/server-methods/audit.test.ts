@@ -54,6 +54,17 @@ const unknownIdentity = {
   remediation: [],
 };
 const unknownCoverage = { state: "unknown", missingEvidence: ["run.record"] };
+const unknownInspection = {
+  schemaVersion: 1,
+  run: { runId: "run-1", status: "unknown" },
+  identity: {
+    ...unknownIdentity,
+    remediation: [{ code: "verify_run_id", text: "Verify the exact run id." }],
+  },
+  decisions: [],
+  decisionDisplays: [],
+  coverage: unknownCoverage,
+};
 
 function expectInvalid(respond: ReturnType<typeof vi.fn>, message?: unknown) {
   expect(respond).toHaveBeenCalledWith(
@@ -83,17 +94,7 @@ describe("audit gateway methods", () => {
       events: [{ ...runEvent, actorType: "agent", actorId: "main" }],
       nextCursor: 10,
     });
-    inspectExecutionIdentityRun.mockReset().mockReturnValue({
-      schemaVersion: 1,
-      run: { runId: "run-1", status: "unknown" },
-      identity: {
-        ...unknownIdentity,
-        remediation: [{ code: "verify_run_id", text: "Verify the exact run id." }],
-      },
-      decisions: [],
-      decisionDisplays: [],
-      coverage: unknownCoverage,
-    });
+    inspectExecutionIdentityRun.mockReset().mockReturnValue(unknownInspection);
   });
 
   it("preserves the exact shipped audit.list request and result shape", async () => {
@@ -134,69 +135,43 @@ describe("audit gateway methods", () => {
     expect(listAuditEvents).not.toHaveBeenCalled();
   });
 
-  it("returns versioned message activity without synthetic run provenance", async () => {
-    listAuditEvents.mockReturnValue({
-      events: [{ ...messageEvent, actorType: "system", actorId: "gateway" }],
-    });
-
-    const respond = await runAuditHandler("audit.activity.list", {
-      kind: "message",
-      direction: "outbound",
-      channel: "telegram",
-    });
-
-    expect(listAuditEvents).toHaveBeenCalledWith({
-      limit: 100,
-      filters: {
-        includeMessages: true,
-        kind: "message",
-        direction: "outbound",
-        channel: "telegram",
+  it.each([
+    { event: messageEvent, actor: { type: "system", id: "gateway" }, channel: "telegram" },
+    {
+      event: {
+        ...messageMetadata,
+        eventId: "event-message-2",
+        sequence: 12,
+        sourceSequence: 4,
+        occurredAt: 102,
+        action: "message.inbound.processed",
+        direction: "inbound",
+        outcome: "completed",
       },
-    });
-    expect(respond).toHaveBeenCalledWith(true, {
-      events: [
-        {
-          eventType: "outbound_message",
-          ...messageEvent,
-          actor: { type: "system", id: "gateway" },
-        },
-      ],
-    });
-  });
-
-  it("projects a store-validated channel-sender identity", async () => {
-    listAuditEvents.mockReturnValue({
-      events: [
-        {
-          ...messageMetadata,
-          eventId: "event-message-2",
-          sequence: 12,
-          sourceSequence: 4,
-          occurredAt: 102,
-          action: "message.inbound.processed",
-          actorType: "channel_sender",
-          actorId: accountRef,
-          direction: "inbound",
-          outcome: "completed",
-        },
-      ],
-    });
-
-    const respond = await runAuditHandler("audit.activity.list", {
-      kind: "message",
-      direction: "inbound",
-    });
-
-    expect(respond).toHaveBeenCalledWith(true, {
-      events: [
-        expect.objectContaining({
-          eventType: "inbound_message",
-          actor: { type: "channel_sender", id: accountRef },
-        }),
-      ],
-    });
-  });
+      actor: { type: "channel_sender", id: accountRef },
+    },
+  ])(
+    "projects versioned $event.direction activity with its validated actor",
+    async ({ event, actor, channel }) => {
+      listAuditEvents.mockReturnValue({
+        events: [{ ...event, actorType: actor.type, actorId: actor.id }],
+      });
+      const filters = {
+        kind: "message",
+        direction: event.direction,
+        ...(channel ? { channel } : {}),
+      };
+      const respond = await runAuditHandler("audit.activity.list", filters);
+      expect(listAuditEvents).toHaveBeenCalledWith({
+        limit: 100,
+        filters: { includeMessages: true, ...filters },
+      });
+      const projected = { eventType: `${event.direction}_message`, actor };
+      expect(respond).toHaveBeenCalledWith(true, {
+        events: [channel ? { ...event, ...projected } : expect.objectContaining(projected)],
+      });
+    },
+  );
 
   it.each([
     { kind: "agent_run", direction: "inbound" },
@@ -239,7 +214,7 @@ describe("audit gateway methods", () => {
     const secrets = (...fields: string[]) =>
       Object.fromEntries(fields.map((field) => [field, `SYNTHETIC_PRIVATE_${field}`]));
     inspectExecutionIdentityRun.mockReturnValueOnce({
-      schemaVersion: 1,
+      ...unknownInspection,
       run: { runId: "run-1", executionId: "execution-1", status: "known" },
       identity: unknownIdentity,
       decisions: [
@@ -265,8 +240,6 @@ describe("audit gateway methods", () => {
           remediation: [secrets("code", "text")],
         },
       ],
-      decisionDisplays: [],
-      coverage: unknownCoverage,
     });
 
     const respond = await runAuditHandler("audit.run.inspect", { executionId: "execution-1" });

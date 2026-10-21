@@ -126,6 +126,10 @@ function makeProvider(id: string, label: string, configured: boolean, autoSelect
   };
 }
 
+function providerView(id: string, name: string, configured: boolean) {
+  return { id, name, configured, models: [`${id}-speech-model`], voices: [`${id}-voice`] };
+}
+
 function expectProviderResponse(respond: ReturnType<typeof vi.fn>, payload: object) {
   expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(payload));
 }
@@ -168,20 +172,8 @@ describe("ttsHandlers", () => {
         expect(respond).toHaveBeenCalledWith(true, {
           active: "google",
           providers: [
-            {
-              id: "openai",
-              name: "OpenAI",
-              configured: false,
-              models: ["openai-speech-model"],
-              voices: ["openai-voice"],
-            },
-            {
-              id: "google",
-              name: "Google",
-              configured: true,
-              models: ["google-speech-model"],
-              voices: ["google-voice"],
-            },
+            providerView("openai", "OpenAI", false),
+            providerView("google", "Google", true),
           ],
         });
       }
@@ -277,55 +269,45 @@ describe("ttsHandlers", () => {
   });
 
   it.each([
-    ["   ", "tts.speak requires text"],
-    ["This text is definitely too long.", "tts.speak text too long (33 chars, max 10)"],
-  ])("tts.speak rejects invalid text %j without synthesizing", async (text, message) => {
-    mocks.resolveTtsConfig.mockReturnValue({ maxTextLength: 10 });
-    const respond = await callTts("tts.speak", { text });
-    expectGatewayErrorResponse(respond, { code: ErrorCodes.INVALID_REQUEST, message });
-    expect(mocks.synthesizeSpeech).not.toHaveBeenCalled();
-  });
-
-  it("tts.speak maps synthesis failures to UNAVAILABLE", async () => {
-    mocks.synthesizeSpeech.mockResolvedValue({
-      success: false,
-      error: "No TTS provider is configured.",
-    });
-
-    const respond = await callTts("tts.speak", { text: "Hello there." });
-
-    expectGatewayErrorResponse(respond, {
-      code: ErrorCodes.UNAVAILABLE,
-      message: "No TTS provider is configured.",
-    });
-  });
-
-  it("tts.speak returns typed unavailable without calling a degraded TTS provider", async () => {
-    setActiveDegradedSecretOwners([
-      {
-        ownerKind: "capability",
-        ownerId: "tts",
-        state: "unavailable",
-        paths: ["tts.providers.elevenlabs.apiKey"],
-        refKeys: ["env:default:ELEVENLABS_API_KEY"],
-        reason: "secret reference was not found",
-      },
-    ]);
-
-    const respond = await callTts("tts.speak", { text: "Hello there." });
-
-    expectGatewayErrorResponse(respond, {
-      code: ErrorCodes.UNAVAILABLE,
+    { text: "   ", message: "tts.speak requires text" },
+    {
+      text: "This text is definitely too long.",
+      message: "tts.speak text too long (33 chars, max 10)",
+    },
+    { failure: "synthesis", message: "No TTS provider is configured." },
+    {
+      failure: "secret",
       message:
         "SecretSurfaceUnavailableError: Secret owner capability:tts is configured but unavailable (secret reference was not found).: code=SECRET_SURFACE_UNAVAILABLE",
+    },
+  ])("tts.speak rejects $message", async ({ text = "Hello", failure, message }) => {
+    mocks.resolveTtsConfig.mockReturnValue({ maxTextLength: 10 });
+    if (failure === "synthesis") {
+      mocks.synthesizeSpeech.mockResolvedValue({ success: false, error: message });
+    } else if (failure === "secret") {
+      setActiveDegradedSecretOwners([
+        {
+          ownerKind: "capability",
+          ownerId: "tts",
+          state: "unavailable",
+          paths: ["tts.providers.elevenlabs.apiKey"],
+          refKeys: ["env:default:ELEVENLABS_API_KEY"],
+          reason: "secret reference was not found",
+        },
+      ]);
+    }
+    const respond = await callTts("tts.speak", { text });
+    expectGatewayErrorResponse(respond, {
+      code: failure ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+      message,
     });
-    expect(respond.mock.calls[0]?.[2]).toMatchObject({
-      details: {
-        reason: "SECRET_SURFACE_UNAVAILABLE",
-        ownerKind: "capability",
-        ownerId: "tts",
-      },
-    });
-    expect(mocks.synthesizeSpeech).not.toHaveBeenCalled();
+    if (failure === "secret") {
+      expect(respond.mock.calls[0]?.[2]).toMatchObject({
+        details: { reason: "SECRET_SURFACE_UNAVAILABLE", ownerKind: "capability", ownerId: "tts" },
+      });
+    }
+    if (failure !== "synthesis") {
+      expect(mocks.synthesizeSpeech).not.toHaveBeenCalled();
+    }
   });
 });
