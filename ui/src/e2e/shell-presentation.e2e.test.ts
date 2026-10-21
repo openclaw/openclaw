@@ -31,6 +31,9 @@ suite.define(() =>
           const sidebar = page.locator("openclaw-app-sidebar");
           expect(await sidebar.count()).toBe(1);
           const sidebarNode = await sidebar.elementHandle();
+          if (!sidebarNode) {
+            throw new Error("expected sidebar element");
+          }
           const assertSidebarIdentity = async () => {
             expect(await sidebar.count()).toBe(1);
             expect(

@@ -34,7 +34,9 @@ function fixture() {
          const asset = new URL("./asset.txt", import.meta.url);
          const resource = fs.readFileSync(asset, "utf8");
          fs.writeFileSync(asset, "changed by callback");
-         return { changes: [version, String(++calls), resource, import.meta.url], warnings: [] };
+         const companion = new URL("./z-helper.dat", import.meta.url);
+         return { changes: [version, String(++calls), resource, import.meta.url,
+           fs.existsSync(companion) ? fs.readFileSync(companion, "utf8") : "none"], warnings: [] };
        }
      }];`,
   );
@@ -98,6 +100,11 @@ it.each(["plain", "overlapping package", "native companion", "external dependenc
         ["first", "1", "original resource"],
       ]);
       expect(results[0]!.changes[3]).not.toBe(results[1]!.changes[3]);
+      expect(results.map((result) => result.changes[4])).toEqual(
+        layout === "native companion"
+          ? ["original companion", "original companion"]
+          : ["none", "none"],
+      );
       expect(acquisitions[0]).toBeGreaterThan(0);
       expect(acquisitions[1]! - acquisitions[0]!).toBe(0);
     });

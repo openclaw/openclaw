@@ -11,6 +11,7 @@ import {
   resolveOfficialExternalWebProviderContractPluginIdsForEnv as webEnvOwners,
   resolveOfficialExternalPluginId as pluginId,
   resolveOfficialExternalPluginInstall as resolveInstall,
+  resolveOfficialExternalPluginLegacyIds,
 } from "./official-external-plugin-catalog.js";
 import {
   installableEntry,
@@ -24,6 +25,7 @@ describe("official external plugin catalog", () => {
     const entry = findPackage("@openclaw/fish-audio-speech");
     expect(entry).toBeDefined();
     expect(pluginId(entry!)).toBe("fish-audio-speech");
+    expect(resolveOfficialExternalPluginLegacyIds(entry!)).toEqual(["fish-audio"]);
     expect(resolveInstall(entry!)).toEqual({
       clawhubSpec: "clawhub:@openclaw/fish-audio-speech",
       npmSpec: "@openclaw/fish-audio-speech",

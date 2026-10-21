@@ -42,8 +42,9 @@ it("includes policy, inventory, and activation in one control-plane fingerprint"
     activationFingerprint: "activation-a",
   };
   const base = resolvePluginControlPlaneFingerprint(params);
-  const fingerprint = (overrides: Parameters<typeof resolvePluginControlPlaneFingerprint>[0]) =>
-    resolvePluginControlPlaneFingerprint({ ...params, ...overrides });
+  const fingerprint = (
+    overrides: Partial<Parameters<typeof resolvePluginControlPlaneFingerprint>[0]>,
+  ) => resolvePluginControlPlaneFingerprint({ ...params, ...overrides });
   expect(fingerprint({ index: createIndex("other") })).not.toBe(base);
   expect(fingerprint({ activationFingerprint: "activation-b" })).not.toBe(base);
   expect(fingerprint({ config: { plugins: { deny: ["demo"] } } })).not.toBe(base);
