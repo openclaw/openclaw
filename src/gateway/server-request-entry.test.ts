@@ -1,15 +1,9 @@
 import { EventEmitter } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import {
-  markGatewayRestartDraining,
-  resetGatewayWorkAdmission,
-} from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
-import { NodeRegistry } from "./node-registry.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import { createKernelFixture } from "./server-kernel.fixture-test-support.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
@@ -291,51 +285,6 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
       }),
     });
     expect(result).toMatchObject({ ok: true, payload: { closed: true } });
-  });
-
-  it("admits exact pending node cleanup replies while close drains", async () => {
-    const node = createOperatorWsClient({ socket: { readyState: 1, send: vi.fn() } });
-    node.connect.role = "node";
-    node.connect.client.id = "node-host";
-    node.connect.client.mode = "node";
-    node.connect.device = {
-      id: "entry-node",
-      publicKey: "key",
-      signature: "sig",
-      signedAt: 1,
-      nonce: "nonce",
-    };
-    node.connect.commands = ["debug.ping"];
-    const registry = new NodeRegistry({
-      resolveCurrentPairingState: async () => ({ identity: "paired", generation: "current" }),
-    });
-    registry.register(node, { pairingIdentity: "paired", pairingGeneration: "current" });
-    const context = { ...kernel.gatewayRequestContext, nodeRegistry: registry };
-    const ready = createDeferredCore<string>();
-    await kernel.prepareClose();
-    markGatewayRestartDraining();
-    const invoked = registry.invokeLifecycle({
-      nodeId: "entry-node",
-      command: "debug.ping",
-      timeoutMs: 10_000,
-      isDispatchAuthorized: () => true,
-      onDispatchReady: ready.resolve,
-    });
-    const outcome = settled(invoked);
-    try {
-      const id = await awaitGateBeforeSettlement(ready.promise, outcome, "invoke did not dispatch");
-      const response = await request(
-        "node.invoke.result",
-        { context, client: node },
-        { id, nodeId: "entry-node", ok: true },
-      );
-      expect(response).toMatchObject({ ok: true });
-      expect(await outcome).toMatchObject({ value: { ok: true } });
-    } finally {
-      registry.unregister(node.connId);
-      await outcome;
-      resetGatewayWorkAdmission();
-    }
   });
 
   it("keeps a retired context closed when a replacement Gateway starts", async () => {

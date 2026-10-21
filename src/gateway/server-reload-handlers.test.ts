@@ -3590,14 +3590,14 @@ describe("gateway Gmail hot reload handlers", () => {
     }
   });
 
-  it.each(["config restart", "hot recovery"] as const)(
+  it.each(["config restart", "hot recovery", "hot successor"] as const)(
     "cancels a deferred %s when a newer config fails required SecretRef preflight",
     async (kind) => {
       vi.useFakeTimers();
       const { clock, scheduler } = createConfigReloadTestClock();
       const harness = await createManagedRestartSequenceHarness({ scheduler });
       const configA: OpenClawConfig =
-        kind === "config restart"
+        kind !== "hot recovery"
           ? harness.deferredConfig
           : {
               ...harness.initialConfig,
@@ -3608,6 +3608,14 @@ describe("gateway Gmail hot reload handlers", () => {
       if (kind === "hot recovery") {
         hoisted.refreshContextWindowCache.mockRejectedValueOnce(new Error("context reload failed"));
       }
+      const hotSuccessor = kind === "hot successor";
+      const invalidConfig = hotSuccessor ? harness.invalidHotConfig : harness.invalidConfig;
+      if (hotSuccessor) {
+        expect(buildGatewayReloadPlan(diffConfigPaths(configA, invalidConfig)).restartGateway).toBe(
+          false,
+        );
+      }
+      const missingToken = hotSuccessor ? "MISSING_HOT_TOKEN" : "MISSING_RESTART_TOKEN";
       const appliedHash = getRuntimeConfigAppliedHash();
       hoisted.activeAgentRunCount.value = 1;
 
@@ -3620,19 +3628,19 @@ describe("gateway Gmail hot reload handlers", () => {
         expect(harness.reloader.isConfigReloadSettled()).toBe(false);
 
         const reloadError = harness.nextReloadError();
-        harness.writeConfig(harness.invalidConfig, "invalid-b", 2);
+        harness.writeConfig(invalidConfig, "invalid-b", 2);
         await clock.wake();
         await expect(reloadError).resolves.toBe(
-          "config reload failed: Error: required SecretRef MISSING_RESTART_TOKEN is unavailable",
+          `config reload failed: Error: required SecretRef ${missingToken} is unavailable`,
         );
 
         expect(harness.activateRuntimeSecrets.prepareSnapshot.mock.calls[0]?.[0].config).toEqual(
           configA,
         );
         expect(harness.activateRuntimeSecrets.prepareSnapshot.mock.calls[1]?.[0].config).toEqual(
-          harness.invalidConfig,
+          invalidConfig,
         );
-        expect(harness.terminalPolicy.isEnabled()).toBe(false);
+        expect(harness.terminalPolicy.isEnabled()).toBe(hotSuccessor);
         expect(harness.promoteSnapshot.mock.calls.map(([snapshot]) => snapshot.hash)).not.toContain(
           "invalid-b",
         );
@@ -3652,7 +3660,7 @@ describe("gateway Gmail hot reload handlers", () => {
         expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
         expect(harness.reloader.isConfigReloadSettled()).toBe(false);
         expect(getRuntimeConfigAppliedHash()).toBe(appliedHash);
-        expect(harness.terminalPolicy.isEnabled()).toBe(false);
+        expect(harness.terminalPolicy.isEnabled()).toBe(hotSuccessor);
         expect(harness.logReload.warn).toHaveBeenCalledWith(
           expect.stringContaining("previously accepted config still requires a Gateway restart"),
         );
@@ -3794,39 +3802,6 @@ describe("gateway Gmail hot reload handlers", () => {
       }
     },
   );
-
-  it("pauses deferred restart A before external hot config B fails SecretRef preflight", async () => {
-    vi.useFakeTimers();
-    const { clock, scheduler } = createConfigReloadTestClock();
-    const harness = await createManagedRestartSequenceHarness({ scheduler });
-    const invalidConfig = harness.invalidHotConfig;
-    const invalidPlan = buildGatewayReloadPlan(
-      diffConfigPaths(harness.deferredConfig, invalidConfig),
-    );
-    expect(invalidPlan.restartGateway).toBe(false);
-    hoisted.activeAgentRunCount.value = 1;
-
-    try {
-      const deferredPromotion = harness.nextPromotion();
-      harness.writeConfig(harness.deferredConfig, "deferred-hot-noop-a", 1);
-      await clock.wake();
-      await deferredPromotion;
-
-      const reloadError = harness.nextReloadError();
-      harness.writeConfig(invalidConfig, "invalid-hot-b", 2);
-      await clock.wake();
-      await expect(reloadError).resolves.toBe(
-        "config reload failed: Error: required SecretRef MISSING_HOT_TOKEN is unavailable",
-      );
-
-      hoisted.activeAgentRunCount.value = 0;
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
-    } finally {
-      hoisted.activeAgentRunCount.value = 0;
-      await harness.reloader.stop();
-    }
-  });
 
   it("revalidates canonical SecretRefs instead of trusting direct-write runtime literals", async () => {
     vi.useFakeTimers();
