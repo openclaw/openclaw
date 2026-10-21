@@ -103,9 +103,7 @@ export function holdForwardWindow() {
   };
 }
 
-type MessageIds = { updateId: number; messageId: number };
-
-function messageUpdate<T extends object>({ updateId, messageId }: MessageIds, content: T) {
+function messageUpdate<T extends object>(updateId: number, messageId: number, content: T) {
   return {
     update_id: updateId,
     message: {
@@ -118,14 +116,14 @@ function messageUpdate<T extends object>({ updateId, messageId }: MessageIds, co
   };
 }
 
-export function photoUpdate(params: MessageIds & { caption?: string }) {
-  return messageUpdate(params, {
+export function photoUpdate(updateId: number, messageId: number, caption?: string) {
+  return messageUpdate(updateId, messageId, {
     media_group_id: "album-115325",
-    ...(params.caption ? { caption: params.caption } : {}),
+    ...(caption ? { caption } : {}),
     photo: [
       {
-        file_id: `photo-${params.messageId}`,
-        file_unique_id: `unique-${params.messageId}`,
+        file_id: `photo-${messageId}`,
+        file_unique_id: `unique-${messageId}`,
         width: 100,
         height: 100,
         file_size: 4,
@@ -141,17 +139,17 @@ const forwardOrigin = {
   sender_user: { id: 555, is_bot: false, first_name: "Origin" },
 };
 
-export function forwardedTextUpdate(params: MessageIds & { text: string }) {
-  return messageUpdate(params, { text: params.text, forward_origin: forwardOrigin });
+export function forwardedTextUpdate(updateId: number, messageId: number, text: string) {
+  return messageUpdate(updateId, messageId, { text, forward_origin: forwardOrigin });
 }
 
-export function forwardedPhotoUpdate(params: MessageIds) {
-  return messageUpdate(params, {
+export function forwardedPhotoUpdate(updateId: number, messageId: number) {
+  return messageUpdate(updateId, messageId, {
     forward_origin: forwardOrigin,
-    photo: photoUpdate(params).message.photo,
+    photo: photoUpdate(updateId, messageId).message.photo,
   });
 }
 
-export function textUpdate(params: MessageIds & { text: string }) {
-  return messageUpdate(params, { text: params.text });
+export function textUpdate(updateId: number, messageId: number, text: string) {
+  return messageUpdate(updateId, messageId, { text });
 }
