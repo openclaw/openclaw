@@ -10,6 +10,7 @@ import {
 } from "../infra/oauth-loopback-callback.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
+import { loginMcpEnterprise } from "./mcp-cli-enterprise.js";
 
 const MCP_OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -21,6 +22,17 @@ export async function loginMcpServer(params: {
   fail: (message: string) => never;
 }): Promise<void> {
   const { name, server, code, owner, fail } = params;
+  if (server.auth === "enterprise") {
+    const resolved = resolveMcpTransportConfig(name, server);
+    if (!resolved || resolved.kind !== "http" || !resolved.enterprise) {
+      return fail(`MCP server "${name}" needs valid enterprise settings and an HTTP URL.`);
+    }
+    if (code) {
+      return fail("Enterprise SSO login requires a fresh browser callback; omit --code.");
+    }
+    await loginMcpEnterprise({ name, config: resolved.enterprise, owner });
+    return;
+  }
   if (asRecord(server.oauth)?.identity === "per-requester") {
     return fail(
       `MCP server "${name}" uses per-requester OAuth. Senders connect from the channel via the MCP connect flow.`,
