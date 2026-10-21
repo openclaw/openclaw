@@ -19,7 +19,18 @@ const model: Parameters<StreamFn>[0] = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
-function captureRequest(payload: Record<string, unknown>) {
+const apiControls = {
+  metadata: { caller: "must-not-send" },
+  max_output_tokens: 128000,
+  temperature: 0.4,
+  top_p: 0.8,
+  prompt_cache_retention: "24h",
+};
+
+function captureRequest(
+  payload: Record<string, unknown>,
+  overrides: Partial<ProviderWrapStreamFnContext> = {},
+) {
   let observed: Parameters<StreamFn>[2];
   let result: Promise<unknown> | undefined;
   const streamFn: StreamFn = (selected, _context, options) => {
@@ -31,6 +42,14 @@ function captureRequest(payload: Record<string, unknown>) {
   };
   return {
     streamFn,
+    context: {
+      provider: "openai",
+      modelId: model.id,
+      model,
+      streamFn,
+      auth: { mode: "oauth", authFlow: TOKEN_SHARING_AUTH_FLOW },
+      ...overrides,
+    } satisfies ProviderWrapStreamFnContext,
     get options() {
       return observed;
     },
@@ -42,18 +61,16 @@ function captureRequest(payload: Record<string, unknown>) {
 
 describe("token-sharing Responses stream", () => {
   it("enforces HTTP and complete-context replay after caller/provider payload transforms", async () => {
-    const capture = captureRequest({
-      input: [{ role: "user", content: "Hello" }],
-      tools: [{ type: "function", name: "read_file", parameters: {} }],
-    });
-    const stream = wrapOpenAIResponsesStream({
-      provider: "openai",
-      modelId: model.id,
-      model,
-      streamFn: capture.streamFn,
-      auth: { mode: "oauth", authFlow: TOKEN_SHARING_AUTH_FLOW },
-      extraParams: { transport: "websocket", store: true, responsesServerCompaction: true },
-    });
+    const capture = captureRequest(
+      {
+        input: [{ role: "user", content: "Hello" }],
+        tools: [{ type: "function", name: "read_file", parameters: {} }],
+      },
+      {
+        extraParams: { transport: "websocket", store: true, responsesServerCompaction: true },
+      },
+    );
+    const stream = wrapOpenAIResponsesStream(capture.context);
     void stream(
       model,
       { messages: [] },
@@ -63,11 +80,7 @@ describe("token-sharing Responses stream", () => {
         onPayload: async (request) => ({
           ...(request as Record<string, unknown>),
           store: true,
-          metadata: { caller: "must-not-send" },
-          max_output_tokens: 128000,
-          temperature: 0.4,
-          top_p: 0.8,
-          prompt_cache_retention: "24h",
+          ...apiControls,
           prompt_cache_options: { ttl: "30m" },
           service_tier: "priority",
           text: { verbosity: "low", format: { type: "json_object" } },
@@ -80,102 +93,69 @@ describe("token-sharing Responses stream", () => {
     expect(observed).toMatchObject({ transport: "sse", replayResponsesItemIds: false });
     expect(new Headers(observed?.headers).get("x-openai-chatpass-test")).toBe("codex-direct");
     expect(new Headers(observed?.headers).get("x-custom")).toBe("preserved");
-    expect(payload).toHaveProperty("store", false);
-    expect(payload).not.toHaveProperty("context_management");
-    for (const field of [
-      "metadata",
-      "max_output_tokens",
-      "temperature",
-      "top_p",
-      "prompt_cache_retention",
-    ]) {
+    for (const field of ["context_management", ...Object.keys(apiControls)]) {
       expect(payload).not.toHaveProperty(field);
     }
     expect(payload).toMatchObject({
+      store: false,
       prompt_cache_options: { ttl: "30m" },
       service_tier: "priority",
       text: { verbosity: "low", format: { type: "json_object" } },
-    });
-    expect(payload).toHaveProperty("input", [{ role: "user", content: "Hello" }]);
-    expect(payload).toHaveProperty(
-      "tools",
-      expect.arrayContaining([
+      tools: expect.arrayContaining([
         { type: "function", name: "read_file", parameters: {} },
         { type: "web_search" },
       ]),
-    );
+    });
+    expect(payload).toHaveProperty("input", [{ role: "user", content: "Hello" }]);
   });
 
   it.each([
     { auth: { mode: "oauth", authFlow: TOKEN_SHARING_AUTH_FLOW }, sharing: true },
     { auth: { mode: "oauth" }, sharing: false },
-  ] as const)(
-    "keeps isolated completions on their credential's route: $auth",
-    async ({ auth, sharing }) => {
-      const capture = captureRequest({ tools: [], max_output_tokens: 64, store: true });
-      const hooks = buildOpenAIResponsesProviderHooks();
-      const wrapped = hooks.wrapSimpleCompletionStreamFn?.({
-        provider: "openai",
-        modelId: model.id,
-        model,
-        streamFn: capture.streamFn,
-        auth,
-      });
-      if (!sharing) {
-        expect(wrapped).toBeUndefined();
-      }
-      const stream = wrapped ?? capture.streamFn;
-      await stream(model, { messages: [], tools: [] }, {});
-      const observed = capture.options;
-      expect(new Headers(observed?.headers).get("x-openai-chatpass-test")).toBe(
-        sharing ? "codex-direct" : null,
-      );
-      const result = await capture.payload;
-      expect(result).toMatchObject({ tools: [], store: !sharing });
-      if (sharing) {
-        expect(result).not.toHaveProperty("max_output_tokens");
-        expect(observed).toMatchObject({ transport: "sse", replayResponsesItemIds: false });
-      } else {
-        expect(result).toHaveProperty("max_output_tokens", 64);
-      }
-    },
-  );
+  ] as const)("isolated completion credential route: $sharing", async ({ auth, sharing }) => {
+    const capture = captureRequest({ tools: [], max_output_tokens: 64, store: true }, { auth });
+    const wrapped = buildOpenAIResponsesProviderHooks().wrapSimpleCompletionStreamFn?.(
+      capture.context,
+    );
+    if (!sharing) {
+      expect(wrapped).toBeUndefined();
+    }
+    const stream = wrapped ?? capture.streamFn;
+    await stream(model, { messages: [], tools: [] }, {});
+    const observed = capture.options;
+    expect(new Headers(observed?.headers).get("x-openai-chatpass-test")).toBe(
+      sharing ? "codex-direct" : null,
+    );
+    const result = await capture.payload;
+    expect(result).toMatchObject({ tools: [], store: !sharing });
+    if (sharing) {
+      expect(result).not.toHaveProperty("max_output_tokens");
+      expect(observed).toMatchObject({ transport: "sse", replayResponsesItemIds: false });
+    } else {
+      expect(result).toHaveProperty("max_output_tokens", 64);
+    }
+  });
 
   it("rejects an unsupported SIWC service tier", async () => {
-    const capture = captureRequest({});
-    const stream = wrapOpenAIResponsesStream({
-      provider: "openai",
-      modelId: model.id,
-      model,
-      auth: { mode: "oauth", authFlow: TOKEN_SHARING_AUTH_FLOW },
-      extraParams: { serviceTier: "auto" },
-      streamFn: capture.streamFn,
-    });
+    const capture = captureRequest({}, { extraParams: { serviceTier: "auto" } });
+    const stream = wrapOpenAIResponsesStream(capture.context);
     void stream(model, { messages: [] }, {});
     await expect(capture.payload).rejects.toThrow(
       "Sign in with ChatGPT does not support this service tier",
     );
   });
 
-  it.each([{ mode: "api_key" }, { mode: "oauth" }] satisfies ProviderWrapStreamFnContext["auth"][])(
-    "preserves ordinary Responses controls for $mode without a sharing grant",
-    async (auth) => {
+  it.each(["api_key", "oauth"] as const)(
+    "preserves ordinary Responses controls without a sharing grant: %s",
+    async (mode) => {
       const controls = {
+        ...apiControls,
         max_output_tokens: 512,
-        temperature: 0.4,
-        top_p: 0.8,
-        prompt_cache_retention: "24h",
         metadata: { purpose: "test" },
         service_tier: "flex",
       };
-      const capture = captureRequest({ ...controls });
-      const stream = wrapOpenAIResponsesStream({
-        provider: "openai",
-        modelId: model.id,
-        model,
-        auth,
-        streamFn: capture.streamFn,
-      });
+      const capture = captureRequest({ ...controls }, { auth: { mode } });
+      const stream = wrapOpenAIResponsesStream(capture.context);
       void stream(model, { messages: [] }, { headers: { "x-custom": "preserved" } });
       const observed = capture.options;
       expect(new Headers(observed?.headers).get("x-openai-chatpass-test")).toBeNull();
