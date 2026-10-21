@@ -24,15 +24,15 @@ function installRuntimeFetch() {
     ProxyAgent: vi.fn(),
     fetch,
   };
-  return fetch;
-}
-
-function requireFetchInit(mock: ReturnType<typeof installRuntimeFetch>): RequestInit {
-  const init = mock.mock.calls[0]?.[1];
-  if (!init) {
-    throw new Error("expected runtime fetch init");
-  }
-  return init;
+  return async (init: RequestInit) => {
+    expect((await fetchWithRuntimeDispatcher("https://example.com", init)).status).toBe(200);
+    expect(fetch).toHaveBeenCalledOnce();
+    const sent = fetch.mock.calls[0]?.[1];
+    if (!sent) {
+      throw new Error("expected runtime fetch init");
+    }
+    return sent;
+  };
 }
 
 afterEach(() => {
@@ -41,24 +41,19 @@ afterEach(() => {
 
 describe("fetchWithRuntimeDispatcher", () => {
   it("drops symbol metadata from plain header dictionaries before runtime fetch", async () => {
-    const runtimeFetch = installRuntimeFetch();
-    const headers = { "Content-Type": "application/json" } as Record<string, string> & {
-      [key: symbol]: unknown;
-    };
+    const fetch = installRuntimeFetch();
+    const headers = { "Content-Type": "application/json" };
     Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
       value: new Set(["content-type"]),
       enumerable: false,
     });
 
-    const response = await fetchWithRuntimeDispatcher("https://example.com/json", {
+    const { headers: sentHeaders } = await fetch({
       method: "POST",
       headers,
       body: "{}",
     });
 
-    expect(response.status).toBe(200);
-    expect(runtimeFetch).toHaveBeenCalledOnce();
-    const sentHeaders = requireFetchInit(runtimeFetch).headers;
     expect(new Headers(sentHeaders).get("content-type")).toBe("application/json");
     expect(sentHeaders).not.toBe(headers);
     expect(Object.getOwnPropertySymbols(sentHeaders as object)).toStrictEqual([]);
@@ -66,12 +61,12 @@ describe("fetchWithRuntimeDispatcher", () => {
   });
 
   it("normalizes global FormData bodies into the runtime FormData implementation", async () => {
-    const runtimeFetch = installRuntimeFetch();
+    const fetch = installRuntimeFetch();
     const form = new FormData();
     form.append("file", new Blob([new Uint8Array([1, 2, 3])], { type: "audio/ogg" }), "clip.ogg");
     form.append("model", "gpt-4o-transcribe");
 
-    const response = await fetchWithRuntimeDispatcher("https://example.com/upload", {
+    const sentInit = await fetch({
       method: "POST",
       headers: {
         "content-length": "999",
@@ -80,9 +75,6 @@ describe("fetchWithRuntimeDispatcher", () => {
       body: form,
     });
 
-    expect(response.status).toBe(200);
-    expect(runtimeFetch).toHaveBeenCalledTimes(1);
-    const sentInit = requireFetchInit(runtimeFetch);
     // BodyInit and RuntimeFormData live in separate type namespaces.
     const body = sentInit.body as unknown as RuntimeFormData;
     expect(body).toBeInstanceOf(RuntimeFormData);
