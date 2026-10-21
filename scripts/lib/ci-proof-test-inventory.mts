@@ -1751,7 +1751,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/mcp-cli.json-failure.test.ts",
   "src/cli/mcp-cli.login-loopback.test.ts",
   "src/cli/mcp-cli.oauth-integration.test.ts",
-  "src/cli/mcp-cli.oauth.test.ts",
   "src/cli/mcp-cli.path-case.windows.test.ts",
   "src/cli/mcp-cli.probe-exit.process.test.ts",
   "src/cli/mcp-cli.test.ts",
