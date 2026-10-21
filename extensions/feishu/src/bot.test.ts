@@ -85,7 +85,7 @@ function savedMedia(id: string, contentType: string, size: number, path = `/tmp/
 }
 
 function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
-  const runtime = {
+  return createPluginRuntimeMock({
     config: {
       current: vi.fn(() => currentRuntimeConfig),
     },
@@ -106,53 +106,13 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
         upsertPairingRequest: vi.fn(),
       },
       inbound: {
-        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         buildContext: buildChannelInboundEventContext,
-        run: vi.fn(async (params) => {
-          const input = await params.adapter.ingest(params.raw);
-          if (!input) {
-            return {
-              admission: { kind: "drop" as const, reason: "ingest-null" },
-              dispatched: false,
-            };
-          }
-          const turn = await params.adapter.resolveTurn(
-            input,
-            {
-              kind: "message",
-              canStartAgentTurn: true,
-            },
-            {},
-          );
-          const { cfg, route, ctxPayload: ctx, record, replyOptions, admission } = turn;
-          await runtime.channel.session.recordInboundSession({
-            storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, {
-              agentId: route.agentId,
-            }),
-            sessionKey: ctx.SessionKey ?? route.sessionKey,
-            ctx,
-            groupResolution: record?.groupResolution,
-            createIfMissing: record?.createIfMissing,
-            updateLastRoute: record?.updateLastRoute,
-            onRecordError: record?.onRecordError ?? (() => undefined),
-          });
-          return {
-            admission: admission ?? { kind: "dispatch" as const },
-            dispatched: true,
-            ctxPayload: ctx,
-            routeSessionKey: route.sessionKey,
-            dispatchResult:
-              admission?.kind === "observeOnly"
-                ? { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } }
-                : await dispatchReply({ ctx, cfg, replyOptions }),
-          };
-        }),
       },
+      reply: { dispatchReplyWithBufferedBlockDispatcher: dispatchReply },
       ...overrides.channel,
     },
-    ...(overrides.system ? { system: overrides.system as PluginRuntime["system"] } : {}),
-  } as unknown as PluginRuntime;
-  return runtime;
+    ...(overrides.system ? { system: overrides.system } : {}),
+  });
 }
 
 type FeishuRoutePeer = { id: string; kind: "direct" | "group" };

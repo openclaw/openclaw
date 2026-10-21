@@ -31,17 +31,6 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
-const shouldSuppressFeishuTextForVoiceMediaMock = vi.hoisted(
-  () =>
-    (params: {
-      mediaUrl?: string;
-      audioAsVoice?: boolean;
-      ttsSupplement?: { visibleTextAlreadyDelivered?: boolean };
-    }) =>
-      params.ttsSupplement
-        ? params.ttsSupplement.visibleTextAlreadyDelivered === true
-        : params.audioAsVoice === true || /\.(?:ogg|opus)(?:[?#]|$)/i.test(params.mediaUrl ?? ""),
-);
 const resolvePinnedHostnameWithPolicyMock = vi.hoisted(() =>
   vi.fn(async (hostname: string) => {
     if (hostname === "files.example.test") {
@@ -65,10 +54,11 @@ vi.mock("./send.js", async (importOriginal) => ({
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
   sendCardFeishu: sendCardFeishuMock,
 }));
-vi.mock("./media.js", () => ({
-  sendMediaFeishu: sendMediaFeishuMock,
-  shouldSuppressFeishuTextForVoiceMedia: shouldSuppressFeishuTextForVoiceMediaMock,
-}));
+vi.mock("./media.js", async (importOriginal) => {
+  const { shouldSuppressFeishuTextForVoiceMedia } =
+    await importOriginal<typeof import("./media.js")>();
+  return { sendMediaFeishu: sendMediaFeishuMock, shouldSuppressFeishuTextForVoiceMedia };
+});
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock };

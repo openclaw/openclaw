@@ -10,6 +10,7 @@ import {
   getFeishuLifecycleTestMocks,
   resetFeishuLifecycleTestMocks,
 } from "./lifecycle.test-support.js";
+import * as bot from "./bot.js";
 import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { FeishuConfigSchema } from "./config-schema.js";
@@ -259,6 +260,39 @@ describe("Feishu event reply lifecycle", () => {
       });
       expect(dispatchReplyFromConfigMock).not.toHaveBeenCalled();
       expect(createFeishuReplyDispatcherMock).not.toHaveBeenCalled();
+    });
+    it("falls back to the legacy /menu synthetic message path for unrelated bot menu keys", async () => {
+      const handleMessage = vi.spyOn(bot, "handleFeishuMessage").mockResolvedValueOnce(undefined);
+      try {
+        await onBotMenu({ ...event("1700000000002"), event_key: "custom-key" });
+        expect(handleMessage).toHaveBeenCalledOnce();
+        expect(handleMessage.mock.calls[0]?.[0].event.message.content).toBe(
+          '{"text":"/menu custom-key"}',
+        );
+        expect(sendCardFeishuMock).not.toHaveBeenCalled();
+      } finally {
+        handleMessage.mockRestore();
+      }
+    });
+    it("reports a fallback failure without reopening the committed menu event", async () => {
+      const handleMessage = vi
+        .spyOn(bot, "handleFeishuMessage")
+        .mockRejectedValueOnce(new Error("fallback failed"));
+      sendCardFeishuMock.mockRejectedValueOnce(new Error("launcher unavailable"));
+      try {
+        const callback = event("1700000000004");
+        await onBotMenu(callback);
+        await vi.waitFor(() =>
+          expect(lastRuntime.error).toHaveBeenCalledWith(
+            "feishu[acct-menu]: error handling bot menu event: Error: fallback failed",
+          ),
+        );
+        await onBotMenu(callback);
+        expect(sendCardFeishuMock).toHaveBeenCalledOnce();
+        expect(handleMessage).toHaveBeenCalledOnce();
+      } finally {
+        handleMessage.mockRestore();
+      }
     });
     it("does not duplicate delivery when launcher fallback hits a post-send failure", async () => {
       sendCardFeishuMock.mockRejectedValueOnce(new Error("boom"));

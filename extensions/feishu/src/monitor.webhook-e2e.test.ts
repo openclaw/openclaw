@@ -5,6 +5,7 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import * as client from "./client.js";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
 import {
@@ -79,9 +80,9 @@ vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
-import { monitorFeishuProvider } from "./monitor.js";
+import { monitorFeishuProvider, type FeishuStatusSink } from "./monitor.js";
 import { feishuWebhookRateLimiter } from "./monitor.state.js";
-import { monitorWebhook } from "./monitor.transport.js";
+import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 beforeAll(async () => {
@@ -202,6 +203,114 @@ function eventPayload(
 ) {
   return { schema: "2.0", header: { event_type, ...header }, event };
 }
+
+describe("Feishu transport status publishing", () => {
+  let now: number;
+  beforeEach(() => {
+    now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+  });
+  afterEach(() => vi.restoreAllMocks());
+  type Patch = Parameters<FeishuStatusSink>[0];
+  type Callbacks = NonNullable<Parameters<typeof client.createFeishuWSClient>[1]>;
+  function expectPatch(actual: Patch | undefined, expected: Patch) {
+    expect(actual).toMatchObject(expected);
+    expect(actual?.lastTransportActivityAt).toBeUndefined();
+  }
+  async function withWsStatus(
+    run: (patches: Patch[], callbacks: Callbacks) => void | Promise<void>,
+    failure?: Error,
+  ) {
+    const patches: Patch[] = [];
+    const abort = new AbortController();
+    let callbacks: Callbacks = {};
+    vi.spyOn(client, "createFeishuWSClient").mockImplementation(async (_account, received) => {
+      if (failure) {
+        throw failure;
+      }
+      callbacks = received ?? {};
+      return { start: vi.fn(async () => undefined), close: vi.fn() } as never;
+    });
+    const account = createFeishuWebhookTestAccount("status");
+    account.config.connectionMode = "websocket";
+    const monitor = monitorWebSocket({
+      account,
+      accountId: "status",
+      abortSignal: abort.signal,
+      eventDispatcher: {} as never,
+      statusSink: (patch) => patches.push(patch),
+    });
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await run(patches, callbacks);
+    } finally {
+      abort.abort();
+      await monitor;
+    }
+  }
+  it("publishes connected state when the WS SDK reports ready or reconnected", async () => {
+    await withWsStatus((patches, callbacks) => {
+      expect(patches).toEqual([]);
+      for (const [index, callback] of [callbacks.onReady, callbacks.onReconnected].entries()) {
+        callback?.();
+        expectPatch(patches[index], {
+          connected: true,
+          lifecycle: "ready",
+          lastConnectedAt: now,
+          lastEventAt: now,
+          lastError: null,
+        });
+        if (index === 0) {
+          expect(patches[0]?.terminalDisconnect).toBeUndefined();
+          now += 1_000;
+        }
+      }
+      now += 1_000;
+      callbacks.onReconnecting?.();
+      expectPatch(patches[2], { connected: false, lifecycle: "recovering", lastEventAt: now });
+    });
+  });
+  it("publishes disconnected when WS handshake throws", async () => {
+    await withWsStatus((patches) => {
+      const disconnected = patches.find((patch) => patch.connected === false);
+      expect(disconnected).toBeDefined();
+      expectPatch(disconnected, { lifecycle: "recovering", lastEventAt: now });
+    }, new Error("boom"));
+  });
+  it("publishes blocked for the SDK terminal WebSocket error", async () => {
+    await withWsStatus(async (patches, callbacks) => {
+      expect(callbacks.onError).toBeTypeOf("function");
+      callbacks.onError?.(new Error("WebSocket reconnect exhausted after 3 attempts"));
+      await vi.waitFor(() =>
+        expect(patches).toContainEqual(
+          expect.objectContaining({
+            connected: false,
+            lifecycle: "blocked",
+            terminalDisconnect: true,
+          }),
+        ),
+      );
+    });
+  });
+  it("publishes connected after Gateway route registration", async () => {
+    const patches: Patch[] = [];
+    await withTransport(
+      "webhook-status",
+      { statusSink: (patch) => patches.push(patch) },
+      async () => {
+        const connected = patches.find((patch) => patch.connected === true);
+        expect(connected).toBeDefined();
+        expectPatch(connected, {
+          lifecycle: "ready",
+          lastConnectedAt: now,
+          lastEventAt: now,
+        });
+      },
+    );
+  });
+});
 
 afterEach(async () => {
   webhookBodyTimeoutMs.value = undefined;
