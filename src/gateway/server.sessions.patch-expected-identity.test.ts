@@ -224,19 +224,24 @@ test("sessions.patch preserves concurrent tool restrictions from a stale replace
   expect(read()?.toolOverrides).toEqual(replacement);
 });
 
-test("sessions.patch requires expected tool overrides to guard a replacement", async () => {
-  const { read, patch } = await seedSession("agent:main:tool-overrides-cas-envelope", {
-    toolOverrides: { webSearch: false },
-  });
-  const result = await patch({
-    expectedToolOverrides: { webSearch: false },
-    label: "unguarded replacement",
-  });
-
-  expect(result).toMatchObject(
-    invalid("expectedToolOverrides requires a toolOverrides replacement."),
-  );
-  expect(read()).not.toHaveProperty("label");
+test.each([
+  {
+    name: "expected tool overrides without a replacement",
+    entry: { toolOverrides: { webSearch: false } },
+    request: { expectedToolOverrides: { webSearch: false }, label: "unguarded replacement" },
+    message: "expectedToolOverrides requires a toolOverrides replacement.",
+  },
+  {
+    name: "automatic acknowledgement with another mutation",
+    entry: { markedUnreadAt: 10 },
+    request: { unread: false, expectedMarkedUnreadAt: 9, label: "Must not be discarded" },
+    message: "expectedMarkedUnreadAt requires unread=false as the only mutation.",
+  },
+])("sessions.patch rejects $name", async ({ entry, request, message }) => {
+  const { read, patch } = await seedSession("agent:main:invalid-patch-envelope", entry);
+  const before = read();
+  expect(await patch(request)).toMatchObject(invalid(message));
+  expect(read()).toEqual(before);
 });
 
 test("sessions.patch rejects stale permission replacement", async () => {
@@ -254,25 +259,6 @@ test("sessions.patch rejects stale permission replacement", async () => {
     error: { details: { reason: "session-changed" } },
   });
   expect(read()?.permissionMode).toBe("read-only");
-});
-
-test("sessions.patch rejects automatic acknowledgement with another mutation", async () => {
-  const { read, patch } = await seedSession("agent:main:conditional-unread-label", {
-    markedUnreadAt: 10,
-  });
-  const result = await patch({
-    unread: false,
-    expectedMarkedUnreadAt: 9,
-    label: "Must not be discarded",
-  });
-
-  expect(result).toMatchObject(
-    invalid("expectedMarkedUnreadAt requires unread=false as the only mutation."),
-  );
-  expect(read()).toMatchObject({
-    markedUnreadAt: 10,
-    sessionId: "conditional-unread-label",
-  });
 });
 
 test.each([

@@ -111,76 +111,29 @@ async function resetMainSession() {
 }
 
 type ArchivedMainResetCase = {
-  label: string;
   key: string;
   mainKey?: string;
-  reason: InternalSessionEntry["archiveReason"];
-  tombstone: boolean;
+  reason?: InternalSessionEntry["archiveReason"];
+  tombstone?: boolean;
   allowed: boolean;
   locked?: boolean;
   staleIdentity?: boolean;
 };
 
-test.each<ArchivedMainResetCase>([
-  {
-    label: "default Main",
-    key: "agent:main:main",
-    mainKey: undefined,
-    reason: "restart-recovery",
-    tombstone: true,
-    allowed: true,
-  },
-  {
-    label: "configured Main",
-    key: "agent:main:inbox",
-    mainKey: "inbox",
-    reason: "restart-recovery",
-    tombstone: true,
-    allowed: true,
-  },
-  {
-    label: "manually archived Main",
-    key: "agent:main:main",
-    mainKey: undefined,
-    reason: "manual",
-    tombstone: true,
-    allowed: false,
-  },
-  {
-    label: "archived peer",
-    key: "agent:main:dashboard:peer",
-    mainKey: undefined,
-    reason: "restart-recovery",
-    tombstone: true,
-    allowed: false,
-  },
-  {
-    label: "archive without tombstone",
-    key: "agent:main:main",
-    mainKey: undefined,
-    reason: "restart-recovery",
-    tombstone: false,
-    allowed: false,
-  },
-  {
-    label: "model-locked recovered Main",
-    key: "agent:main:main",
-    reason: "restart-recovery",
-    tombstone: true,
-    allowed: false,
-    locked: true,
-  },
-  {
-    label: "stale expected Main identity",
-    key: "agent:main:main",
-    reason: "restart-recovery",
-    tombstone: true,
-    allowed: false,
-    staleIdentity: true,
-  },
+test.each<[string, ArchivedMainResetCase]>([
+  ["default Main", { key: "agent:main:main", allowed: true }],
+  ["configured Main", { key: "agent:main:inbox", mainKey: "inbox", allowed: true }],
+  ["manually archived Main", { key: "agent:main:main", reason: "manual", allowed: false }],
+  ["archived peer", { key: "agent:main:dashboard:peer", allowed: false }],
+  ["archive without tombstone", { key: "agent:main:main", tombstone: false, allowed: false }],
+  ["model-locked recovered Main", { key: "agent:main:main", locked: true, allowed: false }],
+  ["stale expected Main identity", { key: "agent:main:main", staleIdentity: true, allowed: false }],
 ])(
-  "sessions.reset preserves history when restoring $label",
-  async ({ key, mainKey, reason, tombstone, allowed, locked, staleIdentity }) => {
+  "sessions.reset preserves history when restoring %s",
+  async (
+    _,
+    { key, mainKey, reason = "restart-recovery", tombstone = true, allowed, locked, staleIdentity },
+  ) => {
     const { dir, storePath } = await createSessionStoreDir();
     testState.sessionConfig = mainKey ? { mainKey } : undefined;
     const sessionId = "synthetic-archived-main";
@@ -702,34 +655,6 @@ test("sessions.patch rejects an archive queued behind a rotated session", async 
   expectArchiveRejected(storePath, sessionKey, replacementSessionId, archived);
 });
 
-test("sessions.reset closes child ACP runtime handles spawned from the parent", async () => {
-  installAcpRuntimeBackendWithFreshSession();
-  await seedMainSession({
-    "acp-child-1": sessionStoreEntry("sess-child-1", { spawnedBy: "agent:main:main" }),
-    "not-acp-child": sessionStoreEntry("sess-not-acp-child", { spawnedBy: "agent:main:main" }),
-    "unrelated-acp-child": sessionStoreEntry("sess-unrelated-acp-child", {
-      spawnedBy: "agent:main:other",
-    }),
-    "acp-grandchild": sessionStoreEntry("sess-grandchild", {
-      parentSessionKey: "agent:main:acp-child-1",
-    }),
-  });
-  seedAcp("agent:main:main");
-  for (const child of ["acp-child-1", "acp-grandchild", "unrelated-acp-child"]) {
-    seedAcp(`agent:main:${child}`, { mode: "oneshot" });
-  }
-
-  const reset = await resetMainSession();
-  expect(reset.ok).toBe(true);
-
-  // Parent reset must not orphan its direct ACP child (#68916).
-  const closedKeys = closedAcpKeys();
-  expect(closedKeys).toEqual(expect.arrayContaining(["agent:main:main", "agent:main:acp-child-1"]));
-  for (const child of ["not-acp-child", "unrelated-acp-child", "acp-grandchild"]) {
-    expect(closedKeys).not.toContain(`agent:main:${child}`);
-  }
-});
-
 test("sessions.reset closes a spawned ACP child that lives in a different agent store", async () => {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (!stateDir) {
@@ -785,12 +710,19 @@ test("sessions.reset closes child ACP runtimes concurrently so stuck children do
     "acp-child-1": sessionStoreEntry("sess-c1", { spawnedBy: "agent:main:main" }),
     "acp-child-2": sessionStoreEntry("sess-c2", { spawnedBy: "agent:main:main" }),
     "acp-child-3": sessionStoreEntry("sess-c3", { parentSessionKey: "agent:main:main" }),
+    "not-acp-child": sessionStoreEntry("sess-not-acp", { spawnedBy: "agent:main:main" }),
+    "unrelated-acp-child": sessionStoreEntry("sess-unrelated", { spawnedBy: "agent:main:other" }),
+    "acp-grandchild": sessionStoreEntry("sess-grandchild", {
+      parentSessionKey: "agent:main:acp-child-1",
+    }),
   });
   for (const sessionKey of [
     "agent:main:main",
     "agent:main:acp-child-1",
     "agent:main:acp-child-2",
     "agent:main:acp-child-3",
+    "agent:main:unrelated-acp-child",
+    "agent:main:acp-grandchild",
   ]) {
     seedAcp(sessionKey, { runtimeSessionName: `runtime:${sessionKey}`, mode: "oneshot" });
   }
@@ -831,6 +763,18 @@ test("sessions.reset closes child ACP runtimes concurrently so stuck children do
     }
     const reset = await resetPromise;
     expect(reset.ok).toBe(true);
+    // Direct-child cleanup (#68916) must neither orphan children nor cascade to peers/grandchildren.
+    expect(closedAcpKeys()).toEqual(
+      expect.arrayContaining([
+        "agent:main:main",
+        "agent:main:acp-child-1",
+        "agent:main:acp-child-2",
+        "agent:main:acp-child-3",
+      ]),
+    );
+    for (const child of ["not-acp-child", "unrelated-acp-child", "acp-grandchild"]) {
+      expect(closedAcpKeys()).not.toContain(`agent:main:${child}`);
+    }
   } finally {
     acpManagerMocks.cancelSession.mockImplementation(async () => {});
     for (const release of releaseChildren) {

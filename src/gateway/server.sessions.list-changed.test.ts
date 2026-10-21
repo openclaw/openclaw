@@ -247,16 +247,11 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
   expect(galleryChild).not.toHaveProperty("totalTokens");
   expect(galleryChild).not.toHaveProperty("model");
   await prepareGatewayReplyRuntimeForTest();
-  const held = new Map<
-    string,
-    {
-      entered: ReturnType<typeof createDeferred<void>>;
-      release: ReturnType<typeof createDeferred<void>>;
-    }
-  >();
-  for (const runId of ["list-live-z", "list-live-a"]) {
-    held.set(runId, { entered: createDeferred(), release: createDeferred() });
-  }
+  const held = new Map(
+    ["list-live-z", "list-live-a"].map(
+      (id) => [id, { entered: createDeferred<void>(), release: createDeferred<void>() }] as const,
+    ),
+  );
   agentCommandMock.mockImplementation(async (options) => {
     const command = options as AgentCommandGatewayIngressOpts;
     const turn = held.get(command.runId!);
@@ -279,21 +274,10 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
       expect(accepted.ok).toBe(true);
       await held.get(runId)!.entered.promise;
     }
-    type ActiveSessionPage = {
-      count: number;
-      totalCount: number;
-      nextOffset: number | null;
-      sessions: Array<{ key: string; hasActiveRun: boolean; activeRunIds: string[] }>;
-    };
-    const first = await rpcReq<ActiveSessionPage>(ws, "sessions.list", {
-      activeOnly: true,
-      limit: 1,
-    });
-    const second = await rpcReq<ActiveSessionPage>(ws, "sessions.list", {
-      activeOnly: true,
-      limit: 1,
-      offset: 1,
-    });
+    const activePage = (offset?: number) =>
+      rpcReq<SessionsListResult>(ws, "sessions.list", { activeOnly: true, limit: 1, offset });
+    const first = await activePage();
+    const second = await activePage(1);
     expect(first.payload).toMatchObject({ count: 1, totalCount: 2, nextOffset: 1 });
     expect(second.payload).toMatchObject({ count: 1, totalCount: 2, nextOffset: null });
     const active = [...first.payload!.sessions, ...second.payload!.sessions];

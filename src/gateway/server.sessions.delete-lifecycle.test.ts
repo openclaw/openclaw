@@ -136,6 +136,29 @@ function seedIncognito(kind: string, options: Partial<SessionEntry> = {}) {
   });
 }
 
+function admitSession(
+  session: Awaited<ReturnType<typeof seedSession>>,
+  onInterrupt: () => void,
+  id = session.id,
+) {
+  return beginSessionEffect({
+    scope: session.storePath,
+    identities: [session.key, id],
+    assertAllowed: () => {},
+    onInterrupt,
+  });
+}
+
+function activeDiscordTarget(storePath: string) {
+  return captureSessionTarget({
+    storeScope: storePath,
+    sessionKey: "agent:main:discord:group:dev",
+    aliases: ["discord:group:dev", "sess-active"],
+    incarnation: "sess-active",
+    agentId: "main",
+  });
+}
+
 function lifecycleHold<T>(result: T) {
   const entered = createDeferred();
   const released = createDeferred();
@@ -174,13 +197,7 @@ test("sessions.delete rejects main and aborts active runs", async () => {
     ["main", "sess-main"],
     ["discord:group:dev", "sess-active"],
   );
-  const target = captureSessionTarget({
-    storeScope: storePath,
-    sessionKey: "agent:main:discord:group:dev",
-    aliases: ["discord:group:dev", "sess-active"],
-    incarnation: "sess-active",
-    agentId: "main",
-  });
+  const target = activeDiscordTarget(storePath);
   const started = createDeferred();
   let interrupted = false;
   const activeRun = withSessionTurn(
@@ -296,14 +313,9 @@ test("sessions.delete interrupts work admitted before runtime registration", asy
   const session = await seedSession();
   let interrupted = false;
   let releaseAdmission = () => {};
-  const admission = await beginSessionEffect({
-    scope: session.storePath,
-    identities: [session.key, session.id],
-    assertAllowed: () => {},
-    onInterrupt: () => {
-      interrupted = true;
-      releaseAdmission();
-    },
+  const admission = await admitSession(session, () => {
+    interrupted = true;
+    releaseAdmission();
   });
   releaseAdmission = admission.release;
 
@@ -320,12 +332,7 @@ test.each(["session id", "updated at"] as const)(
     });
     const replacementId = guard === "session id" ? "sess-replacement" : session.id;
     const interrupted = vi.fn();
-    const replacementAdmission = await beginSessionEffect({
-      scope: session.storePath,
-      identities: [session.key, replacementId],
-      assertAllowed: () => {},
-      onInterrupt: interrupted,
-    });
+    const replacementAdmission = await admitSession(session, interrupted, replacementId);
     const hold = lifecycleHold(undefined);
     const blockingMutation = runSessionMutation({
       scope: session.storePath,
@@ -358,12 +365,7 @@ test("sessions.delete rejects a replacement with the same updated-at timestamp",
     updatedAt,
   });
   const interrupted = vi.fn();
-  const admission = await beginSessionEffect({
-    scope: session.storePath,
-    identities: [session.key, session.id],
-    assertAllowed: () => {},
-    onInterrupt: interrupted,
-  });
+  const admission = await admitSession(session, interrupted);
   try {
     await expectSessionDeleteChanged({
       key: session.key,
@@ -391,17 +393,12 @@ test.each(["controller cancellation", "cleanup"] as const)(
     };
     let releaseAdmission = () => {};
     if (phase === "controller cancellation") {
-      const admission = await beginSessionEffect({
-        scope: session.storePath,
-        identities: [session.key, session.id],
-        assertAllowed: () => {},
-        onInterrupt: () => {
-          try {
-            replace();
-          } finally {
-            releaseAdmission();
-          }
-        },
+      const admission = await admitSession(session, () => {
+        try {
+          replace();
+        } finally {
+          releaseAdmission();
+        }
       });
       releaseAdmission = admission.release;
     } else {
@@ -651,13 +648,7 @@ test("sessions.delete closes child ACP runtimes spawned from the deleted parent"
 
 test("sessions.delete returns unavailable when active run does not stop", async ({ signal }) => {
   const { dir, storePath } = await seedSessions(["discord:group:dev", "sess-active"]);
-  const target = captureSessionTarget({
-    storeScope: storePath,
-    sessionKey: "agent:main:discord:group:dev",
-    aliases: ["discord:group:dev", "sess-active"],
-    incarnation: "sess-active",
-    agentId: "main",
-  });
+  const target = activeDiscordTarget(storePath);
   const claim = await submitSessionControllerTask(target.sessionKey, {
     target,
     start: (mailboxClaim) => {

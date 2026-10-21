@@ -96,6 +96,32 @@ async function deleteSession(sessionKey: string, options?: Parameters<typeof dir
   expect(response).toMatchObject({ ok: true, payload: { deleted: true } });
 }
 
+async function createRepositorySession(
+  sessionKey: string,
+  sessionId: string,
+  options: { runSetupScript?: boolean } = {},
+) {
+  const { storePath } = await createSessionStoreDir();
+  const repositories = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
+  const repository = await repositories.create({
+    agentId: "main",
+    sessionKey,
+    url: "https://github.com/openclaw/fixture.git",
+    assertCurrent: () => {},
+    ...options,
+  });
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry(sessionId, { repositoryWorkspaceId: repository.workspaceId }),
+    },
+  });
+  const artifactRoot = repositories.artifactPath(repository.workspaceId);
+  const artifact = path.join(artifactRoot, "retained-checkpoint");
+  await fs.mkdir(artifactRoot, { recursive: true });
+  await fs.writeFile(artifact, "accepted checkpoint");
+  return { storePath, repositories, repository, artifactRoot, artifact };
+}
+
 afterEach(async () => {
   for (const companion of companions) {
     companion.dispose();
@@ -157,26 +183,11 @@ test.each(["sessions.reset", "sessions.delete"] as const)(
 );
 
 test("repository ownership survives reset and archive, then permanent deletion releases it", async () => {
-  const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:repository-lifecycle";
-  const repositories = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
-  const repository = await repositories.create({
-    agentId: "main",
-    sessionKey,
-    url: "https://github.com/openclaw/fixture.git",
-    runSetupScript: false,
-    assertCurrent: () => {},
-  });
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry("repository-lifecycle-session", {
-        repositoryWorkspaceId: repository.workspaceId,
-      }),
-    },
-  });
-  const artifactRoot = repositories.artifactPath(repository.workspaceId);
-  await fs.mkdir(artifactRoot, { recursive: true });
-  await fs.writeFile(path.join(artifactRoot, "retained-checkpoint"), "accepted checkpoint");
+  const { storePath, repositories, repository, artifactRoot, artifact } =
+    await createRepositorySession(sessionKey, "repository-lifecycle-session", {
+      runSetupScript: false,
+    });
 
   for (const [method, params] of [
     ["sessions.reset", { key: sessionKey }],
@@ -202,9 +213,7 @@ test("repository ownership survives reset and archive, then permanent deletion r
   });
   expect(denied.ok).toBe(false);
   expect(await repositories.get(repository.workspaceId)).toEqual(repository);
-  expect(await fs.readFile(path.join(artifactRoot, "retained-checkpoint"), "utf8")).toBe(
-    "accepted checkpoint",
-  );
+  expect(await fs.readFile(artifact, "utf8")).toBe("accepted checkpoint");
   const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
   expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
   expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
@@ -215,23 +224,9 @@ test("repository ownership survives reset and archive, then permanent deletion r
 test.each(["owner grant", "retained placeholder", "folded sibling", "malformed row"] as const)(
   "repository cleanup preserves full logical absence checks for %s",
   async (boundary) => {
-    const { storePath } = await createSessionStoreDir();
     const sessionKey = "agent:main:matrix:channel:!Mixed:example.org";
-    const repositories = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
-    const repository = await repositories.create({
-      agentId: "main",
-      sessionKey,
-      url: "https://github.com/openclaw/fixture.git",
-      assertCurrent: () => {},
-    });
-    const original = sessionStoreEntry("repository-cleanup-original", {
-      repositoryWorkspaceId: repository.workspaceId,
-    });
-    await writeSessionStore({ entries: { [sessionKey]: original } });
-    const artifactRoot = repositories.artifactPath(repository.workspaceId);
-    await fs.mkdir(artifactRoot, { recursive: true });
-    const artifact = path.join(artifactRoot, "retained-checkpoint");
-    await fs.writeFile(artifact, "accepted checkpoint");
+    const { storePath, repositories, repository, artifactRoot, artifact } =
+      await createRepositorySession(sessionKey, "repository-cleanup-original");
     const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
       agentId: "main",
     }).path;

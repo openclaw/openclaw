@@ -4,7 +4,6 @@ import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { drainSystemEventEntries, peekSystemEvents } from "../infra/system-events.js";
 import {
   acknowledgeSessionStateNotices,
@@ -13,6 +12,10 @@ import {
 } from "../sessions/session-state-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  expectResetAcpState,
+  resolvedAcpMeta,
+} from "./server.sessions.reset-cleanup.test-support.js";
 import { onGatewaySessionReset } from "./session-reset-notifications.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
@@ -57,39 +60,12 @@ async function resetSession(options: Partial<ResetOptions> = {}) {
   });
 }
 
-function resolvedAcpMeta(): SessionAcpMeta {
-  return {
-    backend: "acpx",
-    agent: "codex",
-    runtimeSessionName: "runtime:reset",
-    mode: "persistent",
+const acpMeta = () =>
+  resolvedAcpMeta({
+    recordId: sessionKey,
+    backendSessionId: "backend-session-1",
     runtimeOptions: { runtimeMode: "auto", timeoutSeconds: 30 },
-    cwd: "/tmp/acp-session",
-    state: "idle",
-    identity: {
-      state: "resolved",
-      acpxRecordId: sessionKey,
-      acpxSessionId: "backend-session-1",
-      source: "status",
-      lastUpdatedAt: Date.now(),
-    },
-    lastActivityAt: Date.now(),
-  };
-}
-
-function expectResetAcpState(acp: SessionAcpMeta | undefined) {
-  expect(acp).toMatchObject({
-    backend: "acpx",
-    agent: "codex",
-    runtimeSessionName: "runtime:reset",
-    mode: "persistent",
-    runtimeOptions: { runtimeMode: "auto", timeoutSeconds: 30 },
-    cwd: "/tmp/acp-session",
-    state: "idle",
-    identity: { state: "pending", acpxRecordId: sessionKey },
   });
-  expect(acp?.identity?.acpxSessionId).toBeUndefined();
-}
 
 function accelerateAcpCleanupTimeout() {
   const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
@@ -106,7 +82,7 @@ async function seedAcpSession() {
   const { dir, storePath } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
-  seedCanonicalAcpSessionMeta({ sessionKey, meta: resolvedAcpMeta() });
+  seedCanonicalAcpSessionMeta({ sessionKey, meta: acpMeta() });
   const prepareFreshSession = vi.fn(async () => {});
   acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
     id: "acpx",
@@ -256,7 +232,7 @@ test.each([true, false])("binds legacy ACP to canonical row (existing=%s)", asyn
   await writeSessionStore({
     entries: existing ? { main: sessionStoreEntry("legacy-main") } : {},
   });
-  const { identity: _identity, ...legacyMeta } = resolvedAcpMeta();
+  const { identity: _identity, ...legacyMeta } = acpMeta();
   seedCanonicalAcpSessionMeta({ sessionKey, meta: legacyMeta });
   const reset = await directSessionReq("sessions.reset", { key: "main" });
   expect(reset.ok).toBe(true);
@@ -276,7 +252,7 @@ test.each(["global", "agent:work:main"])(
       for (const agent of ["main", "work"]) {
         seedCanonicalAcpSessionMeta({
           sessionKey: buildAcpDatabaseSessionKey("global", agent),
-          meta: { ...resolvedAcpMeta(), runtimeSessionName: `${agent}-owned` },
+          meta: { ...acpMeta(), runtimeSessionName: `${agent}-owned` },
         });
       }
       const readOwner = (agentId: string) =>
