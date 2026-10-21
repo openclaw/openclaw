@@ -346,7 +346,8 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito PG admission refusal"
     const facts = getPostgresPhysicalFacts(agent.db);
     assert(facts);
     const before = withEngineStoreAdmission(() => readShared(shared.db));
-    await withEngineStoreAdmission(() => closeOpenClawAgentDatabaseByPathAsync(agent.path));
+    installDatabaseProcessRole("cli-oneshot");
+    await closeOpenClawAgentDatabaseByPathAsync(agent.path);
     retireSqliteDatabaseAdmissionForPath(agent.path);
     const client = new Client({ connectionString: mixedAgentConnection });
     await client.connect();
@@ -359,7 +360,6 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito PG admission refusal"
           withOpenClawAgentDatabaseReadOnly(() => undefined, { agentId: "main", path: agent.path }),
         ),
       ).toThrow(/belongs to agent different; requested agent main/);
-      installDatabaseProcessRole("cli-oneshot");
       const error: unknown = await repairReservedIncognitoSessionKeys({
         apply: true,
         cfg: {},
