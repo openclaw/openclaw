@@ -23,6 +23,7 @@ import { createTestApprovalManager } from "./exec-approval-manager.test-support.
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { startExactAuthorizationRequest } from "./server-methods.authorization.test-support.js";
+import { createRequestGate } from "./server-methods.request-gate.test-support.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import { admitChatSend } from "./server-methods/chat-send-admission.js";
 import * as chat from "./server-methods/chat-send-external-entry.js";
@@ -81,24 +82,14 @@ function pausedHandler(
   handler: GatewayRequestHandler,
   before?: (options: Parameters<GatewayRequestHandler>[0]) => void,
 ) {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
+  const gate = createRequestGate();
   return {
     handler: (async (options) => {
       before?.(options);
-      entered.resolve();
-      await release.promise;
+      await gate.pause();
       await handler(options);
     }) satisfies GatewayRequestHandler,
-    async during(request: Promise<void>, change: () => void | Promise<void>) {
-      try {
-        await Promise.race([entered.promise, request]);
-        await change();
-      } finally {
-        release.resolve();
-        await request;
-      }
-    },
+    during: gate.during,
   };
 }
 
@@ -514,16 +505,14 @@ describe("invocation-owned session mutations", () => {
           visibility: "draft" as const,
         };
         await upsertSessionEntryCore(scope, entry);
-        const entered = createDeferredCore();
-        const resume = createDeferredCore();
+        using gate = createRequestGate();
         const effect = vi.fn();
         let current = true;
         const dispatch = vi
           .spyOn(chat, "handleDirectExternalChatSend")
           .mockImplementation(async (options) => {
             const authority = readGatewayRequestMutationAuthority(options);
-            entered.resolve();
-            await resume.promise;
+            await gate.pause();
             authority.assertCurrent();
             options.sessionMutationAuthorization?.assertCurrent();
             effect();
@@ -542,7 +531,7 @@ describe("invocation-owned session mutations", () => {
         );
         const outcome = Promise.allSettled([request]);
         try {
-          await Promise.race([entered.promise, request]);
+          await Promise.race([gate.entered, request]);
           expect(dispatch).toHaveBeenCalledOnce();
           if (changed === "source") {
             current = false;
@@ -551,7 +540,7 @@ describe("invocation-owned session mutations", () => {
             await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement" });
           }
         } finally {
-          resume.resolve();
+          gate.release();
           await outcome;
           dispatch.mockRestore();
         }

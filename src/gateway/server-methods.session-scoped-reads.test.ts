@@ -7,13 +7,13 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import * as sessionDiff from "../sessions/session-diff.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
+import { createRequestGate } from "./server-methods.request-gate.test-support.js";
 import { createHistoryReadContext } from "./server-methods/chat-history.test-helpers.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
 import { sessionsDiffHandlers } from "./server-methods/sessions-diff.js";
@@ -326,8 +326,7 @@ describe("narrow session read owners", () => {
           getRuntimeConfig: () => cfg,
           subscribeSessionMessageEvents: subscribers.subscribe,
         });
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
+        using gate = createRequestGate();
         const respond = vi.fn();
         let current = true;
         const request = dispatchRequest(
@@ -341,8 +340,7 @@ describe("narrow session read owners", () => {
             extraHandlers: createLazyCoreHandlers({
               methods: ["sessions.messages.subscribe"],
               loadHandlers: async () => {
-                entered.resolve();
-                await release.promise;
+                await gate.pause();
                 return sessionSubscriptionHandlers;
               },
             }),
@@ -350,22 +348,22 @@ describe("narrow session read owners", () => {
           change,
         );
         const outcome = Promise.allSettled([request]);
-        try {
-          await Promise.race([entered.promise, request]);
-          expect(respond, JSON.stringify(respond.mock.calls)).not.toHaveBeenCalled();
-          if (change === "source") {
-            current = false;
-          }
-          if (change === "generation") {
-            await sessions.upsertSessionEntryCore(
-              { agentId: "main", sessionKey: key },
-              { ...entry, lifecycleRevision: "replacement", sessionId: "replacement" },
-            );
-          }
-        } finally {
-          release.resolve();
-          await outcome;
-        }
+        await gate.during(
+          request,
+          async () => {
+            expect(respond, JSON.stringify(respond.mock.calls)).not.toHaveBeenCalled();
+            if (change === "source") {
+              current = false;
+            }
+            if (change === "generation") {
+              await sessions.upsertSessionEntryCore(
+                { agentId: "main", sessionKey: key },
+                { ...entry, lifecycleRevision: "replacement", sessionId: "replacement" },
+              );
+            }
+          },
+          outcome,
+        );
         if (change === "source") {
           expect(await outcome).toMatchObject([
             { status: "rejected", reason: { message: "Gateway requester authority changed" } },
@@ -529,12 +527,8 @@ describe("narrow session read owners", () => {
             sessions.loadSessionEntry({ agentId: "main", sessionKey: key })?.lifecycleRevision,
           ).toBeUndefined();
         }
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
-        const io = prepareRead(method, async () => {
-          entered.resolve();
-          await release.promise;
-        });
+        using gate = createRequestGate();
+        const io = prepareRead(method, gate.pause);
         let current = true;
         const respond = vi.fn();
         const request = dispatchRead(method, {
@@ -545,7 +539,7 @@ describe("narrow session read owners", () => {
         });
         const outcome = Promise.allSettled([request]);
         try {
-          await Promise.race([entered.promise, request]);
+          await Promise.race([gate.entered, request]);
           expect(io).toHaveBeenCalledOnce();
           expect(respond).not.toHaveBeenCalled();
           if (changed === "authority") {
@@ -575,7 +569,7 @@ describe("narrow session read owners", () => {
             );
           }
         } finally {
-          release.resolve();
+          gate.release();
           await outcome;
           io.mockRestore();
         }
@@ -621,8 +615,7 @@ describe("narrow session read owners", () => {
           spawnedWorkspaceDir: state.workspaceDir,
         };
         await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
+        using gate = createRequestGate();
         let stats = 0;
         const readFile = vi.fn(async () => Buffer.from("remote content"));
         const unregister = registerAgentWorkspaceAccess(state.workspaceDir, {
@@ -633,8 +626,7 @@ describe("narrow session read owners", () => {
             },
             stat: async () => {
               if (++stats === 2) {
-                entered.resolve();
-                await release.promise;
+                await gate.pause();
               }
               return { type: "file", size: 14, mtimeMs: 1 };
             },
@@ -654,7 +646,7 @@ describe("narrow session read owners", () => {
         );
         const settled = Promise.allSettled([request]);
         try {
-          await Promise.race([entered.promise, request]);
+          await Promise.race([gate.entered, request]);
           expect(stats).toBe(2);
           expect(readFile).not.toHaveBeenCalled();
           if (revoke) {
@@ -664,7 +656,7 @@ describe("narrow session read owners", () => {
             );
           }
         } finally {
-          release.resolve();
+          gate.release();
           await settled;
           unregister();
         }

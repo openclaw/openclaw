@@ -173,8 +173,16 @@ test("routes fanout and removes both session indexes through connected nodes", a
   runtime.nodeSubscribe("node-b", "main", "conn-b");
   expect(runtime.nodeHasSessionSubscribers(" main ")).toBe(true);
   expect(runtime.nodeHasSessionSubscribers("Main")).toBe(false);
-  await runtime.nodeSendToSession("main", "chat", { ok: true });
-  expect(a.frames.map((frame) => JSON.parse(frame).payload)).toEqual([{ ok: true }]);
+  const parse = vi.spyOn(JSON, "parse");
+  try {
+    await runtime.nodeSendToSession("main", "chat", { ok: true });
+    expect(parse).not.toHaveBeenCalled();
+  } finally {
+    parse.mockRestore();
+  }
+  expect(a.frames.map((frame) => JSON.parse(frame))).toEqual([
+    { type: "event", event: "chat", payload: { ok: true } },
+  ]);
   expect(b.frames.map((frame) => JSON.parse(frame).payload)).toEqual([{ ok: true }]);
 
   runtime.nodeUnsubscribe("node-a", " main ", "conn-a");
@@ -478,26 +486,6 @@ test.each(["replacement", "capacity-only"])("routes runner inventory changes on 
     expect(publishInventory(runtime, 0)).toEqual({ changed: true });
   }
   expectChange(change === "replacement", change !== "replacement", 3);
-});
-
-test("forwards subscribed payload json without parsing it again", async () => {
-  const runtime = createRuntime();
-  const { frames } = registerNode(runtime, "conn-node-a", "generation-a");
-  runtime.nodeSubscribe("node-a", "main", "conn-node-a");
-
-  const parseSpy = vi.spyOn(JSON, "parse");
-  try {
-    await runtime.nodeSendToSession("main", "chat", { ok: true });
-    expect(frames).toHaveLength(1);
-    expect(parseSpy).not.toHaveBeenCalled();
-  } finally {
-    parseSpy.mockRestore();
-  }
-  expect(JSON.parse(frames[0] ?? "{}")).toEqual({
-    type: "event",
-    event: "chat",
-    payload: { ok: true },
-  });
 });
 
 test.each([true, false])(
