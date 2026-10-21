@@ -65,6 +65,22 @@ type DreamingPluginApiTestDouble = DreamingPluginApi & {
   registerService: ReturnType<typeof vi.fn<DreamingPluginApi["registerService"]>>;
 };
 
+function cronJob(id: string, overrides: Partial<CronJobLike> = {}): CronJobLike {
+  return {
+    id,
+    name: constants.MANAGED_DREAMING_CRON_NAME,
+    enabled: true,
+    schedule: { kind: "cron", expr: "0 3 * * *" },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: "authored payload" },
+    createdAtMs: 10,
+    ...overrides,
+  };
+}
+const agentTurn = (message: string) => ({ kind: "agentTurn" as const, message });
+const systemEvent = (text: string) => ({ kind: "systemEvent" as const, text });
+
 function createLogger() {
   return {
     debug: vi.fn(),
@@ -90,6 +106,23 @@ function createDreamingConfig(
       },
     },
   } as OpenClawConfig;
+}
+
+function workspaceDreamingConfig(workspace: string) {
+  return createDreamingConfig(
+    { enabled: true, limit: 5, phases: { light: { enabled: false }, rem: { enabled: false } } },
+    { agents: { defaults: { workspace } } },
+  );
+}
+
+async function readDeepReport(workspaceDir: string) {
+  const reportDir = path.join(workspaceDir, "memory", "dreaming", "deep");
+  const reports = await fs.readdir(reportDir);
+  expect(reports).toHaveLength(1);
+  return fs.readFile(
+    path.join(reportDir, expectDefined(reports[0], "deep report filename")),
+    "utf-8",
+  );
 }
 
 function createDreamingTestContext(
@@ -123,7 +156,15 @@ function createDreamingTestContext(
     return result;
   };
   Object.assign(api.runtime, { agent: createPluginRuntimeMock().agent }, params.runtime);
-  return { api, harness, logger };
+  return {
+    api,
+    harness,
+    logger,
+    reply: (
+      ctx: Parameters<ReturnType<typeof getBeforeAgentReplyHandler>>[1],
+      text = constants.DREAMING_SYSTEM_EVENT_TEXT,
+    ) => getBeforeAgentReplyHandler(api.on)({ cleanedBody: text }, ctx),
+  };
 }
 
 async function startDreaming(
@@ -403,67 +444,37 @@ describe("dreaming service reconciliation", () => {
     "requests Doctor without changing legacy jobs when dreaming enabled=%s",
     async (enabled) => {
       vi.useFakeTimers();
-      const legacyJobs: CronJobLike[] = [
-        {
-          id: "legacy-tagged",
-          name: constants.MANAGED_DREAMING_CRON_NAME,
+      const legacyJobs = [
+        cronJob("legacy-tagged", {
           description: `${constants.MANAGED_DREAMING_CRON_TAG} legacy job`,
-          payload: { kind: "agentTurn", message: "authored payload" },
-        },
-        {
-          id: "legacy-agent-turn",
-          name: constants.MANAGED_DREAMING_CRON_NAME,
-          payload: { kind: "agentTurn", message: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        },
-        {
-          id: "legacy-system-event",
-          name: constants.MANAGED_DREAMING_CRON_NAME,
-          payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        },
-        {
-          id: "legacy-light-tagged",
+          payload: agentTurn("authored payload"),
+        }),
+        cronJob("legacy-agent-turn", { payload: agentTurn(constants.DREAMING_SYSTEM_EVENT_TEXT) }),
+        cronJob("legacy-system-event", {
+          payload: systemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT),
+        }),
+        cronJob("legacy-light-tagged", {
           name: "Renamed light job",
           description: "[managed-by=memory-core.dreaming.light]",
-        },
-        {
-          id: "legacy-rem-tagged",
+        }),
+        cronJob("legacy-rem-tagged", {
           name: "Renamed REM job",
           description: "[managed-by=memory-core.dreaming.rem]",
-        },
-        {
-          id: "legacy-light-event",
+        }),
+        cronJob("legacy-light-event", {
           name: "Memory Light Dreaming",
-          payload: { kind: "systemEvent", text: "__openclaw_memory_core_light_sleep__" },
-        },
-        {
-          id: "legacy-rem-event",
+          payload: systemEvent("__openclaw_memory_core_light_sleep__"),
+        }),
+        cronJob("legacy-rem-event", {
           name: "Memory REM Dreaming",
-          payload: { kind: "systemEvent", text: "__openclaw_memory_core_rem_sleep__" },
-        },
-        {
-          id: "operator-job",
-          name: constants.MANAGED_DREAMING_CRON_NAME,
-          payload: { kind: "agentTurn", message: "authored payload" },
-        },
-        {
-          id: "other-declaration",
+          payload: systemEvent("__openclaw_memory_core_rem_sleep__"),
+        }),
+        cronJob("operator-job", { payload: agentTurn("authored payload") }),
+        cronJob("other-declaration", {
           declarationKey: "other-plugin:dreaming",
-          name: constants.MANAGED_DREAMING_CRON_NAME,
           description: constants.MANAGED_DREAMING_CRON_TAG,
-        },
-      ].map((job) =>
-        Object.assign(
-          {
-            enabled: true,
-            schedule: { kind: "cron", expr: "0 3 * * *" },
-            sessionTarget: "main",
-            wakeMode: "next-heartbeat",
-            payload: { kind: "systemEvent", text: "authored payload" },
-            createdAtMs: 10,
-          },
-          job,
-        ),
-      );
+        }),
+      ];
       const before = structuredClone(legacyJobs);
       const { api, harness, logger } = createDreamingTestContext({
         config: createDreamingConfig({ enabled, frequency: "*/3 * * * *" }),
@@ -486,19 +497,17 @@ describe("dreaming service reconciliation", () => {
   );
 
   it.each([false, true])("defers declared jobs only when legacy=%s", async (hasLegacy) => {
-    const seeded = (id: string, createdAtMs: number, expr: string): CronJobLike => ({
-      id,
-      declarationKey: "memory-core:memory-dreaming-promotion",
-      name: constants.MANAGED_DREAMING_CRON_NAME,
-      description: `${constants.MANAGED_DREAMING_CRON_TAG} declared dreaming job`,
-      enabled: true,
-      schedule: { kind: "cron", expr },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: constants.DREAMING_SYSTEM_EVENT_TEXT },
-      delivery: { mode: "none" },
-      createdAtMs,
-    });
+    const seeded = (id: string, createdAtMs: number, expr: string) =>
+      cronJob(id, {
+        declarationKey: "memory-core:memory-dreaming-promotion",
+        description: `${constants.MANAGED_DREAMING_CRON_TAG} declared dreaming job`,
+        schedule: { kind: "cron", expr },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: agentTurn(constants.DREAMING_SYSTEM_EVENT_TEXT),
+        delivery: { mode: "none" },
+        createdAtMs,
+      });
     const legacyJob = seeded("legacy-job", 5, "0 3 * * *");
     delete legacyJob.declarationKey;
     const { api, harness, logger } = createDreamingTestContext({
@@ -550,7 +559,7 @@ describe("dreaming service reconciliation", () => {
   });
 
   it("only triggers managed dreaming when the queued cron event is still pending", async () => {
-    const { api, harness } = createDreamingTestContext({
+    const { api, harness, reply } = createDreamingTestContext({
       config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
     });
 
@@ -562,11 +571,7 @@ describe("dreaming service reconciliation", () => {
       contextKey: "cron:memory-dreaming",
     });
 
-    const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
-    const first = await beforeAgentReply(
-      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-      { trigger: "heartbeat", workspaceDir: ".", sessionKey },
-    );
+    const first = await reply({ trigger: "heartbeat", workspaceDir: ".", sessionKey });
 
     expect(first).toEqual({
       handled: true,
@@ -575,16 +580,13 @@ describe("dreaming service reconciliation", () => {
 
     resetSystemEventsForTest();
 
-    const second = await beforeAgentReply(
-      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-      { trigger: "heartbeat", workspaceDir: ".", sessionKey },
-    );
+    const second = await reply({ trigger: "heartbeat", workspaceDir: ".", sessionKey });
 
     expect(second).toBeUndefined();
   });
 
   it("resolves queued managed dreaming cron events from the base session for isolated heartbeats", async () => {
-    const { api, harness } = createDreamingTestContext({
+    const { api, harness, reply } = createDreamingTestContext({
       config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
     });
 
@@ -595,16 +597,12 @@ describe("dreaming service reconciliation", () => {
       contextKey: "cron:memory-dreaming",
     });
 
-    const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
-    const result = await beforeAgentReply(
-      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-      {
-        trigger: "heartbeat",
-        workspaceDir: ".",
-        sessionKey: "agent:main:main:heartbeat",
-        heartbeatEventQueueSessionKey: "agent:main:main",
-      },
-    );
+    const result = await reply({
+      trigger: "heartbeat",
+      workspaceDir: ".",
+      sessionKey: "agent:main:main:heartbeat",
+      heartbeatEventQueueSessionKey: "agent:main:main",
+    });
 
     expect(result).toEqual({
       handled: true,
@@ -747,7 +745,7 @@ describe("dreaming service reconciliation", () => {
           },
         }) as OpenClawConfig,
     );
-    const { api, harness } = createDreamingTestContext({
+    const { api, harness, reply } = createDreamingTestContext({
       runtime: { config: { current: runtimeCurrentConfig } },
     });
 
@@ -759,11 +757,7 @@ describe("dreaming service reconciliation", () => {
       contextKey: "cron:memory-dreaming",
     });
 
-    const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
-    const result = await beforeAgentReply(
-      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-      { trigger: "heartbeat", workspaceDir, sessionKey },
-    );
+    const result = await reply({ trigger: "heartbeat", workspaceDir, sessionKey });
 
     expect(runtimeCurrentConfig).toHaveBeenCalled();
     expect(result).toEqual({
@@ -777,29 +771,18 @@ describe("dreaming service reconciliation", () => {
   it("sweeps each workspace as its owning agent rather than the roster default", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-owner-");
     runDreamingSweepPhasesMock.mockClear();
-    const { api, harness } = createDreamingTestContext({
-      config: createDreamingConfig(
-        {
-          enabled: true,
-          limit: 5,
-          phases: { light: { enabled: false }, rem: { enabled: false } },
-        },
-        { agents: { defaults: { workspace: workspaceDir } } },
-      ),
+    const { api, harness, reply } = createDreamingTestContext({
+      config: workspaceDreamingConfig(workspaceDir),
     });
 
     await startDreaming(api, harness);
 
-    const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
-    await beforeAgentReply(
-      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-      {
-        trigger: "cron",
-        agentId: "researcher",
-        workspaceDir,
-        sessionKey: "agent:researcher:cron:memory-dreaming",
-      },
-    );
+    await reply({
+      trigger: "cron",
+      agentId: "researcher",
+      workspaceDir,
+      sessionKey: "agent:researcher:cron:memory-dreaming",
+    });
 
     expect(runDreamingSweepPhasesMock).toHaveBeenCalledTimes(1);
     const sweepArgs = expectDefined(
@@ -868,13 +851,7 @@ describe("dreaming service reconciliation", () => {
         { trigger: "cron", agentId: "main", workspaceDir },
       );
       expect(logger.error).not.toHaveBeenCalled();
-      const reportDir = path.join(workspaceDir, "memory", "dreaming", "deep");
-      const reports = await fs.readdir(reportDir);
-      expect(reports).toHaveLength(1);
-      const report = await fs.readFile(
-        path.join(reportDir, expectDefined(reports[0], "deep report filename")),
-        "utf-8",
-      );
+      const report = await readDeepReport(workspaceDir);
       expect(report).toContain(
         `- Ranked ${rejected + promoted} candidate(s) for durable promotion.`,
       );
@@ -930,35 +907,19 @@ describe("dreaming service reconciliation", () => {
         removedStaleLock: stale,
       });
       try {
-        const { api, harness, logger } = createDreamingTestContext({
-          config: createDreamingConfig(
-            {
-              enabled: true,
-              limit: 5,
-              phases: { light: { enabled: false }, rem: { enabled: false } },
-            },
-            { agents: { defaults: { workspace: workspaceDir } } },
-          ),
+        const { api, harness, logger, reply } = createDreamingTestContext({
+          config: workspaceDreamingConfig(workspaceDir),
         });
         await startDreaming(api, harness);
-        await getBeforeAgentReplyHandler(api.on)(
-          { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-          { trigger: "cron", agentId: "main", workspaceDir },
-        );
+        await reply({ trigger: "cron", agentId: "main", workspaceDir });
         expect(logger.error).not.toHaveBeenCalled();
         const summaryLines = mockStringMessages(logger.info).filter((line) =>
           line.startsWith("memory-core: normalized recall artifacts before dreaming"),
         );
-        const reportDir = path.join(workspaceDir, "memory", "dreaming", "deep");
         expect(summaryLines).toEqual([
           `memory-core: normalized recall artifacts before dreaming (${expected}) [workspace=${workspaceDir}].`,
         ]);
-        const reports = await fs.readdir(reportDir);
-        expect(reports).toHaveLength(1);
-        const report = await fs.readFile(
-          path.join(reportDir, expectDefined(reports[0], "deep report filename")),
-          "utf-8",
-        );
+        const report = await readDeepReport(workspaceDir);
         expect(
           report.split("\n").filter((line) => line.startsWith("- Repaired recall artifacts:")),
         ).toEqual([`- Repaired recall artifacts: ${expected}.`]);
@@ -970,23 +931,13 @@ describe("dreaming service reconciliation", () => {
 
   it("does not create memory/ or DREAMS.md on an empty workspace sweep", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-empty-sweep-");
-    const { api, harness } = createDreamingTestContext({
-      config: createDreamingConfig(
-        {
-          enabled: true,
-          limit: 5,
-          phases: { light: { enabled: false }, rem: { enabled: false } },
-        },
-        { agents: { defaults: { workspace: workspaceDir } } },
-      ),
+    const { api, harness, reply } = createDreamingTestContext({
+      config: workspaceDreamingConfig(workspaceDir),
     });
 
     await startDreaming(api, harness);
 
-    await getBeforeAgentReplyHandler(api.on)(
-      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-      { trigger: "cron", agentId: "main", workspaceDir },
-    );
+    await reply({ trigger: "cron", agentId: "main", workspaceDir });
 
     await expect(fs.access(path.join(workspaceDir, "memory"))).rejects.toThrow();
     await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toThrow();

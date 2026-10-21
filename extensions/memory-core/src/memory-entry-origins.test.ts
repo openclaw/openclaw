@@ -32,6 +32,7 @@ import {
   reserveMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
+import { memoryOrigin as origin } from "./memory-forget.suite.test-support.js";
 import {
   ensureMemorySessionTombstones,
   hasMemorySessionTombstone,
@@ -68,17 +69,6 @@ describe("memory entry origins", () => {
     vi.unstubAllEnvs();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
-
-  function origin(entryKey: string, sessionId: string): MemoryEntryOrigin {
-    return {
-      entryKey,
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      originClass: "owner",
-      observedAt: 1_000,
-    };
-  }
 
   const databasePath = () => resolveOpenClawAgentSqlitePath({ agentId: "main" });
   const database = () =>
