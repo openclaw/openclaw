@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { onCleanup } from "solid-js";
+import { onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import type { ChatDetailsDesktopSectionId } from "./chat-details-types.ts";
@@ -76,7 +76,7 @@ export function createDetailsDesktopReveal(
     },
     { targets: () => [content], changeTiming: "sync" },
   );
-  onCleanup(() => animation?.cancel());
+  onSettled(() => () => animation?.cancel());
   return {
     details: (element: HTMLDetailsElement) => {
       disclosure = element;

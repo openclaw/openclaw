@@ -102,6 +102,7 @@ describe("connection bootstrap coordinator", () => {
       started.push("route-prerequisite");
     });
     expect(started).toEqual(["route-prerequisite"]);
+    expect(coordinator.foregroundReady).toBe(false);
 
     coordinator.setForegroundPane(retiredPane, { sessionKey, client, ready: true });
     expect(started, "an unresolved route has not selected that transcript").toEqual([
@@ -123,9 +124,11 @@ describe("connection bootstrap coordinator", () => {
         started,
         "cached, old, pending, and other-session facts cannot release bulk reads",
       ).toEqual(["route-prerequisite"]);
+      expect(coordinator.foregroundReady).toBe(false);
     }
     coordinator.setForegroundPane(retiredPane, null);
     coordinator.setForegroundPane(pane, { sessionKey, client, ready: true });
+    expect(coordinator.foregroundReady).toBe(true);
     await vi.waitFor(() =>
       expect(started).toEqual(["route-prerequisite", "background-0", "background-1"]),
     );
