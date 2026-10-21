@@ -373,6 +373,7 @@ describe("chat history cursor revalidation", () => {
 
       const reply = message("assistant", "Recovery completed.", "retry-answer", 3, {
         idempotencyKey: "run-retry",
+        runId: "run-retry",
       });
       const recovered =
         kind === "delta"
