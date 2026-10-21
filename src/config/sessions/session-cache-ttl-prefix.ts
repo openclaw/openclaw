@@ -1,19 +1,17 @@
 import { sql } from "kysely";
-import {
-  executeSqliteQueryTakeFirstSync,
-  iterateSqliteQuerySync,
-} from "../../infra/kysely-sync.js";
+import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type {
   CacheTtlProjectionPrefix,
   SessionTranscriptBoundedActiveContext,
 } from "./session-accessor.sqlite-contract.js";
 import {
   getActiveTranscriptKysely,
+  readSnapshotEventRows,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import { collectCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix-values.js";
 import {
-  transcriptEventJsonSql,
+  readTranscriptPayload,
   transcriptEventModelNavigationSql,
   transcriptPredicateSql,
 } from "./transcript-payload.js";
@@ -63,7 +61,19 @@ export function readCacheTtlProjectionPrefix(
       .crossJoin("transcript_events as event")
       .whereRef("event.session_id", "=", "active.session_id")
       .whereRef("event.seq", "=", "active.event_seq")
-      .select(["event.seq", entryType.as("event_type")])
+      .select("event.seq")
+      .select((eb) =>
+        eb
+          .case()
+          .when(entryType, "=", "reset")
+          // Preserve the classified kind when legacy JSON starts with another duplicate type.
+          .then(
+            transcriptEventModelNavigationSql(projection.database.db, "event", sql.lit("reset")),
+          )
+          .else(null)
+          .end()
+          .as("reset_json"),
+      )
       .select(
         transcriptPredicateSql(projection.database.db, "navigation_valid", "event").as(
           "navigation_valid",
@@ -112,27 +122,11 @@ export function readCacheTtlProjectionPrefix(
     (function* () {
       for (const row of rows) {
         assertTranscriptNavigationValid(row.navigation_valid);
-        // Sort identities only: projecting payloads there decompresses every obsolete checkpoint
-        // before the first yield. Both reads remain in the caller's projection snapshot.
-        const payload = executeSqliteQueryTakeFirstSync(
-          projection.database.db,
-          db
-            .selectFrom("transcript_events as event")
-            .select(
-              (row.event_type === "reset"
-                ? // Preserve the classified kind when legacy JSON starts with another duplicate type.
-                  transcriptEventModelNavigationSql(
-                    projection.database.db,
-                    "event",
-                    sql.lit("reset"),
-                  )
-                : transcriptEventJsonSql(projection.database.db, "event")
-              ).as("event_json"),
-            )
-            .where("event.session_id", "=", projection.resolved.sessionId)
-            .where("event.seq", "=", row.seq),
-        )!;
-        yield JSON.parse(payload.event_json) as unknown;
+        // Sorting checkpoint payloads decompresses obsolete history before the first yield.
+        // Fetch only consumed payloads through the owner of this same projection snapshot.
+        const eventJson =
+          row.reset_json ?? readTranscriptPayload(readSnapshotEventRows(projection, [row.seq])[0]!);
+        yield JSON.parse(eventJson) as unknown;
       }
     })(),
   );
