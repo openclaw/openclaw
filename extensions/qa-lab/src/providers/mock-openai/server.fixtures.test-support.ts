@@ -1,13 +1,19 @@
+import { expect } from "vitest";
 import {
   type MockServer,
   expectNonStreamingResponsesJson,
   expectOpenAiNonStreamingResponsesJson,
   expectResponses,
+  requireRecord,
   makeUserInput,
   postResponses,
 } from "./server.test-harness.js";
 
 type Options = Record<string, unknown>;
+
+export function userInputs(...items: (string | Record<string, unknown>)[]) {
+  return items.map((item) => (typeof item === "string" ? makeUserInput(item) : item));
+}
 
 function requestInput(input: unknown) {
   // A bare string is shorthand for one user turn; raw wire inputs use the harness directly.
@@ -75,7 +81,6 @@ export function completedResult(value: unknown) {
 export function textBlock(text: string) {
   return { type: "input_text", text };
 }
-import { expect } from "vitest";
 
 export function expectIncludes(text: string, ...parts: string[]) {
   for (const part of parts) {
@@ -94,8 +99,25 @@ export function expectResponseText(payload: unknown, text: string) {
 }
 
 export function expectAnthropicText(payload: unknown, text: string) {
-  expect(payload).toMatchObject({
-    stop_reason: "end_turn",
-    content: [{ type: "text", text }],
-  });
+  expect(payload).toMatchObject({ stop_reason: "end_turn", content: [{ type: "text", text }] });
+}
+
+export function expectSlots(events: Record<string, unknown>[], ids: unknown[]) {
+  expect(
+    events
+      .filter(
+        (event) =>
+          event.type === "response.output_item.added" || event.type === "response.output_item.done",
+      )
+      .map((event) => [
+        event.type,
+        requireRecord(event.item, "output item").id,
+        event.output_index,
+      ]),
+  ).toEqual(
+    ids.flatMap((id, index) => [
+      ["response.output_item.added", id, index],
+      ["response.output_item.done", id, index],
+    ]),
+  );
 }

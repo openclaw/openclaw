@@ -3,7 +3,7 @@ import type { PluginHookRegistration } from "openclaw/plugin-sdk/plugin-test-run
 import { describe, expect, it } from "vitest";
 import qaLabPlugin from "../../../index.js";
 import { QA_SESSION_OBSERVER_HEADER } from "../shared/session-observer-registry.js";
-import { respond, textBlock } from "./server.fixtures.test-support.js";
+import { respond, textBlock, userInputs } from "./server.fixtures.test-support.js";
 import {
   type MockServer,
   createMockServerTestHarness,
@@ -100,7 +100,7 @@ describe("QA transport session identity", () => {
         { "x-session-affinity": sessionId },
       );
     const handoffs = await Promise.all(
-      sessions.map((id) => postSession(id, [makeUserInput(handoffPrompt)])),
+      sessions.map((id) => postSession(id, userInputs(handoffPrompt))),
     );
     for (const handoff of handoffs) {
       expect(outputToolArgsFromItem(outputToolCall(handoff, "sessions_spawn"))).toMatchObject({
@@ -150,13 +150,13 @@ describe("QA transport session identity", () => {
     const server = await startMockServer();
     await observeSession(server, "observed-agent-session");
     for (const body of [
-      { instructions, input: [makeUserInput("Reply exactly: {}")], tools: [] },
+      { instructions, input: userInputs("Reply exactly: {}"), tools: [] },
       { instructions, input: "Reply exactly: {}" },
       ...["system", "developer"].map((role) => ({
-        input: [
+        input: userInputs(
           { type: "message", role, content: [textBlock(instructions)] },
-          makeUserInput("Reply exactly: {}"),
-        ],
+          "Reply exactly: {}",
+        ),
       })),
     ]) {
       const response = await postJson(server, "/v1/responses", body);
@@ -184,7 +184,7 @@ describe("QA transport session identity", () => {
     await observeSession(server, sessionId);
     const request = {
       instructions: "You are a JSON-only function. Return only a valid JSON value.",
-      input: [makeUserInput("Reply exactly: {}")],
+      input: userInputs("Reply exactly: {}"),
       tools: [],
       system: "You are a JSON-only function.",
       messages: [
@@ -196,9 +196,7 @@ describe("QA transport session identity", () => {
     expect(missing.status).toBe(500);
     expect(await missing.text()).toContain("Missing QA session identity");
     expect(await getJson(server, "/debug/requests")).toEqual([]);
-    const admitted = await postJson(server, route, request, {
-      "x-session-affinity": sessionId,
-    });
+    const admitted = await postJson(server, route, request, { "x-session-affinity": sessionId });
     expect(admitted.status).toBe(200);
     expect(await getJson(server, "/debug/last-request")).toMatchObject({ sessionId });
   });
@@ -222,14 +220,14 @@ describe("QA transport session identity", () => {
       "/v1/responses",
       {
         instructions: "Runtime: embedded | agent=qa | session=agent:qa:main",
-        input: [
-          makeUserInput("Subagent terminal reply QA check: visible."),
+        input: userInputs(
+          "Subagent terminal reply QA check: visible.",
           { type: "function_call", call_id: "spawn", name: "sessions_spawn", arguments: "{}" },
           makeToolOutputWithCallId(
             "spawn",
             JSON.stringify({ status: "accepted", childSessionKey, runId: "identity-run" }),
           ),
-        ],
+        ),
       },
       { session_id: sessionId.slice(0, 64) },
     );

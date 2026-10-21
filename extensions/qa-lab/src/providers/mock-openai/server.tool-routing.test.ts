@@ -1,6 +1,8 @@
+import { runInNewContext } from "node:vm";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { expect, it, describe } from "vitest";
+import { expect, it, describe, vi } from "vitest";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
 import type { AnthropicMessage } from "./mock-openai-contracts.js";
 import {
@@ -8,6 +10,8 @@ import {
   functionCall,
   respond,
   textBlock,
+  respondOpenAi,
+  userInputs,
 } from "./server.fixtures.test-support.js";
 import {
   type AnthropicResponse,
@@ -36,15 +40,15 @@ import {
   outputItem,
   outputToolCallId,
   expectOpenAiNonStreamingResponsesJson,
+  outputToolArgsFromItem,
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
+
 const catalogTools = ["dispatch_action", "tool_search", "tool_describe", "sessions_yield"].map(
-  (name) => ({
-    type: "function",
-    name,
-  }),
+  (name) => ({ type: "function", name }),
 );
+
 const shellExec = {
   type: "function",
   name: "exec",
@@ -54,16 +58,20 @@ const shellExec = {
     required: ["command"],
   },
 };
+
 const namespace = [{ type: "namespace", name: "openclaw", tools: catalogTools }];
+
 function catalogOutput(name: string, result: Record<string, unknown>) {
   return JSON.stringify({ tool: { id: `openclaw:${name}`, name, source: "openclaw" }, result });
 }
-function catalogResult(name: string, details: Record<string, unknown>) {
+
+function catalogResult(name: string, details: Record<string, unknown>, includeDetails = true) {
   return catalogOutput(name, {
     content: [{ type: "text", text: JSON.stringify(details) }],
-    details,
+    ...(includeDetails ? { details } : {}),
   });
 }
+
 async function startTurn(prompt: string, body: Record<string, unknown> = {}) {
   const server = await startMockServer();
   const input: unknown[] = [makeUserInput(prompt)];
@@ -85,10 +93,7 @@ it("completes WhatsApp upload-file through the namespaced catalog with intention
     contentType: "image/png",
   };
 
-  const turn = await startTurn(prompt, {
-    model: "gpt-5.6-luna",
-    tools: [shellExec, ...namespace],
-  });
+  const turn = await startTurn(prompt, { model: "gpt-5.6-luna", tools: [shellExec, ...namespace] });
   turn.input.unshift({
     role: "developer",
     content: "## Messaging\n### message tool\n- Proactive send/channel action: `message`.",
@@ -350,7 +355,7 @@ it("binds crossed same-case catalog responses to their matching workers", async 
       model: "gpt-5.6-luna",
       instructions: `Runtime: embedded\n- Your session: ${childKey(n)}.`,
       client_metadata: { session_id: `qa-terminal-child-${n}` },
-      input: [makeUserInput("Subagent terminal reply QA worker: visible.")],
+      input: userInputs("Subagent terminal reply QA worker: visible."),
     });
   const acknowledgeParent = async (n: number) => {
     const input: unknown[] = [makeUserInput("Subagent terminal reply QA check: visible.")];
@@ -710,17 +715,7 @@ describe("subagent-handoff", () => {
 
   // Captured smoke-ci surface: exec is a shell tool, not Code Mode (no wait).
   const structuredTools = ["exec", "sessions_yield", "dispatch_action", "write"].map((name) =>
-    name === "exec"
-      ? {
-          type: "function",
-          name,
-          parameters: {
-            type: "object",
-            properties: { command: { type: "string" } },
-            required: ["command"],
-          },
-        }
-      : { type: "function", name },
+    name === "exec" ? shellExec : { type: "function", name },
   );
   const metadataCarrier = user(
     [
@@ -750,20 +745,7 @@ describe("subagent-handoff", () => {
               { id: "sessions_spawn", args: { task: "Bounded task" } },
               "dispatch",
             ),
-            makeToolOutputWithCallId(
-              "dispatch",
-              JSON.stringify({
-                tool: {
-                  id: `openclaw:${target}`,
-                  name: target,
-                  source: "openclaw",
-                },
-                result: {
-                  content: [{ type: "text", text: JSON.stringify(failure) }],
-                  ...(details ? { details: failure } : {}),
-                },
-              }),
-            ),
+            makeToolOutputWithCallId("dispatch", catalogResult(target, failure, details)),
           ],
         });
         if (unwrap) {
@@ -813,13 +795,7 @@ describe("subagent-handoff", () => {
       const accepted = { status: "accepted", childSessionKey, runId: "structured-run" };
       const receipt = makeToolOutputWithCallId(
         outputToolCallId(call, "spawn"),
-        JSON.stringify({
-          tool: { id: "openclaw:sessions_spawn", name: "sessions_spawn", source: "openclaw" },
-          result: {
-            content: [{ type: "text", text: JSON.stringify(accepted) }],
-            details: accepted,
-          },
-        }),
+        catalogResult("sessions_spawn", accepted),
       );
       const acknowledged = await expectNonStreamingResponsesJson(server, {
         ...parent,
@@ -890,4 +866,135 @@ describe("subagent-handoff", () => {
       expect(outputItems(finalization).some((item) => item.type === "function_call")).toBe(false);
     });
   });
+});
+
+type JsonObject = Record<string, unknown>;
+
+const tool = (name: string, parameters: JsonObject = { type: "object" }) => ({
+  type: "function",
+  name,
+  parameters,
+});
+
+const restartCheckpointTools = [
+  { type: "function", name: "exec", parameters: guestCodeModeExecTool.parameters },
+  tool("wait", { type: "object", properties: { runId: { type: "string" } }, required: ["runId"] }),
+];
+
+const restartRecoveryPrompt =
+  "Your previous turn was interrupted by a gateway restart. Continue from the existing transcript.";
+
+const unsafeProbe = tool("qa_restart_unsafe_probe");
+
+function singleToolCall(payload: unknown, name: string) {
+  expect(outputItems(payload)).toHaveLength(1);
+  return outputToolCall(payload, name);
+}
+
+async function checkpointWait(
+  input: JsonObject[],
+  request: () => Promise<unknown>,
+  checkpoint: number,
+  [runId, fallback]: [string, string],
+) {
+  const execCall = singleToolCall(await request(), "exec");
+  const execArgs = outputToolArgsFromItem(execCall);
+  await expectCheckpoint(execArgs, checkpoint);
+  input.push(
+    execCall,
+    makeToolOutputWithCallId(
+      outputToolCallId(execCall, fallback),
+      JSON.stringify({ status: "waiting", runId }),
+    ),
+  );
+  const waitCall = singleToolCall(await request(), "wait");
+  expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
+  input.push(waitCall, makeUserInput(restartRecoveryPrompt));
+  return execArgs;
+}
+
+async function expectCheckpoint(execArgs: JsonObject, checkpoint: number) {
+  validateToolArguments(guestCodeModeExecTool, {
+    type: "toolCall",
+    id: "restart-checkpoint",
+    name: "exec",
+    arguments: execArgs,
+  });
+  expect(execArgs).toEqual({
+    title: expect.any(String),
+    code: expect.any(String),
+    restartSafe: true,
+  });
+  const started = createDeferred<void>();
+  const released = createDeferred<void>();
+  const target = Object.assign(
+    vi.fn((_args: unknown) => {
+      started.resolve();
+      return released.promise;
+    }),
+    { toolName: "qa_restart_wait" },
+  );
+  const yieldControl = vi.fn();
+  const execution: unknown = runInNewContext(`(async () => { ${String(execArgs.code)} })()`, {
+    catalog: {
+      search: async (name: string) => {
+        expect(name).toBe("qa_restart_wait");
+        return [target];
+      },
+    },
+    yield_control: yieldControl,
+  });
+  try {
+    await Promise.race([
+      started.promise,
+      Promise.resolve(execution).then(() => {
+        throw new Error("checkpoint script completed before waiting");
+      }),
+    ]);
+    expect(yieldControl).toHaveBeenCalled();
+  } finally {
+    released.resolve();
+    await expect(execution).resolves.toBe(`CHECKPOINT-${checkpoint}`);
+  }
+  expect(target.mock.calls.map(([args]) => args)).toEqual([{}]);
+}
+
+it("settles hard-kill recovery after one real checkpoint and resets from request history", async () => {
+  const server = await startMockServer();
+  const prompt = "Code Mode restart wait QA check. Original prompt marker: KILL-RESTART-PROMPT.";
+  const tools = [...restartCheckpointTools, unsafeProbe];
+  const input: JsonObject[] = [makeUserInput(prompt)];
+  const request = () => respondOpenAi(server, input, { tools });
+  const execArgs = await checkpointWait(input, request, 1, [
+    "kill-restart-checkpoint-1",
+    "kill-restart-exec",
+  ]);
+  const recovered = await request();
+  expect(outputItems(recovered).map((item) => item.type)).toEqual(["message"]);
+  expect(outputText(recovered)).toBe("KILL-RESTART-RECOVERED-OK");
+  const freshPayload = await respondOpenAi(server, prompt, { tools });
+  expect(outputToolArgsFromItem(singleToolCall(freshPayload, "exec"))).toEqual(execArgs);
+});
+
+it("derives three restart checkpoints from request history with developer additional tools", async () => {
+  const server = await startMockServer();
+  const prompt =
+    "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT.";
+  const input: JsonObject[] = [makeUserInput(prompt)];
+  const request = (history = input, tools = restartCheckpointTools) =>
+    respondOpenAi(server, [{ type: "additional_tools", role: "developer", tools }, ...history]);
+  for (const checkpoint of [1, 2, 3]) {
+    await checkpointWait(input, request, checkpoint, [
+      `restart-checkpoint-${checkpoint}`,
+      `checkpoint-exec-${checkpoint}`,
+    ]);
+  }
+  const finalPayload = await request();
+  expect(outputText(finalPayload)).toBe("unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK");
+  const unsafePayload = await request(input, [...restartCheckpointTools, unsafeProbe]);
+  expect(outputToolArgsFromItem(singleToolCall(unsafePayload, "qa_restart_unsafe_probe"))).toEqual(
+    {},
+  );
+  const freshPayload = await request(userInputs(prompt));
+  await expectCheckpoint(outputToolArgsFromItem(outputToolCall(freshPayload, "exec")), 1);
 });

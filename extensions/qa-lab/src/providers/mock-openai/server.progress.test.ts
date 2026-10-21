@@ -1,6 +1,12 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { buildMatrixToolProgressMentionSafetyPrompt } from "../../live-transports/matrix/scenarios/scenario-runtime-prompts.js";
 import { runLoadedScenarioFlow } from "../../scenario-flow-runner.test-support.js";
+import {
+  buildChannelStreamingFixtureEvents,
+  resolveTelegramChannelStreamingPause,
+} from "./mock-openai-events.js";
 import {
   anthropicCall,
   completedResult,
@@ -9,30 +15,38 @@ import {
   textBlock,
   expectResponseText,
   expectAnthropicText,
+  respondOpenAi,
+  userInputs,
 } from "./server.fixtures.test-support.js";
 import {
   createMockServerTestHarness,
   expectOk,
   makeToolOutputWithCallId,
-  makeUserInput,
   outputItems,
   outputToolCall,
   postJson,
+  outputText,
+  postResponses,
+  requireRecord,
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
 
 const READ_PROMPT =
   "Tool progress QA check: read `empty.txt` before answering. After the read completes, reply exactly `PROGRESS_OK`.";
+
 const EXEC_PROMPT =
   "Tool progress QA check: call the exec tool exactly once with this exact command before answering: `true`. After that command completes, reply exactly `PROGRESS_OK`.";
+
 const ERROR_PROMPT =
   "Tool progress error QA check: read `denied.txt` before answering. After the read fails, reply exactly `PROGRESS_OK`.";
+
 const RUNNING_OUTPUT =
   "Command still running (session lucky-slug, pid 3128). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 
 const APPROVAL_OUTPUT =
   "Approval required (id abc123, full abc12345).\nHost: gateway\nCWD: /workspace\nCommand:\n```sh\ntrue\n```\nMode: foreground (interactive approvals available).\nBackground mode requires pre-approved policy (allow-always or ask=off).\nReply with: /approve abc123 allow-once|allow-always|deny\nIf the short code is ambiguous, use the full id in /approve.";
+
 const APPROVAL_RESTRICTED_OUTPUT = APPROVAL_OUTPUT.replace(
   "Background mode requires pre-approved policy (allow-always or ask=off).",
   "Background mode requires an effective policy that allows pre-approval (for example ask=off).",
@@ -56,59 +70,33 @@ async function requestProgress(
   context?: string,
 ) {
   const server = await startMockServer();
-  const toolResults = results.map((result, index) => ({
-    ...result,
-    callId: result.callId === null ? undefined : (result.callId ?? `progress_${index}`),
-  }));
+  const responses = route === "responses";
   const input = [prompt, ...(context ? [context] : [])].map((text) => ({
     role: "user",
-    content: route === "responses" ? [textBlock(text)] : text,
+    content: responses ? [textBlock(text)] : text,
   }));
-  const body =
-    route === "responses"
-      ? {
-          input: [
-            ...input,
-            ...toolResults.flatMap((result) => [
-              functionCall(result.tool, result.args, result.callId),
-              {
-                type: "function_call_output",
-                call_id: result.callId,
-                output: result.output,
-                is_error: result.isError,
-              },
-            ]),
-          ],
-        }
-      : {
-          messages: [
-            ...input,
-            ...toolResults.flatMap((result) => [
-              anthropicCall(result.tool, result.args, result.callId),
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "tool_result",
-                    tool_use_id: result.callId,
-                    content: result.output,
-                    is_error: result.isError,
-                  },
-                ],
-              },
-            ]),
-          ],
-        };
-  return (
-    await expectOk(
-      postJson(server, `/v1/${route}`, {
-        model: "qa-model",
-        stream: false,
-        max_tokens: 256,
-        ...body,
-      }),
-    )
-  ).json();
+  const history = results.flatMap(({ tool, args, output, isError, callId }, index) => {
+    const id = callId === null ? undefined : (callId ?? `progress_${index}`);
+    return responses
+      ? [
+          functionCall(tool, args, id),
+          { type: "function_call_output", call_id: id, output, is_error: isError },
+        ]
+      : [
+          anthropicCall(tool, args, id),
+          {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: id, content: output, is_error: isError }],
+          },
+        ];
+  });
+  const body = {
+    model: "qa-model",
+    stream: false,
+    max_tokens: 256,
+    [responses ? "input" : "messages"]: [...input, ...history],
+  };
+  return (await expectOk(postJson(server, `/v1/${route}`, body))).json();
 }
 
 describe("Anthropic command progress wire", () => {
@@ -125,11 +113,7 @@ describe("Anthropic command progress wire", () => {
       "while [ ! -d 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release' ]; do sleep 1; done; rmdir 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release'; false",
     );
     const results: ProgressResult[] = [
-      {
-        tool: "exec",
-        args,
-        output: [{ type: "text", text: RUNNING_OUTPUT }],
-      },
+      { tool: "exec", args, output: [{ type: "text", text: RUNNING_OUTPUT }] },
     ];
     const pending = await requestProgress("messages", prompt, results);
     expect(pending.content).toMatchObject([{ name: "process" }]);
@@ -175,61 +159,45 @@ const FAILURE_ALLOWED_PROMPT = EXEC_PROMPT.replace(
   "command completes or fails,",
 );
 
-describe("background command progress", () => {
-  it.each([
-    [
-      "single-newline exit-like stdout",
-      pollResult("ordinary output\nProcess exited with code 0."),
-      "BUG-TOOL-DID-NOT-COMPLETE",
-    ],
-  ] as const)("does not report success for %s", async (_label, poll, marker) => {
-    const response = await requestProgress("responses", EXEC_PROMPT, [
-      execResult(RUNNING_OUTPUT),
-      poll,
-    ]);
-    expectResponseText(response, marker);
-  });
-
-  it("allows a terminal typed failure with an unknown exit code", async () => {
-    const response = await requestProgress("responses", FAILURE_ALLOWED_PROMPT, [
-      execResult(RUNNING_OUTPUT),
-      pollResult("\n\nProcess exited with unknown exit code.", true),
-    ]);
-    expectResponseText(response, "PROGRESS_OK");
-  });
-
-  it("reports foreground failure from Node: node-1\n(Command exited with code 7)", async () => {
-    const output = "Node: node-1\n(Command exited with code 7)";
-    const isError = false;
-
-    for (const allowsFailure of [false, true]) {
-      const response = await requestProgress(
-        "responses",
-        allowsFailure ? FAILURE_ALLOWED_PROMPT : EXEC_PROMPT,
-        [execResult(output, isError)],
-      );
-      expectResponseText(response, allowsFailure ? "PROGRESS_OK" : "BUG-TOOL-FAILED");
-    }
-  });
-
-  it.each([
-    [
-      "typed error with a running exec handle",
-      [execResult(RUNNING_OUTPUT, true)],
-      "BUG-TOOL-DID-NOT-COMPLETE",
-    ],
-    [
-      "restricted approval decisions",
-      [execResult(APPROVAL_RESTRICTED_OUTPUT, false)],
-      "BUG-TOOL-DID-NOT-COMPLETE",
-    ],
-  ] as const)(
-    "does not accept %s even when command failure is allowed",
-    async (_label, results, marker) => {
-      const response = await requestProgress("responses", FAILURE_ALLOWED_PROMPT, [...results]);
-      expectResponseText(response, marker);
-    },
-  );
+it.each<[string, string, ProgressResult[], string]>([
+  [
+    "single-newline exit-like stdout",
+    EXEC_PROMPT,
+    [execResult(RUNNING_OUTPUT), pollResult("ordinary output\nProcess exited with code 0.")],
+    "BUG-TOOL-DID-NOT-COMPLETE",
+  ],
+  [
+    "terminal typed failure with unknown exit code",
+    FAILURE_ALLOWED_PROMPT,
+    [execResult(RUNNING_OUTPUT), pollResult("\n\nProcess exited with unknown exit code.", true)],
+    "PROGRESS_OK",
+  ],
+  [
+    "foreground failure",
+    EXEC_PROMPT,
+    [execResult("Node: node-1\n(Command exited with code 7)", false)],
+    "BUG-TOOL-FAILED",
+  ],
+  [
+    "allowed foreground failure",
+    FAILURE_ALLOWED_PROMPT,
+    [execResult("Node: node-1\n(Command exited with code 7)", false)],
+    "PROGRESS_OK",
+  ],
+  [
+    "typed error with running handle",
+    FAILURE_ALLOWED_PROMPT,
+    [execResult(RUNNING_OUTPUT, true)],
+    "BUG-TOOL-DID-NOT-COMPLETE",
+  ],
+  [
+    "restricted approval decisions",
+    FAILURE_ALLOWED_PROMPT,
+    [execResult(APPROVAL_RESTRICTED_OUTPUT, false)],
+    "BUG-TOOL-DID-NOT-COMPLETE",
+  ],
+])("background command progress: %s", async (_name, prompt, results, expected) => {
+  expectResponseText(await requestProgress("responses", prompt, results), expected);
 });
 
 it("keeps Slack commentary progress open while its exec is running", async () => {
@@ -288,7 +256,7 @@ it("selects commentary, exec, and final delivery for the actual Telegram scenari
   ).rejects.toBe(captured);
   const request = (input: unknown[]) =>
     respond(server, input, { model: "qa-model", tools: [{ type: "function", name: "exec" }] });
-  const input = [makeUserInput(prompt)];
+  const input = userInputs(prompt);
   const plan = await request(input);
   expect(outputItems(plan)).toMatchObject([
     {
@@ -330,15 +298,7 @@ async function completeProgress(params: {
   return requestProgress(
     "messages",
     params.prompt,
-    [
-      {
-        tool: params.tool,
-        args: params.args,
-        output: params.output,
-        isError: params.isError,
-        callId: call.id,
-      },
-    ],
+    [{ ...params, callId: call.id }],
     params.context,
   );
 }
@@ -389,12 +349,7 @@ it("distinguishes a successful CodeMode runner from its failed read", async () =
   const request = async (messages: unknown[]) => {
     return (
       await expectOk(
-        postJson(server, "/v1/messages", {
-          model: "qa-model",
-          max_tokens: 256,
-          tools,
-          messages,
-        }),
+        postJson(server, "/v1/messages", { model: "qa-model", max_tokens: 256, tools, messages }),
       )
     ).json();
   };
@@ -417,4 +372,122 @@ it("distinguishes a successful CodeMode runner from its failed read", async () =
     },
   ]);
   expectAnthropicText(result, "PROGRESS_OK");
+});
+
+const senderEnvelope =
+  'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"sender":{"id":"qa-user","name":"QA Operator","username":"qa_operator"}}\n```\n\n';
+
+function policyFixture(count: number, marker: string, phrase: string) {
+  const line = (index: number) => `${index + 1}. ${marker} ${phrase}`;
+  return {
+    prompt: `Write ${count} numbered plain-text lines. Every line must contain ${marker} and the words ${phrase}. Finish with a separate final line containing ${marker}-END. Do not use tools, Markdown, or explicit reply tags.`,
+    expected: [...Array.from({ length: count }, (_, index) => line(index)), `${marker}-END`].join(
+      "\n",
+    ),
+    preview: line(0),
+  };
+}
+
+describe("Telegram policy hot-reload mock provider", () => {
+  it("holds an incomplete preview before the final answer with timestamped sender context", async ({
+    signal,
+  }) => {
+    const completionGate = createDeferred<void>();
+    const server = await startMockServer({
+      telegramChannelStreamingPause: () => completionGate.promise,
+    });
+    const fixture = policyFixture(
+      40,
+      "TG-RELOAD-root-a1b2c3d4",
+      "hot reload keeps this conversation connected",
+    );
+    const prompt = `[Sat 2026-10-03 11:56 UTC] ${senderEnvelope}${fixture.prompt}`;
+    const response = await postResponses(server, {
+      model: "gpt-5.6-luna",
+      stream: true,
+      input: userInputs(prompt),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    const events: Array<Record<string, unknown>> = [];
+    let pending = "";
+    let preview = "";
+    const readEvents = async () => {
+      const part = await withinTest(reader.read(), signal);
+      pending += decoder.decode(part.value, { stream: !part.done });
+      const frames = pending.split("\n\n");
+      pending = frames.pop() ?? "";
+      for (const frame of frames) {
+        if (!frame.startsWith("data: {") || !frame.endsWith("}")) {
+          continue;
+        }
+        const event = requireRecord(JSON.parse(frame.slice("data: ".length)), "SSE event");
+        events.push(event);
+        if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
+          preview += event.delta;
+        }
+      }
+      return part.done;
+    };
+    try {
+      while (preview.length < fixture.preview.length) {
+        expect(await readEvents()).toBe(false);
+      }
+      expect(preview).toBe(fixture.preview);
+      expect(events.map((event) => event.type)).not.toContain("response.output_text.done");
+      expect(events.map((event) => event.type)).not.toContain("response.completed");
+      completionGate.resolve();
+      while (!(await readEvents())) {}
+      expect(events.find((event) => event.type === "response.output_text.done")?.text).toBe(
+        fixture.expected,
+      );
+      expect(
+        outputText(events.find((event) => event.type === "response.completed")?.response),
+      ).toBe(fixture.expected);
+    } finally {
+      completionGate.resolve();
+      await reader.cancel();
+    }
+    expect(resolveTelegramChannelStreamingPause(prompt)).toEqual({ previewPauseMs: 3_000 });
+  });
+
+  it("answers the next turn through sender context without holding completion", async () => {
+    const server = await startMockServer();
+    const fixture = policyFixture(
+      12,
+      "TG-RELOAD-account-a1b2c3d4-NEXT",
+      "new policy keeps this conversation connected",
+    );
+    const prompt = `[Sat 2026-10-03 11:56 UTC] ${senderEnvelope}${fixture.prompt}`;
+    const response = await respondOpenAi(server, prompt);
+    expect(outputText(response)).toBe(fixture.expected);
+    expect(resolveTelegramChannelStreamingPause(prompt)).toBeUndefined();
+  });
+
+  it("does not capture unrelated numbered-line prompts", () => {
+    for (const { prompt } of [
+      policyFixture(40, "OTHER-MARKER", "hot reload keeps this conversation connected"),
+      policyFixture(
+        40,
+        "TG-RELOAD-account-a1b2c3d4",
+        "new policy keeps this conversation connected",
+      ),
+      policyFixture(
+        12,
+        "TG-RELOAD-root-a1b2c3d4-NEXT",
+        "hot reload keeps this conversation connected",
+      ),
+    ]) {
+      expect(
+        buildChannelStreamingFixtureEvents({
+          currentPrompt: prompt,
+          allInputText: prompt,
+          hasCompletedToolOutput: false,
+        }),
+      ).toBeUndefined();
+      expect(resolveTelegramChannelStreamingPause(prompt)).toBeUndefined();
+    }
+  });
 });
