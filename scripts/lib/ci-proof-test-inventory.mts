@@ -899,7 +899,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/workboard/src/sqlite-store-batch-read.test.ts",
   "extensions/workboard/src/store-subscription-scope.test.ts",
   "extensions/workboard/src/tools.test.ts",
-  "extensions/xai/image-generation-provider.test.ts",
   "extensions/xai/prompt-cache.test.ts",
   "extensions/xiaomi/speech-provider.test.ts",
   "extensions/zalo/src/channel.pairing.test.ts",

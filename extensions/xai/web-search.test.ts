@@ -4,10 +4,14 @@ import { requireApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { jsonResponse, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCodeExecutionTool } from "./code-execution.js";
 import { createXaiFetchInspectors } from "./responses-http.test-support.js";
-import { defineSearchCacheTests } from "./search-cache.test-support.js";
+import { defineSearchContracts } from "./search-cache.test-support.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 import { createXSearchTool } from "./x-search.js";
+
+const { firstFetchUrl, parseFirstRequestBody: firstFetchBody } =
+  createXaiFetchInspectors("x_search");
 
 const providerAuthMocks = vi.hoisted(() => ({
   resolveApiKeyForProvider: vi.fn().mockResolvedValue({ source: "test", mode: "api-key" }),
@@ -41,6 +45,17 @@ function profileAuth(
   return { apiKey, source: `profile:${profileId}`, mode, profileId };
 }
 
+function profileContext(apiKey: string) {
+  return {
+    config: {},
+    runtimeConfig: {},
+    auth: {
+      hasAuthForProvider: (id: string) => id === "xai",
+      resolveApiKeyForProvider: async (id: string) => (id === "xai" ? apiKey : undefined),
+    },
+  };
+}
+
 function answerPayload(text: string) {
   return { output: [{ type: "message", content: [{ type: "output_text", text }] }] };
 }
@@ -59,11 +74,6 @@ function installXaiWebSearchFetch(
   return mockFetch;
 }
 
-function firstFetchBody(mockFetch: ReturnType<typeof installXaiWebSearchFetch>) {
-  const init = mockFetch.mock.calls[0]?.[1];
-  return JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
-}
-
 function authorizationHeaders(mockFetch: { mock: { calls: unknown[][] } }) {
   return mockFetch.mock.calls.map(([, init]) =>
     new Headers((init as RequestInit | undefined)?.headers).get("Authorization"),
@@ -74,6 +84,7 @@ function xaiPluginConfig(options: {
   enabled?: boolean;
   webSearch?: Record<string, unknown>;
   xSearch?: Record<string, unknown>;
+  codeExecution?: Record<string, unknown>;
 }) {
   const { enabled, ...config } = options;
   const xai = { ...(enabled === undefined ? {} : { enabled }), config };
@@ -213,32 +224,6 @@ describe("xAI web search auth lifecycle", () => {
 });
 
 describe("xai web search config resolution", () => {
-  it("reuses answers only for the agent's resolved credential", async () => {
-    resolveAuth.mockImplementation(async ({ agentDir }: { agentDir?: string }) =>
-      profileAuth(agentDir === "fixture-agent-a" ? "fixture-key-a" : "fixture-key-b"),
-    );
-    const mockFetch = installXaiWebSearchFetch().mockImplementation(async (_url, init) =>
-      xaiAnswerResponse(
-        new Headers(init?.headers).get("Authorization") === "Bearer fixture-key-a"
-          ? "Account A answer"
-          : "Account B answer",
-      ),
-    );
-    const query = "credential-scoped Grok cache regression";
-    const context = (agentDir: string) => ({ config: defaultAgentConfig, agentDir });
-    const first = await search(query, context("fixture-agent-a"));
-    const other = await search(query, context("fixture-agent-b"));
-    const repeated = await search(query, context("fixture-agent-a"));
-
-    expect(first.content).toContain("Account A answer");
-    expect(other.content).toContain("Account B answer");
-    expect(repeated).toMatchObject({ cached: true, content: first.content });
-    expect(authorizationHeaders(mockFetch)).toEqual([
-      "Bearer fixture-key-a",
-      "Bearer fixture-key-b",
-    ]);
-  });
-
   it("treats unresolved non-env SecretRefs as missing credentials instead of using env fallback", async () => {
     await withEnvAsync({ XAI_API_KEY: "ambient-xai-test-key" }, async () => {
       const result = await search("OpenClaw", {
@@ -420,67 +405,37 @@ describe("xai web search config resolution", () => {
     expect(transportSignal?.reason).toBe(reason);
   });
 
-  defineSearchCacheTests("Grok", xaiAnswerResponse, (query, { ttl, signal }) =>
-    search(
-      query,
-      {
-        config: xaiPluginConfig({ webSearch: { apiKey: "xai-cache-key" } }),
-        searchConfig: { cacheTtlMinutes: ttl },
-      },
-      signal,
-    ),
+  defineSearchContracts(
+    "Grok",
+    xaiAnswerResponse,
+    (query, { ttl, signal }) =>
+      search(
+        query,
+        {
+          config: xaiPluginConfig({ webSearch: { apiKey: "xai-cache-key" } }),
+          searchConfig: { cacheTtlMinutes: ttl },
+        },
+        signal,
+      ),
+    (query, scope) => {
+      resolveAuth.mockImplementation(async ({ agentDir }: { agentDir?: string }) =>
+        profileAuth(agentDir === "fixture-agent-a" ? "fixture-key-a" : "fixture-key-b"),
+      );
+      return search(query, { config: defaultAgentConfig, agentDir: `fixture-agent-${scope}` });
+    },
   );
-
-  it("does not contact the generic xAI provider when the caller is already cancelled", async () => {
-    const mockFetch = installXaiWebSearchFetch();
-    const controller = new AbortController();
-    const reason = new Error("generic xAI request cancelled before billing");
-    controller.abort(reason);
-    await expect(search("cancelled generic request", undefined, controller.signal)).rejects.toBe(
-      reason,
-    );
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
 });
 
 describe("xai x_search tool", () => {
-  const { firstFetchUrl, parseFirstRequestBody } = createXaiFetchInspectors("x_search");
   const citation = "https://x.com/openclaw/status/1";
-  const textContent = (text: string) => ({
-    type: "output_text",
-    text,
-    annotations: [{ type: "url_citation", url: citation }],
-  });
 
-  function installXSearchFetch(
-    payload: Record<string, unknown> = {
-      output: [
-        {
-          type: "message",
-          content: [textContent("Found X posts")],
-        },
-      ],
-      citations: [citation],
-    },
-  ) {
-    return installXaiWebSearchFetch(payload);
-  }
-
-  function xSearchConfig({
-    apiKey = "xai-config-test",
-    webSearch,
-    xSearch,
-  }: {
-    apiKey?: unknown;
-    webSearch?: Record<string, unknown>;
-    xSearch?: Record<string, unknown>;
-  } = {}) {
-    const config = { webSearch: { apiKey, ...webSearch }, ...(xSearch ? { xSearch } : {}) };
-    return { plugins: { entries: { xai: { config } } } };
-  }
-
-  function createConfiguredXSearchTool(config?: Parameters<typeof xSearchConfig>[0]) {
-    const tool = createXSearchTool({ config: xSearchConfig(config) });
+  function createConfiguredXSearchTool(config: Parameters<typeof xaiPluginConfig>[0] = {}) {
+    const tool = createXSearchTool({
+      config: xaiPluginConfig({
+        ...config,
+        webSearch: { apiKey: "xai-config-test", ...config.webSearch },
+      }),
+    });
     if (!tool) {
       throw new Error("expected x_search tool to be configured");
     }
@@ -488,14 +443,7 @@ describe("xai x_search tool", () => {
   }
 
   function profileTool(apiKey: string) {
-    const tool = createXSearchTool({
-      config: {},
-      runtimeConfig: {},
-      auth: {
-        hasAuthForProvider: (providerId) => providerId === "xai",
-        resolveApiKeyForProvider: async (providerId) => (providerId === "xai" ? apiKey : undefined),
-      },
-    });
+    const tool = createXSearchTool(profileContext(apiKey));
     if (!tool) {
       throw new Error("Expected configured X search tool");
     }
@@ -504,62 +452,28 @@ describe("xai x_search tool", () => {
 
   function runXSearch(
     query: string,
-    config?: Parameters<typeof xSearchConfig>[0],
+    config?: Parameters<typeof xaiPluginConfig>[0],
     args: Record<string, unknown> = {},
     signal?: AbortSignal,
   ) {
     return createConfiguredXSearchTool(config).execute(query, { query, ...args }, signal);
   }
 
-  it("reuses answers only for the resolved credential across tool instances", async () => {
-    const mockFetch = installXSearchFetch().mockImplementation(async (_url, init) =>
-      jsonResponse({
-        output_text:
-          new Headers(init?.headers).get("Authorization") === "Bearer fixture-key-a"
-            ? "Account A answer"
-            : "Account B answer",
-      }),
-    );
-    const firstTool = profileTool("fixture-key-a");
-    const otherTool = profileTool("fixture-key-b");
-    expect(firstTool.name).toBe("x_search");
-    const args = { query: "credential-scoped X search cache regression" };
-    const first = await firstTool.execute("account-a", args);
-    const other = await otherTool.execute("account-b", args);
-    const repeated = await firstTool.execute("account-a-repeat", args);
-
-    expect(first.details).toMatchObject({ content: expect.stringContaining("Account A answer") });
-    expect(other.details).toMatchObject({ content: expect.stringContaining("Account B answer") });
-    expect(repeated.details).toMatchObject({
-      cached: true,
-      content: expect.stringContaining("Account A answer"),
-    });
-    expect(
-      mockFetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
-    ).toEqual(["Bearer fixture-key-a", "Bearer fixture-key-b"]);
-  });
-
-  it("rejects an already-cancelled X search without contacting the billed provider", async () => {
-    const mockFetch = installXSearchFetch();
-    const controller = new AbortController();
-    const reason = new Error("operator cancelled before billing");
-    controller.abort(reason);
-    await expect(runXSearch("xai-pre-cancel", undefined, {}, controller.signal)).rejects.toBe(
-      reason,
-    );
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  defineSearchCacheTests(
+  defineSearchContracts(
     "X search",
     (text) => jsonResponse({ output_text: text, citations: [] }),
     async (query, { ttl, signal }) =>
       (await runXSearch(query, { xSearch: { cacheTtlMinutes: ttl } }, {}, signal))
         .details as Record<string, unknown>,
+    async (query, scope) =>
+      (await profileTool(`fixture-key-${scope}`).execute(scope, { query })).details,
   );
 
   it("uses the xAI Responses x_search tool with structured filters", async () => {
-    const mockFetch = installXSearchFetch();
+    const mockFetch = installXaiWebSearchFetch({
+      ...answerPayload("Found X posts"),
+      citations: [citation],
+    });
     const tool = createConfiguredXSearchTool({ xSearch: { maxTurns: 2 } });
     const filters = {
       allowed_x_handles: ["openclaw"],
@@ -567,14 +481,14 @@ describe("xai x_search tool", () => {
       to_date: "2026-03-20",
       enable_image_understanding: true,
     };
-    expect(tool.resultContentSource).toBe("network");
+    expect(tool).toMatchObject({ name: "x_search", resultContentSource: "network" });
     const result = await tool.execute("x-search:1", {
       query: "dinner recipes",
       ...structuredClone(filters),
     });
     expect(mockFetch).toHaveBeenCalled();
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
-    expect(parseFirstRequestBody(mockFetch)).toMatchObject({
+    expect(firstFetchBody(mockFetch)).toMatchObject({
       model: "grok-4.7",
       input: [{ role: "user", content: "dinner recipes" }],
       store: false,
@@ -602,27 +516,100 @@ describe("xai x_search tool", () => {
       error: /from_date must be on or before to_date/i,
     },
   ])("rejects $name before calling xAI", async ({ name, args, error }) => {
-    const mockFetch = installXSearchFetch();
+    const mockFetch = installXaiWebSearchFetch();
     await expect(runXSearch(name, undefined, args)).rejects.toThrow(error);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("accepts the xAI limit for excluded_x_handles", async () => {
-    const mockFetch = installXSearchFetch();
+    const mockFetch = installXaiWebSearchFetch();
     const handles = Array.from({ length: 20 }, (_, index) => `excluded_x_handles-${index}`);
     await runXSearch("excluded_x_handles boundary", undefined, { excluded_x_handles: handles });
-    expect(parseFirstRequestBody(mockFetch).tools).toEqual([
+    expect(firstFetchBody(mockFetch).tools).toEqual([
       { type: "x_search", excluded_x_handles: handles },
     ]);
   });
 
   it("shares plugin webSearch.baseUrl with x_search when xSearch.baseUrl is unset", async () => {
-    const mockFetch = installXSearchFetch();
+    const mockFetch = installXaiWebSearchFetch();
     await runXSearch("shared base url route", {
-      apiKey: "xai-plugin-key",
-      webSearch: { baseUrl: "https://api.x.ai/shared/v1/" },
+      webSearch: { apiKey: "xai-plugin-key", baseUrl: "https://api.x.ai/shared/v1/" },
       xSearch: { enabled: true },
     });
     expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/shared/v1/responses");
+  });
+});
+
+describe("xai code_execution tool", () => {
+  function configuredTool(codeExecution?: {
+    model?: string;
+    maxTurns?: number;
+    timeoutSeconds?: number;
+  }) {
+    return createCodeExecutionTool({
+      config: xaiPluginConfig({
+        webSearch: { apiKey: "xai-plugin-key" },
+        codeExecution,
+      }),
+    });
+  }
+
+  function installCodeExecutionFetch() {
+    return installXaiWebSearchFetch({
+      output: [{ type: "code_interpreter_call" }],
+      output_text: "Mean: 42",
+      citations: ["https://example.com/data.csv"],
+    });
+  }
+
+  it("enables code_execution from an xAI auth profile and uses it for requests", async () => {
+    const mockFetch = installCodeExecutionFetch();
+    const tool = createCodeExecutionTool(profileContext("xai-profile-key"));
+
+    expect(tool?.name).toBe("code_execution");
+    await tool?.execute?.("code-execution:auth-profile", {
+      task: "Sum [20, 22]",
+    });
+
+    expect(authorizationHeaders(mockFetch)[0]).toBe("Bearer xai-profile-key");
+  });
+
+  it("requests code_interpreter and returns the execution result", async () => {
+    const mockFetch = installCodeExecutionFetch();
+    const tool = configuredTool({ maxTurns: 2, timeoutSeconds: 45 });
+
+    const result = await tool?.execute?.("code-execution:multi-block", {
+      task: "Calculate and verify the mean.",
+    });
+
+    expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
+    const body = firstFetchBody(mockFetch);
+    expect(body).toMatchObject({ model: "grok-4.7", store: false, max_turns: 2 });
+    expect(body.reasoning).toEqual({ effort: "low" });
+    expect(body.tools).toEqual([{ type: "code_interpreter" }]);
+    expect(result?.details).toMatchObject({
+      content: "Mean: 42",
+      citations: ["https://example.com/data.csv"],
+      usedCodeExecution: true,
+    });
+  });
+
+  it("reuses the xAI plugin web search key without overriding custom model reasoning", async () => {
+    const mockFetch = installCodeExecutionFetch();
+    const tool = configuredTool({ model: "grok-build-0.1" });
+
+    await tool?.execute?.("code-execution:plugin-key", {
+      task: "Compute the standard deviation of [1, 2, 3]",
+    });
+
+    expect(authorizationHeaders(mockFetch)[0]).toBe("Bearer xai-plugin-key");
+    const body = firstFetchBody(mockFetch);
+    expect(body.model).toBe("grok-build-0.1");
+    expect(body.input).toEqual([
+      { role: "user", content: "Compute the standard deviation of [1, 2, 3]" },
+    ]);
+    expect(body.store).toBe(false);
+    expect(body).not.toHaveProperty("reasoning");
+    expect(body).not.toHaveProperty("max_turns");
   });
 });

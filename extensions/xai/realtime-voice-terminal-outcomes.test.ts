@@ -1,19 +1,13 @@
 import type { AddressInfo } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { RealtimeVoiceResponseOutcome } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceResponseOutcome,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { expect, it } from "vitest";
-import { WebSocketServer } from "ws";
+import { type WebSocket, WebSocketServer } from "ws";
 import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
-
-type RealtimeOutcome = {
-  callbackOrder: string[];
-  errors: string[];
-  outcomes: RealtimeVoiceResponseOutcome[];
-  transcripts: Array<{ speaker: string; text: string; final: boolean }>;
-  tools: Array<{ itemId: string; callId: string; name: string; args: unknown }>;
-  clientEvents: string[];
-};
 
 type CaptureRealtimeOutcomeOptions = {
   closeOnToolCall?: boolean;
@@ -25,28 +19,27 @@ type CaptureRealtimeOutcomeOptions = {
 async function captureRealtimeOutcome(
   eventInput: Record<string, unknown> | Record<string, unknown>[],
   options: CaptureRealtimeOutcomeOptions = {},
-): Promise<RealtimeOutcome> {
+) {
   const events = Array.isArray(eventInput) ? eventInput : [eventInput];
-  const outcome: RealtimeOutcome = {
-    callbackOrder: [],
-    errors: [],
-    outcomes: [],
-    transcripts: [],
-    tools: [],
-    clientEvents: [],
-  };
+  const callbackOrder: string[] = [];
+  const errors: string[] = [];
+  const outcomes: RealtimeVoiceResponseOutcome[] = [];
+  const transcripts: Array<{ speaker: string; text: string; final: boolean }> = [];
+  const tools: Parameters<NonNullable<RealtimeVoiceBridgeCreateRequest["onToolCall"]>>[0][] = [];
+  const clientEvents: string[] = [];
   const finished = createDeferred<void>();
   const responseCreatedHandled = createDeferred<void>();
   const waitFor = (promise: Promise<void>, phase: string) =>
     withTimeout(promise, 2_000, { message: `timed out waiting for ${phase}` });
+  let socket: WebSocket;
+  const send = (...batch: Record<string, unknown>[]) =>
+    batch.forEach((event) => socket.send(JSON.stringify(event)));
   const wss = new WebSocketServer({ port: 0, host: "127.0.0.1", maxPayload: 1024 * 1024 });
   wss.on("connection", (ws) => {
-    const send = (...batch: Record<string, unknown>[]) =>
-      batch.forEach((event) => ws.send(JSON.stringify(event)));
-    let queuedTurnTriggered = false;
+    socket = ws;
     ws.on("message", (message) => {
       const { type } = JSON.parse(message.toString()) as { type: string };
-      outcome.clientEvents.push(type);
+      clientEvents.push(type);
       if (type === "response.create" && options.queuedUserMessage) {
         if (options.completeQueuedResponse) {
           send(
@@ -56,19 +49,8 @@ async function captureRealtimeOutcome(
         } else {
           finished.resolve();
         }
-      } else if (
-        type === "conversation.item.create" &&
-        options.queuedUserMessage &&
-        !queuedTurnTriggered
-      ) {
-        queuedTurnTriggered = true;
-        send(...events);
       } else if (type === "session.update") {
-        send(
-          { type: "session.updated" },
-          { type: "response.created", response: { id: "response_1" } },
-          ...(options.queuedUserMessage ? [] : events),
-        );
+        send({ type: "session.updated" });
       }
     });
   });
@@ -80,10 +62,10 @@ async function captureRealtimeOutcome(
     providerConfig: { apiKey: "fixture-value", baseUrl: `http://127.0.0.1:${port}/v1` },
     onAudio() {},
     onClearAudio() {},
-    onError: (error) => outcome.errors.push(error.message),
+    onError: (error) => errors.push(error.message),
     onResponseDone: (responseOutcome) => {
-      outcome.callbackOrder.push("outcome");
-      outcome.outcomes.push(responseOutcome);
+      callbackOrder.push("outcome");
+      outcomes.push(responseOutcome);
       if (responseOutcome.responseId === "response_2") {
         finished.resolve();
       }
@@ -92,12 +74,12 @@ async function captureRealtimeOutcome(
       }
     },
     onTranscript: (speaker, text, final) => {
-      outcome.callbackOrder.push("transcript");
-      outcome.transcripts.push({ speaker, text, final });
+      callbackOrder.push("transcript");
+      transcripts.push({ speaker, text, final });
     },
     onToolCall: (tool) => {
-      outcome.callbackOrder.push("tool");
-      outcome.tools.push(tool);
+      callbackOrder.push("tool");
+      tools.push(tool);
       if (options.closeOnToolCall) {
         void bridge.close();
       }
@@ -107,7 +89,7 @@ async function captureRealtimeOutcome(
         return;
       }
       if (observed.type === "response.done") {
-        outcome.callbackOrder.push("terminal");
+        callbackOrder.push("terminal");
       }
       if (observed.type === "response.created") {
         responseCreatedHandled.resolve();
@@ -120,18 +102,20 @@ async function captureRealtimeOutcome(
 
   try {
     await bridge.connect();
+    send({ type: "response.created", response: { id: "response_1" } });
+    await waitFor(responseCreatedHandled.promise, "response.created");
     if (options.queuedUserMessage) {
-      await waitFor(responseCreatedHandled.promise, "response.created");
       bridge.sendUserMessage?.(options.queuedUserMessage);
     }
+    send(...events);
     await (options.queuedUserMessage
       ? waitFor(finished.promise, "queued response completion")
       : finished.promise);
-    return outcome;
+    return { callbackOrder, errors, outcomes, transcripts, tools, clientEvents };
   } finally {
     await bridge.close();
-    for (const socket of wss.clients) {
-      socket.terminate();
+    for (const client of wss.clients) {
+      client.terminate();
     }
     await new Promise<void>((resolve) => {
       wss.close(() => resolve());
@@ -163,9 +147,10 @@ function terminal(status?: string, response: Record<string, unknown> = {}) {
 function scenario(
   name: string,
   event: Parameters<typeof captureRealtimeOutcome>[0],
-  expected: Partial<Pick<RealtimeOutcome, "errors" | "transcripts" | "tools">> = {},
+  status?: "failed" | "completed",
+  message?: string,
 ) {
-  return { name, event, expected };
+  return { name, event, outcomes: status ? [{ status, ...(message ? { message } : {}) }] : [] };
 }
 
 function assistantAudio(transcript: string) {
@@ -253,7 +238,8 @@ it.each([
   scenario(
     "surfaces provider failure details",
     terminal("failed", { status_details: { error: { code: "rate_limit_exceeded" } } }),
-    { errors: ["xAI realtime voice response failed: rate_limit_exceeded"] },
+    "failed",
+    "xAI realtime voice response failed: rate_limit_exceeded",
   ),
   scenario("ignores nonterminal output items", {
     type: "response.output_item.done",
@@ -262,7 +248,8 @@ it.each([
   scenario(
     "discards buffered and terminal calls after failure",
     [toolArguments, terminal("failed", { output: [completedTool] })],
-    { errors: ["xAI realtime voice response failed"] },
+    "failed",
+    "xAI realtime voice response failed",
   ),
   scenario("ignores incomplete replayed calls", {
     type: "conversation.item.created",
@@ -271,24 +258,12 @@ it.each([
   scenario(
     "ignores incomplete terminal calls",
     terminal("completed", { output: [{ ...completedTool, status: "incomplete" }] }),
+    "completed",
   ),
-])("$name", async ({ event, expected }) => {
+])("$name", async ({ event, outcomes }) => {
   const actual = await captureRealtimeOutcome(event);
-  expect(actual.errors).toEqual([]);
-  expect(actual.transcripts).toEqual(expected.transcripts ?? []);
-  expect(actual.tools).toEqual(expected.tools ?? []);
-  const events = Array.isArray(event) ? event : [event];
-  const responseDone = events.findLast((candidate) => candidate.type === "response.done") as
-    | { response?: { status?: string } }
-    | undefined;
-  if (!responseDone) {
-    expect(actual.outcomes).toEqual([]);
-    return;
-  }
-  expect(actual.outcomes).toHaveLength(1);
-  expect(actual.callbackOrder.slice(-2)).toEqual(["outcome", "terminal"]);
-  expect(actual.outcomes[0]?.status).toBe(responseDone.response?.status);
-  if (expected.errors?.[0]) {
-    expect(actual.outcomes[0]).toMatchObject({ message: expected.errors[0] });
+  expect(actual).toMatchObject({ errors: [], transcripts: [], tools: [], outcomes });
+  if (outcomes.length) {
+    expect(actual.callbackOrder.slice(-2)).toEqual(["outcome", "terminal"]);
   }
 });
