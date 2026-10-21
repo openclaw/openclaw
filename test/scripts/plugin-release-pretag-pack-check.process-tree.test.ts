@@ -24,6 +24,8 @@ import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { withinTest } from "../helpers/promise.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
+import { waitForClose } from "./live-process-fixture.test-support.js";
+import { captureOutput } from "./managed-child-process.test-support.js";
 import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 const fixtureLifetime = createFixtureLifetime();
@@ -210,18 +212,8 @@ function startProofCli(repoDir: string) {
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (data) => {
-    stdout += data;
-  });
-  child.stderr.on("data", (data) => {
-    stderr += data;
-  });
-  const completion = new Promise<number | null>((resolveCompletion, reject) => {
-    child.once("error", reject);
-    child.once("close", resolveCompletion);
-  }).then((code) => ({ code, signal: child.signalCode, stdout, stderr }));
+  const output = captureOutput(child);
+  const completion = waitForClose(child).then((result) => ({ ...result, ...output }));
   void completion.catch(() => {});
   return {
     child,

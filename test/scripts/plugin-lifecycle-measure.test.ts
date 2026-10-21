@@ -1,10 +1,13 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, it } from "vitest";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
+import {
+  isProcessAlive as pidExists,
+  waitForProcessExit as waitForPidExit,
+} from "./live-process-fixture.test-support.js";
 
 const fixtureLifetime = createFixtureLifetime();
 // Join timed-out bodies before releasing their inputs.
@@ -77,22 +80,6 @@ function checkTermination(
       }
     }
   });
-}
-
-function pidExists(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// The sampler sends SIGKILL before exiting, but does not join foreign PID extinction.
-async function waitForPidExit(pid: number, signal: AbortSignal): Promise<void> {
-  while (pidExists(pid)) {
-    await delay(5, undefined, { signal });
-  }
 }
 
 function nonEmptyPathExists(filePath: string): boolean {

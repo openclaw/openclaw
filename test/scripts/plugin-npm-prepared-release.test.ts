@@ -103,18 +103,6 @@ function preparation(
     ReturnType<typeof metadata>,
     ReturnType<typeof metadata>,
   ];
-  const job = (entry: ReturnType<typeof plugin>) => ({
-    name: `Preflight plugin npm package (${entry.packageName})`,
-    run_id: producer.runId,
-    run_attempt: producer.runAttempt,
-    head_sha: producer.workflowSha,
-    status: "completed",
-    conclusion: "success",
-  });
-  const workflowJobs = {
-    total_count: matrix.length,
-    jobs: matrix.map(job),
-  };
   return {
     ...expected,
     npmDistTag,
@@ -122,7 +110,17 @@ function preparation(
     matrix,
     artifacts,
     workflowRun: workflowRun(),
-    workflowJobs,
+    workflowJobs: {
+      total_count: matrix.length,
+      jobs: matrix.map((entry) => ({
+        name: `Preflight plugin npm package (${entry.packageName})`,
+        run_id: producer.runId,
+        run_attempt: producer.runAttempt,
+        head_sha: producer.workflowSha,
+        status: "completed",
+        conclusion: "success",
+      })),
+    },
   };
 }
 

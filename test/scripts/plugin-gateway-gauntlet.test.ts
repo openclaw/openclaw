@@ -185,21 +185,13 @@ describe("plugin gateway gauntlet helpers", () => {
       }),
     ]);
     if (params.rowAssertion) {
-      expect(summary.rows[0]).toEqual(
-        expect.objectContaining({
-          diagnosticFailure,
-          ...(params.rowAssertion === "metrics"
-            ? { qaMetrics: { gatewayCpuCoreRatio: 0, wallMs: 1 } }
-            : {
-                qaSummaryPath: path.join(
-                  outputDir,
-                  "qa-suite",
-                  "chunk-00",
-                  "qa-suite-summary.json",
-                ),
-              }),
-        }),
-      );
+      const evidence =
+        params.rowAssertion === "metrics"
+          ? { qaMetrics: { gatewayCpuCoreRatio: 0, wallMs: 1 } }
+          : {
+              qaSummaryPath: path.join(outputDir, "qa-suite", "chunk-00", "qa-suite-summary.json"),
+            };
+      expect(summary.rows[0]).toEqual(expect.objectContaining({ diagnosticFailure, ...evidence }));
     }
     expect(summary.isolatedRunRootPreserved).toBe(true);
     await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
