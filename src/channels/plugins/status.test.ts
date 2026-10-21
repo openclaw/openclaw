@@ -98,45 +98,35 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
   );
 
   it("preserves runtime facts unless the inspector supplies them: disabled", async () => {
-    await expect(
-      inspectSnapshot(
-        { name: "External account" },
-        {
-          accountId: "default",
-          enabled: false,
-          configured: true,
-          running: false,
-          lastError: "recorded failure",
-        },
-      ),
-    ).resolves.toMatchObject({
+    const runtime = Object.freeze({
+      accountId: "default",
       enabled: false,
       configured: true,
       running: false,
-      stateReason: "disabled",
       lastError: "recorded failure",
+    });
+    await expect(inspectSnapshot({ name: "External account" }, runtime)).resolves.toMatchObject({
+      ...runtime,
+      stateReason: "disabled",
     });
   });
 
   it("projects summary-only inspection without invoking runtime account hooks", async () => {
+    const inspected = Object.freeze({
+      accountId: "primary",
+      enabled: true,
+      configured: true,
+      tokenStatus: "available",
+      name: "Configured account",
+    });
     await expect(
       inspectSnapshot(
-        {
-          accountId: "primary",
-          enabled: true,
-          configured: true,
-          tokenStatus: "available",
-          name: "Configured account",
-        },
+        inspected,
         { accountId: "primary", running: true, lifecycle: "ready" },
         "requested-alias",
       ),
     ).resolves.toMatchObject({
-      accountId: "primary",
-      name: "Configured account",
-      enabled: true,
-      configured: true,
-      tokenStatus: "available",
+      ...inspected,
       running: true,
       lifecycle: "ready",
     });
@@ -198,20 +188,18 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
   });
 
   it("preserves lifecycle fields computed by a custom status adapter", async () => {
-    await expect(
-      snapshotAccount({ enabled: true, configured: true }, {}, () => ({
-        accountId: "default",
-        linked: true,
-        running: false,
-        connected: false,
-        lastError: "probe failed",
-      })),
-    ).resolves.toMatchObject({
-      configured: true,
+    const lifecycle = Object.freeze({
+      accountId: "default",
       linked: true,
       running: false,
       connected: false,
       lastError: "probe failed",
+    });
+    await expect(
+      snapshotAccount({ enabled: true, configured: true }, {}, () => lifecycle),
+    ).resolves.toMatchObject({
+      ...lifecycle,
+      configured: true,
     });
   });
 

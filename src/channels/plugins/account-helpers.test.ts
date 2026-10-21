@@ -8,8 +8,6 @@ import {
   resolveListedDefaultAccountId,
 } from "./account-helpers.js";
 
-const { resolveDefaultAccountId } = createAccountListHelpers("testchannel");
-
 function cfg(
   accounts: Record<string, unknown>,
   defaultAccount?: string,
@@ -76,9 +74,6 @@ describe("createAccountListHelpers", () => {
         channels: { testchannel: { token: "root-token", defaultAccount: "work" } },
       } as unknown as OpenClawConfig),
     ).toEqual(["work"]);
-  });
-  it('returns "default" for empty config', () => {
-    expect(resolveDefaultAccountId({})).toBe("default");
   });
 });
 

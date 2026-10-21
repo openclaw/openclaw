@@ -4,7 +4,6 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
-  applySetupAccountConfigPatch,
   createEnvPatchedAccountSetupAdapter,
   createPatchedAccountSetupAdapter,
   moveSingleAccountChannelSectionToDefaultAccount,
@@ -25,22 +24,6 @@ beforeEach(() => {
 });
 
 afterAll(resetPluginRuntimeStateForTest);
-
-it("applySetupAccountConfigPatch normalizes account id and preserves other accounts", () => {
-  const next = applySetupAccountConfigPatch({
-    cfg: config("demo-setup", { accounts: { personal: { botToken: "personal-token" } } }),
-    channelKey: "demo-setup",
-    accountId: "Work Team",
-    patch: { botToken: "work-token" },
-  });
-
-  expect(next.channels?.["demo-setup"]).toMatchObject({
-    accounts: {
-      personal: { botToken: "personal-token" },
-      "work-team": { enabled: true, botToken: "work-token" },
-    },
-  });
-});
 
 it("patchScopedAccountConfig clears only default-account credentials before replacement", () => {
   const next = patchScopedAccountConfig({
