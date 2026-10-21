@@ -15,16 +15,11 @@ import {
 } from "../../../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../../../state/agent-database-startup.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
-import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import * as deliveryRuntime from "../announce/subagent-announce-delivery.runtime.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
-import type {
-  GatewayRequest,
-  SessionStoreEntry,
-} from "./subagent-registry.lifecycle-fixture.test-support.js";
 import { prepareSubagentRecoveryFixture } from "./subagent-registry.persistence.test-support.js";
-import type { PrepareRequesterWakeChildSession } from "./subagent-registry.requester-wake-session.test-support.js";
+import type { RequesterWakeFixture } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -66,19 +61,7 @@ export function registerRequesterStartupAdmissionTests({
   flushOwnedWork,
   getRequesterWakeCalls,
   wakeRequester,
-}: {
-  requesterSessionKey: string;
-  prepareChildSession: PrepareRequesterWakeChildSession;
-  getFixture: () => {
-    testState: OpenClawTestState;
-    sessionStore: Record<string, SessionStoreEntry>;
-    sessionStorePath: string;
-  };
-  createGatewayContext: () => GatewayRequestContext;
-  flushOwnedWork: () => Promise<void>;
-  getRequesterWakeCalls: () => GatewayRequest[];
-  wakeRequester: typeof maybeWakeRequesterAfterAllChildrenSettled;
-}) {
+}: RequesterWakeFixture) {
   const readWake = (runId: string) => registry.getSubagentRunByRunId(runId)?.requesterSettleWake;
   const advance = async (ms: number, count: number) => {
     await vi.advanceTimersByTimeAsync(ms);

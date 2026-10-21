@@ -1,27 +1,18 @@
 import { expect, it, vi, type Mock } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
-import type { onAgentEvent } from "../../../infra/agent-events.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
-import type { PrepareRequesterWakeChildSession } from "./subagent-registry.requester-wake-session.test-support.js";
+import type { RequesterWakeFixture } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
-export function registerRequesterSelfYieldFollowupTests<Response>(fixture: {
-  requesterSessionKey: string;
-  prepareChildSession: PrepareRequesterWakeChildSession;
-  createGatewayContext: () => GatewayRequestContext;
-  getLifecycleHandler: () => Parameters<typeof onAgentEvent>[0];
-  callGatewayMock: Mock<(request: GatewayRequest) => Promise<Response>>;
-  getAgentCalls: () => GatewayRequest[];
-  emitCompleted: (runId: string, childSessionKey: string, text: string) => void;
-  flushOwnedWork: () => Promise<void>;
-  flushAsync: () => Promise<void>;
-  wakeRequester: typeof maybeWakeRequesterAfterAllChildrenSettled;
-  waitForDeliveredCleanup: (runId: string) => Promise<void>;
-  setReleaseAgentCallGate: (release: () => void) => void;
-}) {
+export function registerRequesterSelfYieldFollowupTests<Response>(
+  fixture: RequesterWakeFixture & {
+    callGatewayMock: Mock<(request: GatewayRequest) => Promise<Response>>;
+    flushAsync: () => Promise<void>;
+    setReleaseAgentCallGate: (release: () => void) => void;
+  },
+) {
   it("delivers an adopted self-yield follow-up once while ordinary announce is in flight", async () => {
     vi.setSystemTime(100_000);
     const context = fixture.createGatewayContext();
@@ -54,7 +45,7 @@ export function registerRequesterSelfYieldFollowupTests<Response>(fixture: {
       hasPendingWork: () => false,
     });
     await register(followupRunId, false);
-    fixture.getLifecycleHandler()({
+    fixture.getLifecycleHandler()!({
       stream: "lifecycle",
       runId: kickoffRunId,
       seq: 1,

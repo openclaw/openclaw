@@ -1,64 +1,37 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
-import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
-import type { onAgentEvent } from "../../../infra/agent-events.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { buildScopedSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
-import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import {
   createRequesterYieldTool,
   visibleChild,
 } from "./subagent-registry.requester-wake-receipts.test-support.js";
+import type { RequesterWakeFixture } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function registerRequesterWakeSettlementBoundaryTests({
   requesterSessionKey,
   spawnVisibleChild,
+  settleTurn,
   emitCompleted,
   flushOwnedWork,
   waitForDeliveredCleanup,
   getRequesterWakeCalls,
   getAgentCalls,
-  getGatewayContext,
+  createGatewayContext: getGatewayContext,
   getLifecycleHandler,
   useGlobalSessionScope,
-}: {
-  requesterSessionKey: string;
-  spawnVisibleChild: (params: {
-    runId: string;
-    childSessionKey: string;
-    requesterTurnRunId: string;
-  }) => Promise<void>;
-  emitCompleted: (runId: string, childSessionKey: string, text: string) => void;
-  flushOwnedWork: () => Promise<void>;
-  waitForDeliveredCleanup: (runId: string) => Promise<void>;
-  getRequesterWakeCalls: () => GatewayRequest[];
-  getAgentCalls: () => GatewayRequest[];
-  getGatewayContext: () => GatewayRequestContext;
-  getLifecycleHandler: () => Parameters<typeof onAgentEvent>[0] | undefined;
+}: RequesterWakeFixture & {
   useGlobalSessionScope: () => void;
 }): void {
   const readRun = registry.getSubagentRunByRunId;
   async function settleYield(runId: string, children: ReturnType<typeof visibleChild>[]) {
     await createRequesterYieldTool(requesterSessionKey, runId).execute(runId, {});
-    const { withLocalSessionPlacementTurnSettlement } =
-      await import("../../session-placement-admission.js");
-    await withLocalSessionPlacementTurnSettlement(
-      {
-        sessionId: "sess-main",
-        sessionKey: requesterSessionKey,
-        agentId: "main",
-        runId,
-      },
-      async () => ({
-        acceptedSessionSpawns: children,
-        meta: { durationMs: 1, yielded: true },
-      }),
-    );
+    await settleTurn(runId, children);
   }
   const addRun = (
     runId: string,
