@@ -345,9 +345,20 @@ async function initializeRetainedBuildCacheInputs() {
       // worker copy does not have. The current index still identifies tracked inputs.
     }
   }
+  // A plain workspace can gain .git without staging its already-admitted inputs.
+  // Treat the authenticated prior manifest as admission history, not the new index.
+  const priorPaths = [];
+  const manifestRoot = path.join(process.env.HOME, ".openclaw-worker", "manifests");
+  for (const digest of priorManifestDigests) {
+    for (const entry of readPriorManifestEntries(manifestRoot, digest)) {
+      if (!entry || typeof entry.path !== "string") fail("invalid prior workspace manifest entry");
+      priorPaths.push(entry.path);
+    }
+  }
   // The index also admits inputs staged after the requested base commit.
   rememberBuildCacheInputs([
     ...paths,
+    ...priorPaths,
     ...(await nulPaths(["--full-name", "--cached"])),
   ]);
 }

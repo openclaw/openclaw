@@ -349,3 +349,35 @@ it("retains build-cache inputs staged after the requested base", async () => {
   const manifest = await readManifest(captured.stdout.trim());
   expect(manifest.entries.some((entry) => entry.path === authored)).toBe(true);
 });
+
+it("retains admitted plain-workspace cache inputs when Git metadata appears", async () => {
+  const { workspace, readManifest, runManifest } = await createScriptWorkspace(
+    tempDirs.make("workspace-plain-admission-"),
+  );
+  const authored = ".artifacts/build-all-cache/authored.txt";
+  const generated = ".artifacts/build-all-cache/generated/output.js";
+  await writeWorkspaceFiles(workspace, {
+    "source.txt": "source\n",
+    [authored]: "authored before Git\n",
+  });
+
+  const plain = await runManifest(["", "all"]);
+  expect(plain.code, plain.stderr).toBe(0);
+  const plainRef = plain.stdout.trim();
+  expect((await readManifest(plainRef)).entries.some((entry) => entry.path === authored)).toBe(
+    true,
+  );
+
+  const initialized = await runCommandWithTimeout(["git", "-C", workspace, "init", "--quiet"], {
+    timeoutMs: 10_000,
+  });
+  expect(initialized.code, initialized.stderr).toBe(0);
+  await writeWorkspaceFiles(workspace, { [generated]: "disposable cache\n" });
+
+  const captured = await runManifest(["", "all", plainRef.slice(7)]);
+  expect(captured.code, captured.stderr).toBe(0);
+  const manifest = await readManifest(captured.stdout.trim());
+  expect(manifest.entries.some((entry) => entry.path === authored)).toBe(true);
+  expect(manifest.entries.some((entry) => entry.path === generated)).toBe(false);
+  expect(manifest.entries.some((entry) => entry.path === "source.txt")).toBe(true);
+});
