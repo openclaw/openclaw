@@ -8,17 +8,23 @@ import {
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
 const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
+const MAX_DISPLAYED_RUN_ID_CHARS = 256;
 export const HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX = "heartbeat-delivery:";
-// maybeNotifyOnExit owns this shape: a status head, then ` :: <output>`, or, when
-// nothing was captured, a blank line before producer notes (timeout retry guidance).
+// Exec completion events are producer/PARSER-shared with bash-tools.exec-runtime.ts.
+// Grammar: "Exec <completed|failed> (<exec-slug>, (code <n>|signal <SIG>)[, run <escaped-id>])[ :: <output>]",
+// or, when nothing was captured, a blank line before producer notes (timeout retry guidance).
+// The run id is delimiter-escaped by the producer (`%` becomes %25 and `)`
+// becomes %29, reversibly) so a single capture-until-close-paren keeps
+// arbitrary supported run ids (#155329).
 const STRUCTURED_EXEC_COMPLETION_EVENT_RE =
-  /^exec (completed|failed) \(([a-z0-9_-]{1,64}), (code -?\d+|signal [^)]+)\)(?: :: ([\s\S]*)|\n\n([\s\S]+))?$/i;
+  /^exec (completed|failed) \(([a-z0-9_-]{1,64}), (code -?\d+|signal [A-Za-z0-9]+)(?:, run ([^)]+))?\)(?: :: ([\s\S]*)|\n\n([\s\S]+))?$/i;
 
 type StructuredExecCompletionEvent = {
   raw: string;
   action: string;
   id: string;
   result: string;
+  runId?: string;
   output: string;
   notes: string;
   succeeded: boolean;
@@ -27,7 +33,7 @@ type StructuredExecCompletionEvent = {
 function parseStructuredExecCompletionEvent(evt: string): StructuredExecCompletionEvent | null {
   const trimmed = evt.trim();
   const match = STRUCTURED_EXEC_COMPLETION_EVENT_RE.exec(trimmed);
-  if (!match || (match[5] !== undefined && match[5] !== EXEC_TIMEOUT_RETRY_GUIDANCE)) {
+  if (!match || (match[6] !== undefined && match[6] !== EXEC_TIMEOUT_RETRY_GUIDANCE)) {
     return null;
   }
   const action = match[1] ?? "";
@@ -37,10 +43,30 @@ function parseStructuredExecCompletionEvent(evt: string): StructuredExecCompleti
     action,
     id: match[2] ?? "",
     result,
-    output: (match[4] ?? "").trim(),
-    notes: (match[5] ?? "").trim(),
+    // The producer escapes % as %25 and ) as %29; the decoder reverses both.
+    runId: match[4] ? parseRunSegment(match[4]) : undefined,
+    output: (match[5] ?? "").trim(),
+    notes: (match[6] ?? "").trim(),
     succeeded: action.toLowerCase() === "completed" && result.toLowerCase() === "code 0",
   };
+}
+
+function parseRunSegment(segment: string): string {
+  // Single pass, so a literal %29 inside an id (emitted as %2529) survives.
+  return segment.replace(/%(25|29)/g, (_match, hex: string) => (hex === "25" ? "%" : ")"));
+}
+
+// Long ids stay parseable end to end, but the prompt display bounds them so a
+// pathological id cannot push the captured result past the prompt budget.
+function displayRunSegment(runId?: string): string {
+  if (!runId) {
+    return "";
+  }
+  const displayed =
+    runId.length > MAX_DISPLAYED_RUN_ID_CHARS
+      ? `${runId.slice(0, MAX_DISPLAYED_RUN_ID_CHARS)}...(truncated)`
+      : runId;
+  return `, run ${displayed}`;
 }
 
 export function isRelayableExecCompletionEvent(evt: string): boolean {
@@ -63,10 +89,15 @@ function formatExecEventPromptText(pendingEvents: string[]): {
       return trimmed ? [trimmed] : [];
     }
     if (parsed.output) {
+      if (parsed.runId && parsed.runId.length > MAX_DISPLAYED_RUN_ID_CHARS) {
+        return [
+          `Exec ${parsed.action} (${parsed.id}, ${parsed.result}${displayRunSegment(parsed.runId)}) :: ${parsed.output}`,
+        ];
+      }
       return [parsed.raw];
     }
     hasMissingOutput = true;
-    const missingOutput = `Exec ${parsed.action} (${parsed.id}, ${parsed.result}) without captured stdout/stderr.`;
+    const missingOutput = `Exec ${parsed.action} (${parsed.id}, ${parsed.result}${displayRunSegment(parsed.runId)}) without captured stdout/stderr.`;
     return [parsed.notes ? `${missingOutput}\n\n${parsed.notes}` : missingOutput];
   });
   return { text: lines.join("\n").trim(), hasMissingOutput };

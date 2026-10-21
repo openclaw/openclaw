@@ -160,6 +160,61 @@ it.each([
   expect(isExecCompletionEvent(event)).toBe(true);
   expect(isRelayableExecCompletionEvent(event)).toBe(true);
 });
+
+it.each([
+  // Run-correlated exit events (#155329) stay structured even with the run segment.
+  { value: "Exec completed (abc12345, code 0, run b7c8d9e0-1f2a)", expected: false },
+  {
+    value: "Exec failed (abc12345, signal SIGKILL, run f1a2b3c4) :: killed output",
+    expected: true,
+  },
+  // Client-chosen run ids accept any nonempty string (underscores, punctuation).
+  { value: "Exec completed (abc12345, code 7, run request_123)", expected: true },
+  { value: "Exec failed (abc12345, signal SIGKILL, run run_client/2) :: killed", expected: true },
+])("classifies run-correlated exec completion events for %j", ({ value, expected }) => {
+  expect(isRelayableExecCompletionEvent(value)).toBe(expected);
+});
+
+it("also carries the run id into missing-output completion prompts", () => {
+  // Missing-output failures extract the run id explicitly if the queued event had it.
+  const result = buildExecEventPrompt(["Exec completed (abc12345, code 7, run request_123)"]);
+
+  expect(result).toContain(
+    "Exec completed (abc12345, code 7, run request_123) without captured stdout/stderr.",
+  );
+});
+
+it("signals stay their own token when the run segment is present", () => {
+  const result = buildExecEventPrompt([
+    "Exec failed (abc12345, signal SIGKILL, run f1a2b3c4) :: killed output",
+  ]);
+
+  // The raw string (with output) is retained; no signal/run leakage into either field.
+  expect(result).toContain("Exec failed (abc12345, signal SIGKILL, run f1a2b3c4) :: killed output");
+});
+
+it("keeps run ids beyond the display bound in the completion grammar", () => {
+  const longRunId = `run-${"a".repeat(140)}`;
+  const prompt = buildExecEventPrompt([`Exec failed (abc12345, code 7, run ${longRunId})`]);
+  expect(prompt).toContain(`run ${longRunId}) without captured stdout/stderr.`);
+});
+
+it("round-trips run ids containing percent escapes", () => {
+  const runId = "request%29-and-100%25-done)";
+  // Mirrors the producer: % becomes %25 first, then ) becomes %29.
+  const escaped = runId.replaceAll("%", "%25").replaceAll(")", "%29");
+  const prompt = buildExecEventPrompt([`Exec failed (abc12345, code 7, run ${escaped})`]);
+  expect(prompt).toContain(`run ${runId}) without captured stdout/stderr.`);
+});
+
+it("keeps captured output visible when a long run id fills the prompt budget", () => {
+  const longRunId = `run-${"a".repeat(8100)}`;
+  const prompt = buildExecEventPrompt([
+    `Exec failed (abc12345, code 7, run ${longRunId}) :: exit reason: disk full`,
+  ]);
+  expect(prompt).toContain("exit reason: disk full");
+  expect(prompt).toContain("...(truncated)");
+});
 it("does not split surrogate pairs in long event text", () => {
   const safePrefix = "x".repeat(7_999);
   const result = buildExecEventPrompt([`${safePrefix}🚀tail`]);

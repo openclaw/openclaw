@@ -569,6 +569,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           scopeKey: defaults?.scopeKey,
           sessionKey: notifySessionKey,
           agentId,
+          runId: defaults?.runId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
           notifyFromConversationTurn,

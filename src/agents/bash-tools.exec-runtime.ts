@@ -358,6 +358,8 @@ export async function runExecProcess({
   scopeKey?: string;
   sessionKey?: string;
   agentId?: string;
+  /** Owning agent-run id, persisted on the session so exit events keep run correlation. */
+  runId?: string;
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
@@ -404,6 +406,7 @@ export async function runExecProcess({
       command: opts.command,
       scopeKey: opts.scopeKey,
       sessionKey: opts.sessionKey,
+      runId: opts.runId,
       cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
       agentId: opts.agentId,
       eventRouting: opts.eventRouting,
@@ -430,6 +433,7 @@ export async function runExecProcess({
     },
     opts.requestOwners,
   );
+
   withoutGatewayToolCallerIdentity(() => addSession(session));
   if (opts.requestOwners?.length) {
     retainExecRequestProcess(opts.requestOwners, waitForExecSession(session));

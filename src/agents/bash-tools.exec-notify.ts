@@ -398,9 +398,16 @@ export async function maybeNotifyOnExit(
     await session.clearExitNotification?.();
     return;
   }
+  // Own-run correlation: persisting the run id on the session keeps terminal events
+  // attributable even when the child dies under a cgroup SIGKILL before any exit
+  // handler ran (#155329). `%` is escaped first (%25), then `)` (%29), so the
+  // reader's single-pass decode round-trips ids containing either character.
+  const runSegment = session.runId
+    ? `, run ${session.runId.replaceAll("%", "%25").replaceAll(")", "%29")}`
+    : "";
   const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}${runSegment}) :: ${output}`
+    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}${runSegment})`;
   const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
   const eventSessionKey =
     session.notifySessionTarget?.sessionKey ??
