@@ -59,8 +59,7 @@ it.each([
     });
     await fixture.account("followup", { provider: "openai", model: "gpt-4o" });
 
-    expect(mocks.refreshQueuedFollowupSession).toHaveBeenCalledOnce();
-    expect(mocks.refreshQueuedFollowupSession).toHaveBeenCalledWith(
+    expect(mocks.refreshQueuedFollowupSession).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         key: fixture.context.sessionKey,
         nextProvider: "openai",

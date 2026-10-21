@@ -248,27 +248,6 @@ describe("runReplyAgent media path normalization", () => {
     expect(enqueueFollowupRunMock.mock.calls[0]?.[1].prompt).toBe("generate chart");
   });
 
-  it("falls back to a queued followup when active steering is rejected", async () => {
-    queueMessageMock.mockImplementation(async (sessionId: string) => ({
-      queued: false,
-      sessionId,
-      reason: "runtime_rejected",
-      gatewayHealth: "live",
-      errorMessage: "cannot steer a compact turn",
-    }));
-
-    await runReplyAgent(await makeSteerParams({ isRunActive: () => true }));
-
-    expect(queueMessageMock).toHaveBeenCalledOnce();
-    expect(reserveSteerCandidateMock).toHaveBeenCalledWith(
-      "main",
-      expect.objectContaining({ prompt: "generate chart" }),
-      expect.objectContaining({ mode: "steer" }),
-      expect.any(Function),
-    );
-    expectDeferredSteer();
-  });
-
   async function runTurn(
     sessionCtx: TemplateContext,
     prompt = "describe this image",

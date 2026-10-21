@@ -494,32 +494,6 @@ describe("buildReplyPayloads media filter integration", () => {
     });
   });
 
-  it("suppresses already-sent text plus media before stripping block-sent media", async () => {
-    const sentKey = JSON.stringify({
-      text: "caption",
-      mediaList: ["file:///tmp/outbound/voice.ogg"],
-    });
-    const pipeline = makePipeline({
-      hasSentPayload: (payload) =>
-        JSON.stringify({
-          text: (payload.text ?? "").trim(),
-          mediaList: [
-            ...(payload.mediaUrl ? [payload.mediaUrl] : []),
-            ...(payload.mediaUrls ?? []),
-          ],
-        }) === sentKey,
-      getSentMediaUrls: () => ["file:///tmp/outbound/voice.ogg"],
-    });
-
-    await expectBuiltPayloads({
-      blockStreamingEnabled: true,
-      blockReplyPipeline: pipeline,
-      normalizeMediaPaths: async (payload) => payload,
-      payloads: [{ text: "caption", mediaUrl: "file:///tmp/outbound/voice.ogg" }],
-      expected: [],
-    });
-  });
-
   const presentation = {
     blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
   };

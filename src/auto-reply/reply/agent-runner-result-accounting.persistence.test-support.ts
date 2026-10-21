@@ -285,8 +285,8 @@ export async function createAgentAccountingPersistenceFixture({
     turn,
     withCompletion,
     setMeta,
-    deliverQueued: async () => {
-      return withAccountingProvider(async () => {
+    deliverQueued: async () =>
+      withAccountingProvider(async () => {
         const delivered: ReplyPayload[] = [];
         const decision = await withCompletion(async (completion) => {
           const accounting = await accountQueued(context.execution, completion);
@@ -314,8 +314,7 @@ export async function createAgentAccountingPersistenceFixture({
           runFollowup: async () => {},
         });
         return delivered;
-      });
-    },
+      }),
     recordCompaction,
     accountAborted: (reason: "user" | "restart") => {
       const compaction =
