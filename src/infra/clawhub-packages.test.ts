@@ -5,6 +5,7 @@ import {
   resolveLatestVersionFromPackage,
   searchClawHubPackages,
 } from "./clawhub-packages.js";
+import { captureClawHubJson as mockResponse } from "./clawhub.test-support.js";
 
 const packageSelector = { name: "@openclaw/diagnostics-otel", version: "2026.3.22" };
 const versionPath = "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22";
@@ -31,26 +32,14 @@ const securityReport = {
   },
 };
 
-function mockResponse(body: unknown) {
-  let requestedUrl = "";
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-    requestedUrl = input instanceof Request ? input.url : String(input);
-    return new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  });
-  return () => new URL(requestedUrl);
-}
-
 afterEach(() => vi.restoreAllMocks());
 
 it("requests official search results before ClawHub applies the result cap", async () => {
-  const requestedUrl = mockResponse({ results: [] });
+  const { url } = mockResponse({ results: [] });
   const query = { query: " research ", family: "claw", isOfficial: true, limit: 1 } as const;
   await expect(searchClawHubPackages(query)).resolves.toEqual([]);
-  expect(requestedUrl().pathname).toBe("/api/v1/packages/search");
-  expect(Object.fromEntries(requestedUrl().searchParams)).toEqual({
+  expect(url().pathname).toBe("/api/v1/packages/search");
+  expect(Object.fromEntries(url().searchParams)).toEqual({
     q: "research",
     family: "claw",
     isOfficial: "true",
@@ -87,34 +76,34 @@ it("fetches typed package artifact resolver reports", async () => {
       npmShasum: "abc",
     },
   };
-  const requestedUrl = mockResponse(report);
+  const { url } = mockResponse(report);
   await expect(fetchClawHubPackageArtifact(packageSelector)).resolves.toEqual(report);
-  expect(requestedUrl().pathname).toBe(`${versionPath}/artifact`);
+  expect(url().pathname).toBe(`${versionPath}/artifact`);
 });
 
 it("fetches typed package security reports", async () => {
-  const requestedUrl = mockResponse(securityReport);
+  const { url } = mockResponse(securityReport);
   const { releaseId, ...release } = securityReport.release;
   await expect(fetchClawHubPackageSecurity(packageSelector)).resolves.toEqual({
     ...securityReport,
     release: { ...release, id: releaseId },
   });
-  expect(requestedUrl().pathname).toBe(`${versionPath}/security`);
+  expect(url().pathname).toBe(`${versionPath}/security`);
 });
 
-it("rejects malformed package security reports", async () => {
-  mockResponse({ trust: { ...securityReport.trust, reasons: "clean", stale: false } });
-  await expect(fetchClawHubPackageSecurity(packageSelector)).rejects.toThrow(
-    "expected reasons to be a string array",
-  );
-});
-
-it("rejects package security reports without their audit overview", async () => {
-  mockResponse({
-    securityAuditUrl: securityReport.securityAuditUrl,
-    trust: { blockedFromDownload: false, reasons: [], pending: false, stale: false },
-  });
-  await expect(fetchClawHubPackageSecurity(packageSelector)).rejects.toThrow(
-    "expected overview to be a non-empty string",
-  );
+it.each([
+  [
+    { trust: { ...securityReport.trust, reasons: "clean", stale: false } },
+    "reasons to be a string array",
+  ],
+  [
+    {
+      securityAuditUrl: securityReport.securityAuditUrl,
+      trust: { blockedFromDownload: false, reasons: [], pending: false, stale: false },
+    },
+    "overview to be a non-empty string",
+  ],
+])("rejects malformed security report %j", async (report, error) => {
+  mockResponse(report);
+  await expect(fetchClawHubPackageSecurity(packageSelector)).rejects.toThrow(`expected ${error}`);
 });

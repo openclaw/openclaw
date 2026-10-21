@@ -6,6 +6,7 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { fetchClawHubJson, type ClawHubFetchOptions } from "./clawhub-client.js";
 import { fetchClawHubSkillVerification, searchClawHubSkills } from "./clawhub-skills.js";
+import { captureClawHubResponse } from "./clawhub.test-support.js";
 
 const search = (options: ClawHubFetchOptions) =>
   searchClawHubSkills({ query: "calendar", ...options });
@@ -33,13 +34,9 @@ describe("clawhub client", () => {
   const originalEnv = captureEnv(["APPDATA", "HOME", "XDG_CONFIG_HOME"]);
 
   async function searchAuthorizationHeader(): Promise<string | null> {
-    let authorization: string | null = null;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
-      authorization = new Headers(init?.headers).get("Authorization");
-      return Response.json({ results: [] });
-    });
+    const request = captureClawHubResponse(() => Response.json({ results: [] }));
     await expect(search({})).resolves.toStrictEqual([]);
-    return authorization;
+    return new Headers(request.init()?.headers).get("Authorization");
   }
 
   afterEach(() => {
@@ -102,8 +99,8 @@ describe("clawhub client", () => {
 
   it("uses a valid Retry-After hint when RateLimit-Reset is malformed", async () => {
     process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
-    vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
+    captureClawHubResponse(
+      () =>
         new Response("Rate limit exceeded", {
           status: 429,
           headers: { "RateLimit-Reset": "invalid", "Retry-After": "7" },
@@ -151,8 +148,8 @@ describe("clawhub client", () => {
   );
 
   it("rejects malformed UTF-8 in otherwise valid ClawHub JSON", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
+    captureClawHubResponse(
+      () =>
         new Response(
           Buffer.concat([
             Buffer.from('{"results":[{"slug":"'),
@@ -201,9 +198,12 @@ describe("clawhub client", () => {
       },
       cancel,
     });
-    vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
-        new Response(body, { status: 200, headers: { "content-type": "application/json" } }),
+    captureClawHubResponse(
+      () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
     );
     const result = fetchClawHubSkillVerification({ slug: "weather" });
 

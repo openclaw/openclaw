@@ -40,9 +40,29 @@ async function expectRejectCode(promise: Promise<unknown>, expected: string | Re
 }
 
 async function makeFile(name: string, data: string | Buffer) {
-  const file = path.join(await tempDirs.make("openclaw-fs-safe-"), name);
-  await fs.writeFile(file, data);
-  return file;
+  return path.join(await makeRoot({ [name]: data }), name);
+}
+
+async function makeRoot(files: Record<string, string | Buffer> = {}) {
+  const root = await tempDirs.make("openclaw-fs-safe-");
+  for (const [name, data] of Object.entries(files)) {
+    const file = path.join(root, name);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, data);
+  }
+  return root;
+}
+
+async function expectContents(file: string, contents: string) {
+  await expect(fs.readFile(file, "utf8")).resolves.toBe(contents);
+}
+
+async function aliasRoot() {
+  const root = await makeRoot();
+  const realDir = path.join(root, "real");
+  await fs.mkdir(realDir);
+  await fs.symlink(realDir, path.join(root, "alias"));
+  return { root, realDir };
 }
 
 async function runSymlinkWriteRace(
@@ -198,62 +218,31 @@ describe("fs-safe", () => {
     await expectRejectCode(readLocalFileSafely({ filePath: link }), "symlink");
   });
 
-  it.runIf(process.platform !== "win32")(
-    "resolves opened file real paths from the fd before the current path target",
-    async () => {
-      const root = await tempDirs.make("openclaw-fs-safe-root-");
-      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
-      const originalPath = path.join(root, "inside.txt");
-      const movedPath = path.join(root, "inside-moved.txt");
-      const outsidePath = path.join(outside, "outside.txt");
-      await fs.writeFile(originalPath, "inside");
-      await fs.writeFile(outsidePath, "outside");
-
-      const originalRealpath = fs.realpath.bind(fs);
-      const realpathSpy = vi.spyOn(fs, "realpath");
-      realpathSpy.mockImplementation(async (target) => {
-        if (typeof target === "string" && target.startsWith("/dev/fd/")) {
-          return movedPath;
-        }
-        return await originalRealpath(target);
-      });
-
-      const handle = await fs.open(originalPath, "r");
-      try {
-        await fs.rename(originalPath, movedPath);
-        await fs.symlink(outsidePath, originalPath);
-
-        const resolved = await resolveOpenedFileRealPathForHandle(handle, originalPath);
-
-        expect(resolved).toBe(movedPath);
-        await expect(handle.readFile({ encoding: "utf8" })).resolves.toBe("inside");
-      } finally {
-        await handle.close().catch(() => {});
-      }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "falls back to the io path when /dev/fd realpath does not resolve to the opened file",
-    async () => {
-      const root = await tempDirs.make("openclaw-fs-safe-root-");
-      const filePath = path.join(root, "inside.txt");
-      await fs.writeFile(filePath, "inside");
-
-      const originalRealpath = fs.realpath.bind(fs);
-      const realpathSpy = vi.spyOn(fs, "realpath");
-      realpathSpy.mockImplementation(async (target) => {
-        if (typeof target === "string" && target.startsWith("/dev/fd/")) {
-          return "/dev/fd/inside.txt";
-        }
-        return await originalRealpath(target);
-      });
-
+  it.runIf(process.platform !== "win32").each(["moved", "unresolved"] as const)(
+    "resolves opened file real paths with a %s fd target",
+    async (mode) => {
+      const filePath = await makeFile("inside.txt", "inside");
+      const movedPath = path.join(path.dirname(filePath), "moved.txt");
+      const realpath = fs.realpath.bind(fs);
+      vi.spyOn(fs, "realpath").mockImplementation(async (target) =>
+        typeof target === "string" && target.startsWith("/dev/fd/")
+          ? mode === "moved"
+            ? movedPath
+            : "/dev/fd/inside.txt"
+          : await realpath(target),
+      );
       const handle = await fs.open(filePath, "r");
       try {
+        if (mode === "moved") {
+          await fs.rename(filePath, movedPath);
+          await fs.symlink(await makeFile("outside.txt", "outside"), filePath);
+        }
         await expect(resolveOpenedFileRealPathForHandle(handle, filePath)).resolves.toBe(
-          await originalRealpath(filePath),
+          mode === "moved" ? movedPath : await realpath(filePath),
         );
+        if (mode === "moved") {
+          await expect(handle.readFile({ encoding: "utf8" })).resolves.toBe("inside");
+        }
       } finally {
         await handle.close().catch(() => {});
       }
@@ -285,9 +274,11 @@ describe("fs-safe", () => {
   });
 
   it("reads files within root through all read helpers", async () => {
-    const root = await tempDirs.make("openclaw-fs-safe-root-");
-
-    await fs.writeFile(path.join(root, "inside.txt"), "inside");
+    const root = await makeRoot({
+      "inside.txt": "inside",
+      "absolute.txt": "absolute",
+      "scoped.txt": "scoped",
+    });
     const rootFs = await openRoot(root);
     const byRelativePath = await rootFs.read("inside.txt");
     expect(byRelativePath.buffer.toString("utf8")).toBe("inside");
@@ -295,12 +286,10 @@ describe("fs-safe", () => {
     expect(byRelativePath.stat.size).toBe(6);
 
     const absolutePath = path.join(root, "absolute.txt");
-    await fs.writeFile(absolutePath, "absolute");
     const byAbsolutePath = await rootFs.readAbsolute(absolutePath);
     expect(byAbsolutePath.buffer.toString("utf8")).toBe("absolute");
 
     const scopedPath = path.join(root, "scoped.txt");
-    await fs.writeFile(scopedPath, "scoped");
     const readScoped = rootFs.reader();
     await expect(readScoped(scopedPath)).resolves.toEqual(Buffer.from("scoped"));
   });
@@ -319,12 +308,10 @@ describe("fs-safe", () => {
   it.runIf(process.platform !== "win32")(
     "rejects symlink-target reads when the path target changes after open",
     async () => {
-      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const root = await makeRoot({ "inside-a.txt": "inside-a", "inside-b.txt": "inside-b" });
       const insideA = path.join(root, "inside-a.txt");
       const insideB = path.join(root, "inside-b.txt");
       const link = path.join(root, "link.txt");
-      await fs.writeFile(insideA, "inside-a");
-      await fs.writeFile(insideB, "inside-b");
       await fs.symlink(insideA, link);
 
       __setFsSafeTestHooksForTest({
@@ -344,9 +331,7 @@ describe("fs-safe", () => {
   );
 
   it("closes the opened handle when afterOpen hook throws", async () => {
-    const root = await tempDirs.make("openclaw-fs-safe-root-");
-    const filePath = path.join(root, "inside.txt");
-    await fs.writeFile(filePath, "inside");
+    const root = await makeRoot({ "inside.txt": "inside" });
 
     let openedHandle: FileHandle | undefined;
     __setFsSafeTestHooksForTest({
@@ -385,44 +370,30 @@ describe("fs-safe", () => {
   });
 
   it("writes a file within root safely", async () => {
-    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const root = await makeRoot();
     await (await openRoot(root)).write("nested/out.txt", "hello");
-    await expect(fs.readFile(path.join(root, "nested", "out.txt"), "utf8")).resolves.toBe("hello");
+    await expectContents(path.join(root, "nested/out.txt"), "hello");
   });
 
   it("appends to a file within root safely", async () => {
-    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const root = await makeRoot({ "nested/out.txt": "seed" });
     const targetPath = path.join(root, "nested", "out.txt");
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    await fs.writeFile(targetPath, "seed");
-
-    await (
-      await openRoot(root)
-    ).append("nested/out.txt", "next", {
-      prependNewlineIfNeeded: true,
-    });
-
-    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("seed\nnext");
+    await (await openRoot(root)).append("nested/out.txt", "next", { prependNewlineIfNeeded: true });
+    await expectContents(targetPath, "seed\nnext");
   });
 
   it("copies a file within root safely", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
-    const sourceDir = await tempDirs.make("openclaw-fs-safe-source-");
-    const sourcePath = path.join(sourceDir, "in.txt");
-    await fs.writeFile(sourcePath, "copy-ok");
+    const sourcePath = await makeFile("in.txt", "copy-ok");
 
     await (await openRoot(root)).copyIn("nested/copied.txt", sourcePath);
 
-    await expect(fs.readFile(path.join(root, "nested", "copied.txt"), "utf8")).resolves.toBe(
-      "copy-ok",
-    );
+    await expectContents(path.join(root, "nested/copied.txt"), "copy-ok");
   });
 
   it("removes a file within root safely", async () => {
-    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const root = await makeRoot({ "nested/out.txt": "hello" });
     const targetPath = path.join(root, "nested", "out.txt");
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    await fs.writeFile(targetPath, "hello");
 
     await (await openRoot(root)).remove("nested/out.txt");
 
@@ -441,11 +412,7 @@ describe("fs-safe", () => {
   it.runIf(process.platform !== "win32")(
     "creates directories through in-root symlink parents",
     async () => {
-      const root = await tempDirs.make("openclaw-fs-safe-root-");
-      const realDir = path.join(root, "real");
-      const aliasDir = path.join(root, "alias");
-      await fs.mkdir(realDir, { recursive: true });
-      await fs.symlink(realDir, aliasDir);
+      const { root, realDir } = await aliasRoot();
 
       await (await openRoot(root)).mkdir(path.join("alias", "nested", "deeper"));
 
@@ -457,11 +424,7 @@ describe("fs-safe", () => {
   it.runIf(process.platform !== "win32")(
     "removes files through in-root symlink parents",
     async () => {
-      const root = await tempDirs.make("openclaw-fs-safe-root-");
-      const realDir = path.join(root, "real");
-      const aliasDir = path.join(root, "alias");
-      await fs.mkdir(realDir, { recursive: true });
-      await fs.symlink(realDir, aliasDir);
+      const { root, realDir } = await aliasRoot();
       await fs.writeFile(path.join(realDir, "target.txt"), "hello");
 
       await (await openRoot(root)).remove(path.join("alias", "target.txt"));
@@ -488,34 +451,25 @@ describe("fs-safe", () => {
     await expectRejectCode((await openRoot(root)).write("../escape.txt", "x"), "outside-workspace");
   });
 
-  it.runIf(process.platform !== "win32")("rejects writing through hardlink aliases", async () => {
-    const root = await tempDirs.make("openclaw-fs-safe-root-");
-    const hardlinkPath = path.join(root, "alias.txt");
-    await withOutsideHardlinkAlias({
-      aliasPath: hardlinkPath,
-      run: async (outsideFile) => {
-        await expectRejectCode((await openRoot(root)).write("alias.txt", "pwned"), "path-alias");
-        await expect(fs.readFile(outsideFile, "utf8")).resolves.toBe("outside");
-      },
-    });
-  });
-
-  it.runIf(process.platform !== "win32")("rejects appending through hardlink aliases", async () => {
-    const root = await tempDirs.make("openclaw-fs-safe-root-");
-    const hardlinkPath = path.join(root, "alias.txt");
-    await withOutsideHardlinkAlias({
-      aliasPath: hardlinkPath,
-      run: async (outsideFile) => {
-        await expectRejectCode(
-          (await openRoot(root)).append("alias.txt", "pwned", {
-            prependNewlineIfNeeded: true,
-          }),
-          "path-alias",
-        );
-        await expect(fs.readFile(outsideFile, "utf8")).resolves.toBe("outside");
-      },
-    });
-  });
+  it.runIf(process.platform !== "win32").each(["write", "append"] as const)(
+    "rejects %s through hardlink aliases",
+    async (operation) => {
+      const root = await makeRoot();
+      await withOutsideHardlinkAlias({
+        aliasPath: path.join(root, "alias.txt"),
+        run: async (outsideFile) => {
+          const rootFs = await openRoot(root);
+          await expectRejectCode(
+            operation === "write"
+              ? rootFs.write("alias.txt", "pwned")
+              : rootFs.append("alias.txt", "pwned", { prependNewlineIfNeeded: true }),
+            "path-alias",
+          );
+          await expectContents(outsideFile, "outside");
+        },
+      });
+    },
+  );
 
   it("does not truncate out-of-root file when symlink retarget races write open", async () => {
     await runSymlinkWriteRace((root, relativePath) =>

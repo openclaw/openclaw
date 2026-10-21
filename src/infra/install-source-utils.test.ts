@@ -74,12 +74,9 @@ async function expectPackFallback(stdout: string, metadata = {}) {
 }
 
 function expectPackError(result: { ok: boolean; error?: string }, expected: string[]): void {
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    return;
-  }
+  expect(result).toMatchObject({ ok: false });
   for (const part of expected) {
-    expect(result.error ?? "").toContain(part);
+    expect(result.error).toContain(part);
   }
 }
 
@@ -173,28 +170,16 @@ describe("resolveNpmSpecMetadata", () => {
 
   describe("registry selectors", () => {
     const name = "example-plugin";
-    it("preserves literal tag v2 in both npm view shapes", async () => {
-      const entry = { name, version: "1.0.0" };
-      // npm resolves literal dist-tags before interpreting the selector as a range.
-      for (const payload of [entry, [entry]]) {
-        mockPackCommandResult({ stdout: JSON.stringify(payload) });
-        await expect(resolveNpmSpecMetadata({ spec: `${name}@v2` })).resolves.toMatchObject({
-          ok: true,
-          metadata: { name, version: "1.0.0", resolvedSpec: `${name}@1.0.0` },
-        });
-      }
-    });
-
-    it("selects the max version when v2 is not a literal tag", async () => {
-      mockPackCommandResult({
-        stdout: JSON.stringify([
-          { name, version: "2.9.0" },
-          { name, version: "2.1.0" },
-        ]),
-      });
+    it.each([
+      { versions: ["1.0.0"], array: false, version: "1.0.0" },
+      { versions: ["1.0.0"], array: true, version: "1.0.0" },
+      { versions: ["2.9.0", "2.1.0"], array: true, version: "2.9.0" },
+    ])("resolves v2 from $versions (array=$array)", async ({ versions, array, version }) => {
+      const entries = versions.map((entryVersion) => ({ name, version: entryVersion }));
+      mockPackCommandResult({ stdout: JSON.stringify(array ? entries : entries[0]) });
       await expect(resolveNpmSpecMetadata({ spec: `${name}@v2` })).resolves.toMatchObject({
         ok: true,
-        metadata: { name, version: "2.9.0", resolvedSpec: `${name}@2.9.0` },
+        metadata: { name, version, resolvedSpec: `${name}@${version}` },
       });
     });
 
@@ -229,19 +214,19 @@ describe("packNpmSpecToArchive", () => {
     mockPackCommandResult({ stdout: JSON.stringify([packEntry]) });
 
     const signal = new AbortController().signal;
-    const result = await packNpmSpecToArchive({
-      spec: "openclaw-plugin@1.2.3",
-      timeoutMs: 1000,
-      workTimeoutMs: null,
-      cwd,
-      signal,
-    });
-
-    expect(result).toEqual({ ok: true, archivePath, metadata: packMetadata });
+    expect(
+      await packNpmSpecToArchive({
+        spec: "openclaw-plugin@1.2.3",
+        timeoutMs: 1000,
+        workTimeoutMs: null,
+        cwd,
+        signal,
+      }),
+    ).toEqual({ ok: true, archivePath, metadata: packMetadata });
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
       expectedNpmCommand([
         "pack",
-        "openclaw-plugin@1.2.3",
+        packMetadata.resolvedSpec,
         "--ignore-scripts",
         "--json",
         "--dry-run=false",
@@ -266,15 +251,14 @@ describe("packNpmSpecToArchive", () => {
     );
   });
 
-  it("uses the workspace archive when npm prints notices without JSON", async () => {
-    await expectPackFallback(`npm notice created package\n${packEntry.filename}\n`);
-  });
-
-  it("falls back to cwd archive when logged JSON metadata omits filename", async () => {
-    await expectPackFallback(
-      `npm notice using cache\n${JSON.stringify([{ ...packFields, id: packEntry.id }])}\n`,
-      packMetadata,
-    );
+  it.each([
+    { stdout: `npm notice created package\n${packEntry.filename}\n`, metadata: {} },
+    {
+      stdout: `npm notice using cache\n${JSON.stringify([{ ...packFields, id: packEntry.id }])}\n`,
+      metadata: packMetadata,
+    },
+  ])("falls back to the cwd archive for $stdout", async ({ stdout, metadata }) => {
+    await expectPackFallback(stdout, metadata);
   });
 
   it("returns friendly error for 404 (package not on npm)", async () => {

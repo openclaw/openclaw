@@ -77,6 +77,19 @@ async function createReboundInstallFixture(fixtureRoot: string, withExistingInst
 async function expectText(directory: string, expected: string, name = "marker.txt") {
   await expect(fs.readFile(path.join(directory, name), "utf8")).resolves.toBe(expected);
 }
+const expectNoStages = async (base: string) =>
+  expect(await listMatchingDirs(base, ".openclaw-install-stage-")).toHaveLength(0);
+const expectEmptyBackups = async (base: string) =>
+  expect(await fs.readdir(path.join(base, ".openclaw-install-backups"))).toHaveLength(0);
+function expectFailure(result: { ok: boolean; error?: string }, message: string) {
+  expect(result).toMatchObject({ ok: false, error: expect.stringContaining(message) });
+}
+function npmCwd(options: Parameters<typeof runCommandWithTimeout>[1]) {
+  if (typeof options === "number" || options.cwd === undefined) {
+    throw new Error("expected staged package install cwd");
+  }
+  return options.cwd;
+}
 
 describe("installPackageDir", () => {
   const fixtureRootTracker = createSuiteTempRootTracker({
@@ -97,15 +110,15 @@ describe("installPackageDir", () => {
     return { fixtureRoot, sourceDir, targetDir };
   }
 
-  async function writeManifest(
-    sourceDir: string,
+  async function createNpmFixture(
     overrides: {
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
     } = {},
   ) {
+    const fixture = await createSourceFixture();
     await fs.writeFile(
-      path.join(sourceDir, "package.json"),
+      path.join(fixture.sourceDir, "package.json"),
       JSON.stringify({
         name: "demo-plugin",
         version: "1.0.0",
@@ -114,11 +127,6 @@ describe("installPackageDir", () => {
       }),
       "utf-8",
     );
-  }
-
-  async function createNpmFixture(overrides?: Parameters<typeof writeManifest>[1]) {
-    const fixture = await createSourceFixture();
-    await writeManifest(fixture.sourceDir, overrides);
     const options = {
       ...updateOptions(fixture.sourceDir, fixture.targetDir),
       mode: "install" as const,
@@ -167,8 +175,8 @@ describe("installPackageDir", () => {
       const result = await install;
       expect(result.ok).toBe(code === 0);
       expect(events.at(-1)).toEqual({ ...events[2], status: code === 0 ? "completed" : "failed" });
-      if (!result.ok) {
-        expect(result.error).toContain("registry refused dependency");
+      if (code) {
+        expectFailure(result, "registry refused dependency");
       }
     },
   );
@@ -204,14 +212,10 @@ describe("installPackageDir", () => {
             : "existing install changed",
       });
       await expectText(targetDir, "old");
-      await expect(
-        listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
-      ).resolves.toHaveLength(0);
+      await expectNoStages(installBaseDir);
       if (phase === "backup") {
         await expectText(targetDir, "keep me", "local.txt");
-        await expect(
-          fs.readdir(path.join(installBaseDir, ".openclaw-install-backups")),
-        ).resolves.toHaveLength(0);
+        await expectEmptyBackups(installBaseDir);
       } else {
         await expect(
           listMatchingDirs(installBaseDir, ".openclaw-install-backups"),
@@ -307,18 +311,14 @@ describe("installPackageDir", () => {
 
       // Restoring the old bytes remains allowed after forward authority closes.
       expect.soft(revokedTargetContents).not.toContain("new");
-      expect.soft(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toContain("publication authority revoked");
-      }
+      expect.soft(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("publication authority revoked"),
+      });
       await expectText(targetDir, "old");
-      await expect(
-        listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
-      ).resolves.toHaveLength(0);
+      await expectNoStages(installBaseDir);
       await expect(listMatchingDirs(installBaseDir, ".fs-safe-move-")).resolves.toHaveLength(0);
-      await expect(
-        fs.readdir(path.join(installBaseDir, ".openclaw-install-backups")),
-      ).resolves.toHaveLength(0);
+      await expectEmptyBackups(installBaseDir);
     } finally {
       release.resolve();
       await installing;
@@ -335,10 +335,7 @@ describe("installPackageDir", () => {
       );
       if (allowed) {
         vi.mocked(runCommandWithTimeout).mockImplementation(async (_argv, optionsOrTimeout) => {
-          const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
-          if (cwd === undefined) {
-            throw new Error("expected staged package install cwd");
-          }
+          const cwd = npmCwd(optionsOrTimeout);
           const depFile = path.join(cwd, "node_modules", "demo-dep", "index.js");
           await fs.mkdir(path.dirname(depFile), { recursive: true });
           await fs.writeFile(depFile, "module.exports = 1;\n", "utf8");
@@ -361,10 +358,7 @@ describe("installPackageDir", () => {
           fs.lstat(path.join(targetDir, "node_modules", "demo-dep", "index.js")),
         ).resolves.toMatchObject({ nlink: 2 });
       } else {
-        expect(result).toMatchObject({
-          ok: false,
-          error: expect.stringContaining("Refusing to move hardlinked file"),
-        });
+        expectFailure(result, "Refusing to move hardlinked file");
         await expectText(targetDir, "old");
       }
     },
@@ -388,10 +382,7 @@ describe("installPackageDir", () => {
         },
       });
 
-      expect(result).toMatchObject({
-        ok: false,
-        error: expect.stringContaining("Refusing to move hardlinked file"),
-      });
+      expectFailure(result, "Refusing to move hardlinked file");
       await expectMissingPath(path.join(targetDir, "marker.txt"));
     },
   );
@@ -467,10 +458,7 @@ describe("installPackageDir", () => {
     await fs.writeFile(path.join(sourceDir, ".npmrc"), npmrcContent, "utf-8");
 
     vi.mocked(runCommandWithTimeout).mockImplementation(async (_argv, optionsOrTimeout) => {
-      const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
-      if (cwd === undefined) {
-        throw new Error("expected package install cwd");
-      }
+      const cwd = npmCwd(optionsOrTimeout);
       await expectMissingPath(path.join(cwd, ".npmrc"));
       await expect(
         listMatchingEntries(cwd, ".openclaw-install-hidden-npmrc-"),
@@ -576,13 +564,8 @@ describe("installPackageDir", () => {
         }),
       );
 
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toContain("npm install failed:");
-        expect(result.error).toContain(
-          failure === "exit" ? "EUNSUPPORTEDPROTOCOL" : "npm transport failed",
-        );
-      }
+      expectFailure(result, "npm install failed:");
+      expectFailure(result, failure === "exit" ? "EUNSUPPORTEDPROTOCOL" : "npm transport failed");
       expect(restoredBeforeCleanup).toBe(true);
       await expectText(targetDir, oldManifest, "package.json");
       await expect(fs.readFile(path.join(sourceDir, "package.json"))).resolves.toEqual(

@@ -10,6 +10,7 @@ import {
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "./install-package-dir.js";
+import { updateOptions } from "./install-package-dir.test-support.js";
 
 vi.mock("../process/exec.js", async () => {
   const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
@@ -58,17 +59,14 @@ it.each(["install", "commit", "rollback"] as const)(
         throw new Error("expected package install cwd");
       }
       const manifest = JSON.parse((await readManifest(cwd)).toString("utf8"));
-      expect(manifest).toMatchObject({
+      expect(manifest).toEqual({
+        name: "demo-plugin",
+        version: "2.0.0",
         dependencies: { yaml: "^2.0.0" },
         optionalDependencies: { fsevents: "^2.3.3" },
         peerDependencies: { zod: "^4.0.0" },
         peerDependenciesMeta: { zod: { optional: false } },
       });
-      expect(manifest.dependencies).not.toHaveProperty("openclaw");
-      expect(manifest.optionalDependencies).not.toHaveProperty("openclaw");
-      expect(manifest.peerDependencies).not.toHaveProperty("openclaw");
-      expect(manifest.peerDependenciesMeta).not.toHaveProperty("openclaw");
-      expect(manifest).not.toHaveProperty("devDependencies");
       return {
         stdout: "",
         stderr: "",
@@ -81,14 +79,10 @@ it.each(["install", "commit", "rollback"] as const)(
 
     let validated = false;
     const installParams = {
-      sourceDir,
-      targetDir,
+      ...updateOptions(sourceDir, targetDir),
       mode: settlement === "install" ? ("install" as const) : ("update" as const),
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
       hasDeps: true,
       omitOpenClawHostDependency: true,
-      depsLogMessage: "Installing deps…",
       afterInstall: async (stagedDir: string) => {
         await expectManifest(stagedDir);
         validated = true;
