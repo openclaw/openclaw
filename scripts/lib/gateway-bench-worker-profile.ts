@@ -25,6 +25,8 @@ type WorkerSample = {
 type WorkerRecording = {
   target: WorkerTarget;
   threadId?: number;
+  script?: string;
+  unregisteredWhileLive?: boolean;
   profilePath: string;
   startedAt: number;
   samplingStartedAt?: number;
@@ -72,9 +74,11 @@ export class GatewayBenchWorkerProfiler {
   private sequence = 0;
   private enabled?: Promise<unknown>;
   private inspector: Session;
+  private resolveScript?: (threadId: number) => string | null | undefined;
 
-  constructor(inspector: Session) {
+  constructor(inspector: Session, resolveScript?: (threadId: number) => string | null | undefined) {
     this.inspector = inspector;
+    this.resolveScript = resolveScript;
     process.on("worker", (worker) => {
       this.workers.add(worker);
       const terminate = worker.terminate.bind(worker);
@@ -205,6 +209,7 @@ export class GatewayBenchWorkerProfiler {
         if (recording.threadId === undefined) {
           throw new Error("Worker native thread identity is unavailable");
         }
+        this.identify(recording);
         if (capture.kind === "cpu") {
           await this.post(target, "Profiler.enable");
           await this.post(target, "Profiler.setSamplingInterval", {
@@ -249,6 +254,22 @@ export class GatewayBenchWorkerProfiler {
     }));
   }
 
+  private identify(recording: WorkerRecording): void {
+    if (recording.threadId === undefined) {
+      return;
+    }
+    const script = this.resolveScript?.(recording.threadId);
+    if (typeof script === "string") {
+      recording.script = script;
+    } else if (
+      script === null &&
+      [...this.workers].some((worker) => worker.threadId === recording.threadId)
+    ) {
+      // Core workers register synchronously and remain registered until native exit.
+      recording.unregisteredWhileLive = true;
+    }
+  }
+
   private finish(kind: GatewayProfileCommand["kind"], recording: WorkerRecording): Promise<void> {
     return (recording.stopping ??= (async () => {
       await recording.pending;
@@ -256,6 +277,7 @@ export class GatewayBenchWorkerProfiler {
         return;
       }
       try {
+        this.identify(recording);
         const result = await this.post(
           recording.target,
           kind === "cpu" ? "Profiler.stop" : "HeapProfiler.stopSampling",

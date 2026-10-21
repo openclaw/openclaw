@@ -72,6 +72,8 @@ type WorkerProfileManifest = {
     inspectorWorkerId: string;
     title: string;
     profilePath: string;
+    script?: string;
+    unregisteredWhileLive?: boolean;
     threadId: number;
     startedAt: number;
     samplingStartedAt?: number;
@@ -244,12 +246,12 @@ function createWorker() {
         inspector.disconnect();
         parentPort.postMessage({retained: retainedRows.length, total});
       });
-    \`, {eval: true, execArgv: []});
+    \`, {eval: true, execArgv: [], name: "profile-workload"});
     worker.on('message', result => process.send({complete: true, threadId: worker.threadId, result}));
 }
 process.on('message', (message) => {
   if (message.prepare) {
-    idle = new Worker('setInterval(() => {}, 1000)', {eval: true, execArgv: []});
+    idle = new Worker('setInterval(() => {}, 1000)', {eval: true, execArgv: [], name: "profile-workload"});
     createWorker();
     Promise.all([once(idle, 'online'), once(worker, 'online')]).then(() => process.send({prepared: true}));
   }
@@ -266,7 +268,7 @@ process.on('message', (message) => {
 });
 (async () => {
   // A retired worker consumes a native ID before the inspector allocates any target IDs.
-  const retired = new Worker('', {eval: true, execArgv: []});
+  const retired = new Worker('', {eval: true, execArgv: [], name: "profile-workload"});
   await once(retired, 'exit');
   await import(process.argv[1]);
   process.send({ready: true});
@@ -290,7 +292,16 @@ it.each([
   async (kind, preexisting) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-profile-"));
     const profilePath = path.join(directory, kind);
-    const { child } = spawnFixture(["-e", workload, preloadUrl], directory);
+    const { child } = spawnFixture(
+      [
+        "--import",
+        new URL("../../scripts/tsx.mjs", import.meta.url).href,
+        "-e",
+        workload,
+        preloadUrl,
+      ],
+      directory,
+    );
     await waitMessage(child, "ready");
     if (preexisting) {
       expect(await sendMessage(child, { prepare: true })).toMatchObject({ prepared: true });
@@ -300,6 +311,13 @@ it.each([
     expect(completed.complete).toBe(true);
     await controlGatewayProfile(child, kind, "stop", profilePath, { includeWorkers: true });
     const manifest = await readJson<WorkerProfileManifest>(`${profilePath}.workers.json`);
+    // Direct workers created before the registry remain explicitly unregistered.
+    const preexistingWorkers = manifest.workers.filter((worker) => !worker.script);
+    expect(preexistingWorkers.length).toBeGreaterThan(0);
+    expect(preexistingWorkers.every((worker) => worker.unregisteredWhileLive)).toBe(true);
+    manifest.workers = manifest.workers.filter((worker) =>
+      worker.title.includes("profile-workload"),
+    );
     expect(manifest).toMatchObject({
       kind,
       sampleClock: "performance.now",
@@ -320,6 +338,12 @@ it.each([
         samplingStoppedAt: expect.any(Number),
       });
       expect(recording.error).toBeUndefined();
+      expect(recording.script).toBe(preexisting ? undefined : "other");
+      if (preexisting) {
+        expect(recording.unregisteredWhileLive).toBe(true);
+      } else {
+        expect(recording.unregisteredWhileLive).not.toBe(true);
+      }
       expect(recording.title).toContain(`[worker ${recording.threadId}]`);
       expect(recording.samplingStartedAt).toBeGreaterThanOrEqual(recording.startedAt);
       expect(recording.samplingStoppedAt).toBeGreaterThan(recording.samplingStartedAt!);
@@ -398,10 +422,17 @@ it.each([
     expect(await sendMessage(child, { retire: true })).toMatchObject({ retired: true });
     await controlGatewayProfile(child, kind, "stop", retiredPath, { includeWorkers: true });
     const retired = await readJson<WorkerProfileManifest>(`${retiredPath}.workers.json`);
+    retired.workers = retired.workers.filter((worker) => worker.title.includes("profile-workload"));
     expect(workerIdentities(retired)).toEqual(workerIdentities(manifest));
     for (const recording of retired.workers) {
       expect(recording.completed).toBe(true);
       expect(recording.error).toBeUndefined();
+      expect(recording.script).toBe(preexisting ? undefined : "other");
+      if (preexisting) {
+        expect(recording.unregisteredWhileLive).toBe(true);
+      } else {
+        expect(recording.unregisteredWhileLive).not.toBe(true);
+      }
       expect(recording.samplingStoppedAt).toBeGreaterThan(recording.samplingStartedAt!);
       if (recording.threadId === completed.threadId) {
         if (kind === "cpu") {

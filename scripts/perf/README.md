@@ -1350,8 +1350,9 @@ For allocation work that executes in a worker, add `--worker-allocations` to
 `memory-soak --allocations`. It uses the existing private inspector channel and
 the same collected-object sampling interval in every isolate. The
 `wholeSoakAllocation.workerManifestPath` artifact lists each worker's native
-thread ID, inspector title, acknowledged sampling boundaries, completion/error,
-and profile path. Join native IDs to the existing memory samples' `workerHeaps`
+thread ID, registry script identity, inspector title, acknowledged sampling boundaries, completion/error,
+and profile path. Live workers absent from the initialized Gateway registry are
+marked separately; Gateway-owned worker pools register synchronously. Join native IDs to the existing memory samples' `workerHeaps`
 and `workerMemoryMissing` script identities before attributing bytes to an owner.
 Read successful worker profiles with `readGatewayHeapProfile` and report main,
 owner-worker, all-worker, and combined bytes per completed foreground turn

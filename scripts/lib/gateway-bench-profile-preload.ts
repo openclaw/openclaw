@@ -74,7 +74,19 @@ if (isMainThread) {
   // process birth and does not include the profiler's own module import cost.
   const initialResources = sampleResources();
   const inspector = new Session();
-  const workers = new GatewayBenchWorkerProfiler(inspector);
+  let workerMemoryModule: typeof import("../../src/infra/worker-cpu.ts") | undefined;
+  const workers = new GatewayBenchWorkerProfiler(inspector, (threadId) => {
+    // Retain registry identity before a short-lived worker disappears between resource samples.
+    const memory = workerMemoryModule?.sampleTrackedWorkerMemory();
+    if (!memory) {
+      return undefined;
+    }
+    return (
+      memory.workerHeaps.find((worker) => worker.threadId === threadId)?.script ??
+      memory.workerMemoryMissing.find((worker) => worker.threadId === threadId)?.script ??
+      null
+    );
+  });
   let inspectorConnected = false;
   const traceGc = process.execArgv.includes("--trace-gc-nvp");
   const markGc = (phase: string, profilePath?: string) => {
@@ -157,8 +169,11 @@ if (isMainThread) {
           };
         }
         // Native benchmark children do not load the Gateway's source registry or loader.
+        if (message.includeWorkers) {
+          workerMemoryModule ??= await import("../../src/infra/worker-cpu.ts");
+        }
         const workerMemory = message.includeWorkers
-          ? (await import("../../src/infra/worker-cpu.ts")).sampleTrackedWorkerMemory()
+          ? workerMemoryModule?.sampleTrackedWorkerMemory()
           : undefined;
         const resources = message.initial
           ? initialResources
@@ -252,6 +267,9 @@ if (isMainThread) {
       if (message.action === "start") {
         if (active.has(message.kind)) {
           throw new Error(`Gateway ${message.kind} profile already started`);
+        }
+        if (message.includeWorkers) {
+          workerMemoryModule ??= await import("../../src/infra/worker-cpu.ts");
         }
         if (message.kind === "cpu") {
           await inspector.post("Profiler.enable");
