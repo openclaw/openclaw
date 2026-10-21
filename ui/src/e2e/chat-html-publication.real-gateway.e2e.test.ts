@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, inject, it } from "vitest";
+import { expect, it } from "vitest";
 import { writeToolCall } from "../../../src/gateway/gateway-provider-fixture.test-support.ts";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
@@ -127,7 +127,6 @@ const suite = createControlUiE2eSuite({
           gateway: {
             controlUi: {
               enabled: true,
-              root: inject("controlUiE2eBuildRoot"),
               embedSandbox: "scripts",
             },
           },
