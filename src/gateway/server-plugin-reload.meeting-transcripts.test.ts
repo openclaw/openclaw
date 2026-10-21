@@ -270,10 +270,7 @@ async function createMeetingReloadFixture(options: { background: boolean }) {
     finished: (generation: number, count: number) =>
       until(() => finished.filter((label) => label.startsWith(`${generation}:`)).length >= count),
     logged: (text: string, times = 1) =>
-      until(
-        () =>
-          debug.mock.calls.filter(([message]) => String(message).includes(text)).length >= times,
-      ),
+      until(() => debug.mock.calls.filter(([message]) => message.includes(text)).length >= times),
     join,
     holdCapture,
     labels,
