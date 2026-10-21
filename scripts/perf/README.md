@@ -1038,9 +1038,11 @@ Gateway latency pairs; the baseline loader still selects the pinned owners.
 This runs paced cohorts after five minutes of warmup, with one real `read` tool
 and a streamed completion per turn, including the same synthetic reasoning
 signature and replay check as `attempt-retention`. Diagnostics and the Prometheus plugin are
-enabled. Session generations reset every twenty cohorts (including warmup) to
-bound intentional live transcript growth; `--reset-every-rounds 0` keeps history
-instead. The report records resets and completed cohorts. It does not exercise
+enabled. Warmup runs a fixed number of paced cohorts, rounded up from the warmup
+duration, so paired runs do equal work. Session generations reset every twenty
+cohorts, restarting that cadence at the first measured cohort, to bound intentional
+live transcript growth; `--reset-every-rounds 0` keeps history instead. The report
+records resets and completed cohorts. It does not exercise
 the image/output-limit recovery of `attempt-retention`. `--rounds` is ignored;
 an admitted cohort drains before the duration ends, so a slow cohort may overrun.
 
