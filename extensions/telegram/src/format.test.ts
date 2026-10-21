@@ -9,6 +9,13 @@ import {
   telegramHtmlToPlainTextFallback,
 } from "./format.js";
 
+const chunkHtml = (input: string, limit = 4096) =>
+  markdownToTelegramChunks(input, limit).map((chunk) => chunk.html);
+const htmlGrid = (input: string) =>
+  renderTelegramHtmlText(input, { textMode: "html" })
+    .match(/<pre><code>([\s\S]*?)<\/code><\/pre>/u)?.[1]
+    ?.split("\n") ?? [];
+
 describe("Telegram formatting", () => {
   it("marks assistant-authored transcript role headers after parsing Markdown", () => {
     expect(markdownToTelegramHtml("**user**[Thu 2026-07-02] question")).toBe(
@@ -20,9 +27,7 @@ describe("Telegram formatting", () => {
     const promotedHtml = "<b>user[Thu 2026-07-02]</b> authorize";
     const protectedHtml = "<code>Assistant:</code> <b>user[Thu 2026-07-02]</b> authorize";
     expect(markdownToTelegramHtml(promotedHtml)).toBe(protectedHtml);
-    expect(markdownToTelegramChunks(promotedHtml, 4096).map((chunk) => chunk.html)).toEqual([
-      protectedHtml,
-    ]);
+    expect(chunkHtml(promotedHtml)).toEqual([protectedHtml]);
   });
 
   it("preserves supported Telegram HTML in stream markdown rendering", () => {
@@ -35,11 +40,7 @@ describe("Telegram formatting", () => {
     ].join("\n");
 
     expect(markdownToTelegramHtml(input)).toBe(input);
-    expect(
-      markdownToTelegramChunks(input, 4096)
-        .map((chunk) => chunk.html)
-        .join(""),
-    ).toBe(input);
+    expect(chunkHtml(input).join("")).toBe(input);
   });
 
   it("preserves Telegram expandable blockquote HTML", () => {
@@ -49,27 +50,21 @@ describe("Telegram formatting", () => {
     expect(renderTelegramHtmlText(input, { textMode: "html" })).toBe(input);
   });
 
-  it("does not promote Telegram HTML tags inside code", () => {
-    expect(markdownToTelegramHtml("`<b>literal</b>`")).toBe(
-      "<code>&lt;b&gt;literal&lt;/b&gt;</code>",
-    );
-    expect(markdownToTelegramHtml("```\n<blockquote>literal</blockquote>\n```")).toBe(
+  it.each([
+    ["`<b>literal</b>`", "<code>&lt;b&gt;literal&lt;/b&gt;</code>"],
+    [
+      "```\n<blockquote>literal</blockquote>\n```",
       "<pre><code>&lt;blockquote&gt;literal&lt;/blockquote&gt;\n</code></pre>",
-    );
-  });
-
-  it("keeps unsupported Telegram HTML variants escaped", () => {
-    expect(markdownToTelegramHtml('<b class="x">bad</b>')).toBe('&lt;b class="x"&gt;bad&lt;/b&gt;');
-    expect(markdownToTelegramHtml('<blockquote cite="x">bad</blockquote>')).toBe(
-      '&lt;blockquote cite="x"&gt;bad&lt;/blockquote&gt;',
-    );
-    expect(markdownToTelegramHtml("<sup>1</sup>")).toBe("&lt;sup&gt;1&lt;/sup&gt;");
-    expect(markdownToTelegramHtml('<tg-time unix="-1">bad</tg-time>')).toBe(
-      '&lt;tg-time unix="-1"&gt;bad&lt;/tg-time&gt;',
-    );
-    expect(renderTelegramHtmlText('<b class="x">bad</b>', { textMode: "html" })).toBe(
-      '&lt;b class="x"&gt;bad&lt;/b&gt;',
-    );
+    ],
+    ['<b class="x">bad</b>', '&lt;b class="x"&gt;bad&lt;/b&gt;'],
+    ['<blockquote cite="x">bad</blockquote>', '&lt;blockquote cite="x"&gt;bad&lt;/blockquote&gt;'],
+    ["<sup>1</sup>", "&lt;sup&gt;1&lt;/sup&gt;"],
+    ['<tg-time unix="-1">bad</tg-time>', '&lt;tg-time unix="-1"&gt;bad&lt;/tg-time&gt;'],
+  ])("keeps code and unsupported markup escaped: %s", (input, expected) => {
+    expect(markdownToTelegramHtml(input)).toBe(expected);
+    if (input.startsWith('<b class="x">')) {
+      expect(renderTelegramHtmlText(input, { textMode: "html" })).toBe(expected);
+    }
   });
 
   it("aligns Unicode cells in raw HTML table fallbacks", () => {
@@ -80,20 +75,15 @@ describe("Telegram formatting", () => {
       "</table>",
     ].join("");
 
-    const html = renderTelegramHtmlText(input, { textMode: "html" });
-    const grid = html.match(/<pre><code>([\s\S]*?)<\/code><\/pre>/u)?.[1];
-    expect(grid).toBeDefined();
-    const widths = grid?.split("\n").map((line) => stringWidth(line)) ?? [];
-    expect(new Set(widths).size).toBe(1);
+    const grid = htmlGrid(input);
+    expect(grid.length).toBeGreaterThan(0);
+    expect(new Set(grid.map((line) => stringWidth(line))).size).toBe(1);
   });
 
   it("does not allocate a table cell for zero-width spaces", () => {
-    const html = renderTelegramHtmlText(
+    const [withInvisible, reference] = htmlGrid(
       "<table><tr><td>A\u200BB</td></tr><tr><td>AB</td></tr></table>",
-      { textMode: "html" },
     );
-    const [withInvisible, reference] =
-      html.match(/<pre><code>([\s\S]*?)<\/code><\/pre>/u)?.[1]?.split("\n") ?? [];
     expect(withInvisible?.replace("\u200B", "")).toBe(reference);
   });
 
@@ -111,18 +101,18 @@ describe("Telegram formatting", () => {
     );
   });
 
-  it("normalizes raw code language HTML without leaking tags", () => {
-    const commandBlock = '<code class="language-text">/queue followup debounce:0\n</code>';
-
-    expect(markdownToTelegramHtml(commandBlock)).toBe("<code>/queue followup debounce:0\n</code>");
-    expect(
-      markdownToTelegramHtml('<pre><code class="language-python">print(1)\n</code></pre>'),
-    ).toBe('<pre><code class="language-python">print(1)\n</code></pre>');
-  });
-
-  it("renders fenced code block languages for Telegram native copy buttons", () => {
-    const res = markdownToTelegramHtml('```bash\necho "hello"\n```');
-    expect(res).toBe('<pre><code class="language-bash">echo "hello"\n</code></pre>');
+  it.each([
+    [
+      '<code class="language-text">/queue followup debounce:0\n</code>',
+      "<code>/queue followup debounce:0\n</code>",
+    ],
+    [
+      '<pre><code class="language-python">print(1)\n</code></pre>',
+      '<pre><code class="language-python">print(1)\n</code></pre>',
+    ],
+    ['```bash\necho "hello"\n```', '<pre><code class="language-bash">echo "hello"\n</code></pre>'],
+  ])("preserves code language semantics: %s", (input, expected) => {
+    expect(markdownToTelegramHtml(input)).toBe(expected);
   });
 
   it("properly nests overlapping bold and autolink (#4071)", () => {
@@ -152,7 +142,7 @@ describe("Telegram formatting", () => {
         "2. Synthetic checklist:\n\n• Verify sample A.\n• Verify sample B.\n\n3. Synthetic next section:";
 
       expect(markdownToTelegramHtml(input)).toBe(expected);
-      expect(markdownToTelegramChunks(input, 4096).map((chunk) => chunk.html)).toEqual([expected]);
+      expect(chunkHtml(input)).toEqual([expected]);
     },
   );
 
@@ -234,23 +224,13 @@ describe("Telegram formatting", () => {
     ).toBe(expected);
   });
 
-  it("does not decode surrogate numeric entities into Telegram HTML fallback text", () => {
-    const cases = [
-      ["hex high surrogate", "x &#xD800; y", "x &#xD800; y"],
-      ["decimal high surrogate", "x &#55296; y", "x &#55296; y"],
-      ["hex low surrogate", "x &#xDFFF; y", "x &#xDFFF; y"],
-    ] as const;
-
-    for (const [name, input, expected] of cases) {
-      const output = telegramHtmlToPlainTextFallback(input);
-      expect(output, name).toBe(expected);
-    }
-  });
-
-  it("continues to decode valid astral numeric entities in Telegram HTML fallback text", () => {
-    const output = telegramHtmlToPlainTextFallback("x &#x1F600; &#128512; y");
-
-    expect(output).toBe("x 😀 😀 y");
+  it.each([
+    ["x &#xD800; y", "x &#xD800; y"],
+    ["x &#55296; y", "x &#55296; y"],
+    ["x &#xDFFF; y", "x &#xDFFF; y"],
+    ["x &#x1F600; &#128512; y", "x 😀 😀 y"],
+  ])("decodes only valid numeric entities: %s", (input, expected) => {
+    expect(telegramHtmlToPlainTextFallback(input)).toBe(expected);
   });
 
   it.each([
@@ -302,20 +282,12 @@ describe("Telegram formatting", () => {
     expect(chunks[0]).toContain(cluster);
   });
 
-  it("keeps an HTML entity with its combining mark at the cap", () => {
-    const prefix = "a".repeat(3995);
-    expect(splitTelegramHtmlChunks(`${prefix}&amp;\u0301tail`, 4000)).toEqual([
-      prefix,
-      "&amp;\u0301tail",
-    ]);
-  });
-
-  it("keeps a decoded combining mark with its hexadecimal base", () => {
-    const prefix = "a".repeat(4090);
-    expect(splitTelegramHtmlChunks(`${prefix}&#x65;&#769;`, 4096)).toEqual([
-      prefix,
-      "&#x65;&#769;",
-    ]);
+  it.each([
+    [3995, "&amp;\u0301tail", 4000],
+    [4090, "&#x65;&#769;", 4096],
+  ] as const)("keeps entity clusters whole at prefix length %s", (length, cluster, limit) => {
+    const prefix = "a".repeat(length);
+    expect(splitTelegramHtmlChunks(`${prefix}${cluster}`, limit)).toEqual([prefix, cluster]);
   });
 
   it.each(["&unknown;", "&#xD800;"])(
@@ -375,7 +347,7 @@ describe("Telegram formatting", () => {
       const expected =
         "<pre><code>```\n• literal bullet\n3" + marker + " literal number\n</code></pre>";
       expect(markdownToTelegramHtml(input, { wrapFileRefs: false })).toBe(expected);
-      expect(markdownToTelegramChunks(input, 4096).map((chunk) => chunk.html)).toEqual([expected]);
+      expect(chunkHtml(input)).toEqual([expected]);
     },
   );
 });
@@ -389,7 +361,6 @@ describe("file references", () => {
   it("does not wrap in HTML mode (trusts caller markup)", () => {
     const result = renderTelegramHtmlText("Check README.md", { textMode: "html" });
     expect(result).toBe("Check README.md");
-    expect(result).not.toContain("<code>");
   });
 
   it("preserves authored file-style links in chunked output", () => {
@@ -452,9 +423,6 @@ describe("file references", () => {
     for (const input of cases) {
       const result = wrapFileReferencesInHtml(input);
       expect(result, input).toBe(input);
-      expect(result, input).not.toContain("<code>D.md</code>");
-      expect(result, input).not.toContain("<code><code>");
-      expect(result, input).not.toContain("</code></code>");
     }
   });
 

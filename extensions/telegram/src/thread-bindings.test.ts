@@ -342,36 +342,19 @@ describe("telegram thread bindings", () => {
   });
 
   it("drops stopped-manager bindings without clearing a replacement generation", async () => {
-    const stopped = await createManager({
-      accountId: "manager-lifecycle",
-      persist: false,
-    });
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:main:subagent:stopped",
-      targetKind: "subagent",
-      conversation: {
-        channel: "telegram",
-        accountId: "manager-lifecycle",
-        conversationId: "stopped-thread",
-      },
+    const options = { accountId: "manager-lifecycle", persist: false };
+    const stopped = await createManager(options);
+    await bind(options.accountId, "agent:main:subagent:stopped", {
+      conversation: conversationFor(options.accountId, "stopped-thread"),
     });
 
     await stopped.stop();
 
-    const replacement = await createManager({
-      accountId: "manager-lifecycle",
-      persist: false,
-    });
+    const replacement = await createManager(options);
     expect(replacement.getByConversationId("stopped-thread")).toBeUndefined();
 
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:main:subagent:replacement",
-      targetKind: "subagent",
-      conversation: {
-        channel: "telegram",
-        accountId: "manager-lifecycle",
-        conversationId: "replacement-thread",
-      },
+    await bind(options.accountId, "agent:main:subagent:replacement", {
+      conversation: conversationFor(options.accountId, "replacement-thread"),
     });
 
     await stopped.stop();

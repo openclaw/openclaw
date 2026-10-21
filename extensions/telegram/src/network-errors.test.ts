@@ -1,4 +1,3 @@
-// Telegram tests cover network errors plugin behavior.
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { describe, expect, it } from "vitest";
 import {
@@ -16,6 +15,17 @@ const errorWithCode = (message: string, code: string) =>
   Object.assign(new Error(message), { code });
 const errorWithTelegramCode = (message: string, error_code: number) =>
   Object.assign(new Error(message), { error_code });
+const causedBy = (error: unknown, message = "wrapped") =>
+  Object.assign(new Error(message), { cause: error });
+class MockHttpError extends Error {
+  constructor(
+    message: string,
+    public readonly error: unknown,
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
 
 function captureTelegramSendError(error: unknown): unknown {
   try {
@@ -26,47 +36,15 @@ function captureTelegramSendError(error: unknown): unknown {
   throw new Error("Expected Telegram send error to be rethrown");
 }
 
-const plainErrorPredicateCases = [
-  {
-    name: "isTelegramServerError",
-    predicate: isTelegramServerError,
-    error: new Error("500: Internal Server Error"),
-  },
-  {
-    name: "isTelegramClientRejection",
-    predicate: isTelegramClientRejection,
-    error: new Error("400: Bad Request"),
-  },
-];
-
-const nestedErrorCodePredicateCases = [
-  {
-    name: "isTelegramRateLimitError",
-    predicate: isTelegramRateLimitError,
-    inner: Object.assign(new Error("Too Many Requests"), { error_code: 429 }),
-  },
-  {
-    name: "isTelegramClientRejection",
-    predicate: isTelegramClientRejection,
-    inner: Object.assign(new Error("Forbidden"), { error_code: 403 }),
-  },
-];
-
 describe("Telegram error_code predicate contracts", () => {
-  it.each(plainErrorPredicateCases)(
-    "$name returns false for plain Error",
-    ({ error, predicate }) => {
-      expect(predicate(error)).toBe(false);
-    },
-  );
-
-  it.each(nestedErrorCodePredicateCases)(
-    "$name detects error_code in nested cause",
-    ({ inner, predicate }) => {
-      const outer = Object.assign(new Error("wrapped"), { cause: inner });
-      expect(predicate(outer)).toBe(true);
-    },
-  );
+  it.each([
+    [isTelegramServerError, new Error("500: Internal Server Error"), false],
+    [isTelegramClientRejection, new Error("400: Bad Request"), false],
+    [isTelegramRateLimitError, causedBy(errorWithTelegramCode("Too Many Requests", 429)), true],
+    [isTelegramClientRejection, causedBy(errorWithTelegramCode("Forbidden", 403)), true],
+  ] as const)("classifies %s (%s)", (predicate, error, expected) => {
+    expect(predicate(error)).toBe(expected);
+  });
 });
 
 describe("isTelegramAuthenticationError", () => {
@@ -104,12 +82,13 @@ describe("isRecoverableTelegramNetworkError", () => {
   });
 
   it("treats undici fetch failed errors as recoverable in send context", () => {
-    const err = new TypeError("fetch failed");
-    expect(isRecoverableTelegramNetworkError(err, { context: "send" })).toBe(true);
-    expect(
-      isRecoverableTelegramNetworkError(new Error("TypeError: fetch failed"), { context: "send" }),
-    ).toBe(true);
-    expect(isRecoverableTelegramNetworkError(err, { context: "polling" })).toBe(true);
+    const recoverable = (error: Error, context: "send" | "polling") =>
+      isRecoverableTelegramNetworkError(error, { context });
+    expect([
+      recoverable(new TypeError("fetch failed"), "send"),
+      recoverable(new Error("TypeError: fetch failed"), "send"),
+      recoverable(new TypeError("fetch failed"), "polling"),
+    ]).toEqual([true, true, true]);
   });
 
   it("honors allowMessageMatch=false for broad snippet matches", () => {
@@ -135,16 +114,13 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "polling" })).toBe(true);
   });
 
-  it("treats delete/react/edit/action (idempotent) contexts like polling, not send", () => {
-    const undiciSnippetErr = new Error("Undici: socket failure");
-    // delete, react, edit, and action are idempotent or non-message operations;
-    // a transient snippet-only error must be retried (allowMessageMatch defaults true),
-    // matching polling/webhook. send stays strict as the regression guard.
-    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "delete" })).toBe(true);
-    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "react" })).toBe(true);
-    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "edit" })).toBe(true);
-    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "action" })).toBe(true);
-    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "send" })).toBe(false);
+  it("allows snippet retries for idempotent operations", () => {
+    const error = new Error("Undici: socket failure");
+    expect(
+      (["delete", "react", "edit", "action", "send"] as const).map((context) =>
+        isRecoverableTelegramNetworkError(error, { context }),
+      ),
+    ).toEqual([true, true, true, true, false]);
   });
 
   it("treats grammY failed-after envelope errors as recoverable in send context", () => {
@@ -176,39 +152,16 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(err)).toBe(true);
   });
 
-  // Grammy HttpError tests (issue #3815)
-  // Grammy wraps fetch errors in .error property, not .cause
-  describe("Grammy HttpError", () => {
-    class MockHttpError extends Error {
-      constructor(
-        message: string,
-        public readonly error: unknown,
-      ) {
-        super(message);
-        this.name = "HttpError";
-      }
-    }
-
-    it("returns false for non-network errors wrapped in HttpError", () => {
-      const authError = new Error("Unauthorized: bot token is invalid");
-      const httpError = new MockHttpError("Bad Request: invalid token", authError);
-
-      expect(isRecoverableTelegramNetworkError(httpError)).toBe(false);
-    });
+  it("rejects non-network HttpError contents (#3815)", () => {
+    const error = new MockHttpError(
+      "Bad Request: invalid token",
+      new Error("Unauthorized: bot token is invalid"),
+    );
+    expect(isRecoverableTelegramNetworkError(error)).toBe(false);
   });
 });
 
 describe("isSafeToRetrySendError", () => {
-  class MockHttpError extends Error {
-    constructor(
-      message: string,
-      public readonly error: unknown,
-    ) {
-      super(message);
-      this.name = "HttpError";
-    }
-  }
-
   it.each([
     ["ECONNREFUSED", "connect ECONNREFUSED", true],
     ["ENOTFOUND", "getaddrinfo ENOTFOUND", true],
@@ -230,14 +183,14 @@ describe("isSafeToRetrySendError", () => {
   });
 
   it("detects pre-connect error nested in cause chain", () => {
-    const root = Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" });
-    const wrapped = Object.assign(new Error("fetch failed"), { cause: root });
+    const wrapped = causedBy(errorWithCode("ECONNREFUSED", "ECONNREFUSED"), "fetch failed");
     expect(isSafeToRetrySendError(wrapped)).toBe(true);
   });
 
   it("detects pre-connect error wrapped in grammY HttpError", () => {
-    const root = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
-    const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: errorWithCode("connect ECONNREFUSED", "ECONNREFUSED"),
+    });
     const wrapped = new MockHttpError("Network request for 'sendMessage' failed!", fetchError);
     expect(isSafeToRetrySendError(wrapped)).toBe(true);
   });
