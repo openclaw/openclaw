@@ -5,45 +5,22 @@ import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeMeetExportBundle } from "./cli-export.js";
-import type { GoogleMeetArtifactsResult, GoogleMeetAttendanceResult } from "./meet-api.js";
 
-const emptyArtifacts: GoogleMeetArtifactsResult = {
-  conferenceRecords: [],
-  artifacts: [],
-};
-
-const emptyAttendance: GoogleMeetAttendanceResult = {
-  conferenceRecords: [],
-  attendance: [],
-};
-
-async function expectSiblingZip(params: {
-  suppliedOutputDir: string;
-  outputDir: string;
-  zipPath: string;
-}): Promise<void> {
-  const result = await writeMeetExportBundle({
-    outputDir: params.suppliedOutputDir,
-    artifacts: emptyArtifacts,
-    attendance: emptyAttendance,
-    zip: true,
+const writeBundle = (outputDir: string, zip = false) =>
+  writeMeetExportBundle({
+    outputDir,
+    artifacts: { conferenceRecords: [], artifacts: [] },
+    attendance: { conferenceRecords: [], attendance: [] },
+    zip,
   });
-
-  const manifest = JSON.parse(
-    fs.readFileSync(path.join(params.outputDir, "manifest.json"), "utf8"),
-  ) as { zipFile?: string };
-  expect(result.outputDir).toBe(params.suppliedOutputDir);
-  expect(result.zipFile).toBe(params.zipPath);
-  expect(manifest.zipFile).toBe(params.zipPath);
-  expect(fs.existsSync(params.zipPath)).toBe(true);
-  expect(fs.existsSync(path.join(params.outputDir, ".zip"))).toBe(false);
-}
 
 describe("Google Meet export publication", () => {
   let tempDir: string;
+  let outputDir: string;
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-publication-"));
+    outputDir = path.join(tempDir, "bundle");
   });
 
   afterEach(() => {
@@ -52,7 +29,6 @@ describe("Google Meet export publication", () => {
   });
 
   it("keeps an existing bundle member when replacement fails", async () => {
-    const outputDir = path.join(tempDir, "bundle");
     const summaryPath = path.join(outputDir, "summary.md");
     fs.mkdirSync(outputDir);
     fs.writeFileSync(summaryPath, "previous summary\n");
@@ -64,20 +40,13 @@ describe("Google Meet export publication", () => {
       throw new Error("injected write failure");
     });
 
-    await expect(
-      writeMeetExportBundle({
-        outputDir,
-        artifacts: emptyArtifacts,
-        attendance: emptyAttendance,
-      }),
-    ).rejects.toThrow("injected write failure");
+    await expect(writeBundle(outputDir)).rejects.toThrow("injected write failure");
 
     expect(fs.readFileSync(summaryPath)).toEqual(priorBytes);
     expect(fs.readdirSync(outputDir)).toEqual(["summary.md"]);
   });
 
   it("keeps an existing ZIP when replacement fails", async () => {
-    const outputDir = path.join(tempDir, "bundle");
     const zipPath = `${outputDir}.zip`;
     const priorZip = await new JSZip()
       .file("previous.txt", "previous export")
@@ -95,14 +64,7 @@ describe("Google Meet export publication", () => {
       await Reflect.apply(realWriteFile, fsp, args);
     });
 
-    await expect(
-      writeMeetExportBundle({
-        outputDir,
-        artifacts: emptyArtifacts,
-        attendance: emptyAttendance,
-        zip: true,
-      }),
-    ).rejects.toThrow("injected ZIP write failure");
+    await expect(writeBundle(outputDir, true)).rejects.toThrow("injected ZIP write failure");
 
     expect(fs.readFileSync(zipPath)).toEqual(priorZip);
     expect(fs.readdirSync(tempDir).toSorted()).toEqual(["bundle", "bundle.zip"]);
@@ -119,12 +81,18 @@ describe("Google Meet export publication", () => {
   ])(
     "writes the ZIP beside an output directory with $label trailing separators",
     async ({ trailingSeparators }) => {
-      const outputDir = path.join(tempDir, "bundle");
-      await expectSiblingZip({
-        suppliedOutputDir: `${outputDir}${trailingSeparators}`,
-        outputDir,
-        zipPath: `${outputDir}.zip`,
-      });
+      const suppliedOutputDir = `${outputDir}${trailingSeparators}`;
+      const zipPath = `${outputDir}.zip`;
+      const result = await writeBundle(suppliedOutputDir, true);
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(outputDir, "manifest.json"), "utf8"),
+      ) as {
+        zipFile?: string;
+      };
+      expect(result).toMatchObject({ outputDir: suppliedOutputDir, zipFile: zipPath });
+      expect(manifest.zipFile).toBe(zipPath);
+      expect(fs.existsSync(zipPath)).toBe(true);
+      expect(fs.existsSync(path.join(outputDir, ".zip"))).toBe(false);
     },
   );
 });

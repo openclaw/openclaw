@@ -1,6 +1,9 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveGoogleMeetConfig, resolveGoogleMeetGatewayOperationTimeoutMs } from "./config.js";
+import {
+  resolveGoogleMeetConfig as resolveConfig,
+  resolveGoogleMeetGatewayOperationTimeoutMs,
+} from "./config.js";
 
 function resolveGoogleMeetConfigFromTestEnv(env: Record<string, string>) {
   for (const suffix of [
@@ -18,28 +21,25 @@ function resolveGoogleMeetConfigFromTestEnv(env: Record<string, string>) {
   for (const [key, value] of Object.entries(env)) {
     vi.stubEnv(key, value);
   }
-  return resolveGoogleMeetConfig({});
+  return resolveConfig({});
 }
 
 describe("google meet config", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
+  afterEach(() => vi.unstubAllEnvs());
 
   it("keeps realtime.provider as the transcription compatibility fallback", () => {
-    const custom = resolveGoogleMeetConfig({ realtime: { provider: "custom-stt" } });
-    expect(custom.realtime.provider).toBe("custom-stt");
-    expect(custom.realtime.transcriptionProvider).toBe("custom-stt");
-
-    const google = resolveGoogleMeetConfig({ realtime: { provider: "google" } });
-    expect(google.realtime.provider).toBe("google");
-    expect(google.realtime.transcriptionProvider).toBe("openai");
+    expect(resolveConfig({ realtime: { provider: "custom-stt" } }).realtime).toMatchObject({
+      provider: "custom-stt",
+      transcriptionProvider: "custom-stt",
+    });
+    expect(resolveConfig({ realtime: { provider: "google" } }).realtime).toMatchObject({
+      provider: "google",
+      transcriptionProvider: "openai",
+    });
   });
 
   it("preserves an empty realtime intro message for silent joins", () => {
-    expect(resolveGoogleMeetConfig({ realtime: { introMessage: "" } }).realtime.introMessage).toBe(
-      "",
-    );
+    expect(resolveConfig({ realtime: { introMessage: "" } }).realtime.introMessage).toBe("");
   });
 
   it.each([
@@ -49,7 +49,7 @@ describe("google meet config", () => {
     [{ audioInputCommand: ["capture"], audioFormat: "pcm" }, "pcm16-24khz"],
     [{ audioFormat: "mu-law" }, "g711-ulaw-8khz"],
   ])("preserves Google audio format defaults and aliases: %j", (chrome, expected) => {
-    expect(resolveGoogleMeetConfig({ chrome }).chrome.audioFormat).toBe(expected);
+    expect(resolveConfig({ chrome }).chrome.audioFormat).toBe(expected);
   });
 
   it("uses env fallbacks for OAuth, preview, and default meeting values", () => {
@@ -85,27 +85,23 @@ describe("google meet config", () => {
 
 describe("google meet gateway operation timeout", () => {
   it("keeps sparse and legacy audio config compatible", () => {
-    const sparse = resolveGoogleMeetConfig({});
-    expect(sparse.chrome.audioBackend).toBe("auto");
-    expect(sparse.chrome.audioInputCommandOverride).toBeUndefined();
-    expect(sparse.chrome.audioOutputCommandOverride).toBeUndefined();
-
-    const legacy = resolveGoogleMeetConfig({
-      chrome: { audioBackend: "blackhole-2ch" },
+    expect(resolveConfig({}).chrome).toMatchObject({
+      audioBackend: "auto",
+      audioInputCommandOverride: undefined,
+      audioOutputCommandOverride: undefined,
     });
+    const legacy = resolveConfig({ chrome: { audioBackend: "blackhole-2ch" } });
     expect(legacy.chrome.audioBackend).toBe("blackhole-2ch");
     expect(legacy.chrome.audioInputCommand).toContain("BlackHole 2ch");
     expect(legacy.chrome.audioOutputCommand).toContain("BlackHole 2ch");
   });
 
   it("builds PipeWire-Pulse commands and retains explicit overrides", () => {
-    const linux = resolveGoogleMeetConfig({
-      chrome: { audioBackend: "pipewire-pulse" },
-    });
+    const linux = resolveConfig({ chrome: { audioBackend: "pipewire-pulse" } });
     expect(linux.chrome.audioInputCommand).toContain("parec");
     expect(linux.chrome.audioOutputCommand).toContain("pacat");
 
-    const custom = resolveGoogleMeetConfig({
+    const custom = resolveConfig({
       chrome: { audioInputCommand: ["capture"], audioOutputCommand: ["play"] },
     });
     expect(custom.chrome).toMatchObject({
@@ -117,7 +113,7 @@ describe("google meet gateway operation timeout", () => {
   });
 
   it("caps timer config fields before runtime polling uses them", () => {
-    const config = resolveGoogleMeetConfig({
+    const config = resolveConfig({
       chrome: {
         joinTimeoutMs: Number.MAX_VALUE,
         waitForInCallMs: Number.MAX_VALUE,
@@ -159,5 +155,5 @@ describe("google meet gateway operation timeout", () => {
 });
 
 function operationTimeout(config: unknown) {
-  return resolveGoogleMeetGatewayOperationTimeoutMs(resolveGoogleMeetConfig(config));
+  return resolveGoogleMeetGatewayOperationTimeoutMs(resolveConfig(config));
 }

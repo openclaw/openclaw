@@ -1,4 +1,3 @@
-// Google Meet tests cover oauth plugin behavior.
 import { createServer, type Server } from "node:http";
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,9 +8,7 @@ async function occupyPort(port: number): Promise<Server | null> {
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(port, "localhost", () => {
-        resolve();
-      });
+      server.listen(port, "localhost", resolve);
     });
   } catch (error) {
     if (error instanceof Error && error.message.includes("EADDRINUSE")) {
@@ -24,23 +21,33 @@ async function occupyPort(port: number): Promise<Server | null> {
 
 async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve) => {
-    server.close(() => {
-      resolve();
-    });
+    server.close(() => resolve());
   });
 }
 
-function mockTokenResponse(payload: Record<string, string | number>) {
-  const fetchMock = vi.fn(
-    async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      new Response(JSON.stringify(payload), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+function mockTokenResponse(response: Response) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => response),
   );
-  vi.stubGlobal("fetch", fetchMock);
-  return fetchMock;
 }
+
+const resolveToken = (overrides: Parameters<typeof resolveGoogleMeetAccessToken>[0] = {}) =>
+  resolveGoogleMeetAccessToken({
+    clientId: "client-id",
+    refreshToken: "refresh-token",
+    ...overrides,
+  });
+const waitForCode = (overrides: Partial<Parameters<typeof waitForGoogleMeetAuthCode>[0]>) =>
+  waitForGoogleMeetAuthCode({
+    state: "state-token",
+    manual: false,
+    timeoutMs: 60_000,
+    authUrl: "https://accounts.google.com/o/oauth2/v2/auth?x=1",
+    promptInput: async () => "unused",
+    writeLine: () => {},
+    ...overrides,
+  });
 
 describe("Google Meet OAuth", () => {
   afterEach(() => {
@@ -50,79 +57,51 @@ describe("Google Meet OAuth", () => {
   });
 
   it("rejects oversized OAuth token responses", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(new Uint8Array(300 * 1024), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-      ),
-    );
-
-    await expect(
-      resolveGoogleMeetAccessToken({
-        clientId: "client-id",
-        refreshToken: "refresh-token",
+    mockTokenResponse(
+      new Response(new Uint8Array(300 * 1024), {
+        headers: { "Content-Type": "application/json" },
       }),
-    ).rejects.toThrow("Google OAuth token: JSON response exceeds 262144 bytes");
+    );
+    await expect(resolveToken()).rejects.toThrow(
+      "Google OAuth token: JSON response exceeds 262144 bytes",
+    );
   });
 
   it("refreshes cached access tokens with Date-invalid expiries", async () => {
-    mockTokenResponse({ access_token: "refreshed-token", expires_in: 3600 });
-
-    const tokens = await resolveGoogleMeetAccessToken({
-      clientId: "client-id",
-      refreshToken: "refresh-token",
+    mockTokenResponse(Response.json({ access_token: "refreshed-token", expires_in: 3600 }));
+    const tokens = await resolveToken({
       accessToken: "cached-token",
       expiresAt: 8_700_000_000_000_000,
     });
 
-    expect(tokens.accessToken).toBe("refreshed-token");
-    expect(tokens.refreshed).toBe(true);
+    expect(tokens).toMatchObject({ accessToken: "refreshed-token", refreshed: true });
   });
 
   it("bounds fallback token lifetimes when the process clock is invalid", async () => {
     vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-    mockTokenResponse({
-      access_token: "new-access-token",
-      expires_in: Number.MAX_SAFE_INTEGER,
-    });
-
-    const tokens = await resolveGoogleMeetAccessToken({
-      clientId: "client-id",
-      refreshToken: "refresh-token",
-    });
-
-    expect(tokens.expiresAt).toBe(3600 * 1000);
+    mockTokenResponse(
+      Response.json({
+        access_token: "new-access-token",
+        expires_in: Number.MAX_SAFE_INTEGER,
+      }),
+    );
+    expect((await resolveToken()).expiresAt).toBe(3600 * 1000);
   });
 
   it("keeps explicit zero-second token lifetimes immediately stale", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
-    mockTokenResponse({ access_token: "new-access-token", expires_in: 0 });
-
-    const tokens = await resolveGoogleMeetAccessToken({
-      clientId: "client-id",
-      refreshToken: "refresh-token",
-    });
-
-    expect(tokens.expiresAt).toBe(Date.now());
+    mockTokenResponse(Response.json({ access_token: "new-access-token", expires_in: 0 }));
+    expect((await resolveToken()).expiresAt).toBe(Date.now());
   });
 
   it("falls back to manual paste when the local callback port is occupied", async () => {
     const blocker = await occupyPort(8085);
     try {
-      const state = "state-token";
       const lines: string[] = [];
-      const code = await waitForGoogleMeetAuthCode({
-        state,
-        manual: false,
-        timeoutMs: 60_000,
-        authUrl: "https://accounts.google.com/o/oauth2/v2/auth?x=1",
+      const code = await waitForCode({
         promptInput: async () =>
-          `http://localhost:8085/oauth2callback?code=auth-code-123&state=${state}`,
+          "http://localhost:8085/oauth2callback?code=auth-code-123&state=state-token",
         writeLine: (message) => lines.push(message),
       });
       expect(code).toBe("auth-code-123");
@@ -139,16 +118,7 @@ describe("Google Meet OAuth", () => {
     const timeoutError = new Error("OAuth callback timeout");
     vi.spyOn(providerAuthRuntime, "waitForLocalOAuthCallback").mockRejectedValueOnce(timeoutError);
     const promptInput = vi.fn(async () => "unused");
-    await expect(
-      waitForGoogleMeetAuthCode({
-        state: "state-token",
-        manual: false,
-        timeoutMs: 1,
-        authUrl: "https://accounts.google.com/o/oauth2/v2/auth?x=1",
-        promptInput,
-        writeLine: () => {},
-      }),
-    ).rejects.toBe(timeoutError);
+    await expect(waitForCode({ timeoutMs: 1, promptInput })).rejects.toBe(timeoutError);
     expect(promptInput).not.toHaveBeenCalled();
   });
 });

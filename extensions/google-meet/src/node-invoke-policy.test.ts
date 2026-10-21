@@ -1,11 +1,10 @@
-// Google Meet node.invoke policy tests cover caller-controlled command sanitization.
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { resolveGoogleMeetConfig } from "./config.js";
 import { createGoogleMeetChromeNodeInvokePolicy } from "./node-invoke-policy.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
 
-function createContext(params: unknown, pluginConfig: Record<string, unknown> = {}) {
+function invoke(params: unknown, config: unknown = {}) {
   const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(async () => ({
     ok: true,
     payload: { ok: true },
@@ -15,16 +14,39 @@ function createContext(params: unknown, pluginConfig: Record<string, unknown> = 
     command: GOOGLE_MEET_NODE_COMMAND,
     params,
     config: {} as never,
-    pluginConfig,
+    pluginConfig: {},
     invokeNode,
   };
-  return { ctx, invokeNode };
+  const policy = createGoogleMeetChromeNodeInvokePolicy(resolveGoogleMeetConfig(config));
+  return { result: policy.handle(ctx), invokeNode };
+}
+
+async function expectDenied(params: unknown, message?: string) {
+  const { result, invokeNode } = invoke(params);
+  await expect(result).resolves.toMatchObject({
+    ok: false,
+    code: "GOOGLE_MEET_NODE_POLICY_DENIED",
+    ...(message ? { message } : {}),
+  });
+  expect(invokeNode).not.toHaveBeenCalled();
 }
 
 describe("Google Meet node invoke policy", () => {
   it("rewrites start executable fields from trusted config", async () => {
-    const policy = createGoogleMeetChromeNodeInvokePolicy(
-      resolveGoogleMeetConfig({
+    const { result, invokeNode } = invoke(
+      {
+        action: "start",
+        url: "https://meet.google.com/abc-defg-hij",
+        mode: "bidi",
+        launch: true,
+        browserProfile: "Attacker Profile",
+        joinTimeoutMs: 1,
+        audioBridgeCommand: ["node", "-e", "process.exit(99)"],
+        audioBridgeHealthCommand: ["node", "-e", "process.exit(98)"],
+        audioInputCommand: ["malicious-capture"],
+        audioOutputCommand: ["malicious-play"],
+      },
+      {
         chrome: {
           launch: false,
           browserProfile: "Trusted Profile",
@@ -32,22 +54,10 @@ describe("Google Meet node invoke policy", () => {
           audioInputCommand: ["trusted-capture", "--raw"],
           audioOutputCommand: ["trusted-play", "--raw"],
         },
-      }),
+      },
     );
-    const { ctx, invokeNode } = createContext({
-      action: "start",
-      url: "https://meet.google.com/abc-defg-hij",
-      mode: "bidi",
-      launch: true,
-      browserProfile: "Attacker Profile",
-      joinTimeoutMs: 1,
-      audioBridgeCommand: ["node", "-e", "process.exit(99)"],
-      audioBridgeHealthCommand: ["node", "-e", "process.exit(98)"],
-      audioInputCommand: ["malicious-capture"],
-      audioOutputCommand: ["malicious-play"],
-    });
 
-    await expect(policy.handle(ctx)).resolves.toEqual({ ok: true, payload: { ok: true } });
+    await expect(result).resolves.toEqual({ ok: true, payload: { ok: true } });
 
     expect(invokeNode).toHaveBeenCalledTimes(1);
     expect(invokeNode).toHaveBeenCalledWith({
@@ -95,29 +105,19 @@ describe("Google Meet node invoke policy", () => {
   });
 
   it("rejects direct start for non-Meet URLs before node dispatch", async () => {
-    const policy = createGoogleMeetChromeNodeInvokePolicy(resolveGoogleMeetConfig({}));
-    const { ctx, invokeNode } = createContext({
-      action: "start",
-      url: "https://example.com/private",
-      mode: "bidi",
-    });
-
-    await expect(policy.handle(ctx)).resolves.toMatchObject({
-      ok: false,
-      code: "GOOGLE_MEET_NODE_POLICY_DENIED",
-      message: "url must be an explicit https://meet.google.com/... URL",
-    });
-    expect(invokeNode).not.toHaveBeenCalled();
+    await expectDenied(
+      { action: "start", url: "https://example.com/private", mode: "bidi" },
+      "url must be an explicit https://meet.google.com/... URL",
+    );
   });
 
   it("keeps direct setup diagnostics but strips extra fields", async () => {
-    const policy = createGoogleMeetChromeNodeInvokePolicy(resolveGoogleMeetConfig({}));
-    const { ctx, invokeNode } = createContext({
+    const { result, invokeNode } = invoke({
       action: "setup",
       audioBridgeCommand: ["node", "-e", "process.exit(99)"],
     });
 
-    await policy.handle(ctx);
+    await result;
 
     expect(invokeNode).toHaveBeenCalledWith({
       params: {
@@ -130,8 +130,6 @@ describe("Google Meet node invoke policy", () => {
   });
 
   it("rejects malformed bridge control before node dispatch", async () => {
-    const policy = createGoogleMeetChromeNodeInvokePolicy(resolveGoogleMeetConfig({}));
-
     for (const params of [
       { action: "pullAudio" },
       { action: "pushAudio", bridgeId: "bridge-1" },
@@ -147,24 +145,11 @@ describe("Google Meet node invoke policy", () => {
       { action: "stopByUrl" },
       { action: "stopByUrl", url: "https://example.com/not-meet" },
     ]) {
-      const { ctx, invokeNode } = createContext(params);
-
-      await expect(policy.handle(ctx)).resolves.toMatchObject({
-        ok: false,
-        code: "GOOGLE_MEET_NODE_POLICY_DENIED",
-      });
-      expect(invokeNode).not.toHaveBeenCalled();
+      await expectDenied(params);
     }
   });
 
   it("rejects unsupported googlemeet.chrome actions before node dispatch", async () => {
-    const policy = createGoogleMeetChromeNodeInvokePolicy(resolveGoogleMeetConfig({}));
-    const { ctx, invokeNode } = createContext({ action: "exec", command: ["id"] });
-
-    await expect(policy.handle(ctx)).resolves.toMatchObject({
-      ok: false,
-      code: "GOOGLE_MEET_NODE_POLICY_DENIED",
-    });
-    expect(invokeNode).not.toHaveBeenCalled();
+    await expectDenied({ action: "exec", command: ["id"] });
   });
 });

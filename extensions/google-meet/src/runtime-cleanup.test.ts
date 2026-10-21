@@ -5,6 +5,14 @@ import { describe, expect, it, vi } from "vitest";
 import { meetRuntime, MEET_URL } from "./test-support/fixtures.test-helpers.js";
 import * as chromeTransport from "./transports/chrome.js";
 
+function launchedTab(targetId: string, openedByPlugin = true) {
+  return {
+    launched: true,
+    tab: { targetId, openedByPlugin },
+    browser: { inCall: true, micMuted: true },
+  };
+}
+
 describe("Google Meet failed-session tab adoption", () => {
   const state = useMeetingTestState(createOpenClawTestState);
 
@@ -12,26 +20,16 @@ describe("Google Meet failed-session tab adoption", () => {
     const adoptionStarted = createDeferred<void>();
     const adoption = createDeferred<Awaited<ReturnType<typeof chromeTransport.launchChromeMeet>>>();
     const liveTabs = new Set<string>();
+    const launchTab = async (targetId: string) => {
+      liveTabs.add(targetId);
+      return launchedTab(targetId);
+    };
     let donorAttempts = 0;
     let allowAdoptedLeave = false;
     const launch = vi
       .spyOn(chromeTransport, "launchChromeMeet")
-      .mockImplementationOnce(async () => {
-        liveTabs.add("donor-tab");
-        return {
-          launched: true,
-          tab: { targetId: "donor-tab", openedByPlugin: true },
-          browser: { inCall: true, micMuted: true },
-        };
-      })
-      .mockImplementationOnce(async () => {
-        liveTabs.add("adopted-tab");
-        return {
-          launched: true,
-          tab: { targetId: "adopted-tab", openedByPlugin: true },
-          browser: { inCall: true, micMuted: true },
-        };
-      })
+      .mockImplementationOnce(() => launchTab("donor-tab"))
+      .mockImplementationOnce(() => launchTab("adopted-tab"))
       .mockImplementationOnce(async () => {
         adoptionStarted.resolve();
         return await adoption.promise;
@@ -48,11 +46,7 @@ describe("Google Meet failed-session tab adoption", () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
     const runtime = state.track(
       meetRuntime(
-        {
-          defaultTransport: "chrome",
-          defaultMode: "agent",
-          realtime: { introMessage: "" },
-        },
+        { defaultTransport: "chrome", defaultMode: "agent", realtime: { introMessage: "" } },
         logger,
         { transcripts: { enabled: false } },
       ),
@@ -60,19 +54,17 @@ describe("Google Meet failed-session tab adoption", () => {
     );
     let replacing: ReturnType<typeof runtime.join> | undefined;
     let retrying: ReturnType<typeof runtime.leave> | undefined;
-    const adoptedResult = {
-      launched: true,
-      tab: { targetId: "adopted-tab", openedByPlugin: false },
-      browser: { inCall: true, micMuted: true },
-    };
+    const adoptedResult = launchedTab("adopted-tab", false);
     try {
       await runtime.join({ url: MEET_URL, agentId: "donor" });
       await expect(runtime.join({ url: MEET_URL, agentId: "failed" })).rejects.toThrow(
         "Could not leave the previous Meet browser tab before reassignment.",
       );
       const failed = runtime.list().find((session) => session.agentId === "failed");
-      expect(failed?.state).toBe("ended");
-      expect(failed?.chrome?.browserTab?.targetId).toBe("adopted-tab");
+      expect(failed).toMatchObject({
+        state: "ended",
+        chrome: { browserTab: { targetId: "adopted-tab" } },
+      });
       if (!failed) {
         throw new Error("Expected a retained failed session");
       }
