@@ -80,9 +80,7 @@ export function createMatrixCryptoInitializationGate() {
       try {
         await task;
       } finally {
-        if (pending === task) {
-          pending = null;
-        }
+        pending = null;
       }
     },
   };
