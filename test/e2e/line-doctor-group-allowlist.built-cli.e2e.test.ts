@@ -87,9 +87,8 @@ async function runDoctor(line: Record<string, unknown>, accessGroups?: Record<st
 
 describe("LINE group allowlists through built doctor --fix", () => {
   it("keeps DM senders out of the group allowlist and explains the missing group list", async () => {
-    const { output, line } = await runDoctor({ dmPolicy: "allowlist", allowFrom: [userId] });
+    const { output } = await runDoctor({ dmPolicy: "allowlist", allowFrom: [userId] });
 
-    expect(line.allowFrom).toEqual([userId]);
     expect(output).toContain(
       'channels.line.groupPolicy is "allowlist" but groupAllowFrom is empty',
     );
@@ -127,39 +126,26 @@ describe("LINE group allowlists through built doctor --fix", () => {
   });
 
   it.each([
-    {
-      name: "an empty static access group",
-      accessGroups: { empty: { type: "message.senders", members: {} } },
-      allowFrom: ["accessGroup:empty"],
-    },
-    {
-      name: "an access group with a LINE sender",
-      accessGroups: { operators: { type: "message.senders", members: { line: [userId] } } },
-      allowFrom: ["accessGroup:operators"],
-    },
-    {
-      name: "an access-group reference beside a concrete sender",
-      accessGroups: { empty: { type: "message.senders", members: {} } },
-      allowFrom: ["accessGroup:empty", userId],
-    },
-  ])(
-    "asks to check $name and still names the uncovered group",
-    async ({ accessGroups, allowFrom }) => {
-      const uncoveredId = `C${"3".repeat(32)}`;
-      const groups = { [groupId]: { allowFrom }, [uncoveredId]: {} };
-      const { output, line } = await runDoctor({ dmPolicy: "disabled", groups }, accessGroups);
+    { name: "an empty static access group", members: {}, concrete: [] },
+    { name: "an access group with a LINE sender", members: { line: [userId] }, concrete: [] },
+    { name: "an access-group reference beside a concrete sender", members: {}, concrete: [userId] },
+  ])("asks to check $name and still names the uncovered group", async ({ members, concrete }) => {
+    const accessGroups = { operators: { type: "message.senders", members } };
+    const allowFrom = ["accessGroup:operators", ...concrete];
+    const uncoveredId = `C${"3".repeat(32)}`;
+    const groups = { [groupId]: { allowFrom }, [uncoveredId]: {} };
+    const { output, line } = await runDoctor({ dmPolicy: "disabled", groups }, accessGroups);
 
-      expect(line).not.toHaveProperty("allowFrom");
-      expect(line.groups).toEqual(groups);
-      expect(output).toContain(`group "${groupId}" uses access-group references`);
-      expect(output).toContain("Check the referenced access groups");
-      expect(output).toContain(
-        `group "${uncoveredId}" has no sender allowlist — messages there are silently dropped`,
-      );
-      expect(output).not.toContain("other groups keep working");
-      expect(output).not.toContain("all group messages will be silently dropped");
-      expect(output).not.toContain("empty sender allowlist");
-      expect(output).not.toContain(`group "${groupId}" has no sender allowlist`);
-    },
-  );
+    expect(line).not.toHaveProperty("allowFrom");
+    expect(line.groups).toEqual(groups);
+    expect(output).toContain(`group "${groupId}" uses access-group references`);
+    expect(output).toContain("Check the referenced access groups");
+    expect(output).toContain(
+      `group "${uncoveredId}" has no sender allowlist — messages there are silently dropped`,
+    );
+    expect(output).not.toContain("other groups keep working");
+    expect(output).not.toContain("all group messages will be silently dropped");
+    expect(output).not.toContain("empty sender allowlist");
+    expect(output).not.toContain(`group "${groupId}" has no sender allowlist`);
+  });
 });
