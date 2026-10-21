@@ -188,69 +188,40 @@ describe("resolveGatewayProgramArguments", () => {
     ]);
   });
 
-  it("uses Node with tsx for source-checkout dev mode", async () => {
-    const repoIndexPath = path.resolve("/repo/src/index.ts");
-    const repoEntryPath = path.resolve("/repo/src/entry.ts");
-    mockEntrypoint(repoIndexPath, "/usr/local/bin/node");
-
-    const result = await gatewayArgs({
-      dev: true,
-    });
-
+  it.each([
+    ["node", true],
+    ["bun", false],
+    ["bun", true],
+  ] as const)("runs the %s Gateway (dev=%s)", async (runtime, dev) => {
+    const root = path.resolve(dev ? "/repo" : "/opt/openclaw");
+    const source = path.join(root, dev ? "src/index.ts" : "dist/entry.js");
+    const entry = path.join(root, dev ? "src/entry.ts" : "dist/index.js");
+    const runtimePath = runtime === "node" ? validatedNodePath : validatedBunPath;
+    mockEntrypoint(source, runtime === "node" ? "/usr/local/bin/node" : validatedBunPath);
+    const result = await gatewayArgs({ dev, runtime, runtimePath });
     expect(result.programArguments).toEqual([
-      validatedNodePath,
-      "--max-old-space-size=16384",
-      "--import",
-      "tsx",
-      repoEntryPath,
+      runtimePath,
+      ...(runtime === "node"
+        ? ["--max-old-space-size=16384", "--import", "tsx"]
+        : ["--no-install"]),
+      entry,
       ...gatewayTail,
     ]);
-    expect(result.workingDirectory).toBe(path.resolve("/repo"));
+    if (dev) {
+      expect(result.workingDirectory).toBe(root);
+    }
   });
 
-  it("uses Bun directly for packaged and source-checkout Gateway commands", async () => {
-    const packagedEntryPath = path.resolve("/opt/openclaw/dist/entry.js");
-    const packagedIndexPath = path.resolve("/opt/openclaw/dist/index.js");
-    mockEntrypoint(packagedEntryPath, validatedBunPath);
-
-    const packaged = await gatewayArgs({ runtime: "bun", runtimePath: validatedBunPath });
-    expect(packaged.programArguments).toEqual([
-      validatedBunPath,
-      "--no-install",
-      packagedIndexPath,
-      ...gatewayTail,
-    ]);
-
-    const repoIndexPath = path.resolve("/repo/src/index.ts");
-    const repoEntryPath = path.resolve("/repo/src/entry.ts");
-    process.argv = [validatedBunPath, repoIndexPath];
-    fsMocks.realpath.mockResolvedValue(repoIndexPath);
-
-    const sourceCheckout = await gatewayArgs({
-      dev: true,
-      runtime: "bun",
-      runtimePath: validatedBunPath,
-    });
-    expect(sourceCheckout.programArguments).toEqual([
-      validatedBunPath,
-      "--no-install",
-      repoEntryPath,
-      ...gatewayTail,
-    ]);
-    expect(sourceCheckout.workingDirectory).toBe(path.resolve("/repo"));
-  });
-
-  it("rejects a blank selected Node path for the node host", async () => {
-    process.execPath = "/usr/local/bin/bun";
-    await expect(nodeArgs({ dev: true, runtimePath: " \t " })).rejects.toThrow(
-      missingSelectedNodeError,
-    );
-  });
-
-  it("rejects a blank selected Bun path for the node host", async () => {
-    await expect(nodeArgs({ runtime: "bun", runtimePath: " \t " })).rejects.toThrow(
-      missingSelectedBunError,
-    );
+  it.each([
+    ["node", missingSelectedNodeError],
+    ["bun", missingSelectedBunError],
+  ] as const)("rejects a blank selected %s path", async (runtime, error) => {
+    if (runtime === "node") {
+      process.execPath = "/usr/local/bin/bun";
+    }
+    await expect(
+      nodeArgs({ runtime, dev: runtime === "node", runtimePath: " \t " }),
+    ).rejects.toThrow(error);
   });
 
   it("uses an executable wrapper from Bun without a selected Node path", async () => {
