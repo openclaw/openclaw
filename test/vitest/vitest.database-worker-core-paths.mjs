@@ -374,6 +374,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-command-foreground.test.ts",
   "src/cli/update-cli/update-command-fresh-overrides.test.ts",
   "src/cli/update-cli/update-command-initial-admission.test.ts",
+  "src/cli/update-cli/update-command-migrate.test.ts",
   "src/cli/update-cli/update-command-migrated-windows.test.ts",
   "src/cli/update-cli/update-command-original-service.test.ts",
   "src/cli/update-cli/update-command-sentinel-env.test.ts",
