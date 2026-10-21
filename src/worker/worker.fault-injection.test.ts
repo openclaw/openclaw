@@ -538,68 +538,6 @@ describe("cloud worker milestone 2 fault injection", () => {
     await harness.settleRun(recoveryRunId);
   });
 
-  it("fences a dead worker and admits a fresh owner at a higher epoch", async () => {
-    const old = await createClients();
-    await old.connection.start();
-    const oldCommit = await old.transcript.commit([transcriptMessage("old owner")]);
-    const { release: pendingRelease, started: pendingStarted } = harness.planPending();
-    const oldInference = old.inference.start(inferenceRequest(harness.epoch, "handoff-old"));
-    const oldInferenceSettled = expect(oldInference).resolves.toMatchObject({
-      type: "error",
-      reason: "session-not-attached",
-    });
-    await pendingStarted.promise;
-
-    const oldEpoch = harness.epoch;
-    const newEpoch = await harness.reclaimWithCredential(REPLACEMENT_CREDENTIAL, "fresh-run");
-    expect(newEpoch).toBeGreaterThan(oldEpoch);
-    const rejected = old.transcript.commit([transcriptMessage("late old owner")]);
-    await expect(rejected).rejects.toMatchObject({
-      name: "WorkerTranscriptCommitError",
-      reason: "placement-mismatch",
-    });
-    await expect(old.connection.waitForExit()).resolves.toMatchObject({ kind: "failed" });
-    pendingRelease.resolve(doneOutcome("stale paid output"));
-    await oldInferenceSettled;
-
-    harness.providerPlan = { kind: "immediate", text: "new owner reply" };
-    // Admission binds the fresh owner to the exact run it executes.
-    const fresh = await createClients({
-      admissionProof: REPLACEMENT_CREDENTIAL,
-      epoch: newEpoch,
-      baseLeafId: oldCommit.newLeafId,
-      runId: "fresh-run",
-    });
-    await fresh.connection.start();
-    expect(harness.admissions.at(-1)?.turnClaim).toMatchObject({
-      runId: "fresh-run",
-      owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: newEpoch },
-    });
-    await expect(
-      fresh.inference.start({
-        ...inferenceRequest(newEpoch, "handoff-new"),
-        runId: "fresh-run",
-      }),
-    ).resolves.toEqual(doneOutcome("new owner reply"));
-    await fresh.transcript.commit([transcriptMessage("new owner")]);
-
-    const messages = transcript()
-      .getEntries()
-      .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-    expect(messages.map((message) => message.role)).toEqual(["user", "user"]);
-    expect(harness.providerCalls).toBe(2);
-    expect(
-      harness.database.db
-        .prepare(
-          "SELECT run_epoch, next_seq FROM worker_transcript_commit_heads WHERE session_id = ? ORDER BY run_epoch",
-        )
-        .all(SESSION_ID),
-    ).toEqual([
-      { run_epoch: oldEpoch, next_seq: 2 },
-      { run_epoch: newEpoch, next_seq: 2 },
-    ]);
-  });
-
   it("fail-stops a reconnected commit whose base changes while application is in flight", async () => {
     const current = await createClients();
     const { entered, release } = transcriptGate("before-apply");

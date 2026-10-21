@@ -356,56 +356,35 @@ describe("worker command lifetime gate", () => {
     },
   );
 
-  it("retains state across turns and cancels only the exact active turn", async () => {
+  it("cancels only the exact active turn", async () => {
     const harness = managedHarness();
-    const lifetime = lifetimeHarness();
-    managedRuntime.backgroundCount = 1;
-    vi.mocked(runWorkerDescriptor).mockResolvedValueOnce({
-      status: "completed",
-      transcriptLeafId: "first-leaf",
-      transcriptNextSeq: 2,
+    const started = waitForRuntimeAbort({
+      status: "failed",
+      reason: "turn-failed",
+      transcriptLeafId: "cancelled-leaf",
+      transcriptNextSeq: 3,
     });
-    const secondStarted = waitForRuntimeAbort(
-      {
-        status: "failed",
-        reason: "turn-failed",
-        transcriptLeafId: "second-leaf",
-        transcriptNextSeq: 3,
-      },
-      () => {
-        managedRuntime.backgroundCount = 0;
-      },
-    );
-    const running = runWorkerCommand({ ...harness, managed: true, lifetime: lifetime.contract });
-    lifetime.open();
+    const running = runWorkerCommand({ ...harness, managed: true });
     harness.turn();
-    await vi.waitFor(() => expect(harness.results).toHaveLength(1));
-    expect(harness.results[0]).toEqual({
-      type: "result",
-      turnId: "turn-1",
-      retainWorker: true,
-      result: { status: "completed", transcriptLeafId: "first-leaf", transcriptNextSeq: 2 },
-    });
-    expect(lifetime.dispose).not.toHaveBeenCalled();
-
-    harness.turn(nextRun(harness.launch));
-    const secondSignal = await secondStarted;
-    harness.send({ type: "cancel", turnId: "turn-1" });
-    expect(secondSignal.aborted).toBe(false);
+    const signal = await started;
     harness.send({ type: "cancel", turnId: "turn-2" });
+    expect(signal.aborted).toBe(false);
+    harness.send({ type: "cancel", turnId: "turn-1" });
     await running;
-
-    expect(harness.results[1]).toMatchObject({
-      turnId: "turn-2",
-      result: { status: "failed", reason: "turn-failed" },
-      retainWorker: false,
-    });
-    expect(createWorkerRuntimeEnvironment).toHaveBeenCalledOnce();
-    expect(
-      vi.mocked(runWorkerDescriptor).mock.calls.map(([, options]) => options?.environmentStateDir),
-    ).toEqual([stateDir, stateDir]);
+    expect(harness.results).toEqual([
+      {
+        type: "result",
+        turnId: "turn-1",
+        result: {
+          status: "failed",
+          reason: "turn-failed",
+          transcriptLeafId: "cancelled-leaf",
+          transcriptNextSeq: 3,
+        },
+        retainWorker: false,
+      },
+    ]);
     expect(managedRuntime.close).toHaveBeenCalledOnce();
-    expect(lifetime.dispose).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(

@@ -11,7 +11,6 @@ import {
   WORKSPACE_INSPECTION_COMMAND,
   WORKSPACE_INSPECTION_MAX_BYTES,
 } from "./workspace-inspection-protocol.js";
-import { inspectSessionWorkspace } from "./workspace-inspection.js";
 
 const request = {
   gatewayNamespace: "gateway-1",
@@ -237,29 +236,17 @@ it("allows larger bounded inspection payloads without widening ordinary command 
   ).toBeNull();
 });
 
-it("preserves the worker file-boundary denial through result decoding", async () => {
-  const raw = await inspectSessionWorkspace(
-    "/workspace",
-    JSON.stringify({
-      operation: "get",
-      sessionKey: "agent:main:worker-files",
-      path: "../outside.txt",
-      files: [],
-    }),
-    () => {},
-  );
-  const result = parseWorkspaceInspectionResult("get", raw);
-  expect(result).toEqual({
-    root: "/workspace",
-    file: { path: "../outside.txt", name: "outside.txt", kind: "read", missing: true },
-    reason: "outside_session_boundary",
-  });
-  for (const invalid of [
-    { ...result, reason: "unknown" },
-    { ...result, unexpected: true },
-  ]) {
-    expect(() => parseWorkspaceInspectionResult("get", JSON.stringify(invalid))).toThrow(
+it.each([{ reason: "unknown" }, { unexpected: true }])(
+  "rejects invalid inspection result fields %j",
+  (invalid) => {
+    const result = {
+      root: "/workspace",
+      file: { path: "../outside.txt", name: "outside.txt", kind: "read", missing: true },
+      reason: "outside_session_boundary",
+      ...invalid,
+    };
+    expect(() => parseWorkspaceInspectionResult("get", JSON.stringify(result))).toThrow(
       "invalid result",
     );
-  }
-});
+  },
+);

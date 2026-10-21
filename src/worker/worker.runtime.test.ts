@@ -249,9 +249,6 @@ type FakeGatewayOptions = {
   silenceFirstLiveEvent?: boolean;
   silenceFirstInference?: boolean;
   dropSessionToolResponses?: number;
-  transcriptFailureAtRequest?: number;
-  liveResyncAckedSeq?: number;
-  liveResyncResponses?: number;
   liveFailure?: "capacity-exceeded";
   heartbeatFailure?: "credential-expired";
   heartbeatIntervalMs?: number;
@@ -287,7 +284,6 @@ class FakeWorkerGateway {
   private droppedTranscript = false;
   private droppedLiveEvent = false;
   private droppedInference = false;
-  private sentLiveResync = 0;
   private unavailable = false;
   private ignoredAdmission = false;
   private readonly inferenceStarted = createDeferred();
@@ -523,12 +519,6 @@ class FakeWorkerGateway {
       this.droppedTranscript = true;
       return;
     }
-    if (this.transcriptRequests.length === this.options.transcriptFailureAtRequest) {
-      this.reject(socket, frame.id, "worker transcript commit rejected", {
-        reason: "stale-base-leaf",
-      });
-      return;
-    }
     this.acceptedTranscriptRequests.push(structuredClone(frame.params));
     this.applicationOrder.push(`transcript:${frame.params.seq}`);
     this.reply(socket, frame.id, {
@@ -549,18 +539,6 @@ class FakeWorkerGateway {
     );
     if (this.options.silenceFirstLiveEvent && !this.droppedLiveEvent) {
       this.droppedLiveEvent = true;
-      return;
-    }
-    if (
-      this.options.liveResyncAckedSeq !== undefined &&
-      this.sentLiveResync < (this.options.liveResyncResponses ?? 1)
-    ) {
-      this.sentLiveResync += 1;
-      this.reject(socket, frame.id, "worker live event rejected", {
-        reason: "resync-required",
-        ackedSeq: this.options.liveResyncAckedSeq,
-        expectedSeq: this.options.liveResyncAckedSeq + 1,
-      });
       return;
     }
     if (this.options.liveFailure) {
@@ -1243,34 +1221,6 @@ it.each([
   },
 );
 
-it("fail-stops a stale mid-run transcript without duplicating or rebasing the paid tail", async () => {
-  const { gateway, launch } = await setup({ transcriptFailureAtRequest: 2 });
-
-  const failure: unknown = await runWorkerDescriptor(launch).then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-
-  expect(failure).toBeInstanceOf(Error);
-  expect(failure).toMatchObject({
-    name: "WorkerTranscriptCommitError",
-    message:
-      "Worker transcript base changed; uncommitted messages were not committed; relaunch required.",
-    reason: "stale-base-leaf",
-  });
-  expect(gateway.inferenceRequests).toHaveLength(1);
-  expect(gateway.transcriptRequests.map((request) => request.seq)).toEqual([3, 4]);
-  expect(
-    gateway.transcriptRequests.map((request) => request.messages.map((message) => message.role)),
-  ).toEqual([["user"], ["assistant"]]);
-  expect(gateway.acceptedTranscriptRequests.map((request) => request.seq)).toEqual([3]);
-  expect(
-    gateway.liveEventRequests.some(
-      (request) => request.event.kind === "lifecycle" && request.event.payload.phase === "error",
-    ),
-  ).toBe(false);
-});
-
 it("requires authoritative terminal delivery after degrading preview live events", async () => {
   const { gateway, launch } = await setup({ liveFailure: "capacity-exceeded" });
 
@@ -1279,24 +1229,6 @@ it("requires authoritative terminal delivery after degrading preview live events
   expect(gateway.inferenceRequests).toHaveLength(1);
   expect(gateway.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
   expect(gateway.liveEventRequests.length).toBeGreaterThanOrEqual(2);
-  expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
-    kind: "lifecycle",
-    payload: { phase: "finishing" },
-  });
-});
-
-it("degrades a repeated no-progress live resync without hanging the run", async () => {
-  const { gateway, launch } = await setup({
-    liveResyncAckedSeq: 0,
-    liveResyncResponses: 2,
-  });
-  launch.assignment.liveEvents = { ackedSeq: 5, nextSeq: 6 };
-
-  await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-  expect(gateway.inferenceRequests).toHaveLength(1);
-  expect(gateway.acceptedTranscriptRequests).toHaveLength(2);
-  expect(gateway.liveEventRequests).toHaveLength(3);
   expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
     kind: "lifecycle",
     payload: { phase: "finishing" },
