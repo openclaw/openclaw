@@ -20,102 +20,6 @@ type GatewayImageConnection = {
   edgeAuthHeaders?: Readonly<Record<string, string>>;
 };
 
-async function readGatewayImageResponse(response: IncomingMessage): Promise<Buffer> {
-  try {
-    if (response.statusCode !== 200) {
-      throw new Error(`Image preview request failed (${response.statusCode ?? "unknown"})`);
-    }
-    const size = Number(response.headers["content-length"]);
-    if (size > TUI_IMAGE_MAX_BYTES) {
-      throw new Error("Image exceeds the preview byte limit");
-    }
-    const chunks: Buffer[] = [];
-    let received = 0;
-    for await (const chunk of response) {
-      if (!Buffer.isBuffer(chunk)) {
-        throw new Error("Invalid image response");
-      }
-      received += chunk.byteLength;
-      if (received > TUI_IMAGE_MAX_BYTES) {
-        throw new Error("Image exceeds the preview byte limit");
-      }
-      chunks.push(chunk);
-    }
-    return Buffer.concat(chunks, received);
-  } finally {
-    response.destroy();
-  }
-}
-
-async function requestGatewayImage(
-  connection: GatewayImageConnection,
-  route: URL,
-  credentials: readonly string[],
-  signal: AbortSignal,
-  mediaBasePath: string,
-): Promise<Buffer> {
-  const gateway = new URL(connection.url);
-  if (gateway.protocol !== "ws:" && gateway.protocol !== "wss:") {
-    throw new Error("Invalid Gateway image transport");
-  }
-  const target = new URL(gateway);
-  target.protocol = gateway.protocol === "wss:" ? "https:" : "http:";
-  const gatewayBasePath = normalizeControlUiBasePath(gateway.pathname);
-  const proxyBasePath =
-    mediaBasePath && gatewayBasePath.endsWith(mediaBasePath)
-      ? gatewayBasePath.slice(0, -mediaBasePath.length)
-      : gatewayBasePath;
-  target.pathname = `${proxyBasePath}${route.pathname}`;
-  target.search = route.search;
-  target.hash = "";
-  target.username = "";
-  target.password = "";
-  const fingerprint = normalizeTlsFingerprint(connection.tlsFingerprint);
-  if (connection.tlsFingerprint && (!fingerprint || target.protocol !== "https:")) {
-    throw new Error("Invalid Gateway image TLS fingerprint");
-  }
-  for (const [index, token] of (credentials.length ? credentials : [""]).entries()) {
-    signal.throwIfAborted();
-    const options: Pick<ClientOptions, "headers" | "rejectUnauthorized"> & {
-      finishRequest?: (request: http.ClientRequest) => void;
-    } = {
-      headers: {
-        ...connection.edgeAuthHeaders,
-        accept: "image/png,image/jpeg,image/gif,image/webp",
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-      },
-    };
-    if (fingerprint) {
-      // Share the transport's pin check, including delaying credentials until peer verification.
-      applyGatewayWebSocketTlsPin(options, fingerprint);
-    }
-    const request = (target.protocol === "https:" ? https : http).request(target, {
-      method: "GET",
-      headers: options.headers,
-      signal,
-      agent: false,
-      ...(fingerprint ? { rejectUnauthorized: options.rejectUnauthorized } : {}),
-    });
-    const responsePromise = new Promise<IncomingMessage>((resolve, reject) => {
-      request.once("response", resolve);
-      request.once("error", reject);
-    });
-    if (options.finishRequest) {
-      options.finishRequest(request);
-    } else {
-      request.end();
-    }
-    const response = await responsePromise;
-    if (response.statusCode === 401 && index + 1 < credentials.length) {
-      response.destroy();
-      continue;
-    }
-    // Native HTTP never follows redirects; credentials stay bound to the connected Gateway.
-    return await readGatewayImageResponse(response);
-  }
-  throw new Error("Image preview authentication failed");
-}
-
 export async function loadGatewayImage(params: {
   request: TuiImageRequest;
   connection: GatewayImageConnection;
@@ -170,12 +74,92 @@ export async function loadGatewayImage(params: {
     route.pathname = route.pathname.replace(/\/full$/, "/thumbnail");
     credentials = [];
   }
-  const buffer = await requestGatewayImage(
-    params.connection,
-    route,
-    credentials,
-    signal,
-    mediaBasePath,
-  );
+  const connection = params.connection;
+  async function requestGatewayImage(): Promise<Buffer> {
+    const gateway = new URL(connection.url);
+    if (gateway.protocol !== "ws:" && gateway.protocol !== "wss:") {
+      throw new Error("Invalid Gateway image transport");
+    }
+    const target = new URL(gateway);
+    target.protocol = gateway.protocol === "wss:" ? "https:" : "http:";
+    const gatewayBasePath = normalizeControlUiBasePath(gateway.pathname);
+    const proxyBasePath =
+      mediaBasePath && gatewayBasePath.endsWith(mediaBasePath)
+        ? gatewayBasePath.slice(0, -mediaBasePath.length)
+        : gatewayBasePath;
+    target.pathname = `${proxyBasePath}${route.pathname}`;
+    target.search = route.search;
+    target.hash = "";
+    target.username = "";
+    target.password = "";
+    const fingerprint = normalizeTlsFingerprint(connection.tlsFingerprint);
+    if (connection.tlsFingerprint && (!fingerprint || target.protocol !== "https:")) {
+      throw new Error("Invalid Gateway image TLS fingerprint");
+    }
+    for (const [index, token] of (credentials.length ? credentials : [""]).entries()) {
+      signal.throwIfAborted();
+      const options: Pick<ClientOptions, "headers" | "rejectUnauthorized"> & {
+        finishRequest?: (request: http.ClientRequest) => void;
+      } = {
+        headers: {
+          ...connection.edgeAuthHeaders,
+          accept: "image/png,image/jpeg,image/gif,image/webp",
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+      };
+      if (fingerprint) {
+        // Share the transport's pin check, including delaying credentials until peer verification.
+        applyGatewayWebSocketTlsPin(options, fingerprint);
+      }
+      const imageRequest = (target.protocol === "https:" ? https : http).request(target, {
+        method: "GET",
+        headers: options.headers,
+        signal,
+        agent: false,
+        ...(fingerprint ? { rejectUnauthorized: options.rejectUnauthorized } : {}),
+      });
+      const responsePromise = new Promise<IncomingMessage>((resolve, reject) => {
+        imageRequest.once("response", resolve);
+        imageRequest.once("error", reject);
+      });
+      if (options.finishRequest) {
+        options.finishRequest(imageRequest);
+      } else {
+        imageRequest.end();
+      }
+      const response = await responsePromise;
+      if (response.statusCode === 401 && index + 1 < credentials.length) {
+        response.destroy();
+        continue;
+      }
+      // Native HTTP never follows redirects; credentials stay bound to the connected Gateway.
+      try {
+        if (response.statusCode !== 200) {
+          throw new Error(`Image preview request failed (${response.statusCode ?? "unknown"})`);
+        }
+        const size = Number(response.headers["content-length"]);
+        if (size > TUI_IMAGE_MAX_BYTES) {
+          throw new Error("Image exceeds the preview byte limit");
+        }
+        const chunks: Buffer[] = [];
+        let received = 0;
+        for await (const chunk of response) {
+          if (!Buffer.isBuffer(chunk)) {
+            throw new Error("Invalid image response");
+          }
+          received += chunk.byteLength;
+          if (received > TUI_IMAGE_MAX_BYTES) {
+            throw new Error("Image exceeds the preview byte limit");
+          }
+          chunks.push(chunk);
+        }
+        return Buffer.concat(chunks, received);
+      } finally {
+        response.destroy();
+      }
+    }
+    throw new Error("Image preview authentication failed");
+  }
+  const buffer = await requestGatewayImage();
   return await prepareTuiImage(buffer, signal);
 }
