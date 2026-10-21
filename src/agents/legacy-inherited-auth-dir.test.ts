@@ -7,10 +7,7 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveLegacyCompatibilityAgentId,
 } from "./agent-scope-config.js";
-import {
-  resolveLegacyInheritedAuthAgentId,
-  resolveLegacyInheritedAuthSourceAgentDir,
-} from "./legacy-inherited-auth-dir.js";
+import { resolveLegacyInheritedAuthAgentId } from "./legacy-inherited-auth-dir.js";
 
 describe("legacy inherited auth ownership", () => {
   it("uses the raw legacy marker owner for direct config inputs", () => {
@@ -54,23 +51,5 @@ describe("legacy inherited auth ownership", () => {
     expect(resolveLegacyInheritedAuthAgentId(config)).toBe("main");
     expect(resolveSessionStoreCompatibilityAgentId(config)).toBe("main");
     expect(resolveAgentWorkspaceDir(config, "research")).toBe("/srv/shared/research");
-  });
-
-  it("uses the configured inheritance owner and custom agentDir as the shared cutover source", () => {
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: { authInheritance: { agentId: "ops" } },
-        entries: { main: {}, ops: { agentDir: "/srv/ops-auth" } },
-      },
-    };
-    const env = { OPENCLAW_STATE_DIR: "/srv/state", OPENCLAW_AGENT_DIR: undefined };
-
-    expect(resolveLegacyInheritedAuthSourceAgentDir(config, env)).toBe("/srv/ops-auth");
-    expect(
-      resolveLegacyInheritedAuthSourceAgentDir(config, {
-        ...env,
-        OPENCLAW_AGENT_DIR: "/srv/relocated-auth",
-      }),
-    ).toBe("/srv/relocated-auth");
   });
 });

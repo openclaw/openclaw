@@ -166,25 +166,54 @@ export function bootstrapSharedAuthStoreInWorker(
         const fallbackPath = input.fallbackSourcePath;
         const fallbackIdentity = input.fallbackSourceIdentity;
         let fallbackAnchor: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+        let fallbackSource: EngineConnection | undefined;
         let committing = false;
         try {
           // Main still backs inherited reads until ownership flips. Hold its existing-file
           // writer reservation through the shared commit so a foreign writer cannot make
           // the emptiness decision stale.
           fallbackAnchor = openNodeSqliteDatabase(resolveExistingSqliteFileUri(fallbackPath));
-          return runSqliteImmediateTransactionSync(
-            fallbackAnchor,
-            () => {
-              assertDatabasePathIdentity(fallbackPath, fallbackIdentity);
-              const fallbackRows = readSharedAuthLegacyRowsFromDatabase(fallbackAnchor!);
-              if (fallbackRows.store || fallbackRows.state) {
-                return commit(false);
-              }
-              committing = true;
-              return commit(true, fallbackPath);
-            },
-            { operationLabel: "auth-profiles.bootstrap-fallback-source" },
-          );
+          // The selected engine owns every agent store, so inspect main through the
+          // same engine instead of trusting an empty SQLite identity anchor.
+          fallbackSource = fallbackAnchor;
+          if (agentEngineInput()) {
+            fallbackSource = openAgentEngineStore(
+              fallbackAnchor,
+              undefined,
+              fallbackPath,
+              true,
+              (connection, error) => {
+                fallbackSource = connection;
+                throw error;
+              },
+            );
+          }
+          const inspectFallback = () => {
+            assertDatabasePathIdentity(fallbackPath, fallbackIdentity);
+            const fallbackRows = readSharedAuthLegacyRowsFromDatabase(fallbackSource!);
+            if (fallbackRows.store || fallbackRows.state) {
+              return commit(false);
+            }
+            committing = true;
+            return commit(true, fallbackPath);
+          };
+          if (isPostgresSqlConnection(fallbackSource)) {
+            const postgres = fallbackSource;
+            return postgres.runTransaction(
+              () => {
+                // sqlite-allow-raw -- The fallback snapshot must include a writer that commits while this lock waits.
+                postgres.exec("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
+                // sqlite-allow-raw -- Hold the fallback writer's existing advisory lock during inspection.
+                postgres.prepare("SELECT pg_advisory_xact_lock(?)").get(postgres.advisoryLockKey);
+                return inspectFallback();
+              },
+              undefined,
+              true,
+            );
+          }
+          return runSqliteImmediateTransactionSync(fallbackSource, inspectFallback, {
+            operationLabel: "auth-profiles.bootstrap-fallback-source",
+          });
         } catch (error) {
           if (committing) {
             throw error;
@@ -192,7 +221,13 @@ export function bootstrapSharedAuthStoreInWorker(
           // Leave unreadable fallback state to Doctor rather than flipping ownership past it.
           return commit(false);
         } finally {
-          fallbackAnchor?.close();
+          try {
+            fallbackSource?.close();
+          } finally {
+            if (fallbackSource !== fallbackAnchor && fallbackAnchor?.isOpen) {
+              fallbackAnchor.close();
+            }
+          }
         }
       }
       return commit(true);

@@ -26,16 +26,6 @@ export function resolveLegacyInheritedAuthAgentDir(
   return resolveAgentDir(config, resolveLegacyInheritedAuthAgentId(config), env);
 }
 
-/** Select the legacy source that shared-store cutover must preserve for inherited auth. */
-export function resolveLegacyInheritedAuthSourceAgentDir(
-  config: OpenClawConfig | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  return env.OPENCLAW_AGENT_DIR?.trim() || !config
-    ? resolveSharedMainAuthAgentDir(env)
-    : resolveLegacyInheritedAuthAgentDir(config, env);
-}
-
 /**
  * Selection-only variant: resolving an aliased owner directory must not register that
  * directory under the owner, or database-owner inference would pick the alias later.
@@ -47,13 +37,6 @@ export function resolveLegacyInheritedAuthSourceAgentDirWithoutRegistration(
   return env.OPENCLAW_AGENT_DIR?.trim() || !config
     ? resolveSharedMainAuthAgentDir(env)
     : resolveEffectiveAgentDir(config, resolveLegacyInheritedAuthAgentId(config), { env });
-}
-
-export function resolveLegacyAuthSourceStorePath(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  return path.join(resolveLegacyInheritedAuthSourceAgentDir(config, env), "openclaw-agent.sqlite");
 }
 
 export function resolveLegacyInheritedAuthDir(
