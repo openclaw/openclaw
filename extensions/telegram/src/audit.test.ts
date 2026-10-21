@@ -27,6 +27,7 @@ function makeStallingMembershipResponse(cancel: (reason?: unknown) => void): Res
 
 describe("telegram audit", () => {
   beforeAll(async () => {
+    // mock-isolation: Membership auditing uses controlled responses without opening live Telegram dispatchers.
     vi.doMock("./fetch.js", () => ({
       resolveTelegramApiBase: () => "https://api.telegram.org",
       resolveTelegramTransport: () => ({ fetch: fetchWithTimeoutMock, close: async () => {} }),

@@ -24,6 +24,7 @@ const native = vi.hoisted(() => ({
   http: vi.fn<typeof import("../daemon-cli/restart-health-probe.js").waitForGatewayHttpReadiness>(),
 }));
 
+// mock-isolation: Windows readiness uses fixture service state without inspecting the host service manager.
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => ({
     readCommand: async () => null,

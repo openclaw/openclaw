@@ -23,6 +23,7 @@ const {
   hasConfiguredChannelsForReadOnlyScopeMock: vi.fn(),
 }));
 
+// mock-isolation: Setup-fallback routing excludes unrelated plugin-contract and workspace flag discovery.
 vi.mock("./dangerous-config-flags.js", () => ({
   collectEnabledInsecureOrDangerousFlags: (_configForTest: OpenClawConfig): string[] => [],
 }));
@@ -40,6 +41,7 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
   resolveConfiguredChannelPluginIdsAsync: async () => [],
 }));
 
+// mock-isolation: Capture delegated setup-fallback plugins without invoking real channel security collectors.
 vi.mock("./audit-channel.collect.runtime.js", () => ({
   collectChannelSecurityFindings: collectChannelSecurityFindingsMock,
 }));

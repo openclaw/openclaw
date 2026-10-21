@@ -27,12 +27,14 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   return { ...actual, workerData: { [SQLITE_NATIVE_RESOURCE_PORT]: ports.port1 } };
 });
 vi.mock("./worker-task-server.js", () => ({ serveOwnedWorkerTasks: fixture.register }));
+// mock-isolation: Controlled allocations exercise removal acknowledgement without starting native sessions.
 vi.mock("./sqlite-snapshot-staging-runtime.js", () => ({
   createSqliteSnapshotStagingRuntime: () => ({
     allocate: fixture.allocate,
     close: async () => {},
   }),
 }));
+// mock-isolation: Removal receipts are injected and unexpected native child creation must fail this fixture.
 vi.mock("./sqlite-readonly-native-resource.client.js", () => ({
   createSqliteReadOnlyNativeResourceClient: () => ({
     createSession: () => {
