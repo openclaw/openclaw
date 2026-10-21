@@ -1,9 +1,10 @@
-import http from "node:http";
+import type http from "node:http";
 import { MatrixClient as MatrixJsClient, MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "./channel.js";
 import { MatrixClient } from "./matrix/sdk.js";
@@ -141,7 +142,7 @@ async function withMatrixFixture(
   const uploads: string[] = [];
   const timeline: string[] = [];
   const requestErrors: unknown[] = [];
-  const server = http.createServer((request, response) => {
+  const handler: Parameters<typeof withServer>[0] = (request, response) => {
     void (async () => {
       const path = decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname);
       response.setHeader("content-type", "application/json");
@@ -176,24 +177,15 @@ async function withMatrixFixture(
         );
       }
     });
-  });
-  let client: MatrixClient | undefined;
-  try {
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing loopback address");
-    }
-    const resolvedClient = new MatrixClient(`http://127.0.0.1:${address.port}`, "fixture-token", {
+  };
+  await withServer(handler, async (url) => {
+    const resolvedClient = new MatrixClient(url, "fixture-token", {
       userId: "@bot:example.org",
       deviceId: "fixture",
       encryption: false,
       autoBootstrapCrypto: false,
       ssrfPolicy: { allowPrivateNetwork: true },
     });
-    client = resolvedClient;
     const senders = registeredSenders(registration);
     const context = {
       cfg: {},
@@ -204,25 +196,20 @@ async function withMatrixFixture(
           sendMessageMatrix(to, text, { ...options, client: resolvedClient }),
       },
     };
-    await run({
-      senders,
-      context,
-      pendingText: (text, options) => settle(senders.sendText({ ...context, text, ...options })),
-      handlers,
-      uploads,
-      timeline,
-    });
-    expect(requestErrors).toEqual([]);
-  } finally {
     try {
-      await client?.stopWithoutPersist();
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-        server.closeAllConnections();
+      await run({
+        senders,
+        context,
+        pendingText: (text, options) => settle(senders.sendText({ ...context, text, ...options })),
+        handlers,
+        uploads,
+        timeline,
       });
+      expect(requestErrors).toEqual([]);
+    } finally {
+      await resolvedClient.stopWithoutPersist();
     }
-  }
+  });
 }
 
 describe("registered Matrix sender currentness", () => {

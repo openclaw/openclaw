@@ -89,15 +89,6 @@ describe("matrix approval reactions", () => {
     expect(await resolveTarget()).toBeNull();
   });
 
-  it("stops resolving reactions after the approval anchor event is unregistered", async () => {
-    await registerTarget({
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-    });
-    await unregisterMatrixApprovalReactionTargetRaw({ ...anchor, accountId: "default" });
-
-    expect(await resolveTarget()).toBeNull();
-  });
-
   it("persists system-agent approval reaction targets when runtime state is available", async () => {
     const approvalKind = "system-agent" as const;
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);

@@ -621,7 +621,6 @@
 ["extensions/matrix/index.test.ts","./src/matrix/subagent-hooks.js","9286c116b438f3e4f501f86c76811d430e67c12b24ccbe47e9b1c355319c7f6f",1]
 ["extensions/matrix/src/approval-config.storage.test.ts","openclaw/plugin-sdk/approval-gateway-runtime","a70edd84d00a423b32703cc05a1d1fffc54291b2762423b7cb0112733f79574b",1]
 ["extensions/matrix/src/channel.account-paths.test.ts","./channel.runtime.js","1a63723dcdc925bff5f06b316809de6593354f702159520dd774287b3325b20c",1]
-["extensions/matrix/src/channel.message-adapter.test.ts","./matrix/send.js","3c273af2d7008318311489a6bdcf3050ceb7c8c574551840aa1b645661fa7349",1]
 ["extensions/matrix/src/channel.setup.test.ts","./matrix/actions/verification.js","83134ae10d96393ddf55b8da61e2ffe5aff420f40593824656921b4b53b63e12",1]
 ["extensions/matrix/src/cli-config-publication.test.ts","./runtime.js","a2b2606c9d209163a43fb5bd595092b13f715ca9e4208cfdbb783b57ae860686",1]
 ["extensions/matrix/src/cli.test.ts","./matrix/accounts.js","f30891c639450947af3634edc14ee37bb98676b6962f9fd792e0f54080676ce4",1]

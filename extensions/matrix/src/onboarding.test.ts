@@ -76,6 +76,10 @@ function authPrompter(
   });
 }
 
+function textPrompt(prompter: ReturnType<typeof createMatrixWizardPrompter>, message: string) {
+  return vi.mocked(prompter.text).mock.calls.find(([options]) => options.message === message)?.[0];
+}
+
 describe("matrix onboarding", () => {
   installMatrixOnboardingEnvRestoreHooks();
   beforeEach(() => installMatrixTestRuntime());
@@ -119,6 +123,9 @@ describe("matrix onboarding", () => {
     expect(opsAccount?.homeserver).toBeUndefined();
     expect(opsAccount?.accessToken).toBeUndefined();
     expect(notes.join("\n")).toContain("WARNING: Matrix invite auto-join defaults to off.");
+    expect(textPrompt(prompter, "Matrix rooms allowlist (comma-separated)")?.placeholder).toBe(
+      "!roomId:server, !roomId, #alias:server, Project Room",
+    );
   });
 
   it("reuses an existing raw default-like key during onboarding promotion when defaultAccount is unset", async () => {
@@ -186,11 +193,9 @@ describe("matrix onboarding", () => {
     });
 
     await configure({ cfg: {}, configured: false, prompter });
-    const secretCall = vi
-      .mocked(prompter.text)
-      .mock.calls.find(([options]) => options.message === secretPrompt);
-    expect(secretCall?.[0]).toMatchObject({ message: secretPrompt, sensitive: true });
-    expect(secretCall?.[0]).not.toHaveProperty("initialValue");
+    const prompt = textPrompt(prompter, secretPrompt);
+    expect(prompt).toMatchObject({ message: secretPrompt, sensitive: true });
+    expect(prompt).not.toHaveProperty("initialValue");
   });
 
   it("preserves SecretRef access tokens when keeping existing credentials", async () => {
@@ -277,24 +282,6 @@ describe("matrix onboarding", () => {
     expect(result.cfg.channels?.matrix?.autoJoinAllowlist).toEqual([
       "!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70",
     ]);
-  });
-
-  it("advertises the suffixless Room v12 form in the group room setup placeholder", async () => {
-    const prompter = createMatrixUpdateKeepCredentialsPrompter({
-      configureRoomsAccess: true,
-      roomsAllowlist: "!ops-room:example.org",
-    });
-
-    await configure({ prompter });
-
-    const roomsPromptCall = vi
-      .mocked(prompter.text)
-      .mock.calls.find(
-        ([options]) => options.message === "Matrix rooms allowlist (comma-separated)",
-      );
-    expect(roomsPromptCall?.[0].placeholder).toBe(
-      "!roomId:server, !roomId, #alias:server, Project Room",
-    );
   });
 
   it("reports account-scoped DM config keys for named accounts", () => {

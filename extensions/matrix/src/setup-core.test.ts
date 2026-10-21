@@ -30,30 +30,24 @@ const withDm = (dm: { policy?: "open"; allowFrom: string[] }) =>
   withMatrix({ accounts: { ops: { dm } } });
 
 function setupProxy(overrides: Partial<ChannelSetupWizardAdapter> = {}) {
+  const status = {
+    channel: "matrix" as const,
+    configured: true,
+    statusLines: ["Matrix: configured"],
+  };
   const matrixSetupWizard: ChannelSetupWizardAdapter = {
     channel: "matrix",
-    getStatus: vi.fn(async () => ({
-      channel: "matrix",
-      configured: false,
-      statusLines: [],
-    })),
+    getStatus: vi.fn(async () => status),
     configure: vi.fn(async ({ cfg }) => ({ cfg })),
     ...overrides,
   };
   const loader = vi.fn(async () => ({ matrixSetupWizard }));
-  return { loader, proxy: createMatrixSetupWizardProxy(loader) };
+  return { loader, status, matrixSetupWizard, proxy: createMatrixSetupWizardProxy(loader) };
 }
 
 describe("createMatrixSetupWizardProxy", () => {
   it("loads the setup surface when setup status is requested", async () => {
-    const status = {
-      channel: "matrix" as const,
-      configured: true,
-      statusLines: ["Matrix: configured"],
-    };
-    const getStatus = vi.fn(async () => status);
-    const configure = vi.fn(async ({ cfg }) => ({ cfg }));
-    const { loader, proxy } = setupProxy({ configure, getStatus });
+    const { loader, proxy, status, matrixSetupWizard } = setupProxy();
     const cfg = withMatrix({});
     expect(await proxy.getStatus({ cfg, accountOverrides: {} })).toBe(status);
     expect(
@@ -67,8 +61,8 @@ describe("createMatrixSetupWizardProxy", () => {
       }),
     ).toEqual({ cfg });
     expect(loader).toHaveBeenCalledTimes(1);
-    expect(getStatus).toHaveBeenCalledWith({ cfg, accountOverrides: {} });
-    expect(configure).toHaveBeenCalledTimes(1);
+    expect(matrixSetupWizard.getStatus).toHaveBeenCalledWith({ cfg, accountOverrides: {} });
+    expect(matrixSetupWizard.configure).toHaveBeenCalledTimes(1);
   });
 
   it("keeps sync dmPolicy helpers local and lazy-loads only promptAllowFrom", async () => {

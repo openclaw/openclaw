@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { chunkTextForOutbound, type OpenClawConfig } from "../runtime-api.js";
 
 const mocks = vi.hoisted(() => ({
@@ -7,12 +7,36 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Verify outbound translation without opening a Matrix SDK client or network connection.
-vi.mock("./matrix/send.js", () => mocks);
+vi.mock("./matrix/send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./matrix/send.js")>()),
+  ...mocks,
+  editMessageMatrix: vi.fn(),
+  reactMatrixMessage: vi.fn(),
+  resolveMatrixRoomId: vi.fn(),
+  sendTypingMatrix: vi.fn(),
+}));
+// Registered adapter proofs must not read the process runtime singleton.
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  getOptionalMatrixRuntime: () => undefined,
+  getMatrixRuntime: () => ({ channel: { text: { chunkMarkdownText: (text: string) => [text] } } }),
+}));
 
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
-import { matrixOutbound } from "./outbound.js";
+import { matrixPlugin } from "./channel.js";
+const matrixOutbound = matrixPlugin.outbound!;
 
 const to = "room:!room:example";
+const cfg: OpenClawConfig = {
+  channels: {
+    matrix: {
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "resolved-token",
+    },
+  },
+};
+const context = { cfg, to, accountId: "default" };
 type PayloadContext = Parameters<NonNullable<typeof matrixOutbound.sendPayload>>[0];
 function sendPayload(
   payload: PayloadContext["payload"],
@@ -71,23 +95,20 @@ function senderResult(
   };
 }
 
+beforeEach(() => {
+  mocks.sendMessageMatrix
+    .mockReset()
+    .mockResolvedValue({ messageId: "$event-1", roomId: "!room:example" });
+  mocks.sendPollMatrix.mockReset().mockResolvedValue({ eventId: "$poll", roomId: "!room:example" });
+});
+
 describe("matrixOutbound cfg threading", () => {
-  const cfg: OpenClawConfig = {
-    channels: { matrix: { accessToken: "resolved-token" } },
-  };
-  const context = { cfg, to, accountId: "default" };
   const presentationContent = {
     version: 1,
     type: "message.presentation",
     blocks: [{ type: "divider" }],
   };
   const channelData = (extraContent: Record<string, unknown>) => ({ matrix: { extraContent } });
-  beforeEach(() => {
-    mocks.sendMessageMatrix.mockReset();
-    mocks.sendPollMatrix.mockReset();
-    mocks.sendMessageMatrix.mockResolvedValue({ messageId: "evt-1", roomId: "!room:example" });
-    mocks.sendPollMatrix.mockResolvedValue({ eventId: "$poll", roomId: "!room:example" });
-  });
 
   it("makes progress for fractional BMP and astral limits", () => {
     const chunker = matrixOutbound.chunker;
@@ -107,24 +128,32 @@ describe("matrixOutbound cfg threading", () => {
     expect(chunkTextForOutbound("abcdef   ", 5)).toEqual(["abcde", "f   "]);
   });
 
-  it("preserves the complete Matrix sender result through sendMedia", async () => {
-    const sent = senderResult("first\nlast", ["$first", "media", "$reply"], ["$last", "text"]);
-    mocks.sendMessageMatrix.mockResolvedValueOnce(sent);
-    const result = await matrixOutbound.sendMedia!({
-      ...context,
-      text: "first\nlast",
-      mediaUrl: "file:///tmp/photo.png",
-    });
+  it.each(["outbound", "message"] as const)(
+    "preserves the owner receipt through %s media",
+    async (surface) => {
+      const sent = senderResult("first\nlast", ["$first", "media", "$reply"], ["$last", "text"]);
+      mocks.sendMessageMatrix.mockResolvedValueOnce(sent);
+      const send =
+        surface === "outbound" ? matrixOutbound.sendMedia! : matrixPlugin.message!.send!.media!;
+      const result = await send({
+        ...context,
+        text: "first\nlast",
+        mediaUrl: "file:///tmp/photo.png",
+      });
 
-    expect(result).toMatchObject({
-      channel: "matrix",
-      messageId: "$last",
-      target: { kind: "room", id: "!room:example" },
-      primaryMessageId: "$first",
-      content: "first\nlast",
-    });
-    expect(result.receipt).toBe(sent.receipt);
-  });
+      expect(result.messageId).toBe("$last");
+      if (surface === "outbound") {
+        expect(result).toMatchObject({
+          channel: "matrix",
+          messageId: "$last",
+          target: { kind: "room", id: "!room:example" },
+          primaryMessageId: "$first",
+          content: "first\nlast",
+        });
+      }
+      expect(result.receipt).toBe(sent.receipt);
+    },
+  );
 
   it("passes resolved cfg through injected deps.matrix", async () => {
     const matrix = vi.fn(async () => ({ messageId: "evt-injected", roomId: "!room:example" }));
@@ -166,6 +195,13 @@ describe("matrixOutbound cfg threading", () => {
   });
 
   it("renders divider-only MessagePresentation with a non-empty Matrix fallback body", async () => {
+    expect(matrixOutbound.presentationCapabilities).toMatchObject({
+      supported: true,
+      buttons: true,
+      selects: true,
+      context: true,
+      divider: true,
+    });
     const presentation = { blocks: [{ type: "divider" as const }] };
     const rendered = await renderPresentation(presentation);
 
@@ -207,6 +243,31 @@ describe("matrixOutbound cfg threading", () => {
       "Choose\n\nEnvironment:\n- Production: `/deploy production`\n- Opaque",
     );
     expect(rendered?.text).not.toContain("private-callback-token");
+  });
+
+  it("forwards rendered buttons through the registered payload sender", async () => {
+    const presentation = {
+      title: "Select thinking level",
+      tone: "info" as const,
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Low", value: "/think low" }] }],
+    };
+    const extraContent = {
+      "com.openclaw.presentation": { ...presentation, version: 1, type: "message.presentation" },
+    };
+    const rendered = await renderPresentation(presentation, "fallback");
+    for (const fragment of ["fallback", "Select thinking level"]) {
+      expect(rendered?.text).toContain(fragment);
+    }
+    expect(rendered?.channelData?.matrix).toEqual(expect.objectContaining({ extraContent }));
+    await sendPayload(rendered!, { ...context, threadId: "$thread", replyToId: "$reply" });
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledOnce();
+    expectSend(mocks.sendMessageMatrix, rendered!.text!, {
+      accountId: "default",
+      threadId: "$thread",
+      replyToId: "$reply",
+      extraContent,
+    });
+    expect(mockOptions(mocks.sendMessageMatrix).cfg).toBe(cfg);
   });
 
   it.each([false, true])(
@@ -315,4 +376,128 @@ describe("matrixOutbound cfg threading", () => {
     expect(result.receipt?.parts[1]).not.toHaveProperty("replyToId");
     expect(result.receipt?.parts[2]).not.toHaveProperty("replyToId");
   });
+});
+
+describe("matrix channel message adapter", () => {
+  const adapter = matrixPlugin.message!;
+  const { text: sendText, media: sendMedia } = adapter.send!;
+  if (!sendText || !sendMedia) {
+    throw new Error("Expected Matrix text and media senders");
+  }
+  beforeAll(async () => {
+    mocks.sendMessageMatrix.mockResolvedValue({ messageId: "$warmup", roomId: "!room:example" });
+    await sendText({ ...context, text: "warmup" });
+  });
+
+  it("routes the standard Matrix send action through canonical durable delivery", async () => {
+    const prepareSendPayload = matrixPlugin.actions!.prepareSendPayload!;
+    const payload = { text: "durable tool send" };
+    expect(
+      await prepareSendPayload({ ctx: { action: "send", cfg } as never, payload } as never),
+    ).toBe(payload);
+    expect(
+      await prepareSendPayload({ ctx: { action: "edit", cfg } as never, payload } as never),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["room:!room:example", "off", "$thread"],
+    ["matrix:channel:!room:example", "all", "$thread"],
+    ["room:!another:example", "all", undefined],
+    ["user:@alice:example", "all", undefined],
+  ] as const)(
+    "routes a native Matrix message action to %s (%s)",
+    async (target, replyToMode, threadId) => {
+      const toolContext = {
+        currentChannelProvider: "matrix" as const,
+        currentChannelId: "room:!room:example",
+        currentThreadTs: "$thread",
+        currentMessageId: "$reply",
+        replyToMode,
+        hasRepliedRef: { value: true },
+      };
+      const resolved = matrixPlugin.threading!.resolveAutoThreadId!({
+        cfg,
+        accountId: "default",
+        to: target,
+        toolContext,
+        replyToId: "$explicit-reply",
+      });
+      await matrixPlugin.actions!.handleAction!({
+        cfg,
+        channel: "matrix",
+        action: "send",
+        accountId: "default",
+        toolContext,
+        params: {
+          to: target,
+          message: "threaded native action",
+          replyTo: "$explicit-reply",
+          ...(resolved ? { threadId: resolved } : {}),
+        },
+      });
+      expect(mocks.sendMessageMatrix).toHaveBeenCalledOnce();
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe(target);
+      expect(mockOptions(mocks.sendMessageMatrix)).toMatchObject({
+        cfg,
+        accountId: "default",
+        replyToId: "$explicit-reply",
+        threadId,
+      });
+    },
+  );
+
+  it("registers durable-final capabilities and their lifecycle hooks", () => {
+    expect(adapter).toMatchObject({
+      durableFinal: {
+        capabilities: {
+          text: true,
+          media: true,
+          replyTo: true,
+          thread: true,
+          messageSendingHooks: true,
+          afterCommit: true,
+          reconcileUnknownSend: true,
+        },
+        reconcileUnknownSend: expect.any(Function),
+        afterUnknownSendTerminal: expect.any(Function),
+      },
+      send: { text: expect.any(Function), lifecycle: { afterCommit: expect.any(Function) } },
+    });
+  });
+
+  it.each(["text", "voice"] as const)(
+    "forwards durable %s options and projects its receipt",
+    async (kind) => {
+      const options = {
+        accountId: "default",
+        deliveryQueueId: "queue-1",
+        deliveryPartIndex: 2,
+        deliveryPartCount: 3,
+        replyToId: "$reply",
+        threadId: "$thread",
+        ...(kind === "voice"
+          ? {
+              mediaUrl: "file:///tmp/cat.png",
+              mediaLocalRoots: ["/tmp/openclaw"],
+              audioAsVoice: true,
+            }
+          : {}),
+      };
+      const result = await (kind === "voice" ? sendMedia : sendText)({
+        ...context,
+        text: "hello",
+        ...options,
+      });
+      expect(mocks.sendMessageMatrix).toHaveBeenCalledOnce();
+      expectSend(mocks.sendMessageMatrix, "hello", options);
+      expect(mockOptions(mocks.sendMessageMatrix).cfg).toBe(cfg);
+      expect(result.receipt).toMatchObject({
+        platformMessageIds: ["$event-1"],
+        parts: [{ kind }],
+        replyToId: "$reply",
+        threadId: "$thread",
+      });
+    },
+  );
 });
