@@ -2,6 +2,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureGatewayAuthPolicy, isGatewayAuthGrantCurrent } from "../auth-policy.js";
 import type { OperatorScope } from "../operator-scopes.js";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { GatewayClientRegistry } from "./client-registry.js";
 import { disconnectDisallowedGatewayPolicyClients } from "./ws-origin-policy.js";
 import {
@@ -12,6 +13,25 @@ import {
 import type { GatewayWsClient } from "./ws-types.js";
 
 describe("committed browser origin policy", () => {
+  it("rechecks contextual ingress even when the config and policy objects are unchanged", () => {
+    let current = true;
+    const ingress = createRemoteControlUiIngressTestContext({
+      assertCurrent() {
+        if (!current) {
+          throw new Error("Ingress revoked");
+        }
+      },
+    });
+    const config: OpenClawConfig = {};
+    const policy = captureGatewayAuthPolicy(config, {
+      role: "operator",
+      browserOrigin: { origin: ingress.publicOrigin, remoteControlUiIngress: ingress },
+    });
+    expect(isGatewayAuthGrantCurrent(policy, config)).toBe(true);
+    current = false;
+    expect(isGatewayAuthGrantCurrent(policy, config)).toBe(false);
+  });
+
   it.each(["allowedOrigins", "publicOrigin", "host fallback"])(
     "revokes a fenced browser grant when its %s admission ends",
     (policy) => {
@@ -310,6 +330,7 @@ describe("committed authentication policy", () => {
     };
     const onRevoked = vi.fn();
     onTestFinished(onGatewayPolicyClientInvalidated(client, onRevoked));
+    expect(isGatewayAuthGrantCurrent(client.authPolicy, initial)).toBe(true);
     disconnectDisallowedGatewayPolicyClients([client], next);
     expect(client.invalidated).toBe(revoked);
     expect(client.sourceInvalidated).toBe(revoked);
