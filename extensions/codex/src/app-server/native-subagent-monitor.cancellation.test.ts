@@ -167,8 +167,8 @@ it.each([true, false])(
       vi.useRealTimers();
     });
     const f = await nativeChild();
-    await f.client.completeTurn({ status: "interrupted" });
     expect(isCodexAppServerLiveThreadClaimed(f.client.client, parentThreadId)).toBe(true);
+    await f.client.completeTurn({ status: "interrupted" });
     const stop = cancelDescendants(f.monitor, {
       requesterTurnRunId: undefined,
       acceptsRequest: (custody) => selected && custody === requestCustody,
@@ -176,7 +176,7 @@ it.each([true, false])(
     await vi.advanceTimersByTimeAsync(5_000);
     expect(await stop).toEqual(selected ? cancelled : noCancellation);
     expect(f.interruptBudgets).toEqual([]);
-    expect(isCodexAppServerLiveThreadClaimed(f.client.client, parentThreadId)).toBe(!selected);
+    expect(isCodexAppServerLiveThreadClaimed(f.client.client, parentThreadId)).toBe(false);
     expect(f.runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
   },
 );
