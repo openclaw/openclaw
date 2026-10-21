@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { runWithAsyncStore } from "../shared/async-store.js";
 import type { SqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session-types.js";
 
 export type SqliteReadOnlyWorkerScope = {
@@ -40,7 +41,7 @@ export function createSqliteReadOnlyWorkerScope(options?: {
   let closing: Promise<void> | undefined;
   return {
     run<T>(operation: () => T): T {
-      return readOnlyWorkerScope.run(scope, operation);
+      return runWithAsyncStore(readOnlyWorkerScope, scope, operation);
     },
     close(): Promise<void> {
       closing ??= (async () => {
@@ -77,8 +78,6 @@ export function captureSqliteReadOnlyWorkerScope(): <T>(operation: () => T) => T
       throw new SqliteReadOnlyWorkerScopeClosedError();
     }
     scope.controller.signal.throwIfAborted();
-    return readOnlyWorkerScope.getStore() === scope
-      ? operation()
-      : readOnlyWorkerScope.run(scope, operation);
+    return runWithAsyncStore(readOnlyWorkerScope, scope, operation);
   };
 }

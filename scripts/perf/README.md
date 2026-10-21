@@ -1,5 +1,25 @@
 # Team-shaped synthetic state
 
+## Async context allocation
+
+`async-store-measure.mjs` compares Node's native runner, the shared single-copy
+runner, and experimental parent-linked or indexed carriers. Run on an approved
+benchmark host with Node 26; it imports only the production helper and Node built-ins:
+
+```sh
+node scripts/perf/async-store-measure.mjs stock 26 200000
+node scripts/perf/async-store-measure.mjs single 26 200000
+node scripts/perf/async-store-measure.mjs linked 26 200000
+node scripts/perf/async-store-measure.mjs slots 26 200000
+```
+
+Repeat for 1, 8, 10, 20, 26, and 40 outer stores. Each invocation starts in a fresh
+process, warms 20,000 entries, samples collected allocations at 512-byte intervals,
+then measures unprofiled entry and oldest/middle/newest lookup time separately.
+The persistent carriers are experiments, not production context owners. These
+mechanism measurements do not establish Gateway GC or latency improvements; use
+the concurrent, swapped-core Gateway workload for acceptance.
+
 ## Workboard dashboard reads
 
 `workboard-read-measure.ts` exercises the real source Gateway and Workboard SQLite
