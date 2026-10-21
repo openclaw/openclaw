@@ -157,4 +157,37 @@ describe("Zalo unsupported-event lifecycle", () => {
       await monitor.stop();
     }
   });
+
+  it("retries the guidance notice when the first send fails transiently", async () => {
+    const monitor = await startOpenMonitor();
+    let sendAttempts = 0;
+    sendMessageMock.mockImplementation(async () => {
+      sendAttempts += 1;
+      if (sendAttempts === 1) {
+        throw new Error("transient send failure");
+      }
+      return { ok: true, result: { message_id: "zalo-unsupported-notice-retry" } } as unknown;
+    });
+    try {
+      const payload = createUnsupportedUpdate({
+        messageId: "zalo-unsupported-retry-1",
+        userId: "user-1",
+        userName: "User One",
+        chatId: "dm-unsupported-4",
+        messageType: "sticker_gif",
+      });
+      await postEvent(monitor, payload, { replay: true });
+
+      // The first transient failure must not tombstone the event as complete; the
+      // replay is re-delivered and the guidance is sent once it succeeds.
+      expect(sendAttempts).toBeGreaterThanOrEqual(2);
+      expect(sendMessageMock).toHaveBeenLastCalledWith(
+        "zalo-token",
+        { chat_id: "dm-unsupported-4", text: UNSUPPORTED_NOTICE },
+        undefined,
+      );
+    } finally {
+      await monitor.stop();
+    }
+  });
 });

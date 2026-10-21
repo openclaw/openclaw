@@ -184,7 +184,7 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
 async function handleUnsupportedMessage(
   params: ZaloProcessingContext & { message: ZaloMessage },
 ): Promise<void> {
-  const { message, core, runtime, token, statusSink, fetcher } = params;
+  const { message, token, statusSink, fetcher } = params;
   // Zalo keeps the sender's text on some unsupported events (for example URL
   // link-preview cards in DMs); recover those through the normal authorized pipeline.
   if (message.text?.trim()) {
@@ -195,20 +195,14 @@ async function handleUnsupportedMessage(
   if (!authorization) {
     return;
   }
-  try {
-    await sendMessage(
-      token,
-      { chat_id: authorization.chatId, text: UNSUPPORTED_MESSAGE_NOTICE },
-      fetcher,
-    );
-    statusSink?.({ lastOutboundAt: Date.now() });
-  } catch (error) {
-    logVerbose(
-      core,
-      runtime,
-      `zalo unsupported-message notice failed for ${message.from.id}: ${String(error)}`,
-    );
-  }
+  // Let notice-send failures propagate so the durable webhook ingress can retry
+  // transient errors instead of tombstoning the event and losing the guidance.
+  await sendMessage(
+    token,
+    { chat_id: authorization.chatId, text: UNSUPPORTED_MESSAGE_NOTICE },
+    fetcher,
+  );
+  statusSink?.({ lastOutboundAt: Date.now() });
 }
 
 async function handleImageMessage(
