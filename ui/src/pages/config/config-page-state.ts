@@ -53,12 +53,7 @@ import {
   readSystemInfo,
   SYSTEM_INFO_POLL_INTERVAL_MS,
 } from "../../lib/system-info.ts";
-import {
-  discoverRealtimeTalkCameras,
-  discoverRealtimeTalkInputs,
-  observeRealtimeTalkDevices,
-  realtimeTalkDeviceIssueMessage,
-} from "../chat/talk/input.ts";
+import { observeRealtimeTalkDevices } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
 import { createConfigPageModels } from "./config-page-models.ts";
 import {
@@ -72,6 +67,7 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
+import { refreshMediaDevice } from "./media-device-discovery.ts";
 import { admitMemoryRoute } from "./memory-route-admission.ts";
 import {
   configTargetIdFromHash,
@@ -317,7 +313,7 @@ export function createConfigPage(
       for (const kind of ["microphone", "camera"] as const) {
         if (!mediaDevices[kind].loaded) {
           mediaDevices[kind].loaded = true;
-          void refreshMediaDevices(kind, false);
+          void refreshMediaDevice(mediaDevices[kind], kind, false, invalidate);
         }
       }
       if (snapshot.phase === "connected") {
@@ -465,39 +461,6 @@ export function createConfigPage(
     }
   }
 
-  async function refreshMediaDevices(kind: "microphone" | "camera", requestPermission: boolean) {
-    const device = mediaDevices[kind];
-    if (device.loading) {
-      device.requestsPermission ||= requestPermission;
-      return;
-    }
-    device.loading = true;
-    device.requestsPermission = requestPermission;
-    device.error = null;
-    invalidate();
-    try {
-      const discover =
-        kind === "microphone" ? discoverRealtimeTalkInputs : discoverRealtimeTalkCameras;
-      const result = await discover(() => device.requestsPermission);
-      device.devices = result.devices;
-      device.permissionRequired = result.permissionRequired;
-      device.error = result.issue
-        ? realtimeTalkDeviceIssueMessage(
-            result.issue,
-            kind === "microphone" ? "audioinput" : "videoinput",
-          )
-        : null;
-    } catch (error) {
-      // Discovery is best-effort in blocked/inactive contexts; a rejection
-      // must not wedge the picker in its loading state.
-      device.error = formatUiError(error);
-    } finally {
-      device.loading = false;
-      device.requestsPermission = false;
-      invalidate();
-    }
-  }
-
   function synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
     if (runtimeConfig !== runtimeConfigSource) {
       if (runtimeConfigSource) {
@@ -583,6 +546,7 @@ export function createConfigPage(
     const request = ++cameraSelectionRequest;
     const videoDeviceId = deviceId.trim() || undefined;
     mediaDevices.camera.error = null;
+    mediaDevices.camera.discovery = null;
     invalidate();
     try {
       await switchActiveRealtimeTalkCameras(videoDeviceId);
@@ -901,14 +865,16 @@ export function createConfigPage(
         selectedDeviceId: settings.realtimeTalkInputDeviceId ?? "",
       },
       composerHoldToRecord: settings.composerHoldToRecord !== false,
-      onMicrophoneRefresh: () => void refreshMediaDevices("microphone", true),
+      onMicrophoneRefresh: () =>
+        void refreshMediaDevice(mediaDevices.microphone, "microphone", true, invalidate),
       onMicrophoneSelect: (deviceId: string) =>
         applySettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined }),
       camera: {
         ...mediaDevices.camera,
         selectedDeviceId: settings.realtimeTalkVideoDeviceId ?? "",
       },
-      onCameraRefresh: () => void refreshMediaDevices("camera", true),
+      onCameraRefresh: () =>
+        void refreshMediaDevice(mediaDevices.camera, "camera", true, invalidate),
       onCameraSelect: (deviceId: string) => void selectCamera(deviceId),
       gatewayUrl: context.gateway.connection.gatewayUrl,
       assistantName: applicationConfig.read().assistantIdentity.name,
@@ -962,8 +928,8 @@ export function createConfigPage(
     );
     customThemeImportOwner.connect(context.gateway.connection.gatewayUrl);
     mediaDeviceWatch = observeRealtimeTalkDevices(() => {
-      void refreshMediaDevices("microphone", false);
-      void refreshMediaDevices("camera", false);
+      void refreshMediaDevice(mediaDevices.microphone, "microphone", false, invalidate);
+      void refreshMediaDevice(mediaDevices.camera, "camera", false, invalidate);
     });
     synchronize();
     return () => {
