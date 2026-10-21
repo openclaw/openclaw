@@ -389,7 +389,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     bootstrapTotalMaxChars: params.bootstrap.bootstrapTotalMaxChars,
     bootstrapTruncation: buildBootstrapTruncationReportMeta({
       analysis: params.bootstrap.bootstrapAnalysis,
-      warningMode: params.bootstrap.bootstrapPromptWarningMode,
       warning: params.bootstrap.bootstrapPromptWarning,
     }),
     sandbox: params.setup.sandboxReport,

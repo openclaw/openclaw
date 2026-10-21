@@ -58,6 +58,10 @@ that were never installed.
 These preparation changes require the installed updater to contain the fix;
 staging a newer candidate cannot change an older updater's initial install.
 
+Source candidates bound the native declaration compiler with the shared Go runtime
+policy used by local checks. Node's heap limit does not cover that compiler.
+Explicit `GOMEMLIMIT`, `GOGC`, and `GOMAXPROCS` tuning remains in effect.
+
 Managed update helpers route diagnostic logs to stderr so debug logging cannot
 interrupt their control handshake. This applies to the installed updater; a newer
 candidate cannot change an older updater's pre-activation handshake.
@@ -83,6 +87,11 @@ recorded run, and names `openclaw update repair` as the next action. Repair or t
 next update's admission can record the failed outcome without waiting for the
 inactivity grace period. Live or unverifiable drivers and retained recovery
 continue to preserve their ownership.
+
+A successful foreground update hands completion to the replacement Gateway.
+Automatic history reconciliation preserves that handoff while startup verifies
+the running build. If the replacement never starts, `openclaw update repair`
+can recover the abandoned handoff explicitly.
 
 Handoff repair uses recorded boot sessions and process creation times to exclude
 prior-boot families and unrelated processes with reused parent PIDs. On Windows,
@@ -176,6 +185,11 @@ that stale local file from restored shared state instead of merging it. PostgreS
 installations use an engine-aware driver with local-family capture support, so
 rollback restores the shared and local stores together. See
 [credential migration and recovery](/reference/database-schemas/versioning#local-client-credentials).
+
+Updates started by 2026.10.4 keep the client credential store's independent
+schema out of the older updater's agent-schema check. Credential-aware updaters
+verify that store against its own schema, and both paths retain its backup and
+recovery coverage.
 
 Independent native credential sources remain unchanged during import and remain
 readable by the previous app after rollback. Reusing the same source preserves
@@ -700,6 +714,10 @@ its `--timeout` option cannot increase this cap.
 
 Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
 uses up to four concurrent file copies and avoids a disk flush for every file.
+Failures to remove private candidate copies or Git inspection worktrees are
+warnings that identify the cleanup path and error class. They preserve the
+original candidate result and the installed runtime's recovery verdict.
+Unverified process cleanup still requires its recovery owner.
 If a copy fails, active copies finish before cleanup; link publication and
 verification run only after all file copies succeed. Each private copy or inspection
 uses one generous absolute allowance derived from its inventoried size, with the

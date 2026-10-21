@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -257,7 +258,7 @@ export const systemHandlers: GatewayRequestHandlers = {
     respond(true, await collectSystemInfo(context), undefined);
   },
   "system-event": async (options) => {
-    const { params, respond, context } = options;
+    const { params, respond, context, client } = options;
     if (!assertValidParams(params, validateSystemEventParams, "system-event", respond)) {
       return;
     }
@@ -340,7 +341,12 @@ export const systemHandlers: GatewayRequestHandlers = {
       : params.lastInputSeconds;
     const presenceUpdate = updateSystemPresence({
       text,
-      deviceId: params.deviceId,
+      // Native Mac beacons omit deviceId; use their authenticated connection identity.
+      deviceId:
+        params.deviceId ??
+        (isNodePresenceLine && client?.connect.client.id === GATEWAY_CLIENT_IDS.MACOS_APP
+          ? client.connect.device?.id
+          : undefined),
       instanceId: params.instanceId,
       host: params.host,
       ip: params.ip,

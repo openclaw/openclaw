@@ -201,7 +201,7 @@ export function SidebarAgentRoster(props: RosterProps) {
                 id: "create-claw",
                 label: t("clawsDraft.title"),
                 class: "sidebar-customize-menu__item",
-                icon: <Icon name="box" />,
+                icon: <Icon name="share" />,
               },
             ]
           : []),

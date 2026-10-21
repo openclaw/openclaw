@@ -3,10 +3,12 @@ import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { resolvePaletteSessionSettings, type SettingsOptions } from "./palette-session-settings.ts";
+import { repositoryIssueText } from "./submit-gates.ts";
 import { AgentSelect, RequiredSessionPlacement } from "./target-controls-view.tsx";
 
 type SettingsProjection = ReturnType<typeof resolvePaletteSessionSettings>;
@@ -14,21 +16,11 @@ type FocusTarget = "back" | "search" | "workspace";
 
 function SettingsIcon() {
   return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
+    <StrokeIcon width="24" height="24">
       <path d="M4 7h8m4 0h4M4 17h2m4 0h10" />
       <circle cx="14" cy="7" r="2" />
       <circle cx="8" cy="17" r="2" />
-    </svg>
+    </StrokeIcon>
   );
 }
 
@@ -284,13 +276,13 @@ export function PaletteSessionSettingsView(properties: {
   }
 
   function SettingsSummary() {
-    onCleanup(() => {
-      readAgentControls = undefined;
-    });
     onSettled(() => {
       if (focusTarget === "workspace") {
         focusTargets.workspace?.focus({ preventScroll: true });
       }
+      return () => {
+        readAgentControls = undefined;
+      };
     });
     const place = () => properties.options.draft.place;
     const workspace = nativeListener("click", (event) => showPlaces(true, event.detail > 0));
@@ -368,7 +360,8 @@ export function PaletteSessionSettingsView(properties: {
                   place().remotePlacement
                     ? t("newSession.checkoutRemoteLocked")
                     : !place().worktreeAvailable()
-                      ? t("newSession.gitCheckUnavailable")
+                      ? (repositoryIssueText(place().repository) ??
+                        t("newSession.gitCheckUnavailable"))
                       : undefined
                 }
                 disabled={view().locked || place().remotePlacement}

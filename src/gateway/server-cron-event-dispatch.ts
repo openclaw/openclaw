@@ -1,9 +1,96 @@
+import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildCronCommandSummary } from "../cron/command-output-summary.js";
+import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import type { CronService } from "../cron/service.js";
+import type { CronServiceDeps } from "../cron/service/state.js";
+import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import type { CronJob, CronPayload } from "../cron/types.js";
+import { withSystemEventOwner } from "../infra/system-event-ownership.js";
+import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
 import type { CronExitResult } from "./cron-exit-watchers.js";
 import type { CronStreamFireDisposition } from "./cron-stream-watchers.js";
+
+type ResolveCronTarget = (opts?: {
+  agentId?: string | null;
+  sessionKey?: string | null;
+  preserveUntargeted?: boolean;
+}) => {
+  runtimeConfig: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+};
+
+export async function runGatewayCronSessionEvent(
+  request: Parameters<NonNullable<CronServiceDeps["runSessionEvent"]>>[0],
+  resolveTarget: ResolveCronTarget,
+) {
+  const sessionKey = resolveCronSessionTargetSessionKey(request.job.sessionTarget);
+  const target = resolveTarget({ agentId: request.job.agentId, sessionKey });
+  if (!target.agentId || !target.sessionKey) {
+    return { status: "error" as const, error: "Automation has no valid session destination" };
+  }
+  const canonicalRequest = sessionKey
+    ? canonicalizeMainSessionAlias({
+        cfg: target.runtimeConfig,
+        agentId: target.agentId,
+        sessionKey,
+      })
+    : undefined;
+  const sessionAgentId = parseAgentSessionKey(canonicalRequest)?.agentId;
+  if (sessionAgentId && normalizeAgentId(sessionAgentId) !== normalizeAgentId(target.agentId)) {
+    return {
+      status: "error" as const,
+      error:
+        "Automation session target belongs to another agent; update agentId or sessionTarget before retrying",
+    };
+  }
+  const { runCronSessionTurn } = await import("../cron/session-run.js");
+  return await runCronSessionTurn({
+    ...request,
+    cfg: target.runtimeConfig,
+    agentId: target.agentId,
+    sessionKey: target.sessionKey,
+  });
+}
+
+export function resolveGatewayCronOriginDeliveryContext(
+  opts: Parameters<NonNullable<CronServiceDeps["resolveOriginDeliveryContext"]>>[0],
+  resolveTarget: ResolveCronTarget,
+) {
+  // Global scope removes the key's agent prefix; retain the selected store owner.
+  const { runtimeConfig, agentId, sessionKey } = resolveTarget({
+    ...opts,
+    preserveUntargeted: true,
+  });
+  return sessionKey
+    ? resolveCronStoredDeliveryContext({ cfg: runtimeConfig, agentId, sessionKey })
+    : undefined;
+}
+
+export function enqueueCronSystemEvent(
+  text: string,
+  opts: Parameters<CronServiceDeps["enqueueSystemEvent"]>[1],
+  target: { agentId?: string; sessionKey?: string },
+) {
+  const { agentId, sessionKey } = target;
+  if (!agentId || !sessionKey) {
+    throw new Error("Cron system event target did not resolve an owner and session key.");
+  }
+  const adoption = createDeferredCore<boolean>();
+  const remove = enqueueSystemEventWithReceipt(
+    text,
+    withSystemEventOwner(
+      { sessionKey, contextKey: opts?.contextKey, deliveryContext: opts?.deliveryContext },
+      agentId,
+    ),
+    { onSettled: adoption.resolve },
+  );
+  return remove ? { accepted: true, remove, adopted: adoption.promise } : { accepted: false };
+}
 
 export function formatOnExitRunSummary(exit: CronExitResult): string {
   const lines = [

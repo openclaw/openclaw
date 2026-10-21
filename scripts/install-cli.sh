@@ -43,9 +43,11 @@ installer_error() {
   local msg="$1"
   emit_json error message "$msg"
   log "ERROR: $msg"
+  log "Support: https://community.openclaw.ai/"
 }
 installer_npm_version_error() {
   log "ERROR: unable to determine npm version; no package changes were made"
+  log "Support: https://community.openclaw.ai/" >&2
 }
 installer_clone_error() {
   fail "Could not publish the cloned checkout: ${1}. Inspect the destination for partial files, move it or choose another --git-dir, then retry."
@@ -148,6 +150,10 @@ FRESH_GIT_MIN_FREE_KIB=$((6 * 1024 * 1024))
 print_usage() {
   cat <<EOF
 Usage: install-cli.sh [options]
+
+Support: https://community.openclaw.ai/
+FAQ: https://docs.openclaw.ai/start/faq
+
   --json                              Emit NDJSON events (no human output)
   --prefix <path>                     Install prefix (default: ~/.openclaw; use \$OPENCLAW_PREFIX to override)
   --install-method, --method npm|git  Install via npm (default) or from a git checkout
@@ -1106,8 +1112,7 @@ install_openclaw() {
   if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$lifecycle_pending" || -e "$legacy_install_guard" ]]; then
     log "npm install openclaw@${resolved_requested} did not produce a usable package; retrying once"
     if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$lifecycle_pending" || -e "$legacy_install_guard" ]]; then
-      emit_json error message "npm install did not produce a usable OpenClaw package"
-      log "ERROR: npm install did not produce a usable OpenClaw package"
+      installer_error "npm install did not produce a usable OpenClaw package"
       return 1
     fi
   fi
@@ -1359,6 +1364,7 @@ main() {
   fi
   emit_json "done" version "$installed_version"
   log "OpenClaw installed (${installed_version})."
+  log "Support: https://community.openclaw.ai/"
 
   if [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
     "${PREFIX}/bin/openclaw" onboard

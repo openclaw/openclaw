@@ -6,7 +6,11 @@ import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
 import { createBeamRequestHandler } from "./http.js";
 import type { BeamStoredSession } from "./types.js";
 
-const requestScope = vi.hoisted(() => ({ revalidate: vi.fn<() => Promise<void>>() }));
+const requestScope = vi.hoisted(() => ({
+  client: { clientIp: "127.0.0.1", connect: { scopes: ["operator.write"] } },
+  revalidate: vi.fn<() => Promise<void>>(),
+}));
+// mock-isolation: These fixtures replace only the admitted request owner, including revalidation.
 vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   getPluginRuntimeGatewayRequestScope: () => requestScope,
 }));
@@ -21,7 +25,6 @@ function uploadRequest(store: ReturnType<typeof memoryStore>) {
   const handler = createBeamRequestHandler({
     store,
     now: () => 100,
-    resolveClient: () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] }),
     resolveControlUiBasePath: () => undefined,
   });
   return { req, res, run: () => handler(req, res) };

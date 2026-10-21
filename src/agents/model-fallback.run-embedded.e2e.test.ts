@@ -529,6 +529,13 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     "exhausts bounded recovery on organization TPM exhaustion from %s before fallback",
     async (source) => {
       await withDefaultAuth(async ({ agentDir, workspaceDir }) => {
+        let initialCooldownUntil: number | undefined;
+        // The writer owns its clock; observe its first window before later failure marks.
+        sleepWithAbortMock.mockImplementationOnce(async () => {
+          const initial = (await readFallbackUsageStats(agentDir))["openai:p1"];
+          expect((initial?.cooldownUntil ?? 0) - (initial?.lastFailureAt ?? 0)).toBe(90_000);
+          initialCooldownUntil = initial?.cooldownUntil;
+        });
         const message =
           "429 Rate limit reached for mock-1 in organization org-example on tokens per min (TPM): Limit 10000, Used 9900, Requested 200. Please try again in 90s.";
         const config = makeModelFallbackConfig();
@@ -563,8 +570,11 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           Array<number>(9).fill(90_000),
         );
         const stats = (await readFallbackUsageStats(agentDir))["openai:p1"];
-        expect(stats).toMatchObject({ cooldownReason: "rate_limit", cooldownModel: "mock-1" });
-        expect((stats?.cooldownUntil ?? 0) - (stats?.lastFailureAt ?? 0)).toBe(30_000);
+        expect(stats).toMatchObject({
+          cooldownReason: "rate_limit",
+          cooldownModel: "mock-1",
+          cooldownUntil: initialCooldownUntil,
+        });
 
         runEmbeddedAttemptMock.mockClear();
         sleepWithAbortMock.mockClear();

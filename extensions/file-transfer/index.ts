@@ -121,17 +121,17 @@ export default definePluginEntry({
         dangerous: true,
         duplex: true,
         handle: async (...args) => {
-          const { createWorkspaceCommand } = await import("./src/node-host/workspace-memory.js");
-          return await createWorkspaceCommand(api, kind).handle(...args);
+          const { handleWorkspaceCommand } = await import("./src/node-host/workspace-memory.js");
+          return await handleWorkspaceCommand(api, kind, ...args);
         },
       });
       api.registerNodeInvokePolicy({
         commands: [`workspace.${kind}`],
         dangerous: true,
         async handle(ctx) {
-          const { createWorkspaceWorkerPolicy } =
+          const { handleWorkspaceWorkerPolicy } =
             await import("./src/shared/workspace-memory-policy.js");
-          return await createWorkspaceWorkerPolicy(kind).handle(ctx);
+          return await handleWorkspaceWorkerPolicy(kind, ctx);
         },
       });
     }

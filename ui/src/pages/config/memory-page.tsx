@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 // The URL owns the active tab; Settings owners supply agent and configuration state.
-import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { ControlUiSettingsSnapshot } from "../../../../src/plugin-sdk/control-ui-settings.js";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -133,7 +133,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   const addonNoticeOperations = new Map<string, object>();
 
-  let active = true;
+  let active = false;
 
   function activeTab(routeData = props.routeData): MemoryTab {
     return memoryTabForRoute(routeData ?? {}, application?.basePath ?? "") ?? "overview";
@@ -457,6 +457,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     });
   }
   onSettled(() => {
+    active = true;
     const unsubscribe = [
       // Retire pending reads on every connection transition, even within one render.
       gateway.subscribe(() => syncGateway(application.gateway.snapshot)),
@@ -466,13 +467,13 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       props.admittedRoute.subscribe(publishSettings),
     ];
     syncGateway(gateway.read().snapshot);
-    return () => unsubscribe.forEach((stop) => stop());
-  });
-  onCleanup(() => {
-    active = false;
-    pageConnection = null;
-    pageSupportProbe = null;
-    addonNoticeOperations.clear();
+    return () => {
+      active = false;
+      pageConnection = null;
+      pageSupportProbe = null;
+      addonNoticeOperations.clear();
+      unsubscribe.forEach((stop) => stop());
+    };
   });
 
   const engineSelection = () => resolveMemoryEngineSelection(props.configObject);

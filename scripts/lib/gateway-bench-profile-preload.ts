@@ -56,6 +56,19 @@ if (isMainThread) {
   if (!process.send) {
     throw new Error("Gateway profiling requires the benchmark IPC channel");
   }
+  if (process.env.OPENCLAW_BENCH_FIRST_TEXT === "1") {
+    const { onAgentEvent } = await import("../../src/infra/agent-events.js");
+    onAgentEvent((event) => {
+      if (event.stream === "assistant" && (event.data.delta || event.data.text)) {
+        process.send?.({
+          channel: GATEWAY_PROFILE_CHANNEL,
+          kind: "agent-text",
+          runId: event.runId,
+          atEpochMs: performance.timeOrigin + performance.now(),
+        });
+      }
+    });
+  }
   // This begins after preload imports, before the Gateway entry. It is not
   // process birth and does not include the profiler's own module import cost.
   const initialResources = sampleResources();
@@ -102,16 +115,30 @@ if (isMainThread) {
     if (message.kind === "resource-usage" && message.action === "sample") {
       void (async () => {
         let sessionCensus: GatewayResourceSnapshot["sessionCensus"];
-        if (message.sessionCensus) {
+        if (message.sessionCensus || message.clearPromptCacheObservations) {
           if (!message.collectGarbage || message.initial) {
-            throw new Error("Session census requires a current forced-GC resource sample");
+            throw new Error("Session attribution requires a current forced-GC resource sample");
           }
           const sourceEntry = fileURLToPath(new URL("../../src/entry.ts", import.meta.url));
           if (!process.argv[1] || realpathSync(process.argv[1]) !== realpathSync(sourceEntry)) {
             throw new Error(
-              "Session census requires --entry src/entry.ts; bundled constructors have a different identity",
+              "Session attribution requires --entry src/entry.ts; bundled modules have a different identity",
             );
           }
+        }
+        if (message.clearPromptCacheObservations) {
+          const { clearPromptCacheObservations } =
+            await import("../../src/agents/embedded-agent-runner/prompt-cache-observability.js");
+          clearPromptCacheObservations();
+        }
+        if (message.collectGarbage) {
+          if (!inspectorConnected) {
+            inspector.connect();
+            inspectorConnected = true;
+          }
+          await inspector.post("HeapProfiler.collectGarbage");
+        }
+        if (message.sessionCensus) {
           // Match the source runtime's module identities; count-only queries never retain instances.
           const [{ SessionManager }, { AgentSession }, { Agent }] = await Promise.all([
             import("../../src/agents/sessions/session-manager.js"),
@@ -124,13 +151,6 @@ if (isMainThread) {
             AgentSession: queryObjects(AgentSession, { format: "count" }),
             Agent: queryObjects(Agent, { format: "count" }),
           };
-        }
-        if (message.collectGarbage) {
-          if (!inspectorConnected) {
-            inspector.connect();
-            inspectorConnected = true;
-          }
-          await inspector.post("HeapProfiler.collectGarbage");
         }
         const resources = message.initial
           ? initialResources

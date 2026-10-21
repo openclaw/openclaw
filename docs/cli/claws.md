@@ -31,15 +31,16 @@ with each Claw attributed to its publisher.
 
 ## Create with an agent
 
-With Claws enabled in Labs, choose **Create a Claw** from an agent's settings,
-the chat companion rail, or the agent's left-sidebar context menu. The action
-sends the bundled `/skill create-claw` command into that agent's existing main
-chat. The agent proposes portable behavior with an input, job, output, and
-authority boundary, writes a private draft, and returns a review link in the
-same conversation. It does not create or fork a session. This flow currently
-requires a workspace on the Gateway host.
+With Claws enabled in Labs, choose **Create Claw** from the main chat header or
+the agent's left-sidebar context menu. The action sends the bundled
+`$create-claw` skill invocation into that agent's existing main chat. The agent
+proposes portable behavior with an input, job, output, and authority boundary,
+then writes its private draft in that conversation. When the draft is ready,
+the Control UI opens a review modal; the agent does not return a review link or
+create or fork a session. This flow currently requires a workspace on the
+Gateway host.
 
-The review link opens a sectioned modal with the exact archive files and
+The review modal shows the exact archive files and
 declared skill, plugin, MCP, and automation requirements. Change the name or
 description and uncheck any optional workspace file or requirement before
 publishing. **Ask for changes** returns to the same chat; inspect the rebuilt
@@ -51,8 +52,9 @@ rejected. Review the remaining text for personal facts and private context.
 Sign in with `clawhub login` on the Gateway host. Review shows the personal publisher
 and scoped package name. **Publish to ClawHub** uploads that exact reviewed
 artifact; changing the selection or publisher requires another review. An agent
-turn cannot authorize this step. The chat links to a submitted package and
-marks public discovery as pending security review.
+turn cannot authorize this step. After submission, a dismissing notification
+confirms that publication is pending security review and links to the Claw's
+ClawHub page.
 After ClawHub makes it public, others can discover it and Add it as an ordinary agent.
 
 ## Author locally
@@ -210,6 +212,10 @@ and starts with "What can you do?" after a successful Add.
 `--agent-id` and `--workspace` override the default destination with an
 unused ID or new path. Ordinary Add does not require a separate plan or
 review token. Exceptional trust warnings can still require explicit consent.
+
+Gateway Add review responses describe schedules as either `{ cron, timezone }`
+or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
+values are `none`, `last-channel`, or `owner`.
 
 Add reuses matching shared dependencies, installs missing requirements,
 creates the agent and its workspace, and assigns its automations. An existing

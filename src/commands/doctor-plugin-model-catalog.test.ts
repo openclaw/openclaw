@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as terminalNote from "../../packages/terminal-core/src/note.js";
 import { resolveAuthProfileDatabaseOwnerId } from "../agents/auth-profiles/sqlite.js";
 import {
   encodePluginModelCatalogRelativePath,
@@ -68,7 +69,6 @@ function migrationParams(agentDirs: string[], shouldRepair = true) {
     agentDirs,
     prompter: prompter(shouldRepair),
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv,
-    note: vi.fn(),
   };
 }
 
@@ -97,7 +97,12 @@ function readCatalogCacheRow(
   }
 }
 
+beforeEach(() => {
+  vi.spyOn(terminalNote, "note").mockImplementation(() => {});
+});
+
 afterEach(async () => {
+  vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -142,7 +147,7 @@ describe("doctor generated plugin model catalog migration", () => {
     const malformedBefore = readCatalogCacheRow(agentDir, "zai");
     const params = migrationParams([agentDir], false);
     await maybeMigrateLegacyPluginModelCatalogs(params);
-    expect(params.note).toHaveBeenCalledWith(
+    expect(terminalNote.note).toHaveBeenCalledWith(
       expect.stringContaining("contains repairable model rows"),
       "Plugin model catalogs",
     );
@@ -203,7 +208,7 @@ describe("doctor generated plugin model catalog migration", () => {
 
     const params = migrationParams([agentDir]);
     await maybeMigrateLegacyPluginModelCatalogs(params);
-    expect(params.note).toHaveBeenCalledWith(
+    expect(terminalNote.note).toHaveBeenCalledWith(
       expect.stringContaining("completed the cost of 1 model row(s)"),
       "Doctor changes",
     );
@@ -278,7 +283,7 @@ describe("doctor generated plugin model catalog migration", () => {
 
     const params = migrationParams([agentDir]);
     await maybeMigrateLegacyPluginModelCatalogs(params);
-    expect(params.note).not.toHaveBeenCalledWith(expect.anything(), "Doctor changes");
+    expect(terminalNote.note).not.toHaveBeenCalledWith(expect.anything(), "Doctor changes");
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "nvidia", contents: refreshed },
     ]);

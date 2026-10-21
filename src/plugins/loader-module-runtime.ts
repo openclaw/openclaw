@@ -4,6 +4,7 @@ import { VERSION } from "../version.js";
 import { runPluginRegistration } from "./api-lifecycle.js";
 import { tryNativeRequireModule } from "./native-module-require.js";
 import { getPluginCache, withPluginCache } from "./plugin-cache.js";
+import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -192,7 +193,7 @@ export function createPluginModuleLoader(options: {
         });
         if (cache.retirement || isPluginRegistryRetired(owner.registry)) {
           await preparedArtifact.artifact.disposeAsync();
-          throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+          throw new PluginInventoryRetiredError();
         }
         try {
           // Reentrant loading may have installed this exact owner while acquisition

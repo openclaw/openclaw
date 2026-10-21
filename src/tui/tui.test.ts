@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import * as embeddedStateLock from "../infra/embedded-state-lock.js";
 import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-support.js";
+import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -568,6 +569,9 @@ it.each([
 });
 
 function createGatewayLockOptions(stateDir: string): GatewayLockOptions {
+  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
+    () => 123_456,
+  );
   return {
     allowInTests: true,
     env: {
@@ -576,7 +580,6 @@ function createGatewayLockOptions(stateDir: string): GatewayLockOptions {
       OPENCLAW_STATE_DIR: stateDir,
     },
     lockDir: path.join(stateDir, "gateway-locks"),
-    readProcessStartTime: () => 123_456,
     // Live-owner inspection and uncontended acquisition never wait on this; it only
     // bounds lock-file inspection, which loaded small hosts can push past 100ms.
     timeoutMs: 5_000,

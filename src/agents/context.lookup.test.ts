@@ -16,7 +16,7 @@ const state = vi.hoisted(() => {
   return {
     config: initialConfig,
     catalog,
-    loadConfig: vi.fn<() => OpenClawConfig>(),
+    loadConfig: vi.fn<() => OpenClawConfig | null>(),
     loadOwner: vi.fn<(_params: unknown) => Promise<Pick<Owner, "modelCatalog">>>(),
     publishedOwner: vi.fn<(_params: unknown) => Owner | undefined>(),
   };
@@ -24,7 +24,7 @@ const state = vi.hoisted(() => {
 
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
-  getRuntimeConfig: state.loadConfig,
+  getRuntimeConfigSnapshot: state.loadConfig,
 }));
 vi.mock("../config/runtime-source-projection.js", () => ({
   projectConfigOntoRuntimeSourceSnapshot: (snapshot: OpenClawConfig) => snapshot,
@@ -106,20 +106,24 @@ describe("context cache lifecycle", () => {
     expect(state.loadConfig).not.toHaveBeenCalled();
   });
 
-  it("retries config loading only after backoff", async () => {
-    vi.useFakeTimers();
-    state.config = config("openrouter", model(sonnet, 654_321));
-    state.loadConfig.mockImplementationOnce(() => {
-      throw new Error("transient");
-    });
-    expectTokens(sonnet, undefined);
-    expect(state.loadConfig).toHaveBeenCalledTimes(1);
-    expectTokens(sonnet, undefined);
-    expect(state.loadConfig).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expectTokens(sonnet, 654_321);
-    expect(state.loadConfig).toHaveBeenCalledTimes(2);
-    await context.ensureContextWindowCacheLoaded();
+  it("reads newly published context limits on the next lookup", async () => {
+    const runtime = await import("../config/runtime-snapshot.js");
+    const previous = runtime.getRuntimeConfigSnapshot();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+    state.loadConfig.mockImplementation(runtime.getRuntimeConfigSnapshot);
+    try {
+      runtime.clearRuntimeConfigSnapshot();
+      expectTokens(sonnet, undefined, sync);
+      runtime.setRuntimeConfigSnapshot(config("openrouter", model(sonnet, 654_321)));
+      expectTokens(sonnet, 654_321, sync);
+    } finally {
+      if (previous) {
+        runtime.setRuntimeConfigSnapshot(previous);
+      } else {
+        runtime.clearRuntimeConfigSnapshot();
+      }
+      clock.mockRestore();
+    }
   });
 
   it("replaces configured token overrides before refreshing discovery", async () => {
@@ -139,7 +143,8 @@ describe("context cache lifecycle", () => {
     state.catalog.entries = [
       discovered("anthropic/claude-opus-4.7-20260219", 200_000, "anthropic"),
     ];
-    await context.ensureContextWindowCacheLoaded(cfg);
+    state.config = cfg;
+    await context.ensureContextWindowCacheLoaded();
     expect(state.loadOwner).toHaveBeenCalledWith({ config: cfg, readOnly: true });
     expect(state.publishedOwner).not.toHaveBeenCalled();
     expectTokens("anthropic/claude-opus-4.7-20260219", 1_000_000, sync);
@@ -212,9 +217,8 @@ describe("context cache lifecycle", () => {
   it("retires stale discovery when exact catalog loading fails", async () => {
     replaceDiscoveredContextTokenCache(new Map([["stale-model", 999_000]]));
     state.loadOwner.mockRejectedValueOnce(new Error("catalog unavailable"));
-    await context.ensureContextWindowCacheLoaded(
-      config("synthetic", model("current-model", 96_000)),
-    );
+    state.config = config("synthetic", model("current-model", 96_000));
+    await context.ensureContextWindowCacheLoaded();
     expectTokens("stale-model", undefined, { cfg: {} });
   });
 

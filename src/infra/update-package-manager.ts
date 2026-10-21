@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { filterStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { detectPackageManager } from "./detect-package-manager.js";
 import { readPackageManagerSpec } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
@@ -116,54 +117,41 @@ export async function resolveUpdateBuildManager(
 
     const npmAvailable = await isManagerAvailable(runCommand, "npm", timeoutMs, baseEnv);
     if (npmAvailable && pnpmVersion) {
-      const pnpmBootstrap = await (async () => {
-        const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-pnpm-"));
-        const cleanup = async () => {
-          await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
-        };
-        try {
-          // npm 11.16+ requires project policy for local installs; only this pinned
-          // tool may run its native-binary provisioning script in the temporary prefix.
-          await fs.writeFile(
-            path.join(tempRoot, "package.json"),
-            JSON.stringify({
-              private: true,
-              allowScripts: { [`pnpm@${pnpmVersion}`]: true },
-            }),
-          );
-          const installResult = await runCommand(
-            ["npm", "install", "--prefix", tempRoot, `pnpm@${pnpmVersion}`],
-            { timeoutMs: work ? work.timeoutMs : timeoutMs, env: baseEnv },
-          );
-          if (installResult.code !== 0) {
-            await cleanup();
-            return null;
-          }
-          const env = Object.fromEntries(
-            Object.entries(baseEnv ?? process.env)
-              .filter(([, value]) => value != null)
-              .map(([key, value]) => [key, String(value)]),
-          );
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-pnpm-"));
+      const cleanup = async () => {
+        await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+      };
+      try {
+        // npm 11.16+ requires project policy for local installs; only this pinned
+        // tool may run its native-binary provisioning script in the temporary prefix.
+        await fs.writeFile(
+          path.join(tempRoot, "package.json"),
+          JSON.stringify({
+            private: true,
+            allowScripts: { [`pnpm@${pnpmVersion}`]: true },
+          }),
+        );
+        const installResult = await runCommand(
+          ["npm", "install", "--prefix", tempRoot, `pnpm@${pnpmVersion}`],
+          { timeoutMs: work ? work.timeoutMs : timeoutMs, env: baseEnv },
+        );
+        if (installResult.code === 0) {
+          const env = filterStringRecord(baseEnv ?? process.env) ?? {};
           applyPathPrepend(env, [path.join(tempRoot, "node_modules", ".bin")]);
-          if (!(await isManagerAvailable(runCommand, "pnpm", timeoutMs, env, pnpmVersion))) {
-            await cleanup();
-            return null;
+          if (await isManagerAvailable(runCommand, "pnpm", timeoutMs, env, pnpmVersion)) {
+            return {
+              kind: "resolved",
+              manager: "pnpm",
+              fallback: false,
+              env,
+              cleanup,
+            };
           }
-          return { env, cleanup };
-        } catch {
-          await cleanup();
-          return null;
         }
-      })();
-      if (pnpmBootstrap) {
-        return {
-          kind: "resolved",
-          manager: "pnpm",
-          fallback: false,
-          env: pnpmBootstrap.env,
-          cleanup: pnpmBootstrap.cleanup,
-        };
+      } catch {
+        // Failed preparation shares the same temporary-prefix cleanup and outcome.
       }
+      await cleanup();
       return { kind: "missing-required", preferred, reason: "pnpm-npm-bootstrap-failed" };
     }
 

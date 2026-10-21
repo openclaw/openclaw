@@ -125,12 +125,7 @@ function isConfigMutationNoopForSnapshot(
   config: Record<string, unknown>,
   raw: string,
 ) {
-  let nextConfig: unknown;
-  try {
-    nextConfig = JSON.parse(raw);
-  } catch {
-    return false;
-  }
+  const nextConfig: unknown = JSON.parse(raw);
   if (!isPlainObject(nextConfig)) {
     return false;
   }

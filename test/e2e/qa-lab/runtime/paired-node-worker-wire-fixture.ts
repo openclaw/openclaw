@@ -328,7 +328,6 @@ type WireWorkerHostOptions = {
   root: string;
   label?: string;
   capacity?: number;
-  capacityWaitMs?: number;
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
   workerGatewayUrl?: string;
@@ -442,7 +441,6 @@ export async function createPairedNodeWorkerHost(
     env: nodeEnv,
     workspace,
     capacity: options.capacity,
-    capacityWaitMs: options.capacityWaitMs,
     nativeInferenceSnapshot,
     ...(options.containerEngine ? { containerEngine: options.containerEngine } : {}),
     ...(options.containerImage ? { containerImage: options.containerImage } : {}),

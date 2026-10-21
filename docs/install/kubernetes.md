@@ -92,6 +92,12 @@ Namespace: openclaw (configurable via OPENCLAW_NAMESPACE)
 └── Secret/openclaw-secrets    # Gateway token + API keys
 ```
 
+Keep `replicas: 1` and the provided `Recreate` strategy so replacements stop the
+old pod before starting another Gateway against the same state. The PVC must
+use persistent local or block storage with a local filesystem, not an NFS, SMB,
+or CIFS share. `ReadWriteOnce` alone guarantees neither that storage choice nor
+one pod at a time. See [SQLite storage requirements](/install/docker/networking-and-storage#storage-and-persistence).
+
 The Deployment checks `/readyz` for startup and traffic readiness with a five-minute startup budget, and `/healthz` for liveness. Every check asserts the JSON check contract rather than the status code alone, because the Control UI answers unknown paths with a catch-all `200`; a status-only check would pass forever against an image whose check route does not exist yet.
 
 `/startupz` is the better traffic-admission check because it ignores channel health, so one failing channel account cannot evict an otherwise healthy Gateway from Service endpoints. It requires an image built from `2026.8.1` or newer, the release that introduced it, which is newer than the tag pinned above. After pinning such an image, switch the startup and readiness checks to `/startupz` and keep `/readyz` for monitoring that should include channel-account health.
@@ -156,6 +162,13 @@ image: ghcr.io/openclaw/openclaw:2026.7.1-2-slim
 ```
 
 Images from `2026.8.1` onward need a [writable cache location](/install/kubernetes#architecture-notes); the shipped manifest provides it through `XDG_CACHE_HOME`. When upgrading an older deployment, apply that environment entry along with the image change.
+
+The official image entrypoint runs Doctor before the Gateway, but this manifest's
+explicit `command` bypasses it. Before upgrading an existing PVC, back up its
+state, scale the Deployment to zero, wait for its pods to terminate, and run the
+new image's `openclaw doctor --fix --non-interactive` in a one-off pod or Job with
+the same state/config mounts. Restore one replica only after Doctor succeeds.
+See [container upgrade and recovery](/install/docker#upgrading-container-images).
 
 ### Expose beyond port-forward
 

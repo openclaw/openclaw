@@ -444,7 +444,7 @@ describe("native subagent submission receipts in the binding store", () => {
           new Error(
             rejectedOwner === "receipt"
               ? "Cancelled native follow-up receipt was not acknowledged."
-              : "Cancelled native assignment was not acknowledged.",
+              : "Native assignment was not acknowledged.",
           ),
         ]);
         await reopen();

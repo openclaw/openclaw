@@ -1,6 +1,6 @@
 import "../../test/dom.setup.ts";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWorkboardCard } from "../../lib/workboard/test/index-helpers.ts";
 import { afterWorkboardUpdate } from "../../test/settle.ts";

@@ -5,16 +5,18 @@ import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tre
 import { createUpdateStateInspectionReporter } from "./update-candidate-state.diagnostics.js";
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 
-export const RetainedRuntimeFilesSchema = z.object({
-  relocations: UpdateCandidatePluginTreePlanSchema.shape.relocations,
-  files: z.array(z.string()),
-  entries: z.number().int().nonnegative(),
-  estimatedBytes: UpdateCandidatePluginTreePlanSchema.shape.bytes,
-  inventoryMs: z.number().nonnegative(),
-  materializationMs: z.number().nonnegative(),
-  linked: z.number().int().nonnegative(),
-  copied: z.number().int().nonnegative(),
-});
+export const RetainedRuntimeFilesSchema = z
+  .object({
+    relocations: UpdateCandidatePluginTreePlanSchema.shape.relocations,
+    files: z.array(z.string()),
+    entries: z.number().int().nonnegative(),
+    estimatedBytes: UpdateCandidatePluginTreePlanSchema.shape.bytes,
+    inventoryMs: z.number().nonnegative(),
+    materializationMs: z.number().nonnegative(),
+    linked: z.number().int().nonnegative(),
+    copied: z.number().int().nonnegative(),
+  })
+  .or(z.object({ unusableReason: z.string() }));
 
 export function projectRetainedRuntimePath(privateRoot: string, source: string): string {
   const base = path.parse(source).root;
@@ -58,6 +60,9 @@ export async function prepareRetainedRuntimeFiles(params: {
     // the process before cleanup, then rechecks authority before using the result.
     assertCurrent() {},
   });
+  if ("unusableReason" in counts) {
+    return counts;
+  }
   // Tree discovery stays in the worker. Returning the full plan can
   // exceed stdout's capture limit after materialization has already succeeded.
   return {

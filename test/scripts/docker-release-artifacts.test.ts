@@ -118,9 +118,16 @@ function createLayout(
   };
 }
 
-async function createPreparedRelease(includeBrowser = true, releaseVersion = defaultVersion) {
+async function createPreparedRelease(
+  includeBrowser = true,
+  releaseVersion = defaultVersion,
+  recovery?: { artifactAttempt: string; architectureAttempts: [string, string] },
+) {
   const root = temporaryDirectory();
-  const artifactName = dockerReleaseArtifactName(sourceSha, runAttempt);
+  const artifactName = dockerReleaseArtifactName(
+    sourceSha,
+    recovery?.artifactAttempt ?? runAttempt,
+  );
   const context = {
     schemaVersion: 1,
     repository,
@@ -157,6 +164,13 @@ async function createPreparedRelease(includeBrowser = true, releaseVersion = def
     conclusion: "success",
     head_sha: toolingSha,
   };
+  const architectureJobs = architectures.map((architecture, index) => ({
+    ...job,
+    id: 20 + index,
+    run_attempt: Number(recovery?.architectureAttempts[index] ?? runAttempt),
+    name: `Prepare Docker / Prepare Docker images (${architecture})`,
+    check_run_url: `https://api.github.com/repos/${repository}/check-runs/${20 + index}`,
+  }));
   const run = {
     id: Number(runId),
     run_attempt: Number(runAttempt),
@@ -187,17 +201,27 @@ async function createPreparedRelease(includeBrowser = true, releaseVersion = def
     if (endpoint.endsWith("/actions/jobs/7")) {
       return job;
     }
+    const architectureJob = architectureJobs.find((candidate) =>
+      endpoint.endsWith(`/actions/jobs/${candidate.id}`),
+    );
+    if (architectureJob) {
+      return architectureJob;
+    }
     if (endpoint.includes("/jobs?")) {
+      const attempt = Number(endpoint.match(/\/attempts\/([0-9]+)\//u)?.[1]);
+      const attemptJobs = architectureJobs.filter((candidate) => candidate.run_attempt === attempt);
+      const jobs = [
+        ...(job.run_attempt === attempt ? [job] : []),
+        ...attemptJobs,
+        {
+          ...job,
+          id: 8,
+          check_run_url: `https://api.github.com/repos/${repository}/check-runs/8`,
+        },
+      ];
       return {
-        jobs: [
-          job,
-          {
-            ...job,
-            id: 8,
-            check_run_url: `https://api.github.com/repos/${repository}/check-runs/8`,
-          },
-        ],
-        total_count: 2,
+        jobs,
+        total_count: jobs.length,
       };
     }
     if (endpoint.endsWith(`/actions/runs/${runId}/attempts/${runAttempt}`)) {
@@ -208,7 +232,7 @@ async function createPreparedRelease(includeBrowser = true, releaseVersion = def
     }
     throw new Error(`Unexpected API read: ${endpoint}`);
   };
-  for (const architecture of architectures) {
+  for (const [architectureIndex, architecture] of architectures.entries()) {
     const images = [];
     for (const variant of includeBrowser ? ["default", "browser"] : ["default"]) {
       const directory = path.join(root, "payloads", `${artifactName}-${architecture}`, variant);
@@ -223,6 +247,10 @@ async function createPreparedRelease(includeBrowser = true, releaseVersion = def
     }
     writeJson(path.join(root, "metadata", `${architecture}.json`), {
       ...context,
+      producer: {
+        ...context.producer,
+        runAttempt: recovery?.architectureAttempts[architectureIndex] ?? runAttempt,
+      },
       architecture,
       images,
     });
@@ -230,10 +258,11 @@ async function createPreparedRelease(includeBrowser = true, releaseVersion = def
   const manifest = sealDockerRelease({
     metadataDirectory: path.join(root, "metadata"),
     context,
+    artifactName,
     checkRunId: "7",
     readApi,
   });
-  return { root, manifest, run, attemptRun, job, artifacts, readApi };
+  return { root, manifest, run, attemptRun, job, architectureJobs, artifacts, readApi };
 }
 
 async function createPublicationRetry(conclusion = "failure") {
@@ -429,6 +458,61 @@ function expectLines(value: unknown, lines: string[]) {
 }
 
 describe("prepared Docker publication", () => {
+  it("adopts successful architecture producers across a failed-job retry", async () => {
+    const fixture = await createPreparedRelease(false, defaultVersion, {
+      artifactAttempt: "1",
+      architectureAttempts: ["1", "2"],
+    });
+    expect(fixture.manifest.artifactName).toBe(dockerReleaseArtifactName(sourceSha, "1"));
+    expect(fixture.manifest.producer.runAttempt).toBe("2");
+    expect(
+      fixture.manifest.architectures.map(
+        (entry: { producer: { runAttempt: string } }) => entry.producer.runAttempt,
+      ),
+    ).toEqual(["1", "2"]);
+    expect((await verifyPrepared(fixture)).manifest).toBe(fixture.manifest);
+  });
+
+  it.each([
+    [
+      "another parent",
+      (metadata: { producer: { runId: string } }) => (metadata.producer.runId = "999"),
+    ],
+    [
+      "another tooling revision",
+      (metadata: { producer: { workflowSha: string } }) =>
+        (metadata.producer.workflowSha = sourceSha),
+    ],
+    [
+      "future attempt",
+      (metadata: { producer: { runAttempt: string } }) => (metadata.producer.runAttempt = "3"),
+    ],
+  ])("rejects %s architecture metadata before adoption", async (_label, mutate) => {
+    const fixture = await createPreparedRelease(false);
+    const metadataPath = path.join(fixture.root, "metadata", "amd64.json");
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+    const context = structuredClone(metadata);
+    delete context.architecture;
+    delete context.images;
+    mutate(metadata);
+    writeJson(metadataPath, metadata);
+    expect(() =>
+      sealDockerRelease({
+        metadataDirectory: path.join(fixture.root, "metadata"),
+        context,
+        artifactName: fixture.manifest.artifactName,
+        checkRunId: "7",
+        readApi: fixture.readApi,
+      }),
+    ).toThrow(/producer mismatch/u);
+  });
+
+  it("rejects a replaced architecture job before artifact acquisition", async () => {
+    const fixture = await createPreparedRelease(false);
+    fixture.architectureJobs[0]!.run_attempt += 1;
+    await expect(verifyPrepared(fixture)).rejects.toThrow(/amd64 preparation job/u);
+  });
+
   it("publishes authenticated candidate bytes", async () => {
     const { fixture, verified, bytes, registry } = await createCandidateDockerPublication();
     const images = registries;
@@ -729,8 +813,7 @@ describe("prepared Docker publication", () => {
       { preparedRunId: "0" },
       { preparedRunAttempt: 2 },
       { preparedRunAttempt: "0" },
-      { preparedRunAttempt: "1" },
-      { preparedArtifactName: dockerReleaseArtifactName(sourceSha, "3") },
+      { preparedArtifactName: dockerReleaseArtifactName(toolingSha, "3") },
       { preparedManifestSha256: "invalid" },
     ]) {
       expect(() =>

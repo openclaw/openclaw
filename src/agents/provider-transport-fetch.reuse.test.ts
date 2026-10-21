@@ -64,13 +64,15 @@ describe("Responses trailing HTTP body", () => {
           });
           for (let turn = 0; turn < 5; turn += 1) {
             settled = createDeferredCore();
+            const request = {
+              model: model.id,
+              stream: true,
+              input: [{ role: "user", content: "fixture" }],
+            } satisfies Parameters<typeof createResponsesStreamWithRecovery>[0]["request"];
             const { stream } = await createResponsesStreamWithRecovery({
               client,
-              request: {
-                model: model.id,
-                stream: true,
-                input: [{ role: "user", content: "fixture" }],
-              },
+              request,
+              buildFullHistoryRequest: () => request,
               requestOptions: undefined,
               model: localModel,
             });

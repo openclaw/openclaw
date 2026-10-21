@@ -36,10 +36,14 @@ import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
-import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
+import type { ChatActivityPillsProps } from "./chat-activity-pills.tsx";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
-import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-mention-menu.tsx";
+import type {
+  HumanMentionAccess,
+  HumanMentionDirectory,
+  HumanMentionMenu,
+} from "./chat-composer-mention-menu.tsx";
 import type { ChatComposerCapabilityMenuProps } from "./chat-composer-plus-menu.types.ts";
 import type { SkillMenu } from "./chat-composer-skill-menu.tsx";
 import type { SlashMenu } from "./chat-composer-slash-menu.tsx";
@@ -56,6 +60,22 @@ type ChatQueuedEditProps = {
   onCancel: () => void;
 };
 
+/** Destinations and owner facts not already carried by ChatProps. */
+type ChatMobileActivities = {
+  onOpenSubagents?: NonNullable<ChatActivityPillsProps["subagents"]>["onOpen"];
+  goal?: Pick<
+    NonNullable<ChatActivityPillsProps["goal"]>,
+    "executionConfirmed" | "hidden" | "onOpen"
+  >;
+  onOpenProgress?: NonNullable<ChatActivityPillsProps["progress"]>["onOpen"];
+  onOpenPullRequest?: NonNullable<ChatActivityPillsProps["pullRequests"]>["onOpen"];
+  /** Eligibility is decided by the publication owner, including retained outcomes. */
+  publication?: {
+    eligible: boolean;
+    onOpen: NonNullable<ChatActivityPillsProps["publication"]>["onOpen"];
+  };
+};
+
 export type ChatComposerDisabledBanner = {
   kind: "above-composer" | "composer-replacement";
   presentation?: "compact" | "hidden";
@@ -67,6 +87,8 @@ export type ChatComposerDisabledBanner = {
   busy?: boolean;
   busyLabel?: string;
   disabledReason?: string;
+  /** Existing pane run action, relocated into the desktop subagent notice. */
+  stop?: { onAbort: () => void };
 } & ({ actionLabel: string; onAction: () => void } | { actionLabel?: never; onAction?: never });
 
 export type ChatSessionProgressProps = {
@@ -88,7 +110,20 @@ export type ChatSessionProgressProps = {
 export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
   getTranscriptElement?: () => HTMLElement | null;
+  getScrollToLatestElement?: () => HTMLButtonElement | null;
   onComposerShellRef?: (element: HTMLElement) => void | (() => void);
+  onComposerFloatRef?: (element: HTMLElement) => void | (() => void);
+  onActivityPillsLayout?: ChatActivityPillsProps["onLayout"];
+  /** Native merged chrome, supplied by the pane owner; never inferred from pane width. */
+  mobileComposer?: boolean;
+  /** Observed keyboard visibility from the shell viewport owner, when available. */
+  mobileKeyboardVisible?: boolean;
+  /** Presentation fact only. The host owns dock suspension and viewport recovery. */
+  onComposerEditingChange?: (editing: boolean) => void;
+  mobileActivities?: ChatMobileActivities;
+  /** Prepared by ChatComposerView from native facts and real destinations. */
+  mobileActivityPills?: ChatActivityPillsProps;
+  mobileApprovalContent?: JSX.Element;
   /** Provisional/deleted previews must not mount session-scoped extension controllers. */
   sessionAdmitted?: boolean;
   connected: boolean;
@@ -115,7 +150,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   runId?: string | null;
   /** The pane scopes Gateway questions to this conversation's agent and session. */
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
-  asyncQuestions?: AsyncQuestionPresentation;
   stream: string | null;
   queue: ChatQueueItem[];
   draft: string;
@@ -128,6 +162,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   mentions?: readonly HumanMention[];
   getMentions?: () => readonly HumanMention[];
   mentionDirectory?: HumanMentionDirectory;
+  /** Register the mounted native composer operation; return its parent-owned release. */
+  registerHumanMentionAccess?: (access: HumanMentionAccess) => () => void;
   mentionsUnsupported?: boolean;
   modelCatalog: readonly ModelCatalogEntry[];
   modelSwitching: boolean;
@@ -216,10 +252,6 @@ export type ChatComposerState = {
   presentation: {
     dictationError: string | null;
     goalExpandedId: string | null;
-    activeQuestionKey: string | null;
-    gatewayQuestionIds: Set<string>;
-    asyncQuestionIds: Set<string>;
-    questionCollapsed: boolean;
   };
   updatePresentation: StoreSetter<ChatComposerState["presentation"]>;
   questionTakeoverActive: boolean;

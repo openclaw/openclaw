@@ -300,6 +300,48 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
   },
 );
 
+it("publishes a new revision for plugin-owned navigation mutations before notifying readers", async () => {
+  const navigation = { id: "board", label: "Workboard", page: { id: "board" } };
+  const completed = createDeferred();
+  const context = connectedContext(
+    {
+      gatewayUrl: localGateway(),
+      request: async (method) =>
+        method === "plugins.controlUi.list" ? catalog([pluginDescriptor()]) : { ok: true },
+    },
+    configForRuntime(),
+  );
+  vi.mocked(initializeControlUiPlugin).mockImplementation(async (getContext, runtime, owner) => {
+    const host = createControlUiPluginHost(getContext, runtime, owner);
+    host.ui.registerNavigation(navigation);
+    return Object.assign(owner, { host });
+  });
+  const runtime = runtimeFor(context);
+  expect(runtime.revision).toBe(0);
+  runtime.subscribe(() => {
+    if (runtime.registryStatus === "complete") {
+      completed.resolve();
+    }
+  });
+  runtime.start();
+  await completed.promise;
+  const registration = runtime.registrations("navigation")[0]!;
+  const previousRevision = runtime.revision;
+  const observed: { revision: number; label: string | undefined }[] = [];
+  runtime.subscribe(() =>
+    observed.push({
+      revision: runtime.revision,
+      label: runtime.registrations("navigation")[0]?.value.label,
+    }),
+  );
+
+  navigation.label = "Updated board";
+  registration.host.ui.invalidate();
+
+  expect(runtime.registrations("navigation")[0]?.value).toBe(navigation);
+  expect(observed).toEqual([{ revision: previousRevision + 1, label: "Updated board" }]);
+});
+
 it.each([
   {
     scenario: "cross-origin native plugin",
@@ -449,7 +491,7 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
       if (event === "plugins.changed") {
         generation += 1;
       }
-      client.opts.onEvent?.(
+      client.testOptions.onEvent?.(
         createGatewayEvent(
           event,
           event === "plugins.changed" ? { generation } : { revision: next ?? "disabled" },
@@ -463,7 +505,7 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
     };
     try {
       runtime.start();
-      client.opts.onHello?.(hello);
+      client.testOptions.onHello?.(hello);
       await vi.waitFor(() => expect(runtime.registrations("replacements")).toHaveLength(1));
       runtime.selectReplacement("composer", "review/composer");
       const first = runtime.selectedReplacement("composer")!;
@@ -517,7 +559,7 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
       expect(runtime.selectedReplacement("composer")).toBeUndefined();
       runtime.selectReplacement("composer", "review/composer");
       const reinstalled = runtime.selectedReplacement("composer")!;
-      client.opts.onHello?.({ ...hello, server: { connId: "native-connection-two" } });
+      client.testOptions.onHello?.({ ...hello, server: { connId: "native-connection-two" } });
       await vi.waitFor(() => {
         expect(runtime.registrations("replacements")).toHaveLength(1);
         expect(runtime.isLoading("review")).toBe(false);

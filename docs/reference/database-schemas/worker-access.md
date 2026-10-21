@@ -361,11 +361,10 @@ facts; unknown write coverage invalidates conservatively. The shared mechanism i
 
 Memory publication retains index facts under its own write scope, so session
 activity and embedding-cache writes do not trigger another facts query. The
-publication worker also retains the embedding-cache size, updates it only after
-committed inserts/deletes, and reloads after unscoped writes or schema changes.
-Pruning uses that count and one bounded oldest-row delete. Unbounded replacement
-writes may overestimate this disposable cache and evict entries early; bounded
-writes still reserve space before insertion.
+publication worker also retains the embedding-cache size and its precision,
+updates it only after committed writes, and reloads after unscoped writes or
+schema changes. Pruning reuses an exact count or refreshes an upper bound before
+bounded oldest-row deletion. Bounded writes still reserve space before insertion.
 
 Memory managers receive schema, table-presence, and index facts from worker
 admission without opening a host reader. Bundled status callers await the same
@@ -1369,6 +1368,9 @@ Ordinary discovery keeps one captured roster and listing through completion.
 Later registry, path, or row changes are observed on the next owner preparation;
 there is no post-read registry retry or repeated listing-identity capture.
 Registry receipts and physical replacement invalidate reusable target facts.
+The discovery memo adopts each decoded result once and shares a deeply readonly,
+frozen snapshot on warm reads. Inventory preparation captures its selection facts
+once; repeated reads still check registry, physical-file, and applicable row revisions.
 Session-row writes invalidate fixed-store inventories, whose agent visibility
 can depend on those rows. Per-agent inventories retain their path and registry
 facts across ordinary turns, avoiding another discovery and
@@ -2079,6 +2081,9 @@ entry, header, and first event commit together. Cancellation after commit report
 the committed-error contract, and an unknown outcome fences fallback instead of
 repeating the append. Attempt teardown releases the actor only after accepted
 and nested writes actually drain, including when the consumer's bounded wait ends.
+Worker loss before actor admission fails that command without fencing the actor;
+later commands use the replacement worker. Loss after admission still requires
+confirmed settlement or reconciliation before another command can proceed.
 Released synchronous SDK methods and explicit compaction maintenance keep their
 named compatibility adapters and publish through the existing receipt owners.
 
@@ -2482,7 +2487,7 @@ retention, stored bytes, or update behavior changes.
 Ordinary turn preparation retains workspace snapshots, conversation bindings,
 skill-library queries, workshop changes, GitHub attribution, node catalogs, and
 exec policy in bounded process-local caches. Their existing owning writers
-invalidate the retained facts on commit or uncertain settlement. Binding expiry
+update or invalidate retained facts on commit; uncertain settlement invalidates them. Binding expiry
 still invokes its pruning owner; workspace recovery predicates and explicit
 snapshot reads retain their existing database paths. Unchanged workspace
 preparation does not dispatch another registration transaction. Workshop reads
@@ -2504,10 +2509,16 @@ existing authority owner. Committed facts install when native commit evidence
 arrives, before the ordinary reply; the writer queue still owns accepted work
 until settlement. A lost reply never triggers mutation replay.
 
-Workspace setup, aliases, attestation sets, local and repository workspaces, and
-node prepared-workspace lifecycle operations publish through their existing
-native or worker kernels. Deletion remains a tombstone, and newer native changes
-supersede delayed worker postimages. All domains in a compound receipt install
+Workspace setup and attestation writers publish the complete snapshot they just
+committed, so the next preparation reuses those facts without another registration
+read. Unchanged hashes refresh the durable attestation timestamp only after an
+hour; first attestations and changed hashes write immediately. The persisted
+24-hour disappearance guard therefore protects at least 23 hours after the last
+unchanged preparation, including across a restart. Alias changes invalidate
+cached resolutions. Local and repository workspaces and node prepared-workspace
+lifecycle operations publish through their existing native or worker kernels.
+Deletion remains a tombstone, and newer native changes supersede delayed worker
+postimages. All domains in a compound receipt install
 before public observers. Nested rollback discards tentative facts; a confirmed
 rollback preserves the previous committed projection. Missing accepted receipts,
 unknown settlement, or failed installation invalidate the affected domain.
@@ -2716,6 +2727,13 @@ SQLite fingerprints without constructing a scratch database or transferring
 contracts between processes. Version facts stay within their unchanged
 snapshot. Each request rereads stored facts. Schemas, stored bytes, and update
 behavior are unchanged.
+
+PostgreSQL startup starts its isolated agent-schema reader while shared-state
+inspection runs, then transfers that reader to the first agent-inspection slot.
+Only process loading overlaps: database inspection still follows shared-state
+discovery and retains its fresh read, admission boundary, and full request timeout.
+Cancellation and early returns close an unused reader; SQLite keeps its existing
+clean-close fast path without starting a child.
 
 `pnpm db:postgres:gen` also generates the SQLite catalogs for declared shared-state
 and agent schema fragments, including supported historical migration definitions.
@@ -3084,6 +3102,12 @@ consuming history. Activity summaries consume the patch transaction's acknowledg
 watermark while retaining dirty notifications and fresh subsequent reads.
 Cold metadata joins initialization and turn preparation; restoration stays with
 the cold-storage owner, outside the writer FIFO and before message hooks run.
+
+Cache-TTL prefix reads sort marker identities before loading their payloads.
+The same read snapshot supplies each consumed marker by its exact sequence,
+stopping at the newest applicable checkpoint or reset. Obsolete checkpoint
+payloads are not decompressed into the sorter, so their total size does not
+determine the bounded history read's working set.
 
 Ordinary reply initialization reuses its writer-locked snapshot when accepted
 activity is already recorded and neither the entry nor conversation routing
@@ -4435,19 +4459,24 @@ dimensions invalidate the generation
 before the operation returns, even when clearing fails or loses its reply;
 the error still propagates without replay. Worker-owned staging preserves cache
 binary values and is discarded after settlement or owner closure. Source-file inspection remains on the
-host. Cache pruning uses that same worker for its live count and oldest-row deletion,
-with a transaction recheck before each batch of at most 100 rows. The host releases
-admission and yields between batches; only definite pre-entry lock failures retry.
+host. Cache pruning uses the same publication worker and retained cache size.
+Capacity reservations and bounded prune batches preserve an exact count from
+their affected-row results; ordinary replacements retain an upper bound, which is
+counted once when needed. Existing write receipts invalidate the retained size
+after another writer changes the cache. The host releases admission and yields
+between batches of at most 100 rows. Publications retain the connection owner's
+busy timeout and return native failures without a separate host retry loop.
 Published source hashes, chunks, embedding-cache rows, session tombstones, and
 index/source snapshots use the existing retrieval worker's read-only connection.
 They retain their physical source and caller lifetime without reserving the agent
 writer FIFO. Private shadow databases keep their publication worker and private
-queue for read-your-writes. Both adapters use the same read kernels. Shadow session publication prepares
-its current tombstone predicate in the original published worker while retaining
-the workspace lock through commit. Ordinary publication checks that predicate only
-inside its committing transaction. The shadow's empty tombstone table never grants
-publication authority. Cold opening remains separate work. Schemas, cache retention,
-and stored formats are unchanged.
+queue for read-your-writes. Both adapters use the same read kernels. Full rebuilds
+capture the published revision before fresh session discovery, which excludes
+existing tombstones. A newly recorded forget advances that revision, and final
+live publication rejects a shadow built before it. Direct source and generated-cache
+writes retain their tombstone checks inside the committing transaction. The shadow's
+empty tombstone table never grants publication authority. Cold opening remains
+separate work. Schemas, cache retention, and stored formats are unchanged.
 
 Session-only lexical searches return hits and recall metadata in one retrieval
 request. An in-process reader/writer queue orders retrieval and publication, and
@@ -5813,6 +5842,13 @@ cursor and follow-up reads retain one SQLite snapshot across transport
 acknowledgments.
 SQLite streams the ordered cursor through a native iterator; PostgreSQL uses
 16-row keyset batches because its bridge buffers results.
+Bounded SQLite context hydration also decodes one payload row at a time, so the
+encoded window does not remain resident alongside its decoded result. Its byte
+selection, event order, and snapshot authority are unchanged. Before a transcript
+worker task starts on V8, usage at or above 80% of the actual heap limit sheds its
+decoded history and memory-export caches through the isolate-local memory-pressure
+channel. Subsequent reads repopulate those caches through their existing owners;
+database handles and stored transcript bytes remain under their original lifecycle.
 Manual compaction reads entry and transcript statistics after the previous writer
 settles, then reuses them while its lifecycle owner holds admission closed.
 The initial canonical lookup supplies session identity without an unchanged-entry

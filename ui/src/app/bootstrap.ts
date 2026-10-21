@@ -169,7 +169,6 @@ export function bootstrapApplication(): ApplicationRuntime {
     settings,
     startup.password ?? "",
     hasPendingGateway ? "" : (startup.pendingBootstrapToken ?? ""),
-    undefined,
     {
       persistDefaultConnectionSettings: documentMode === null,
       ownsWarmBoot,

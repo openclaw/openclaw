@@ -16,7 +16,6 @@ import { hasModalSurface } from "../../components/overlay-registry.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import type { SessionMenuData } from "../../components/session-menu-actions.ts";
 import { sessionMenuDataFromRow } from "../../components/session-menu-data.ts";
-import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import {
   captureSessionMutationScope,
   isSessionMutationScopeCurrent,
@@ -34,7 +33,6 @@ import {
 } from "../../lib/keyboard-shortcut-contract.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
-import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
   areUiSessionKeysEquivalent,
   canArchiveSessionRow,
@@ -47,16 +45,20 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { runSessionNavigationAction } from "../../lib/sessions/session-menu-navigation.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
-import { showToast } from "../../lib/toast.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
-import { headerSessionMetadataPatch } from "./chat-pane-session-metadata-patch.ts";
+import {
+  createHeaderSessionActionHost,
+  createHeaderSessionActionRows,
+  headerSessionMetadataPatch,
+  renameSession,
+} from "./chat-pane-session-metadata-patch.ts";
 import { chatSessionPresentationTitle } from "./chat-pane-session-presentation.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
-import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
+import type { ChatPaneHeaderAction } from "./components/chat-pane-header.types.ts";
 import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.ts";
 
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {
@@ -196,9 +198,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       openEditor(action.editor, action.path);
       return;
     }
-    if (action.kind === "rename") {
-      this.beginHeaderRename(row);
-      return;
+    if (action.kind === "rename" && !this.mergedChrome) {
+      return this.beginHeaderRename(row);
     }
     if (
       action.kind === "copy-session-id" ||
@@ -263,7 +264,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       return;
     }
     const scope = this.captureHeaderSessionActionScope(
-      action.kind === "set-icon" ||
+      action.kind === "rename" ||
+        action.kind === "set-icon" ||
         action.kind === "set-color" ||
         action.kind === "reset-appearance" ||
         action.kind === "move-to-group",
@@ -273,6 +275,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       return;
     }
     const owner = this.headerOutcomeOwner;
+    const draftSignal = this.headerSessionDraftAbortController.signal;
     if (action.kind === "plugin") {
       const current = this.state ? selectedChatSessionRow(this.state) : undefined;
       try {
@@ -291,78 +294,18 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       }
       return;
     }
-    const toActionSession = (candidate: GatewaySessionRow) => ({
-      key: candidate.key,
-      sessionId: candidate.sessionId,
-      sharingRole: candidate.sharingRole,
-      label: this.resolveHeaderSessionTitle(candidate),
-      pinned: candidate.pinned === true,
-      unread: candidate.unread === true,
-      archived: candidate.archived === true,
-      category: candidate.category,
-      sidebarRoot: candidate.sidebarRoot,
-      isChild:
-        !isSubagentSessionKey(candidate.key) &&
-        Boolean(resolveSidebarSessionParentKey(candidate, new Set())),
-      active: true,
-      hasActiveRun: candidate.hasActiveRun ?? candidate.status === "running",
-      gatewayHasActiveRun: candidate.hasActiveRun,
-      hasActiveSubagentRun: candidate.hasActiveSubagentRun,
-      hasArchiveDescendants: hasSessionArchiveDescendants(
-        candidate,
-        this.state?.sessionsResult?.sessions ?? [],
-      ),
+    const { session, resolveCurrentSession } = createHeaderSessionActionRows(scope, row, {
+      label: (candidate) => this.resolveHeaderSessionTitle(candidate),
+      rows: () => this.state?.sessionsResult?.sessions ?? [],
     });
-    const session = toActionSession(row);
-    // Refresh metadata only on the selected instance; replacements must keep
-    // the captured ID so the Gateway rejects the stale action. No-ID rows
-    // still need current-list presence before a metadata patch can create them.
-    const resolveCurrentSession = (notify = false) => {
-      const currentRow = scope.sessions.state.result?.sessions.find(
-        (candidate) =>
-          areUiSessionKeysEquivalent(candidate.key, row.key) &&
-          (!session.sessionId || candidate.sessionId === session.sessionId),
-      );
-      const resolvedRow = currentRow ?? (session.sessionId ? row : null);
-      if (!resolvedRow && notify) {
-        showToast({ message: t("common.refresh") });
-      }
-      return resolvedRow ? toActionSession(resolvedRow) : null;
-    };
     try {
       const operations = await (this.headerSessionOperationsLoad ??=
         import("../../components/session-organizer-operations.runtime.ts"));
-      const host: SessionOperations.SessionActionHost & { knownSessionGroups(): string[] } = {
-        sessionData: {
-          isSessionMutationScopeCurrent: (candidate) =>
-            this.isHeaderSessionActionCurrent(candidate, owner),
-          publishSessionMutationError: (candidate, error) => {
-            if (this.isHeaderSessionActionCurrent(candidate, owner)) {
-              this.publishHeaderError(error, owner);
-            }
-          },
-          refreshSidebarSessions: async (agentId) => {
-            const outcome = await scope.sessions.reconcileMutation(agentId);
-            if (outcome.status === "failed" && this.isHeaderSessionActionCurrent(scope, owner)) {
-              this.publishHeaderError(outcome.error, owner);
-            }
-          },
-        },
-        pruneSidebarSessionEntry: (key) => {
-          const entry = serializeSidebarEntry({ type: "session", key });
-          const sidebarEntries = scope.context.navigation.snapshot.sidebarEntries.filter(
-            (candidate) => candidate !== entry,
-          );
-          scope.context.navigation.update({ sidebarEntries });
-        },
+      const host = createHeaderSessionActionHost(scope, {
+        isCurrent: (candidate) => this.isHeaderSessionActionCurrent(candidate, owner),
+        publishError: (error) => this.publishHeaderError(error, owner),
         selectSession: (key) => this.onPaneSessionChange?.(this.paneId, key),
-        sidebarSessionStatusFilter: () => "active",
-        knownSessionGroups: () =>
-          collectKnownSessionGroups(
-            scope.sessions.state.groups,
-            scope.sessions.state.result?.sessions ?? [],
-          ),
-      };
+      });
       const assignCategory = (category: string | null) =>
         operations.assignSessionCategory(
           host,
@@ -373,6 +316,33 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           { resolveSession: resolveCurrentSession },
         );
       switch (action.kind) {
+        case "rename": {
+          const state = this.state;
+          if (!state) {
+            return;
+          }
+          return await renameSession(operations, host, row, scope, {
+            state,
+            signal: draftSignal,
+            begin: () => {
+              if (this.state !== state || !this.presented) {
+                return null;
+              }
+              const currentScope = this.captureHeaderSessionActionScope(true);
+              if (!currentScope) {
+                return null;
+              }
+              const currentOwner = this.headerOutcomeOwner;
+              return {
+                scope: currentScope,
+                isCurrent: () =>
+                  this.state === state &&
+                  this.isHeaderSessionActionCurrent(currentScope, currentOwner),
+                publishError: (error) => this.publishHeaderError(error, currentOwner),
+              };
+            },
+          });
+        }
         case "toggle-involving-me":
           await operations.setSessionInvolvement(host, session, !row.hiddenFromInvolvingMe, scope);
           break;

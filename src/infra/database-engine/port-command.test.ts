@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, expect, it } from "vitest";
 import "./database-suite-workers.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { seedPortSqlite } from "./port-command.integration.test-support.js";
 import { runDatabasePortTask } from "./port-command.worker.js";
 import { loadDatabasePortDescriptor } from "./port-provider-descriptor.js";
 import { inspectDatabasePort, type PortDescriptor } from "./port.worker.js";
@@ -14,6 +15,8 @@ import metadata from "./workboard-port.generated.json" with { type: "json" };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scope = { assertCurrent() {} };
+const inspect = (sourcePath: string) =>
+  runDatabasePortTask({ operation: "inspect", sourcePath, config: {}, to: "postgres" }, scope);
 let descriptor: PortDescriptor;
 beforeAll(async () => {
   descriptor = await loadDatabasePortDescriptor("workboard");
@@ -21,21 +24,24 @@ beforeAll(async () => {
 function fixture(sql = "") {
   const directory = tempDirs.make("port-command-");
   const sourcePath = path.join(directory, "workboard.sqlite");
-  using db = openNodeSqliteDatabase(sourcePath);
-  db.exec(metadata.sqlite);
-  db.exec("INSERT INTO workboard_schema_migrations VALUES ('schema-3', 17)");
-  db.exec(
-    "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('board', ' {\"a\":1,\"a\":2} ', 1, 2)",
+  seedPortSqlite(
+    sourcePath,
+    `${metadata.sqlite};
+    INSERT INTO workboard_schema_migrations VALUES ('schema-3', 17);
+    INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('board', ' {"a":1,"a":2} ', 1, 2);
+    ${sql}`,
   );
-  if (sql) {
-    db.exec(sql);
-  }
   return { directory, sourcePath };
 }
 async function hash(file: string) {
   return createHash("sha256")
     .update(await fs.readFile(file))
     .digest("hex");
+}
+async function inspectSource(sourcePath: string) {
+  using db = openNodeSqliteDatabase(sourcePath, { readOnly: true, readBigInts: true });
+  descriptor.inspectSqliteSource?.(db);
+  return await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
 }
 
 it.each([25, 27])("preserves the version %s backup shape and Doctor guidance", async (version) => {
@@ -44,121 +50,83 @@ it.each([25, 27])("preserves the version %s backup shape and Doctor guidance", a
   const legacy = await loadStatePortDescriptor(version);
   {
     using db = openNodeSqliteDatabase(sourcePath);
-    db.exec(legacy.sqlite);
-    for (const fragment of legacy.fragments ?? []) {
-      db.exec(fragment.sqlite);
-    }
+    const schemas = [legacy, ...(legacy.fragments ?? [])];
+    db.exec(schemas.map((schema) => schema.sqlite).join("\n;\n"));
     db.exec(`PRAGMA user_version = ${version}`);
-    for (const table of [
-      "github_publication_requests",
-      "github_personal_publication_requests",
-      "github_repository_publication_requests",
-    ]) {
-      expect(
-        db
-          .prepare(`PRAGMA table_info(${table})`)
-          .all()
-          .some((column) => column.name === "draft"),
-      ).toBe(false);
-      const definition = [legacy, ...(legacy.fragments ?? [])]
+    for (const prefix of ["", "personal_", "repository_"]) {
+      const table = `github_${prefix}publication_requests`;
+      const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+      expect(columns.some((column) => column.name === "draft")).toBe(false);
+      const definition = schemas
         .flatMap((part) => part.tables)
         .find((entry) => entry.name === table);
       expect(definition?.columns.some((column) => column.name === "draft")).toBe(false);
     }
   }
   const original = await hash(sourcePath);
-  await expect(
-    runDatabasePortTask({ operation: "inspect", sourcePath, config: {}, to: "postgres" }, scope),
-  ).rejects.toThrow("run openclaw doctor --fix with the matching version first");
+  await expect(inspect(sourcePath)).rejects.toThrow(
+    "run openclaw doctor --fix with the matching version first",
+  );
   expect(await hash(sourcePath)).toBe(original);
 });
 
-describe("workboard port worker", () => {
-  it("inspects without writing and refuses changed canonical SQLite data", async () => {
-    const { directory, sourcePath } = fixture();
-    const original = await hash(sourcePath);
-    const before = await fs.readdir(directory);
-    const inspected = await runDatabasePortTask(
-      { operation: "inspect", sourcePath, config: {}, to: "postgres" },
-      scope,
-    );
-    expect(inspected).toMatchObject({ engine: "sqlite", version: 3, migrationRequired: false });
-    expect(inspected.verification?.tables.workboard_boards?.rows).toBe(1);
-    expect(await fs.readdir(directory)).toEqual(before);
-    expect(await hash(sourcePath)).toBe(original);
-    const targetPath = path.join(directory, "staged.sqlite");
-    await fs.copyFile(sourcePath, targetPath);
-    assert(inspected.verification);
-    using changed = openNodeSqliteDatabase(targetPath);
-    changed.exec("UPDATE workboard_boards SET name = 'changed'");
-    await expect(
-      runDatabasePortTask(
-        {
-          operation: "verify",
-          sourcePath: targetPath,
-          config: {},
-          engine: "sqlite",
-          storeId: "00000000-0000-4000-8000-000000000001",
-          namespace: "unused",
-          verification: inspected.verification,
-        },
-        scope,
-      ),
-    ).rejects.toThrow("changed canonical rows");
-    expect(await hash(sourcePath)).toBe(original);
+it("inspects without writing and refuses changed canonical SQLite data", async () => {
+  const { directory, sourcePath } = fixture();
+  const original = await hash(sourcePath);
+  const before = await fs.readdir(directory);
+  const inspected = await inspect(sourcePath);
+  expect(inspected).toMatchObject({
+    family: "workboard",
+    engine: "sqlite",
+    version: 3,
+    migrationRequired: false,
+    verification: { tables: { workboard_boards: { rows: 1 } } },
   });
-
-  it.each([
-    ["future version", "PRAGMA user_version = 99", "schema version 99"],
-    [
-      "unknown migration",
-      "INSERT INTO workboard_schema_migrations VALUES ('future-payload', 1)",
-      "unknown schema migration",
-    ],
-    ["unknown table", "CREATE TABLE private_payload (data TEXT)", "Unknown SQLite table"],
-    ["missing table", "DROP TABLE workboard_worker_protocol", "Unknown or missing columns"],
-    ["invalid UTF8", "UPDATE workboard_boards SET name = CAST(x'80' AS TEXT)", "invalid UTF-8"],
-    [
-      "unknown column",
-      "ALTER TABLE workboard_boards ADD COLUMN private_payload TEXT",
-      "Unknown or missing columns",
-    ],
-    [
-      "literal NUL",
-      "UPDATE workboard_boards SET name = 'private-payload' || char(0)",
-      "unrepresentable UTF-8",
-    ],
-  ])(
-    "refuses %s without exposing payloads or changing the source",
-    async (_label, sql, message) => {
-      const { sourcePath } = fixture(sql);
-      const original = await hash(sourcePath);
-      using source = openNodeSqliteDatabase(sourcePath, { readOnly: true, readBigInts: true });
-      const failure = await Promise.resolve()
-        .then(() => {
-          descriptor.inspectSqliteSource?.(source);
-          return inspectDatabasePort({ engine: "sqlite", db: source }, descriptor);
-        })
-        .catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(Error);
-      expect(String(failure)).toContain(message);
-      expect(String(failure)).not.toContain("private-payload");
-      expect(await hash(sourcePath)).toBe(original);
-    },
-  );
-
-  it("maps foreign-key failure without exposing payloads or changing the source", async () => {
-    const { sourcePath } = fixture(
-      "PRAGMA foreign_keys = OFF; INSERT INTO workboard_card_labels VALUES ('absent', 1, 'private-payload')",
-    );
-    const original = await hash(sourcePath);
-    const failure = await runDatabasePortTask(
-      { operation: "inspect", sourcePath, config: {}, to: "postgres" },
+  expect([await fs.readdir(directory), await hash(sourcePath)]).toEqual([before, original]);
+  const targetPath = path.join(directory, "staged.sqlite");
+  await fs.copyFile(sourcePath, targetPath);
+  assert(inspected.verification);
+  using changed = openNodeSqliteDatabase(targetPath);
+  changed.exec("UPDATE workboard_boards SET name = 'changed'");
+  await expect(
+    runDatabasePortTask(
+      {
+        operation: "verify",
+        sourcePath: targetPath,
+        config: {},
+        engine: "sqlite",
+        storeId: "00000000-0000-4000-8000-000000000001",
+        namespace: "unused",
+        verification: inspected.verification,
+      },
       scope,
-    ).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(Error);
-    expect(String(failure)).toContain("database validation");
-    expect(String(failure)).not.toContain("private-payload");
-    expect(await hash(sourcePath)).toBe(original);
-  });
+    ),
+  ).rejects.toThrow("changed canonical rows");
+  expect(await hash(sourcePath)).toBe(original);
+});
+
+it.each([
+  ["schema version 99", "PRAGMA user_version = 99"],
+  [
+    "unknown schema migration",
+    "INSERT INTO workboard_schema_migrations VALUES ('future-payload', 1)",
+  ],
+  ["Unknown SQLite table", "CREATE TABLE private_payload (data TEXT)"],
+  ["Unknown or missing columns", "DROP TABLE workboard_worker_protocol"],
+  ["invalid UTF-8", "UPDATE workboard_boards SET name = CAST(x'80' AS TEXT)"],
+  ["Unknown or missing columns", "ALTER TABLE workboard_boards ADD COLUMN private_payload TEXT"],
+  ["unrepresentable UTF-8", "UPDATE workboard_boards SET name = 'private-payload' || char(0)"],
+  [
+    "database validation",
+    "PRAGMA foreign_keys = OFF; INSERT INTO workboard_card_labels VALUES ('absent', 1, 'private-payload')",
+  ],
+])("refuses %s (%s) without exposing payloads or changing the source", async (message, sql) => {
+  const { sourcePath } = fixture(sql);
+  const original = await hash(sourcePath);
+  const run = message === "database validation" ? inspect : inspectSource;
+  const failure = await run(sourcePath).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect(String(failure)).toContain(message);
+  expect(String(failure)).not.toContain("private-payload");
+  expect(await hash(sourcePath)).toBe(original);
 });

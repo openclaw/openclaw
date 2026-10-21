@@ -16,11 +16,8 @@ import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheMutation,
 } from "./manager-publication-task.js";
-import {
-  MemoryManagerSyncOps,
-  type MemoryIndexWorkItem,
-  type MemorySemanticProviderGeneration,
-} from "./manager-sync-ops.js";
+import type { MemoryIndexWorkItem, MemorySemanticProviderGeneration } from "./manager-sync-base.js";
+import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
 
@@ -199,8 +196,8 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
             embedding.length !== generation.embeddingDimensions,
         )
       ) {
-        // Separate successful batches can disagree. Neither dimension is authoritative;
-        // discard this identity's ambiguous cache so retries can recover after restart.
+        // Conflicting batches cannot share an identity's cache. Discard it so
+        // retries can recover after restart, using the declared size when available.
         await withMemoryWorkspaceLock(this.workspaceDir, async () => {
           try {
             await this.withGeneratedEmbeddingCacheWrite(generation, {

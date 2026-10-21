@@ -85,6 +85,8 @@ function successfulNativeSetup() {
       "node-env",
       "macos-swift-tools",
       "macos-native-assets",
+      "swift-test-build",
+      "native-test-cli",
       "macos-node-assets",
       "macos-node-tooling",
       "ios-swift-tools",
@@ -2822,9 +2824,7 @@ describe("ci workflow guards", () => {
       expect(job.strategy["fail-fast"]).toBe(false);
       expect(job.strategy["max-parallel"]).toBe(2);
       expect(job["continue-on-error"]).not.toBe(true);
-      expect(job.needs).toEqual(
-        jobName === "macos-swift" ? ["preflight", "build-artifacts"] : ["preflight"],
-      );
+      expect(job.needs).toEqual(["preflight"]);
       const workloads =
         jobName === "macos-swift"
           ? {
@@ -2834,7 +2834,7 @@ describe("ci workflow guards", () => {
                 "Swift lint",
                 "Swift build (release)",
               ],
-              tests: ["Swift test"],
+              tests: ["Build Swift tests", "Swift test"],
               packages: [
                 "OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)",
                 "OpenClawKit tests",
@@ -2843,17 +2843,16 @@ describe("ci workflow guards", () => {
             }
           : {
               smoke: [
-                "Swift lint",
                 ...(historical ? [] : ["Configure iOS build and report simulator selection"]),
                 ...(historical ? [] : ["Prepare iOS simulator"]),
                 "Build iOS app",
+                ...(historical ? ["Swift lint"] : []),
                 ...(historical ? [] : ["Run focused iOS voice cleanup simulator tests"]),
                 ...(historical ? [] : ["Run focused iOS lifecycle simulator tests"]),
               ],
               release: ["Build iOS app (Release)"],
               tests: [
                 "Test Watch RTC engine",
-                "Swift lint",
                 "Configure iOS build and report simulator selection",
                 "Prepare iOS simulator",
                 "Build iOS app",
@@ -2867,13 +2866,14 @@ describe("ci workflow guards", () => {
         const phaseContext = { ...context, matrix: { phase } };
         const expected =
           historical && phase === "tests"
-            ? ["Test Watch RTC engine", "Swift lint", "Build iOS app"]
+            ? ["Test Watch RTC engine", "Build iOS app", "Swift lint"]
             : workloads[phase];
         names.push(evaluateWorkflowExpression(job.name, phaseContext));
         const selected = job.steps
           .filter((step: WorkflowStep) =>
             Object.values(workloads)
               .flat()
+              .concat("Swift lint")
               .includes(step.name ?? ""),
           )
           .filter(
@@ -2973,7 +2973,8 @@ describe("ci workflow guards", () => {
               matrix: { phase },
               steps: {
                 ...successfulNativeSetup(),
-                "swift-test": {
+                "swift-test": { outcome: "success", outputs: {} },
+                "swift-test-build": {
                   outcome: "success",
                   outputs: { "debug-tests-built": phase === "tests" ? "true" : "" },
                 },
@@ -3001,7 +3002,25 @@ describe("ci workflow guards", () => {
           eventName === "pull_request" && name === "OpenClawKit tests" ? [] : ["packages"],
         );
       }
+      expect(selectedPhases("Build Swift tests")).toEqual(["tests"]);
       expect(selectedPhases("Swift test")).toEqual(["tests"]);
+      expect(
+        selectedPhases("Swift test", {
+          steps: {
+            ...successfulNativeSetup(),
+            "swift-test-build": { outcome: "failure", outputs: {} },
+          },
+        }),
+      ).toEqual([]);
+      expect(
+        selectedPhases("Swift test", {
+          fileHashes: { "apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift": "present" },
+          steps: {
+            ...successfulNativeSetup(),
+            "native-test-cli": { outcome: "failure", outputs: {} },
+          },
+        }),
+      ).toEqual([]);
       expect(selectedPhases("Setup bundled recovery runtime build")).toEqual(
         full && !historical ? ["tests"] : [],
       );
@@ -3010,7 +3029,11 @@ describe("ci workflow guards", () => {
       );
       expect(
         selectedPhases("Setup bundled recovery runtime build", {
-          steps: { "swift-test": { outcome: "failure", outputs: { "debug-tests-built": "true" } } },
+          steps: {
+            ...successfulNativeSetup(),
+            "swift-test-build": { outcome: "success", outputs: { "debug-tests-built": "true" } },
+            "swift-test": { outcome: "failure", outputs: {} },
+          },
         }),
       ).toEqual([]);
       expect(
@@ -8765,6 +8788,15 @@ describe("ci workflow guards", () => {
         selectedJobs: [],
       }),
     ),
+    ...["scripts/lib/ios-test-results.mjs", "scripts/lib/ios-test-results.d.mts"].map(
+      (changedPath) => ({
+        label: `Screenshot input ${changedPath}`,
+        changedPath,
+        eventName: "push" as const,
+        screenshots: true,
+        selectedJobs: ["ios-build"],
+      }),
+    ),
     {
       label: "iOS unit tests do not select screenshot capture",
       changedPath: "apps/ios/Tests/SettingsTests.swift",
@@ -12305,19 +12337,24 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it("captures all iOS families in one native job and retains phase timings", () => {
+  it("captures all iOS families in one native job and retains phase and resource diagnostics", () => {
     const capture = readCiWorkflow().jobs["ios-screenshot-capture"];
     expect(capture.strategy).toBeUndefined();
     const step = capture.steps.find(
       (candidate: WorkflowStep) => candidate.id === "device_screenshots",
     );
-    expect(step.run).toBe("pnpm ios:screenshots");
+    expect(step.run.trim()).toBe(
+      'node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \\\n  pnpm ios:screenshots',
+    );
     expect(step.env).toEqual({ OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1" });
     const diagnostics = capture.steps.find(
       (candidate: WorkflowStep) => candidate.name === "Upload iOS screenshot timing diagnostics",
     );
     expect(diagnostics.if).toBe("always()");
-    expect(diagnostics.with.path).toBe("apps/ios/build/screenshot-diagnostics.json");
+    expect(diagnostics.with.path.trim().split("\n")).toEqual([
+      "apps/ios/build/screenshot-diagnostics.json",
+      "${{ runner.temp }}/ios-resource-timeline.jsonl",
+    ]);
   });
 
   it("reduces iOS screenshots only after the combined capture succeeded", () => {

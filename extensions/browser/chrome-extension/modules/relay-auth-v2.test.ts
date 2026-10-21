@@ -57,7 +57,6 @@ describe("Browser Relay Authentication v2 WebCrypto vectors", () => {
       sessionId: VECTOR.fields.sessionId,
       clientProof: VECTOR.clientProof,
     });
-    expect(auth.authenticated).toBe(false);
     await expect(
       auth.acceptOk({
         type: "auth.ok",
@@ -66,7 +65,6 @@ describe("Browser Relay Authentication v2 WebCrypto vectors", () => {
         acceptProof: VECTOR.acceptProof,
       }),
     ).resolves.toBeUndefined();
-    expect(auth.authenticated).toBe(true);
   });
 });
 
@@ -77,7 +75,6 @@ describe("Browser Relay Authentication v2 client validation", () => {
     await expect(auth.acceptChallenge(challenge({ serverProof: "A".repeat(43) }))).rejects.toThrow(
       "server proof is invalid",
     );
-    expect(auth.authenticated).toBe(false);
     await expect(auth.acceptChallenge(challenge())).rejects.toThrow("out of sequence");
   });
 
@@ -141,7 +138,6 @@ describe("Browser Relay Authentication v2 client validation", () => {
         acceptProof: "A".repeat(43),
       }),
     ).rejects.toThrow("accept proof is invalid");
-    expect(auth.authenticated).toBe(false);
   });
 
   it("canonicalizes only the allowed profile query", () => {

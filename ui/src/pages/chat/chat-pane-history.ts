@@ -23,8 +23,6 @@ import {
   cloneChatAttachmentsForIndependentOwner,
   replaceChatAttachmentsFromEditor,
 } from "./attachment-payload-store.ts";
-import { mergeStoredChatSessionSnapshot } from "./chat-board-snapshot.ts";
-import { projectChatFields } from "./chat-field-projection.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import {
   fetchStagedOlderHistoryPage,
@@ -39,20 +37,16 @@ import {
   resolveChatHistoryPagination,
   type ChatHistoryResult,
 } from "./chat-history-snapshot.ts";
-import {
-  chatHistoryRequests,
-  getChatHistoryLoadState,
-  type InitialChatSnapshotHydration,
-} from "./chat-history-state.ts";
+import { chatHistoryRequests, getChatHistoryLoadState } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { ChatPaneReplyNavigation } from "./chat-pane-reply-navigation.ts";
 import {
   CHAT_HISTORY_PREFETCH_EDGE_PX,
   CHAT_HISTORY_INTENT_IDLE_MS,
   clearPaneSessionHandoff,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
+import { ChatPaneSnapshotHydration } from "./chat-pane-snapshot-hydration.ts";
 import { TranscriptHistoryInput } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
@@ -69,14 +63,10 @@ import {
   saveChatSessionScrollPosition,
   scheduleChatScroll,
 } from "./scroll.ts";
-import {
-  applyChatCacheSnapshot,
-  cacheChatSessionSnapshot,
-  resolveChatSnapshotKey,
-} from "./session-message-cache.ts";
+import { applyChatCacheSnapshot } from "./session-message-cache.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 
-export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
+export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
   private activeCatalogContinuation: symbol | null = null;
   private activeOlderLoad: Promise<boolean> | null = null;
   private historyViewportFillAttempted = false;
@@ -91,75 +81,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     page: StagedOlderHistoryPage | null;
     load: Promise<void> | null;
   } = { page: null, load: null };
-
-  protected hydrateStoredChatSnapshot(
-    state: NonNullable<ChatPaneHistory["state"]>,
-    sessionKey: string,
-  ): void {
-    if (!this.sessionSnapshotStore) {
-      return;
-    }
-    const cacheKey = resolveChatSnapshotKey(state, { sessionKey });
-    const requests = chatHistoryRequests(state);
-    const hydration: InitialChatSnapshotHydration = {
-      titlePending: true,
-      sessionKey,
-      connected: this.context.gateway.snapshot.phase === "connected",
-      promise: this.sessionSnapshotStore
-        .read(cacheKey)
-        .then((storedSnapshot) => {
-          if (
-            requests.initialSnapshotHydration !== hydration ||
-            this.state !== state ||
-            !this.ownsChatSnapshot({ sessionKey }) ||
-            !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-            resolveChatSnapshotKey(state, { sessionKey }) !== cacheKey
-          ) {
-            return hydration.complete?.();
-          }
-          const snapshot = mergeStoredChatSessionSnapshot(
-            state.chatMessagesBySession,
-            state,
-            { sessionKey },
-            storedSnapshot,
-          );
-          if (snapshot?.board) {
-            this.boardProviderLease?.restoreSnapshot(
-              snapshot.board.snapshot,
-              snapshot.board.receivedAtMs,
-            );
-          }
-          if (requests.acceptedHistory) {
-            return hydration.complete?.();
-          }
-          // A sibling can fill the shared cache while this pane still needs its
-          // own transcript. Adopt those messages before revalidating their cursor.
-          if (!snapshot) {
-            return hydration.complete?.();
-          }
-          applyChatCacheSnapshot(state, snapshot);
-          const hydrated = { ...snapshot, messages: state.chatMessages };
-          cacheChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }, hydrated);
-          if (snapshot.progressCard !== undefined) {
-            const target = this.resolveChatReadTarget();
-            if (target) {
-              this.progressCards.hydrate(target, snapshot.progressCard);
-            }
-          }
-          // Release the history response before publishing the cached transcript.
-          hydration.complete?.();
-        })
-        .catch(() => hydration.complete?.())
-        .finally(() => {
-          hydration.titlePending = false;
-          if (requests.initialSnapshotHydration === hydration && !hydration.wait) {
-            delete requests.initialSnapshotHydration;
-          }
-        }),
-    };
-    // Only the title observes cache readiness; history keeps its existing wait contract.
-    requests.initialSnapshotHydration = projectChatFields(hydration, ["titlePending"]);
-  }
 
   protected readonly refreshHistory = () => {
     const state = this.state;

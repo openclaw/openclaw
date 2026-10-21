@@ -166,8 +166,11 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
       }
       source = `export const controlUiPluginDistributions = [${modules.join(",")}];`;
     },
-    transform(_code, id) {
-      return id.split("?")[0] === inventoryModule ? { code: source, map: null } : null;
+    transform: {
+      filter: { id: /\/ui\/src\/plugins\/control-ui-distribution\.ts(?:\?.*)?$/ },
+      handler(_code, id) {
+        return id.split("?")[0] === inventoryModule ? { code: source, map: null } : null;
+      },
     },
   };
 }

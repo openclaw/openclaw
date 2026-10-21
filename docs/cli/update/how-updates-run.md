@@ -254,10 +254,14 @@ helper's fingerprint. Explicit runtime links into those recovery artifacts are
 rejected; the evidence remains untouched for its recovery owner.
 
 Unchanged retained runtime files use hard links when the filesystem supports
-them. Retention verifies each source before linking and checks the resulting
-inode and metadata, without rehashing bytes for the change time caused by its
-own link. Files requiring independent plugin-safety checks or relocation still
-use verified copies.
+them. The same-inode path does not rehash content. If linking changes file
+identity, retention verifies size, mode, and a stable content hash against the
+inventory, accepting equivalent filesystem copy-up. A failed check makes the
+whole retained runtime unusable: the updater logs a warning naming the file and
+check, leaves the tree unbound, and continues. Package rollback keeps its separate
+verified backup; the warning makes clear that no verified retained rollback
+runtime is available. Files requiring plugin-safety checks or relocation use
+verified copies.
 
 Candidate verification uses the same best-effort contract when its scan reaches
 the resource limits: activation and publication continue with directory identity,

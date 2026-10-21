@@ -18,7 +18,6 @@ import { agentCommandFromIngress } from "../commands/agent.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions/main-session.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updatePairedDevicePresence } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
@@ -85,10 +84,10 @@ type VoiceTranscriptReservation = {
   receivedAt: number;
   status: "pending" | "ready" | "checking" | "rejected";
   isConnectionCurrent?: () => boolean | Promise<boolean>;
+  assertCurrent?: () => void;
   start?: () => Promise<unknown>;
   resolve: (admission: VoiceTranscriptReservationAdmission) => void;
   rejectDecision: (reason: unknown) => void;
-  decision: Promise<VoiceTranscriptReservationAdmission>;
 };
 const pendingVoiceTranscriptReservations = new Map<string, VoiceTranscriptReservation[]>();
 const recentExecFinishedRuns = new Map<string, number>();
@@ -185,120 +184,6 @@ function shouldDropDuplicateVoiceTranscript(params: {
   }
 
   return false;
-}
-
-function reserveVoiceTranscript(params: {
-  sessionKey: string;
-  fingerprint: string;
-  receivedAt: number;
-}): {
-  admit: (params: {
-    isConnectionCurrent?: () => boolean | Promise<boolean>;
-    start: () => Promise<unknown>;
-  }) => Promise<VoiceTranscriptReservationAdmission>;
-  reject: () => void;
-} {
-  // Resolve reservations in receipt order so delayed currentness checks cannot
-  // change the dedupe window, while rejected connections leave no committed state.
-  const decision = createDeferredCore<VoiceTranscriptReservationAdmission>();
-  const reservation: VoiceTranscriptReservation = {
-    fingerprint: params.fingerprint,
-    receivedAt: params.receivedAt,
-    status: "pending",
-    resolve: decision.resolve,
-    rejectDecision: decision.reject,
-    decision: decision.promise,
-  };
-  const queue = pendingVoiceTranscriptReservations.get(params.sessionKey) ?? [];
-  queue.push(reservation);
-  pendingVoiceTranscriptReservations.set(params.sessionKey, queue);
-
-  const drain = () => {
-    while (queue[0]?.status === "rejected") {
-      const next = queue.shift();
-      if (!next) {
-        break;
-      }
-      next.resolve(null);
-    }
-    const next = queue[0];
-    if (!next) {
-      pendingVoiceTranscriptReservations.delete(params.sessionKey);
-      return;
-    }
-    if (next.status !== "ready") {
-      return;
-    }
-    next.status = "checking";
-    void (async () => {
-      try {
-        const isCurrent = next.isConnectionCurrent ? await next.isConnectionCurrent() : true;
-        const admission =
-          isCurrent &&
-          !shouldDropDuplicateVoiceTranscript({
-            sessionKey: params.sessionKey,
-            fingerprint: next.fingerprint,
-            now: next.receivedAt,
-          }) &&
-          next.start
-            ? { work: next.start() }
-            : null;
-        queue.shift();
-        next.resolve(admission);
-      } catch (err) {
-        queue.shift();
-        next.rejectDecision(err);
-      }
-      drain();
-    })();
-  };
-  const settle = (status: "ready" | "rejected") => {
-    if (reservation.status !== "pending") {
-      return;
-    }
-    reservation.status = status;
-    drain();
-  };
-
-  return {
-    admit: ({ isConnectionCurrent, start }) => {
-      reservation.isConnectionCurrent = isConnectionCurrent;
-      reservation.start = start;
-      settle("ready");
-      return reservation.decision;
-    },
-    reject: () => settle("rejected"),
-  };
-}
-
-function dispatchReservedVoiceAgentCommand(params: {
-  ctx: NodeEventContext;
-  nodeId: string;
-  input: NodeAgentCommandInput;
-  reservation: ReturnType<typeof reserveVoiceTranscript>;
-  isConnectionCurrent?: () => boolean | Promise<boolean>;
-  onStart: () => void;
-}): Promise<void> {
-  return runWithGatewayIndependentRootWorkContinuation(async () => {
-    if (params.isConnectionCurrent && !(await params.isConnectionCurrent())) {
-      params.reservation.reject();
-      return;
-    }
-    const admission = await params.reservation.admit({
-      isConnectionCurrent: params.isConnectionCurrent,
-      start: () => {
-        params.onStart();
-        return agentCommandFromIngress(params.input, defaultRuntime, params.ctx.deps);
-      },
-    });
-    if (!admission) {
-      return;
-    }
-    await admission.work;
-  }, "node-events:voice-turn").catch((err: unknown) => {
-    params.reservation.reject();
-    params.ctx.logGateway.warn(`agent failed node=${params.nodeId}: ${formatForLog(err)}`);
-  });
 }
 
 function shouldDropDuplicateExecFinished(params: {
@@ -407,42 +292,6 @@ async function cleanupNodeEventMedia(
   }
 }
 
-async function sendReceiptAck(params: {
-  cfg: OpenClawConfig;
-  deps: NodeEventContext["deps"];
-  sessionKey: string;
-  channel: string;
-  to: string;
-  text: string;
-}) {
-  const resolved = await resolveOutboundTarget({
-    channel: params.channel,
-    to: params.to,
-    cfg: params.cfg,
-    mode: "explicit",
-  });
-  if (!resolved.ok) {
-    throw new Error(String(resolved.error));
-  }
-  const session = buildOutboundSessionContext({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-  });
-  const send = await sendDurableMessageBatchCore({
-    cfg: params.cfg,
-    channel: params.channel,
-    to: resolved.to,
-    payloads: [{ text: params.text }],
-    session,
-    bestEffort: true,
-    durability: "best_effort",
-    deps: createOutboundSendDeps(params.deps),
-  });
-  if (send.status === "failed") {
-    throw send.error;
-  }
-}
-
 export const handleNodeEvent = (
   ctx: NodeEventContext,
   nodeId: string,
@@ -514,34 +363,74 @@ async function handlePreparedNodeEvent(
       const fingerprint = resolveVoiceTranscriptFingerprint(obj, text);
       const sessionId = entry?.sessionId ?? randomUUID();
       const runId = randomUUID();
-      const transcriptReservation = reserveVoiceTranscript({
-        sessionKey: canonicalKey,
+      source?.assertCurrent();
+      // Resolve reservations in receipt order so delayed currentness checks cannot
+      // change the dedupe window, while rejected connections leave no committed state.
+      const decision = createDeferredCore<VoiceTranscriptReservationAdmission>();
+      const reservation: VoiceTranscriptReservation = {
         fingerprint,
         receivedAt,
-      });
+        status: "pending",
+        resolve: decision.resolve,
+        rejectDecision: decision.reject,
+        assertCurrent: source?.assertCurrent,
+      };
+      const queue = pendingVoiceTranscriptReservations.get(canonicalKey) ?? [];
+      queue.push(reservation);
+      pendingVoiceTranscriptReservations.set(canonicalKey, queue);
 
-      source?.assertCurrent();
-      const voiceWork = dispatchReservedVoiceAgentCommand({
-        ctx,
-        nodeId,
-        input: {
-          runId,
-          message: text,
-          sessionId,
-          sessionKey: canonicalKey,
-          thinking: "low",
-          deliver: false,
-          messageChannel: "node",
-          inputProvenance: {
-            kind: "external_user",
-            sourceChannel: "voice",
-            sourceTool: "gateway.voice.transcript",
-          },
-          allowModelOverride: false,
-        },
-        reservation: transcriptReservation,
-        isConnectionCurrent: opts?.isConnectionCurrent,
-        onStart: () => {
+      const drain = () => {
+        while (queue[0]?.status === "rejected") {
+          queue.shift()?.resolve(null);
+        }
+        const next = queue[0];
+        if (!next) {
+          pendingVoiceTranscriptReservations.delete(canonicalKey);
+          return;
+        }
+        if (next.status !== "ready") {
+          return;
+        }
+        next.status = "checking";
+        void (async () => {
+          try {
+            const isCurrent = next.isConnectionCurrent ? await next.isConnectionCurrent() : true;
+            next.assertCurrent?.();
+            const admission =
+              isCurrent &&
+              !shouldDropDuplicateVoiceTranscript({
+                sessionKey: canonicalKey,
+                fingerprint: next.fingerprint,
+                now: next.receivedAt,
+              }) &&
+              next.start
+                ? { work: next.start() }
+                : null;
+            next.resolve(admission);
+          } catch (err) {
+            next.rejectDecision(err);
+          } finally {
+            queue.shift();
+            drain();
+          }
+        })();
+      };
+      const settle = (status: "ready" | "rejected") => {
+        if (reservation.status !== "pending") {
+          return;
+        }
+        reservation.status = status;
+        drain();
+      };
+
+      const isConnectionCurrent = opts?.isConnectionCurrent;
+      const voiceWork = runWithGatewayIndependentRootWorkContinuation(async () => {
+        if (isConnectionCurrent && !(await isConnectionCurrent())) {
+          settle("rejected");
+          return;
+        }
+        reservation.isConnectionCurrent = isConnectionCurrent;
+        reservation.start = () => {
           const touch = queueSessionStoreTouch({
             ctx,
             storePath,
@@ -560,7 +449,35 @@ async function handlePreparedNodeEvent(
             sessionKey: canonicalKey,
             clientRunId: runId,
           });
-        },
+          return agentCommandFromIngress(
+            {
+              runId,
+              message: text,
+              sessionId,
+              sessionKey: canonicalKey,
+              thinking: "low",
+              deliver: false,
+              messageChannel: "node",
+              inputProvenance: {
+                kind: "external_user",
+                sourceChannel: "voice",
+                sourceTool: "gateway.voice.transcript",
+              },
+              allowModelOverride: false,
+            },
+            defaultRuntime,
+            ctx.deps,
+          );
+        };
+        settle("ready");
+        const admission = await decision.promise;
+        if (!admission) {
+          return;
+        }
+        await admission.work;
+      }, "node-events:voice-turn").catch((err: unknown) => {
+        settle("rejected");
+        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
       });
       source?.pending.push(voiceWork);
       return undefined;
@@ -751,14 +668,33 @@ async function handlePreparedNodeEvent(
           if (!(await isNodeEventConnectionCurrent(opts))) {
             return;
           }
-          await sendReceiptAck({
-            cfg,
-            deps: ctx.deps,
-            sessionKey: canonicalKey,
+          const receiptDeps = ctx.deps;
+          const resolved = await resolveOutboundTarget({
             channel: deliveryChannel,
             to: deliveryTo,
-            text: receiptText,
+            cfg,
+            mode: "explicit",
           });
+          if (!resolved.ok) {
+            throw new Error(String(resolved.error));
+          }
+          const session = buildOutboundSessionContext({
+            cfg,
+            sessionKey: canonicalKey,
+          });
+          const send = await sendDurableMessageBatchCore({
+            cfg,
+            channel: deliveryChannel,
+            to: resolved.to,
+            payloads: [{ text: receiptText }],
+            session,
+            bestEffort: true,
+            durability: "best_effort",
+            deps: createOutboundSendDeps(receiptDeps),
+          });
+          if (send.status === "failed") {
+            throw send.error;
+          }
         }, "node-events:delivery").catch((err: unknown) => {
           ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
         });

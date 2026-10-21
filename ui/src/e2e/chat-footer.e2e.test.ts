@@ -1,13 +1,17 @@
+import path from "node:path";
 import type { CDPSession, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   closeChatDetails,
   openChatDetails,
   openDetailsPullRequests,
+  openChatTaskProgress,
+  openDesktopPullRequestPage,
 } from "./chat-details.test-support.ts";
 import {
   chatMessage,
@@ -59,26 +63,30 @@ async function expectInputReachable(page: Page) {
     const actions = [...input.querySelectorAll<HTMLElement>(".chat-send-btn")].filter(
       (action) => action.getClientRects().length > 0,
     );
+    const targets = actions.map((action) => {
+      const button = action.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        button.left + button.width / 2,
+        button.top + button.height / 2,
+      );
+      return {
+        label: action.getAttribute("aria-label"),
+        rect: { x: button.x, y: button.y, width: button.width, height: button.height },
+        hit: hit ? { tag: hit.tagName, class: hit.getAttribute("class") } : null,
+        reachable: action.contains(hit),
+      };
+    });
     return {
       top: bounds.top,
       bottom: bounds.bottom,
       viewportHeight: innerHeight,
-      actionsReachable:
-        actions.length > 0 &&
-        actions.every((action) => {
-          const button = action.getBoundingClientRect();
-          return action.contains(
-            document.elementFromPoint(
-              button.left + button.width / 2,
-              button.top + button.height / 2,
-            ),
-          );
-        }),
+      targets,
+      actionsReachable: targets.length > 0 && targets.every((target) => target.reachable),
     };
   });
   expect(geometry.top).toBeGreaterThanOrEqual(0);
   expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewportHeight);
-  expect(geometry.actionsReachable).toBe(true);
+  expect(geometry.actionsReachable, JSON.stringify(geometry)).toBe(true);
 }
 
 async function verifyFooter(page: Page, width: number, height: number, touch: boolean) {
@@ -135,6 +143,7 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
             branch: "fix/footer-layout",
             title: "Improve chat layout",
             url: "https://github.com/example/demo/pull/42",
+            checksUrl: "https://github.com/example/demo/pull/42/checks",
             state: "open",
             checks: { state: "passing", passed: 12, failed: 0, skipped: 0, running: 0 },
           },
@@ -144,7 +153,9 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
       },
     },
   });
-  const pullRequest = page.locator(".chat-pr");
+  const pullRequest = page
+    .locator(touch ? ".chat-pr-mobile__row" : ".chat-pr")
+    .filter({ visible: true });
   await openDetailsPullRequests(page);
   await pullRequest.waitFor();
   const thread = page.locator(".chat-thread");
@@ -179,15 +190,19 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
   await page.locator(".chat-error").waitFor();
   await waitForChatScrollIdle(page);
 
-  // Details clips overflowing rows; its scrollport must stay above the notice.
-  const details = page.getByRole("dialog", { name: "Details", exact: true });
-  const detailsBottom = await details.evaluate((element) => element.getBoundingClientRect().bottom);
-  const noticeTop = await page
-    .locator(".chat-error")
-    .evaluate((element) => element.getBoundingClientRect().top);
-  expect(detailsBottom).toBeLessThanOrEqual(noticeTop);
+  // Each native host leaves the run notice outside its own scrollport.
+  const details = await openChatDetails(page);
+  await waitForLayoutSettled(page, touch ? ".chat-mobile-host" : ".chat-details");
+  const detailsBounds = (await details.boundingBox())!;
+  const noticeBounds = (await page.locator(".chat-error").boundingBox())!;
+  if (touch) {
+    expect(noticeBounds.y + noticeBounds.height).toBeLessThanOrEqual(detailsBounds.y);
+    expect(detailsBounds.y + detailsBounds.height).toBeLessThanOrEqual(height);
+  } else {
+    expect(detailsBounds.y + detailsBounds.height).toBeLessThanOrEqual(noticeBounds.y);
+  }
   // Bring the action into view through Details without moving the transcript reader.
-  await pullRequest.locator(".chat-pr__link").click({ trial: true });
+  await (touch ? pullRequest : pullRequest.locator(".chat-pr__link")).click({ trial: true });
   const overlap = await pullRequest.evaluate((element) => {
     const row = element.getBoundingClientRect();
     const notice = document.querySelector(".chat-error")!.getBoundingClientRect();
@@ -220,19 +235,57 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
   await expectInputReachable(page);
 
   await openDetailsPullRequests(page);
-  await activate(pullRequest.locator(".chat-pr__checks-pill"), touch);
+  let menu: Locator;
+  if (touch) {
+    await pullRequest.tap();
+    await page.getByRole("button", { name: "Checks", exact: true }).tap();
+    menu = page.locator('.chat-mobile-details-page[data-details-page="pull-request-checks"]');
+  } else {
+    menu = await openDesktopPullRequestPage(pullRequest, "checks", "keyboard");
+  }
   await gateway.waitForRequest(checksMethod);
-  const menu = page.locator(".chat-pr__checks-menu");
   await menu.waitFor({ state: "visible" });
-  await menu.locator('input[name="autoFix"]:enabled').waitFor({ state: "visible" });
+  await waitForLayoutSettled(
+    page,
+    touch
+      ? '.chat-mobile-host, .chat-mobile-details-page[data-details-page="pull-request-checks"]'
+      : ".chat-details, .chat-pr-menu",
+  );
   const menuBounds = (await menu.boundingBox())!;
   const contextBounds = (await page.locator(".chat-footer__context").boundingBox())!;
-  expect(menuBounds.y).toBeLessThan(contextBounds.y);
+  if (touch) {
+    expect(menuBounds.y).toBeGreaterThanOrEqual(contextBounds.y + contextBounds.height);
+  } else {
+    expect(menuBounds.y).toBeLessThan(contextBounds.y);
+  }
   expect(menuBounds.y).toBeGreaterThanOrEqual(0);
   expect(menuBounds.y + menuBounds.height).toBeLessThanOrEqual(height);
-  await menu.getByRole("link", { name: "Open checks on GitHub" }).click({ trial: true });
-
-  await page.keyboard.press("Escape");
+  await menu
+    .locator('a[href="https://github.com/example/demo/pull/42/checks"]')
+    .click({ trial: true });
+  if (touch) {
+    await page
+      .locator(".chat-mobile-host__header")
+      .getByRole("button", { name: "Back", exact: true })
+      .tap();
+    await page.getByRole("button", { name: "CI monitoring", exact: true }).tap();
+    menu = page.locator('.chat-mobile-details-page[data-details-page="pull-request-monitoring"]');
+  } else {
+    menu = await openDesktopPullRequestPage(pullRequest, "monitoring", "keyboard");
+  }
+  const autoFix = menu.getByRole("switch", {
+    name: "Auto-fix CI & address comments",
+    exact: true,
+  });
+  await autoFix.waitFor();
+  await expect.poll(() => autoFix.isEnabled()).toBe(true);
+  if (touch) {
+    await closeChatDetails(page);
+  } else {
+    await page.keyboard.press("Escape");
+    expect(await menu.isVisible()).toBe(true);
+    await page.keyboard.press("Escape");
+  }
   await expect.poll(() => menu.isVisible()).toBe(false);
 
   await gateway.setMethodResponse("progressCard.get", {
@@ -251,13 +304,12 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
     },
   });
   await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 1 });
-  const progress = page.locator('[data-progress-card-placement="details"]');
-  await openChatDetails(page);
-  await progress.waitFor();
-  if ((await progress.getAttribute("open")) === null) {
+  const progress = await openChatTaskProgress(page);
+  if (!touch && (await progress.getAttribute("open")) === null) {
     await activate(progress.locator("summary"), touch);
   }
-  await progress.locator(".session-progress-card__body").waitFor({ state: "visible" });
+  await progress.locator(".task-progress-details__plan").waitFor({ state: "visible" });
+  await closeChatDetails(page);
 
   // Use the normal offline queue owner so nothing drains during the layout proof.
   await gateway.setOnline(false);
@@ -274,25 +326,41 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
   await queue(queuedMessages);
   const draft = "Keep every control reachable while reviewing this long draft.\n".repeat(12);
   await composer.fill(draft);
-  const persistentContext = page.locator(".chat-footer__context");
+  const persistentContext = page.locator(
+    touch ? ".agent-chat__composer-shell" : ".chat-footer__context",
+  );
   expect(await persistentContext.locator(".chat-queue__item").count()).toBe(3);
   await expectInputReachable(page);
 
   // Progress scrolls inside Details rather than chaining into the queue.
-  await openChatDetails(page);
-  const body = progress.locator(".session-progress-card__body");
+  await openChatTaskProgress(page);
+  const body = progress.locator(".task-progress-details__plan");
   await body.scrollIntoViewIfNeeded();
   await waitForChatScrollIdle(page);
   const beforeDetailsScroll = await thread.evaluate((element) => element.scrollTop);
-  const bounds = (await details.boundingBox())!;
+  const scrollport = touch
+    ? progress.locator(".chat-mobile-details-page__body")
+    : details.locator(".chat-details-desktop-body");
+  const bounds = (await scrollport.boundingBox())!;
   const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
   await scrollDown(page, point, touchClient);
-  await expect.poll(() => details.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect.poll(() => scrollport.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   await progress.locator(".session-progress-card__step").last().scrollIntoViewIfNeeded();
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+    await page.screenshot({
+      path: path.join(suite.artifactDir, `footer-progress-${touch ? "phone" : "desktop"}.png`),
+      animations: "disabled",
+    });
+  }
   await expectInputReachable(page);
   expect(await thread.evaluate((element) => element.scrollTop)).toBe(beforeDetailsScroll);
   expect(await persistentContext.locator(".session-progress-card, .chat-pr").count()).toBe(0);
-  await page.keyboard.press("Escape");
+  if (touch) {
+    await closeChatDetails(page);
+  } else {
+    await page.keyboard.press("Escape");
+    await details.waitFor({ state: "hidden" });
+  }
   const remove = page
     .locator(".chat-queue__item", { hasText: queuedMessages[2] })
     .locator(".chat-queue__remove");

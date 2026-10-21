@@ -68,21 +68,19 @@ describe("streamSessionTranscriptLines", () => {
     ).rejects.toBe(error);
   });
 
-  it("honours an abort signal between lines", async () => {
+  it("closes the stream when a consumer stops between lines", async () => {
     fs.writeFileSync(transcriptPath, "one\ntwo\nthree\n", "utf-8");
-    const controller = new AbortController();
-
+    const createReadStream = vi.spyOn(fs, "createReadStream");
     const out: string[] = [];
-    for await (const line of streamSessionTranscriptLines(transcriptPath, {
-      signal: controller.signal,
-    })) {
+    for await (const line of streamSessionTranscriptLines(transcriptPath)) {
       out.push(line);
       if (line === "one") {
-        controller.abort();
+        break;
       }
     }
 
     expect(out).toEqual(["one"]);
+    expect(createReadStream.mock.results[0]?.value.destroyed).toBe(true);
   });
 });
 
@@ -106,32 +104,27 @@ describe("streamSessionTranscriptLinesReverse", () => {
 
   it("preserves multibyte UTF-8 across chunk boundaries", async () => {
     const firstLine = `${"a".repeat(1100)}🌊`;
-    const secondLine = `${"b".repeat(1100)}✅`;
+    // The first reverse read splits the wave's four UTF-8 bytes at the 64 KiB boundary.
+    const secondLine = `${"b".repeat(65529)}✅`;
     fs.writeFileSync(transcriptPath, `${firstLine}\n${secondLine}\n`, "utf-8");
 
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse(transcriptPath, {
-        chunkBytes: 1024,
-      }),
-    );
+    const lines = await collect(streamSessionTranscriptLinesReverse(transcriptPath));
 
     expect(lines).toEqual([secondLine, firstLine]);
   });
 
-  it("honours an abort signal between reverse lines", async () => {
+  it("closes the file when a consumer stops between reverse lines", async () => {
     fs.writeFileSync(transcriptPath, "one\ntwo\nthree\n", "utf-8");
-    const controller = new AbortController();
-
+    const open = vi.spyOn(fs.promises, "open");
     const out: string[] = [];
-    for await (const line of streamSessionTranscriptLinesReverse(transcriptPath, {
-      signal: controller.signal,
-    })) {
+    for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
       out.push(line);
       if (line === "three") {
-        controller.abort();
+        break;
       }
     }
 
     expect(out).toEqual(["three"]);
+    expect((await open.mock.results[0]?.value)?.fd).toBe(-1);
   });
 });

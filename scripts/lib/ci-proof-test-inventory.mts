@@ -1678,7 +1678,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/capability-web-output.process.test.ts",
   "src/cli/channels-account-selector.integration.test.ts",
   "src/cli/channels-list-catalog-row-discovery.test.ts",
-  "src/cli/channels-list-route-cold-imports.test.ts",
   "src/cli/channels-status-cold-imports.test.ts",
   "src/cli/claws-cli.inspect.test.ts",
   "src/cli/cli-process-child.test-helpers.test.ts",

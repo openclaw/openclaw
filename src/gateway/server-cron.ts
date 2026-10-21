@@ -26,7 +26,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { runCronCommandJob } from "../cron/command-runner.js";
-import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
@@ -50,8 +49,6 @@ import {
 } from "../infra/heartbeat-wake.js";
 import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
 import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
-import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging.js";
 import type {
   PluginHookCronChangedEvent,
@@ -97,9 +94,12 @@ import {
   withObservedCronStreamState,
 } from "./server-cron-drain.js";
 import {
+  enqueueCronSystemEvent,
   fireOnExitJob,
   fireStreamJob,
   formatOnExitRunSummary,
+  resolveGatewayCronOriginDeliveryContext,
+  runGatewayCronSessionEvent,
 } from "./server-cron-event-dispatch.js";
 import { describeCronInferenceMigration } from "./server-cron-inference.js";
 import {
@@ -513,35 +513,10 @@ export function buildGatewayCronService(params: {
       listAgentIds(getRuntimeConfig()).some((id) => normalizeAgentId(id) === agentId),
     resolveSessionStorePath,
     sessionStorePath,
-    enqueueSystemEvent: (text, opts) => {
-      const { agentId, sessionKey } = resolveCronTarget(opts);
-      if (!agentId || !sessionKey) {
-        throw new Error("Cron system event target did not resolve an owner and session key.");
-      }
-      const remove = enqueueSystemEventWithReceipt(
-        text,
-        withSystemEventOwner(
-          {
-            sessionKey,
-            contextKey: opts?.contextKey,
-            deliveryContext: opts?.deliveryContext,
-          },
-          agentId,
-        ),
-      );
-      return remove ? { accepted: true, remove } : { accepted: false };
-    },
-    resolveOriginDeliveryContext: (opts) => {
-      // Global scope removes the key's agent prefix; retain the selected store owner.
-      const { runtimeConfig, agentId, sessionKey } = resolveCronTarget({
-        ...opts,
-        preserveUntargeted: true,
-      });
-      if (!sessionKey) {
-        return undefined;
-      }
-      return resolveCronStoredDeliveryContext({ cfg: runtimeConfig, agentId, sessionKey });
-    },
+    enqueueSystemEvent: (text, opts) => enqueueCronSystemEvent(text, opts, resolveCronTarget(opts)),
+    runSessionEvent: (request) => runGatewayCronSessionEvent(request, resolveCronTarget),
+    resolveOriginDeliveryContext: (opts) =>
+      resolveGatewayCronOriginDeliveryContext(opts, resolveCronTarget),
     runSchedulerOwned,
     requestHeartbeat: (opts) => requestHeartbeat(resolveCronHeartbeatWake(opts)),
     requestHeartbeatAndWait: (opts, lifecycle) =>
@@ -562,7 +537,7 @@ export function buildGatewayCronService(params: {
     runIsolatedAgentJob: async (request) => {
       const { job } = request;
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
-      const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
+      const sessionKey = `cron:${job.id}`;
       return await runCronIsolatedAgentTurn({
         ...request,
         cfg: runtimeConfig,

@@ -10,6 +10,7 @@ import { readPackageManagerSpec } from "./package-json.js";
 import { DEV_BRANCH } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import { resolveGitUpdateTrackingRef, type GitFetchTarget } from "./update-git-metadata.js";
+import { warnOnUpdateCleanupFailure } from "./update-maintenance.js";
 import {
   parsePnpmPackageManagerVersion,
   resolveUpdateBuildManager,
@@ -609,7 +610,19 @@ export async function runGitCandidatePreflight(params: {
         });
   } finally {
     if (!cleanupUncertain) {
-      const cleanup = () => cleanupGitPreflight(params, worktreeDir, preflightRoot);
+      const cleanup = () =>
+        cleanupGitPreflight(params, worktreeDir, preflightRoot).catch(async (error: unknown) => {
+          await warnOnUpdateCleanupFailure(error, preflightRoot, async (message) => {
+            const warning = params.steps.findLast((entry) => entry.name === "preflight-cleanup");
+            if (!warning) {
+              return console.warn(message);
+            }
+            warning.advisory = { kind: "recoverable-maintenance", message };
+            const { progress, stepIndex: index, totalSteps: total } = step(warning.name);
+            await progress?.onStepComplete?.({ ...warning, index, total });
+          });
+          return false;
+        });
       if (tested?.status !== "ok" || !params.retainCleanup?.(cleanup)) {
         await cleanup();
       }

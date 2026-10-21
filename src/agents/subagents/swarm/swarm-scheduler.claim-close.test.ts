@@ -11,7 +11,7 @@ import {
 } from "../../../state/openclaw-state-db-cache.js";
 import { waitForQueuedSubagentClaim } from "../registry/subagent-registry-queued-registration-wait.js";
 import { activateSwarmRun, closeSwarmScheduler, reserveSwarmRun } from "./swarm-scheduler.js";
-import { testing } from "./swarm-scheduler.test-support.js";
+import { observeSwarmSchedulerWork } from "./swarm-scheduler.lifecycle.test-support.js";
 
 const wakes = vi.hoisted(() => new Set<() => void>());
 vi.mock("../registry/subagent-registry-publication.js", async (importOriginal) => {
@@ -31,15 +31,17 @@ vi.mock("../registry/subagent-registry-publication.js", async (importOriginal) =
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let admission: ReturnType<typeof captureOpenClawStateDatabaseReadAdmission>;
+let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
 
 beforeEach(() => {
+  schedulerWork = observeSwarmSchedulerWork();
   resetGatewayWorkAdmission();
   admission = captureOpenClawStateDatabaseReadAdmission(
     path.join(tempDirs.make("openclaw-swarm-claim-close-"), "state.sqlite"),
   );
 });
 afterEach(async () => {
-  testing.reset();
+  await schedulerWork.close();
   resetGatewayWorkAdmission();
   await closeOpenClawStateDatabaseByPathAsync(admission.databasePath);
   expect(wakes.size).toBe(0);
@@ -104,7 +106,7 @@ it.each(["start", "failure"] as const)(
     });
     try {
       await entered.promise;
-      closing = closeSwarmScheduler(lifecycleOwner).then(() => {
+      closing = schedulerWork.close().then(() => {
         closed = true;
       });
       await nextTurn();

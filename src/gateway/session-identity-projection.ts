@@ -10,6 +10,7 @@ import type {
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import {
+  resolveSessionCreatorActor,
   sessionCreatorProfileId,
   type SessionActor,
 } from "../config/sessions/session-entry-provenance.js";
@@ -219,7 +220,7 @@ export function projectSessionOwner(
   const persisted = entry?.owner;
   const identities = userProfileIdentityById ?? new Map();
   const actor = projectAssignableSessionOwner(
-    persisted?.actor ?? entry?.createdActor,
+    persisted?.actor ?? resolveSessionCreatorActor(entry?.createdActor),
     identities,
     cfg,
     configuredAgentIds,

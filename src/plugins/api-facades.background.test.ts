@@ -1,5 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, vi } from "vitest";
+import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
+import {
+  createSqliteReadOnlyWorkerScope,
+  runScopedSqliteInspection,
+} from "../infra/sqlite-readonly-worker.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { instrumentPluginInstanceApi } from "./api-facades.js";
@@ -24,9 +29,7 @@ function fixture() {
   const instance = new PluginInstance(record.id, { registry, record });
   const api = instrumentPluginInstanceApi(
     buildPluginApi({
-      id: record.id,
-      name: record.id,
-      source: record.source,
+      ...record,
       registrationMode: "full",
       config: {},
       runtime: createUnavailableRuntime("setup-only"),
@@ -39,6 +42,47 @@ function fixture() {
 }
 
 describe("instance-bound background context", () => {
+  it.each([false, true])(
+    "owns readers when registration closes before background work settles (alreadyClosed=%s)",
+    async (alreadyClosed) => {
+      const registration = createSqliteReadOnlyWorkerScope();
+      const owner = registration.run(fixture);
+      const caller = createSqliteReadOnlyWorkerScope();
+      const release = createDeferredCore();
+      let readers: ReturnType<typeof captureSqliteReadOnlyWorkerScope> | undefined;
+      let pending: Promise<string> | undefined;
+      try {
+        if (alreadyClosed) {
+          await registration.close();
+        }
+        pending = caller.run(() =>
+          owner.run(async () => {
+            readers = captureSqliteReadOnlyWorkerScope();
+            await release.promise;
+            return runScopedSqliteInspection(undefined, async (signal) => {
+              signal?.throwIfAborted();
+              return "background read completed";
+            });
+          }),
+        );
+        await registration.close();
+        await caller.close();
+        release.resolve();
+        await expect(pending).resolves.toBe("background read completed");
+        expect(readers?.(() => "live")).toBe("live");
+        owner.instance.onModuleDispose(() => {
+          expect(readers?.(() => "module cleanup")).toBe("module cleanup");
+        });
+        await expect(owner.instance.dispose()).resolves.toEqual({ errors: [] });
+        expect(() => readers?.(() => "retired")).toThrow("SQLite read-only worker scope closed");
+      } finally {
+        release.resolve();
+        await Promise.allSettled([pending, registration.close(), caller.close()]);
+        await owner.instance.dispose();
+      }
+    },
+  );
+
   it("detaches registration and opening requests, follows adoption, and preserves its host", async () => {
     const caller = new AsyncLocalStorage<string>();
     const host = new LegacyPluginSdkResourceHost();
@@ -53,21 +97,20 @@ describe("instance-bound background context", () => {
       expect(pluginInstanceInvocation.getStore()?.instance).toBe(owner.instance);
       expect(getBoundLegacyPluginSdkResourceHost()).toBe(host);
     };
+    const openingScope = {
+      isWebchatConnect: () => false,
+      signal: new AbortController().signal,
+      pluginRegistry: owner.registry,
+    };
+    const work = () =>
+      owner.run(async () => {
+        observe();
+        await Promise.resolve();
+        observe();
+      });
     try {
       await caller.run("opening-turn", () =>
-        withPluginRuntimeGatewayRequestScope(
-          {
-            isWebchatConnect: () => false,
-            signal: new AbortController().signal,
-            pluginRegistry: owner.registry,
-          },
-          () =>
-            owner.run(async () => {
-              observe();
-              await Promise.resolve();
-              observe();
-            }),
-        ),
+        withPluginRuntimeGatewayRequestScope(openingScope, work),
       );
       expect(owner.run(() => 42)).toBe(42);
       const error = new Error("background failure");
@@ -86,18 +129,14 @@ describe("instance-bound background context", () => {
     const owner = fixture();
     const replacement = fixture();
     const gate = createDeferredCore<string>();
-    const enteredCleanup = createDeferredCore();
-    owner.instance.lifecycle.onDispose(() =>
-      owner.run(() => {
-        expect(pluginInstanceInvocation.getStore()?.instance).toBe(owner.instance);
-        enteredCleanup.resolve();
-      }),
+    const cleanup = vi.fn(() =>
+      owner.run(() => expect(pluginInstanceInvocation.getStore()?.instance).toBe(owner.instance)),
     );
+    owner.instance.lifecycle.onDispose(cleanup);
     const pending = owner.run(() => gate.promise);
     let disposed = false;
-    const closing = owner.instance.dispose().then((result) => {
+    const closing = owner.instance.dispose().finally(() => {
       disposed = true;
-      return result;
     });
     try {
       expect(() => owner.run(() => "new work")).toThrow("reloaded or disabled");
@@ -105,8 +144,8 @@ describe("instance-bound background context", () => {
       expect(disposed).toBe(false);
       gate.resolve("settled");
       await expect(pending).resolves.toBe("settled");
-      await enteredCleanup.promise;
       await expect(closing).resolves.toEqual({ errors: [] });
+      expect(cleanup).toHaveBeenCalledOnce();
       expect(() => owner.run(() => "retired")).toThrow("reloaded or disabled");
       expect(replacement.run(() => pluginInstanceInvocation.getStore()?.instance)).toBe(
         replacement.instance,
@@ -122,11 +161,10 @@ describe("instance-bound background context", () => {
     const owner = fixture();
     const gate = createDeferredCore();
     const pending = owner.run(() => gate.promise);
-    let cleaned = false;
-    owner.instance.lifecycle.onDispose(async () => {
+    const cleanup = vi.fn(async () => {
       await pending;
-      cleaned = true;
     });
+    owner.instance.lifecycle.onDispose(cleanup);
     const closing = owner.instance.dispose();
     void pending.catch(() => {});
     try {
@@ -134,7 +172,7 @@ describe("instance-bound background context", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       await expect(closing).resolves.toEqual({ errors: [] });
       await expect(pending).resolves.toBeUndefined();
-      expect(cleaned).toBe(true);
+      expect(cleanup).toHaveResolvedTimes(1);
     } finally {
       gate.resolve();
       await Promise.allSettled([pending, closing]);

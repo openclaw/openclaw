@@ -10,7 +10,6 @@ import {
   waitForAbortSignal,
 } from "openclaw/plugin-sdk/runtime-env";
 import { apiThrottler } from "./bot.runtime.js";
-import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import { isTelegramRateLimitError, readTelegramRetryAfterMs } from "./network-errors.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
@@ -365,7 +364,6 @@ function createTelegramAccountThrottler(
   const baseThrottler = createThrottler();
   const chatActions = createTelegramSendChatActionHandler({
     logger: (message) => logVerbose(`telegram: ${message}`),
-    minIntervalMs: TELEGRAM_CHAT_ACTION_INTERVAL_MS,
   });
   const schedulersByChat = new Map<string, GroupRequestScheduler>();
   const floodGate = new TelegramFloodGate();

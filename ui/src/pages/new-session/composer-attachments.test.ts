@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import * as toast from "../../lib/toast.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
@@ -131,14 +132,16 @@ it.each(["owner", "tile"] as const)(
       ]),
     );
     expect(status()?.textContent).toContain("Preparing 1 attachment");
+    const notify = vi.spyOn(toast, "showToast");
     readers[1]?.dispatchEvent(new ProgressEvent("error"));
     await waitForFast(() => expect(attachmentDraft.reads.pendingReads).toBe(0));
-    tiles.forEach((tile, index) =>
-      expect(container.querySelectorAll(".chat-attachment-thumb")[index]).toBe(tile),
-    );
-    expect(
-      tiles[1]?.querySelector('.chat-attachment-error[role="img"]')?.getAttribute("aria-label"),
-    ).toContain("bad.txt");
+    expect([...container.querySelectorAll(".chat-attachment-thumb")]).toEqual([tiles[0], tiles[2]]);
+    expect(container.querySelector(".chat-attachment-error")).toBeNull();
+    expect(notify).toHaveBeenCalledExactlyOnceWith({
+      message: "Could not attach file. Try again.",
+      placement: "top-center",
+      severity: "error",
+    });
     expect(status()?.textContent?.trim()).toBe("");
 
     composer.dispatchEvent(createDragEvent("drop", [new File(["held"], "held.txt")]));

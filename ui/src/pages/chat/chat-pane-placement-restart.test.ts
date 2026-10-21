@@ -6,7 +6,10 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createModalDialogTestFixture } from "../../test-helpers/modal-dialog.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { createPlacementPane } from "./chat-pane-placement.test-support.ts";
+import {
+  createPlacementPane,
+  selectPlacementConfiguration,
+} from "./chat-pane-placement.test-support.ts";
 
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 
@@ -91,10 +94,12 @@ it.each([
       );
       if (target === "cloud") {
         clickChoice("cloud:aws");
-        clickChoice("os:windows/wsl2");
-        clickChoice("machine:fast");
+        await selectPlacementConfiguration("Operating system", "windows/wsl2");
+        await selectPlacementConfiguration("Machine", "fast");
       } else {
-        expect(clickChoice("gateway")?.textContent).toContain("Gateway · local");
+        expect(clickChoice("gateway")?.querySelector(".session-move__name")?.textContent).toBe(
+          "Gateway · local",
+        );
       }
       const restartButton = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
         (button) => button.textContent?.trim() === "Restart session",

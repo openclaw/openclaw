@@ -21,11 +21,16 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { reconcileDiagnosticGcObserver, stopDiagnosticGcObserver } from "./diagnostic-gc.js";
+import { emitDiagnosticMemorySample } from "./diagnostic-memory.js";
 import { startGatewayDiagnosticHeartbeat, stopGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 const native = vi.hoisted(() => {
-  type Collection = { gcType: string; cost: number };
+  type Collection = {
+    gcType: string;
+    cost: number;
+    afterGC?: { heapSpaceStatistics: { spaceName: string; spaceUsedSize: number }[] };
+  };
   const active = new Set<Profiler>();
   class Profiler {
     collections: Collection[] = [];
@@ -35,7 +40,12 @@ const native = vi.hoisted(() => {
     }
     stop() {
       active.delete(this);
-      return { statistics: this.collections };
+      return {
+        statistics: this.collections.map((entry) => ({
+          afterGC: { heapSpaceStatistics: [] },
+          ...entry,
+        })),
+      };
     }
   }
   return {
@@ -323,5 +333,68 @@ it("reports unavailable native GC reasons as other", async () => {
   } finally {
     stopDiagnosticGcObserver();
     unsubscribe();
+  }
+});
+
+it("retains the native post-major-GC baseline across allocations and clears it on stop", async () => {
+  const sampleMain = () =>
+    emitDiagnosticMemorySample({
+      isBunRuntime: false,
+      heapSizeLimitBytes: 10_000,
+      memoryUsage: { rss: 1000, heapUsed: 600, heapTotal: 1000, external: 100, arrayBuffers: 50 },
+    });
+  const unsubscribe = onInternalDiagnosticEvent(() => {}, { include: ["diagnostic.gc"] });
+  setDiagnosticsEnabledForProcess(true);
+  reconcileDiagnosticGcObserver();
+  const parent = new MessageChannel();
+  const attached = once(parent.port1, "message");
+  const close = serveWorkerMemorySamples(parent.port2);
+  const [{ port }] = (await attached) as [{ port: MessagePort }];
+  try {
+    await once(port, "message");
+    port.postMessage({ gc: true });
+    const sample = async () => {
+      const pending = once(port, "message");
+      port.postMessage(undefined);
+      return (await pending)[0] as { oldGenerationAfterGcBytes?: number };
+    };
+    expect((await sample()).oldGenerationAfterGcBytes).toBeUndefined();
+    expect(sampleMain().oldGenerationAfterGcBytes).toBeUndefined();
+    const collection = (gcType: string, old: number) => ({
+      gcType,
+      cost: 1_000,
+      afterGC: {
+        heapSpaceStatistics: [
+          { spaceName: "old_space", spaceUsedSize: old },
+          { spaceName: "large_object_space", spaceUsedSize: 200 },
+          { spaceName: "new_space", spaceUsedSize: 9999 },
+          { spaceName: "code_space", spaceUsedSize: 9999 },
+        ],
+      },
+    });
+    native.collect([
+      collection("MarkSweepCompact", 100),
+      collection("MarkSweepCompact", 300),
+      collection("Scavenge", 900),
+    ]);
+    await vi.advanceTimersByTimeAsync(1000);
+    const memory = sampleMain();
+    expect(memory).toMatchObject({ heapSizeLimitBytes: 10_000, oldGenerationAfterGcBytes: 500 });
+    expect(await sample()).toMatchObject({ oldGenerationAfterGcBytes: 500 });
+    native.collect([collection("Scavenge", 1234)]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await sample()).toMatchObject({ oldGenerationAfterGcBytes: 500 });
+    stopDiagnosticGcObserver();
+    close();
+    expect(sampleMain().oldGenerationAfterGcBytes).toBeUndefined();
+    reconcileDiagnosticGcObserver();
+    expect(sampleMain().oldGenerationAfterGcBytes).toBeUndefined();
+  } finally {
+    close();
+    stopDiagnosticGcObserver();
+    unsubscribe();
+    port.close();
+    parent.port1.close();
+    parent.port2.close();
   }
 });
