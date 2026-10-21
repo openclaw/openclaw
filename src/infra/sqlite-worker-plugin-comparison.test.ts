@@ -64,21 +64,6 @@ const keep = (operation: "update" | "delete" = "update") =>
   ({ operation, action: "keep" }) as const;
 
 describe("plugin state data-only comparison", () => {
-  it("observes native and worker writes with independent returned values", async () => {
-    const { store, legacy } = fixture("receipt-cache");
-    legacy.register("counter", { count: 1 });
-    const first = await store.observe("counter");
-    first.value!.count = 99;
-    expect((await store.observe("counter")).value).toEqual({ count: 1 });
-
-    legacy.register("counter", { count: 2 });
-    expect((await store.observe("counter")).value).toEqual({ count: 2 });
-    await store.register("counter", { count: 3 });
-    expect((await store.observe("counter")).value).toEqual({ count: 3 });
-    legacy.delete("counter");
-    expect((await store.observe("counter")).value).toBeUndefined();
-  });
-
   it.each([{ action: "set" }, { action: "keep" }] as const)(
     "converges after an unannounced native deletion ($action)",
     async ({ action }) => {
@@ -113,6 +98,10 @@ describe("plugin state data-only comparison", () => {
         legacy.delete("counter");
       }
       const before = await store.observe("counter");
+      if (present) {
+        before.value!.count = 99;
+        expect((await store.observe("counter")).value).toEqual({ count: 1 });
+      }
       const dispatch = vi.spyOn(Worker.prototype, "postMessage");
       Worker.prototype.postMessage = function (this: Worker, message, transferList) {
         const request = asOptionalRecord(message);

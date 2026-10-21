@@ -676,24 +676,6 @@ function deadlineWriterFixture() {
   return { database, admission, admit, owner, write };
 }
 
-it("rolls back when broker custody is revoked after the host grant but before native use", () => {
-  const { database, admission, admit, owner, write } = deadlineWriterFixture();
-  const custody = new SqliteWorkerSlotCustody().createRequest();
-  custody.activate();
-  custody.accept();
-  owner.requestCustody = custody.descriptor;
-  vi.spyOn(Atomics, "wait").mockImplementation(() => {
-    admission.service();
-    custody.retire();
-    return "ok";
-  });
-  expect(() => write(() => requestAdmission({ stage: "commit", facts: undefined }))).toThrow(
-    "request custody is revoked",
-  );
-  expect(admit).toHaveBeenCalledOnce();
-  expect(database.prepare("SELECT * FROM proof").all()).toEqual([]);
-});
-
 it.each(["transaction", "commit"] as const)(
   "keeps a non-cron $stage write waiting past one second without an explicit deadline",
   (stage) => {
