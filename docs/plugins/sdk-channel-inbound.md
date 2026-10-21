@@ -149,7 +149,7 @@ releases a keyed queue when the flush's `admission` promise settles and keeps it
 `completion` promise available to `drain()`. New `onFlush` callbacks should use
 the supplied `createFlush` helper or return those two promises explicitly.
 
-Plugins built against the `v2026.7.2-beta.5` callback contract can still return a
+Plugins built against the stable `v2026.7.x` releases can still return a
 Promise or thenable. The host waits for that result for both admission and
 completion, preserving same-key ordering and rejection handling. No removal date
 has been announced for this runtime compatibility path.
