@@ -151,8 +151,7 @@ type AutomaticReplyContext = {
   deliver: (payload: ReplyPayload, kind: "final" | "block") => ReturnType<NativeReplyDelivery>;
 };
 
-// Capture synthetic assistant output at the inbound reply boundary; the shared
-// outbound planner, scoped media loading, and native HTTP transport remain real.
+// Capture assistant output; outbound planning, scoped media loading and HTTP remain real.
 async function withNativeAutomaticReply(
   run: (context: AutomaticReplyContext) => Promise<void>,
   options: { botOnly?: boolean } = {},
@@ -167,10 +166,10 @@ async function withNativeAutomaticReply(
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const config = structuredClone(fixture.ctx.cfg) as CoreConfig;
     config.agents = { defaults: { workspace }, entries: { main: {} } };
-    const work = config.channels?.["nextcloud-talk"]?.accounts?.work;
-    if (!work) {
-      throw new Error("expected fixture API account");
-    }
+    const work = expectDefined(
+      config.channels?.["nextcloud-talk"]?.accounts?.work,
+      "fixture account",
+    );
     work.dmPolicy = "allowlist";
     work.allowFrom = ["user-1"];
     if (options.botOnly) {
@@ -195,8 +194,6 @@ async function withNativeAutomaticReply(
       ]),
     );
     installPairingController(vi.fn(async () => []));
-    // Existing pairing tests retain their text spy; native reply cases delegate
-    // the spy to the real transport so the old URL fallback remains observable.
     const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
     mocks.send.mockImplementation(actual.sendMessageNextcloudTalk);
     const controller = new AbortController();
@@ -215,11 +212,10 @@ async function withNativeAutomaticReply(
           onAbandoned: async () => {},
         },
       });
-      const request = vi.mocked<ProviderReplyDispatch>(core.channel.inbound.dispatch).mock
-        .calls[0]?.[0];
-      if (!request) {
-        throw new Error("expected admitted automatic reply delivery");
-      }
+      const request = expectDefined(
+        vi.mocked<ProviderReplyDispatch>(core.channel.inbound.dispatch).mock.calls[0]?.[0],
+        "automatic reply delivery",
+      );
       await run({
         fixture: Object.assign(fixture, { mediaUrl }),
         controller,
@@ -370,19 +366,17 @@ describe("nextcloud-talk inbound behavior", () => {
 
     expect(hasControlCommand).toHaveBeenCalledWith(command, config);
     expect(coreRuntime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
-    expect(dispatched(coreRuntime)).toEqual(
-      expect.objectContaining({
-        replyPipeline: {},
-        ctxPayload: expect.objectContaining({
-          CommandBody: command,
-          BodyForCommands: command,
-          RawBody: text.trim(),
-          BodyForAgent: text.trim(),
-          CommandAuthorized: true,
-          WasMentioned: false,
-        }),
-      }),
-    );
+    expect(dispatched(coreRuntime)).toMatchObject({
+      replyPipeline: {},
+      ctxPayload: {
+        CommandBody: command,
+        BodyForCommands: command,
+        RawBody: text.trim(),
+        BodyForAgent: text.trim(),
+        CommandAuthorized: true,
+        WasMentioned: false,
+      },
+    });
   });
 
   it("binds durable ingress adoption into reply options", async () => {
@@ -395,29 +389,17 @@ describe("nextcloud-talk inbound behavior", () => {
     };
 
     const request = await allowedInbound({ turnAdoptionLifecycle: lifecycle });
-    expect(request.replyOptions?.turnAdoptionLifecycle).toEqual(
-      expect.objectContaining({ admission: "exclusive", onAdopted: lifecycle.onAdopted }),
-    );
+    expect(request.replyOptions?.turnAdoptionLifecycle).toMatchObject({
+      admission: "exclusive",
+      onAdopted: lifecycle.onAdopted,
+    });
   });
 
   it("sanitizes inbound replies while preserving native delivery fields", async () => {
-    const coreRuntime = createPluginRuntimeMock();
-    setNextcloudTalkRuntime(coreRuntime);
-    installPairingController(vi.fn(async () => []));
-
-    const config = { channels: { "nextcloud-talk": {} } } as CoreConfig;
-    await handleNextcloudTalkInbound({
-      message: createMessage(),
-      account: createAccount({ dmPolicy: "allowlist", allowFrom: ["user-1"] }),
-      config,
-      runtime: createRuntimeSpies(),
-    });
-
-    const request = vi.mocked(coreRuntime.channel.inbound.dispatch).mock.calls[0]?.[0];
-    const preparePayload = request?.delivery.preparePayload;
-    if (!preparePayload) {
-      throw new Error("expected Nextcloud Talk reply preparation");
-    }
+    const preparePayload = expectDefined(
+      (await allowedInbound()).delivery.preparePayload,
+      "reply preparation",
+    );
     const info = { kind: "final" as const };
     const mediaOnlyPayload = { mediaUrl: "https://example.com/a.png" };
     expect(await preparePayload(mediaOnlyPayload, info)).toBe(mediaOnlyPayload);
@@ -465,9 +447,11 @@ describe("nextcloud-talk inbound behavior", () => {
         );
         expect(shareRequests).toHaveLength(1);
         const share = new URLSearchParams(shareRequests[0]!.body.toString());
-        expect(share.get("shareType")).toBe("10");
-        expect(share.get("shareWith")).toBe("allowed");
-        expect(share.get("permissions")).toBe("1");
+        expect(Object.fromEntries(share)).toMatchObject({
+          shareType: "10",
+          shareWith: "allowed",
+          permissions: "1",
+        });
         expect(JSON.parse(share.get("talkMetaData") ?? "{}")).toEqual({ caption, replyTo: 41 });
         expect(result).toMatchObject({
           visibleReplySent: true,

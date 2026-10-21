@@ -18,6 +18,7 @@ function talkConfig(config: NonNullable<NonNullable<CoreConfig["channels"]>["nex
   return { channels: { "nextcloud-talk": config } };
 }
 const baseUrl = "https://cloud.example.com";
+const invalidUrl = "URL must start with http:// or https://";
 const { credentials, status } = nextcloudTalkSetupWizard;
 const validateInput = expectDefined(nextcloudTalkSetupContract.validateInput, "setup validator");
 const prepareInput = expectDefined(
@@ -55,9 +56,7 @@ describe("nextcloud talk setup", () => {
     expect(normalizeNextcloudTalkBaseUrl(undefined)).toBe("");
 
     expect(validateNextcloudTalkBaseUrl("")).toBe("Required");
-    expect(validateNextcloudTalkBaseUrl("cloud.example.com")).toBe(
-      "URL must start with http:// or https://",
-    );
+    expect(validateNextcloudTalkBaseUrl("cloud.example.com")).toBe(invalidUrl);
     expect(validateNextcloudTalkBaseUrl(baseUrl)).toBeUndefined();
   });
 
@@ -79,12 +78,8 @@ describe("nextcloud talk setup", () => {
     expect(validate({ useEnv: false, secret: "secret", baseUrl: "" })).toBe(
       "Nextcloud Talk requires --base-url.",
     );
-    expect(validate({ secret: "secret", baseUrl: "ftp://cloud.example.com" })).toBe(
-      "URL must start with http:// or https://",
-    );
-    expect(validate({ secret: "secret", baseUrl: "cloud.example.com" })).toBe(
-      "URL must start with http:// or https://",
-    );
+    expect(validate({ secret: "secret", baseUrl: "ftp://cloud.example.com" })).toBe(invalidUrl);
+    expect(validate({ secret: "secret", baseUrl: "cloud.example.com" })).toBe(invalidUrl);
     expect(
       validate({ secret: "secret", baseUrl: " https://cloud.example.com/talk/// " }),
     ).toBeNull();

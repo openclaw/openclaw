@@ -60,7 +60,7 @@ function startSpool(
   deliver: NextcloudTalkIngressDeliver,
   log = vi.fn(),
 ) {
-  return createNextcloudTalkWebhookSpool({
+  const spool = createNextcloudTalkWebhookSpool({
     accountId: "default",
     queue,
     deliver,
@@ -69,17 +69,8 @@ function startSpool(
     adoptionStallTimeoutMs: 5_000,
     legacyReplayStore: null,
   });
-}
-
-async function withSpool(
-  spool: ReturnType<typeof startSpool>,
-  run: (spool: ReturnType<typeof startSpool>) => Promise<void>,
-): Promise<void> {
-  try {
-    await run(spool);
-  } finally {
-    await spool.stop();
-  }
+  spools.push(spool);
+  return spool;
 }
 
 async function receive(spool: ReturnType<typeof startSpool>, body: string) {
@@ -109,6 +100,7 @@ async function expectIgnored(
 
 let queue: NextcloudTalkIngressQueue;
 let stateDir: string;
+const spools: ReturnType<typeof createNextcloudTalkWebhookSpool>[] = [];
 beforeEach(async () => {
   stateDir = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nextcloud-ingress-")),
@@ -120,6 +112,7 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
+  await Promise.all(spools.splice(0).map((spool) => spool.stop()));
   closeOpenClawStateDatabaseForTest();
   await fs.rm(stateDir, { recursive: true, force: true });
   vi.restoreAllMocks();
@@ -184,10 +177,9 @@ describe("Nextcloud Talk durable ingress", () => {
       enqueue: vi.fn().mockRejectedValue(appendError),
     } satisfies NextcloudTalkIngressQueue;
     const deliver = vi.fn();
-    await withSpool(startSpool(failingQueue, deliver), async (spool) => {
-      await expect(spool.receive(createRawEvent())).rejects.toBe(appendError);
-      expect(deliver).not.toHaveBeenCalled();
-    });
+    const spool = startSpool(failingQueue, deliver);
+    await expect(spool.receive(createRawEvent())).rejects.toBe(appendError);
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("drains other rooms while keeping unadopted same-room deliveries ordered", async () => {
@@ -293,27 +285,25 @@ describe("Nextcloud Talk durable ingress", () => {
       lifecycle.onAdoptionFinalizing();
       adopt = lifecycle.onAdopted;
     });
-    await withSpool(startSpool(queue, deliver), async (spool) => {
-      const rawEvent = createRawEvent({ messageId: "msg-finalizing" });
-      await spool.receive(rawEvent);
-      await spool.waitForIdle();
-      expect(await queue.listClaims()).toHaveLength(1);
-      if (!adopt) {
-        throw new Error("Expected adoption callback after finalization");
-      }
+    const spool = startSpool(queue, deliver);
+    const rawEvent = createRawEvent({ messageId: "msg-finalizing" });
+    await spool.receive(rawEvent);
+    await spool.waitForIdle();
+    expect(await queue.listClaims()).toHaveLength(1);
+    if (!adopt) {
+      throw new Error("Expected adoption callback after finalization");
+    }
 
-      await adopt();
-      await spool.receive(rawEvent);
-      await spool.waitForIdle();
-      expect(deliver).toHaveBeenCalledTimes(1);
-    });
+    await adopt();
+    await spool.receive(rawEvent);
+    await spool.waitForIdle();
+    expect(deliver).toHaveBeenCalledTimes(1);
   });
 
   it.each([
     {
       kind: "text",
       body: createRawEvent({ messageId: "msg-restart", text: "ordinary text" }),
-      id: "msg-restart",
       lane: "room:test-room-token",
       message: {
         messageId: "msg-restart",
@@ -325,34 +315,12 @@ describe("Nextcloud Talk durable ingress", () => {
     {
       kind: "file_shared",
       body: createFileSharedActivityBody(),
-      id: "4242",
       lane: "room:redacted-room-token",
       message: {
         messageId: "4242",
         roomToken: "redacted-room-token",
-        attachment: expect.objectContaining({ fileId: "9001" }),
-      },
-    },
-  ])("recovers $kind in its original lane exactly once", async ({ body, id, lane, message }) => {
-    const interrupted = startSpool(queue, deferredDelivery());
-    await receive(interrupted, body);
-    await expectClaim(id, lane, body);
-    await interrupted.stop();
-    const deliver = adoptedDelivery();
-    await withSpool(startSpool(queue, deliver), async (spool) => {
-      await spool.waitForIdle();
-      await receive(spool, body);
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expectDelivered(deliver, message);
-    });
-  });
-
-  it.each([
-    {
-      kind: "file_shared",
-      body: createFileSharedActivityBody(),
-      message: {
-        messageId: "4242",
+        senderId: "users/alice",
+        senderName: "Alice",
         roomName: "Receipts",
         text: "@openclaw please inspect this receipt",
         timestamp: expect.any(Number),
@@ -369,8 +337,12 @@ describe("Nextcloud Talk durable ingress", () => {
     {
       kind: "voice",
       body: createVoiceMessageActivityBody(),
+      lane: "room:redacted-room-token",
       message: {
         messageId: "4250",
+        roomToken: "redacted-room-token",
+        senderId: "users/alice",
+        senderName: "Alice",
         roomName: "Voice notes",
         text: "",
         attachment: {
@@ -383,27 +355,30 @@ describe("Nextcloud Talk durable ingress", () => {
         },
       },
     },
-  ])("durably admits $kind activities", async ({ body, message }) => {
-    const deliver = deferredDelivery();
-    await withSpool(startSpool(queue, deliver), async (spool) => {
-      await receive(spool, body);
-      await expectClaim(message.messageId, "room:redacted-room-token", body);
-      expectDelivered(deliver, {
-        ...message,
-        roomToken: "redacted-room-token",
-        senderId: "users/alice",
-        senderName: "Alice",
-      });
-    });
-  });
+  ])(
+    "durably admits and recovers $kind in its original lane exactly once",
+    async ({ body, lane, message }) => {
+      const deferred = deferredDelivery();
+      const interrupted = startSpool(queue, deferred);
+      await receive(interrupted, body);
+      await expectClaim(message.messageId, lane, body);
+      expectDelivered(deferred, message);
+      await interrupted.stop();
+      const deliver = adoptedDelivery();
+      const recovered = startSpool(queue, deliver);
+      await recovered.waitForIdle();
+      await receive(recovered, body);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expectDelivered(deliver, message);
+    },
+  );
 
   it("admits a Talk file share with a numeric byte size", async () => {
     const deliver = vi.fn<NextcloudTalkIngressDeliver>(async () => {});
-    await withSpool(startSpool(queue, deliver), async (spool) => {
-      await receive(spool, createFileSharedActivityBody({ fileSize: 1_234_567 }));
-      expectDelivered(deliver, {
-        attachment: expect.objectContaining({ declaredSizeBytes: 1_234_567 }),
-      });
+    const spool = startSpool(queue, deliver);
+    await receive(spool, createFileSharedActivityBody({ fileSize: 1_234_567 }));
+    expectDelivered(deliver, {
+      attachment: expect.objectContaining({ declaredSizeBytes: 1_234_567 }),
     });
   });
 
@@ -413,72 +388,49 @@ describe("Nextcloud Talk durable ingress", () => {
       content: JSON.stringify({ message: "{file}", parameters: { file: { type: "file" } } }),
     });
     const deliver = vi.fn<NextcloudTalkIngressDeliver>(async () => {});
-    await withSpool(startSpool(queue, deliver), async (spool) => {
-      await receive(spool, body);
-      await receive(spool, body);
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expectDelivered(deliver, {
-        messageId: "4245",
-        text: "",
-        attachmentIssue: "media_missing_metadata",
-      });
-      expect(deliver.mock.calls[0]?.[0]).not.toHaveProperty("attachment");
+    const spool = startSpool(queue, deliver);
+    await receive(spool, body);
+    await receive(spool, body);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expectDelivered(deliver, {
+      messageId: "4245",
+      text: "",
+      attachmentIssue: "media_missing_metadata",
     });
-  });
-
-  it("keeps malformed normal-message activities without a file parameter ignored", async () => {
-    const deliver = vi.fn();
-    await withSpool(startSpool(queue, deliver), async (spool) => {
-      await expectIgnored(spool, activityBody({ id: "4246", content: "{not-json" }), deliver);
-    });
+    expect(deliver.mock.calls[0]?.[0]).not.toHaveProperty("attachment");
   });
 
   it.each([
-    { name: "participant_joined", message: "Alice joined the conversation", parameters: {} },
     {
-      name: "object_shared",
-      message: "{object}",
-      parameters: { object: { type: "deck-card", id: "redacted" } },
+      name: "malformed normal-message",
+      body: activityBody({ id: "4246", content: "{not-json" }),
+      event: undefined,
     },
-  ])(
-    "keeps unrelated Talk Activity $name events ignored",
-    async ({ name, message, parameters }) => {
-      const body = activityBody({
-        id: "4243",
-        name,
-        content: JSON.stringify({ message, parameters }),
-      });
-      const deliver = vi.fn();
-      const log = vi.fn();
-      await withSpool(startSpool(queue, deliver, log), async (spool) => {
-        await expectIgnored(spool, body, deliver);
-        expect(log).toHaveBeenCalledWith(
-          "nextcloud-talk: ignored non-message webhook event (type=Activity objectType=Note)",
-        );
-      });
+    ...[
+      { name: "participant_joined", message: "Alice joined the conversation", parameters: {} },
+      {
+        name: "object_shared",
+        message: "{object}",
+        parameters: { object: { type: "deck-card", id: "redacted" } },
+      },
+    ].map(({ name, message, parameters }) => ({
+      name,
+      body: activityBody({ id: "4243", name, content: JSON.stringify({ message, parameters }) }),
+      event: "type=Activity objectType=Note",
+    })),
+    {
+      name: "non-message document",
+      body: JSON.stringify({ type: "Create", object: { type: "Document", id: "file-1" } }),
+      event: "type=Create objectType=Document",
     },
-  );
-
-  it("logs non-message events before they consume the message id", async () => {
+  ])("ignores $name without consuming its message id", async ({ body, event }) => {
     const deliver = vi.fn();
     const log = vi.fn();
-    await withSpool(startSpool(queue, deliver, log), async (spool) => {
-      const fileShare = JSON.stringify({
-        type: "Create",
-        actor: { type: "Person", id: "alice", name: "Alice" },
-        object: {
-          type: "Document",
-          id: "file-1",
-          name: "report.pdf",
-          content: "",
-          mediaType: "application/pdf",
-        },
-        target: { type: "Collection", id: "room-1", name: "Room 1" },
-      });
-      await expectIgnored(spool, fileShare, deliver);
+    await expectIgnored(startSpool(queue, deliver, log), body, deliver);
+    if (event) {
       expect(log).toHaveBeenCalledWith(
-        "nextcloud-talk: ignored non-message webhook event (type=Create objectType=Document)",
+        `nextcloud-talk: ignored non-message webhook event (${event})`,
       );
-    });
+    }
   });
 });

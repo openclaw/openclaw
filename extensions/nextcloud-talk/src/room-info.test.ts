@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import { createAccount } from "./inbound-media.test-fixtures.js";
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
@@ -18,14 +19,11 @@ afterEach(() => {
 });
 
 function lookupAccount(accountId: string): ResolvedNextcloudTalkAccount {
-  return {
+  return createAccount({
     accountId,
-    enabled: true,
     baseUrl: "https://nc.example.com",
-    secret: "test-bot-secret",
-    secretSource: "config",
     config: { apiUser: "bot", apiPassword: "secret" },
-  };
+  });
 }
 
 const roomResponse = (type: number | string) => Response.json({ ocs: { data: { type } } });
@@ -35,10 +33,10 @@ function mockResponse(response: Response) {
   fetchWithSsrFGuard.mockResolvedValue({ response, release });
   return release;
 }
-function lookup(accountId: string, runtime?: RuntimeEnv) {
+function lookup(account: string | ResolvedNextcloudTalkAccount, runtime?: RuntimeEnv) {
   return resolveNextcloudTalkRoomKind({
-    account: lookupAccount(accountId),
-    roomToken: `room-${accountId}`,
+    account: typeof account === "string" ? lookupAccount(account) : account,
+    roomToken: "shared-room",
     runtime,
   });
 }
@@ -61,16 +59,13 @@ describe("nextcloud talk room info", () => {
       ),
       release,
     }));
-    const lookupRoom = (account: ResolvedNextcloudTalkAccount) =>
-      resolveNextcloudTalkRoomKind({ account, roomToken });
-
-    await expect(lookupRoom(first)).resolves.toBe("direct");
-    await expect(lookupRoom(second)).resolves.toBe("group");
-    await expect(lookupRoom(first)).resolves.toBe("direct");
+    await expect(lookup(first)).resolves.toBe("direct");
+    await expect(lookup(second)).resolves.toBe("group");
+    await expect(lookup(first)).resolves.toBe("direct");
     expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledTimes(2);
 
-    await expect(lookupRoom({ ...first, config: {} })).resolves.toBeUndefined();
+    await expect(lookup({ ...first, config: {} })).resolves.toBeUndefined();
     expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
   });
 
@@ -80,17 +75,14 @@ describe("nextcloud talk room info", () => {
     fetchWithSsrFGuard
       .mockRejectedValueOnce(new SsrFBlockedError("blocked private network"))
       .mockResolvedValueOnce({ response: roomResponse(1), release });
-    const lookupRoom = (current: ResolvedNextcloudTalkAccount) =>
-      resolveNextcloudTalkRoomKind({ account: current, roomToken: "shared-room" });
-
-    await expect(lookupRoom(account)).resolves.toBeUndefined();
+    await expect(lookup(account)).resolves.toBeUndefined();
     await expect(
-      lookupRoom({
+      lookup({
         ...account,
         config: { ...account.config, network: { dangerouslyAllowPrivateNetwork: true } },
       }),
     ).resolves.toBe("direct");
-    await expect(lookupRoom(account)).resolves.toBeUndefined();
+    await expect(lookup(account)).resolves.toBeUndefined();
     expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledTimes(1);
   });
@@ -148,9 +140,7 @@ describe("nextcloud talk room info", () => {
 
   it("returns undefined from room info without credentials or base url", async () => {
     const account = { ...lookupAccount("acct-missing"), baseUrl: "", config: {} };
-    await expect(
-      resolveNextcloudTalkRoomKind({ account, roomToken: "room-missing" }),
-    ).resolves.toBeUndefined();
+    await expect(lookup(account)).resolves.toBeUndefined();
 
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
@@ -160,11 +150,9 @@ describe("nextcloud talk room info", () => {
     fetchWithSsrFGuard
       .mockResolvedValueOnce({ response: new Response("", { status: 599 }), release })
       .mockResolvedValueOnce({ response: roomResponse(6), release });
-    const params = { account: lookupAccount("http-599"), roomToken: "direct" };
-
-    await expect(resolveNextcloudTalkRoomKind(params)).rejects.toThrow("(599)");
-    await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBe("direct");
-    await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBe("direct");
+    await expect(lookup("http-599")).rejects.toThrow("(599)");
+    await expect(lookup("http-599")).resolves.toBe("direct");
+    await expect(lookup("http-599")).resolves.toBe("direct");
 
     expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledTimes(2);
@@ -176,30 +164,16 @@ describe("nextcloud talk room info", () => {
       response: roomResponse(1),
       release: vi.fn(async () => {}),
     });
-    const params = { account: lookupAccount("transport"), roomToken: "direct" };
-
-    await expect(resolveNextcloudTalkRoomKind(params)).rejects.toBe(transportError);
-    await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBe("direct");
+    await expect(lookup("transport")).rejects.toBe(transportError);
+    await expect(lookup("transport")).resolves.toBe("direct");
     expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps security-policy rejection on the cached fallback path", async () => {
-    fetchWithSsrFGuard.mockRejectedValue(new SsrFBlockedError("blocked private network"));
-    const params = { account: lookupAccount("policy"), roomToken: "direct" };
-
-    await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBeUndefined();
-    await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBeUndefined();
-    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry or fetch a file URL", async () => {
     const baseUrl = "file:///tmp/nextcloud-talk";
-    const params = {
-      account: { ...lookupAccount(`invalid-${baseUrl}`), baseUrl },
-      roomToken: "direct",
-    };
-    await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBeUndefined();
-    await expect(resolveNextcloudTalkRoomKind(params)).resolves.toBeUndefined();
+    const account = { ...lookupAccount(`invalid-${baseUrl}`), baseUrl };
+    await expect(lookup(account)).resolves.toBeUndefined();
+    await expect(lookup(account)).resolves.toBeUndefined();
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 });

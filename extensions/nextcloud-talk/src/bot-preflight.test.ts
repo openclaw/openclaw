@@ -51,43 +51,21 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
     fetchWithSsrFGuard.mockReset();
   });
 
-  it("accepts numeric response features", async () => {
-    mockBotAdmin(1 | 2 | 8);
-
+  it.each([
+    [11, true, 11],
+    [9, false, 9],
+    ["2response", false, undefined],
+  ] as const)("checks response feature %s", async (input, ok, features) => {
+    mockBotAdmin(input);
     await expect(probe()).resolves.toEqual({
-      ok: true,
-      code: "ok",
+      ok,
+      code: ok ? "ok" : "missing_response_feature",
       botId: "7",
       botName: "OpenClaw",
-      features: 11,
-      message: 'Nextcloud Talk bot "OpenClaw" has the response feature.',
-    });
-  });
-
-  it("reports missing response feature for the matching webhook bot", async () => {
-    mockBotAdmin(1 | 8);
-
-    await expect(probe()).resolves.toEqual({
-      ok: false,
-      code: "missing_response_feature",
-      botId: "7",
-      botName: "OpenClaw",
-      features: 9,
-      message:
-        'Nextcloud Talk bot "OpenClaw" (7) is missing the response feature (features=9); outbound replies will fail. Run ./occ talk:bot:state --feature webhook --feature response --feature reaction 7 1 or reinstall the bot with --feature response.',
-    });
-  });
-
-  it("rejects malformed response features", async () => {
-    mockBotAdmin("2response");
-
-    await expect(probe()).resolves.toEqual({
-      ok: false,
-      code: "missing_response_feature",
-      botId: "7",
-      botName: "OpenClaw",
-      message:
-        'Nextcloud Talk bot "OpenClaw" (7) is missing the response feature; outbound replies will fail. Run ./occ talk:bot:state --feature webhook --feature response --feature reaction 7 1 or reinstall the bot with --feature response.',
+      features,
+      message: ok
+        ? 'Nextcloud Talk bot "OpenClaw" has the response feature.'
+        : `Nextcloud Talk bot "OpenClaw" (7) is missing the response feature${features === undefined ? "" : ` (features=${features})`}; outbound replies will fail. Run ./occ talk:bot:state --feature webhook --feature response --feature reaction 7 1 or reinstall the bot with --feature response.`,
     });
   });
 
