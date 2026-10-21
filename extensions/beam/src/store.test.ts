@@ -1,6 +1,6 @@
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-import { assert, expect, it, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
 import type { BeamStoredSession } from "./types.js";
@@ -33,14 +33,11 @@ it("expires cached summaries at storage expiry without rereading transcripts", a
   );
   const entries = vi.spyOn(store.keyedStore, "entries").mockResolvedValue(rows);
   const clock = vi.spyOn(Date, "now").mockReturnValue(199);
-  try {
-    expect(await store.list()).toHaveLength(1);
-    clock.mockReturnValue(200);
-    expect(await store.list()).toEqual([]);
-    expect(entries).toHaveBeenCalledTimes(1);
-  } finally {
-    clock.mockRestore();
-  }
+  onTestFinished(() => clock.mockRestore());
+  expect(await store.list()).toHaveLength(1);
+  clock.mockReturnValue(200);
+  expect(await store.list()).toEqual([]);
+  expect(entries).toHaveBeenCalledTimes(1);
 });
 
 it("refreshes foreign changes in the background and drains its service on stop", async () => {

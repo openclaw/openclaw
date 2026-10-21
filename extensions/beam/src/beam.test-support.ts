@@ -13,7 +13,7 @@ import type {
 import type { ActiveSessionCatalog } from "openclaw/plugin-sdk/session-catalog-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, vi } from "vitest";
+import { afterEach, assert, vi } from "vitest";
 import { createBeamRequestHandler } from "./http.js";
 import { createBeamMirrorRunner } from "./mirror.js";
 import { createBeamStore, type BeamStore } from "./store.js";
@@ -125,8 +125,6 @@ export function createBeamTestCatalog(
             modelProvider: session.modelProvider,
             recencyAt: session.recencyAt,
             status: "stored",
-            createdAt: beamTestNow - 60_000,
-            updatedAt: session.recencyAt,
             archived: false,
             canContinue: false,
             canArchive: false,
@@ -195,9 +193,7 @@ export function beamMirrorTestFixture() {
   ) => {
     const testCatalog = createBeamTestCatalog(catalog);
     const fetchFn = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-      if (typeof init?.body !== "string") {
-        throw new Error("expected Beam JSON request body");
-      }
+      assert(typeof init?.body === "string", "expected Beam JSON request body");
       const payload = JSON.parse(init.body) as BeamUpload;
       const headers = (init.headers ?? {}) as Record<string, string>;
       sent.push({ payload, ...(headers.Authorization ? { auth: headers.Authorization } : {}) });
