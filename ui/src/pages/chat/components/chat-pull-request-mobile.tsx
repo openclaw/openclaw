@@ -1,4 +1,4 @@
-import { For, Show, createSignal, onCleanup } from "solid-js";
+import { For, Show, createSignal, onSettled } from "solid-js";
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
@@ -175,9 +175,12 @@ export type ChatPullRequestMobileDetailProps = ChatPullRequestMobileRecoveryProp
 export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailProps) {
   const [copying, setCopying] = createSignal(false);
   const [copyFailed, setCopyFailed] = createSignal(false);
-  let mounted = true;
-  onCleanup(() => {
-    mounted = false;
+  let mounted = false;
+  onSettled(() => {
+    mounted = true;
+    return () => {
+      mounted = false;
+    };
   });
   const copy = async () => {
     const pr = props.pullRequest;

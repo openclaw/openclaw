@@ -1215,9 +1215,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readAuthProfileRows"],
+        operations: ["readAuthProfileRows", "readAuthProfileJsonCellTexts"],
         evidence:
-          "Only auth-profiles/store.worker.ts, plugin-model-catalog.worker.ts, and sqlite-readonly-native-payload.ts's auth-profile-rows worker call this batched reader; synchronous SDK cell readers remain T1.",
+          "Auth-profile inspection workers and the shared/agent usage workers call these paired readers; synchronous SDK cell readers remain T1.",
       },
     ],
   ],

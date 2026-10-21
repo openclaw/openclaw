@@ -8,7 +8,7 @@ exception that justifies keeping it. Measure the touched production files before
 and after, and report the counts in the PR. Prefer fewer production lines;
 explain growth needed for the idiom or correctness.
 
-The installed `solid-js/CHEATSHEET.md` (rc.14) is the API contract. Its
+The installed `solid-js/CHEATSHEET.md` (rc.16) is the API contract. Its
 "What changed from 1.x" list is required reading before the first edit: Solid 2
 is neither React nor Solid 1, and both priors produce plausible-looking bugs.
 
@@ -64,6 +64,13 @@ prod 'runWithOwner\(|getOwner\(' | wc -l
 | `Provider` components, `mergeProps`, `splitProps`, `onMount`, `createResource`, `Index`, `classList`, `use:` | `<Context value>`, `merge`, `omit`, `onSettled`, async computation + `<Loading>`, `For keyed={false}`, `class` arrays/objects, `ref={factory()}`                         | Never: these are Solid 1 and either fail to compile or silently no-op.                                                                                                                                                               |
 | Loading flags in local signals around an async read                                                          | An async `createMemo`/`createProjection` under `<Loading>`; `isPending(() => x())` for in-flight changes                                                                 | The flag is an owner's mutation state (saving/admitted/uncertain), which stays at the owner.                                                                                                                                         |
 | Hand-rolled keyed merge of server lists into local state                                                     | `createProjection(async () => owner.list(), [], { key: "id" })`, or `reconcile(rows, "id")` inside a store draft                                                         | The list is an owner snapshot; consume it through a projection instead.                                                                                                                                                              |
+
+On rc.16, a return-form object derivation can omit its seed; a provided seed
+must be a complete value, and array derivations still need `[]`. Refresh a
+derived store at its root, then read the nested value after settlement. A
+`Loading` reset uses a value (`on={id()}`), not an accessor. Teardown writes are
+now supported by Solid, but disposal still should not republish an owner's
+state merely to reset a view that is gone. See the [rc.16 notes](lessons.md#rc16-upgrade).
 
 ## Order of work
 

@@ -202,9 +202,11 @@ describe("downloadToFile", () => {
   });
 
   it("rejects declared archives above the download cap", async () => {
-    const fetchResult = okDownloadResponse("archive", { headers: { "content-length": "12" } });
+    const fetchResult = okDownloadResponse("archive", {
+      headers: { "content-length": "268435457" },
+    });
     fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
-    await expect(downloadToFile(DOWNLOAD_URL, filePath, 5, 8)).rejects.toThrow("declared 12");
+    await expect(downloadToFile(DOWNLOAD_URL, filePath)).rejects.toThrow("declared 268435457");
     await expectPathMissing(filePath);
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
   });
@@ -212,7 +214,7 @@ describe("downloadToFile", () => {
   it("ignores malformed declared archive lengths", async () => {
     const fetchResult = okDownloadResponse("archive", { headers: { "content-length": "0x10" } });
     fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
-    await downloadToFile(DOWNLOAD_URL, filePath, 5, 8);
+    await downloadToFile(DOWNLOAD_URL, filePath);
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("archive");
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
   });
@@ -221,14 +223,14 @@ describe("downloadToFile", () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array(6));
-        controller.enqueue(new Uint8Array(6));
+        controller.enqueue(Buffer.alloc(256 * 1024 * 1024));
         controller.close();
       },
     });
     const fetchResult = okDownloadResponse(body);
     fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
-    await expect(downloadToFile(DOWNLOAD_URL, filePath, 5, 8)).rejects.toThrow(
-      "8-byte download cap",
+    await expect(downloadToFile(DOWNLOAD_URL, filePath)).rejects.toThrow(
+      "268435456-byte download cap",
     );
     await expectPathMissing(filePath);
     expect(fetchResult.release).toHaveBeenCalledTimes(1);

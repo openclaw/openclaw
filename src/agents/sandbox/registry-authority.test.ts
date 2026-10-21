@@ -49,14 +49,13 @@ it("retains local-workspace authority through browser transaction and commit gra
   };
   await insertRegistryWorktree(process.env, worktree);
   const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-  replaceSessionEntrySync(
-    { agentId: "main", sessionKey, storePath },
-    {
-      sessionId: "browser-session",
-      updatedAt: 1,
-      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-    },
-  );
+  const sessionTarget = { agentId: "main", sessionKey, storePath };
+  const session = {
+    sessionId: "browser-session",
+    updatedAt: 1,
+    worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
+  };
+  replaceSessionEntrySync(sessionTarget, session);
 
   class WorkspaceRevokedError extends Error {}
   const refusal = new WorkspaceRevokedError("Browser workspace authority revoked");
@@ -79,24 +78,19 @@ it("retains local-workspace authority through browser transaction and commit gra
   using owner = await resolveLocalWorkspaceOwner(ownerParams);
   expect(owner).toBeDefined();
   const grants: SqliteWorkerAdmissionRequest["stage"][] = [];
-  const coldOpens: SqliteWorkerAdmissionRequest["stage"][] = [];
-  const openNative = nativeSqlite.openNodeSqliteDatabase;
-  vi.spyOn(nativeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    if (stage !== undefined) {
-      coldOpens.push(stage);
-    }
-    return openNative(...args);
-  });
+  const openNative = vi.spyOn(nativeSqlite, "openNodeSqliteDatabase");
   const createAdmission = workerStore.createSqliteWorkerWriteAdmission;
   vi.spyOn(workerStore, "createSqliteWorkerWriteAdmission").mockImplementation(
     (assertCurrent, nativeLocations) =>
       createAdmission((request) => {
         stage = request.stage;
+        const opens = openNative.mock.calls.length;
         try {
           assertCurrent(request);
           grants.push(stage);
         } finally {
           stage = undefined;
+          expect(openNative.mock.calls).toHaveLength(opens);
         }
       }, nativeLocations),
   );
@@ -113,7 +107,6 @@ it("retains local-workspace authority through browser transaction and commit gra
   // Session authority is worker-prepared; this upsert uses the registry's worker owner.
   await updateBrowserRegistry(entry, owner!.assertCurrent);
   expect(grants).toEqual(["transaction", "commit"]);
-  expect(coldOpens).toEqual([]);
   expect((await readBrowserRegistry()).entries).toEqual([entry]);
 
   for (const revokedStage of ["transaction", "commit"] as const) {
@@ -123,17 +116,12 @@ it("retains local-workspace authority through browser transaction and commit gra
     ).rejects.toBe(refusal);
     expect((await readBrowserRegistry()).entries).toEqual([entry]);
   }
-  expect(coldOpens).toEqual([]);
   revokeAt = undefined;
-  await replaceSessionEntry(
-    { agentId: "main", sessionKey, storePath },
-    {
-      sessionId: "browser-session",
-      lifecycleRevision: "replacement",
-      updatedAt: 2,
-      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-    },
-  );
+  await replaceSessionEntry(sessionTarget, {
+    ...session,
+    lifecycleRevision: "replacement",
+    updatedAt: 2,
+  });
   expect(() => owner!.assertCurrent()).toThrow("Local sandbox workspace authority changed");
   using released = await resolveLocalWorkspaceOwner(ownerParams);
   released![Symbol.dispose]();

@@ -27,7 +27,6 @@ export async function maybeDeliverDiscordDirectStatus(params: {
   defaultGroupActivation: () => "always" | "mention";
   interaction: CommandInteraction | BaseComponentInteraction;
   mediaLocalRoots: readonly string[];
-  preferFollowUp: boolean;
   responseEphemeral?: boolean;
   effectiveRoute: ResolvedAgentRoute;
   respond: (content: string, options?: { ephemeral?: boolean }) => Promise<boolean>;
@@ -62,7 +61,6 @@ export async function maybeDeliverDiscordDirectStatus(params: {
       payload: statusReply,
       mediaLocalRoots: params.mediaLocalRoots,
       ...resolveDiscordInteractionReplyOptions(params),
-      preferFollowUp: params.preferFollowUp,
       responseEphemeral: params.responseEphemeral,
       onDelivered: recordReply,
     });

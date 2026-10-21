@@ -1,19 +1,17 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-// Tests typing mode persistence across session updates and reply turns.
-import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTypingController } from "./typing.js";
 
 describe("typing persistence bug fix", () => {
-  let onReplyStartSpy: Mock;
-  let onCleanupSpy: Mock;
+  const onReplyStartSpy = vi.fn();
+  const onCleanupSpy = vi.fn();
   let controller: ReturnType<typeof createTypingController>;
 
   beforeEach(() => {
     vi.useFakeTimers();
-    onReplyStartSpy = vi.fn();
-    onCleanupSpy = vi.fn();
-
+    onReplyStartSpy.mockReset();
+    onCleanupSpy.mockReset();
     controller = createTypingController({
       onReplyStart: onReplyStartSpy,
       onCleanup: onCleanupSpy,
@@ -22,9 +20,19 @@ describe("typing persistence bug fix", () => {
     });
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
+
+  async function exerciseClosedController(closed: typeof controller) {
+    await closed.onReplyStart();
+    await closed.startTypingLoop();
+    await closed.startTypingOnText("late text");
+    closed.refreshTypingTtl();
+    closed.markRunComplete();
+    closed.markDispatchIdle();
+    closed.cleanup();
+    expect(closed.isActive()).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  }
 
   it("keeps typing alive while keepalive ticks continue during long runs", async () => {
     const longRunCleanupSpy = vi.fn();
@@ -96,58 +104,29 @@ describe("typing persistence bug fix", () => {
         controller.markRunComplete();
       }
       await starting;
-      await controller.onReplyStart();
-      await controller.startTypingLoop();
-      await controller.startTypingOnText("late text");
-      controller.refreshTypingTtl();
-      controller.markRunComplete();
-      controller.markDispatchIdle();
-      controller.cleanup();
-
-      expect(controller.isActive()).toBe(false);
+      await exerciseClosedController(controller);
       expect(onCleanupSpy).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(12_000);
       expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
     },
   );
 
   it("should prevent typing restart even if cleanup is delayed", async () => {
-    // Start typing
     await controller.startTypingLoop();
     expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
 
-    // Mark run complete (but dispatch not idle yet - simulating cleanup delay)
+    // Dispatch remains busy while three more keepalive intervals pass.
     controller.markRunComplete();
-
-    // Multiple typing intervals should NOT restart typing
-    vi.advanceTimersByTime(6000); // First interval
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
-
-    vi.advanceTimersByTime(6000); // Second interval
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
-
-    vi.advanceTimersByTime(6000); // Third interval
-    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
-
-    // Eventually dispatch becomes idle and triggers cleanup
+    for (let interval = 0; interval < 3; interval++) {
+      vi.advanceTimersByTime(6000);
+      expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+    }
     controller.markDispatchIdle();
     expect(onCleanupSpy).toHaveBeenCalledTimes(1);
   });
 
   it("returns an inert controller when typing callbacks are absent", async () => {
-    const inert = createTypingController({});
-
-    await inert.onReplyStart();
-    await inert.startTypingLoop();
-    await inert.startTypingOnText("hello");
-    inert.refreshTypingTtl();
-    inert.markRunComplete();
-    inert.markDispatchIdle();
-    inert.cleanup();
-
-    expect(inert.isActive()).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
+    await exerciseClosedController(createTypingController({}));
   });
 
   it("clamps an oversized typing interval and derives a longer TTL", async () => {

@@ -1,9 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { For, Show, createMemo, onSettled, untrack } from "solid-js";
+import { For, Show, createMemo, untrack } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
@@ -69,6 +70,7 @@ export type PositionRailAssistant = {
 export type PositionRailViewParams = {
   assistant?: PositionRailAssistant;
   markers: Readonly<ChatPositionIndex["markers"]>;
+  liveMarkers?: ChatPositionIndex["liveMarkers"];
   renderedIndexes: readonly number[];
   activeId: string | undefined;
   visibleIds: ReadonlySet<string>;
@@ -101,11 +103,11 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
       separated: renderedIndex > 0 && index > props.renderedIndexes[renderedIndex - 1]! + 1,
     })),
   );
-  const previewMarker = createMemo(() =>
-    props.previewId == null
-      ? undefined
-      : props.markers.find((marker) => marker.id === props.previewId),
-  );
+  const previewMarker = createMemo(() => {
+    const marker = props.markers.find((candidate) => candidate.id === props.previewId);
+    const live = props.liveMarkers?.find((candidate) => candidate.id === props.previewId);
+    return marker && live ? { ...marker, message: live.message } : marker;
+  });
   const previewMessage = createMemo(() => {
     const marker = previewMarker();
     return marker ? normalizeMessage(marker.message) : undefined;
@@ -128,27 +130,20 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
     return text ? toSanitizedMarkdownHtml(text, { codeBlockChrome: "none" }) : "";
   });
   const stopScrollInput = (event: Event) => props.stopScrollInput.handleEvent(event);
-  let stopInput: (() => void)[] = [];
-  const bindInputScroller = (element: HTMLDivElement) => {
-    props.bindScroller(element);
-    // Stop touch input here, before the transcript's native history listeners.
-    stopInput = ["wheel", "touchstart", "touchmove"].map((type) =>
-      listen(element, type, stopScrollInput, { passive: true }),
-    );
-  };
-  onSettled(() => () => stopInput.forEach((stop) => stop()));
   const Preview = () => {
     let label: HTMLElement | undefined;
     let copy: HTMLElement | undefined;
     const description = () =>
       `${label?.textContent?.trim() ?? ""} ${copy?.textContent?.trim() ?? ""}. ${t("chat.thread.positionMarkerHint")}`;
-    onSettled(() => {
-      const bindPreview = props.bindPreview;
-      return () => bindPreview();
-    });
     return (
       <div
-        ref={(element) => props.bindPreview(element, description)}
+        ref={[
+          elementRef((element) => {
+            const bindPreview = props.bindPreview;
+            bindPreview(element, description);
+            return () => bindPreview();
+          }),
+        ]}
         class="chat-position-rail__preview"
         aria-hidden="true"
       >
@@ -183,7 +178,16 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
     >
       <div class="chat-position-rail__track">
         <div
-          ref={bindInputScroller}
+          ref={[
+            elementRef((element: HTMLDivElement) => {
+              props.bindScroller(element);
+              // Stop touch input here, before the transcript's native history listeners.
+              const stopInput = ["wheel", "touchstart", "touchmove"].map((type) =>
+                listen(element, type, stopScrollInput, { passive: true }),
+              );
+              return () => stopInput.forEach((stop) => stop());
+            }),
+          ]}
           class="chat-position-rail__marks"
           role="list"
           aria-label={t("chat.thread.positionRail")}
@@ -194,10 +198,6 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
               {(entry) => {
                 // The For key fixes this marker's identity for its owner.
                 const initialMarkerId = untrack(() => entry().marker.id);
-                onSettled(() => {
-                  const bindMarker = props.bindMarker;
-                  return () => bindMarker(initialMarkerId);
-                });
                 return (
                   <>
                     <Show when={entry().separated}>
@@ -211,7 +211,13 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
                       aria-setsize={props.markers.length}
                     >
                       <button
-                        ref={(element) => props.bindMarker(initialMarkerId, element)}
+                        ref={[
+                          elementRef((element: HTMLButtonElement) => {
+                            const bindMarker = props.bindMarker;
+                            bindMarker(initialMarkerId, element);
+                            return () => bindMarker(initialMarkerId);
+                          }),
+                        ]}
                         class="chat-position-rail__marker"
                         style={{ top: `${entry().index * POSITION_RAIL_MARKER_HEIGHT}px` }}
                         type="button"

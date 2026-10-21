@@ -202,6 +202,10 @@ function runChecks(job: string, name: string, env: Record<string, string> = {}) 
       if [ "$1" = '--input-type=module' ]; then
         return 1
       elif [ "$1" = '-e' ]; then
+        if [ "$#" -ge 3 ] && [ "$3" = 'check:baseline-ratchets' ]; then
+          [ "$HAS_BASELINE_RATCHETS" = 'true' ]
+          return
+        fi
         if [ "$FAIL_SCRIPT" != '' ] && [[ "$2" == *"$FAIL_SCRIPT"* ]]; then return 1; fi
       else
         printf 'CHECK node %s\n' "$*"
@@ -223,6 +227,7 @@ function runChecks(job: string, name: string, env: Record<string, string> = {}) 
         CI_TYPE_GRAPHS_JSON: "",
         FAIL_COMMAND: "check:max-lines-ratchet",
         FAIL_SCRIPT: "",
+        HAS_BASELINE_RATCHETS: "false",
         ...env,
       },
     },
@@ -298,7 +303,7 @@ describe("CI check failure collection", () => {
     }
   });
 
-  it("finishes every baseline ratchet after the first failure", () => {
+  it("finishes every frozen baseline ratchet after the first failure", () => {
     const result = runChecks("checks-baseline-ratchets", "Run baseline ratchets", {
       RATCHET_BASE_REF: "base",
       RATCHET_PR_HEAD_SHA: "",
@@ -307,6 +312,18 @@ describe("CI check failure collection", () => {
     expect(result.stdout).toContain("CHECK check:max-lines-ratchet --base base");
     expect(result.stdout).toContain("CHECK plugins:inventory:check");
     expect(result.stdout.match(/^CHECK /gm)).toHaveLength(8);
+  });
+  it("preserves the combined baseline runner's failure", () => {
+    const result = runChecks("checks-baseline-ratchets", "Run baseline ratchets", {
+      RATCHET_BASE_REF: "base",
+      RATCHET_PR_HEAD_SHA: "",
+      HAS_BASELINE_RATCHETS: "true",
+      FAIL_COMMAND: "check:baseline-ratchets",
+    });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stdout.match(/^CHECK .*$/gm)).toEqual([
+      "CHECK check:baseline-ratchets --base base",
+    ]);
   });
   it("runs protocol checks after bundled tests fail", () => {
     const result = runChecks("checks-fast-core", "Run ${{ matrix.task }} (${{ matrix.runtime }})", {
@@ -525,7 +542,10 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
     ["macos-swift", "Native state schema version contract", "macos-node-assets", "tests"],
     ["macos-swift", "Swift lint", "macos-swift-tools", "tests"],
     ["macos-swift", "Swift build (release)", "select-xcode", "release"],
+    ["macos-swift", "Build Swift tests", "macos-native-assets", "tests"],
     ["macos-swift", "Swift test", "macos-native-assets", "tests"],
+    ["macos-swift", "Swift test", "swift-test-build", "tests"],
+    ["macos-swift", "Swift test", "native-test-cli", "tests"],
     [
       "macos-swift",
       "OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)",
@@ -552,6 +572,8 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
         "macos-node-assets",
         "macos-swift-tools",
         "macos-native-assets",
+        "swift-test-build",
+        "native-test-cli",
         "ios-swift-tools",
         "ios-configure",
         "ios-simulator",
@@ -565,10 +587,14 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
       runAttempt: 1,
       failed: true,
       matrix: { phase },
+      fileHashes: { "apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift": "present" },
       env: { HISTORICAL_TARGET: "false", MACOS_PRIMARY_PHASE: "tests" },
       preflightOutputs: { run_openclawkit_tests: "true", validation_tier: "full" },
       steps: { ...setup, "macos-node-tooling": { outputs: {}, outcome: "skipped" as const } },
     };
+    expect(ciWorkflow.jobs[job].steps.some((step: WorkflowStep) => step.id === producer)).toBe(
+      true,
+    );
     expectAdmission(ciStep(job, name).if, nativeContext, [
       {
         ...nativeContext,

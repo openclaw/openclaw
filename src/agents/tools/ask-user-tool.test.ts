@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { ReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
@@ -14,7 +14,6 @@ import {
   settleAskUserPromptDelivery,
   waitForAskUserPromptReady,
 } from "./ask-user-tool.js";
-import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
 
 type SentPrompt = Parameters<
   NonNullable<Parameters<typeof createAskUserTool>[0]["questionPrompt"]>["send"]
@@ -86,15 +85,19 @@ function gatewayStub(handlers: RpcHandlers) {
 function reservePrompt(
   params: Partial<Omit<Parameters<typeof reserveAskUserPromptDelivery>[0], "questions">> = {},
 ) {
-  const reservation = reserveAskUserPromptDelivery({
+  const input = {
     toolCallId: TOOL_CALL_ID,
     sessionKey: SESSION_KEY,
     ...params,
     questions: normalizeAskUserParams(validArgs).questions,
-  });
+  };
+  const reservation = reserveAskUserPromptDelivery(input);
   if (!reservation) {
     throw new Error("expected prompt reservation");
   }
+  onTestFinished(() =>
+    cancelAskUserPromptDelivery(input.toolCallId, input.sessionKey, input.runId, input.agentId),
+  );
   return reservation;
 }
 
@@ -141,9 +144,10 @@ function requestedQuestionId(mock: ReturnType<typeof gatewayStub>["mock"]): stri
   return questionId;
 }
 
-afterEach(() => {
-  resetPendingAskUserQuestionsForTest();
-  vi.restoreAllMocks();
+beforeEach(() => {
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
 });
 
 describe("ask_user", () => {
@@ -258,6 +262,11 @@ describe("ask_user", () => {
         sessionKey: "agent:main:executor-session",
       })
       .execute(toolCallId, validArgs);
+    const toolSettlement = Promise.allSettled([pending]);
+    onTestFinished(async () => {
+      finishWait.resolve({ status: "cancelled" });
+      await toolSettlement;
+    });
     await vi.waitFor(() =>
       expect(gateway.mock.mock.calls.some(([method]) => method === "question.request")).toBe(true),
     );
@@ -357,6 +366,7 @@ describe("ask_user", () => {
       const result = status === "answered" ? { status, answers } : { status };
       const finishWait = createDeferred<typeof result>();
       const promptStarted = createDeferred();
+      const promptReleased = createDeferred();
       let aborted = false;
       registeredGateway({
         "question.waitAnswer": async () => finishWait.promise,
@@ -368,10 +378,16 @@ describe("ask_user", () => {
           send: (_payload, options) => {
             options?.signal?.addEventListener("abort", () => (aborted = true), { once: true });
             promptStarted.resolve();
-            return new Promise<void>(() => {});
+            return promptReleased.promise;
           },
         },
       }).execute("call-direct-dispatch-abort", validArgs);
+      const toolSettlement = Promise.allSettled([pending]);
+      onTestFinished(async () => {
+        finishWait.resolve(result);
+        promptReleased.resolve();
+        await toolSettlement;
+      });
       await promptStarted.promise;
       finishWait.resolve(result);
       await expect(pending).resolves.toMatchObject({
@@ -390,6 +406,7 @@ describe("ask_user", () => {
       questions: normalized.questions,
       timeoutSeconds: normalized.timeoutSeconds,
     });
+    onTestFinished(() => cancelAskUserPromptDelivery("call-reserved", sessionKey));
     const sent: SentPrompt[] = [];
     registeredGateway({
       "question.waitAnswer": async () => ({ status: "expired" }),
@@ -447,6 +464,11 @@ describe("ask_user", () => {
       sessionKey: "agent:main:serialized",
     });
     const first = tool.execute("call-first", validArgs);
+    const toolSettlement = Promise.allSettled([first]);
+    onTestFinished(async () => {
+      finishWait.resolve({ status: "cancelled" });
+      await toolSettlement;
+    });
     await gateway.waitForCall("question.waitAnswer");
 
     await expect(tool.execute("call-second", validArgs)).rejects.toThrow(
@@ -471,6 +493,11 @@ describe("ask_user", () => {
       "question.resolve": async () => ({ status: "cancelled" }),
     });
     const pending = ask(controller.signal);
+    const toolSettlement = Promise.allSettled([pending]);
+    onTestFinished(async () => {
+      controller.abort();
+      await toolSettlement;
+    });
     await gateway.waitForCall(method);
     expect(gateway.mock.mock.calls.some((call) => call[0] === method)).toBe(true);
     const questionId = requestedQuestionId(gateway.mock);
@@ -488,6 +515,12 @@ describe("ask_user", () => {
     });
     const controller = new AbortController();
     const pending = ask(controller.signal);
+    const toolSettlement = Promise.allSettled([pending]);
+    onTestFinished(async () => {
+      controller.abort();
+      finishRegistration.resolve({ id: reservation.questionId });
+      await toolSettlement;
+    });
     await gateway.waitForCall("question.request");
 
     controller.abort(new Error("stop before registration completed"));
@@ -500,8 +533,12 @@ describe("ask_user", () => {
   it("suppresses a stale prompt when an image arrives during registration", async () => {
     const finishRegistration = createDeferred<unknown>();
     let resolveCount = 0;
+    let registeredQuestionId = "";
     const gateway = gatewayStub({
-      "question.request": async () => await finishRegistration.promise,
+      "question.request": async (params) => {
+        registeredQuestionId = String(params.id);
+        return await finishRegistration.promise;
+      },
       "question.resolve": async () => {
         resolveCount += 1;
         if (resolveCount === 1) {
@@ -514,6 +551,11 @@ describe("ask_user", () => {
       },
     });
     const pending = ask();
+    const toolSettlement = Promise.allSettled([pending]);
+    onTestFinished(async () => {
+      finishRegistration.resolve({ id: registeredQuestionId });
+      await toolSettlement;
+    });
     await gateway.waitForCall("question.request");
     const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
@@ -560,6 +602,11 @@ describe("ask_user", () => {
       },
     });
     const pending = ask();
+    const toolSettlement = Promise.allSettled([pending]);
+    onTestFinished(async () => {
+      finishWait.resolve({ status: "cancelled" });
+      await toolSettlement;
+    });
     await gateway.waitForCall("question.waitAnswer");
 
     const foreignModule = (await import(
@@ -582,11 +629,12 @@ describe("ask_user", () => {
     const reservation = reservePrompt();
     const answers = { answers: { deploy_target: ["Production"] } };
     let waitCalls = 0;
+    const firstWait = createDeferred<unknown>();
     registeredGateway({
       "question.waitAnswer": async () => {
         waitCalls += 1;
         if (waitCalls === 1) {
-          return await new Promise<unknown>(() => {});
+          return await firstWait.promise;
         }
         return { status: "answered", answers };
       },
@@ -598,6 +646,11 @@ describe("ask_user", () => {
       },
     });
     const pending = ask();
+    const toolSettlement = Promise.allSettled([pending]);
+    onTestFinished(async () => {
+      firstWait.resolve({ status: "cancelled" });
+      await toolSettlement;
+    });
     await vi.waitFor(() => expect(waitCalls).toBe(1));
 
     settleAskUserPromptDelivery(
@@ -628,6 +681,12 @@ describe("ask_user", () => {
     });
     const controller = new AbortController();
     const pending = ask(controller.signal);
+    const toolSettlement = Promise.allSettled([pending]);
+    onTestFinished(async () => {
+      controller.abort();
+      finishWait.resolve({ status: "cancelled" });
+      await toolSettlement;
+    });
     await vi.waitFor(() =>
       expect(gateway.mock.mock.calls.some((call) => call[0] === "question.request")).toBe(true),
     );
@@ -641,11 +700,11 @@ describe("ask_user", () => {
 
   it("claims unmatched plain text as free text without steering it into the run", async () => {
     let finishWait: ((value: unknown) => void) | undefined;
+    const answer = createDeferred<unknown>();
     const gateway = registeredGateway({
       "question.waitAnswer": async () => {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
+        finishWait = answer.resolve;
+        return await answer.promise;
       },
       "question.resolve": async (params) => {
         const answers = params.answers;
@@ -656,6 +715,11 @@ describe("ask_user", () => {
     const pending = createAskUserTool({
       sessionKey: "agent:main:claim",
     }).execute("call-claim", validArgs);
+    const toolSettlement = Promise.allSettled([pending]);
+    onTestFinished(async () => {
+      answer.resolve({ status: "cancelled" });
+      await toolSettlement;
+    });
     await gateway.waitForCall("question.waitAnswer");
     expect(finishWait).toBeTypeOf("function");
     const questionId = requestedQuestionId(gateway.mock);
@@ -711,6 +775,11 @@ describe("ask_user", () => {
       },
     });
     const pending = ask();
+    const toolSettlement = Promise.allSettled([pending]);
+    onTestFinished(async () => {
+      finishWait.resolve({ status: "cancelled" });
+      await toolSettlement;
+    });
     await gateway.waitForCall("question.waitAnswer");
     const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
@@ -761,6 +830,11 @@ describe("ask_user", () => {
       },
     });
     const pending = ask();
+    const toolSettlement = Promise.allSettled([pending]);
+    onTestFinished(async () => {
+      finishWait.resolve({ status: "cancelled" });
+      await toolSettlement;
+    });
     await gateway.waitForCall("question.waitAnswer");
     const steer = vi.fn(async () => undefined);
     const persistApproved = vi.fn(async () => undefined);
@@ -792,6 +866,11 @@ describe("ask_user", () => {
       },
     });
     const pending = ask();
+    const toolSettlement = Promise.allSettled([pending]);
+    onTestFinished(async () => {
+      finishWait.resolve({ status: "cancelled" });
+      await toolSettlement;
+    });
     await gateway.waitForCall("question.waitAnswer");
     const steer = vi.fn(async () => undefined);
 

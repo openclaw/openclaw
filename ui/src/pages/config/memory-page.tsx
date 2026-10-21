@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 // The URL owns the active tab; Settings owners supply agent and configuration state.
-import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, createStore, onSettled, Show } from "solid-js";
 import type { ControlUiSettingsSnapshot } from "../../../../src/plugin-sdk/control-ui-settings.js";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -97,13 +97,12 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   const [engineOutcome, setEngineOutcome] = createSignal<MemoryEngineOutcome | null>(null);
 
-  const [addonBusy, setAddonBusy] = createSignal(new Set<string>());
-
-  const [addonErrors, setAddonErrors] = createSignal(new Map<string, string>());
-
-  const [addonNotices, setAddonNotices] = createSignal(new Map<string, MemoryAddonNotice>());
-
-  const [addonRefreshWarnings, setAddonRefreshWarnings] = createSignal(new Map<string, string>());
+  const [addonOutcomes, setAddonOutcomes] = createStore<{
+    busy: Partial<Record<string, true>>;
+    errors: Partial<Record<string, string>>;
+    notices: Partial<Record<string, MemoryAddonNotice>>;
+    refreshWarnings: Partial<Record<string, string>>;
+  }>({ busy: {}, errors: {}, notices: {}, refreshWarnings: {} });
 
   let settingsEpoch = 0;
   const settingsListeners = new Set<() => void>();
@@ -133,7 +132,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   const addonNoticeOperations = new Map<string, object>();
 
-  let active = true;
+  let active = false;
 
   function activeTab(routeData = props.routeData): MemoryTab {
     return memoryTabForRoute(routeData ?? {}, application?.basePath ?? "") ?? "overview";
@@ -164,8 +163,10 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     pageConnection = connection;
     setEngineBusy(false);
     setEngineOutcome(null);
-    setAddonBusy(new Set<string>());
-    setAddonRefreshWarnings(new Map());
+    setAddonOutcomes((draft) => {
+      draft.busy = {};
+      draft.refreshWarnings = {};
+    });
     retireSettingsReads();
     if (!client || !connected) {
       setCatalog({
@@ -178,10 +179,13 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       kind: "loading",
     });
     onSettled(publishSettings);
-    setAddonNotices(
-      (current) =>
-        new Map([...current].filter(([, notice]) => notice.bootId && notice.bootId === bootId)),
-    );
+    setAddonOutcomes((draft) => {
+      for (const [pluginId, notice] of Object.entries(draft.notices)) {
+        if (!notice?.bootId || notice.bootId !== bootId) {
+          delete draft.notices[pluginId];
+        }
+      }
+    });
     refreshPluginReads(client, connection);
   }
 
@@ -238,7 +242,9 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       return;
     }
     if (!refreshError) {
-      setAddonRefreshWarnings(new Map());
+      setAddonOutcomes((draft) => {
+        draft.refreshWarnings = {};
+      });
       if (engineOutcome()?.kind === "warning") {
         setEngineOutcome(null);
       }
@@ -248,7 +254,9 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       error: refreshError,
     });
     if (pluginId) {
-      setAddonRefreshWarnings((current) => new Map(current).set(pluginId, message));
+      setAddonOutcomes((draft) => {
+        draft.refreshWarnings[pluginId] = message;
+      });
     } else {
       setEngineOutcome({
         kind: "warning",
@@ -259,7 +267,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   async function changeAddon(pluginId: string, enabled: boolean) {
     if (
-      addonBusy().has(pluginId) ||
+      addonOutcomes.busy[pluginId] ||
       props.mutationDisabled ||
       catalog().kind !== "ready" ||
       !catalogCanMutate() ||
@@ -276,16 +284,10 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     }
     const noticeOperation = {};
     addonNoticeOperations.set(pluginId, noticeOperation);
-    setAddonBusy((current) => new Set(current).add(pluginId));
-    setAddonErrors((current) => {
-      const errors = new Map(current);
-      errors.delete(pluginId);
-      return errors;
-    });
-    setAddonRefreshWarnings((current) => {
-      const warnings = new Map(current);
-      warnings.delete(pluginId);
-      return warnings;
+    setAddonOutcomes((draft) => {
+      draft.busy[pluginId] = true;
+      delete draft.errors[pluginId];
+      delete draft.refreshWarnings[pluginId];
     });
     try {
       const mutation = await runPluginConfigMutation(
@@ -311,14 +313,12 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
         const keepNotice =
           notice &&
           (bootId && currentBootId ? bootId === currentBootId : pageConnection === connection);
-        setAddonNotices((current) => {
-          const notices = new Map(current);
+        setAddonOutcomes((draft) => {
           if (keepNotice) {
-            notices.set(pluginId, { message: notice, bootId });
+            draft.notices[pluginId] = { message: notice, bootId };
           } else {
-            notices.delete(pluginId);
+            delete draft.notices[pluginId];
           }
-          return notices;
         });
       }
       const currentConnection = pageConnection;
@@ -327,17 +327,17 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       }
     } catch (error) {
       if (pageConnection === connection) {
-        setAddonErrors((current) => new Map(current).set(pluginId, formatUiError(error)));
+        setAddonOutcomes((draft) => {
+          draft.errors[pluginId] = formatUiError(error);
+        });
       }
     } finally {
       if (addonNoticeOperations.get(pluginId) === noticeOperation) {
         addonNoticeOperations.delete(pluginId);
       }
       if (pageConnection === connection) {
-        setAddonBusy((current) => {
-          const busy = new Set(current);
-          busy.delete(pluginId);
-          return busy;
+        setAddonOutcomes((draft) => {
+          delete draft.busy[pluginId];
         });
       }
     }
@@ -457,6 +457,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     });
   }
   onSettled(() => {
+    active = true;
     const unsubscribe = [
       // Retire pending reads on every connection transition, even within one render.
       gateway.subscribe(() => syncGateway(application.gateway.snapshot)),
@@ -466,13 +467,13 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       props.admittedRoute.subscribe(publishSettings),
     ];
     syncGateway(gateway.read().snapshot);
-    return () => unsubscribe.forEach((stop) => stop());
-  });
-  onCleanup(() => {
-    active = false;
-    pageConnection = null;
-    pageSupportProbe = null;
-    addonNoticeOperations.clear();
+    return () => {
+      active = false;
+      pageConnection = null;
+      pageSupportProbe = null;
+      addonNoticeOperations.clear();
+      unsubscribe.forEach((stop) => stop());
+    };
   });
 
   const engineSelection = () => resolveMemoryEngineSelection(props.configObject);
@@ -529,12 +530,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
         engineBusy={engineBusy() || props.mutationDisabled || catalogBlocksMutation()}
         engineOutcome={engineOutcome()}
         onEngineChange={(nextEngineId) => void changeEngine(nextEngineId, engineSelection())}
-        addons={buildMemoryAddonRows(catalog(), {
-          busy: addonBusy(),
-          errors: addonErrors(),
-          notices: addonNotices(),
-          refreshWarnings: addonRefreshWarnings(),
-        })}
+        addons={buildMemoryAddonRows(catalog(), addonOutcomes)}
         canToggleAddons={
           catalogCanMutate() &&
           !props.mutationDisabled &&

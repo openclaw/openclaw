@@ -197,7 +197,10 @@ OpenClaw release:
         use protected file-descriptor forwarding, including tokens saved with
         `openclaw models auth paste-token --provider anthropic`. API keys saved for
         the `anthropic` provider require an explicit account selection for CLI
-        forwarding. Existing sessions keep their account until you select another
+        forwarding. Saved subscription accounts also make configured Claude CLI
+        models available in the picker without a native `claude auth login`;
+        switching models preserves the configured Claude CLI runtime.
+        Existing sessions keep their account until you select another
         or remove its saved profile. Native-tool approvals remain under OpenClaw
         control. Schema-valid native calls pass through OpenClaw's shared
         tool policy before native approval. Isolated side-question completions

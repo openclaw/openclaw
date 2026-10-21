@@ -206,6 +206,19 @@ describe("linux-node commands", () => {
     );
   });
 
+  it("keeps truncated notification errors within the limit without splitting surrogate pairs", async () => {
+    const { command } = createHarness({
+      runCommand: async () => ({
+        ...success(),
+        code: 1,
+        stderr: `${"x".repeat(299)}\u{1f600}tail`,
+      }),
+    });
+    await expect(
+      command("system.notify").handle(JSON.stringify({ title: "Test" })),
+    ).rejects.toThrow(new Error(`NOTIFICATIONS_UNAVAILABLE: ${"x".repeat(299)}`));
+  });
+
   it("accepts either notification field but rejects an empty notification", async () => {
     const { command, runCommand } = createHarness();
     const params = { title: "Status", body: "" };

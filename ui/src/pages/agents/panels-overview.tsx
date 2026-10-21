@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, For, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createUniqueId, For, onSettled, Show } from "solid-js";
 import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type {
   AgentIdentityResult,
@@ -63,7 +63,7 @@ export function AgentOverview(
     : undefined;
   const uploadsEnabled = () => configProjection?.read().uploadsEnabled !== false;
   const avatarLoader = createIdentityAvatars();
-  onCleanup(avatarLoader.connect());
+  onSettled(() => avatarLoader.connect());
   const avatarProjection = projectOwner(avatarLoader, (owner) => owner);
   const catalogOwnsChoices = createMemo(
     () => params.modelCatalogRetired || params.modelSelectionPolicy?.restricted,

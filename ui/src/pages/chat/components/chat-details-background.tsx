@@ -15,7 +15,7 @@ import {
 } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsSubagents, type ChatDetailsSubagentsProps } from "./chat-details-subagents.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import { ChatSubagentActivity } from "./chat-subagent-activity-live.ts";
+import { ChatSubagentActivity } from "./chat-subagent-activity-lazy.tsx";
 
 type Props = {
   details: ChatDetailsProps;

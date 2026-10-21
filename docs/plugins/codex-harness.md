@@ -640,6 +640,12 @@ delegation continues to use `sessions_spawn`. Stored submission and result
 receipts are recovery evidence, not permission to adopt a child or deliver to a
 replacement parent.
 
+When a native child spawns its own child, Codex delivers that grandchild's result
+to the immediate native parent. OpenClaw retires the completed assignment without
+another root continuation, including after restart when native lineage can be
+verified. Unavailable lineage leaves the assignment pending for later recovery;
+native-parent rotation alone does not prove nested delivery.
+
 For native Codex V1 agents, a completed `wait` result also records delivery to
 the foreground parent. OpenClaw does not start another continuation for that
 same child result after the parent replies.

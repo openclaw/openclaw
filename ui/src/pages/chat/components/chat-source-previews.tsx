@@ -1,4 +1,4 @@
-import { For, Show, createSignal, createUniqueId, onCleanup } from "solid-js";
+import { For, Show, createSignal, createStore, createUniqueId, onCleanup } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -106,7 +106,7 @@ function SourceCard(props: {
 
 export function ChatSourcePreviews(props: SourcePreviewsProps) {
   const [revision, setRevision] = createSignal(0);
-  const [failedFavicons, setFailedFavicons] = createSignal<ReadonlySet<string>>(new Set<string>());
+  const [failedFavicons, setFailedFavicons] = createStore<Record<string, boolean>>({});
   let active = true;
   onCleanup(() => {
     active = false;
@@ -121,7 +121,7 @@ export function ChatSourcePreviews(props: SourcePreviewsProps) {
     const url = props.fetchFavicon
       ? readLinkFavicon(new URL(source.url).hostname, props.fetchFavicon, refreshFavicons)
       : null;
-    return url && !failedFavicons().has(url) ? url : null;
+    return url && !failedFavicons[url] ? url : null;
   };
   return (
     <Show when={props.sources.length > 0}>
@@ -138,7 +138,11 @@ export function ChatSourcePreviews(props: SourcePreviewsProps) {
                 <SourceCard
                   source={source()}
                   favicon={favicon(source())}
-                  onImageError={(url) => setFailedFavicons((failed) => new Set([...failed, url]))}
+                  onImageError={(url) =>
+                    setFailedFavicons((failed) => {
+                      failed[url] = true;
+                    })
+                  }
                 />
               )}
             </For>

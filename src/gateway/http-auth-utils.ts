@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
@@ -68,6 +69,8 @@ import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+import { prepareSessionCreatorProfile } from "./session-creator.js";
+import { createProfileSessionEntryFilter } from "./session-sharing-read.js";
 
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
@@ -423,31 +426,54 @@ export async function authorizeControlUiReadRequestOrReply(
   return requestAuth;
 }
 
+/** Decides whether a session-byte route may serve bytes for one resolved session entry. */
+export type ControlUiSessionReadFilter = (
+  sessionKey: string | undefined,
+  entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">,
+) => boolean;
+
+export type AuthorizedControlUiSessionOwnerReadRequest = AuthorizedControlUiReadRequest &
+  GatewayHttpResponseAuthority & { canReadSession: ControlUiSessionReadFilter };
+
 /**
- * Session byte routes cannot apply the client-specific `sessions.list` filter.
- * Require its read scope plus an unfiltered owner view. Locally approved ingress
- * grants retain that view without acquiring admin scope.
+ * Session byte routes serve one session's bytes after the route resolves its
+ * entry, so they apply the same per-profile visibility rule as session reads:
+ * the creating profile sees its own sessions and other profiles see shared ones
+ * within their role's session cap. Admin scope and locally approved ingress
+ * owner grants keep the unfiltered view. A request without an authenticated
+ * profile has no visibility to evaluate and stays refused.
  */
 export async function authorizeControlUiSessionOwnerReadRequestOrReply(
   params: Omit<ControlUiReadAuthParams, "allowQueryToken" | "requiredOperatorMethod">,
-): Promise<(AuthorizedControlUiReadRequest & GatewayHttpResponseAuthority) | null> {
+): Promise<AuthorizedControlUiSessionOwnerReadRequest | null> {
   const requestAuth = await authorizeControlUiReadRequestOrReply({
     ...params,
     requiredOperatorMethod: "sessions.list",
   });
+  if (!requestAuth) {
+    return null;
+  }
   if (
-    !requestAuth ||
     requestAuth.operatorScopes.includes(ADMIN_SCOPE) ||
     (getRemoteControlUiIngressContext(params.req) &&
       requestAuth.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID)
   ) {
-    return requestAuth;
+    return { ...requestAuth, canReadSession: () => true };
   }
-  sendJson(params.res, 403, {
-    ok: false,
-    error: { message: "owner access required", type: "forbidden" },
-  });
-  return null;
+  const profile = requestAuth.preparedSessionProfile;
+  if (!profile?.profileId) {
+    sendJson(params.res, 403, {
+      ok: false,
+      error: { message: "owner access required", type: "forbidden" },
+    });
+    return null;
+  }
+  // Aliases were prepared with the profile; the filter never reads resident state later.
+  const canReadSession = createProfileSessionEntryFilter(
+    { profileId: profile.profileId, sessionCap: requestAuth.operatorRolePolicy?.sessions.others },
+    prepareSessionCreatorProfile(profile.profileId, profile.aliases),
+  );
+  return { ...requestAuth, canReadSession };
 }
 
 export async function authorizeGatewayHttpRequestOrReply(

@@ -1,4 +1,4 @@
-import { createSignal, onCleanup } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
@@ -19,7 +19,7 @@ export function FileDownloadButton(props: {
 }) {
   const [pending, setPending] = createSignal(false);
   let request: AbortController | null = null;
-  onCleanup(() => request?.abort());
+  onSettled(() => () => request?.abort());
   const download = async () => {
     if (request || props.disabled) {
       return;

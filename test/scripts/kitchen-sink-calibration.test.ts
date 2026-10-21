@@ -75,6 +75,7 @@ function fixture({ obscured = false, failure = "", checksum = 633_235_013, disab
         process: { user: sampleIndex * 100, system: 0 },
         mainThread: { user: sampleIndex * 100, system: 0 },
         memory: { ...memory, rss: 100 + held, external: held, arrayBuffers: held },
+        heapSpaces: [],
         activeResources: { Timeout: obscured ? 5 : state.timerActive ? 2 : 1 },
         runtime: { node: "26.1.0", platform: "linux", arch: "x64" },
       };

@@ -431,7 +431,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     });
 
     expect(segments).toHaveLength(1);
-    expect(segments[0]).toMatchObject({ kind: "text", mrkdwn: false });
+    expect(segments[0]).toMatchObject({ kind: "text" });
     const fallback = segments[0]?.kind === "text" ? segments[0].text : "";
     expect(fallback).toContain("<@U1> & <!channel>");
     expect(fallback).toContain("/say ` <!channel>");
@@ -456,7 +456,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     });
 
     expect(resolution.authoredTextPlacement).toBe("blocks");
-    expect(resolution.segments).toContainEqual({ kind: "text", text, mrkdwn: false });
+    expect(resolution.segments).toContainEqual({ kind: "text", text });
   });
 
   it("materializes authored text blocks as verbatim mrkdwn", () => {

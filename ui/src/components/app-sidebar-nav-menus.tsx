@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createUniqueId, onCleanup } from "solid-js";
+import { createUniqueId, onSettled } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   isPluginsHubRoute,
@@ -66,7 +66,8 @@ export type SidebarDropdownProps = {
 export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
   const id = createUniqueId();
   let removeListeners: (() => void)[] = [];
-  onCleanup(() => removeListeners.forEach((stop) => stop()));
+  // Menu publishes its handle after settled setup has registered this teardown.
+  onSettled(() => () => removeListeners.forEach((stop) => stop()));
   return (
     <Menu
       controls={params.controls}

@@ -1,4 +1,4 @@
-import { Show, onSettled, onCleanup, type Element } from "solid-js";
+import { Show, onSettled, type Element } from "solid-js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
@@ -20,7 +20,6 @@ import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import { PaneHeaderPresence, PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { ChatDetails } from "./chat-details.tsx";
-import { ChatHeaderCreateClawAction } from "./chat-header-create-claw-action.tsx";
 import {
   ChatPanelHeaderActions,
   ChatDashboardMenu,
@@ -77,8 +76,8 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
   );
   onSettled(() => {
     props.setDashboardControls?.(dashboardControls);
+    return () => props.setDashboardControls?.(undefined);
   });
-  onCleanup(() => props.setDashboardControls?.(undefined));
   const incognito = () =>
     (props.incognito ?? props.session?.incognito) || isIncognitoSessionKey(props.session?.key);
   const Details = (detailsProps: {
@@ -442,7 +441,6 @@ function ChatPaneHeaderChrome(
               <RunningSubagents count={props.runningSubagentCount} />
             </Show>
             <Show when={props.runAction}>{(action) => <PaneSubagentStop {...action()} />}</Show>
-            <ChatHeaderCreateClawAction onCreateClaw={props.onCreateClaw} />
             <Show when={!props.mergedChrome}>
               <Show when={props.presence}>
                 {(presence) => <PaneHeaderPresence {...presence()} />}

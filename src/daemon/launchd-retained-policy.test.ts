@@ -7,6 +7,38 @@ import { restartLaunchAgent, startLaunchAgent } from "./launchd-lifecycle.js";
 import * as runtime from "./launchd-runtime.js";
 import * as ownership from "./launchd-system.js";
 
+const success = { code: 0, termination: "exit" as const, stdout: "", stderr: "" };
+const missing = { ...success, code: 1, stderr: "Could not find service" };
+const policy = (disabled = false) => ({
+  ...success,
+  stdout: `disabled services = {\n"ai.openclaw.gateway" => ${disabled ? "disabled" : "enabled"}\n}`,
+});
+const job = (target: string | undefined, loaded: boolean) =>
+  loaded ? { ...success, stdout: `${target} = {\n\tstate = waiting\n}` } : missing;
+const controlArgs = (preserveAutoStart = true) => ({
+  env: { HOME: "/fixture/user" },
+  stdout: new PassThrough(),
+  preserveDefinition: true,
+  preserveAutoStart,
+});
+function mockLaunchctl(
+  handlers: Record<string, (args: string[]) => native.LaunchctlResult>,
+  before: (command: string) => void = () => {},
+) {
+  vi.spyOn(native, "execLaunchctl").mockImplementation(async (args) => {
+    const command = args[0];
+    if (!command) {
+      throw new Error("Missing native command");
+    }
+    before(command);
+    const handler = Object.hasOwn(handlers, command) ? handlers[command] : undefined;
+    if (!handler) {
+      throw new Error("Unexpected native command: " + command);
+    }
+    return handler(args);
+  });
+}
+
 beforeEach(() => {
   vi.spyOn(ownership, "assertNoSystemLaunchDaemonOwnership").mockResolvedValue();
   vi.spyOn(currentService, "isCurrentProcessInsideLaunchdService").mockResolvedValue(false);
@@ -27,49 +59,32 @@ it.each(
   async ({ scenario, preserveAutoStart }) => {
     const commands: string[] = [];
     let loaded = scenario === "loaded";
-    let firstKick = true;
-    let firstBootstrap = true;
-    const success = { code: 0, termination: "exit" as const, stdout: "", stderr: "" };
-    vi.spyOn(native, "execLaunchctl").mockImplementation(async (args) => {
-      const command = args[0];
-      if (!command) {
-        throw new Error("Missing native command");
-      }
-      commands.push(command);
-      if (command === "print-disabled") {
-        return { ...success, stdout: 'disabled services = {\n"ai.openclaw.gateway" => enabled\n}' };
-      }
-      if (command === "enable") {
-        return success;
-      }
-      if (command === "print") {
-        return loaded
-          ? { ...success, stdout: `${args[1]} = {\n\tstate = waiting\n}` }
-          : { ...success, code: 1, stderr: "Could not find service" };
-      }
-      if (command === "bootstrap") {
-        if (firstBootstrap && scenario === "bootstrap-failure") {
-          firstBootstrap = false;
-          return { ...success, code: 5, stderr: "fixture bootstrap failure" };
-        }
-        loaded = true;
-        return success;
-      }
-      if (command === "kickstart") {
-        if (firstKick && scenario === "recovery") {
-          firstKick = false;
-          return { ...success, code: 5, stderr: "fixture kickstart failure" };
-        }
-        return loaded ? success : { ...success, code: 1, stderr: "Could not find service" };
-      }
-      throw new Error("Unexpected native command: " + command);
-    });
-    const result = restartLaunchAgent({
-      env: { HOME: "/fixture/user" },
-      stdout: new PassThrough(),
-      preserveDefinition: true,
-      preserveAutoStart,
-    });
+    let kicks = 0;
+    let bootstraps = 0;
+    mockLaunchctl(
+      {
+        "print-disabled": () => policy(),
+        enable: () => success,
+        print: (args) => job(args[1], loaded),
+        bootstrap: () => {
+          if (scenario === "bootstrap-failure" && bootstraps++ === 0) {
+            return { ...success, code: 5, stderr: "fixture bootstrap failure" };
+          }
+          loaded = true;
+          return success;
+        },
+        kickstart: () => {
+          if (scenario === "recovery" && kicks++ === 0) {
+            return { ...success, code: 5, stderr: "fixture kickstart failure" };
+          }
+          return loaded ? success : missing;
+        },
+      },
+      (command) => {
+        commands.push(command);
+      },
+    );
+    const result = restartLaunchAgent(controlArgs(preserveAutoStart));
     if (scenario === "bootstrap-failure") {
       await expect(result).rejects.toThrow("fixture bootstrap failure");
     } else {
@@ -85,21 +100,15 @@ it.each(
   },
 );
 
+const phases = [
+  "activation",
+  "nested-activation",
+  "restoration",
+  "disabled-bootstrap",
+  "disabled-restoration",
+] as const;
 it.each(
-  (["start", "restart"] as const).flatMap((action) =>
-    (
-      [
-        "activation",
-        "nested-activation",
-        "restoration",
-        "disabled-bootstrap",
-        "disabled-restoration",
-      ] as const
-    ).map((phase) => ({
-      action,
-      phase,
-    })),
-  ),
+  (["start", "restart"] as const).flatMap((action) => phases.map((phase) => ({ action, phase }))),
 )(
   "preserves uncertain cleanup during $action $phase without further native commands",
   async ({ action, phase }) => {
@@ -109,53 +118,29 @@ it.each(
     const commandsAfterUncertainCleanup: string[] = [];
     let uncertainCleanup = false;
     let inspections = 0;
-    const success = { code: 0, termination: "exit" as const, stdout: "", stderr: "" };
-    vi.spyOn(native, "execLaunchctl").mockImplementation(async (args) => {
-      const command = args[0];
-      if (!command) {
-        throw new Error("Missing native command");
-      }
-      if (uncertainCleanup) {
-        commandsAfterUncertainCleanup.push(command);
-      }
-      if (
-        (command === "kickstart" && ["activation", "nested-activation"].includes(phase)) ||
-        command === "bootstrap"
-      ) {
-        uncertainCleanup = true;
-        throw failure;
-      }
-      if (command === "kickstart") {
-        return { ...success, code: 5, stderr: "fixture activation failure" };
-      }
-      if (command === "print") {
-        inspections += 1;
-        return inspections === 1 && phase !== "disabled-bootstrap"
-          ? { ...success, stdout: `${args[1]} = {\n\tstate = waiting\n}` }
-          : { ...success, code: 1, stderr: "Could not find service" };
-      }
-      if (command === "print-disabled") {
-        const policy = phase.startsWith("disabled-") ? "disabled" : "enabled";
-        return {
-          ...success,
-          stdout: `disabled services = {\n"ai.openclaw.gateway" => ${policy}\n}`,
-        };
-      }
-      if (command === "enable" || command === "disable") {
-        return success;
-      }
-      throw new Error("Unexpected native command: " + command);
-    });
+    mockLaunchctl(
+      {
+        kickstart: () => ({ ...success, code: 5, stderr: "fixture activation failure" }),
+        print: (args) => job(args[1], ++inspections === 1 && phase !== "disabled-bootstrap"),
+        "print-disabled": () => policy(phase.startsWith("disabled-")),
+        enable: () => success,
+        disable: () => success,
+      },
+      (command) => {
+        if (uncertainCleanup) {
+          commandsAfterUncertainCleanup.push(command);
+        }
+        if (
+          (command === "kickstart" && ["activation", "nested-activation"].includes(phase)) ||
+          command === "bootstrap"
+        ) {
+          uncertainCleanup = true;
+          throw failure;
+        }
+      },
+    );
     const activate = action === "start" ? startLaunchAgent : restartLaunchAgent;
-    await expect(
-      activate({
-        env: { HOME: "/fixture/user" },
-        stdout: new PassThrough(),
-        preserveDefinition: true,
-        preserveAutoStart: true,
-        assertCurrent: () => {},
-      }),
-    ).rejects.toBe(failure);
+    await expect(activate({ ...controlArgs(), assertCurrent: () => {} })).rejects.toBe(failure);
     expect(commandsAfterUncertainCleanup).toEqual([]);
   },
 );
