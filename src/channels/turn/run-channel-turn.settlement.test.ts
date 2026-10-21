@@ -31,6 +31,10 @@ describe("channel turn terminal settlement", () => {
       ...scope,
     };
     const noticeContext = { channel: "telegram", to: "chat-1", accountId: "default" };
+    const deliveries = (state: "prepared" | "unknown" | "delivered") => [
+      { id: completion.deliveryId, state },
+      ...(sibling ? [{ id: "delivery-2", state: "prepared" as const }] : []),
+    ];
     await replaceSessionEntry(scope, {
       sessionId: completion.sessionId,
       updatedAt: 1,
@@ -40,19 +44,11 @@ describe("channel turn terminal settlement", () => {
         createdAt: 1,
         intentId: completion.intentId,
         context: noticeContext,
-        deliveries: [
-          { id: completion.deliveryId, state: "prepared" },
-          ...(sibling ? [{ id: "delivery-2", state: "prepared" as const }] : []),
-        ],
+        deliveries: deliveries("prepared"),
       },
     });
     const readEntry = () => readSessionEntryReadOnlyInWorker(scope);
-    const expectedPending = sibling
-      ? [
-          { id: completion.deliveryId, state: "delivered" },
-          { id: "delivery-2", state: "prepared" },
-        ]
-      : undefined;
+    const expectedPending = sibling ? deliveries("delivered") : undefined;
     const observerError = new Error("post-delivery observer failed");
     const onDelivered = vi.fn<NonNullable<AssembledChannelTurn["delivery"]["onDelivered"]>>(
       async () => {
@@ -69,10 +65,7 @@ describe("channel turn terminal settlement", () => {
     let admittedEntry: Awaited<ReturnType<typeof readEntry>>;
     const deliver = vi.fn(async () => {
       admittedEntry = await readEntry();
-      expect(admittedEntry?.pendingFinalDelivery?.deliveries).toEqual([
-        { id: completion.deliveryId, state: "unknown" },
-        ...(sibling ? [{ id: "delivery-2", state: "prepared" }] : []),
-      ]);
+      expect(admittedEntry?.pendingFinalDelivery?.deliveries).toEqual(deliveries("unknown"));
       expect(admittedEntry?.pendingDeliveryNotice).toMatchObject({
         intentId: completion.intentId,
         state: "owed",
@@ -82,6 +75,10 @@ describe("channel turn terminal settlement", () => {
     });
     const onError = vi.fn();
     const settlement = vi.spyOn(deliveryCompletion, "settlePendingFinalDelivery");
+    const assertDeliveredOnce = () => {
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(onDelivered).toHaveBeenCalledOnce();
+    };
     const dispatch: DispatchReplyWithBufferedBlockDispatcher = async (params) => {
       const dispatcher = createReplyDispatcher(params.dispatcherOptions);
       dispatcher.sendFinalReply(
@@ -125,8 +122,7 @@ describe("channel turn terminal settlement", () => {
         },
       },
     });
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(onDelivered).toHaveBeenCalledOnce();
+    assertDeliveredOnce();
     expect(settlement.mock.calls.some(([, state]) => state === "queued")).toBe(false);
     expect((await readEntry())?.pendingFinalDelivery?.deliveries).toEqual(expectedPending);
     if (observerThrows) {
@@ -146,8 +142,7 @@ describe("channel turn terminal settlement", () => {
 
     // A fresh payload identity consults durable custody rather than the retained receipt.
     await run();
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(onDelivered).toHaveBeenCalledOnce();
+    assertDeliveredOnce();
     expect((await readEntry())?.pendingFinalDelivery?.deliveries).toEqual(expectedPending);
     expect((await readEntry())?.updatedAt).toBe(1);
 
@@ -158,8 +153,7 @@ describe("channel turn terminal settlement", () => {
     await replaceSessionEntry(scope, admittedEntry);
     await run();
     await run();
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(onDelivered).toHaveBeenCalledOnce();
+    assertDeliveredOnce();
     const afterReplay = await readEntry();
     expect(afterReplay?.pendingFinalDelivery).toEqual(admittedEntry.pendingFinalDelivery);
     expect(afterReplay?.pendingDeliveryNotice).toEqual(admittedEntry.pendingDeliveryNotice);

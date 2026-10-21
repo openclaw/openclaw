@@ -1,4 +1,3 @@
-// Message turn guardrail tests cover channel turn safety checks and fixture boundaries.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,24 +56,17 @@ function readRepoFile(relativePath: string): string {
 }
 
 function isScannableTsFile(relativePath: string): boolean {
-  const parts = relativePath.split("/");
   return (
-    !parts.some((part) => skippedExtensionScanDirs.has(part)) &&
+    !relativePath.split("/").some((part) => skippedExtensionScanDirs.has(part)) &&
     relativePath.endsWith(".ts") &&
     !relativePath.endsWith(".d.ts")
   );
 }
 
-function listGitTsFiles(relativeDir: string): string[] | null {
-  return (
-    listGitTrackedFiles({ repoRoot, pathspecs: relativeDir })?.filter(isScannableTsFile) ?? null
-  );
-}
-
 function listTsFiles(relativeDir: string): string[] {
-  const gitFiles = listGitTsFiles(relativeDir);
+  const gitFiles = listGitTrackedFiles({ repoRoot, pathspecs: relativeDir });
   if (gitFiles) {
-    return gitFiles;
+    return gitFiles.filter(isScannableTsFile);
   }
 
   const dir = path.join(repoRoot, ...relativeDir.split("/"));
@@ -86,10 +78,7 @@ function listTsFiles(relativeDir: string): string[] {
       }
       return listTsFiles(relativePath);
     }
-    if (!entry.isFile() || !isScannableTsFile(relativePath)) {
-      return [];
-    }
-    return [relativePath];
+    return entry.isFile() && isScannableTsFile(relativePath) ? [relativePath] : [];
   });
 }
 
@@ -111,10 +100,7 @@ describe("message turn migration guardrails", () => {
     const result = await runChannelTurn({
       channel: "test",
       raw: {},
-      adapter: {
-        ingest: () => null,
-        resolveTurn: vi.fn(),
-      },
+      adapter: { ingest: () => null, resolveTurn: vi.fn() },
     });
 
     expect(result).toEqual({
@@ -146,10 +132,11 @@ describe("message turn migration guardrails", () => {
 
   it("keeps plugin runtime files off deprecated reply-history map helpers", () => {
     for (const file of listTsFiles("extensions")) {
-      if (file.includes(".test.") || file.endsWith(".test.ts")) {
-        continue;
-      }
-      if (legacyReplyHistoryCompatibilityFiles.has(file)) {
+      if (
+        file.includes(".test.") ||
+        file.endsWith(".test.ts") ||
+        legacyReplyHistoryCompatibilityFiles.has(file)
+      ) {
         continue;
       }
       const source = readRepoFile(file);

@@ -58,11 +58,7 @@ export function createDurableSendResult(messageIds: string[]) {
   return {
     status: "sent",
     results: messageIds.map((messageId) => ({ messageId })),
-    receipt: {
-      platformMessageIds: messageIds,
-      parts: [],
-      sentAt: 1,
-    },
+    receipt: { platformMessageIds: messageIds, parts: [], sentAt: 1 },
   };
 }
 
@@ -118,11 +114,7 @@ export function createDispatcherBackedDispatch(
     dispatcher.markComplete();
     const settledReceipt = (await dispatcher.waitForIdle()) || undefined;
     onReceipt(settledReceipt);
-    return {
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-      settledReceipt,
-    };
+    return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 }, settledReceipt };
   }) as DispatchReplyWithBufferedBlockDispatcher;
 }
 

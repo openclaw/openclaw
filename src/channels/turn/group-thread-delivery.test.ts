@@ -15,29 +15,26 @@ const sendStructuredDurableMessageBatch = vi.hoisted(() =>
 );
 const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
 
-vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/outbound/deliver.js")>();
-  return { ...actual, resolveOutboundDurableFinalDeliverySupport };
-});
+vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/outbound/deliver.js")>()),
+  resolveOutboundDurableFinalDeliverySupport,
+}));
 
-vi.mock("../message/send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../message/send.js")>();
-  return {
-    ...actual,
-    sendDurableMessageBatchCore: vi.fn(),
-    sendStructuredDurableMessageBatchCore: sendStructuredDurableMessageBatch,
-  };
-});
+vi.mock("../message/send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../message/send.js")>()),
+  sendDurableMessageBatchCore: vi.fn(),
+  sendStructuredDurableMessageBatchCore: sendStructuredDurableMessageBatch,
+}));
 
-vi.mock("../session.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session.js")>();
-  return { ...actual, recordInboundSession: vi.fn(async () => undefined) };
-});
+vi.mock("../session.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session.js")>()),
+  recordInboundSession: vi.fn(async () => undefined),
+}));
 
-vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/hook-runner-global.js")>();
-  return { ...actual, getGlobalHookRunner };
-});
+vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/hook-runner-global.js")>()),
+  getGlobalHookRunner,
+}));
 
 vi.mock("../../config/sessions/transcript.js", () => ({
   readRecentUserAssistantTextForSession: vi.fn(async () => []),
@@ -65,6 +62,9 @@ describe("group thread channel delivery", () => {
         runMessageSent,
       });
       const token = createExecutionIdentityAdmissionToken("run-alice");
+      const target = { to: "chat-1", replyToId: "source-1", threadId: 42 };
+      const sessionKey = (agentId: string) =>
+        `agent:${agentId}:telegram:group:chat-1:thread:telegram-account-acct:thread:42`;
       if (lane === "durable") {
         sendStructuredDurableMessageBatch.mockImplementation(async ({ plan, channel }) => {
           const messageId = `sent-${plan[0]?.payload.text}`;
@@ -118,10 +118,7 @@ describe("group thread channel delivery", () => {
                 ),
               ).queued
             : dispatcher.sendFinalReply(payload);
-          return {
-            queuedFinal,
-            counts: dispatcher.getQueuedCounts(),
-          };
+          return { queuedFinal, counts: dispatcher.getQueuedCounts() };
         },
         delivery: {
           observeMessageSent: true,
@@ -142,14 +139,9 @@ describe("group thread channel delivery", () => {
           expect(request).toMatchObject({
             channel: "telegram",
             accountId: "acct",
-            to: "chat-1",
-            replyToId: "source-1",
-            threadId: 42,
+            ...target,
             runId: `run-${agentId}`,
-            session: {
-              agentId,
-              key: `agent:${agentId}:telegram:group:chat-1:thread:telegram-account-acct:thread:42`,
-            },
+            session: { agentId, key: sessionKey(agentId) },
           });
           expect(request?.executionIdentityToken).toBe(agentId === "alice" ? token : undefined);
         }
@@ -163,16 +155,11 @@ describe("group thread channel delivery", () => {
           channelId: "telegram",
           accountId: "acct",
           conversationId: "chat-1",
-          sessionKey: `agent:${agentId}:telegram:group:chat-1:thread:telegram-account-acct:thread:42`,
+          sessionKey: sessionKey(agentId),
           runId: `run-${agentId}`,
         });
         expect(runMessageSending).toHaveBeenCalledWith(
-          expect.objectContaining({
-            to: "chat-1",
-            content: `${agentId} answer`,
-            replyToId: "source-1",
-            threadId: 42,
-          }),
+          expect.objectContaining({ ...target, content: `${agentId} answer` }),
           context,
         );
         expect(runMessageSent).toHaveBeenCalledWith(
