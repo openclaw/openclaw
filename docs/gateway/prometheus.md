@@ -522,6 +522,7 @@ includes HTML rewriting, CSP preparation, compression, and response submission;
 time queued before the handler or delivery to the browser. Only entered stages
 are observed, including on failure; HEAD requests record `render` and `total`.
 The JSON bootstrap endpoint and static assets do not contribute samples.
+Queued diagnostic traces retain each stage's original start and end times.
 
 ### Session diff stages
 

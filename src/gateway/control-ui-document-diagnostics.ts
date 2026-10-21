@@ -1,6 +1,5 @@
 import { performance } from "node:perf_hooks";
 import { createQueuedDiagnosticPhaseEmitter } from "../infra/diagnostic-events.js";
-import { createPhaseTimings } from "./server-methods/phase-timings.js";
 
 type DocumentStage =
   | "auth_grants"
@@ -9,6 +8,7 @@ type DocumentStage =
   | "git_branch"
   | "preferences"
   | "render";
+type DocumentPhase = { name: string; startedAt: number; endedAt?: number };
 
 /** Emit after delivery; parallel preparation stages overlap within the total. */
 export function startControlUiDocumentDiagnostics(startedAt: number) {
@@ -16,20 +16,30 @@ export function startControlUiDocumentDiagnostics(startedAt: number) {
   if (!emit) {
     return undefined;
   }
-  const timing = createPhaseTimings<DocumentStage>();
+  const phases: DocumentPhase[] = [];
   return {
-    scope: timing.scope,
+    scope(stage: DocumentStage) {
+      const phase: DocumentPhase = {
+        name: `control-ui.document.${stage}`,
+        startedAt: performance.now(),
+      };
+      phases.push(phase);
+      return {
+        [Symbol.dispose]() {
+          phase.endedAt ??= performance.now();
+        },
+      };
+    },
     [Symbol.dispose]() {
-      const durationMs = performance.now() - startedAt;
-      const endedAt = Date.now();
-      timing.flush(performance.now());
-      timing.close();
-      for (const [stage, elapsed] of [...timing.totals, ["total", durationMs] as const]) {
+      const endedAt = performance.now();
+      phases.push({ name: "control-ui.document.total", startedAt, endedAt });
+      for (const phase of phases) {
+        const end = phase.endedAt ?? endedAt;
         emit({
-          name: `control-ui.document.${stage}`,
-          startedAt: endedAt - elapsed,
-          endedAt,
-          durationMs: elapsed,
+          name: phase.name,
+          startedAt: performance.timeOrigin + phase.startedAt,
+          endedAt: performance.timeOrigin + end,
+          durationMs: end - phase.startedAt,
         });
       }
     },

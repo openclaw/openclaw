@@ -14,7 +14,7 @@ export function createPhaseTimings<Phase extends string>() {
     close() {
       active.clear();
     },
-    scope(this: void, initialPhase: Phase) {
+    scope(initialPhase: Phase) {
       let phase: Phase | undefined = initialPhase;
       let startedAt = performance.now();
       const record = (now: number) => {
