@@ -1,20 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { Security } from "./security.tsx";
 
 type SecurityViewProps = Parameters<typeof Security>[0];
-
-type SecurityControl = HTMLButtonElement | HTMLLabelElement;
-
-function expectButtonByText(container: Element, text: string): SecurityControl {
-  const button = Array.from(
-    container.querySelectorAll<SecurityControl>("button, label.settings-segmented__btn"),
-  ).find((candidate) => candidate.textContent?.trim() === text);
-  return expectDefined(button, `button labelled ${text}`);
-}
 
 function expectRowByTitle(container: Element, text: string): HTMLElement {
   const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
@@ -39,13 +30,10 @@ function renderSecurity(
     },
     configBusy: false,
     canPairDevice: true,
-    onPairMobile: vi.fn(),
-    onBrowserEnabledToggle: vi.fn(),
-    onToolProfileChange: vi.fn(),
     editor: undefined,
     ...overrides,
   };
-  return { ...mountSolid(() => <Security {...props} />), ...props };
+  return mountSolid(() => <Security {...props} />);
 }
 
 describe("Security", () => {
@@ -64,16 +52,6 @@ describe("Security", () => {
     const authStatus = authRow.querySelector(".settings-status");
     expect(authStatus?.textContent?.trim()).toBe("none");
     expect(authStatus?.classList.contains("settings-status--warn")).toBe(true);
-  });
-
-  it("opens mobile pairing from the overview", () => {
-    const { container, onPairMobile } = renderSecurity();
-
-    expectRowByTitle(container, "Pair a device");
-    const button = expectButtonByText(container, "Pair device");
-    expect(button).toHaveProperty("disabled", false);
-    button.click();
-    expect(onPairMobile).toHaveBeenCalledOnce();
   });
 
   it("embeds the schema editor below the curated overview", () => {

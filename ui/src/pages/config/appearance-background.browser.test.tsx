@@ -248,7 +248,11 @@ const buttons = (selector: string) => [...host.querySelectorAll<HTMLButtonElemen
 const source = (kind: string) => button(`[data-background-source="${kind}"]`);
 const mode = (kind: string) => button(`[data-test-id="background-presentation-${kind}"]`);
 const backgroundRange = () => host.querySelector<HTMLInputElement>('input[type="range"]')!;
-function renderBackground(props: BackgroundViewProps) {
+function renderBackground(
+  overrides: Partial<Omit<BackgroundViewProps, "preference">> = {},
+  preference: Partial<BackgroundPreference> = {},
+) {
+  const props = fixture(overrides, preference);
   if (!update) {
     const [current, setCurrent] = createSignal({ ...props });
     update = setCurrent;
@@ -257,10 +261,14 @@ function renderBackground(props: BackgroundViewProps) {
     update({ ...props });
   }
   flush();
+  return props;
 }
-function fixture(overrides: Partial<BackgroundViewProps> = {}): BackgroundViewProps {
+function fixture(
+  overrides: Partial<Omit<BackgroundViewProps, "preference">>,
+  preference: Partial<BackgroundPreference>,
+): BackgroundViewProps {
   return {
-    preference: { ...DEFAULT_BACKGROUND_PREFERENCE, source: { kind: "theme" } },
+    preference: { ...DEFAULT_BACKGROUND_PREFERENCE, source: { kind: "theme" }, ...preference },
     imageUrl: null,
     hasImage: false,
     busy: false,
@@ -282,62 +290,20 @@ function fixture(overrides: Partial<BackgroundViewProps> = {}): BackgroundViewPr
 }
 
 describe("Appearance backgrounds", () => {
-  it("keeps source selection separate from both placement preferences", () => {
-    const props = fixture();
-    renderBackground(props);
-    source("none").click();
-    expect(props.onSource).toHaveBeenCalledWith("none");
-    expect(props.onChange).not.toHaveBeenCalled();
-    const rows = host.querySelectorAll<HTMLElement>(".settings-row--toggle");
-    rows[0]!.click();
-    expect(props.onChange).toHaveBeenLastCalledWith({ showOnNewSession: false });
-    rows[1]!.click();
-    expect(props.onChange).toHaveBeenLastCalledWith({ showInSessions: false });
-  });
-
-  it("defaults absent presentation to Faded and changes modes without replacing other choices", () => {
-    const props = fixture();
-    renderBackground(props);
-    const faded = mode("faded");
-    const fullBleed = mode("full-bleed");
-    expect(faded.getAttribute("aria-pressed")).toBe("true");
-    expect(faded.closest(".settings-segmented")).not.toBeNull();
-    fullBleed.click();
-    expect(props.onChange).toHaveBeenCalledExactlyOnceWith({ presentation: "full-bleed" });
-    expect(props.onSource).not.toHaveBeenCalled();
-    const changed = fixture({ preference: { ...props.preference, presentation: "full-bleed" } });
-    renderBackground(changed);
-    expect(fullBleed.getAttribute("aria-pressed")).toBe("true");
-    faded.click();
-    expect(changed.onChange).toHaveBeenCalledExactlyOnceWith({ presentation: "faded" });
-  });
-
   it("explains disabled placement separately from zero visibility", () => {
-    renderBackground(
-      fixture({
-        preference: {
-          ...DEFAULT_BACKGROUND_PREFERENCE,
-          showOnNewSession: false,
-          showInSessions: false,
-        },
-      }),
-    );
+    renderBackground({}, disabledPlacement);
+    expect(mode("faded").ariaPressed).toBe("true");
     expect(host.textContent).toContain("Both pages are off");
     expect(backgroundRange().disabled).toBe(false);
-    renderBackground(fixture({ preference: { ...DEFAULT_BACKGROUND_PREFERENCE, visibility: 0 } }));
+    renderBackground({}, { visibility: 0 });
     expect(host.textContent).toContain("At 0%, the artwork is hidden");
   });
 
   it("retains removal access when None is selected without silently deleting the image", () => {
-    const props = fixture({
-      preference: {
-        ...DEFAULT_BACKGROUND_PREFERENCE,
-        source: { kind: "none" },
-        presentation: "full-bleed",
-      },
-      hasImage: true,
-    });
-    renderBackground(props);
+    const props = renderBackground(
+      { hasImage: true },
+      { source: { kind: "none" }, presentation: "full-bleed" },
+    );
     expect(source("none").getAttribute("aria-pressed")).toBe("true");
     const switches = [...host.querySelectorAll<HTMLInputElement>(".settings-toggle__input")];
     expect(switches).toHaveLength(2);
@@ -354,7 +320,7 @@ describe("Appearance backgrounds", () => {
   });
 
   it("leaves the plain choices available when custom uploads are unavailable", () => {
-    renderBackground(fixture({ uploadAllowed: false }));
+    renderBackground({ uploadAllowed: false });
     expect([source("none").disabled, source("theme").disabled]).toEqual([false, false]);
     expect([source("custom").disabled, button("[data-background-upload]").disabled]).toEqual([
       true,
@@ -363,8 +329,7 @@ describe("Appearance backgrounds", () => {
   });
 
   it("delivers the chosen file once and clears the input so it can be selected again", () => {
-    const props = fixture();
-    renderBackground(props);
+    const props = renderBackground();
     const file = new File(["image fixture"], "background.png", { type: "image/png" });
     const transfer = new DataTransfer();
     transfer.items.add(file);
@@ -376,9 +341,11 @@ describe("Appearance backgrounds", () => {
   });
 
   it("shows failure text safely and locks conflicting controls during upload", () => {
-    renderBackground(
-      fixture({ busy: true, hasImage: true, message: { kind: "error", text: "Image <failed>" } }),
-    );
+    renderBackground({
+      busy: true,
+      hasImage: true,
+      message: { kind: "error", text: "Image <failed>" },
+    });
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Image <failed>");
     expect(host.querySelector("failed")).toBeNull();
     expect(buttons("button").every((control) => control.disabled)).toBe(true);

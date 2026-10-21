@@ -1,14 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRouter } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { resetServerUiPrefsSync } from "../../app/server-prefs.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
@@ -283,95 +281,60 @@ describe("ConfigPage navigation", () => {
     );
   });
 
-  it("keeps the config owner through a pending subpage loader in the real outlet", async () => {
-    const context = completeConfigContext(routeContext());
-    const configPages = pages.filter((route) => route.id !== "settings" && route.id !== "config");
+  it("keeps the config renderer and host across pending subpage data updates", async () => {
+    // The shared outlet suite owns deferred-loader scheduling; ConfigRoute owns renderer identity.
     const communications = expectDefined(
-      configPages.find((route) => route.id === "communications"),
+      pages.find((page) => page.id === "communications"),
       "communications route",
     );
     const advanced = expectDefined(
-      configPages.find((route) => route.id === "advanced"),
+      pages.find((page) => page.id === "advanced"),
       "advanced route",
     );
-    const loadAdvanced = expectDefined(advanced.loader, "advanced loader");
-    const releaseAdvanced = deferred();
-    const provider = createSolidApplicationContextProvider(context);
-    const productionModule = await communications.component();
-    const render = productionModule.renderSolid;
-    expect((await advanced.component()).renderSolid).toBe(render);
-    const module = {
-      ...productionModule,
-      renderSolid: (props: Parameters<typeof render>[0]) =>
-        createComponent(provider.wrapper, {
-          get children() {
-            return createComponent(render, props);
-          },
-        }),
-    };
-    const router = createRouter<
-      ConfigPageId,
-      ApplicationContext,
-      typeof module,
-      ConfigPageRouteData
-    >({
-      routes: [
-        { ...communications, component: () => module },
-        {
-          ...advanced,
-          component: () => module,
-          loader: async (...args: Parameters<typeof loadAdvanced>) => {
-            const data = loadAdvanced(...args);
-            await releaseAdvanced.promise;
-            return data;
-          },
-        },
-      ],
-    });
-    const mounted = mountRouterOutlet({ router, retryContext: context });
-    try {
-      await router.navigate(
-        "communications",
-        context,
-        {},
-        settingsRoute("communications", "?section=tts"),
-      );
-      await waitForSolid(() => {
-        expect(mounted.querySelector("#config-section-tts")).not.toBeNull();
-      });
-      const host = expectDefined(mounted.querySelector("openclaw-config-page"), "config host");
-      expect(host.querySelector(".content-header--settings .page-title")?.textContent).toBe(
-        "Communications",
-      );
-
-      const navigation = router.navigate("advanced", context);
-      await waitForSolid(() => {
-        const pending = router.getState().matches[0];
-        expect(pending).toMatchObject({ routeId: "advanced", status: "pending" });
-        expect(pending?.module).toBeDefined();
-        expect(pending?.data).toBeUndefined();
-      });
-      expect(mounted.querySelector("openclaw-config-page")).toBe(host);
-      expect(host.isConnected).toBe(true);
-      expect(host.querySelector(".content-header--settings .page-title")?.textContent).toBe(
-        "Communications",
-      );
-      expect(host.querySelector("#config-section-tts")).not.toBeNull();
-
-      releaseAdvanced.resolve(undefined);
-      await navigation;
-      await waitForSolid(() => {
-        expect(host.querySelector(".content-header--settings .page-title")?.textContent).toBe(
-          "Advanced",
-        );
-      });
-      expect(mounted.querySelector("openclaw-config-page")).toBe(host);
-      expect(host.isConnected).toBe(true);
-    } finally {
-      releaseAdvanced.resolve(undefined);
-      mounted.dispose();
-      router.stop();
+    const modules = [await communications.component(), await advanced.component()];
+    const render = modules[0]!.renderSolid;
+    for (const module of modules) {
+      expect(module.renderSolid).toBe(render);
+      if (!("renderOwnerKey" in module) || typeof module.renderOwnerKey !== "function") {
+        throw new Error("Settings routes require an explicit render owner");
+      }
+      expect(module.renderOwnerKey()).toBe("settings-config");
     }
+    const [data, setData] = createSignal<ConfigPageRouteData>({
+      ...settingsRoute("communications", "?section=tts"),
+      pageId: "communications",
+    });
+    const [pending, setPending] = createSignal(false);
+    const provider = createSolidApplicationContextProvider(routeContext());
+    const { container } = mountSolid(
+      () =>
+        createComponent(render, {
+          get data() {
+            return data();
+          },
+          get loaderPending() {
+            return pending();
+          },
+          presented: true,
+        }),
+      { wrapper: provider.wrapper },
+    );
+    flush();
+    const host = query(container, "openclaw-config-page");
+    const presentation = () => [
+      container.querySelector("openclaw-config-page"),
+      host.isConnected,
+      host.querySelector(".content-header--settings .page-title")?.textContent,
+    ];
+    expect(presentation()).toEqual([host, true, "Communications"]);
+    expect(host.querySelector("#config-section-tts")).not.toBeNull();
+    setPending(true);
+    flush();
+    expect(presentation()).toEqual([host, true, "Communications"]);
+    expect(host.querySelector("#config-section-tts")).not.toBeNull();
+    setData({ ...settingsRoute("advanced"), pageId: "advanced" });
+    setPending(false);
+    await waitForSolid(() => expect(presentation()).toEqual([host, true, "Advanced"]));
   });
 
   describe("ConfigPage pending section navigation", () => {
@@ -424,7 +387,6 @@ describe("ConfigPage navigation", () => {
           routeData: settingsRoute("communications"),
         });
         const { page } = view;
-        flush();
         const { frames, run } = animationFrames();
         const previousTarget = query(page, "#config-section-messages");
         const previousScroll = vi.fn();
@@ -606,7 +568,6 @@ describe("ConfigPage model catalog lifecycle", () => {
       const selection = context.settingsAgentSelection.state as { selectedId: string | null };
       selection.selectedId = "writer";
       publishConfigSource(context.settingsAgentSelection);
-      flush();
       const writerModels = [{ id: "writer-model", name: "Writer Model", provider: "openai" }];
       writer.resolve({ models: writerModels });
       flush();
@@ -614,7 +575,6 @@ describe("ConfigPage model catalog lifecycle", () => {
 
       selection.selectedId = "main";
       publishConfigSource(context.settingsAgentSelection);
-      flush();
       const currentMainModels = [{ id: "current-main", name: "Current Main", provider: "openai" }];
       await waitForSolid(() => expect(mainRequests).toBe(2));
       await expectModels(view);
@@ -628,7 +588,6 @@ describe("ConfigPage model catalog lifecycle", () => {
 
       selection.selectedId = null;
       publishConfigSource(context.settingsAgentSelection);
-      flush();
       await expectModels(view);
       await waitForSolid(() =>
         expect(view.page.textContent).toContain("Explicit model catalog unavailable"),
@@ -714,12 +673,10 @@ describe("ConfigPage model catalog lifecycle", () => {
       const { view } = await mount({ request } as unknown as GatewayBrowserClient);
       await expectStatusReads(request, 1);
       view.update({ pageId: "advanced" });
-      flush();
       await vi.advanceTimersByTimeAsync(20_000);
       expect(view.page.isConnected).toBe(true);
       await expectStatusReads(request, 1);
       view.update({ pageId: "appearance" });
-      flush();
       await expectStatusReads(request, 2);
     });
   });
@@ -764,7 +721,6 @@ describe("ConfigPage meeting capture", () => {
       } as unknown as ApplicationContext;
       const view = mountConfigPage(context, { pageId: "communications" });
       const container = view.container;
-      flush();
       expect(container.querySelector("openclaw-meeting-capture-settings")).toBeNull();
       const captureTab = query(container, '.hub-tab[data-tab-value="transcripts"]');
       expect(captureTab.textContent?.trim()).toBe("Meeting capture");

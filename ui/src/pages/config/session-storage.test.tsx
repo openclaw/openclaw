@@ -1,19 +1,16 @@
 import type { SessionsStorageStatusResult } from "@openclaw/gateway-protocol";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationContext } from "../../app/context.ts";
-import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
-import {
-  createRuntimeConfigCapability,
-  type RuntimeConfigCapability,
-} from "../../lib/config/runtime-config-capability.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { SessionStorageSettings } from "./session-storage.tsx";
+import {
+  clickSettings,
+  mountConfigSettings,
+  settingsButton as button,
+  waitSettingsText as waitText,
+} from "./settings-page.test-support.ts";
 
-const configs: RuntimeConfigCapability[] = [];
 type Maintenance = Partial<SessionsStorageStatusResult["maintenance"]>;
 function inventory(count: number, maintenance: Maintenance = {}): SessionsStorageStatusResult {
   return {
@@ -62,31 +59,12 @@ async function mount() {
       return options?.signal ? withinTest(response, options.signal) : response;
     };
   const client = { request } as unknown as GatewayBrowserClient;
-  const { gateway, publish } = createGatewayHarness(client);
-  const runtimeConfig = createRuntimeConfigCapability(gateway);
-  configs.push(runtimeConfig);
-  await runtimeConfig.ensureLoaded();
-  const context = { gateway, runtimeConfig } as unknown as ApplicationContext;
-  const { container: page, unmount } = mountSolid(() => <SessionStorageSettings />, {
-    wrapper: createSolidApplicationContextProvider(context).wrapper,
-  });
-  await waitText(page, "7 uncompressed");
-  return { page, context, runtimeConfig, request, client, respond, reply, publish, unmount };
-}
-function button(page: HTMLElement, label: string) {
-  return [...page.querySelectorAll("button")].find((item) => item.textContent?.trim() === label)!;
+  const mounted = await mountConfigSettings(client, () => <SessionStorageSettings />);
+  await waitText(mounted.page, "7 uncompressed");
+  return { ...mounted, request, respond, reply };
 }
 function click(page: HTMLElement, label: string) {
-  const control = button(page, label);
-  expect(control.disabled).toBe(false);
-  control.click();
-  flush();
-}
-
-function waitText(page: HTMLElement, text: string, selector?: string) {
-  return waitForSolid(() =>
-    expect((selector ? page.querySelector(selector) : page)?.textContent).toContain(text),
-  );
+  clickSettings(page, label, true);
 }
 async function expectIdle(request: ReturnType<typeof vi.fn>) {
   const calls = request.mock.calls.length;
@@ -99,12 +77,6 @@ function draft(page: HTMLElement, value: string) {
   input.dispatchEvent(new Event("input", { bubbles: true }));
   return input;
 }
-afterEach(() => {
-  cleanupSolid();
-  configs.splice(0).forEach((config) => config.dispose());
-  vi.restoreAllMocks();
-});
-
 it.each([
   ["status", "reconnect"],
   ["run", "client"],
@@ -126,13 +98,9 @@ it.each([
     publish(true, { request: currentRequest } as unknown as GatewayBrowserClient);
   } else {
     request.mockImplementation(currentRequest);
-    if (change === "reconnect") {
-      const hello = context.gateway.snapshot.hello;
-      publish(false, client, hello);
-      publish(true, client, hello);
-    } else {
-      publish(true, client);
-    }
+    const hello = context.gateway.snapshot.hello;
+    publish(false, client, hello);
+    publish(true, client, hello);
   }
   await waitText(page, "42 uncompressed");
   previous.resolve(inventory(700, { archivedTranscripts: 693 }));
@@ -281,7 +249,7 @@ async function startBackgroundRun() {
     method === "sessions.storage.run" ? Promise.resolve(running) : readStatus(method),
   );
   click(mounted.page, "Run now");
-  await waitForSolid(() => expect(mounted.page.textContent).toContain("Background batch started."));
+  await waitText(mounted.page, "Background batch started.");
   await waitText(mounted.page, "Running", ".settings-status");
   return { ...mounted, running, nextStatus };
 }
