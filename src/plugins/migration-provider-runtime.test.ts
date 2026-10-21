@@ -27,16 +27,14 @@ const createContext = (): MigrationProviderContext => ({
 const writeJson = (root: string, file: string, value: unknown) =>
   fs.writeFileSync(path.join(root, file), JSON.stringify(value));
 
-type MockManifestRegistry = { plugins: Array<Record<string, unknown>> };
-
-type MockPluginIndex = {
-  plugins: Array<{ pluginId: string; origin: string; enabled: boolean }>;
+type MockMetadata = {
+  index: { plugins: Array<{ pluginId: string; origin: string; enabled: boolean }> };
+  plugins: Array<Record<string, unknown>>;
 };
 
 const mocks = vi.hoisted(() => ({
   resolveRuntimePluginRegistry: vi.fn<(params?: unknown) => PluginRegistry | undefined>(),
-  loadPluginManifestRegistry: vi.fn<(params?: Record<string, unknown>) => MockManifestRegistry>(),
-  loadPluginRegistrySnapshot: vi.fn<(_params?: unknown) => MockPluginIndex>(),
+  metadata: vi.fn<() => MockMetadata>(),
   acquirePluginRegistryForInspection: vi.fn(),
   release: vi.fn(async () => {}),
   listBundledPluginMetadata:
@@ -55,33 +53,9 @@ vi.mock("./active-runtime-registry.js", () => ({
     mocks.resolveRuntimePluginRegistry(params && { onlyPluginIds: params.requiredPluginIds }),
 }));
 
-// mock-isolation: Migration fixtures provide their installed index without filesystem discovery.
-vi.mock("./plugin-registry-snapshot.js", () => ({
-  loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
-  loadPluginRegistrySnapshotWithMetadata: (params?: { index?: MockPluginIndex }) => ({
-    source: params?.index ? "provided" : "derived",
-    snapshot: params?.index ?? mocks.loadPluginRegistrySnapshot(),
-    diagnostics: [],
-  }),
-}));
-
 // mock-isolation: Migration fixtures bind metadata to their synthetic installed registry.
 vi.mock("./plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: (params: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv }) => {
-    const index = mocks.loadPluginRegistrySnapshot();
-    const manifestRegistry = mocks.loadPluginManifestRegistry({
-      index,
-      config: params.config,
-      env: params.env,
-      includeDisabled: true,
-    });
-    return { index, plugins: manifestRegistry.plugins };
-  },
-}));
-
-vi.mock("./manifest-registry-installed.js", () => ({
-  loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistry,
-  resolveInstalledManifestRegistryIndexFingerprint: () => "test-installed-index",
+  loadPluginMetadataSnapshot: mocks.metadata,
 }));
 
 vi.mock("./bundled-plugin-metadata.js", () => ({
@@ -131,22 +105,20 @@ function createOwnedMigrationRegistry(
 function mockInstalledProviders(
   entries: Array<{ pluginId: string; providerId: string; enabled?: boolean }>,
 ) {
-  mocks.loadPluginRegistrySnapshot.mockReturnValue({
-    plugins: entries.map(({ pluginId, enabled = true }) => ({
-      pluginId,
+  mocks.metadata.mockReturnValue({
+    index: {
+      plugins: entries.map(({ pluginId, enabled = true }) => ({
+        pluginId,
+        origin: "installed",
+        enabled,
+      })),
+    },
+    plugins: entries.map(({ pluginId, providerId }) => ({
+      id: pluginId,
       origin: "installed",
-      enabled,
+      contracts: { migrationProviders: [providerId] },
     })),
   });
-  mocks.loadPluginManifestRegistry.mockImplementation((params) => ({
-    plugins: entries
-      .filter(({ enabled }) => params?.includeDisabled || enabled !== false)
-      .map(({ pluginId, providerId }) => ({
-        id: pluginId,
-        origin: "installed",
-        contracts: { migrationProviders: [providerId] },
-      })),
-  }));
 }
 
 function mockInspection(active: PluginRegistry, loaded: PluginRegistry) {
@@ -165,8 +137,7 @@ describe("migration provider runtime", () => {
     vi.resetModules();
     vi.clearAllMocks();
     mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
-    mocks.loadPluginManifestRegistry.mockReturnValue({ plugins: [] });
-    mocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+    mocks.metadata.mockReturnValue({ index: { plugins: [] }, plugins: [] });
     mocks.acquirePluginRegistryForInspection.mockResolvedValue({
       registry: createEmptyPluginRegistry(),
       release: mocks.release,
@@ -321,10 +292,8 @@ describe("migration provider runtime", () => {
       const active = createEmptyPluginRegistry();
       mocks.resolveRuntimePluginRegistry.mockReturnValue(active);
       if (origin === "global") {
-        mocks.loadPluginRegistrySnapshot.mockReturnValue({
-          plugins: [{ pluginId: "fixture", origin, enabled: true }],
-        });
-        mocks.loadPluginManifestRegistry.mockReturnValue({
+        mocks.metadata.mockReturnValue({
+          index: { plugins: [{ pluginId: "fixture", origin, enabled: true }] },
           plugins: [
             {
               id: "fixture",

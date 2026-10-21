@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { writeJsonFile as writeJson } from "../../test/helpers/temp-repo.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
@@ -30,10 +31,6 @@ function checkRecord(pluginId: string, record: PluginInstallRecord) {
 async function writeFile(file: string, contents: string) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, contents, "utf8");
-}
-
-async function writeJson(file: string, value: unknown) {
-  await writeFile(file, JSON.stringify(value));
 }
 
 async function writePackage(dir: string, manifest: Record<string, unknown>, mainContent?: string) {

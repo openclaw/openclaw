@@ -4,6 +4,7 @@ import type http from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { closeHttpServer } from "../../test/helpers/gateway-integration-fixtures.js";
 import { preparePostCorePluginConfig } from "../cli/update-cli/update-command-config.js";
 import { updatePluginsAfterCoreUpdate } from "../cli/update-cli/update-command-plugins.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -29,9 +30,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   for (const server of servers.splice(0)) {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await closeHttpServer(server);
   }
 });
 

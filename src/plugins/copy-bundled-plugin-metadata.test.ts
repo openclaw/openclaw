@@ -30,22 +30,19 @@ function expectFiles(root: string, files: Record<string, string>) {
 
 function createPlugin(
   repoRoot: string,
-  params: {
-    id: string;
-    manifest?: Record<string, unknown>;
-    withoutEntry?: boolean;
-  },
+  id: string,
+  manifest: Record<string, unknown> = {},
+  withoutEntry = false,
 ) {
-  const pluginDir = path.join(repoRoot, "extensions", params.id);
-  fs.mkdirSync(pluginDir, { recursive: true });
+  const pluginDir = path.join(repoRoot, "extensions", id);
   writeJsonFile(path.join(pluginDir, "openclaw.plugin.json"), {
-    id: params.id,
+    id,
     configSchema: { type: "object" },
-    ...params.manifest,
+    ...manifest,
   });
   writeJsonFile(path.join(pluginDir, "package.json"), {
-    name: `@openclaw/${params.id}`,
-    ...(!params.withoutEntry ? { openclaw: { extensions: ["./index.ts"] } } : {}),
+    name: `@openclaw/${id}`,
+    ...(!withoutEntry ? { openclaw: { extensions: ["./index.ts"] } } : {}),
   });
   return pluginDir;
 }
@@ -54,12 +51,6 @@ function readBundledManifest(repoRoot: string, pluginId: string): Record<string,
   return JSON.parse(
     readText(bundledPluginDir(repoRoot, pluginId), "openclaw.plugin.json"),
   ) as Record<string, unknown>;
-}
-
-function readBundledPackageJson(repoRoot: string, pluginId: string) {
-  return JSON.parse(readText(bundledPluginDir(repoRoot, pluginId), "package.json")) as {
-    openclaw?: { extensions?: string[] };
-  };
 }
 
 function bundledPluginDir(repoRoot: string, pluginId: string) {
@@ -72,7 +63,7 @@ function expectBundledSkills(repoRoot: string, pluginId: string, skills: string[
 
 function fixture(id: string, manifest: Record<string, unknown> = {}) {
   const repoRoot = makeRepoRoot("openclaw-bundled-plugin-");
-  const pluginDir = createPlugin(repoRoot, { id, manifest });
+  const pluginDir = createPlugin(repoRoot, id, manifest);
   return { repoRoot, pluginDir, distDir: bundledPluginDir(repoRoot, id) };
 }
 
@@ -187,8 +178,9 @@ describe("copyBundledPluginMetadata", () => {
       "assets/runtime.js": "keep runtime asset",
     });
     expect(fs.readdirSync(path.join(distAssetsDir, "activity"))).toEqual(["acp_status.svg"]);
-    const packageJson = readBundledPackageJson(repoRoot, "acpx");
-    expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
+    expect(JSON.parse(readText(distDir, "package.json"))).toMatchObject({
+      openclaw: { extensions: ["./index.js"] },
+    });
   });
 
   it.skipIf(process.platform === "win32")("does not copy escaped theme artwork", () => {
@@ -269,7 +261,7 @@ describe("copyBundledPluginMetadata", () => {
 
     copyBundledPluginMetadata({ repoRoot });
 
-    expect(fs.existsSync(path.join(copied, "SKILL.md"))).toBe(true);
+    expect(readText(copied, "SKILL.md")).toBe("# Tlon Skill\n");
     expect(fs.lstatSync(copied).isSymbolicLink()).toBe(false);
     expect(fs.existsSync(path.join(copied, "node_modules"))).toBe(false);
     expect(fs.existsSync(legacy)).toBe(false);
@@ -280,9 +272,7 @@ describe("copyBundledPluginMetadata", () => {
     const { repoRoot, copied } = skillFixture();
     const hoistedSkillDir = path.join(repoRoot, "node_modules", "@tloncorp", "tlon-skill");
     writeFiles(hoistedSkillDir, { "SKILL.md": "# Hoisted Tlon Skill\n" });
-
     copyBundledPluginMetadata({ repoRoot });
-
     expect(readText(copied, "SKILL.md")).toContain("Hoisted Tlon Skill");
     expectBundledSkills(repoRoot, "tlon", ["./bundled-skills/@tloncorp/tlon-skill"]);
   });
@@ -350,9 +340,7 @@ describe("copyBundledPluginMetadata", () => {
     const staleDistDir = bundledPluginDir(repoRoot, "google-gemini-cli-auth");
     writeFiles(staleDistDir, { "index.js": "export default {}\n" });
     writeStaleMetadata(staleDistDir, "google-gemini-cli-auth");
-
     copyBundledPluginMetadata({ repoRoot });
-
     expect(fs.existsSync(staleDistDir)).toBe(false);
   });
 
@@ -385,7 +373,7 @@ describe("copyBundledPluginMetadata", () => {
     const pluginFile = path.join(targetDir, "extensions", "acpx", "index.js");
     fs.mkdirSync(path.dirname(pluginFile), { recursive: true });
     fs.writeFileSync(pluginFile, "export {};\n");
-    createPlugin(repoRoot, { id: "acpx", withoutEntry: true });
+    createPlugin(repoRoot, "acpx", {}, true);
     const distLink = path.join(repoRoot, "dist");
     fs.symlinkSync(targetDir, distLink, "dir");
 

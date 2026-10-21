@@ -21,25 +21,12 @@ vi.mock("../plugin-sdk/session-transcript-runtime.js", () => ({
   withSessionTranscriptWrite: async (
     _params: unknown,
     run: (context: {
-      appendMessage: (params: {
-        message: Record<string, unknown>;
-        idempotencyLookup?: string;
-        preparation?: { source?: () => void };
-      }) => Promise<void>;
+      appendMessage: (params: { message: Record<string, unknown> }) => Promise<void>;
     }) => Promise<void>,
   ) => {
     transcript.lockCalls += 1;
     await run({
-      appendMessage: async ({ message, idempotencyLookup, preparation }) => {
-        const key = message.idempotencyKey;
-        if (
-          idempotencyLookup === "scan" &&
-          typeof key === "string" &&
-          transcript.messages.some((candidate) => candidate.idempotencyKey === key)
-        ) {
-          return;
-        }
-        preparation?.source?.();
+      appendMessage: async ({ message }) => {
         transcript.messages.push(message);
       },
     });
@@ -61,8 +48,6 @@ function runtimeWithList() {
 function importHistory(
   items: TranscriptItem[],
   options: {
-    continuationNotice?: string;
-    commitGuard?: () => void;
     maxPageSize?: number;
     read?: ReturnType<typeof catalogReader>;
   } = {},
@@ -75,8 +60,6 @@ function importHistory(
     sessionKey: "agent:main:catalog-adopt",
     agentId: "main",
     config: {},
-    continuationNotice: options.continuationNotice,
-    commitGuard: options.commitGuard,
   });
 }
 
@@ -228,36 +211,6 @@ describe("importSessionCatalogHistory", () => {
     await expect(importHistory([], { read })).rejects.toThrow("catalog read failed");
     expect(transcript.lockCalls).toBe(0);
     expect(transcript.messages).toEqual([]);
-  });
-
-  it("appends one idempotent continuation notice under the caller authority guard", async () => {
-    const commitGuard = vi.fn();
-    const options = {
-      continuationNotice: "Copied snapshot; using openai/gpt-5.6-sol.",
-      commitGuard,
-    };
-
-    await importHistory([item("u-1", "userMessage", "Continue")], options);
-    expect(commitGuard).toHaveBeenCalledTimes(2);
-    await importHistory([item("u-1", "userMessage", "Continue")], options);
-    expect(commitGuard).toHaveBeenCalledTimes(2);
-
-    expect(transcript.messages.map(messageText)).toEqual([
-      "Continue",
-      "Copied snapshot; using openai/gpt-5.6-sol.",
-    ]);
-    expect(transcript.messages[1]).toMatchObject({
-      provider: "openclaw",
-      model: "session-catalog",
-      idempotencyKey: "pi-catalog:thread-1:continuation-notice",
-    });
-    commitGuard.mockImplementation(() => {
-      throw new Error("Catalog source revoked");
-    });
-    await expect(importHistory([item("u-2", "userMessage", "Refused")], options)).rejects.toThrow(
-      "Catalog source revoked",
-    );
-    expect(transcript.messages).toHaveLength(2);
   });
 });
 
