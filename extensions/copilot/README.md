@@ -32,8 +32,8 @@ From the repository root, use synthetic state in a disposable directory and run:
 
 ```bash
 OPENCLAW_STATE_DIR=/path/to/isolated-state \
-NODE_OPTIONS="--import=$(pwd)/extensions/copilot/scripts/journal-allocation-probe.mjs" \
-node --import ./scripts/tsx.mjs extensions/copilot/scripts/bench-attempt-transcript-journal.ts --history-mib 1
+NODE_OPTIONS="--import=$(pwd)/extensions/copilot/test/journal-allocation-probe.mjs" \
+node --import ./scripts/tsx.mjs extensions/copilot/test/bench-attempt-transcript-journal.ts --history-mib 1
 ```
 
 Use a fresh state directory for each process. Supported history sizes are `0.25`,

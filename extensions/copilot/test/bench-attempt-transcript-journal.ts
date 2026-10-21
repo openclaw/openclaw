@@ -1,6 +1,6 @@
 /* oxlint-disable unicorn/require-post-message-target-origin -- Node BroadcastChannel has no targetOrigin argument. */
-// NODE_OPTIONS="--import=$(pwd)/extensions/copilot/scripts/journal-allocation-probe.mjs" \
-// node --import ./scripts/tsx.mjs extensions/copilot/scripts/bench-attempt-transcript-journal.ts --history-mib 1
+// NODE_OPTIONS="--import=$(pwd)/extensions/copilot/test/journal-allocation-probe.mjs" \
+// node --import ./scripts/tsx.mjs extensions/copilot/test/bench-attempt-transcript-journal.ts --history-mib 1
 // Run baseline/candidate serially, interleaved. Isolated synthetic state only; no provider calls.
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
