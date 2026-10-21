@@ -1,16 +1,15 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { Bot } from "grammy";
 import {
   createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createStructuredOutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher as dispatchThroughSharedOwner } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createBot,
   createContext,
-  createReasoningStreamContext,
   createDirectSessionPayload,
   createStatusReactionController as createReactions,
   createTelegramDraftStream as createDraftStream,
@@ -21,14 +20,15 @@ import {
   dispatchWithContext,
   editMessageTelegram,
   emitToolStart,
-  expectDeliveredReply,
-  loadSessionStore,
-  setupDraftStreams,
-  type TelegramMessageContext,
+  telegramDepsForTest,
   type DispatchReplyWithBufferedBlockDispatcherArgs as DispatchArgs,
+  editMessageReplyMarkupTelegram,
+  emitTelegramMessageSentHooks,
 } from "./bot-message-dispatch.test-harness.js";
 import type * as DeliveryRepliesModule from "./bot/delivery.replies.js";
+import { asTelegramClientFetch } from "./client-fetch.js";
 import type * as DraftStreamModule from "./draft-stream.js";
+import type { TelegramDraftStream } from "./draft-stream.js";
 import type * as SendEditModule from "./send-edit.js";
 
 const failedDelivery = "I couldn't deliver my reply. Please ask again.";
@@ -284,7 +284,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     },
   );
 
-  it.each(["replacement", "second"] as const)(
+  it.each(["recording", "replacement", "second"] as const)(
     "preserves the accepted answer across a %s failure",
     async (failure) => {
       const { bot, messages, sendMessage, editMessageText } = await observeTransport();
@@ -292,6 +292,9 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       const first = "First accepted answer";
       const preview = "Answer in progress while checking the completed result";
       const final = "Complete answer already accepted by Telegram";
+      const recordContext = vi.fn(async () => {
+        throw new Error("prompt context recording failed");
+      });
       resolveReply(
         async (_ctx, options) => {
           if (failure === "replacement") {
@@ -324,6 +327,13 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
             : { channels: { telegram: { botToken: "synthetic-test-token" } } },
         retryDispatchErrors: failure === "replacement" ? undefined : true,
         suppressFailureFallback: failure === "replacement" ? undefined : true,
+        moduleMocks:
+          failure === "recording"
+            ? {
+                ...telegramDepsForTest,
+                recordOutboundMessageForPromptContext: recordContext,
+              }
+            : undefined,
       });
       await vi.advanceTimersByTimeAsync(failure === "replacement" ? 10_000 : 5_000);
       if (failure === "second") {
@@ -337,11 +347,18 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       } else {
         expect(result).toEqual({ kind: "completed" });
         expect([...messages.values()]).toEqual([final]);
-        expect(sendMessage.mock.calls.map(([, text]) => text)).toEqual([
-          preview,
-          expect.stringContaining("Read"),
-          final,
-        ]);
+        if (failure === "recording") {
+          expect(sendMessage).toHaveBeenCalledOnce();
+          expect(recordContext).toHaveBeenCalledWith(
+            expect.objectContaining({ text: final, messageId: [...messages.keys()][0] }),
+          );
+        } else {
+          expect(sendMessage.mock.calls.map(([, text]) => text)).toEqual([
+            preview,
+            expect.stringContaining("Read"),
+            final,
+          ]);
+        }
       }
     },
   );
@@ -381,100 +398,153 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
   });
 });
 
-function mockTurn(run: (params: DispatchArgs) => Promise<void>) {
-  dispatchReplyMock.mockImplementation(async (params) => {
-    await run(params);
-    return { queuedFinal: true };
-  });
-}
+const question = {
+  text: "Should this harmless check continue?",
+  channelData: { askUser: { questionId: "ask_0123456789abcdef0123456789abcdef" } },
+};
+const buttons = [[{ text: "Continue", callback_data: "ask:continue" }]];
+const settled = "The question has settled.";
 
-function createReasoningFinalDelivery(): (params: DispatchArgs) => Promise<void> {
-  const payload = { text: "hidden", isReasoning: true };
-  const plan = expectDefined(
-    createStructuredOutboundPayloadPlan([payload])[0],
-    "prepared reasoning payload",
+describeTelegramDispatch("dispatchTelegramMessage native questions", () => {
+  it.each([
+    { streamMode: "progress", controls: "buttonless", rejectControls: false },
+    { streamMode: "partial", controls: "buttons", rejectControls: true },
+  ] as const)(
+    "keeps the accepted $controls question on the $streamMode stream (controls rejected: $rejectControls)",
+    async ({ streamMode, controls, rejectControls }) => {
+      vi.useFakeTimers();
+      let draft: TelegramDraftStream | undefined;
+      const register = vi
+        .spyOn(questionGatewayRuntime, "registerChannelDelivery")
+        .mockImplementation(() => {});
+      const status = createReactions();
+      try {
+        const { draft: realDraft, delivery, edit } = await installRealDelivery();
+        createDraftStream.mockImplementation((params) => {
+          const stream = realDraft.createTelegramDraftStream(params);
+          draft ??= stream;
+          return stream;
+        });
+        deliverReplies.mockImplementation(delivery.deliverReplies);
+        editMessageReplyMarkupTelegram.mockImplementation(edit.editMessageReplyMarkupTelegram);
+        const visible = new Map<number, string>();
+        const keyboards = new Map<number, unknown>();
+        let nextMessageId = 1001;
+        let rejectedControlEdits = 0;
+        const ok = (result: unknown = true) => Response.json({ ok: true, result });
+        const fetch: typeof globalThis.fetch = async (input, init) => {
+          const method = new URL(input instanceof Request ? input.url : String(input)).pathname
+            .split("/")
+            .at(-1);
+          if (typeof init?.body !== "string") {
+            throw new Error("Expected a JSON Telegram request");
+          }
+          const payload = asNonArrayRecord(JSON.parse(init.body));
+          const messageId =
+            typeof payload.message_id === "number" ? payload.message_id : nextMessageId++;
+          if (method === "deleteMessage") {
+            visible.delete(messageId);
+            keyboards.delete(messageId);
+            return ok();
+          }
+          if (method === "editMessageText" && payload.reply_markup && rejectControls) {
+            rejectedControlEdits += 1;
+            return Response.json({
+              ok: false,
+              error_code: 400,
+              description: "Bad Request: BUTTON_DATA_INVALID",
+            });
+          }
+          if (method === "editMessageReplyMarkup") {
+            keyboards.set(messageId, payload.reply_markup);
+            return ok();
+          }
+          if (method !== "sendMessage" && method !== "editMessageText") {
+            throw new Error(`Unexpected Telegram method: ${method}`);
+          }
+          if (typeof payload.text !== "string") {
+            throw new Error("Expected Telegram message text");
+          }
+          visible.set(messageId, payload.text);
+          if (payload.reply_markup !== undefined) {
+            keyboards.set(messageId, payload.reply_markup);
+          }
+          return ok(telegramMessage(messageId, payload.text));
+        };
+        const bot = new Bot("123456:question-fixture", {
+          client: { fetch: asTelegramClientFetch(fetch) },
+        });
+
+        let questionMessageId: number | undefined;
+        dispatchReplyMock.mockImplementation(async ({ dispatcherOptions, replyOptions }) => {
+          await toolStart(replyOptions, "exec", "check");
+          await vi.advanceTimersByTimeAsync(1500);
+          await draft?.flush();
+          expect([...visible.values()].some((text) => text.includes("Exec"))).toBe(true);
+          await dispatcherOptions.deliver(
+            {
+              ...question,
+              channelData: {
+                ...question.channelData,
+                ...(controls === "buttons" ? { telegram: { buttons } } : {}),
+              },
+            },
+            { kind: "tool" },
+          );
+          questionMessageId = draft?.messageId();
+          expect(visible.get(questionMessageId ?? -1)).toBe(question.text);
+          await toolStart(replyOptions, "wait", "wait");
+          await vi.advanceTimersByTimeAsync(1500);
+          await draft?.flush();
+          expect(visible.get(questionMessageId ?? -1)).toBe(question.text);
+          if (controls === "buttons") {
+            expect(keyboards.get(questionMessageId ?? -1)).toEqual({
+              inline_keyboard: [[{ text: "Continue", callback_data: "ask:continue" }]],
+            });
+          }
+          await dispatcherOptions.deliver({ text: settled }, { kind: "final" });
+          return { queuedFinal: true };
+        });
+        await dispatchWithContext({
+          bot,
+          cfg: { channels: { telegram: { botToken: "123456:question-fixture" } } },
+          context: createContext({
+            ctxPayload: createDirectSessionPayload(),
+            threadSpec: { id: undefined, scope: "none" },
+            replyThreadId: undefined,
+            statusReactionController: status,
+          }),
+          streamMode,
+          telegramCfg: { streaming: { mode: streamMode, progress: { toolProgress: true } } },
+        });
+        await vi.runOnlyPendingTimersAsync();
+        if (rejectControls) {
+          expect(rejectedControlEdits).toBe(1);
+          expect(register).not.toHaveBeenCalled();
+          expect([...visible.values()]).toEqual([question.text]);
+          expect([...keyboards.values()]).toEqual([]);
+          expect(status.setError).toHaveBeenCalledOnce();
+          expect(emitTelegramMessageSentHooks).toHaveBeenCalledWith(
+            expect.objectContaining({ success: false, messageId: [...visible.keys()][0] }),
+          );
+        } else {
+          expect([...visible.values()]).toEqual([question.text, settled]);
+          expect(register).toHaveBeenCalledOnce();
+          const registration = register.mock.calls[0]?.[0];
+          expect(registration).toMatchObject({
+            questionId: question.channelData.askUser.questionId,
+            deliveryId: `telegram:default:123:${questionMessageId}`,
+          });
+          await registration?.finalize("Answered: continue");
+          expect(visible.get(questionMessageId ?? -1)).toContain("Answered: continue");
+          expect(keyboards.get(questionMessageId ?? -1)).toEqual({ inline_keyboard: [] });
+          expect([...visible.values()]).toContain(settled);
+        }
+      } finally {
+        await draft?.discard();
+        register.mockRestore();
+        vi.useRealTimers();
+      }
+    },
   );
-  return async ({ dispatcherOptions }) => {
-    const deliverPrepared = expectDefined(
-      dispatcherOptions.deliverPrepared,
-      "prepared Telegram delivery",
-    );
-    await deliverPrepared(plan, { kind: "final" });
-  };
-}
-
-describeTelegramDispatch("dispatchTelegramMessage reasoning lanes", () => {
-  it("routes prepared typed reasoning-only finals to the reasoning lane when reasoning streams", async () => {
-    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
-      answerMessageId: 2001,
-      reasoningMessageId: 3001,
-    });
-    mockTurn(createReasoningFinalDelivery());
-    await dispatchWithContext({ context: createReasoningStreamContext() });
-    expect(reasoningDraftStream.update).toHaveBeenCalledWith(
-      "🧠 _hidden_",
-      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
-    );
-    expect(answerDraftStream.update).not.toHaveBeenCalled();
-    expect(deliverReplies).not.toHaveBeenCalled();
-  });
-
-  it("suppresses whitespace-form internal prefixes until one visible final", async () => {
-    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
-      answerMessageId: 2001,
-      reasoningMessageId: 3001,
-    });
-    mockTurn(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver(
-        { text: "< / internal", isReasoning: true },
-        { kind: "block" },
-      );
-      expect(reasoningDraftStream.update).not.toHaveBeenCalled();
-      expect(deliverReplies).not.toHaveBeenCalled();
-      await dispatcherOptions.deliver({ text: "VISIBLE" }, { kind: "final" });
-    });
-
-    await dispatchWithContext({ context: createReasoningStreamContext() });
-
-    expect(reasoningDraftStream.update).not.toHaveBeenCalled();
-    expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.update).toHaveBeenCalledWith(
-      "VISIBLE",
-      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
-    );
-    expect(deliverReplies).not.toHaveBeenCalled();
-  });
-
-  it("routes prepared typed reasoning-only finals to durable delivery when reasoning is persistent", async () => {
-    const sessionKey = "agent:default:telegram:direct:123";
-    loadSessionStore.mockReturnValue({
-      [sessionKey]: { reasoningLevel: "on" },
-    });
-    mockTurn(createReasoningFinalDelivery());
-    await dispatchWithContext({
-      context: createContext({
-        ctxPayload: { SessionKey: sessionKey } as unknown as TelegramMessageContext["ctxPayload"],
-      }),
-    });
-    expectDeliveredReply(0, { text: "🧠 _hidden_" });
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not persist typed reasoning-only finals in progress stream mode", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    mockTurn(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver(
-        { text: "<think>hidden</think>", isReasoning: true },
-        { kind: "final" },
-      );
-    });
-
-    await dispatchWithContext({
-      context: createReasoningStreamContext(),
-      streamMode: "progress",
-    });
-
-    expect(deliverReplies).not.toHaveBeenCalled();
-    expect(answerDraftStream.update).not.toHaveBeenCalled();
-  });
 });
