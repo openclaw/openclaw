@@ -13,7 +13,7 @@ import { resolveCronRunAdmissionSource } from "./run-authority.js";
 import { resolveCronSessionTargetSessionKey } from "./session-target.js";
 import type { CronStoredJob } from "./types.js";
 
-export type ScheduledDivergenceLabel =
+type ScheduledDivergenceLabel =
   | "equal"
   | "gain-intended"
   | "gain-unexpected"
@@ -21,7 +21,7 @@ export type ScheduledDivergenceLabel =
   | "retarget"
   | "pause";
 
-export type ScheduledDecisionField =
+type ScheduledDecisionField =
   | "admissionSource"
   | "ownerEmbedded"
   | "automations"
@@ -32,7 +32,7 @@ export type ScheduledDecisionField =
   | "sandbox"
   | "parentState";
 
-export type ScheduledDecisionVector = Readonly<{
+type ScheduledDecisionVector = Readonly<{
   admissionSource?: "operator-schedule" | "requester-schedule";
   ownerEmbedded: boolean;
   automations: "none" | "self" | "self-and-parent-wake" | "unscoped";
@@ -50,7 +50,7 @@ type ProjectionJob = Pick<
 >;
 
 /** The decisions the existing code makes for one occurrence. */
-export function projectLegacyDecisions(
+function projectLegacyDecisions(
   job: ProjectionJob,
   facts: ScheduledAdmissionFacts,
 ): ScheduledDecisionVector {
@@ -76,7 +76,7 @@ export function projectLegacyDecisions(
 }
 
 /** The same decisions read from a built context. */
-export function projectContextDecisions(
+function projectContextDecisions(
   result: ScheduledExecutionContextResult,
   legacy: ScheduledDecisionVector,
 ): ScheduledDecisionVector | "pause" | "fail" {
@@ -101,6 +101,13 @@ export function projectContextDecisions(
     parentState: legacy.parentState,
   };
 }
+
+const AUTOMATIONS_RANK: Record<ScheduledDecisionVector["automations"], number> = {
+  none: 0,
+  self: 1,
+  "self-and-parent-wake": 2,
+  unscoped: 3,
+};
 
 // Fields whose widening is the intended fix for parent-linked runs.
 const INTENDED_GAINS = new Set<ScheduledDecisionField>(["memory", "workspace", "automations"]);
@@ -127,8 +134,7 @@ function labelField(
     return after ? "loss" : "gain-unexpected";
   }
   if (field === "automations") {
-    const rank = { none: 0, self: 1, "self-and-parent-wake": 2, unscoped: 3 } as const;
-    return rank[after as keyof typeof rank] > rank[before as keyof typeof rank]
+    return AUTOMATIONS_RANK[context.automations] > AUTOMATIONS_RANK[legacy.automations]
       ? "gain-intended"
       : "loss";
   }

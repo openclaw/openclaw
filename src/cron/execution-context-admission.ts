@@ -5,10 +5,6 @@
  */
 import { access } from "node:fs/promises";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
-import type {
-  AdmittedRunContext,
-  OperationalRunInstanceRef,
-} from "../agents/admitted-run-context.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import { prepareCommandOwnerAuthority } from "../auto-reply/command-auth.js";
@@ -18,6 +14,7 @@ import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCreatorSandbox } from "../gateway/operator-role-policy.js";
+import { decodeGatewayOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import {
   buildScheduledExecutionContext,
@@ -29,22 +26,11 @@ import {
 import { resolveCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
 import type { CronStoredJob } from "./types.js";
 
-export type ScheduledExecutionContext = ScheduledExecutionFacts &
+type ScheduledExecutionContext = ScheduledExecutionFacts &
   Readonly<{
     /** Throws when the parent incarnation or the admitted run is no longer current. */
     assertCurrent: () => void;
   }>;
-
-// Keyed by the operational run instance so only the admitting owner can bind a
-// context; parameters and plugin code cannot construct one.
-const contextsByRun = new WeakMap<OperationalRunInstanceRef, ScheduledExecutionContext>();
-
-/** Reads the context bound to an admitted run, if its admission minted one. */
-export function readScheduledExecutionContext(
-  admitted: AdmittedRunContext | undefined,
-): ScheduledExecutionContext | undefined {
-  return admitted ? contextsByRun.get(admitted.operationalRunInstance) : undefined;
-}
 
 type MintParams = {
   cfg: OpenClawConfig;
@@ -62,7 +48,9 @@ type MintParams = {
 
 export type MintedScheduledExecution = Readonly<{
   result: ScheduledExecutionContextResult;
-  bind: (run: OperationalRunInstanceRef, assertAdmitted: () => void) => void;
+  /** Binds the context to the admitted run; the admission owner reads it through `current`. */
+  bind: (assertAdmitted: () => void) => void;
+  current: () => ScheduledExecutionContext | undefined;
   release: () => void;
 }>;
 
@@ -97,17 +85,26 @@ async function checkRequesterOwner(params: MintParams): Promise<boolean> {
   return false;
 }
 
-function parentRefOf(job: CronStoredJob) {
-  return job.sourceConversation ?? job.operatorSource?.source;
+// Same precedence as the builder's principal resolution: the operator source names
+// the exact incarnation, then the creating conversation.
+function parentSessionKeyOf(job: CronStoredJob): string | undefined {
+  if (job.operatorSource) {
+    try {
+      return decodeGatewayOperatorRecoverySource(job.operatorSource.source).sessionKey;
+    } catch {
+      return undefined;
+    }
+  }
+  return job.sourceConversation?.sessionKey;
 }
 
 async function readParentRow(params: MintParams): Promise<ScheduledAdmissionFacts["parentRow"]> {
-  const parent = parentRefOf(params.job) as { sessionKey?: unknown } | undefined;
-  if (typeof parent?.sessionKey !== "string") {
+  const parentSessionKey = parentSessionKeyOf(params.job);
+  if (!parentSessionKey) {
     return undefined;
   }
   const entry = await readSessionEntryInWorker({
-    sessionKey: parent.sessionKey,
+    sessionKey: parentSessionKey,
     storePath: params.storePath,
     readConsistency: "latest",
   });
@@ -179,7 +176,7 @@ export function assembleScheduledAdmissionFacts(
 }
 
 /** Mints the context for one occurrence. Errors become a `fail` result. */
-export async function mintScheduledExecutionContext(
+async function mintScheduledExecutionContext(
   params: MintParams,
 ): Promise<MintedScheduledExecution> {
   let releaseLease = () => {};
@@ -206,27 +203,24 @@ export async function mintScheduledExecutionContext(
   } catch (error) {
     result = { status: "fail", error: error instanceof Error ? error.message : String(error) };
   }
-  let bound: OperationalRunInstanceRef | undefined;
+  let context: ScheduledExecutionContext | undefined;
   return {
     result,
-    bind(run, assertAdmitted) {
+    bind(assertAdmitted) {
       if (result.status !== "ready") {
         return;
       }
-      bound = run;
-      contextsByRun.set(run, {
+      context = {
         ...result.facts,
         assertCurrent: () => {
           assertAdmitted();
           assertParentCurrent();
         },
-      });
+      };
     },
+    current: () => context,
     release() {
-      if (bound) {
-        contextsByRun.delete(bound);
-        bound = undefined;
-      }
+      context = undefined;
       releaseLease();
       releaseLease = () => {};
     },

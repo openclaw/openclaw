@@ -1,23 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronStoredJob } from "./types.js";
 
-const readSessionEntryInWorker = vi.fn();
+const readSessionEntryInWorker = vi.fn<(params: { sessionKey: string }) => Promise<unknown>>();
 const generationRelease = vi.fn();
 const generationAssert = vi.fn();
-const prepareSessionGenerationFacts = vi.fn(async () => ({
+const prepareSessionGenerationFacts = vi.fn(async (_input: unknown) => ({
   assertCurrent: generationAssert,
   release: generationRelease,
 }));
 
-vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
-  readSessionEntryInWorker: (...args: unknown[]) => readSessionEntryInWorker(...args),
+vi.mock("../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntryInWorker: (params: { sessionKey: string }) => readSessionEntryInWorker(params),
 }));
-vi.mock("../config/sessions/session-delivery-generation.js", () => ({
-  prepareSessionGenerationFacts: (...args: unknown[]) => prepareSessionGenerationFacts(...args),
+vi.mock("../config/sessions/session-delivery-generation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-delivery-generation.js")>()),
+  prepareSessionGenerationFacts: (input: unknown) => prepareSessionGenerationFacts(input),
 }));
 
-const { mintScheduledExecutionContext, readScheduledExecutionContext } =
-  await import("./execution-context-admission.js");
+const { mintCronPromptExecutionContext } = await import("./execution-context-admission.js");
 const { prepareCronRunAdmission } = await import("./run-admission.js");
 
 const PARENT_KEY = "agent:main:dashboard:parent";
@@ -41,17 +42,17 @@ function job(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
 }
 
 function mint(stored: CronStoredJob) {
-  return mintScheduledExecutionContext({
-    cfg: {},
-    job: stored,
-    trigger: "cron",
-    runId: "run-1",
-    agentId: "main",
-    runSessionKey: "agent:main:cron:job-1:run:s1",
-    storePath: "/tmp/store.json",
-    toolsAllow: ["*"],
-    operatorAuthorityRestored: false,
-  });
+  return mintCronPromptExecutionContext(
+    {
+      cfgWithAgentDefaults: {},
+      job: stored,
+      agentId: "main",
+      runSessionKey: "agent:main:cron:job-1:run:s1",
+      cronSession: { storePath: "/tmp/store.json" },
+      agentPayload: { toolsAllow: ["*"] },
+    },
+    { runId: "run-1", trigger: "cron" },
+  );
 }
 
 beforeEach(() => {
@@ -61,7 +62,7 @@ beforeEach(() => {
   generationAssert.mockReset();
 });
 
-describe("mintScheduledExecutionContext", () => {
+describe("mintCronPromptExecutionContext", () => {
   it("binds the context to the admitted run and releases it on close", async () => {
     const minted = await mint(job({ scheduledToolPolicy: { version: 1, mode: "trusted" } }));
     expect(minted.result.status).toBe("ready");
@@ -74,15 +75,15 @@ describe("mintScheduledExecutionContext", () => {
       deliveryAttemptFence: null,
       scheduledExecution: minted,
     });
-    const admitted = await admission.preparedRunAdmission.admit("embedded");
-    const context = readScheduledExecutionContext(admitted);
+    await admission.preparedRunAdmission.admit("embedded");
+    const context = admission.readScheduledExecution();
     expect(context).toMatchObject({
       jobId: "job-1",
       principal: { kind: "operator", basis: "trusted-policy" },
     });
     expect(() => context?.assertCurrent()).not.toThrow();
     admission.close();
-    expect(readScheduledExecutionContext(admitted)).toBeUndefined();
+    expect(admission.readScheduledExecution()).toBeUndefined();
   });
 
   it("holds the parent generation for a linked job and releases it", async () => {

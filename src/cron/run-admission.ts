@@ -87,9 +87,7 @@ export function prepareCronRunAdmission(params: {
       bindGatewayContextResolver(admitted, resolveGatewayContext);
       assertAdmitted = resolveAdmittedRunActiveAssertion(admitted);
       params.onAdmitted?.(admitted);
-      params.scheduledExecution?.bind(admitted.operationalRunInstance, () =>
-        readAdmittedSource()(),
-      );
+      params.scheduledExecution?.bind(() => readAdmittedSource()());
     },
   });
   const preparedRunAdmission = params.executionIdentity?.onPostAdmission
@@ -159,6 +157,8 @@ export function prepareCronRunAdmission(params: {
       operationalRunInstance,
     }),
     messageActionTurnCapability,
+    /** The minted execution context once the run is admitted; nothing reads it yet. */
+    readScheduledExecution: () => params.scheduledExecution?.current(),
     close,
     finish: async () => {
       await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance).finally(close);
