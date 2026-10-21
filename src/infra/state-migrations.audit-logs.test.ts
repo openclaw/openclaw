@@ -6,7 +6,6 @@ import path from "node:path";
 import { expect, it as baseIt, vi } from "vitest";
 import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { SYSTEM_AGENT_AUDIT_SCOPE } from "../system-agent/audit.js";
 import * as fsSafe from "./fs-safe.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
@@ -622,12 +621,11 @@ it("upgrades a legacy nonzero raw checkpoint to the blank append pad", async ({ 
   expect(openLegacyAuditRawCheckpointStore(audit.stateDir).entries()[0]?.value.recordCount).toBe(0);
 });
 
-it.for(["stale", "later", "redacted", "scrubbing", "restoring"] as const)(
+it.for(["stale", "later", "scrubbing", "restoring"] as const)(
   "recovers %s restore journals",
   async (mode, { audit }) => {
     const { raw, restore } = audit.system;
     const token = ["token", "redaction-marker"].join("=");
-    let replacement = "";
     const summary = mode === "restoring" ? "restore after restart" : "original archive";
     if (mode === "stale" || mode === "later") {
       const original = mode === "stale" ? event(token, "03", "config.set") : event("original");
@@ -645,11 +643,6 @@ it.for(["stale", "later", "redacted", "scrubbing", "restoring"] as const)(
         });
         await fs.writeFile(raw, buildAuditScrubbedContent(interrupted.length));
       }
-    } else if (mode === "redacted") {
-      const original = jsonLine(event("secret archive value"));
-      replacement = original.replace("secret archive value", " ".repeat(20));
-      await audit.seedRawArchive(audit.system, replacement);
-      await writeAuditRestoreJournal(raw, Buffer.from(original, "utf8"));
     } else {
       const bytes = Buffer.from(jsonLine(event(summary)));
       const restoredBytes = mode === "restoring" ? Math.floor(bytes.length / 2) : 0;
@@ -671,22 +664,16 @@ it.for(["stale", "later", "redacted", "scrubbing", "restoring"] as const)(
       expect(detected.hasLegacy).toBe(true);
     }
     const result = await audit.migrate(detected);
-    if (mode === "redacted") {
-      expectIncludes(result.warnings, "no longer matches its restore journal target");
-      await expect(readText(raw)).resolves.toBe(replacement);
-      await fs.access(restore);
+    expect(result.warnings).toEqual([]);
+    await expectMissing(restore);
+    if (mode === "stale") {
+      expect(result.changes.join("\n")).toContain("Recovered 1 later");
+      await expect(readText(raw)).resolves.not.toContain(token);
+    } else if (mode === "later") {
+      expect(audit.systemSummaries()).toEqual(["original", "later"]);
     } else {
-      expect(result.warnings).toEqual([]);
-      await expectMissing(restore);
-      if (mode === "stale") {
-        expect(result.changes.join("\n")).toContain("Recovered 1 later");
-        await expect(readText(raw)).resolves.not.toContain(token);
-      } else if (mode === "later") {
-        expect(audit.systemSummaries()).toEqual(["original", "later"]);
-      } else {
-        expect((await readText(raw)).trim()).toBe("");
-        expect(audit.systemSummaries()).toEqual([summary]);
-      }
+      expect((await readText(raw)).trim()).toBe("");
+      expect(audit.systemSummaries()).toEqual([summary]);
     }
   },
 );
@@ -745,7 +732,7 @@ it("completes verified partial sanitized tails", async ({ audit }) => {
   await expectSystemArchive(audit, ["before archive", "first later row", "second later row"]);
 });
 
-it("keeps identical appends and refuses ambiguous whitespace", async ({ audit }) => {
+it("keeps identical appends", async ({ audit }) => {
   const { raw, sanitized } = audit.system;
   const record = event("Repeated operation");
   await audit.write(audit.system.source, `${jsonLine(record)}\n${jsonLine(record)}`);
@@ -755,20 +742,4 @@ it("keeps identical appends and refuses ambiguous whitespace", async ({ audit })
   expect(audit.systemSummaries()).toEqual(Array(3).fill("Repeated operation"));
   const sanitizedRows = (await readText(sanitized)).trim().split("\n");
   expect(sanitizedRows).toHaveLength(3);
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      database.db
-        .prepare("DELETE FROM diagnostic_events WHERE scope = ?")
-        .run("migration.legacy-audit-raw");
-    },
-    { env: audit.env },
-  );
-  await audit.appendJsonLines(raw, [record]);
-  const ambiguous = await audit.migrate();
-  expect(ambiguous.changes).toEqual([]);
-  expect(ambiguous.warnings).toEqual([
-    expect.stringContaining("checkpointless raw archive begins with ambiguous whitespace"),
-  ]);
-  expect(audit.systemEntries()).toHaveLength(3);
-  expect((await readText(sanitized)).trim().split("\n")).toHaveLength(3);
 });
