@@ -7,7 +7,7 @@ import {
   compiledMacNativeFixtures,
   runMacFixtureTool,
 } from "./mac-native-fixtures.test-support.js";
-import type { MacScriptFixture } from "./mac-script-fixture.test-support.js";
+import type { createMacScriptTest, MacScriptFixture } from "./mac-script-fixture.test-support.js";
 
 export const sourceCommit = "a".repeat(40);
 export const peekabooCommit = "b".repeat(40);
@@ -32,6 +32,31 @@ export function expectExit<T extends { status: number | null; stderr: string }>(
 ) {
   expect(result.status, result.stderr).toBe(status);
   return result;
+}
+
+export function createMacCases<Fixture>(
+  register: ReturnType<typeof createMacScriptTest>,
+  prepare: (mac: MacScriptFixture) => Fixture | Promise<Fixture>,
+) {
+  // Track the actual body, not fixture teardown: timed-out commands must settle
+  // before their lifetime can remove the inputs they still own.
+  const run = (
+    mac: MacScriptFixture,
+    body: (fixture: Fixture, mac: MacScriptFixture) => Promise<void>,
+  ) => mac.lifetime.run(async () => body(await prepare(mac), mac));
+  function testCase(
+    name: string,
+    body: (fixture: Fixture, mac: MacScriptFixture) => Promise<void>,
+  ) {
+    return register(name, ({ mac }) => run(mac, body));
+  }
+  testCase.for =
+    <Row>(rows: readonly Row[]) =>
+    (name: string, body: (row: Row, fixture: Fixture, mac: MacScriptFixture) => Promise<void>) =>
+      register.for(rows)(name, (row, { mac }) =>
+        run(mac, (fixture, owner) => body(row, fixture, owner)),
+      );
+  return testCase;
 }
 
 function digest(contents: string | Buffer) {
