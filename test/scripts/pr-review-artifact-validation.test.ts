@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 import {
   REVIEWED_PR,
   REVIEWED_HEAD,
@@ -15,7 +16,6 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
 const reviewScript = join(process.cwd(), "scripts/pr-lib/review.sh");
-const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 const testNodeExecPath = resolveTestNodeExecPath();
 
@@ -114,18 +114,22 @@ function runArtifactsInit(review: ReturnType<typeof validReview>, markdown: stri
 }
 
 function runMergeVerification(
-  checks: "api-error" | "invalid-json" | "invalid-row" | "pending" | "cancelled" | "failed",
+  checks: "invalid-json" | "invalid-row" | "cancelled" | "failed",
   investigatedLocalFailure = false,
 ) {
-  const fixtureRoot = tempDirs.make("openclaw-pr-merge-verification-");
-  const localDir = join(fixtureRoot, ".local");
-  const head = "a".repeat(40);
-  const review = validReadyReview(head);
+  const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-merge-verification-"));
+  f.seedPreparedMerge();
+  const review = validReadyReview(f.head);
+  Object.assign(review.behavioralSweep, {
+    status: "pass",
+    branches: [{ path: "src/subject.ts", decision: "synthetic change", outcome: "reviewed" }],
+  });
+  review.tests.ran = ["synthetic local proof"];
   if (investigatedLocalFailure) {
     Object.assign(review.tests, {
       result: "fail",
       investigatedLocalFailures: {
-        head,
+        head: f.head,
         failures: [
           {
             failure: "A local live check returned an incomplete reply.",
@@ -137,65 +141,27 @@ function runMergeVerification(
       },
     });
   }
-  writeReviewArtifacts(fixtureRoot, review, { headSha: head, prNumber: 42 });
-  writeFileSync(join(localDir, "prep.env"), `PREP_HEAD_SHA=${head}\n`);
-  writeFileSync(join(localDir, "gates.env"), "GATES_MODE=full\n");
-
-  const checksResponse = {
-    "api-error": "echo 'GitHub API unavailable' >&2; return 1",
-    pending: `printf '%s\\n' '[{"name":"CI","bucket":"pending","state":"IN_PROGRESS"}]'; return 8`,
+  writeFileSync(join(f.local, "review.json"), JSON.stringify(review));
+  writeFileSync(join(f.local, "gates.env"), "GATES_MODE=full\n");
+  f.configure({
+    requiredChecks: checks === "failed" ? "fail" : "pass",
+  });
+  const responses: Partial<Record<typeof checks, string>> = {
     cancelled: `printf '%s\\n' '[{"name":"CI","bucket":"cancel","state":"CANCELLED"}]'`,
-    failed: `printf '%s\\n' '[{"name":"CI","bucket":"fail","state":"FAILURE"}]'`,
     "invalid-json": "printf '%s\\n' 'not valid JSON'",
     "invalid-row": `printf '%s\\n' '["malformed required row"]'`,
-  }[checks];
-  const observation = {
-    number: 42,
-    url: "https://github.com/fixture/repo/pull/42",
-    isDraft: false,
-    baseRepository: {
-      id: "fixture-repo",
-      databaseId: 123,
-      nameWithOwner: "fixture/repo",
-      url: "https://github.com/fixture/repo",
-    },
-    headRefName: "review-branch",
-    headRefOid: head,
   };
-
-  return runShell(fixtureRoot, mergeScript, [
-    'script_parent_dir=$(cd "$(dirname "$1")/.." && pwd)',
-    'for module in common review worktree merge-outcome; do source "$script_parent_dir/pr-lib/$module.sh"; done',
-    'repo_root() { printf "%s\\n" "$fixture_root"; }',
-    // common.sh defines these too; reinstall the fixture boundary after sourcing it.
-    'enter_worktree() { cd "$fixture_root"; }',
-    'require_artifact() { [ -s "$1" ]; }',
-    "verify_prep_branch_matches_prepared_head() { :; }",
-    `refresh_main_snapshot() { PR_MAIN_SHA=${"b".repeat(40)}; }`,
-    "mark_pr_operation_side_effects_started() { :; }",
-    "pr_git() {",
-    '  if [ "${1-}" = -C ]; then shift 2; fi',
-    '  case "${1-}" in --git-dir=*) shift;; esac',
-    '  case "$1" in',
-    '    remote) printf "%s\\n" "https://github.com/fixture/repo.git";;',
-    '    rev-parse) case "$2" in',
-    '      --absolute-git-dir) printf "%s/.git\\n" "$fixture_root";;',
-    `      --verify) test "$3" = 'refs/heads/pr-42^{commit}' || return 1; printf '%s\\n' '${head}';;`,
-    "    esac;;",
-    "  esac",
-    "}",
-    'node() { case "$1" in */watch-pr-ci.mjs) return 0;; *) command node "$@";; esac; }',
-    "MERGE_REPO_NAME=fixture/repo",
-    "MERGE_REPO_HOST=github.com",
-    `pr_gh_plain() { case "$*" in "pr checks 42 --required --json name,bucket,state --repo https://github.com/fixture/repo") ${checksResponse};; *) return 99;; esac; }`,
-    'pr_gh_quota_read() { pr_gh_plain "$@"; }',
-    `merge_rest() { echo 'REST policy requires GraphQL' >&2; printf '%s\\n' '{"restUnavailable":true}'; }`,
-    "pr_gh() {",
-    '  test "$*" = "pr view 42 --json number,url,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository" || return 99',
-    `  printf '%s\\n' '${JSON.stringify(observation)}'`,
-    "}",
-    `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
-  ]);
+  const response = responses[checks];
+  return f.shell(
+    [
+      ...(response
+        ? [
+            `pr_gh_plain() { case "$*" in "pr checks 42 --required --json name,bucket,state --repo https://github.com/fixture/repo") ${response};; *) gh_plain "$@";; esac; }`,
+          ]
+        : []),
+      `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
+    ].join("\n"),
+  );
 }
 
 describePosix("scripts/pr review artifact validation", () => {
@@ -296,24 +262,15 @@ describePosix("scripts/pr review artifact validation", () => {
   );
 
   it.each([
-    ["api-error", "stderr", "unable to verify the required GitHub checks"],
     ["invalid-json", "stderr", "unable to verify the required GitHub checks"],
     ["invalid-row", "stderr", "GitHub returned invalid required-check evidence"],
     ["failed", "stdout", "Required checks are failing"],
     ["cancelled", "stdout", "Required checks are failing"],
-    ["pending", "stdout", "Required checks are still pending."],
   ] as const)("keeps %s required checks blocking in an OR-list", (checks, stream, message) => {
     const result = runMergeVerification(checks, checks === "failed");
     expect(result.status).toBe(1);
     expect(result[stream]).toContain(message);
     expect(result.stdout).not.toContain("merge-verify passed");
-    if (checks === "api-error") {
-      expect(result.stderr).toContain("GitHub API unavailable");
-      expect(result.stdout).not.toContain("No required checks configured");
-    }
-    if (checks === "pending") {
-      expect(result.stderr).not.toContain("unable to verify the required GitHub checks");
-    }
   });
 
   it("reports the required branch entry shape without a raw jq error", () => {

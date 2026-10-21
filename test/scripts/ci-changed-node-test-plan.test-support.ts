@@ -7,12 +7,99 @@ import {
   resolveChangedNodeTestTargets,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import {
+  createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
   type CompactNodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { PR_PROTECTED_RUNTIME_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
 
 type Shards = ReturnType<typeof createChangedNodeTestShards>;
+type FileSelection =
+  | {
+      targets?: string[];
+      includePatterns?: string[];
+      groups?: { includePatterns?: string[] }[];
+    }[]
+  | null;
+export function writeFiles(cwd: string, files: Record<string, string> | readonly string[]) {
+  const entries: [string, string][] = Array.isArray(files)
+    ? files.map((file): [string, string] => [file, "export {};\n"])
+    : Object.entries(files);
+  for (const [file, source] of entries) {
+    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+    writeFileSync(path.join(cwd, file), source);
+  }
+}
+
+export const testConfig = (name: string) => `test/vitest/vitest.${name}.config.ts`;
+
+export const boundaryShard = {
+  checkName: "checks-node-changed-boundary",
+  configs: [testConfig("boundary")],
+  requiresDist: false,
+  runner: "blacksmith-8vcpu-ubuntu-2404",
+  shardName: "changed-boundary",
+};
+
+export function includedFiles(groups: readonly { includePatterns?: string[] }[]) {
+  return groups.flatMap((group) => group.includePatterns ?? []);
+}
+
+export function groupConfigs(groups: readonly { configs: string[] }[]) {
+  return groups.flatMap((group) => group.configs);
+}
+
+export function fullOwnerPlan(runnerBackend?: string, changedPaths?: string[]) {
+  return createNodeTestShardBundles({
+    compactMode: "pull-request",
+    runnerBackend,
+    changedPaths,
+    includeReleaseOnlyPluginShards: false,
+  });
+}
+
+export function expectFiles(shards: FileSelection, files: readonly string[], label?: string) {
+  expect(shards, label).not.toBeNull();
+  expect(selectedFiles(shards).toSorted(), label).toEqual([...files].toSorted());
+}
+
+export function expectSameFields<K extends PropertyKey>(
+  actual: Partial<Record<K, unknown>>,
+  expected: Partial<Record<K, unknown>>,
+  keys: readonly K[],
+) {
+  for (const key of keys) {
+    expect(actual[key], String(key)).toEqual(expected[key]);
+  }
+}
+
+export function canonicalOwner(jobs: CompactNodeTestShard[], shardName: string) {
+  const job = expectDefined(
+    jobs.find((candidate) => candidate.groups.some((group) => group.shard_name === shardName)),
+    `canonical job for ${shardName}`,
+  );
+  const group = expectDefined(
+    job.groups.find((candidate) => candidate.shard_name === shardName),
+    "canonical group",
+  );
+  return { job, group };
+}
+
+export function expectCanonicalJob(
+  job: NonNullable<Shards>[number],
+  ownerJob: CompactNodeTestShard,
+  owner: CompactNodeTestShard["groups"][number],
+) {
+  const serialProjection = isSerialNodeTestProjection(job.groups, ownerJob);
+  expect(job.planConcurrency).toBe(serialProjection ? 1 : ownerJob.planConcurrency);
+  expect(job.env).toEqual(
+    serialProjection && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+      ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
+      : ownerJob.env,
+  );
+  expectSameFields(job, ownerJob, ["runner", "timeoutMinutes"]);
+}
+
 export const gatewayCallsitesGuard = "src/gateway/client-callsites.guard.test.ts";
 
 export const smokeTestFiles = new Set([
@@ -37,16 +124,14 @@ export function createChangedNodeTestShards(
 }
 
 export function materializeGatewayCallsitesFixture(cwd: string) {
-  const file = path.join(cwd, gatewayCallsitesGuard);
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, "export {};\n");
+  writeFiles(cwd, [gatewayCallsitesGuard]);
 }
 
 export function fallbackGroups(shards: NonNullable<Shards>) {
   return shards.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]);
 }
 
-export function selectedFiles(shards: Shards) {
+export function selectedFiles(shards: FileSelection) {
   return (shards ?? []).flatMap((shard) =>
     (shard.targets ?? []).concat(
       shard.includePatterns ?? [],
