@@ -7,6 +7,10 @@ import {
 } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
+const FLASH = "deepseek-ai/DeepSeek-V4.1-Flash";
+const sparseFeatures = ["tools", "reasoning", "json_mode", "structured_outputs"];
+const liveRow = (id: string, fields: object = {}) => ({ id, object: "model", ...fields });
+
 describe("Baseten model catalog", () => {
   it("keeps manifest thinking controls and declared capabilities in runtime catalogs", () => {
     const declaredModels = buildManifestModelProviderConfig({
@@ -14,34 +18,30 @@ describe("Baseten model catalog", () => {
       catalog: manifest.modelCatalog.providers.baseten,
     }).models;
     const runtimeModels = new Map(buildStaticBasetenModels().map((model) => [model.id, model]));
-    const defaultModel = declaredModels.find(
-      (model) => model.id === "deepseek-ai/DeepSeek-V4.1-Flash",
-    );
+    const defaultModel = declaredModels.find((model) => model.id === FLASH);
 
     expect.soft(defaultModel?.compat?.supportedReasoningEfforts).toContain("max");
     for (const model of declaredModels) {
       const runtimeModel = runtimeModels.get(model.id);
       expect(runtimeModel, model.id).toBeDefined();
-      expect
-        .soft(runtimeModel?.compat?.supportsReasoningEffort, `${model.id} scalar effort`)
-        .toBe(model.compat?.supportsReasoningEffort ?? false);
       for (const field of [
+        "supportsReasoningEffort",
         "supportedReasoningEfforts",
         "reasoningEffortMap",
         "codeMode",
       ] as const) {
         expect
           .soft(runtimeModel?.compat?.[field], `${model.id} ${field}`)
-          .toEqual(model.compat?.[field]);
+          .toEqual(
+            model.compat?.[field] ?? (field === "supportsReasoningEffort" ? false : undefined),
+          );
       }
     }
   });
 
   it("projects authenticated live rows while retaining curated capability metadata", () => {
     const models = projectBasetenLiveModels([
-      {
-        id: "thinkingmachines/inkling",
-        object: "model",
+      liveRow("thinkingmachines/inkling", {
         name: "Inkling live",
         context_length: 1_048_576,
         max_completion_tokens: 32_768,
@@ -51,16 +51,14 @@ describe("Baseten model catalog", () => {
           input_cache_read: "0.00000018",
         },
         supported_features: ["vision", "reasoning", "reasoning_effort"],
-      },
-      {
-        id: "future/model",
-        object: "model",
+      }),
+      liveRow("future/model", {
         context_length: 64_000,
         max_completion_tokens: 4_000,
         pricing: { prompt: 0.0000002, completion: 0.0000008, input_cache_read: 0.00000004 },
         supported_features: ["vision", "reasoning_effort"],
-      },
-      { id: "future/model", object: "model" },
+      }),
+      liveRow("future/model"),
       { id: "ignored", object: "not-a-model" },
     ]);
 
@@ -89,25 +87,14 @@ describe("Baseten model catalog", () => {
   });
 
   it("uses live capability metadata when present and curated metadata when absent", () => {
-    const liveCapabilities = projectBasetenLiveModels([
-      {
-        id: "deepseek-ai/DeepSeek-V4.1-Flash",
-        object: "model",
-        supported_features: [],
-      },
-    ])[0];
-    const curatedCapabilities = projectBasetenLiveModels([
-      {
-        id: "deepseek-ai/DeepSeek-V4.1-Flash",
-        object: "model",
-      },
-    ])[0];
+    const [live] = projectBasetenLiveModels([liveRow(FLASH, { supported_features: [] })]);
+    const [curated] = projectBasetenLiveModels([liveRow(FLASH)]);
 
-    expect(liveCapabilities).toMatchObject({ reasoning: false, input: ["text"] });
-    expect(liveCapabilities?.compat?.supportsReasoningEffort).toBe(false);
-    expect(liveCapabilities?.compat?.supportedReasoningEfforts).toBeUndefined();
-    expect(liveCapabilities?.compat?.reasoningEffortMap).toBeUndefined();
-    expect(curatedCapabilities).toMatchObject({
+    expect(live).toMatchObject({ reasoning: false, input: ["text"] });
+    expect(live?.compat?.supportsReasoningEffort).toBe(false);
+    expect(live?.compat?.supportedReasoningEfforts).toBeUndefined();
+    expect(live?.compat?.reasoningEffortMap).toBeUndefined();
+    expect(curated).toMatchObject({
       reasoning: true,
       input: ["text", "image"],
       compat: { supportsReasoningEffort: true },
@@ -115,7 +102,7 @@ describe("Baseten model catalog", () => {
   });
 
   it("resolves future model ids without shadowing bundled rows", () => {
-    expect(resolveBasetenDynamicModel("deepseek-ai/DeepSeek-V4.1-Flash")).toBeUndefined();
+    expect(resolveBasetenDynamicModel(FLASH)).toBeUndefined();
     expect(resolveBasetenDynamicModel("thinkingmachines/inkling")?.id).toBe(
       "thinkingmachines/inkling",
     );
@@ -128,19 +115,14 @@ describe("Baseten model catalog", () => {
     });
   });
 
-  it.each([
-    { id: "future/model", features: ["tools", "reasoning", "json_mode", "structured_outputs"] },
-    {
-      id: "deepseek-ai/DeepSeek-V4.1-Flash-custom",
-      features: ["tools", "reasoning", "json_mode", "structured_outputs"],
-    },
-    { id: "zai-org/GLM-5.2", features: ["tools", "reasoning"] },
-    { id: "deepseek-ai/DeepSeek-V4-Pro-0813", features: [] },
-    { id: "deepseek-ai/DeepSeek-V4.1-Flash", features: ["tools"] },
-  ])("does not borrow documented Flash capabilities for $id with $features", ({ id, features }) => {
-    const [model] = projectBasetenLiveModels([
-      { id, object: "model", supported_features: features },
-    ]);
+  it.each<[string, string[]]>([
+    ["future/model", sparseFeatures],
+    [`${FLASH}-custom`, sparseFeatures],
+    ["zai-org/GLM-5.2", ["tools", "reasoning"]],
+    ["deepseek-ai/DeepSeek-V4-Pro-0813", []],
+    [FLASH, ["tools"]],
+  ])("does not borrow documented Flash capabilities for %s with %j", (id, features) => {
+    const [model] = projectBasetenLiveModels([liveRow(id, { supported_features: features })]);
     expect(model).toMatchObject({ reasoning: features.includes("reasoning"), input: ["text"] });
     expect(model?.compat?.supportsReasoningEffort).toBe(false);
     expect(model?.compat?.supportedReasoningEfforts).toBeUndefined();
