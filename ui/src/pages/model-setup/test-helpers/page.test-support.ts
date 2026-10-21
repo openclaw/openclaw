@@ -11,15 +11,12 @@ import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import type { ModelSetupRouteData } from "../first-run-setup.ts";
 import type { ModelSetupPageState } from "../state.ts";
 import { createPage, mountModelSetupPage } from "./solid-page.test-support.tsx";
+import { detected } from "./view.test-support.tsx";
 
-export type TestModelSetupPage = HTMLElement & {
-  routeData?: ModelSetupRouteData;
-  updateComplete: Promise<boolean>;
-};
+export type TestModelSetupPage = ReturnType<typeof createPage>;
 
 export const customIconUrl = "https://cdn.example.com/acme.png";
 
-const option = (id: string, label: string, hint: string) => ({ id, brandId: id, label, hint });
 const subscribe = () => () => undefined;
 const selection = () => ({ state: { selectedId: "main", scopeId: "main" }, subscribe });
 
@@ -28,26 +25,11 @@ export const detection: SystemAgentSetupDetectResult = {
   unavailableCandidates: [],
   manualProviders: [],
   authOptions: [],
-  prepareOptions: [
-    option("ollama", "Ollama", "Connect to an Ollama server and select a cloud or local model"),
-    option(
-      "llama-cpp",
-      "llama.cpp",
-      "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
-    ),
-    option(
-      "lmstudio",
-      "LM Studio",
-      "Connect to a running LM Studio server and use an already loaded model",
-    ),
-  ],
-  recommendedInstalls: [
-    {
-      ...option("ollama", "Ollama", "Run open models locally"),
-      website: "https://ollama.com/download",
-      icon: "https://cdn.simpleicons.org/ollama",
-    },
-  ],
+  prepareOptions: ["ollama", "llama-cpp", "lmstudio"].map((id) => {
+    const { brandId, label, hint } = detected.prepareOptions!.find((entry) => entry.id === id)!;
+    return { id, brandId, label, hint };
+  }),
+  recommendedInstalls: detected.recommendedInstalls!.map((install) => Object.assign({}, install)),
   workspace: "/tmp/workspace",
   setupComplete: false,
 };
@@ -87,13 +69,7 @@ export function createContext() {
       password: "",
       bootstrapToken: "",
     },
-    eventLog: [],
-    connect: () => undefined,
-    setSessionKey: () => undefined,
-    start: () => undefined,
-    stop: () => undefined,
     subscribe,
-    subscribeEventLog: subscribe,
     subscribeEvents: subscribe,
   } as unknown as ApplicationGateway;
   const runtimeConfig = createRuntimeConfigCapability(gateway);
