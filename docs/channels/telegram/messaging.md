@@ -31,6 +31,12 @@ again. Version-1 cache entries, retained group history, and session transcripts
 remain supported. Transcript deduplication uses recorded message identities;
 markerless assistant replies may appear in both reply context and the transcript.
 
+When Telegram context is restored from the session transcript, confirmed final
+replies sent with the `message` tool are included alongside the user requests they
+answered. An interrupted tool result does not hide a reply whose final delivery
+was already recorded. Progress updates and ordinary delivery bookkeeping are
+excluded from this restored context.
+
 <Note>
   **Upgrade note: Telegram's default preview changed in 2026.8.1.** With `channels.telegram.streaming` unset, Telegram keeps one editable status draft during the turn (the agent's current status plus its tool lines) and sends the final answer as a normal message. It previously streamed the answer text itself into the preview. No config becomes invalid and no `doctor --fix` is needed; to keep the previous behavior, set:
 
