@@ -26,6 +26,7 @@ import { isRecord } from "../../packages/normalization-core/src/record-coerce.js
 import type { AnyAgentTool } from "../../src/agents/tools/common.js";
 import { normalizeOpenAIToolSchemas } from "../../src/plugin-sdk/provider-tools.js";
 import { validateJsonSchemaValue } from "../../src/plugins/schema-validator.js";
+import type { JsonSchemaObject } from "../../src/shared/json-schema.types.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -90,7 +91,7 @@ function syntheticCatalog(count: number) {
   }));
 }
 
-type Entry = { tool: AnyAgentTool; value: unknown };
+type Entry = { tool: AnyAgentTool & { parameters: JsonSchemaObject }; value: unknown };
 const inputJson = values.schemas
   ? readFileSync(values.schemas, "utf8")
   : JSON.stringify(syntheticCatalog(integer(values.tools, "tools")));
@@ -283,23 +284,25 @@ for (const [name, run] of Object.entries(workloads)) {
     sourceSchemaClones: 0,
   };
   const original = { entries: Object.entries, stringify: JSON.stringify, clone: structuredClone };
-  const observe = (key: keyof typeof counts) => ({
-    apply(
-      target: typeof Object.entries | typeof JSON.stringify | typeof structuredClone,
-      receiver: unknown,
-      args: unknown[],
-    ) {
-      const source = args[0];
-      if (source && typeof source === "object" && schemas.has(source)) {
-        counts[key]++;
-      }
-      return Reflect.apply(target, receiver, args);
-    },
-  });
+  const observe = <
+    T extends typeof Object.entries | typeof JSON.stringify | typeof structuredClone,
+  >(
+    target: T,
+    key: keyof typeof counts,
+  ) =>
+    new Proxy(target, {
+      apply(callable, receiver: unknown, args: unknown[]) {
+        const source = args[0];
+        if (source && typeof source === "object" && schemas.has(source)) {
+          counts[key]++;
+        }
+        return Reflect.apply(callable, receiver, args);
+      },
+    });
   try {
-    Object.entries = new Proxy(original.entries, observe("sourceSchemaEnumerations"));
-    JSON.stringify = new Proxy(original.stringify, observe("sourceSchemaStringifications"));
-    globalThis.structuredClone = new Proxy(original.clone, observe("sourceSchemaClones"));
+    Object.entries = observe(original.entries, "sourceSchemaEnumerations");
+    JSON.stringify = observe(original.stringify, "sourceSchemaStringifications");
+    globalThis.structuredClone = observe(original.clone, "sourceSchemaClones");
     await run(stable);
   } finally {
     Object.entries = original.entries;
@@ -312,7 +315,14 @@ if (values["golden-output"]) {
   writeFileSync(values["golden-output"], `${JSON.stringify(goldens, null, 2)}\n`);
 }
 
-const measurements = [];
+const measurements: Array<{
+  workload: string;
+  mode: (typeof modes)[number];
+  sample: number;
+  msPerCatalog: number;
+  sampledBytesPerCatalog: number;
+  functions: Record<string, { self: number; inclusive: number }>;
+}> = [];
 if (!values["golden-only"]) {
   if (!globalThis.gc) {
     throw new Error("Run with node --expose-gc");
