@@ -19,6 +19,7 @@ import {
   observeWorkerMessage,
   workerMessagePayloadBytes,
 } from "./worker-message-metrics.js";
+import type { WorkerPoolClass } from "./worker-pool-sizing.js";
 
 const gcStorm = channel("openclaw.code-mode.gc-storm");
 
@@ -45,6 +46,7 @@ type WorkerSource = {
   internalMessages?: true;
   lifecycleMessages?: boolean;
   poolId?: number;
+  taskMetrics?: NonNullable<DiagnosticMemoryUsage["workerTaskMetrics"]>[number];
   workerSlot?: number;
   started?: boolean;
   retirementReason?: WorkerRetirementReason;
@@ -94,6 +96,7 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
     poolIds: new WeakMap<object, number>(),
     workers: new Map<WorkerCpuHandle, WorkerSource>(),
     lifecycle: new Map<string, { started: number; retired: Map<WorkerRetirementReason, number> }>(),
+    taskMetrics: new Map<string, NonNullable<DiagnosticMemoryUsage["workerTaskMetrics"]>[number]>(),
   };
 });
 
@@ -134,7 +137,11 @@ export function trackNativeWorkerForCpu(
 }
 
 /** Pool identity follows its live Workers without retaining the pool itself. */
-export function attributeWorkerToPool(worker: WorkerCpuHandle, pool: object): void {
+export function attributeWorkerToPool(
+  worker: WorkerCpuHandle,
+  pool: object,
+  workerClass?: WorkerPoolClass,
+): void {
   const source = trackedWorkers.workers.get(worker);
   if (!source) {
     return;
@@ -145,6 +152,28 @@ export function attributeWorkerToPool(worker: WorkerCpuHandle, pool: object): vo
     trackedWorkers.poolIds.set(pool, poolId);
   }
   source.poolId = poolId;
+  // SDK callers can provide arbitrary runtime strings despite the typed class contract.
+  const boundedClass =
+    workerClass === "reader" ||
+    workerClass === "file-reader" ||
+    workerClass === "compute" ||
+    workerClass === "writer" ||
+    workerClass === "singleton"
+      ? workerClass
+      : "other";
+  const key = `${boundedClass}:${source.script}`;
+  let metrics = trackedWorkers.taskMetrics.get(key);
+  if (!metrics) {
+    metrics = {
+      workerClass: boundedClass,
+      script: source.script,
+      tasksCompleted: 0,
+      heapUsedHighWaterBytes: 0,
+      gc: [],
+    };
+    trackedWorkers.taskMetrics.set(key, metrics);
+  }
+  source.taskMetrics = metrics;
 }
 
 /** A bounded census of live pools, including Workers whose retirement is pending. */
@@ -334,6 +363,12 @@ async function refreshWorkerHeap(worker: WorkerCpuHandle, source: WorkerSource):
     const heap = await worker.getHeapStatistics();
     // A late native interrupt must not replace a newer, complete port sample.
     if (source.heap === previous) {
+      if (source.taskMetrics) {
+        source.taskMetrics.heapUsedHighWaterBytes = Math.max(
+          source.taskMetrics.heapUsedHighWaterBytes,
+          heap.used_heap_size,
+        );
+      }
       source.heap = {
         value: {
           heapUsed: heap.used_heap_size,
@@ -369,8 +404,73 @@ export function setTrackedWorkerGcObserver(
   }
 }
 
+export function isWorkerGcObservationEnabled(): boolean {
+  return Boolean(trackedWorkers.gcObserver);
+}
+
+function recordWorkerGc(source: WorkerSource, samples: GcSample[]): void {
+  const metrics = source.taskMetrics;
+  if (metrics) {
+    for (const sample of samples) {
+      // The SDK can serve its own worker protocol. Keep its metric vocabulary bounded too.
+      if (
+        !sample ||
+        !["scavenge", "mark_sweep_compact", "incremental", "weak_processing"].includes(
+          sample.kind,
+        ) ||
+        !Number.isFinite(sample.durationMs) ||
+        sample.durationMs < 0
+      ) {
+        continue;
+      }
+      let totals = metrics.gc.find((entry) => entry.kind === sample.kind);
+      if (!totals) {
+        totals = { kind: sample.kind, count: 0, durationMs: 0, reclaimedBytes: 0 };
+        metrics.gc.push(totals);
+      }
+      totals.count++;
+      totals.durationMs += sample.durationMs;
+      if (Number.isFinite(sample.reclaimedBytes) && sample.reclaimedBytes! >= 0) {
+        totals.reclaimedBytes += sample.reclaimedBytes!;
+      }
+      metrics.heapUsedHighWaterBytes = Math.max(
+        metrics.heapUsedHighWaterBytes,
+        Number.isFinite(sample.heapUsedBeforeBytes) ? sample.heapUsedBeforeBytes! : 0,
+      );
+    }
+  }
+  trackedWorkers.gcObserver?.(samples, source.script, source.workerSlot);
+}
+
 /** The existing registry owns this channel until native exit, never the submitting task. */
 export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknown): boolean {
+  if (
+    isRecord(message) &&
+    (message.status === "ok" || message.status === "failed") &&
+    isRecord(message.diagnostics)
+  ) {
+    const source = trackedWorkers.workers.get(worker);
+    if (source) {
+      // Host telemetry is attached by the served worker, never taken from the task result.
+      const sample = message.diagnostics;
+      if (Array.isArray(sample.gc)) {
+        recordWorkerGc(source, sample.gc);
+      }
+      if (
+        source.taskMetrics &&
+        typeof sample.heapUsed === "number" &&
+        Number.isFinite(sample.heapUsed) &&
+        sample.heapUsed >= 0
+      ) {
+        source.taskMetrics.tasksCompleted++;
+        source.taskMetrics.heapUsedHighWaterBytes = Math.max(
+          source.taskMetrics.heapUsedHighWaterBytes,
+          sample.heapUsed,
+        );
+      }
+    }
+    return false;
+  }
   if (!isRecord(message) || message.status !== "memory" || !(message.port instanceof MessagePort)) {
     return false;
   }
@@ -472,10 +572,16 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
       );
       // This private port is handed off by our isolate telemetry owner, not task input.
       if (record.gc) {
-        trackedWorkers.gcObserver?.(record.gc, source.script, source.workerSlot);
+        recordWorkerGc(source, record.gc);
       }
       if (!("heapUsed" in record)) {
         return;
+      }
+      if (source.taskMetrics) {
+        source.taskMetrics.heapUsedHighWaterBytes = Math.max(
+          source.taskMetrics.heapUsedHighWaterBytes,
+          record.heapUsed,
+        );
       }
       // The private producer supplies native counters; retain the cloned sample as-is.
       delete record.gc;
@@ -506,6 +612,18 @@ export function getTrackedWorkerLifecycleSnapshot() {
       script,
       started: counts.started,
       retired: [...counts.retired].map(([reason, count]) => ({ reason, count })),
+    })),
+    workerTaskMetrics: [...trackedWorkers.taskMetrics.values()].map((entry) => ({
+      workerClass: entry.workerClass,
+      script: entry.script,
+      tasksCompleted: entry.tasksCompleted,
+      heapUsedHighWaterBytes: entry.heapUsedHighWaterBytes,
+      gc: entry.gc.map(({ kind, count, durationMs, reclaimedBytes }) => ({
+        kind,
+        count,
+        durationMs,
+        reclaimedBytes,
+      })),
     })),
   };
 }

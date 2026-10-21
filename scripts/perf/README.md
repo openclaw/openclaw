@@ -2308,6 +2308,34 @@ rate comparison. The default run starts no model provider.
 
 ## Prompt history fingerprints
 
+`worker-task-metrics-measure.ts` measures the real shared compute pool and source
+provider-prompt worker with one short user message, then 64 synthetic messages
+containing 256 KiB of text. Run on the approved benchmark host:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/worker-task-metrics-measure.ts \
+  --start-at <future-epoch-ms> --output /path/to/result.json
+```
+
+Each phase has four concurrent clients and four bursts of 500 timed tasks,
+providing 2,000 samples for p50/p95/p99; every percentile includes its sample count.
+Each burst first warms 100 tasks, and then retires its workers with `pool.rotate()`.
+Task latency and phase CPU/elapsed exclude warmup and rotation; rotation times are
+reported separately. The first warmup completes before the shared start deadline;
+subsequent bursts and the second phase run sequentially. Missed startup deadlines,
+task errors, or fingerprint mismatches fail the run. Every reply verifies count,
+role, content digest, and stable packed fingerprints without rehashing the input.
+
+GC observations include warmup and retirement and are context only; baseline
+workers can lose their final GC batch at retirement. Retained pool totals are
+cumulative across phases and remain in `retainedAfterClose`; they are absent when
+running this unchanged script on a baseline without the new counters. No provider
+or Gateway is contacted. Run at least two concurrent pairs under one host quiet
+lock, use the current interleaved 16-CPU sides, and swap sides for the second pair.
+Apply the paired-mean and sample-count decision rules; major GC needs at least
+50 collections per side to gate. Set each process's HOME, OPENCLAW_HOME, and
+TMPDIR to its own sandbox, and use the host's production guard and resource limits.
+
 `prompt-cache-history-measure.ts` runs the production `convertToLlm` and history
 fingerprint owner over 400 synthetic assistant messages with text and nested tool
 arguments. It separates one cold call from 100 warm calls for append-normalized,

@@ -15,6 +15,8 @@ import {
   markWorkerRetirement,
   trackNativeWorkerForCpu,
   sampleTrackedWorkerMemory,
+  attributeWorkerToPool,
+  receiveWorkerMemoryPort,
 } from "./worker-cpu.js";
 import { getWorkerMessageMetrics } from "./worker-message-metrics.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
@@ -42,6 +44,60 @@ async function createWorker(filename?: URL) {
 }
 
 describe("worker CPU lifecycle", () => {
+  it("retains task heap and GC totals across worker retirement without retaining worker ids", async () => {
+    const register = (id: number) => {
+      const worker = Object.assign(new EventEmitter(), {
+        threadId: id,
+        cpuUsage: async () => ({ user: 0, system: 0 }),
+        getHeapStatistics: async () => getHeapStatistics(),
+      });
+      trackNativeWorkerForCpu(
+        worker,
+        new URL("./provider-prompt-state.worker.ts", import.meta.url),
+      );
+      attributeWorkerToPool(worker, {}, "compute");
+      return worker;
+    };
+    const first = register(9001);
+    const reply = (
+      worker: typeof first,
+      heapUsed: number,
+      durationMs: number,
+      reclaimedBytes: number,
+    ) =>
+      receiveWorkerMemoryPort(worker, {
+        status: "ok",
+        diagnostics: {
+          heapUsed,
+          gc: [{ kind: "scavenge", reason: "other", durationMs, reclaimedBytes }],
+        },
+      });
+    const snapshot = () =>
+      sampleTrackedWorkerMemory().workerTaskMetrics.find(
+        (entry) =>
+          entry.workerClass === "compute" && entry.script === "provider-prompt-state.worker.js",
+      );
+    expect(reply(first, 1024, 2, 512)).toBe(false);
+    const { port1, port2 } = new MessageChannel();
+    expect(receiveWorkerMemoryPort(first, { status: "memory", port: port1 })).toBe(true);
+    const periodicSample = once(port1, "message");
+    port2.postMessage({ heapUsed: 2048, heapTotal: 4096, external: 0, arrayBuffers: 0 });
+    await periodicSample;
+    port1.close();
+    port2.close();
+    first.emit("exit");
+    const second = register(9002);
+    expect(reply(second, 768, 3, 256)).toBe(false);
+    second.emit("exit");
+    expect(snapshot()).toEqual({
+      workerClass: "compute",
+      script: "provider-prompt-state.worker.js",
+      tasksCompleted: 2,
+      heapUsedHighWaterBytes: 2048,
+      gc: [{ kind: "scavenge", count: 2, durationMs: 5, reclaimedBytes: 768 }],
+    });
+  });
+
   it.each([
     ["ERR_WORKER_OUT_OF_MEMORY", "crash"],
     ["ERR_CODE_MODE_GC_THRASH", "gc-thrash"],
