@@ -1,13 +1,12 @@
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   activateRuntime: vi.fn(async () => {
     throw new Error("read-only inspection activated the runtime");
   }),
   staticStatus: vi.fn(async () => ({ activation: "inactive" })),
-  nativePackageReady: vi.fn(async () => true),
-  inspectDriver: vi.fn(async () => "current"),
+  nativeReady: vi.fn(async () => true),
   uninstallDriver: vi.fn(async (_params?: unknown): Promise<void> => undefined),
   setup: vi.fn(async ({ nativePackageReady }: { nativePackageReady: boolean }) => ({
     actions: nativePackageReady ? [] : [{ id: "install-native-package" }],
@@ -16,11 +15,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./runtime-api.js", () => ({ createFaceTimeRuntime: mocks.activateRuntime }));
 vi.mock("./src/static-status.js", () => ({ inspectFaceTimeStaticStatus: mocks.staticStatus }));
-vi.mock("./src/plugin-paths.js", () => ({
-  inspectFaceTimeNativePackage: mocks.nativePackageReady,
-}));
+vi.mock("./src/plugin-paths.js", () => ({ inspectFaceTimeNativePackage: mocks.nativeReady }));
 vi.mock("./src/driver-setup.js", () => ({
-  inspectFaceTimeDriver: mocks.inspectDriver,
+  inspectFaceTimeDriver: vi.fn(async () => "current"),
   uninstallFaceTimeDriver: mocks.uninstallDriver,
 }));
 vi.mock("./src/setup.js", () => ({ runFaceTimeSetup: mocks.setup }));
@@ -29,9 +26,8 @@ vi.mock("./src/config.js", async (importOriginal) => {
   return {
     ...actual,
     validateFaceTimeConfig(config: import("./src/config.js").FaceTimeConfig) {
-      const errors = actual
-        .validateFaceTimeConfig(config)
-        .errors.filter((error) => error !== "facetime requires macOS");
+      const validation = actual.validateFaceTimeConfig(config);
+      const errors = validation.errors.filter((error) => error !== "facetime requires macOS");
       return { valid: errors.length === 0, errors };
     },
   };
@@ -44,93 +40,81 @@ function registerPlugin(enabled?: boolean) {
   let toolFactory: (() => { execute(id: string, input: unknown): Promise<unknown> }) | undefined;
   plugin.register!(
     createTestPluginApi({
-      id: "facetime",
-      name: "FaceTime",
       rootDir: "/plugin",
       pluginConfig: { enabled, ownerHandles: ["owner@example.com"] },
       runtime: { system: { runCommandWithTimeout: vi.fn() } } as never,
-      registerGatewayMethod: (name, handler) => {
-        gatewayMethods.set(name, handler as (options: unknown) => Promise<void>);
-      },
-      registerTool: (factory) => {
-        toolFactory = factory as unknown as typeof toolFactory;
-      },
+      registerGatewayMethod: (name, handler) =>
+        void gatewayMethods.set(name, handler as (options: unknown) => Promise<void>),
+      registerTool: (factory) => (toolFactory = factory as unknown as typeof toolFactory),
     }),
   );
-  const request = async (name: string, respond = vi.fn()) => {
+  const request = async (name: string) => {
+    const respond = vi.fn();
     await gatewayMethods.get(`facetime.${name}`)!({ respond });
     return respond;
   };
   return { request, toolFactory };
 }
 
-describe("FaceTime control-plane registration", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.nativePackageReady.mockResolvedValue(true);
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.nativeReady.mockResolvedValue(true);
+});
+
+it("serves gateway and model status without build, socket, injection, or runtime activation", async () => {
+  const { request, toolFactory } = registerPlugin();
+  expect(await request("status")).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({ activation: "inactive" }),
+  );
+  await toolFactory!().execute("tool-1", { action: "get_status" });
+  expect(mocks.staticStatus).toHaveBeenCalledTimes(2);
+  expect(mocks.activateRuntime).not.toHaveBeenCalled();
+});
+
+it("reports native installation remediation without attempting runtime activation", async () => {
+  mocks.nativeReady.mockResolvedValue(false);
+  const { request } = registerPlugin();
+  const installAction = expect.objectContaining({ id: "install-native-package" });
+  expect(await request("setup")).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({ actions: [installAction] }),
+  );
+  expect(mocks.setup).toHaveBeenCalledWith(expect.objectContaining({ nativePackageReady: false }));
+  expect(mocks.activateRuntime).not.toHaveBeenCalled();
+});
+
+it("retains a runtime whose carrier shutdown fails before uninstall", async () => {
+  const stop = vi.fn(async () => {
+    throw new Error("carrier shutdown unresolved");
   });
+  mocks.activateRuntime.mockResolvedValueOnce({ stop } as never);
+  const { request } = registerPlugin(true);
+  await request("preflight");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    expect(await request("uninstall")).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+  }
+  expect(stop).toHaveBeenCalledTimes(2);
+  expect(mocks.activateRuntime).toHaveBeenCalledTimes(1);
+  expect(mocks.uninstallDriver).not.toHaveBeenCalled();
+});
 
-  it("serves gateway and model status without build, socket, injection, or runtime activation", async () => {
-    const { request, toolFactory } = registerPlugin();
-    expect(await request("status")).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ activation: "inactive" }),
-    );
-    await toolFactory!().execute("tool-1", { action: "get_status" });
-
-    expect(mocks.staticStatus).toHaveBeenCalledTimes(2);
-    expect(mocks.activateRuntime).not.toHaveBeenCalled();
-  });
-
-  it("reports native installation remediation without attempting runtime activation", async () => {
-    mocks.nativePackageReady.mockResolvedValue(false);
-    const { request } = registerPlugin();
-    expect(await request("setup")).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        actions: [expect.objectContaining({ id: "install-native-package" })],
-      }),
-    );
-    expect(mocks.setup).toHaveBeenCalledWith(
-      expect.objectContaining({ nativePackageReady: false }),
-    );
-    expect(mocks.activateRuntime).not.toHaveBeenCalled();
-  });
-
-  it("retains a runtime whose carrier shutdown fails before uninstall", async () => {
-    const stop = vi.fn(async () => {
-      throw new Error("carrier shutdown unresolved");
-    });
-    mocks.activateRuntime.mockResolvedValueOnce({ stop } as never);
-    const { request } = registerPlugin(true);
-    await request("preflight");
-    for (let attempt = 0; attempt < 2; attempt++) {
-      expect(await request("uninstall")).toHaveBeenCalledWith(false, undefined, expect.any(Object));
-    }
-    expect(stop).toHaveBeenCalledTimes(2);
-    expect(mocks.activateRuntime).toHaveBeenCalledTimes(1);
-    expect(mocks.uninstallDriver).not.toHaveBeenCalled();
-  });
-
-  it("blocks runtime activation until native uninstall finishes", async () => {
-    const { promise, resolve: finishUninstall } = Promise.withResolvers<void>();
-    mocks.uninstallDriver.mockReturnValueOnce(promise);
-    const runtime = {
-      stop: vi.fn(async () => undefined),
-      preflight: vi.fn(async () => ({ ready: true })),
-    };
-    mocks.activateRuntime.mockResolvedValue(runtime as never);
-    const { request } = registerPlugin(true);
-    await request("preflight");
-    const uninstall = request("uninstall");
-    await vi.waitFor(() => expect(mocks.uninstallDriver).toHaveBeenCalledTimes(1));
-
-    expect(await request("preflight")).toHaveBeenCalledWith(false, undefined, expect.any(Object));
-    expect(mocks.activateRuntime).toHaveBeenCalledTimes(1);
-
-    finishUninstall();
-    await uninstall;
-    expect(await request("preflight")).toHaveBeenCalledWith(true, { ready: true });
-    expect(mocks.activateRuntime).toHaveBeenCalledTimes(2);
-  });
+it("blocks runtime activation until native uninstall finishes", async () => {
+  const { promise, resolve: finishUninstall } = Promise.withResolvers<void>();
+  mocks.uninstallDriver.mockReturnValueOnce(promise);
+  const runtime = {
+    stop: vi.fn(async () => undefined),
+    preflight: vi.fn(async () => ({ ready: true })),
+  };
+  mocks.activateRuntime.mockResolvedValue(runtime as never);
+  const { request } = registerPlugin(true);
+  await request("preflight");
+  const uninstall = request("uninstall");
+  await vi.waitFor(() => expect(mocks.uninstallDriver).toHaveBeenCalledTimes(1));
+  expect(await request("preflight")).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+  expect(mocks.activateRuntime).toHaveBeenCalledTimes(1);
+  finishUninstall();
+  await uninstall;
+  expect(await request("preflight")).toHaveBeenCalledWith(true, { ready: true });
+  expect(mocks.activateRuntime).toHaveBeenCalledTimes(2);
 });
