@@ -7,7 +7,6 @@ import { createActivityTestConfig, createMemoryKeyedStore } from "./test-helpers
 
 afterEach(() => {
   setDiscordActivitiesRuntime(undefined);
-  vi.unstubAllEnvs();
 });
 
 describe("Discord Activity persistence", () => {
@@ -87,34 +86,27 @@ function createApi(
   return { api, routes, widgetPresenters, resolvePath };
 }
 
-describe("Discord Activities registration", () => {
-  const unconfigured = { channels: { discord: { token: "test" } } };
-  const context = { messageChannel: "discord", accountId: "default", nativeChannelId: "987654321" };
-  it("registers static transport surfaces before runtime config is published", () => {
-    const test = createApi(unconfigured, createActivityTestConfig());
+const unconfigured = { channels: { discord: { token: "test" } } };
+const context = { messageChannel: "discord", accountId: "default", nativeChannelId: "987654321" };
+it.each([true, false])("registers static routes; configured=%s", (configured) => {
+  const test = createApi(
+    configured ? unconfigured : {},
+    configured ? createActivityTestConfig() : unconfigured,
+  );
 
-    registerDiscordActivities(test.api);
+  registerDiscordActivities(test.api);
 
-    expect(test.routes).toEqual([
-      expect.objectContaining({ path: "/discord/activity", auth: "plugin", match: "prefix" }),
-    ]);
-    expect(test.resolvePath).toHaveBeenCalledWith("assets/embedded-app-sdk.mjs");
-    expect(test.widgetPresenters).toEqual([
-      expect.objectContaining({
-        target: "current_channel",
-        capabilities: { sourceKinds: ["html"], maxSourceBytes: 48 * 1024 },
-      }),
-    ]);
-    const presenter = test.widgetPresenters[0];
-    expect(presenter?.target === "current_channel" && presenter.match(context)).toBe(true);
-    expect(getDiscordActivitiesRuntime()).toBeDefined();
-  });
-
-  it("keeps the static presenter unavailable when Activities are unconfigured", () => {
-    const test = createApi({}, unconfigured);
-    registerDiscordActivities(test.api);
-
-    const presenter = test.widgetPresenters[0];
-    expect(presenter?.target === "current_channel" && presenter.match(context)).toBe(false);
-  });
+  expect(test.routes).toEqual([
+    expect.objectContaining({ path: "/discord/activity", auth: "plugin", match: "prefix" }),
+  ]);
+  expect(test.resolvePath).toHaveBeenCalledWith("assets/embedded-app-sdk.mjs");
+  expect(test.widgetPresenters).toEqual([
+    expect.objectContaining({
+      target: "current_channel",
+      capabilities: { sourceKinds: ["html"], maxSourceBytes: 48 * 1024 },
+    }),
+  ]);
+  const presenter = test.widgetPresenters[0];
+  expect(presenter?.target === "current_channel" && presenter.match(context)).toBe(configured);
+  expect(getDiscordActivitiesRuntime()).toBeDefined();
 });
