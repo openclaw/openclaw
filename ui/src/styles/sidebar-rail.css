@@ -333,6 +333,12 @@
     box-shadow var(--duration-fast) ease;
 }
 
+/* Match the session lists' 2px rhythm so adjacent hover/current fills read as
+   separate rows instead of merging into one block. */
+.sidebar-pages__entry + .sidebar-pages__entry {
+  margin-block-start: 2px;
+}
+
 .sidebar-pages__entry:hover {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 72%, transparent);

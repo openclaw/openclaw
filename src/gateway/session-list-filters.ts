@@ -15,12 +15,10 @@ import {
   resolveSessionCreatorActor,
   sessionCreatorProfileId,
 } from "../config/sessions/session-entry-provenance.js";
-import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
-import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunStateActive } from "../shared/session-run-state.js";
 import { normalizeSessionSearchText } from "../shared/session-search-text.js";
@@ -37,7 +35,7 @@ import {
   projectSessionPeopleFacet,
   resolveSessionListProfileReference,
 } from "./session-identity-projection.js";
-import type { SessionEntryPair } from "./session-list-order.js";
+import type { SessionListEntry } from "./session-list-order.js";
 import type {
   SessionListModelFactsLookup,
   SessionListTargetLookup,
@@ -64,8 +62,8 @@ import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-s
 import type { SessionListModelCatalog, SessionsListResult } from "./session-utils.types.js";
 
 export type SessionListFilteredEntries = {
-  entries: SessionEntryPair[];
-  ownerEntries: SessionEntryPair[];
+  entries: SessionListEntry[];
+  ownerEntries: SessionListEntry[];
   totalCount: number;
   ownerFacet: SessionOwnerFacetIdentity[];
   ownerSessionCounts?: SessionOwnerSessionCount[];
@@ -88,7 +86,7 @@ export type SessionEntrySelection = Omit<SessionListFilteredEntries, "ownerEntri
 
 export type SessionListFilterParams = {
   cfg: OpenClawConfig;
-  entries: (archived: SessionsListParams["archived"]) => Iterable<SessionEntryPair>;
+  entries: (archived: SessionsListParams["archived"]) => Iterable<SessionListEntry>;
   entriesSorted?: boolean;
   getTarget: SessionListTargetLookup;
   getModelFacts?: SessionListModelFactsLookup;
@@ -190,9 +188,9 @@ export function* filterSessionEntries(
   const ownerFirstActorId = normalizeOptionalString(params.ownerFirstActorId);
   const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
   let activityExpiresAt = Infinity;
-  const entries: SessionEntryPair[] = [];
+  const entries: SessionListEntry[] = [];
   let totalCount = 0;
-  const ownerEntries: SessionEntryPair[] = [];
+  const ownerEntries: SessionListEntry[] = [];
   const ownerFacet = new Map<string, SessionOwnerFacetIdentity>();
   const ownerSessionCounts = opts.includeOwnerSessionCounts
     ? new Map<string, SessionOwnerSessionCount>()
@@ -221,7 +219,7 @@ export function* filterSessionEntries(
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
 
   // Person references resolve before candidate filters; ordinary reads need no roster copy.
-  const visibleEntries: SessionEntryPair[] = [];
+  const visibleEntries: SessionListEntry[] = [];
   if (opts.involvingProfileId) {
     for (const pair of params.entries("all")) {
       if (
@@ -449,18 +447,14 @@ export function* filterSessionEntries(
         continue;
       }
     }
-    if (
-      opts.pinned !== undefined &&
-      (entry.pinnedAt !== undefined && isPinnableSessionEntry(storeKey, entry)) !== opts.pinned
-    ) {
+    if (opts.pinned !== undefined && (selection.pinnedAt !== undefined) !== opts.pinned) {
       continue;
     }
     if (matchesSearch && !matchesSearch(key, entry)) {
       continue;
     }
     if (activeMinutes !== undefined) {
-      const activity =
-        opts.sortBy === "activity" ? sessionActivityTimestamp(entry) : (entry.updatedAt ?? 0);
+      const activity = opts.sortBy === "activity" ? selection.activity : selection.updatedAt;
       const expiresAt = activity + activeMinutes * 60_000;
       if (expiresAt < now) {
         continue;
@@ -553,7 +547,7 @@ export function* filterSessionEntries(
           entry.createdAt !== undefined && entry.createdAt >= activeCutoff,
         );
       }
-      const activityTs = sessionActivityTimestamp(entry);
+      const activityTs = selection.activity;
       if (activityTs >= activityPulse.since && activityTs < activityPulse.until) {
         const bucket = opts.activityPulseBoundaries!.findLastIndex(
           (boundary) => boundary <= activityTs,

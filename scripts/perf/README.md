@@ -2060,12 +2060,49 @@ happens after measurement. The sample preserves parsed payload content, not the
 original wire encoding or response envelope. Use it for offline content and
 serialized-payload comparison, accounting explicitly for expected dynamic fields
 such as timestamps and IDs. Exact uncompressed response-frame byte totals remain
-in the RPC metrics. Neither option changes defaults or generates additional RPCs.
+in the RPC metrics. For `--scenario sessions.list`, capture also writes
+`list-responses.json`: twenty filter, sort, pin, archive, and paging requests issued
+after measurement and removal of the harness-created parent/child sessions (unless
+using a preseeded history). Compare these payloads across revisions with identical fixtures,
+normalizing only recorded envelope timestamps, process-local `rowsRevision` tokens,
+and sandbox paths. Capture remains
+opt-in; the additional requests do not warm the measured workload.
+For `sessions.list` response comparisons, `--capture-responses` can run without
+allocation or CPU profiling.
+
+For a bounded owner probe without a Gateway, run
+`node --import ./scripts/tsx.mjs scripts/perf/session-list-order-measure.ts`.
+It reports five sampled allocation/thread-CPU observations for preparation per row
+and warm top-200 sorting over 5,000 rows, plus the selected keys for all three sorts.
+Use `--count-work` in a separate process for exact comparator, pin, activity, and
+key-normalization call counts. That pass enables coverage before loading the owner
+and excludes performance measurements. Run the same script on both revisions.
+
+For long RPC allocation windows, use `--warmup-operations` to warm fewer requests
+than the measured `--operations` count. For example, `--scenario sessions.list
+--warmup-operations 25000 --operations 100000 --rounds 1 --allocations --trace-gc
+--diagnostics --heap-sampling-interval 524288` keeps one uninterrupted measured
+window and bounds profile size. Record actual elapsed durations; operation counts
+are not time guarantees. Warmup defaults to the measured operation count. Heap
+sampling defaults remain 32 KiB for RPC/turn rounds and 512 KiB for memory soaks.
+Stopping a heap sample forces GC, so use one long round for natural-GC acceptance
+rather than aggregating short rounds separated by sample stops.
 
 Turn scenarios use `--runs` (forced
 to one for `chat.send`); `--chunks` controls streamed answer size. `plugins.reload`
 defaults to one operation per round; other RPC scenarios default to 100. Count
 the warmup when choosing reload batches: the admin RPC allows 30 calls per minute.
+Reload rounds honor `--round-interval-ms`; use single-operation rounds spaced
+by at least 2,400 ms for longer captures below that limit.
+The reload scenario retains the synthetic fixture's `plugins.allow` and
+`plugins.entries` configuration, then adds its no-op plugin. Configure bundled
+plugins there to include their metadata and runtime participation in the workload;
+the default team-shape fixture disables plugins. `plugin-inventory.json` records
+the actual runtime states before capture, including enabled plugins that remain
+unloaded under their lazy activation policy. The harness replaces `plugins.load`
+with its own synthetic plugin directory.
+With diagnostics enabled, `wholeReloadDiagnostics` retains one full-run event-loop
+histogram and GC totals; use its observation counts to qualify tail percentiles.
 Setup, startup
 recovery, subscription establishment, and one warmup round are outside capture.
 Each measured window includes completion and event drain, including the one-second

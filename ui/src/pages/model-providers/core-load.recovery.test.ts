@@ -54,3 +54,44 @@ it.each(["providers", "discovery"] as const)(
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(2);
   },
 );
+
+it("publishes receipts only for admitted reads and retires a replaced read immediately", async () => {
+  const first = createDeferred();
+  const next = createDeferred();
+  let calls = 0;
+  const request = createGatewayRequestMock(async (method) => {
+    if (method === "models.authStatus") {
+      await (calls++ === 0 ? first.promise : next.promise);
+      return { ts: calls, providers: [] };
+    }
+    if (method === "models.list") {
+      return { models: [] };
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const completed = vi.fn();
+  const loader = new ModelProviderCoreLoader(() => {}, {
+    onStart: () => {},
+    onComplete: completed,
+    onCatalogComplete: () => {},
+  });
+  const client = createTestGatewayClient(request);
+  const original = loader.refresh(client, "main", "replacement");
+  const retired = loader.receipt!;
+  await loader.refresh(client, "main", "publication");
+  expect(loader.receipt).toBe(retired);
+  const replacement = loader.refresh(client, "main", "replacement");
+  const current = loader.receipt!;
+  expect(current).not.toBe(retired);
+  expect(await retired.promise).toBeUndefined();
+  first.resolve();
+  await original;
+  expect(completed).not.toHaveBeenCalled();
+  next.resolve();
+  await replacement;
+  expect(await current.promise).toBeUndefined();
+  expect(completed).toHaveBeenCalledOnce();
+  expect(loader.receipt).toBe(current);
+  loader.invalidate();
+  expect(loader.receipt).toBeNull();
+});
