@@ -35,6 +35,17 @@ const REVIEW_ID = "0b6a4a52-1f43-4f0e-9d55-3c1d8e1f7a10";
 const REVIEW_RUN_ID = workshopReviewRunId(REVIEW_ID);
 const REVIEWED_SESSION = "agent:main:telegram:direct:42";
 const user: WorkshopMutationContext = { config: {}, agentId: "main", actor: "user" };
+const undo = (runId = REVIEW_RUN_ID) => undoWorkshopReview(user, { runId });
+function expectNotice(text: string) {
+  expect(mocks.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(text), {
+    sessionKey: resolveSystemEventQueueKey(REVIEWED_SESSION, "main"),
+  });
+}
+async function expectRefusal(error: Error | RegExp, runId = REVIEW_RUN_ID) {
+  await expect(undo(runId)).rejects.toThrow(error);
+  expect(mocks.restoreWorkshopSkill).not.toHaveBeenCalled();
+  expect(mocks.archiveWorkshopSkill).not.toHaveBeenCalled();
+}
 
 function record(
   ctx: WorkshopMutationContext,
@@ -83,14 +94,12 @@ beforeEach(() => {
     const latest = new Map(feed.map((change) => [change.skillName, change.action]));
     return [...latest].filter(([, action]) => action !== "archive").map(([name]) => ({ name }));
   });
-  mocks.restoreWorkshopSkill.mockImplementation(
-    async (ctx: WorkshopMutationContext, params: { name: string }) =>
-      record(ctx, { skillName: params.name, action: "restore" }),
-  );
-  mocks.archiveWorkshopSkill.mockImplementation(
-    async (ctx: WorkshopMutationContext, params: { name: string }) =>
-      record(ctx, { skillName: params.name, action: "archive" }),
-  );
+  const mutate =
+    (action: "restore" | "archive") =>
+    async (ctx: WorkshopMutationContext, { name }: { name: string }) =>
+      record(ctx, { skillName: name, action });
+  mocks.restoreWorkshopSkill.mockImplementation(mutate("restore"));
+  mocks.archiveWorkshopSkill.mockImplementation(mutate("archive"));
   // A background review edits an existing skill twice and creates another.
   const review = { ...user, actor: "review" as const, sessionKey: REVIEWED_SESSION };
   const reviewCtx = { ...review, runId: REVIEW_RUN_ID };
@@ -101,7 +110,7 @@ beforeEach(() => {
 
 describe("undoWorkshopReview", () => {
   it("restores edited skills, archives created ones, and tells the reviewed session", async () => {
-    const result = await undoWorkshopReview(user, { runId: REVIEW_RUN_ID });
+    const result = await undo();
 
     const undoCtx = { ...user, runId: `skill-workshop-undo:${REVIEW_ID}` };
     expect(mocks.restoreWorkshopSkill).toHaveBeenCalledExactlyOnceWith(undoCtx, {
@@ -120,17 +129,11 @@ describe("undoWorkshopReview", () => {
       ["deploy", "restore", "user"],
       ["release", "archive", "user"],
     ]);
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("do not revert it again"),
-      { sessionKey: resolveSystemEventQueueKey(REVIEWED_SESSION, "main") },
-    );
+    expectNotice("do not revert it again");
   });
 
   it("lets a concurrent second press find the review already undone", async () => {
-    const [first, second] = await Promise.all([
-      undoWorkshopReview(user, { runId: REVIEW_RUN_ID }),
-      undoWorkshopReview(user, { runId: REVIEW_RUN_ID }),
-    ]);
+    const [first, second] = await Promise.all([undo(), undo()]);
 
     expect([first.status, second.status]).toEqual(["undone", "already-undone"]);
     expect(mocks.archiveWorkshopSkill).toHaveBeenCalledTimes(1);
@@ -139,12 +142,11 @@ describe("undoWorkshopReview", () => {
   it("refuses a review id with no recorded changes", async () => {
     const runId = workshopReviewRunId("6f1d2c3b-0000-4000-8000-000000000000");
 
-    await expect(undoWorkshopReview(user, { runId })).rejects.toThrow(
+    await expectRefusal(
       new WorkshopReviewNotFoundError(`No skill changes recorded for review ${runId}.`),
+      runId,
     );
-    await expect(undoWorkshopReview(user, { runId: "foreground-run" })).rejects.toBeInstanceOf(
-      WorkshopReviewNotFoundError,
-    );
+    await expect(undo("foreground-run")).rejects.toBeInstanceOf(WorkshopReviewNotFoundError);
     expect(mocks.restoreWorkshopSkill).not.toHaveBeenCalled();
   });
 
@@ -155,32 +157,20 @@ describe("undoWorkshopReview", () => {
       record({ ...user, runId: "later" }, { skillName: `other-${feed.length}`, action: "patch" });
     }
 
-    await expect(undoWorkshopReview(user, { runId: REVIEW_RUN_ID })).rejects.toThrow(
-      /too old to undo in one step/,
-    );
-    expect(mocks.restoreWorkshopSkill).not.toHaveBeenCalled();
-    expect(mocks.archiveWorkshopSkill).not.toHaveBeenCalled();
+    await expectRefusal(/too old to undo in one step/);
   });
 
   it("refuses before any write when a saved version is no longer kept", async () => {
     mocks.listWorkshopArchive.mockResolvedValue([]);
 
-    await expect(undoWorkshopReview(user, { runId: REVIEW_RUN_ID })).rejects.toThrow(
-      /version of "deploy" saved before it is no longer kept/,
-    );
-    expect(mocks.archiveWorkshopSkill).not.toHaveBeenCalled();
+    await expectRefusal(/version of "deploy" saved before it is no longer kept/);
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it("reports and announces the reverts that committed before a later one failed", async () => {
     mocks.archiveWorkshopSkill.mockRejectedValueOnce(new Error("Learning is off."));
 
-    await expect(undoWorkshopReview(user, { runId: REVIEW_RUN_ID })).rejects.toThrow(
-      "Partly undone (restored `deploy`); Learning is off.",
-    );
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("restored `deploy`"),
-      { sessionKey: resolveSystemEventQueueKey(REVIEWED_SESSION, "main") },
-    );
+    await expect(undo()).rejects.toThrow("Partly undone (restored `deploy`); Learning is off.");
+    expectNotice("restored `deploy`");
   });
 });

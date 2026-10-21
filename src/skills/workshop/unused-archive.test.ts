@@ -1,10 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { canonicalizePath } from "../../agents/utils/paths.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../../cron/store.js";
@@ -20,17 +17,28 @@ import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { archiveUnusedWorkshopSkills } from "./unused-archive.js";
 
 const DAY_MS = 24 * 60 * 60_000;
-const openclawAgent: OpenClawConfig = {
-  agents: {
-    defaults: {
-      model: "anthropic/claude-test",
-      models: { "anthropic/*": { agentRuntime: { id: "openclaw" } } },
+function agentConfig(runtime = "openclaw"): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: "anthropic/claude-test",
+        models: { "anthropic/*": { agentRuntime: { id: runtime } } },
+      },
     },
-  },
-};
+  };
+}
+const openclawAgent = agentConfig();
 
 let state: OpenClawTestState;
 let stopTracking: (() => Promise<void>) | undefined;
+
+const archive = (config = openclawAgent, now = Date.now() + 31 * DAY_MS) =>
+  archiveUnusedWorkshopSkills(config, "main", now);
+async function expectSkills(...names: string[]) {
+  expect((await listWorkshopSkills(openclawAgent, "main")).map((skill) => skill.name)).toEqual(
+    names,
+  );
+}
 
 async function createSkill(name: string) {
   await createWorkshopSkill(
@@ -73,17 +81,10 @@ describe("archiveUnusedWorkshopSkills", () => {
     await createSkill("stale");
     await createSkill("used");
 
-    // A skill younger than 30 days is never archived.
-    expect(
-      await archiveUnusedWorkshopSkills(openclawAgent, "main", createdAtMs + 29 * DAY_MS),
-    ).toEqual([]);
+    expect(await archive(openclawAgent, createdAtMs + 29 * DAY_MS)).toEqual([]);
 
     await recordUse("used", createdAtMs + 20 * DAY_MS);
-    const archived = await archiveUnusedWorkshopSkills(
-      openclawAgent,
-      "main",
-      createdAtMs + 31 * DAY_MS,
-    );
+    const archived = await archive(openclawAgent, createdAtMs + 31 * DAY_MS);
 
     expect(archived).toEqual([
       expect.objectContaining({
@@ -94,17 +95,12 @@ describe("archiveUnusedWorkshopSkills", () => {
         versionId: expect.any(String),
       }),
     ]);
-    expect((await listWorkshopSkills(openclawAgent, "main")).map((skill) => skill.name)).toEqual([
-      "used",
-    ]);
+    await expectSkills("used");
     await restoreWorkshopSkill(
       { config: openclawAgent, agentId: "main", actor: "user" },
       { name: "stale" },
     );
-    expect((await listWorkshopSkills(openclawAgent, "main")).map((skill) => skill.name)).toEqual([
-      "stale",
-      "used",
-    ]);
+    await expectSkills("stale", "used");
   });
 
   it("keeps a skill that a cron job names, even a paused one", async () => {
@@ -120,41 +116,22 @@ describe("archiveUnusedWorkshopSkills", () => {
       ],
     });
 
-    const archived = await archiveUnusedWorkshopSkills(
-      openclawAgent,
-      "main",
-      Date.now() + 31 * DAY_MS,
-    );
+    const archived = await archive();
     expect(archived.map((change) => change.skillName)).toEqual(["quarterly-taxes-old"]);
   });
 
-  it("fails closed when the agent's default runtime cannot report skill reads", async () => {
-    const codexAgent: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-test",
-          models: { "anthropic/*": { agentRuntime: { id: "codex" } } },
-        },
+  it.each([
+    ["the default runtime cannot report skill reads", agentConfig("codex")],
+    [
+      "the agent runs sandboxed",
+      {
+        agents: { defaults: { ...openclawAgent.agents?.defaults, sandbox: { mode: "non-main" } } },
       },
-    };
+    ],
+  ] satisfies [string, OpenClawConfig][])("fails closed when %s", async (_, config) => {
     await createSkill("stale");
-
-    expect(await archiveUnusedWorkshopSkills(codexAgent, "main", Date.now() + 31 * DAY_MS)).toEqual(
-      [],
-    );
-    expect(await listWorkshopSkills(openclawAgent, "main")).toHaveLength(1);
-  });
-
-  it("fails closed when the agent runs sandboxed", async () => {
-    const sandboxedAgent: OpenClawConfig = {
-      agents: { defaults: { ...openclawAgent.agents?.defaults, sandbox: { mode: "non-main" } } },
-    };
-    await createSkill("stale");
-
-    expect(
-      await archiveUnusedWorkshopSkills(sandboxedAgent, "main", Date.now() + 31 * DAY_MS),
-    ).toEqual([]);
-    expect(await listWorkshopSkills(openclawAgent, "main")).toHaveLength(1);
+    expect(await archive(config)).toEqual([]);
+    await expectSkills("stale");
   });
 
   it("fails closed in a process that does not record skill usage", async () => {
@@ -162,9 +139,7 @@ describe("archiveUnusedWorkshopSkills", () => {
     await stopTracking?.();
     stopTracking = undefined;
 
-    expect(
-      await archiveUnusedWorkshopSkills(openclawAgent, "main", Date.now() + 31 * DAY_MS),
-    ).toEqual([]);
+    expect(await archive()).toEqual([]);
   });
 
   it("stops when Learning was switched Off after the pass was admitted", async () => {
@@ -173,13 +148,7 @@ describe("archiveUnusedWorkshopSkills", () => {
       ...openclawAgent,
       skills: { workshop: { autonomous: { mode: "off" } } },
     });
-    try {
-      expect(
-        await archiveUnusedWorkshopSkills(openclawAgent, "main", Date.now() + 31 * DAY_MS),
-      ).toEqual([]);
-    } finally {
-      clearRuntimeConfigSnapshot();
-    }
-    expect(await listWorkshopSkills(openclawAgent, "main")).toHaveLength(1);
+    expect(await archive()).toEqual([]);
+    await expectSkills("stale");
   });
 });
