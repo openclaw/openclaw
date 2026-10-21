@@ -259,11 +259,6 @@ export function renderSessionSection(params: {
           })()}
           onStartDrag={(sectionId) => host().sessionOrganizer.startSidebarSectionDrag(sectionId)}
           onFinishDrag={() => host().sessionOrganizer.finishSidebarSectionDrag()}
-          reorder={{
-            label: label(),
-            onMove: (target: string, position: "before" | "after") =>
-              host().sessionOrganizer.reorderSidebarSection(section().id, target, position),
-          }}
           onContextMenu={(() => {
             const currentGroup = group();
             return currentGroup
