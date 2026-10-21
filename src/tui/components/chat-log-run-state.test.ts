@@ -19,51 +19,39 @@ describe("ChatLog run state", () => {
     }
   }
   it("keeps revised snapshots scoped to their own concurrent assistant run", () => {
-    chatLog.updateAssistant("Obsolete first reply.", "run-first");
-    chatLog.updateAssistant("Preserved second reply.", "run-second");
+    chatLog.updateAssistant("Obsolete first", "run-first");
+    chatLog.updateAssistant("Preserved second", "run-second");
     chatLog.startTool("first-tool", "read_file", { path: "first.txt" }, "run-first");
-    chatLog.updateAssistant("Revised first reply.", "run-first");
-    chatLog.updateAssistant("Preserved second reply.\n\nSecond continuation.", "run-second");
+    chatLog.updateAssistant("Revised first", "run-first");
+    chatLog.updateAssistant("Preserved second\n\nSecond continuation", "run-second");
 
     const rendered = render();
-    expect(rendered).not.toContain("Obsolete first reply.");
-    for (const text of [
-      "Revised first reply.",
-      "Preserved second reply.",
-      "Second continuation.",
-    ]) {
+    expect(rendered).not.toContain("Obsolete first");
+    for (const text of ["Revised first", "Preserved second", "Second continuation"]) {
       expect(rendered.split(text)).toHaveLength(2);
     }
-    expectOrder(rendered, "Preserved second reply.", "Second continuation.");
+    expectOrder(rendered, "Preserved second", "Second continuation");
   });
 
-  it("keeps a replacement final reply anchored when its previous reply is pruned", () => {
+  it.each([false, true])("anchors a delayed prompt after pruning (streaming=%s)", (streaming) => {
     chatLog = new ChatLog(20);
-    chatLog.finalizeAssistant("Previous completed reply.", "run-replaced");
-    addNotices(19);
-    chatLog.finalizeAssistant("Replacement completed reply.", "run-replaced");
-    chatLog.addLiveUser("Delayed replacement prompt.", {
-      messageId: "user",
-      runId: "run-replaced",
-    });
+    chatLog.finalizeAssistant("Evicted reply.", streaming ? "old-run" : "run");
+    if (streaming) {
+      chatLog.updateAssistant("Surviving reply.", "run");
+      addNotices(18);
+      chatLog.startTool("tool", "read_file", { path: "active.txt" });
+    } else {
+      addNotices(19);
+      chatLog.finalizeAssistant("Surviving reply.", "run");
+    }
+    chatLog.addLiveUser("Delayed prompt.", { messageId: "user", runId: "run" });
     const rendered = render();
     expect(chatLog.children).toHaveLength(20);
-    expect(rendered).not.toContain("Previous completed reply.");
-    expectOrder(rendered, "Delayed replacement prompt.", "Replacement completed reply.");
-  });
-
-  it("infers active tool ownership after another finalized run leaves scrollback", () => {
-    chatLog = new ChatLog(20);
-    chatLog.finalizeAssistant("Evicted completed reply.", "run-evicted");
-    chatLog.updateAssistant("Surviving streamed reply.", "run-active");
-    addNotices(18);
-    chatLog.startTool("active-tool", "read_file", { path: "active.txt" });
-    chatLog.addLiveUser("Delayed active prompt.", { messageId: "user", runId: "run-active" });
-    const rendered = render();
-    expect(chatLog.children).toHaveLength(20);
-    expect(rendered).not.toContain("Evicted completed reply.");
-    expectOrder(rendered, "Delayed active prompt.", "Surviving streamed reply.");
-    expectOrder(rendered, "Surviving streamed reply.", "Read File");
+    expect(rendered).not.toContain("Evicted reply.");
+    expectOrder(rendered, "Delayed prompt.", "Surviving reply.");
+    if (streaming) {
+      expectOrder(rendered, "Surviving reply.", "Read File");
+    }
   });
 
   it("deduplicates authoritative user events and adopts the matching pending prompt", () => {
@@ -108,7 +96,6 @@ describe("ChatLog run state", () => {
   it("re-keys a pending user in place without moving its position", () => {
     chatLog.addPendingUser("local", "queued hello");
     chatLog.updateAssistant("hi there", "r-accepted");
-
     expect(chatLog.rekeyPendingUser("local", "r-accepted")).toBe(true);
 
     expectOrder(render(), "queued hello", "hi there");

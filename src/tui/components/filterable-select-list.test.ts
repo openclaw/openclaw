@@ -3,16 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { FilterableSelectList, type FilterableSelectItem } from "./filterable-select-list.js";
 
-type FilterableSelectListTheme = ConstructorParameters<typeof FilterableSelectList>[2];
-
-const mockTheme: FilterableSelectListTheme = {
+const mockTheme = {
   selectedPrefix: (t) => `[${t}]`,
   selectedText: (t) => `**${t}**`,
   description: (t) => `(${t})`,
   scrollInfo: (t) => `~${t}~`,
   noMatch: (t) => `!${t}!`,
   filterLabel: (t) => `>${t}<`,
-};
+} satisfies ConstructorParameters<typeof FilterableSelectList>[2];
 
 const cursorCell = renderFakeCursor(" ");
 
@@ -40,27 +38,19 @@ describe("FilterableSelectList", () => {
       list.handleInput(ch);
     }
   }
-  function expectWidth(list: FilterableSelectList, width: number) {
-    for (const line of list.render(width)) {
-      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-    }
-  }
 
   it("keeps ANSI, CJK, scroll, and no-match rows within seven terminal columns", () => {
     const items: FilterableSelectItem[] = [
-      {
-        value: "cjk",
-        label: "\u001b[32m日本語の検索結果\u001b[0m",
-        description: "長い説明と表示幅の検証",
-      },
+      { value: "cjk", label: "\u001b[32m日本語検索\u001b[0m", description: "長い説明" },
       { value: "other", label: "another long search result" },
     ];
     const list = createList(items, 1);
     list.focused = true;
 
-    expectWidth(list, 7);
-    typeInput(list, "missing");
-    expectWidth(list, 7);
+    for (const filter of ["", "missing"]) {
+      typeInput(list, filter);
+      expect(Math.max(...list.render(7).map(visibleWidth))).toBeLessThanOrEqual(7);
+    }
   });
 
   it("filters names beginning with k", () => {

@@ -44,18 +44,14 @@ describe("CustomEditor", () => {
     expect(onCtrlD).not.toHaveBeenCalled();
   });
 
-  it("inserts German AltGr printable Kitty CSI-u input", () => {
-    editor.handleInput("\u001b[64::113;7u");
-    editor.handleInput("\u001b[8364::101;7u");
-
-    expect(editor.getText()).toBe("@€");
-  });
-
-  it("ignores printable Kitty key release events", () => {
-    editor.handleInput("\u001b[214;1u");
-    editor.handleInput("\u001b[214;1:3u");
-
-    expect(editor.getText()).toBe("Ö");
+  it.each([
+    ["AltGr characters", ["\u001b[64::113;7u", "\u001b[8364::101;7u"], "@€"],
+    ["key release ignored", ["\u001b[214;1u", "\u001b[214;1:3u"], "Ö"],
+  ] as const)("handles Kitty input: %s", (_name, keys, expected) => {
+    for (const key of keys) {
+      editor.handleInput(key);
+    }
+    expect(editor.getText()).toBe(expected);
   });
 
   it("submits an exact sole argument completion with one Enter", async () => {
