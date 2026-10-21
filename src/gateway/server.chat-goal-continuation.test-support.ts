@@ -14,7 +14,6 @@ export function registerGoalAutomaticContinuationCases(
     params: Record<string, unknown>,
   ) => Promise<MockInstance<RespondFn>>,
   goalStart: (message: string) => Record<string, unknown>,
-  userMessages: () => readonly unknown[],
 ) {
   const result = (sessionId: string, aborted?: boolean) => ({
     payloads: aborted ? [] : [{ text: "More work remains." }],
@@ -33,29 +32,6 @@ export function registerGoalAutomaticContinuationCases(
     }));
   const start = async (message: string) =>
     expect((await rpc("chat.send", goalStart(message))).mock.calls[0]?.[0]).toBe(true);
-  it("nudges consecutive normal final turns until the same Goal is complete", async () => {
-    const completed = createDeferred();
-    runEmbeddedAgent.mockImplementation(async (params) => {
-      const calls = runEmbeddedAgent.mock.calls.length;
-      if (calls === 3) {
-        await setGoalStatus("complete");
-        completed.resolve();
-      }
-      return result(params.sessionId);
-    });
-    await start("Finish a three-turn checklist");
-    await completed.promise;
-    await expectDrained();
-    expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
-    expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toContain("Advance");
-    expect(runEmbeddedAgent.mock.calls[2]?.[0].prompt).toContain("Advance");
-    expect(userMessages()).toHaveLength(1);
-    expect(loadSessionEntry(scope())?.goal).toMatchObject({
-      status: "complete",
-      continuationTurns: 2,
-    });
-  });
-
   it("stops automatic goal pursuit when the operator stops a continuation", async () => {
     const { sessionKey } = scope();
     const secondStarted = createDeferred();

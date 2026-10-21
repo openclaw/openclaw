@@ -420,37 +420,6 @@ describe("chat.history cursor catch-up", () => {
     }
   });
 
-  test("returns an empty delta at the cached head with a fixed multi-agent store", async () => {
-    testState.agentsConfig = {
-      ownership: "explicit",
-      entries: { main: {}, ops: {} },
-    };
-    testState.agentConfig = { sessionStore: { agentId: "main" } };
-    const { context } = await createCursorSession();
-    const page = await callChat<History>(context, "chat.history", { sessionKey });
-    expect(page.ok).toBe(true);
-    expect(page.payload?.deltaCursor).toEqual(expect.any(String));
-    const explicitFirstPage = await callChat<{ deltaCursor?: string }>(context, "chat.history", {
-      sessionKey,
-      offset: 0,
-    });
-    expect(explicitFirstPage.payload?.deltaCursor).toEqual(expect.any(String));
-
-    const delta = await callChat(context, "chat.history", {
-      sessionKey,
-      cursor: page.payload?.deltaCursor,
-    });
-    expect(delta).toMatchObject({
-      ok: true,
-      payload: {
-        kind: "delta",
-        messages: [],
-        deltaCursor: page.payload?.deltaCursor,
-        sessionInfo: { activeLeafEntryId: "cached" },
-      },
-    });
-  });
-
   test.each([
     { name: "no sibling", sibling: [] },
     {

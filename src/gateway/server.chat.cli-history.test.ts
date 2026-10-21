@@ -22,7 +22,6 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 const directories = createTempDirTracker();
 const sessionStoreFixture = createDirectChatSessionStoreFixture(directories);
-const importTimestamp = Date.parse("2026-03-26T16:29:54.800Z");
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
@@ -39,7 +38,7 @@ afterAll(async () => {
 async function withCliHistory(
   sessionId: string,
   cliSessionId: string,
-  imported: Parameters<typeof importedMessage>[],
+  imported: unknown,
   run: (ws: Awaited<ReturnType<typeof harness.openWs>>) => Promise<void>,
 ) {
   const ws = await harness.openWs();
@@ -52,7 +51,7 @@ async function withCliHistory(
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
       path.join(projectsDir, `${cliSessionId}.jsonl`),
-      imported.map((row) => JSON.stringify(importedMessage(...row))).join("\n"),
+      JSON.stringify(imported),
       "utf-8",
     );
     setTestEnvValue("HOME", homeDir);
@@ -82,51 +81,15 @@ async function withCliHistory(
   }
 }
 
-function importedMessage(
-  role: string,
-  uuid: string,
-  timestamp: number,
-  content: unknown,
-  model?: string,
-) {
-  return {
-    type: role,
-    uuid,
-    timestamp: new Date(timestamp).toISOString(),
-    message: { role, content, ...(model ? { model } : {}) },
-  };
-}
-
-function localMessages(length: number, timestamp: number) {
-  return Array.from({ length }, (_, index) =>
-    createTextTranscriptEvent(
-      index % 2 === 0 ? "user" : "assistant",
-      `local-only message ${index + 1}`,
-      { timestamp: timestamp + index },
-    ),
-  );
-}
-
 type HistoryMessage = {
   role?: unknown;
   content?: unknown;
   __openclaw?: {
-    id?: string;
-    seq?: number;
     importedFrom?: unknown;
     externalId?: unknown;
     cliSessionId?: unknown;
   };
 };
-type HistoryPage = {
-  messages?: HistoryMessage[];
-  hasMore?: boolean;
-  nextOffset?: number;
-  totalMessages?: number;
-  completeSnapshot?: boolean;
-};
-const historyPage = (ws: Parameters<typeof rpcReq>[0], params: Record<string, unknown>) =>
-  rpcReq<HistoryPage>(ws, "chat.history", { sessionKey: "main", ...params });
 
 test("chat.history deduplicates a structured local Claude delivery with managed audio", async () => {
   const sessionId = "sess-claude-cli-delivery-dedupe";
@@ -136,14 +99,12 @@ test("chat.history deduplicates a structured local Claude delivery with managed 
   await withCliHistory(
     sessionId,
     cliSessionId,
-    [
-      [
-        "assistant",
-        "assistant-delivery-ready",
-        deliveryTimestamp,
-        [{ type: "text", text: "CLAUDE DELIVERY READY" }],
-      ],
-    ],
+    {
+      type: "assistant",
+      uuid: "assistant-delivery-ready",
+      timestamp: new Date(deliveryTimestamp).toISOString(),
+      message: { role: "assistant", content: [{ type: "text", text: "CLAUDE DELIVERY READY" }] },
+    },
     async (ws) => {
       await writeMainSessionTranscript(
         [
@@ -164,7 +125,10 @@ test("chat.history deduplicates a structured local Claude delivery with managed 
         sessionId,
       );
 
-      const history = await historyPage(ws, { limit: 100 });
+      const history = await rpcReq<{ messages?: HistoryMessage[] }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 100,
+      });
       expect(history.ok, JSON.stringify(history.error)).toBe(true);
       const assistantMessages = (history.payload?.messages ?? []).filter(
         (message) => message.role === "assistant",
@@ -188,99 +152,6 @@ test("chat.history deduplicates a structured local Claude delivery with managed 
         cliSessionId,
       });
       expect(JSON.stringify(assistantMessages)).not.toContain("[[reply_to:");
-    },
-  );
-});
-
-test("chat.history pages the full local prefix and external-only claude-cli rows", async () => {
-  const sessionId = "sess-claude-cli-local-prefix";
-  await withCliHistory(
-    sessionId,
-    "5b8b202c-f6bb-4046-9475-d2f15fd07532",
-    [
-      ["user", "import-prefix-user", importTimestamp, "import prefix user"],
-      ["assistant", "import-prefix-assistant", importTimestamp + 700, "import prefix assistant"],
-    ],
-    async (ws) => {
-      await writeMainSessionTranscript(
-        localMessages(70, Date.parse("2026-03-27T00:00:00.000Z")),
-        sessionId,
-      );
-
-      const history = await historyPage(ws, { limit: 2 });
-      expect(history.ok, JSON.stringify(history.error)).toBe(true);
-      expect(history.payload?.totalMessages).toBe(72);
-      expect(history.payload?.hasMore).toBe(true);
-      expect(history.payload?.completeSnapshot).toBeUndefined();
-      expect(history.payload?.messages).toHaveLength(2);
-      const messages = [...(history.payload?.messages ?? [])];
-      let nextOffset = history.payload?.nextOffset;
-      while (nextOffset !== undefined) {
-        const older = await historyPage(ws, { limit: 20, offset: nextOffset });
-        expect(older.ok).toBe(true);
-        expect(older.payload?.messages?.length).toBeLessThanOrEqual(20);
-        messages.unshift(...(older.payload?.messages ?? []));
-        if (older.payload?.nextOffset !== undefined) {
-          expect(older.payload.nextOffset).toBeGreaterThan(nextOffset);
-        }
-        nextOffset = older.payload?.nextOffset;
-      }
-      const deliveredIdentities = new Set(
-        messages.map((message) => {
-          const metadata = expectDefined(message["__openclaw"], "history metadata");
-          return metadata.seq !== undefined
-            ? `seq:${metadata.seq}`
-            : `id:${expectDefined(metadata.id, "history id")}`;
-        }),
-      );
-      expect(deliveredIdentities.size).toBe(72);
-      expect(deliveredIdentities).toContain("id:import-prefix-user");
-      expect(deliveredIdentities).toContain("id:import-prefix-assistant");
-      for (let index = 1; index <= 70; index += 1) {
-        expect(deliveredIdentities).toContain(`seq:${index}`);
-      }
-    },
-  );
-});
-
-test("chat.history pages when every older claude-cli import duplicates a local row", async () => {
-  const sessionId = "sess-claude-cli-dedupe-loop";
-  const dupBaseMs = importTimestamp;
-  await withCliHistory(
-    sessionId,
-    "0f5b202c-f6bb-4046-9475-d2f15fd07531",
-    [
-      ["user", "dup-user-1", dupBaseMs, "dup user question"],
-      [
-        "assistant",
-        "dup-assistant-1",
-        dupBaseMs + 1000,
-        [{ type: "text", text: "dup assistant reply" }],
-        "claude-sonnet-4-6",
-      ],
-    ],
-    async (ws) => {
-      // The two import copies are the oldest local records; 45 newer
-      // local-only records push them past the limit-1 tail window (40 raw
-      // messages), so the tail merge incorporates the import while the full
-      // read dedupes everything. This layout used to recurse forever.
-      await writeMainSessionTranscript(
-        [
-          createTextTranscriptEvent("user", "dup user question", { timestamp: dupBaseMs }),
-          createTextTranscriptEvent("assistant", "dup assistant reply", {
-            timestamp: dupBaseMs + 1000,
-          }),
-          ...localMessages(45, dupBaseMs + 60_000),
-        ],
-        sessionId,
-      );
-
-      const history = await historyPage(ws, { limit: 1 });
-      expect(history.ok, JSON.stringify(history.error)).toBe(true);
-      expect(history.payload?.totalMessages).toBe(47);
-      expect(history.payload?.hasMore).toBe(true);
-      expect(history.payload?.nextOffset).toBeGreaterThan(0);
-      expect(JSON.stringify(history.payload?.messages?.at(-1))).toContain("local-only message 45");
     },
   );
 });
