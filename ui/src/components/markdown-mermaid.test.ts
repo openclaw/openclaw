@@ -179,6 +179,23 @@ it.each([
   }
 });
 
+it("keeps the focused options menu open when pending rendering finishes", async () => {
+  const { pending, element } = await pendingDiagram("Pending menu");
+  const trigger = action(element, "Diagram options");
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  const menuItem = action(element, "Show source");
+  menuItem.focus();
+  expect(document.activeElement).toBe(menuItem);
+
+  pending.resolve(svg);
+  await waitForImage(element);
+
+  expect(action(element, "Diagram options")).toBe(trigger);
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  expect(document.activeElement).toBe(menuItem);
+});
+
 it.each(["source", "theme"])("ignores a stale layout after a %s change", async (change) => {
   const old = createDeferred<string>();
   const current = createDeferred<string>();
@@ -208,6 +225,73 @@ it.each(["source", "theme"])("ignores a stale layout after a %s change", async (
   expect(element!.querySelector('[role="status"]')).toBeNull();
   expect(createObjectURL).toHaveBeenCalledTimes(1);
   expect(revokeObjectURL).not.toHaveBeenCalled();
+});
+
+it.each(["source", "theme"])(
+  "keeps a resolved image only for the same source while a %s layout is pending",
+  async (change) => {
+    const { element } = await mount("Displayed diagram");
+    const previousUrl = await waitForImage(element);
+    const pending = createDeferred<string>();
+    renderSvg.mockReturnValueOnce(pending.promise);
+
+    if (change === "source") {
+      element.source = source("Replacement diagram");
+    } else {
+      document.documentElement.dataset.themeMode = "dark";
+    }
+    await waitForSolid(() => expect(renderSvg).toHaveBeenCalledTimes(2));
+
+    if (change === "source") {
+      expect(imageSource(element)).toBeUndefined();
+      expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith(previousUrl);
+      expect(action(element, "Expand diagram").disabled).toBe(true);
+    } else {
+      expect(imageSource(element)).toBe(previousUrl);
+      expect(revokeObjectURL).not.toHaveBeenCalled();
+      expect(action(element, "Expand diagram").disabled).toBe(false);
+    }
+
+    pending.resolve(svg);
+    await waitForSolid(() => expect(imageSource(element)).toBe("blob:mermaid-2"));
+    expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith(previousUrl);
+  },
+);
+
+it.each(["source", "theme"])("recovers from a layout failure after a %s change", async (change) => {
+  renderSvg.mockRejectedValueOnce(new Error("Invalid initial diagram"));
+  const { element } = await mount("Failed diagram");
+  await waitForSolid(() =>
+    expect(element.querySelector('[role="status"]')?.textContent).toContain("Check the source"),
+  );
+
+  if (change === "source") {
+    element.source = source("Corrected diagram");
+  } else {
+    document.documentElement.dataset.themeMode = "dark";
+  }
+
+  await waitForImage(element);
+  expect(renderSvg).toHaveBeenCalledTimes(2);
+  expect(element.querySelector('[role="status"]')).toBeNull();
+});
+
+it("retries a previously failed image after returning to its source", async () => {
+  const { original, element } = await mount("Retry image");
+  await waitForImage(element);
+  element.querySelector("img")!.dispatchEvent(new Event("error"));
+  await waitForSolid(() =>
+    expect(element.querySelector('[role="status"]')?.textContent).toContain(
+      "The diagram image could not be displayed",
+    ),
+  );
+
+  element.source = source("Another diagram");
+  await waitForImage(element);
+  element.source = original;
+  await waitForImage(element);
+  expect(element.querySelector('[role="status"]')).toBeNull();
+  expect(renderSvg).toHaveBeenCalledTimes(2);
 });
 
 it.each([true, false])(

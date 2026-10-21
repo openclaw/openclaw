@@ -312,20 +312,21 @@ suite.define(() => {
       const agentMenu = sidebar.locator(".sidebar-agent-menu");
       await expect
         .poll(async () => {
-          const [card, menu] = await Promise.all([
+          const [card, rail, menu] = await Promise.all([
             sidebar.locator(".sidebar-agent-card__main").boundingBox(),
+            sidebar.locator(".sidebar-rail").boundingBox(),
             agentMenu.boundingBox(),
           ]);
-          if (!card || !menu) {
+          if (!card || !rail || !menu) {
             return null;
           }
           return {
-            belowCard: menu.y >= card.y + card.height,
-            anchoredToCard: menu.x <= card.x + card.width && menu.x + menu.width >= card.x,
+            railGap: menu.x - (rail.x + rail.width),
+            topOffset: menu.y - card.y,
             inViewport: menu.x >= 0 && menu.x + menu.width <= page.viewportSize()!.width,
           };
         })
-        .toEqual({ belowCard: true, anchoredToCard: true, inViewport: true });
+        .toEqual({ railGap: 8, topOffset: 0, inViewport: true });
       await agentMenu.locator('[data-value="agent:writer"]').click();
       await waitForRequest(gateway, "sessions.list", (params) => params.agentId === "writer");
       await expectAgentName(sidebar, "Writer");
@@ -341,7 +342,8 @@ suite.define(() => {
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
         .locator(".sidebar-agent-menu")
-        .locator('[data-value="command:agent-settings"]')
+        .locator('[data-value="agent:writer"]')
+        .getByRole("button", { name: "Writer settings", exact: true })
         .click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/writer");
       expect(new URL(page.url()).searchParams.get("agent")).toBeNull();

@@ -4,7 +4,6 @@ import {
   externalContentStamp,
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
-  normalizeCacheKey,
   readCachedSearchPayload,
   readResponseText,
   resolveCacheTtlMs,
@@ -136,17 +135,22 @@ export async function runSearxngSearch(params: {
   count?: number;
   categories?: string;
   language?: string;
-  baseUrl?: string;
   timeoutSeconds?: number;
   cacheTtlMinutes?: number;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
-  const count = resolveSearchCount(params.count, DEFAULT_SEARCH_COUNT);
+  const count = resolveSearchCount(
+    params.count ?? params.config?.tools?.web?.search?.maxResults,
+    DEFAULT_SEARCH_COUNT,
+  );
   const categories = params.categories ?? resolveSearxngCategories(params.config);
   const language = params.language ?? resolveSearxngLanguage(params.config);
-  const baseUrl = params.baseUrl ?? resolveSearxngBaseUrl(params.config);
-  const timeoutSeconds = resolveTimeoutSeconds(params.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
+  const baseUrl = resolveSearxngBaseUrl(params.config);
+  const timeoutSeconds = resolveTimeoutSeconds(
+    params.timeoutSeconds ?? params.config?.tools?.web?.search?.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS,
+  );
   const cacheTtlMs = resolveCacheTtlMs(
     params.cacheTtlMinutes ?? params.config?.tools?.web?.search?.cacheTtlMinutes,
     DEFAULT_CACHE_TTL_MINUTES,
@@ -160,16 +164,14 @@ export async function runSearxngSearch(params: {
   const endpointMode = await validateSearxngBaseUrl(baseUrl);
   params.signal?.throwIfAborted();
 
-  const cacheKey = normalizeCacheKey(
-    JSON.stringify({
-      provider: "searxng",
-      query: params.query,
-      count,
-      categories: categories ?? "",
-      language: language ?? "",
-      baseUrl,
-    }),
-  );
+  const cacheKey = JSON.stringify({
+    provider: "searxng",
+    query: params.query,
+    count,
+    categories: categories ?? "",
+    language: language ?? "",
+    baseUrl,
+  });
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;

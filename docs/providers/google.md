@@ -255,6 +255,13 @@ OpenClaw preserves their partial content and reports a length-limited result.
 Function calls in that partial response remain incomplete instead of becoming
 an executable tool-use turn.
 
+The managed Gemini and Vertex transports stop reading when a compatible proxy
+sends `data: [DONE]`, release the response body, and ignore later frames. A valid
+candidate finish reason is still required for a successful result. First-frame
+quota errors participate in API-key rotation. For Gemini's first-response retry,
+usage metadata, response IDs, and empty or unspecified finish states do not count
+as generated output or disable the existing retry deadline.
+
 ## Web search
 
 The bundled `gemini` web-search provider uses Gemini Google Search grounding.

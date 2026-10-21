@@ -549,6 +549,37 @@ describe("Sessions page typing and detail ownership", () => {
       archived: "all",
     });
   });
+  it("retries a failed descriptor inside the expanded panel", async () => {
+    const row: GatewaySessionRow = {
+      ...result("agent:main:details").sessions[0]!,
+      sessionId: "details-session",
+      rowMode: "compact",
+    };
+    const descriptor = createDeferred<{ session: GatewaySessionRow }>();
+    let description = descriptor.promise;
+    const request = listRequest(() => sessionsResult([row], 1), {
+      "sessions.subscribe": subscribed,
+      "sessions.groups.list": () => ({ groups: [], sectionOrder: [] }),
+      "sessions.describe": () => description,
+    });
+    const { page } = await mountPage(createTestGatewayClient(request), sessionsResult([row], 1));
+    click(page, ".session-details-toggle");
+    await advance();
+    descriptor.reject(new Error("Descriptor unavailable"));
+    await advance();
+    await page.updateComplete;
+    expect(page.querySelector('.session-details-panel [role="alert"]')?.textContent).toContain(
+      "Descriptor unavailable",
+    );
+    description = Promise.resolve({ session: { ...row, rowMode: undefined, label: "Recovered" } });
+    namedButton(page, "Retry")!.click();
+    await advance();
+    await page.updateComplete;
+    expect(page.querySelector('.session-details-panel [role="alert"]')).toBeNull();
+    expect(findInput(page, ".session-details-panel input").value).toBe("Recovered");
+    expect(request.mock.calls.filter(([name]) => name === "sessions.describe")).toHaveLength(2);
+  });
+
   it.each([
     { entry: "interactive", closeBeforeReply: false },
     { entry: "deep-link", closeBeforeReply: false },
@@ -589,6 +620,9 @@ describe("Sessions page typing and detail ownership", () => {
       await advance();
       expect(calls("describe")).toHaveLength(1);
       expect(select()?.disabled).toBe(true);
+      click(page, '.session-data-row input[type="checkbox"]');
+      await page.updateComplete;
+      expect(namedButton(page, "Delete")?.disabled).toBe(false);
       const held = page.result;
       if (closeBeforeReply) {
         await toggle();
@@ -634,6 +668,25 @@ describe("Sessions page typing and detail ownership", () => {
         await page.updateComplete;
         expect(calls("describe")).toHaveLength(2);
         expect(select()?.options[0]?.textContent?.trim()).toBe("Inherited: Off");
+        const draft = findInput(page, ".session-details-panel input");
+        draft.value = "Uncommitted label";
+        const failedRefresh = createDeferred<{ session: GatewaySessionRow }>();
+        description = failedRefresh.promise;
+        connection.emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: { key: row.key, agentId: "main", reason: "patch" },
+        });
+        await advance();
+        expect(findInput(page, ".session-details-panel input")).toBe(draft);
+        expect(draft.disabled).toBe(true);
+        failedRefresh.reject(new Error("Descriptor refresh failed"));
+        await advance();
+        await page.updateComplete;
+        expect(findInput(page, ".session-details-panel input")).toBe(draft);
+        expect(draft.value).toBe("Uncommitted label");
+        expect(draft.disabled).toBe(false);
+        expect(panel()?.textContent).toContain("Descriptor refresh failed");
       }
     },
   );

@@ -87,7 +87,7 @@ export function ClawsCatalogView(props: ClawsCatalogViewProps) {
             >
               <a
                 class="plugin-catalog-detail__back"
-                href={pathForRoute("agents-home", props.basePath)}
+                href={pathForRoute("claws", props.basePath)}
                 onClick={(event) => {
                   if (shouldHandleNavigationClick(event)) {
                     event.preventDefault();

@@ -210,19 +210,11 @@ describe("attempt result projection", () => {
     ).toBe(expected);
   });
 
-  it.each(
-    [false, true].flatMap((nativeCall) =>
-      [
-        '{"name":"write","arguments":{"path":"proof.txt"}}',
-        "<tool_call><function=write><parameter=path>proof.txt</parameter></function></tool_call>",
-        'Action: write\nAction Input: {"path":"proof.txt"}',
-        '[TOOL_CALL]{tool => "write", args => {"path":"proof.txt"}}[/TOOL_CALL]',
-      ].map((text) => ({ nativeCall, text })),
-    ),
-  )(
-    "recognizes text-only terminal calls after a read (native=$nativeCall): $text",
-    ({ nativeCall, text }) => {
-      const assistant = textAssistant(text);
+  // Syntax variants belong to packages/tool-call-repair/src/attempt.test.ts.
+  it.each([false, true])(
+    "recognizes text-only terminal calls after a read (native=%s)",
+    (nativeCall) => {
+      const assistant = textAssistant('{"name":"write","arguments":{"path":"proof.txt"}}');
       if (nativeCall) {
         assistant.content.push({ type: "toolCall", id: "native", name: "write", arguments: {} });
       }
@@ -482,17 +474,16 @@ describe("attempt result projection", () => {
   });
 
   it("projects pending media and voice fields", () => {
-    expect(completeResult().toolMediaUrls).toBeUndefined();
-    expect(completeResult({ pendingToolMediaReply: { mediaUrls: [" "] } }).toolMediaUrls).toEqual([
-      " ",
+    const projectMedia = (pendingToolMediaReply?: ResultInput["pendingToolMediaReply"]) => {
+      const { toolMediaUrls, toolAudioAsVoice } = completeResult({ pendingToolMediaReply });
+      return { toolMediaUrls, toolAudioAsVoice };
+    };
+    expect(projectMedia()).toEqual({ toolMediaUrls: undefined, toolAudioAsVoice: undefined });
+    expect(projectMedia({ mediaUrls: [" "] }).toolMediaUrls).toEqual([" "]);
+    expect(projectMedia({ mediaUrls: ["file:///tmp/result.png"] }).toolMediaUrls).toEqual([
+      "file:///tmp/result.png",
     ]);
-    expect(
-      completeResult({ pendingToolMediaReply: { mediaUrls: ["file:///tmp/result.png"] } })
-        .toolMediaUrls,
-    ).toEqual(["file:///tmp/result.png"]);
-    expect(completeResult({ pendingToolMediaReply: { audioAsVoice: true } }).toolAudioAsVoice).toBe(
-      true,
-    );
+    expect(projectMedia({ audioAsVoice: true }).toolAudioAsVoice).toBe(true);
     const mediaUrls = ["/tmp/reply.opus"];
     const coreMedia = (messagingToolSentMediaUrls: string[] = []) => {
       const result = completeResult({

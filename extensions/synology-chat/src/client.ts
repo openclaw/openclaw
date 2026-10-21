@@ -199,9 +199,10 @@ export async function sendHostedFileUrl(
   userId?: string,
   allowInsecureSsl = false,
   onPlatformSendDispatch?: () => Promise<void>,
+  text?: string,
 ): Promise<SynologyHostedFileSendResult> {
   const effect = captureEffectAuthority();
-  const body = buildWebhookBody({ file_url: fileUrl }, userId);
+  const body = buildWebhookBody({ file_url: fileUrl, ...(text ? { text } : {}) }, userId);
 
   await waitForSendSlot(incomingUrl);
   await onPlatformSendDispatch?.();

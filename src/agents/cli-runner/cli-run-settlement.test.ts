@@ -194,6 +194,110 @@ it.each(["required", "result-required", "optional"] as const)(
     );
   },
 );
+
+it.each([
+  {
+    name: "a required hidden acknowledgement",
+    terminalReplyExpectation: "result-required" as const,
+    output: { text: "HEARTBEAT_OK" },
+    trigger: "user" as const,
+    expectedError: true,
+  },
+  {
+    name: "an optional hidden acknowledgement",
+    terminalReplyExpectation: "optional" as const,
+    output: { text: "HEARTBEAT_OK" },
+    trigger: "user" as const,
+    expectedError: false,
+  },
+  {
+    name: "a required acknowledgement with media",
+    terminalReplyExpectation: "result-required" as const,
+    output: { text: "HEARTBEAT_OK", toolMediaUrls: ["https://example.invalid/chart.png"] },
+    trigger: "user" as const,
+    expectedError: false,
+  },
+  {
+    name: "a real heartbeat acknowledgement",
+    terminalReplyExpectation: "result-required" as const,
+    output: { text: "HEARTBEAT_OK" },
+    trigger: "heartbeat" as const,
+    expectedError: false,
+  },
+])("settles $name at the message-presentation boundary", (testCase) => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  context.params.terminalReplyExpectation = testCase.terminalReplyExpectation;
+  context.params.trigger = testCase.trigger;
+
+  const result = testRunResult({ context, output: testCase.output });
+
+  if (testCase.expectedError) {
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta.error).toMatchObject({
+      kind: "incomplete_turn",
+      message: "No answer was returned. Ask again if you still need one.",
+      fallbackSafe: false,
+    });
+    expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
+    expect(result.meta.finalAssistantVisibleText).toBeUndefined();
+    expect(result.meta.finalAssistantRawText).toBe("HEARTBEAT_OK");
+    return;
+  }
+
+  expect(result.meta.error).toBeUndefined();
+  expect(result.meta.terminalReply).toEqual({
+    disposition: "visible",
+    text: "HEARTBEAT_OK",
+  });
+  expect(result.payloads?.[0]?.text).toBe("HEARTBEAT_OK");
+  if (testCase.output.toolMediaUrls) {
+    expect(result.payloads?.flatMap((payload) => payload.mediaUrls ?? [])).toContain(
+      testCase.output.toolMediaUrls[0],
+    );
+  }
+});
+
+it("preserves confirmed final delivery of an acknowledgement-only CLI result", () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  context.params.terminalReplyExpectation = "result-required";
+  const result = testRunResult({
+    context,
+    output: {
+      text: "HEARTBEAT_OK",
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSourceReplyPayloads: [{ text: "HEARTBEAT_OK", sourceReplyFinal: true }],
+    },
+  });
+
+  expect(result.meta.error).toBeUndefined();
+  expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+  expect(result.payloads).toEqual([{ text: "HEARTBEAT_OK" }]);
+});
+
+it("preserves an accepted completion-message child over a hidden CLI acknowledgement", () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  context.params.terminalReplyExpectation = "result-required";
+  const acceptedSessionSpawns = [
+    {
+      runId: "child-run",
+      childSessionKey: "agent:main:subagent:child-run",
+      expectsCompletionMessage: true,
+    },
+  ];
+  const result = testRunResult({
+    context,
+    output: { text: "HEARTBEAT_OK", acceptedSessionSpawns },
+  });
+
+  expect(result.meta.error).toBeUndefined();
+  expect(result.meta.terminalReply).toEqual({
+    disposition: "visible",
+    text: "HEARTBEAT_OK",
+  });
+  expect(result.acceptedSessionSpawns).toEqual(acceptedSessionSpawns);
+});
+
 it.each([
   ["blocked", "s1", "previous-native-session"],
   ["no-native-id", "s1", "previous-native-session"],

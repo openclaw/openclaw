@@ -344,9 +344,7 @@ export function renderSessionSection(params: {
                   <button
                     type="button"
                     class="sidebar-session-group-actions"
-                    title={t("sessionsView.groupMenu", {
-                      group: currentGroup(),
-                    })}
+                    title={t("sessionsView.groupOptions")}
                     aria-label={t("sessionsView.groupMenu", {
                       group: currentGroup(),
                     })}

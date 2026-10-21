@@ -30,7 +30,9 @@ const mockPluginRegistryIds = vi.hoisted(() => [
   "lmstudio",
   "memory-core",
   "ollama",
+  "some-plugin",
 ]);
+const mockPluginTools = vi.hoisted(() => ({ names: ["some_plugin_tool"] as string[] | undefined }));
 
 const readInstalledPackageVersionMock = vi.hoisted(() =>
   vi.fn(async (dir: string): Promise<string | undefined> => {
@@ -56,7 +58,8 @@ type FixturePluginsConfig = {
 };
 
 // mock-isolation: Use explicit fixture enablement without loading plugin runtime state.
-vi.mock("../plugins/config-state.js", () => ({
+vi.mock("../plugins/config-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/config-state.js")>()),
   normalizePluginId: (id: string) => id,
   resolveEffectiveEnableState: (params: {
     config?: FixturePluginsConfig;
@@ -85,11 +88,18 @@ vi.mock("../plugins/config-state.js", () => ({
   }),
 }));
 
-vi.mock("../plugins/plugin-registry.js", () => ({
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-registry.js")>()),
   createPluginRegistryIdNormalizer: () => (id: string) => id,
   loadPluginRegistrySnapshot: () => ({
     diagnostics: [],
-    plugins: mockPluginRegistryIds.map((pluginId) => ({ pluginId })),
+    plugins: mockPluginRegistryIds.map((pluginId) => ({
+      pluginId,
+      contributions:
+        pluginId === "some-plugin" && mockPluginTools.names !== undefined
+          ? { contracts: { tools: mockPluginTools.names } }
+          : undefined,
+    })),
   }),
 }));
 
@@ -110,28 +120,6 @@ vi.mock("../channels/plugins/read-only.js", () => ({
 
 vi.mock("../channels/read-only-account-inspect.js", () => ({
   inspectReadOnlyChannelAccount: () => null,
-}));
-
-vi.mock("../agents/sandbox/config.js", () => ({
-  resolveSandboxConfigForAgent: () => ({ mode: "off" }),
-}));
-
-vi.mock("../agents/sandbox/tool-policy.js", () => ({
-  resolveSandboxToolPolicyForAgent: () => undefined,
-}));
-
-vi.mock("../agents/tool-policy-match.js", () => ({
-  isToolAllowedByPolicies: (_tool: string, policies: unknown[]) =>
-    policies.every((policy) => policy == null),
-}));
-
-vi.mock("../agents/tool-policy.js", () => ({
-  resolveToolProfilePolicy: (profile: unknown) =>
-    profile === "coding" || profile === "minimal" ? {} : undefined,
-}));
-
-vi.mock("../agents/sandbox-tool-policy.js", () => ({
-  pickSandboxToolPolicy: () => undefined,
 }));
 
 describe("security audit install metadata findings", () => {
@@ -452,12 +440,50 @@ describe("security audit extension tool reachability findings", () => {
             } satisfies OpenClawConfig,
             absent: "plugins.tools_reachable_permissive_policy",
           },
+          {
+            name: "reports plugin tools added to a restrictive profile",
+            cfg: {
+              plugins: { allow: ["some-plugin"] },
+              tools: { profile: "coding", alsoAllow: ["group:plugins"] },
+            } satisfies OpenClawConfig,
+            present: { checkId: "plugins.tools_reachable_permissive_policy", severity: "warn" },
+          },
+          {
+            name: "keeps plugin-group auditing for installed indexes without tool contracts",
+            tools: undefined,
+            cfg: {
+              plugins: { allow: ["some-plugin"] },
+              tools: { profile: "coding", alsoAllow: ["group:plugins"] },
+            } satisfies OpenClawConfig,
+            present: { checkId: "plugins.tools_reachable_permissive_policy", severity: "warn" },
+          },
+          {
+            name: "does not invent tools for an explicitly empty tool contract",
+            tools: [] as string[],
+            cfg: { plugins: { allow: ["some-plugin"] } } satisfies OpenClawConfig,
+            absent: "plugins.tools_reachable_permissive_policy",
+          },
+          {
+            name: "honors a denied concrete tool even when its plugin group is allowed",
+            cfg: {
+              plugins: { allow: ["some-plugin"] },
+              tools: {
+                profile: "coding",
+                alsoAllow: ["group:plugins"],
+                deny: ["some_plugin_tool"],
+              },
+            } satisfies OpenClawConfig,
+            absent: "plugins.tools_reachable_permissive_policy",
+          },
         ] as const;
 
         for (const testCase of cases) {
+          mockPluginTools.names = "tools" in testCase ? testCase.tools : ["some_plugin_tool"];
           const findings = await collectPluginsTrustFindings({ cfg: testCase.cfg, stateDir });
           if ("present" in testCase) {
-            expect(findings).toContainEqual(expect.objectContaining(testCase.present));
+            expect(findings, testCase.name).toContainEqual(
+              expect.objectContaining(testCase.present),
+            );
           }
           if ("detail" in testCase) {
             expect(

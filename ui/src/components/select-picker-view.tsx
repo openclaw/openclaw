@@ -321,9 +321,6 @@ export function PickerContent<Option extends PickerOption>(props: {
       enter ? 120 : 150,
     );
   }
-  onCleanup(() => {
-    clearTimeout(hoverTimer);
-  });
   createScrollPosition(
     () => ({
       reveal: opened()
@@ -363,6 +360,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     const disconnectAnchor = anchor.connect();
     const stop = control.connect(() => {}, onOpenChange);
     return () => {
+      clearTimeout(hoverTimer);
       stop();
       disconnectAnchor();
     };

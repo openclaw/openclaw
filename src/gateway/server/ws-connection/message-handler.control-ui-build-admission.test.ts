@@ -18,6 +18,7 @@ import { rawDataToString } from "../../../infra/ws.js";
 import { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { GatewayClientRegistry } from "../client-registry.js";
+import { gatewayTestTextTransport } from "../connection-transport.test-support.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const {
@@ -206,7 +207,7 @@ describe("Control UI build admission over WebSocket", () => {
       };
       attachGatewayWsMessageHandler({
         clients: new GatewayClientRegistry(),
-        socket,
+        socket: gatewayTestTextTransport(socket),
         prepareAuthenticatedReceive: () => ({ ok: true, value: vi.fn() }),
         connectionWork,
         upgradeReq: request as IncomingMessage,

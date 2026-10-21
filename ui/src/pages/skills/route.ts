@@ -62,7 +62,6 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
       loadSkillsRouteData(context, options, surface),
     component: () =>
       import("./skills-page.tsx").then((module) => ({
-        header: true,
         renderSolid: module.createSkillsRenderer(surface),
       })),
   });

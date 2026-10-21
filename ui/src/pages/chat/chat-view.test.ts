@@ -757,7 +757,7 @@ describe("retained input navigation", () => {
       type: "attachment_error",
       attachment: { kind: "video", label: "walkthrough.mp4", code: "file-not-found" },
     },
-  ])("names a queued $attachment.kind attachment without message text", (content) => {
+  ])("names a queued $attachment.kind attachment without message text", async (content) => {
     const historyState = makeChatHost({ currentSessionId: "attachment-session" });
     applyChatPendingInputs(historyState, {
       total: 1,
@@ -773,6 +773,8 @@ describe("retained input navigation", () => {
       ],
     });
     const container = renderChatView({ historyState });
+    await vi.dynamicImportSettled();
+    flush();
     expect(container.querySelector(".chat-queue__text")?.textContent).toBe(
       content.attachment.label,
     );
@@ -2902,7 +2904,7 @@ describe("chat attachment picker", () => {
       preview.querySelector(".chat-attachment-file--video .chat-attachment-file__preview svg"),
     ).not.toBeNull();
     expect(preview.querySelector(".chat-attachment-file__preview img")).toBeNull();
-    expect(preview.querySelector(".chat-attachment-file__type")?.textContent).toBe("MP4");
+    expect(preview.querySelector(".chat-attachment-file__type")?.textContent).toBe("MP4 · 5 B");
   });
 });
 describe("chat welcome", () => {
@@ -4705,7 +4707,10 @@ describe("chat transcript rendering cache", () => {
         onOpenWorkspaceFile,
       };
       renderChatInto(container, { ...props, allowExternalEmbedUrls: false });
-      const frame = expectDefined(container.querySelector("iframe"), "blocked widget frame");
+      await vi.dynamicImportSettled();
+      const frame = await waitForSolid(() =>
+        expectDefined(container.querySelector("iframe"), "blocked widget frame"),
+      );
       expect(frame.getAttribute("src")).toBeNull();
       expect(frame.getAttribute("sandbox")).toBe("");
 

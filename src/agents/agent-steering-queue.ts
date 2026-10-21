@@ -194,8 +194,7 @@ export async function preparePendingAgentSteeringLease(params: {
     }
   }
   const selection = await selectPromptBoundedItems(
-    // eslint-disable-next-line unicorn/no-array-sort -- This fresh private array has no other reader.
-    pending.sort(sortPendingSteeringItems),
+    pending.toSorted(sortPendingSteeringItems),
     params.readResult,
   );
   if (!selection) {

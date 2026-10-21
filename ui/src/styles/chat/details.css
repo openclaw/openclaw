@@ -274,7 +274,7 @@ openclaw-chat-details[mobile] {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
+  text-overflow: clip;
 }
 .chat-details button:hover {
   background: var(--bg-hover);
@@ -418,7 +418,7 @@ openclaw-chat-details[mobile] {
   font-weight: 400;
   overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
+  text-overflow: clip;
 }
 .chat-details .chat-subagent-activity__status {
   grid-column: 2;
@@ -570,7 +570,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
 .chat-details__process-tail {
   overflow: hidden;
   min-width: 0;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 .chat-details__process-name {
@@ -634,7 +634,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
 }
 .chat-details .chat-pr__repo {
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
   font-size: 12px;
   font-weight: 500;
@@ -875,7 +875,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 .chat-environment__action > svg,
@@ -974,7 +974,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 .chat-environment__machine-trigger svg {

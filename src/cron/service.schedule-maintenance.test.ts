@@ -126,10 +126,7 @@ it("keeps future slots while probing malformed schedules", () => {
 it.each([true, false])("preserves startup catch-up deferrals only while enabled=%s", (enabled) => {
   const deferred = now + 120_000;
   const { job, state } = checkMaintenance(
-    {
-      enabled,
-      state: { nextRunAtMs: deferred, startupCatchupAtMs: deferred },
-    },
+    { enabled, state: { nextRunAtMs: deferred, startupCatchupAtMs: deferred } },
     enabled ? deferred : undefined,
     { changed: !enabled },
   );

@@ -122,6 +122,7 @@ export class ShellOwner
   routeOutlet?: ControlUiReadinessOutlet;
   terminalPanel?: HTMLElement & { readonly available?: boolean };
   navDrawerElement?: HTMLElement;
+  navBackdropElement?: HTMLElement;
   contentElement?: HTMLElement;
   toastElement?: HTMLElement;
   // Desktop and modal navigation are two slots for the same live sidebar.

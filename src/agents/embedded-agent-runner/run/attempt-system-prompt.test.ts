@@ -14,6 +14,8 @@ import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
+import * as referencePaths from "../../docs-path.js";
+import * as runtimePrompt from "../../runtime-prompt.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { ToolSearchCatalogRef } from "../../tool-search-types.js";
@@ -461,6 +463,99 @@ describe("buildAttemptSystemPrompt", () => {
     expect(result.runtimeChannel).toBeUndefined();
     expect(getProviderRuntimeHandle).not.toHaveBeenCalled();
     expect(markStage).toHaveBeenCalledWith("system-prompt");
+  });
+
+  it.each([
+    {
+      label: "detached model run",
+      modelRun: true,
+      detached: true,
+      disableTools: true,
+      ambient: false,
+    },
+    {
+      label: "detached prompt-none run",
+      promptMode: "none" as const,
+      detached: true,
+      disableTools: true,
+      ambient: false,
+    },
+    {
+      label: "durable raw run",
+      modelRun: true,
+      detached: false,
+      disableTools: true,
+      ambient: true,
+    },
+    { label: "detached ordinary run", detached: true, disableTools: true, ambient: true },
+    {
+      label: "detached tool-capable raw run",
+      modelRun: true,
+      detached: true,
+      disableTools: false,
+      ambient: true,
+    },
+  ])("prepares only the required ambient context for $label", async (mode) => {
+    const resolveRuntime = vi.spyOn(runtimePrompt, "resolveAgentRuntimePrompt");
+    const resolveReferences = vi.spyOn(referencePaths, "resolveOpenClawReferencePaths");
+    const config = {};
+    const attempt = {
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      model: makeProviderModelFixture({
+        id: "gpt-5.6-luna",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+      config,
+      admittedRunContext: await admitPrompt(config),
+      runId: "raw-prompt-run",
+      sessionId: "raw-prompt",
+      sessionKey: "agent:main:raw-prompt",
+      sessionPersistence: mode.detached ? "detached" : "durable",
+      modelRun: mode.modelRun,
+      promptMode: mode.promptMode,
+      disableTools: mode.disableTools,
+    } satisfies Parameters<typeof prepareEmbeddedAttemptSystemPrompt>[0]["attempt"];
+    const getProviderRuntimeHandle = vi.fn(() => ({
+      provider: attempt.provider,
+      modelId: attempt.modelId,
+      prepared: true as const,
+    }));
+    const prepared = await prepareEmbeddedAttemptSystemPrompt({
+      attempt,
+      activeContextEngine: undefined,
+      bootstrap: {
+        ...buildBootstrapBudgetState({ files: [] }),
+        bootstrapMode: "full",
+        contextFiles: [],
+        bootstrapInjectionStats: [],
+        shouldRecordCompletedBootstrapTurn: false,
+        workspaceNotes: [],
+      },
+      setup: createAttemptSetupFixture({ getProviderRuntimeHandle }),
+      capabilityToolNames: new Set(),
+      effectiveTools: [],
+      isRawModelRun: mode.modelRun === true || mode.promptMode === "none",
+      modelToolsEnabled: true,
+      skillsPrompt: "",
+      toolSearchDirectoryEnabled: false,
+      toolSearchRuntimeConfig: config,
+    });
+
+    if (mode.ambient) {
+      expect(resolveRuntime).toHaveBeenCalledOnce();
+      expect(resolveReferences).toHaveBeenCalledOnce();
+      expect(prepared.systemPromptReport).toBeDefined();
+    } else {
+      expect(resolveRuntime).not.toHaveBeenCalled();
+      expect(resolveReferences).not.toHaveBeenCalled();
+      expect(getProviderRuntimeHandle).not.toHaveBeenCalled();
+      expect(prepared.systemPromptText).toBe("");
+      expect(prepared.systemPromptReport).toBeUndefined();
+      expect(prepared.runtimeInfo).toEqual({ model: "openai/gpt-5.6-luna" });
+    }
   });
 
   it.each(["/tmp/open\u202eclaw\n"])(

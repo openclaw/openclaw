@@ -79,10 +79,9 @@ describe("nostr-profile-import", () => {
         const resultPromise = importProfileFromRelays({
           pubkey,
           relays: ["wss://slow.example"],
-          timeoutMs: 25,
         });
 
-        await vi.advanceTimersByTimeAsync(25);
+        await vi.advanceTimersByTimeAsync(10_000);
 
         await expect(resultPromise).resolves.toMatchObject({
           ok: false,

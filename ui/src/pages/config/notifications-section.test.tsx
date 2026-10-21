@@ -3,9 +3,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../../src/shared/deferred.ts";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { NotificationsSection } from "./notifications-section.tsx";
 
 const userPreferences = {
@@ -58,6 +60,31 @@ function select(container: Element, label: string) {
 }
 
 describe("native notification test outcome", () => {
+  it("keeps the send affordance pending until the command settles", async () => {
+    const completion = createDeferredCore<undefined>();
+    const onSend = vi.fn(() => completion.promise);
+    const { container } = renderSection({
+      nativeNotifications: { permission: "granted", test: null },
+      onNativeNotificationsSendTest: onSend,
+    });
+    const button = expectDefined(container.querySelector<HTMLButtonElement>("button"), "send");
+    button.click();
+    flush();
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toContain("Sending test");
+    expect(container.querySelector(".settings-status--accent")?.textContent).toContain(
+      "Sending test",
+    );
+    expect(container.textContent).toContain("Test notification");
+    button.click();
+    expect(onSend).toHaveBeenCalledTimes(1);
+    completion.resolve(undefined);
+    await waitForSolid(() => {
+      expect(button.disabled).toBe(false);
+      expect(button.textContent).toContain("Send test");
+    });
+  });
+
   it("renders pending immediately and disables duplicate sends", () => {
     const onSend = vi.fn();
     const { container } = renderSection({
@@ -119,8 +146,17 @@ describe("Web Push preference saves", () => {
     });
   });
 
-  it("disables every preference control while a save is in flight", () => {
-    const { container } = renderSection({ webPush: webPush(true) });
+  it("disables every preference control while the admitted save is in flight", async () => {
+    const completion = createDeferred();
+    const view = renderSection({
+      webPush: webPush(),
+      onWebPushSetUserPreferences: () => completion.promise,
+    });
+    const { container } = view;
+    view.getByRole("switch", { name: "Someone mentions me" }).click();
+    await waitForSolid(() =>
+      expect(container.querySelector(".settings-stack")?.hasAttribute("inert")).toBe(true),
+    );
 
     expect(container.querySelector(".settings-page .settings-page")).toBeNull();
     const group = expectDefined(
@@ -129,6 +165,64 @@ describe("Web Push preference saves", () => {
     );
     expect(group.querySelector("input, select")).not.toBeNull();
     expect(group.hasAttribute("inert")).toBe(true);
+    completion.resolve();
+    await waitForSolid(() =>
+      expect(container.querySelector(".settings-stack")?.hasAttribute("inert")).toBe(false),
+    );
+  });
+});
+
+describe("Web Push native read boundaries", () => {
+  it("retires a rejected read when a replacement finishes", async () => {
+    const failed = createDeferred();
+    const replacement = createDeferred();
+    const [current, setCurrent] = createSignal({ ...webPush(), read: failed.promise });
+    const { container } = renderSection({
+      get webPush() {
+        return current();
+      },
+    });
+    expect(container.querySelector(".settings-stack")).toBeNull();
+    failed.reject(new Error("Example preferences unavailable"));
+    await waitForSolid(() =>
+      expect(container.textContent).toContain("Example preferences unavailable"),
+    );
+    setCurrent({ ...webPush(), read: replacement.promise });
+    flush();
+    replacement.resolve();
+    await waitForSolid(() => expect(container.querySelector(".settings-stack")).not.toBeNull());
+    expect(container.textContent).not.toContain("Example preferences unavailable");
+  });
+});
+
+describe("Web Push command presentation", () => {
+  it("keeps settings available after an admitted command rejects", async () => {
+    const completion = createDeferred();
+    const initial = webPush();
+    const [current, setCurrent] = createSignal(initial);
+    const view = renderSection({
+      get webPush() {
+        return current();
+      },
+      onWebPushTest: () => {
+        setCurrent({ ...initial, loading: true });
+        void completion.promise.catch(() =>
+          setCurrent({ ...initial, command: completion.promise }),
+        );
+        return completion.promise;
+      },
+    });
+    const send = view.getByRole("button", { name: "Send test" });
+    send.click();
+    await waitForSolid(() => expect(send.hasAttribute("disabled")).toBe(true));
+    completion.reject(new Error("Example notification service is unavailable."));
+    await waitForSolid(() =>
+      expect(view.container.textContent).toContain("Example notification service is unavailable."),
+    );
+    expect(view.container.textContent).toContain("Browser support");
+    expect(view.container.querySelectorAll(".cfg-field__error")).toHaveLength(1);
+    expect(view.getByRole("button", { name: "Send test" }).hasAttribute("disabled")).toBe(false);
+    expect(view.container.querySelector(".settings-stack")?.hasAttribute("inert")).toBe(false);
   });
 });
 

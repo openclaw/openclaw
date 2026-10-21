@@ -3,11 +3,15 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { useAuthBridgeFixture } from "./codex-auth-bridge.test-support.js";
 import { splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
+
+vi.mock("@openclaw/fs-safe/json", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/json")>()),
+}));
 
 const execFileAsync = promisify(execFile);
 const baseFixture = useAuthBridgeFixture();
@@ -22,11 +26,7 @@ function fixture() {
     configPath: (dir = stateDir) => path.join(dir, "acpx", "codex-home", "config.toml"),
     wrapperPath: (agent = "codex") => path.join(stateDir, "acpx", `${agent}-acp-wrapper.mjs`),
     prepare: (pluginConfig = config(), dir = stateDir, bin?: string) =>
-      prepare({
-        pluginConfig,
-        stateDir: dir,
-        resolveInstalledCodexAcpBinPath: async () => bin,
-      }),
+      prepare({ pluginConfig, stateDir: dir }, bin),
   };
 }
 
@@ -162,14 +162,13 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
   });
 
   it("normalizes an explicitly configured Claude ACP npx command to the local wrapper", async () => {
-    const { root, stateDir, config, wrapperPath } = fixture();
+    const { stateDir, config, wrapperPath } = fixture();
     const resolved = await prepareAcpxCodexAuthConfig({
       pluginConfig: config(
         "npx -y @agentclientprotocol/claude-agent-acp@0.31.4 --permission-mode bypass",
         "claude",
       ),
       stateDir,
-      resolveInstalledClaudeAcpBinPath: async () => path.join(root, "claude-agent-acp.js"),
     });
 
     expectWrapperCommand(resolved.agents.claude, wrapperPath("claude-agent"));

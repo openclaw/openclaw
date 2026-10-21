@@ -120,12 +120,11 @@ export async function resolveClickClackInboundAccess(params: {
       : { chatType: "group", kind: "channel", id: routingMessage.channel_id ?? "" },
   );
   const routingConfig = routeConfig as OpenClawConfig;
-  const accountRuntime = getClickClackRuntime();
   const peer: RoutePeer = {
     kind: isDirect ? "direct" : "channel",
     id: target,
   };
-  let accountRoute: ResolvedAgentRoute = accountRuntime.channel.routing.resolveAgentRoute({
+  let accountRoute: ResolvedAgentRoute = routeRuntime.channel.routing.resolveAgentRoute({
     cfg: routingConfig,
     channel: CHANNEL_ID,
     accountId: routingAccount.accountId,
@@ -136,7 +135,7 @@ export async function resolveClickClackInboundAccess(params: {
     const dmScope = routingConfig.session?.dmScope ?? "main";
     // Account-level agent ownership changes only the agent prefix. Preserve the
     // resolved session policy so outbound recipient routing reaches this key.
-    const sessionKey = accountRuntime.channel.routing.buildAgentSessionKey({
+    const sessionKey = routeRuntime.channel.routing.buildAgentSessionKey({
       agentId,
       mainKey: routingConfig.session?.mainKey,
       channel: CHANNEL_ID,
@@ -145,7 +144,7 @@ export async function resolveClickClackInboundAccess(params: {
       dmScope,
       identityLinks: routingConfig.session?.identityLinks,
     });
-    const mainSessionKey = accountRuntime.channel.routing.buildAgentSessionKey({
+    const mainSessionKey = routeRuntime.channel.routing.buildAgentSessionKey({
       agentId,
       mainKey: routingConfig.session?.mainKey,
       channel: CHANNEL_ID,
@@ -350,6 +349,7 @@ export async function resolveClickClackInboundAccess(params: {
       ? {
           cfg,
           modeWhenAccessGroupsOff: "configured",
+          hasControlCommand: runtime.channel.text.hasControlCommand(params.message.body, cfg),
         }
       : false,
   });
@@ -435,7 +435,7 @@ export async function resolveClickClackInboundAccess(params: {
           }),
         hasControlCommand:
           shouldCheckCommand &&
-          runtime.channel.commands.shouldComputeCommandAuthorized(params.message.body, currentCfg),
+          runtime.channel.text.hasControlCommand(params.message.body, currentCfg),
         commandAuthorized: resolved.commandAccess.authorized,
       },
     }).shouldSkip;

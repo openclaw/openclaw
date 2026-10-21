@@ -580,6 +580,110 @@ it("refreshes update status once when the page becomes active", async () => {
   await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledTimes(2));
 });
 
+it("presents initial and manual update status reads without hiding policy controls", async () => {
+  const initial = deferred<boolean>();
+  const manual = deferred<boolean>();
+  const refreshUpdateStatus = vi
+    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
+    .mockReturnValueOnce(initial.promise)
+    .mockReturnValueOnce(manual.promise);
+  const context = configContext({
+    gateway: connectedGateway(["update.status"]),
+    overlays: {
+      refreshUpdateStatus,
+      snapshot: {
+        updateStatusBanner: { source: "read", tone: "warn", text: "Recorded update status" },
+      },
+    },
+  });
+  const { container } = mountConfigPage(context, { pageId: "updates" });
+  const status = () => container.querySelector(".settings-status")?.textContent;
+  await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
+  expect(container.querySelectorAll('input[role="switch"]')).toHaveLength(2);
+  expect(refreshUpdateStatus).toHaveBeenCalledOnce();
+
+  initial.resolve(true);
+  await waitForSolid(() => expect(status()).toContain("Recorded update status"));
+  const check = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Check status",
+  )!;
+  check.click();
+  await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
+  expect(check.disabled).toBe(true);
+  manual.resolve(false);
+  await waitForSolid(() => {
+    expect(status()).toContain("Recorded update status");
+    expect(check.disabled).toBe(false);
+  });
+  expect(container.querySelector(".updates-status-check-failed")).toBeNull();
+  expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+});
+
+it("retires an update status receipt when the page leaves and re-enters", async () => {
+  const first = deferred<boolean>();
+  const second = deferred<boolean>();
+  const refreshUpdateStatus = vi
+    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
+    .mockReturnValueOnce(first.promise)
+    .mockReturnValueOnce(second.promise);
+  const context = configContext({
+    gateway: connectedGateway(["update.status"]),
+    overlays: {
+      refreshUpdateStatus,
+      snapshot: { updateStatusBanner: { tone: "warn", text: "Current update status" } },
+    },
+  });
+  const view = mountConfigPage(context, { pageId: "updates" });
+  const status = () => view.container.querySelector(".settings-status")?.textContent;
+  await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
+  view.update({ pageId: "advanced" });
+  view.update({ pageId: "updates" });
+  expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+  first.resolve(false);
+  await waitForSolid(() => expect(status()).toContain("Checking for updates…"));
+  second.resolve(true);
+  await waitForSolid(() => expect(status()).toContain("Current update status"));
+});
+
+it("retries a rejected update status read without hiding policy controls", async () => {
+  const failed = deferred<boolean>();
+  const retried = deferred<boolean>();
+  const refreshUpdateStatus = vi
+    .fn<ApplicationContext["overlays"]["refreshUpdateStatus"]>()
+    .mockReturnValueOnce(failed.promise)
+    .mockReturnValueOnce(retried.promise);
+  const context = configContext({
+    gateway: connectedGateway(["update.status"]),
+    overlays: {
+      refreshUpdateStatus,
+      snapshot: { updateStatusBanner: { tone: "warn", text: "Current update status" } },
+    },
+  });
+  const { container } = mountConfigPage(context, { pageId: "updates" });
+  await waitForSolid(() => expect(refreshUpdateStatus).toHaveBeenCalledOnce());
+  failed.reject(new Error("Synthetic status read failed"));
+  await waitForSolid(() =>
+    expect(container.querySelector(".updates-status-check-failed")?.textContent).toContain(
+      "Synthetic status read failed",
+    ),
+  );
+  expect(container.querySelectorAll('input[role="switch"]')).toHaveLength(2);
+  container.querySelector<HTMLButtonElement>(".updates-status-check-failed button")!.click();
+  await waitForSolid(() => {
+    expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".settings-status")?.textContent).toContain(
+      "Checking for updates…",
+    );
+  });
+  retried.resolve(true);
+  await waitForSolid(() => {
+    expect(container.querySelector(".settings-status")?.textContent).toContain(
+      "Current update status",
+    );
+    expect(container.querySelector(".updates-status-check-failed")).toBeNull();
+  });
+});
+
 it("stages policy changes through patchForm and confirms Update now before overlays", async () => {
   const patchForm = vi.fn();
   const updateActions = {

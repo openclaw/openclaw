@@ -15,6 +15,7 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import {
   createUpdatesViewDom,
+  nativeSettings,
   createUpdatesViewProps as createProps,
   type UpdatesViewOverrides,
 } from "./updates.test-support.ts";
@@ -73,30 +74,15 @@ function waitingUpdate(campaign: Pick<Campaign, "forceAtMs"> & Partial<Campaign>
   } satisfies NonNullable<UpdatesViewOverrides["update"]>;
 }
 
-function nativeSettings(snapshot: NativeDeviceSettingsCapability["snapshot"]) {
-  return {
-    snapshot,
-    subscribe: () => () => undefined,
-    set: vi.fn(),
-    requestPermission: vi.fn(),
-    openSystemSettings: vi.fn(),
-    openPanel: vi.fn(),
-    checkForUpdates: vi.fn(),
-    setupChromeExtension: vi.fn(),
-    refresh: vi.fn(),
-    dispose: vi.fn(),
-  } satisfies NativeDeviceSettingsCapability;
-}
-
 describe("renderUpdates", () => {
   it.each(["Update now", "Retry update"])(
     "dispatches %s to the latest handler without replacing the button",
     (label) => {
-      const initial = vi.fn();
-      const replacement = vi.fn();
+      const initial = vi.fn(async () => undefined);
+      const replacement = vi.fn(async () => undefined);
       const [handler, setHandler] = createRoot((dispose) => {
         onTestFinished(dispose);
-        return createSignal<() => void>(() => initial);
+        return createSignal<() => Promise<void>>(() => initial);
       });
       const update = label === "Retry update" ? { updateRun: failedRun() } : undefined;
       mountUpdates(
@@ -349,7 +335,7 @@ describe("renderUpdates", () => {
     },
   );
 
-  it("keeps Mac updater controls native and available independently of Gateway admin access", () => {
+  it("keeps Mac updater controls native and available independently of Gateway admin access", async () => {
     const nativeListeners = new Set<Parameters<NativeDeviceSettingsCapability["subscribe"]>[0]>();
     const snapshot = createNativeDeviceSettingsSnapshot();
     const nativeDeviceSettings = {
@@ -370,7 +356,11 @@ describe("renderUpdates", () => {
     expect(automatic.hasAttribute("disabled")).toBe(false);
     automatic.checked = false;
     automatic.dispatchEvent(new Event("change"));
-    expect(nativeDeviceSettings.set).toHaveBeenCalledWith("updates.automatic", false);
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
+      "updates.automatic",
+      false,
+      expect.any(Function),
+    );
     row("Check for Updates…").querySelector("button")?.click();
     expect(nativeDeviceSettings.checkForUpdates).toHaveBeenCalledOnce();
     nativeDeviceSettings.snapshot = {
@@ -386,11 +376,13 @@ describe("renderUpdates", () => {
       listener(nativeDeviceSettings.snapshot);
     }
     flush();
-    expect(row("App version").textContent).toContain("2026.9.4 (build 43)");
+    await waitForSolid(() =>
+      expect(row("App version").textContent).toContain("2026.9.4 (build 43)"),
+    );
     expect(row("App updates unavailable").textContent).toContain("Updater is not bundled");
     expect(container.textContent).not.toContain("Check for updates automatically");
     renderUpdates();
-    expect(container.textContent).not.toContain("This Mac");
+    await waitForSolid(() => expect(container.textContent).not.toContain("This Mac"));
   });
 
   it("renders build facts, policy controls, status, and the shared update action", () => {
@@ -562,8 +554,7 @@ describe("renderUpdates", () => {
     const hold = row("Status").querySelector<HTMLButtonElement>("button");
     expect(hold?.textContent?.trim()).toBe("Hold 1 h");
     hold!.click();
-    flush();
-    expect(hold!.disabled).toBe(true);
+    await waitForSolid(() => expect(hold!.disabled).toBe(true));
     hold!.click();
     expect(onHoldUpdate).toHaveBeenCalledOnce();
     expect(row("Status").querySelector("[role='timer']")).toBe(timer);
@@ -585,8 +576,7 @@ describe("renderUpdates", () => {
     renderUpdates({ update: waitingUpdate({ forceAtMs: 762_000 }), onHoldUpdate });
     const hold = row("Status").querySelector<HTMLButtonElement>("button")!;
     hold.click();
-    flush();
-    expect(hold.disabled).toBe(true);
+    await waitForSolid(() => expect(hold.disabled).toBe(true));
 
     renderUpdates({
       update: waitingUpdate({ id: "campaign-2", forceAtMs: 762_000 }),
@@ -598,9 +588,8 @@ describe("renderUpdates", () => {
     await retired.promise;
     await waitForSolid(() => expect(replacement.disabled).toBe(false));
     replacement.click();
-    flush();
     expect(onHoldUpdate).toHaveBeenCalledTimes(2);
-    expect(replacement.disabled).toBe(true);
+    await waitForSolid(() => expect(replacement.disabled).toBe(true));
     current.resolve(false);
     await waitForSolid(() => expect(replacement.disabled).toBe(false));
   });

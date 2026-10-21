@@ -10,7 +10,6 @@ extensions/browser/src/browser/chrome-mcp.test.ts
 extensions/browser/src/browser/chrome.internal.test.ts
 extensions/browser/src/browser/chrome.ts
 extensions/browser/src/browser/extension-relay/relay-bridge.ts
-extensions/browser/src/browser/routes/agent.snapshot.ts
 extensions/codex/src/app-server/approval-bridge.ts
 extensions/codex/src/app-server/auth-bridge.test.ts
 extensions/codex/src/app-server/auth-bridge.ts
@@ -39,7 +38,6 @@ extensions/codex/src/conversation-binding.test.ts
 extensions/codex/src/migration/provider.test.ts
 extensions/codex/src/migration/session-binding-sidecars.ts
 extensions/codex/src/supervision-tools.ts
-extensions/comfy/workflow-runtime.ts
 extensions/copilot/harness.test.ts
 extensions/copilot/harness.ts
 extensions/copilot/src/attempt.test.ts
@@ -69,7 +67,6 @@ extensions/google-meet/index.test.ts
 extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
 extensions/google/transport-stream.test.ts
-extensions/google/transport-stream.ts
 extensions/imessage/src/actions.ts
 extensions/imessage/src/monitor.last-route.test.ts
 extensions/imessage/src/monitor/inbound-processing.ts

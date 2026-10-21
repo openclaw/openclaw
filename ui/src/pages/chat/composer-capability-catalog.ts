@@ -10,6 +10,21 @@ export function composerWebSearchBaseEnabled(config: Record<string, unknown> | n
   return asRecord(asRecord(asRecord(config?.tools)?.web)?.search)?.enabled !== false;
 }
 
+export function resolveComposerSkills(
+  skills: readonly ChatComposerMenuSkill[] | null,
+  toolOverrides: SessionToolOverrides | null | undefined,
+) {
+  return (
+    skills?.map((skill) => ({
+      ...skill,
+      enabled:
+        skill.missingDeps || skill.blocked
+          ? false
+          : (readOwnEntry(toolOverrides?.skills, skill.key) ?? skill.baseEnabled),
+    })) ?? null
+  );
+}
+
 function toComposerSkill(skill: SkillStatusEntry): ChatComposerMenuSkill {
   const missingDeps = Object.values(skill.missing).some((values) => values.length > 0);
   const blocked = skill.blockedByAllowlist || skill.blockedByAgentFilter;
@@ -27,7 +42,7 @@ function toComposerSkill(skill: SkillStatusEntry): ChatComposerMenuSkill {
 export class ComposerSkillCatalog {
   private readonly skills = new Map<string, ChatComposerMenuSkill[]>();
   private readonly loading = new Set<string>();
-  private readonly loadErrors = new Set<string>();
+  private readonly reads = new Map<string, Promise<readonly ChatComposerMenuSkill[] | null>>();
   private client: GatewayBrowserClient | null = null;
   private connectionEpoch: number | undefined;
 
@@ -41,7 +56,7 @@ export class ComposerSkillCatalog {
     this.connectionEpoch = connectionEpoch;
     this.skills.clear();
     this.loading.clear();
-    this.loadErrors.clear();
+    this.reads.clear();
   }
 
   load(
@@ -61,24 +76,26 @@ export class ComposerSkillCatalog {
     }
     const isCurrent = () =>
       this.client === client && this.connectionEpoch === connectionEpoch && isCurrentConnection();
-    this.loadErrors.delete(agentId);
     this.loading.add(agentId);
-    this.notify();
-    void loadSkillStatusReport(client, agentId)
+    const read = loadSkillStatusReport(client, agentId)
       .then((report) => {
-        if (report && isCurrent()) {
-          this.skills.set(
-            agentId,
-            report.skills
-              .map(toComposerSkill)
-              .toSorted((left, right) => left.name.localeCompare(right.name)),
-          );
+        if (!isCurrent()) {
+          return null;
         }
+        const skills =
+          report?.skills
+            .map(toComposerSkill)
+            .toSorted((left, right) => left.name.localeCompare(right.name)) ?? null;
+        if (skills) {
+          this.skills.set(agentId, skills);
+        }
+        return skills;
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (isCurrent()) {
-          this.loadErrors.add(agentId);
+          throw error;
         }
+        return null;
       })
       .finally(() => {
         if (isCurrent()) {
@@ -86,26 +103,17 @@ export class ComposerSkillCatalog {
           this.notify();
         }
       });
+    this.reads.set(agentId, read);
+    // The menu opens before a renderer observes this admitted read.
+    void read.catch(() => undefined);
+    this.notify();
+  }
+
+  read(agentId: string) {
+    return this.reads.get(agentId) ?? null;
   }
 
   rows(agentId: string, toolOverrides: SessionToolOverrides | null | undefined) {
-    return (
-      this.skills.get(agentId)?.map((skill) =>
-        Object.assign({}, skill, {
-          enabled:
-            skill.missingDeps || skill.blocked
-              ? false
-              : (readOwnEntry(toolOverrides?.skills, skill.key) ?? skill.baseEnabled),
-        }),
-      ) ?? null
-    );
-  }
-
-  isLoading(agentId: string): boolean {
-    return this.loading.has(agentId);
-  }
-
-  hasError(agentId: string): boolean {
-    return this.loadErrors.has(agentId);
+    return resolveComposerSkills(this.skills.get(agentId) ?? null, toolOverrides);
   }
 }

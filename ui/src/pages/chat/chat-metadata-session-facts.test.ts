@@ -2,7 +2,10 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import {
+  invalidateChatMetadataForSessionEvent,
+  invalidateChatMetadataStore,
+} from "../../lib/chat/chat-metadata-cache.ts";
 import { revalidateChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import {
   createGatewayHarness,
@@ -50,6 +53,39 @@ function metadataHost(
   onTestFinished(() => retireChatMetadataRequests(state));
   return { client, sessions, state, ...harness };
 }
+
+it("keeps unrelated chat metadata when deletion also refreshes the roster", async () => {
+  const row = sessionRow("agent:work:current", { agentId: "work" });
+  const request = makeRequestMock({
+    "chat.metadata": { commands: [] },
+    "models.list": { models: [] },
+    "sessions.describe": { session: row },
+  });
+  const { client, state } = metadataHost(request, row.key, {
+    sessionsResult: sessionsResult([row], 1),
+  });
+  await refreshChatMetadata(state);
+  request.mockClear();
+  // The deletion owner emits the exact removal followed by a broad roster notice.
+  for (const payload of [
+    { sessionKey: "agent:other:removed", agentId: "other", reason: "delete" },
+    { reason: "delete" },
+  ]) {
+    invalidateChatMetadataForSessionEvent(client, payload, {});
+  }
+  await refreshChatMetadata(state);
+  expect(requestCalls(request, "models.list")).toHaveLength(0);
+  expect(requestCalls(request, "sessions.describe")).toHaveLength(0);
+
+  invalidateChatMetadataForSessionEvent(
+    client,
+    { sessionKey: row.key, agentId: "work", reason: "delete" },
+    {},
+  );
+  await refreshChatMetadata(state);
+  expect(requestCalls(request, "models.list")).toHaveLength(1);
+  expect(requestCalls(request, "sessions.describe")).toHaveLength(1);
+});
 
 it.each(["agent:work:current", "global"])(
   "refreshes catalog-dependent facts for %s without reloading retained roster windows",

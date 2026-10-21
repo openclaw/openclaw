@@ -1661,7 +1661,7 @@ describe("doctor health contributions", () => {
       mocks.collectDiskSpaceHealthFindings,
       () => [makeWarningFinding("disk-space")],
       {},
-      { args: () => [] },
+      { args: (ctx: ReturnType<typeof lintContext>) => [ctx.env] },
     ),
     {
       id: "device-pairing",

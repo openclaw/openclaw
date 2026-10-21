@@ -21,8 +21,9 @@ import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
-import "../../../components/tooltip.ts";
 import { McpAppPanel } from "../../../components/solid/mcp-app-panel.tsx";
+import "../../../components/tooltip.ts";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import {
@@ -35,6 +36,7 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
+import { FileSessionMenu } from "./chat-file-session-menu.tsx";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import { SidebarAttachment } from "./chat-sidebar-attachment.tsx";
@@ -213,6 +215,11 @@ export function SidebarPanel(props: SidebarPanelProps) {
     >
       <div
         class="sidebar-panel"
+        data-file-entry-id={
+          props.content?.kind === "file"
+            ? props.content.sessionFileSource?.messageEntryId
+            : undefined
+        }
         data-file-session-key={
           props.content?.kind === "markdown"
             ? props.content.fileLinkSessionKey
@@ -239,7 +246,12 @@ export function SidebarPanel(props: SidebarPanelProps) {
           </div>
         </Show>
         <Show when={props.filePresentation === "mobile" && props.content?.kind === "image"}>
-          <SidebarFileMobileRail name={title()} identity={title()} back={props.fileBack} />
+          <SidebarFileMobileRail
+            name={title()}
+            identity={title()}
+            back={props.fileBack}
+            attachment={props.fileView?.fileAttachment}
+          />
         </Show>
         <div class={["sidebar-content", { "sidebar-file-mobile__body": mobileMedia() }]}>
           <Show
@@ -427,6 +439,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                       runtime={props.attachmentRuntime}
                       embedSandboxMode={props.embedSandboxMode ?? "scripts"}
                       download={props.attachmentDownload}
+                      attachment={props.fileView?.fileAttachment}
                       mobile={props.filePresentation === "mobile"}
                       back={props.fileBack}
                       onOpenImage={props.onOpenImage}
@@ -441,7 +454,11 @@ export function SidebarPanel(props: SidebarPanelProps) {
                       {(file) => (
                         <div class="sidebar-file-view__path-bar">
                           <div class="sidebar-file-view__path-field">
-                            <span class="sidebar-file-view__path" title={file().path}>
+                            <span
+                              ref={createTextOverflow(() => file().path)}
+                              class="sidebar-file-view__path"
+                              title={file().path}
+                            >
                               {file().path}
                             </span>
                             <CopyButton
@@ -459,6 +476,9 @@ export function SidebarPanel(props: SidebarPanelProps) {
                               download={(signal) => file().download(signal)}
                               class="btn btn--sm sidebar-file-view__action"
                             />
+                            <Show when={props.fileView?.fileAttachment}>
+                              <FileSessionMenu attachment={props.fileView?.fileAttachment} />
+                            </Show>
                             <Show when={props.fileView?.onReveal}>
                               <openclaw-tooltip prop:content={t("chat.detailPanel.showInFiles")}>
                                 <button

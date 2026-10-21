@@ -21,11 +21,14 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
-import { ChatDetailsProgress } from "./chat-details-progress.tsx";
 import "../../../styles/chat/details.css";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+const ChatDetailsProgress = lazy(() => import("./chat-details-progress.tsx"), {
+  export: "ChatDetailsProgress",
+});
 
 const ChatDetailsSession = lazy(() => import("./chat-details-session.tsx"), {
   export: "ChatDetailsSession",
@@ -613,19 +616,21 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                         <Show
                           when={props.chat?.progressCard || props.chat?.progressCardInitialLoading}
                         >
-                          <ChatDetailsProgress
-                            onHideProgress={() => {
-                              // The top-layer inspector must not cover the Undo toast.
-                              if (!docked()) {
-                                close(true);
-                              }
-                            }}
-                            menuRef={(menu) => {
-                              progressMenu = menu;
-                            }}
-                            props={props.chat}
-                            presented={isPresented() && opened()}
-                          />
+                          <Loading>
+                            <ChatDetailsProgress
+                              onHideProgress={() => {
+                                // The top-layer inspector must not cover the Undo toast.
+                                if (!docked()) {
+                                  close(true);
+                                }
+                              }}
+                              menuRef={(menu) => {
+                                progressMenu = menu;
+                              }}
+                              props={props.chat}
+                              presented={isPresented() && opened()}
+                            />
+                          </Loading>
                         </Show>
                       </>
                     }
