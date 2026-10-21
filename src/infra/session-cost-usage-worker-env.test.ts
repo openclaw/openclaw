@@ -186,6 +186,21 @@ it("inventories retained usage by transcript recency and logical agent after wri
       { sessionId: "second", mtimeMs: 2000 },
     ],
   });
+  // The smallest transcript is oldest: refresh priority is independent of inventory recency.
+  await expect(
+    run(prepared, {
+      kind: "refresh",
+      pricingFingerprint: await fingerprint(prepared.config, prepared.agentDir),
+      maxFiles: 1,
+    }),
+  ).resolves.toMatchObject({
+    kind: "refresh",
+    changed: true,
+    remainingFiles: [
+      { sessionFile: expect.stringContaining(":first:") },
+      { sessionFile: expect.stringContaining(":second:") },
+    ],
+  });
   appendUsage("main", "old", "agent:main:old", 4000);
   await expect(run(prepared, { kind: "inventory", minMtimeMs: 2000 })).resolves.toMatchObject({
     kind: "inventory",
