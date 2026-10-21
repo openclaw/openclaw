@@ -433,10 +433,10 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
             {(option) => {
               let inputElement: HTMLInputElement;
               onSettled(() => {
-                const value = option().value;
-                inputs.set(value, inputElement);
-                props.inputRef?.(value, inputElement);
-                return () => inputs.delete(value);
+                const initialValue = option().value;
+                inputs.set(initialValue, inputElement);
+                props.inputRef?.(initialValue, inputElement);
+                return () => inputs.delete(initialValue);
               });
               return (
                 <label

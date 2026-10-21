@@ -110,7 +110,11 @@ it("registers keyed radio refs without untracked reads and retains focused input
   expect(inputRef).toHaveBeenCalledTimes(3);
   expect(inputRef).toHaveBeenCalledWith("last", last);
   last.focus();
-  setChoices(choices().map((option) => ({ ...option, label: `${option.label} updated` })));
+  setChoices([
+    { value: "first", label: "First updated" },
+    { value: "middle", label: "Middle updated" },
+    { value: "last", label: "Last updated" },
+  ]);
   flush();
   last.click();
   flush();
