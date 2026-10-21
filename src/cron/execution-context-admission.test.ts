@@ -420,6 +420,36 @@ describe("occurrence pause", () => {
     occurrence.release();
   });
 
+  it("hands a child run its current parent's row and sandbox requirement", async () => {
+    const parentEntry = {
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+      sandbox: "required" as const,
+    };
+    readSessionEntryInWorker.mockResolvedValue(parentEntry);
+    const occurrence = await admit(linked);
+    expect(occurrence.childParent).toEqual({
+      binding: { sessionKey: PARENT_KEY, entry: parentEntry },
+      sandbox: "required",
+    });
+    occurrence.release();
+  });
+
+  it("leaves an in-session job's own binding to the session it runs in", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+    });
+    const occurrence = await admit({ ...linked, sessionTarget: `session:${PARENT_KEY}` });
+    expect(occurrence.childParent).toBeUndefined();
+    occurrence.release();
+  });
+
+  it("hands no binding to a reset parent's unbound run", async () => {
+    readSessionEntryInWorker.mockResolvedValue({ sessionId: "new-session" });
+    expect((await admit(linked)).childParent).toBeUndefined();
+  });
+
   it("never pauses on a failed read", async () => {
     readSessionEntryInWorker.mockRejectedValue(new Error("worker unavailable"));
     expect((await admit(linked)).pause).toBeUndefined();

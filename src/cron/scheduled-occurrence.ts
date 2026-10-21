@@ -5,6 +5,7 @@
  * core can import it.
  */
 import type { OperationalRunInstanceRef } from "../agents/operational-run-instance.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ScheduledExecutionContextResult,
@@ -41,6 +42,12 @@ export type MintedScheduledExecution = Readonly<{
 export type ScheduledOccurrence = Readonly<{
   /** Set when the exact parent is removed or archived, or its bound worktree is gone. */
   pause?: CronParentUnavailable;
+  /** A child run's parent row, read once by the admission; its persisted binding selects the child's workspace. */
+  childParent?: Readonly<{
+    binding: Readonly<{ sessionKey: string; entry: SessionEntry }>;
+    /** Set when the parent row requires a sandbox. */
+    sandbox?: "required";
+  }>;
   mint: (run: ScheduledOccurrenceRun) => MintedScheduledExecution;
   /** Releases the parent generation; the occurrence owner calls it once the occurrence settles. */
   release: () => void;

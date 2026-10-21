@@ -74,14 +74,18 @@ it.each([
   "managed-escape",
   "managed-foreign-owner",
   "managed-manual-owner",
+  "isolated-child",
+  "isolated-child-managed",
 ] as const)("scheduled file access respects %s conversation workspace", async (scenario) => {
+  // An isolated job created in a conversation is its child and runs in that conversation's binding.
+  const isolatedChild = scenario.startsWith("isolated-child");
   const foreignWorkspace = tempDirs.make("cron-foreign-workspace-");
   const foreignKey = "agent:main:dashboard:another-person";
   const targetKey = scenario === "foreign" || scenario === "operator" ? foreignKey : SESSION;
   const config = await prepareAuthorityConfig({
     tools: { allow: [AUTOMATIONS_TOOL_NAME, "read", "write"], fs: { workspaceOnly: true } },
   });
-  const managedRoot = scenario.startsWith("managed")
+  const managedRoot = scenario.includes("managed")
     ? tempDirs.make("cron-managed-workspace-")
     : undefined;
   const worktree = managedRoot
@@ -95,7 +99,9 @@ it.each([
         now: Date.now(),
       })
     : undefined;
-  const ownWorkspace = worktree?.path ?? stateDir;
+  const ownWorkspace =
+    worktree?.path ??
+    (scenario === "isolated-child" ? tempDirs.make("cron-parent-workspace-") : stateDir);
   await fs.writeFile(path.join(stateDir, "sentinel.txt"), "DEFAULT_WORKSPACE");
   await fs.writeFile(path.join(ownWorkspace, "sentinel.txt"), "OWN_WORKSPACE");
   await fs.writeFile(path.join(foreignWorkspace, "sentinel.txt"), "FOREIGN_WORKSPACE");
@@ -140,7 +146,7 @@ it.each([
     name: `Workspace authority ${scenario}`,
     enabled: false,
     schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: `session:${targetKey}`,
+    sessionTarget: isolatedChild ? "isolated" : `session:${targetKey}`,
     payload: { kind: "agentTurn", message: "Read sentinel.txt", toolsAllow: ["read"] },
     delivery: { mode: "none" },
   };
@@ -183,6 +189,9 @@ it.each([
   if (scenario !== "operator") {
     expect(job.owner?.sessionKey).toBe(SESSION);
   }
+  if (isolatedChild) {
+    expect(job.sourceConversation?.sessionKey).toBe(SESSION);
+  }
   if (scenario === "archived") {
     replaceSessionEntrySync({ sessionKey: SESSION }, { ...creatorEntry, archivedAt: Date.now() });
   }
@@ -210,7 +219,7 @@ it.each([
         }
         return { payloads: [{ text: "Read complete" }], meta: { agentMeta: {} } };
       },
-      { sessionKey: targetKey },
+      isolatedChild ? {} : { sessionKey: targetKey },
     ),
   );
   const execution = createAuthorityCronService(config, runCronIsolatedAgentTurn);
