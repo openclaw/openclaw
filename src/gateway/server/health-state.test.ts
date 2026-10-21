@@ -75,10 +75,8 @@ async function loadHealthState() {
   vi.resetModules();
   collectGatewayHealthSnapshotMock.mockReset();
   collectGatewayHealthSnapshotMock.mockResolvedValue(createHealthSummary());
-  getUpdateAvailableMock.mockReset();
-  getUpdateAvailableMock.mockReturnValue(null);
-  getUpdateScheduleMock.mockReset();
-  getUpdateScheduleMock.mockReturnValue(null);
+  getUpdateAvailableMock.mockReset().mockReturnValue(null);
+  getUpdateScheduleMock.mockReset().mockReturnValue(null);
   getRuntimeConfigMock.mockReset().mockReturnValue({ agents: { entries: { main: {} } } });
   return await import("./health-state.js");
 }
@@ -186,39 +184,30 @@ describe("buildGatewaySnapshot update metadata", () => {
     }
   });
 
-  it("omits the schedule and projects legacy availability without update detail access", async () => {
+  it.each([false, true])("projects availability and schedule with update details=%s", (details) => {
     getUpdateAvailableMock.mockReturnValue(updateAvailable);
     getUpdateScheduleMock.mockReturnValue(updateSchedule);
 
     const snapshot = healthState.buildGatewaySnapshot({
       client: null,
-      includeUpdateDetails: false,
+      includeUpdateDetails: details,
       revisionProjector,
     });
 
-    expect(snapshot.updateAvailable).toEqual({
-      currentVersion: "2026.8.7",
-      latestVersion: "2026.8.8",
-      channel: "dev",
-    });
-    expect(snapshot.updateSchedule).toBeUndefined();
+    if (details) {
+      expect(snapshot.updateAvailable).toBe(updateAvailable);
+      expect(snapshot.updateSchedule).toBe(updateSchedule);
+    } else {
+      expect(snapshot.updateAvailable).toEqual({
+        currentVersion: "2026.8.7",
+        latestVersion: "2026.8.8",
+        channel: "dev",
+      });
+      expect(snapshot.updateSchedule).toBeUndefined();
+      expect(getUpdateScheduleMock).not.toHaveBeenCalled();
+    }
     expect(snapshot.sessionDefaults).toMatchObject({ ownership: "sole", selectionRequired: false });
     expect(snapshot.appliedConfigHash).toBe("resolved-token:internal-applied-hash");
-    expect(getUpdateScheduleMock).not.toHaveBeenCalled();
-  });
-
-  it("includes the full update availability and schedule with update detail access", async () => {
-    getUpdateAvailableMock.mockReturnValue(updateAvailable);
-    getUpdateScheduleMock.mockReturnValue(updateSchedule);
-
-    const snapshot = healthState.buildGatewaySnapshot({
-      client: null,
-      includeUpdateDetails: true,
-      revisionProjector,
-    });
-
-    expect(snapshot.updateAvailable).toBe(updateAvailable);
-    expect(snapshot.updateSchedule).toBe(updateSchedule);
   });
 });
 
@@ -439,16 +428,15 @@ describe("refreshGatewayHealthSnapshot", () => {
   ])(
     "publishes current event-loop health after collection ($includeSensitive, $reset)",
     async ({ includeSensitive, reset }) => {
-      const initial = {
+      const initial = eventLoopHealth({
         degraded: true,
         degradedSinceMs: 61_000,
-        reasons: ["event_loop_delay" as const],
+        reasons: ["event_loop_delay"],
         intervalMs: 2_000,
         delayP99Ms: 1_500,
         delayMaxMs: 1_700,
         utilization: 0.2,
-        cpuCoreRatio: 0.1,
-      };
+      });
       let current: GatewayEventLoopHealth | undefined = initial;
       const pending = await startRefresh({
         probe: true,
@@ -511,19 +499,11 @@ describe("refreshGatewayHealthSnapshot", () => {
       },
     });
 
-    expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledTimes(2);
-    expect(
-      collectGatewayHealthSnapshotMock.mock.calls
-        .map((_call, index) => healthSnapshotCallArg(index)?.probe)
-        .toSorted((a, b) => Number(a) - Number(b)),
-    ).toEqual([false, true]);
-    expect(
-      collectGatewayHealthSnapshotMock.mock.calls.map(
-        (_call, index) => healthSnapshotCallArg(index)?.audience,
-      ),
-    ).toEqual(["public", "public"]);
+    expect(collectGatewayHealthSnapshotMock.mock.calls).toMatchObject([
+      [{ probe: false, audience: "public", runtimeSnapshot }],
+      [{ probe: true, audience: "public", runtimeSnapshot: undefined }],
+    ]);
     expect(healthSnapshotCallArg()?.runtimeSnapshot).toBe(runtimeSnapshot);
-    expect(healthSnapshotCallArg(1)?.runtimeSnapshot).toBeUndefined();
   });
 
   it("keeps strength-aware admin and public refresh lanes isolated", async () => {
