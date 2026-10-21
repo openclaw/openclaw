@@ -163,14 +163,35 @@ export function areSessionCatalogsSettled(
 }
 
 function visibleSessionCatalogClient(owner: SessionCatalogDataOwner): GatewayBrowserClient | null {
-  if (document.visibilityState === "hidden") {
+  if (document.visibilityState === "hidden" || !owner.sessionCatalogRowsVisible) {
     return null;
   }
   return owner.sessionCatalogGatewayClient();
 }
 
-function refreshSessionCatalogsInBackground(owner: SessionCatalogDataOwner): Promise<void> {
+/** Hosts whose catalogs show no rows yet and still have a page to discover. */
+function sessionCatalogDiscoveryPages(owner: SessionCatalogDataOwner) {
+  const hiddenIds = new Set(owner.sessionCatalogIdsWithoutVisibleRows());
+  return owner.sessionCatalogs.flatMap((catalog) => {
+    if (!hiddenIds.has(catalog.id) || catalog.pending || catalog.error) {
+      return [];
+    }
+    const hostIds = catalog.hosts
+      .filter((host) => host.nextCursor && !host.pending && !host.error)
+      .map((host) => host.hostId);
+    return hostIds.length > 0 ? [{ catalogId: catalog.id, hostIds }] : [];
+  });
+}
+
+function refreshSessionCatalogsInBackground(
+  owner: SessionCatalogDataOwner,
+  admitted = () => Boolean(visibleSessionCatalogClient(owner)),
+): Promise<void> {
   const context = owner.context;
+  if (!admitted()) {
+    owner.sessionCatalogLive.skipHiddenRefresh();
+    return Promise.resolve();
+  }
   const scope = owner.sessionCatalogLive.refreshScope;
   return context.connectionBootstrap.run(
     scope,
@@ -180,7 +201,11 @@ function refreshSessionCatalogsInBackground(owner: SessionCatalogDataOwner): Pro
         owner.sessionCatalogLive.refreshScope === scope &&
         owner.isSessionDataHostConnected
       ) {
-        await owner.refreshSessionCatalogs();
+        if (admitted()) {
+          await owner.refreshSessionCatalogs();
+        } else {
+          owner.sessionCatalogLive.skipHiddenRefresh();
+        }
       }
     },
     { background: true },
@@ -227,8 +252,9 @@ export function resolveSessionCatalogAgentId(owner: SessionCatalogDataOwner): st
 }
 
 export function scheduleSessionCatalogRefresh(owner: SessionCatalogDataOwner): void {
-  if (!visibleSessionCatalogClient(owner)) {
-    owner.sessionCatalogLive.cancelScheduledRefreshes();
+  const visible = Boolean(visibleSessionCatalogClient(owner));
+  owner.sessionCatalogLive.setVisible(visible);
+  if (!visible) {
     return;
   }
   owner.sessionCatalogLive.scheduleActivation(() => requestSessionCatalogRefresh(owner));
@@ -236,7 +262,7 @@ export function scheduleSessionCatalogRefresh(owner: SessionCatalogDataOwner): v
 
 function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): Promise<void> {
   return owner.sessionCatalogLive.requestRefresh({
-    visible: document.visibilityState !== "hidden",
+    visible: Boolean(visibleSessionCatalogClient(owner)),
     connected:
       owner.isSessionDataHostConnected &&
       owner.sessionCatalogAgentId !== null &&
@@ -248,14 +274,20 @@ function requestSessionCatalogRefresh(owner: SessionCatalogDataOwner): Promise<v
 
 export function updateSessionCatalogData(owner: SessionCatalogDataOwner): void {
   owner.synchronizeSessionScope();
-  if (
-    !visibleSessionCatalogClient(owner) ||
-    owner.sessionCatalogLive.hasRequested ||
-    owner.sessionCatalogLive.requestGeneration === owner.sessionScopeGeneration
-  ) {
+  const live = owner.sessionCatalogLive;
+  const reopened = live.setVisible(Boolean(visibleSessionCatalogClient(owner)));
+  if (live.hasRequested || live.requestGeneration === owner.sessionScopeGeneration) {
+    if (reopened && live.hasRequested) {
+      live.resume(owner.isSessionDataHostConnected, () => requestSessionCatalogRefresh(owner));
+    }
     return;
   }
-  void refreshSessionCatalogsInBackground(owner);
+  // The first read also fills a collapsed panel, so its rows do not shift in on
+  // opening; only follow-up polling waits for the rows to be shown.
+  void refreshSessionCatalogsInBackground(
+    owner,
+    () => document.visibilityState !== "hidden" && Boolean(owner.sessionCatalogGatewayClient()),
+  );
 }
 
 export function applySessionCatalogHostEvent(
@@ -287,6 +319,11 @@ async function replayFreshSessionCatalogHost(
   const client = owner.sessionCatalogGatewayClient();
   const agentId = owner.sessionCatalogAgentId;
   if (!client || !agentId) {
+    return;
+  }
+  if (!visibleSessionCatalogClient(owner)) {
+    // Keep the published window; reopening replays expanded pages once.
+    owner.sessionCatalogLive.skipHiddenRefresh();
     return;
   }
   const generation = owner.sessionScopeGeneration;
@@ -350,7 +387,9 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
   // Hidden pages resume through the coalesced visibility handler.
   owner.synchronizeSessionScope();
   const agentId = owner.sessionCatalogAgentId;
-  const client = visibleSessionCatalogClient(owner);
+  // Explicit refreshes may read a collapsed sidebar; automatic work uses the
+  // background admission above and must still see a presented catalog surface.
+  const client = document.visibilityState === "hidden" ? null : owner.sessionCatalogGatewayClient();
   if (!client || !agentId) {
     return;
   }
@@ -371,6 +410,7 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
       owner.loadingMoreSessionCatalogIds = new Set();
       withdrawFreshSessionCatalogs(owner);
     },
+    visible: () => Boolean(visibleSessionCatalogClient(owner)),
     applyFinal: (catalogs) => {
       owner.sessionCatalogs = owner.sessionCatalogLive.resumeDiscovery(catalogs);
       owner.sessionCatalogRefreshStatus = completePanelRefresh();
@@ -381,6 +421,9 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
       const scope = owner.sessionCatalogLive.refreshScope;
       const discoveryClient = visibleSessionCatalogClient(owner);
       if (!discoveryClient || !owner.isSessionDataHostConnected) {
+        if (owner.isSessionDataHostConnected && sessionCatalogDiscoveryPages(owner).length > 0) {
+          owner.sessionCatalogLive.skipHiddenRefresh();
+        }
         return;
       }
       // Empty prefixes belong to this finite cursor sweep, not a window that root
@@ -391,16 +434,7 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
         discoveryClient === visibleSessionCatalogClient(owner) &&
         owner.isSessionDataHostConnected
       ) {
-        const hiddenIds = new Set(owner.sessionCatalogIdsWithoutVisibleRows());
-        const pages = owner.sessionCatalogs.flatMap((catalog) => {
-          if (!hiddenIds.has(catalog.id) || catalog.pending || catalog.error) {
-            return [];
-          }
-          const hostIds = catalog.hosts
-            .filter((host) => host.nextCursor && !host.pending && !host.error)
-            .map((host) => host.hostId);
-          return hostIds.length > 0 ? [{ catalogId: catalog.id, hostIds }] : [];
-        });
+        const pages = sessionCatalogDiscoveryPages(owner);
         if (pages.length === 0) {
           return;
         }

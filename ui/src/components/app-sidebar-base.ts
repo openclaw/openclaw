@@ -254,6 +254,7 @@ export abstract class AppSidebarBase {
 
   get sessionCatalogRowsVisible(): boolean {
     return (
+      !this.navigationCollapsed &&
       this.navigationView === "sessions" &&
       this.sidebarAgentsMode === "chip" &&
       !this.contextualSidebar

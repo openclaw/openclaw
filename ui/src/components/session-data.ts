@@ -176,7 +176,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   }
 
   get sessionCatalogRowsVisible(): boolean {
-    return this.inputs.sessionCatalogRowsVisible;
+    return this.inputs.navigationVisible && this.inputs.sessionCatalogRowsVisible;
   }
 
   expandedAgentId = (): string => this.inputs.expandedAgentId();
