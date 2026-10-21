@@ -303,8 +303,21 @@ describe("audit writer shared worker", () => {
     recordExecutionDecisionFactInDatabase(receipt, { ...options, now: 0 });
     recordOutboundMessageProgressInDatabase(
       {
-        ...messageEvent("message.outbound.queued"),
+        sourceId: "prune-progress",
         sourceSequence: 1,
+        occurredAt: 0,
+        kind: "message",
+        action: "message.outbound.queued",
+        status: "started",
+        outcome: "queued",
+        actorType: "agent",
+        actorId: "main",
+        agentId: "main",
+        runId: "prune-run",
+        direction: "outbound",
+        channel: "qa-channel",
+        conversationKind: "direct",
+        targetId: "synthetic-target",
       },
       options,
     );
