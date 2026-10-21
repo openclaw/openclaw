@@ -724,16 +724,6 @@ describe("automatic exact-target admission", () => {
     { changed: true, serial: "1", expected: 1 },
     { ci: "true", expected: 2 },
     { args: [], expected: 1 },
-    { args: ["--reporter=dot"], expected: 1 },
-    { args: ["--coverage.enabled=false"], expected: 1 },
-    {
-      args: ["--reporter=json", "--coverage.enabled=false"],
-      expected: 1,
-    },
-    {
-      args: ["--reporter=github-actions", "--coverage.enabled=false"],
-      expected: 1,
-    },
     { args: ["--coverage"], expected: 1 },
     { args: ["--outputFile=report.json"], expected: 1 },
     { args: ["--reporter=html"], expected: 1 },

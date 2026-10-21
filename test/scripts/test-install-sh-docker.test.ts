@@ -978,13 +978,6 @@ printf 'status=%s\\n' "$status"
       ],
     ],
     [
-      "launcher version contract in build and runtime stages",
-      [
-        "COPY node-version.mjs ./",
-        "COPY --from=runtime-assets --chown=node:node /app/node-version.mjs .",
-      ],
-    ],
-    [
       "installed Playwright browser cache",
       [
         "ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright",

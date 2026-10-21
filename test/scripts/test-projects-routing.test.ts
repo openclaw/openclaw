@@ -13,7 +13,6 @@ import {
   resolveVitestPretestBuildMode,
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
-import { withEnv } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
 import { createGatewayServerIsolatedVitestConfig } from "../vitest/vitest.gateway-server-isolated.config.ts";
@@ -26,7 +25,6 @@ import { collectVitestExcludePatterns, matchesVitestGlob } from "../vitest/vites
 
 const {
   applyParallelVitestCachePaths,
-  buildFullSuiteVitestRunPlans,
   buildVitestRunPlans: planRuns,
   createVitestRunSpecs: runSpecs,
   findUnmatchedExplicitTestTargets: unmatchedTargets,
@@ -297,29 +295,6 @@ describe("test-projects args", () => {
     "caps project-level parallelism for conservative %s",
     (key) => expect(resolveParallelFullSuiteConcurrency(58, { [key]: "1" })).toBe(1),
   );
-
-  it("keeps conservative local full-suite runs on leaf project configs", () => {
-    withEnv(
-      {
-        OPENCLAW_VITEST_MAX_WORKERS: "1",
-        OPENCLAW_TEST_WORKERS: undefined,
-        OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
-        OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
-        CI: undefined,
-        GITHUB_ACTIONS: undefined,
-      },
-      () => {
-        const configs = buildFullSuiteVitestRunPlans([]).map((plan) => plan.config);
-
-        expect(configs).toContain("test/vitest/vitest.unit-fast.config.ts");
-        expect(configs).toContain("test/vitest/vitest.boundary.config.ts");
-        expect(configs).toContain("test/vitest/vitest.agents-core.config.ts");
-        expect(configs).toContain("test/vitest/vitest.plugins.config.ts");
-        expect(configs).not.toContain("test/vitest/vitest.full-core-unit-fast.config.ts");
-        expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
-      },
-    );
-  });
 
   it("keeps explicit project-level parallelism authoritative", () => {
     expect(

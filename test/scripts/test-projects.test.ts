@@ -3486,83 +3486,89 @@ describe("scripts/test-projects full-suite sharding", () => {
     }
   });
 
-  it("expands untargeted local runs to leaf project configs by default", async () => {
-    const infraConfig = configFile("infra");
-    const infraFiles = await listVitestConfigTestFiles(infraConfig);
-    const toolingFiles = await listVitestConfigTestFiles(configFile("tooling"));
-    const uiFiles = await listVitestConfigTestFiles(configFile("ui"));
-    const gatewayFiles = await listVitestConfigTestFiles(configFile("gateway-database-workers"));
-    const extensionDatabaseFiles = await listVitestConfigTestFiles(
-      configFile("extension-database-workers"),
-    );
-    withEnv(
-      {
-        OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
-        OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
-        OPENCLAW_TEST_PROJECTS_SERIAL: undefined,
-        CI: undefined,
-        GITHUB_ACTIONS: undefined,
-        OPENCLAW_VITEST_MAX_WORKERS: undefined,
-        OPENCLAW_TEST_WORKERS: undefined,
-      },
-      () => {
-        const plans = planFullSuite([], process.cwd());
-        const configs = plans.map((plan) => plan.config);
+  it.each([undefined, "1"])(
+    "expands untargeted local runs to leaf configs (worker limit %s)",
+    async (workers) => {
+      const infraConfig = configFile("infra");
+      const infraFiles = await listVitestConfigTestFiles(infraConfig);
+      const toolingFiles = await listVitestConfigTestFiles(configFile("tooling"));
+      const uiFiles = await listVitestConfigTestFiles(configFile("ui"));
+      const gatewayFiles = await listVitestConfigTestFiles(configFile("gateway-database-workers"));
+      const extensionDatabaseFiles = await listVitestConfigTestFiles(
+        configFile("extension-database-workers"),
+      );
+      withEnv(
+        {
+          OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
+          OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
+          OPENCLAW_TEST_PROJECTS_SERIAL: undefined,
+          CI: undefined,
+          GITHUB_ACTIONS: undefined,
+          OPENCLAW_VITEST_MAX_WORKERS: workers,
+          OPENCLAW_TEST_WORKERS: undefined,
+        },
+        () => {
+          const plans = planFullSuite([], process.cwd());
+          const configs = plans.map((plan) => plan.config);
 
-        expect(configs).toContain(configFile("gateway-server"));
-        expect(configs).toContain(configFile("extension-telegram"));
-        expect(configs).not.toContain(configFile("full-agentic"));
-        expect(configs).not.toContain(configFile("full-core-unit-fast"));
+          expect(configs).toContain(configFile("gateway-server"));
+          expect(configs).toContain(configFile("extension-telegram"));
+          for (const owner of ["unit-fast", "boundary", "agents-core", "plugins"]) {
+            expect(configs).toContain(configFile(owner));
+          }
+          expect(configs).not.toContain(configFile("full-agentic"));
+          expect(configs).not.toContain(configFile("full-core-unit-fast"));
 
-        const targetedPlans = (config: string) =>
-          plans.filter((plan) => plan.config === config && plan.forwardedArgs.length > 0);
-        const unitFastPlans = targetedPlans(configFile("unit-fast"));
-        expect(unitFastPlans.length).toBeGreaterThan(1);
-        expect(unitFastPlans.every((plan) => plan.forwardedArgs.length <= 70)).toBe(true);
-        const unitSrcPlans = targetedPlans(configFile("unit-src"));
-        expect(unitSrcPlans.length).toBeGreaterThan(1);
-        expect(unitSrcPlans.every((plan) => plan.forwardedArgs.length <= 150)).toBe(true);
-        const toolingPlans = targetedPlans(configFile("tooling"));
-        expect(toolingPlans.length).toBeGreaterThan(1);
-        expect(toolingPlans).toHaveLength(Math.ceil(toolingFiles.length / 8));
-        expectChunkedFiles(toolingPlans, toolingFiles, 8);
-        const uiPlans = targetedPlans(configFile("ui"));
-        expect(uiPlans).toHaveLength(Math.ceil(uiFiles.length / 8));
-        expectChunkedFiles(uiPlans, uiFiles, 8);
-        const gatewayPlans = targetedPlans(configFile("gateway-database-workers"));
-        expect(gatewayPlans).toHaveLength(Math.ceil(gatewayFiles.length / 50));
-        expectChunkedFiles(gatewayPlans, gatewayFiles, 50);
-        const extensionDatabasePlans = targetedPlans(configFile("extension-database-workers"));
-        expectChunkedFiles(extensionDatabasePlans, extensionDatabaseFiles, 20);
-        expect(
-          extensionDatabasePlans
-            .filter((plan) =>
-              plan.forwardedArgs.some((file) => file.startsWith("extensions/telegram/")),
-            )
-            .every((plan) => plan.forwardedArgs.length === 1),
-        ).toBe(true);
-        const infraPlans = plans.filter((plan) => plan.config === infraConfig);
-        expect(infraPlans.length).toBeGreaterThan(1);
-        expect(
-          infraPlans.every(
-            (plan) => plan.forwardedArgs.length > 0 && plan.forwardedArgs.length <= 64,
-          ),
-        ).toBe(true);
-        expect(infraPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
-          [...new Set(infraFiles)].toSorted(),
-        );
-        const toolingTargets = toolingPlans.flatMap((plan) => plan.forwardedArgs);
-        expect(toolingTargets.filter((file) => file.startsWith("test/fixtures/"))).toEqual([]);
-        expect(plans.flatMap((plan) => plan.forwardedArgs)).toEqual(
-          expect.arrayContaining(testFiles("test/scripts", "oxlint-boundary-guards ts-topology")),
-        );
-        for (const plan of plans.filter((entry) => entry.forwardedArgs.length > 0)) {
-          expect(plan.timingTargets).toEqual(plan.forwardedArgs);
-          expect(plan.includePatterns).toBeNull();
-        }
-      },
-    );
-  });
+          const targetedPlans = (config: string) =>
+            plans.filter((plan) => plan.config === config && plan.forwardedArgs.length > 0);
+          const unitFastPlans = targetedPlans(configFile("unit-fast"));
+          expect(unitFastPlans.length).toBeGreaterThan(1);
+          expect(unitFastPlans.every((plan) => plan.forwardedArgs.length <= 70)).toBe(true);
+          const unitSrcPlans = targetedPlans(configFile("unit-src"));
+          expect(unitSrcPlans.length).toBeGreaterThan(1);
+          expect(unitSrcPlans.every((plan) => plan.forwardedArgs.length <= 150)).toBe(true);
+          const toolingPlans = targetedPlans(configFile("tooling"));
+          expect(toolingPlans.length).toBeGreaterThan(1);
+          expect(toolingPlans).toHaveLength(Math.ceil(toolingFiles.length / 8));
+          expectChunkedFiles(toolingPlans, toolingFiles, 8);
+          const uiPlans = targetedPlans(configFile("ui"));
+          expect(uiPlans).toHaveLength(Math.ceil(uiFiles.length / 8));
+          expectChunkedFiles(uiPlans, uiFiles, 8);
+          const gatewayPlans = targetedPlans(configFile("gateway-database-workers"));
+          expect(gatewayPlans).toHaveLength(Math.ceil(gatewayFiles.length / 50));
+          expectChunkedFiles(gatewayPlans, gatewayFiles, 50);
+          const extensionDatabasePlans = targetedPlans(configFile("extension-database-workers"));
+          expectChunkedFiles(extensionDatabasePlans, extensionDatabaseFiles, 20);
+          expect(
+            extensionDatabasePlans
+              .filter((plan) =>
+                plan.forwardedArgs.some((file) => file.startsWith("extensions/telegram/")),
+              )
+              .every((plan) => plan.forwardedArgs.length === 1),
+          ).toBe(true);
+          const infraPlans = plans.filter((plan) => plan.config === infraConfig);
+          expect(infraPlans.length).toBeGreaterThan(1);
+          expect(
+            infraPlans.every(
+              (plan) => plan.forwardedArgs.length > 0 && plan.forwardedArgs.length <= 64,
+            ),
+          ).toBe(true);
+          expect(infraPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+            [...new Set(infraFiles)].toSorted(),
+          );
+          const toolingTargets = toolingPlans.flatMap((plan) => plan.forwardedArgs);
+          expect(toolingTargets.filter((file) => file.startsWith("test/fixtures/"))).toEqual([]);
+          expect(plans.flatMap((plan) => plan.forwardedArgs)).toEqual(
+            expect.arrayContaining(testFiles("test/scripts", "oxlint-boundary-guards ts-topology")),
+          );
+          for (const plan of plans.filter((entry) => entry.forwardedArgs.length > 0)) {
+            expect(plan.timingTargets).toEqual(plan.forwardedArgs);
+            expect(plan.includePatterns).toBeNull();
+          }
+        },
+      );
+    },
+  );
 
   it("preserves one database invocation when Vitest owns suite-wide sharding", () => {
     withEnv(
