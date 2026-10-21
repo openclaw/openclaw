@@ -1,7 +1,7 @@
 // Real process replacement covers the idle-session handoff that owner tests cannot prove.
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -13,12 +13,16 @@ import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { killProcessTree } from "../src/process/kill-tree.js";
 import { getFileLockProcessStartTime } from "../src/shared/pid-alive.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
+import {
+  restartProviderServer,
+  restartToolNames,
+  writeRestartJsonText,
+  restartModelConfig,
+  writeRestartToolCall,
+} from "./gateway-restart.test-support.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
@@ -36,34 +40,8 @@ const RECOVERY_FINAL = "BACKGROUND_PROCESS_LOSS_RECONCILED";
 const REVOKED_FINAL = "BACKGROUND_PROCESS_REVOKED_WRITE_DENIED";
 const LOST_NOTICE = "process was lost when the Gateway restarted";
 
-function writeTool(response: ServerResponse, name: string, args: object, ordinal: number) {
-  const item = {
-    type: "function_call",
-    id: `fc_exec_${ordinal}`,
-    call_id: `call_exec_${ordinal}`,
-    name,
-    arguments: JSON.stringify(args),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_exec_${ordinal}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
-}
+const writeTool = (response: ServerResponse, name: string, args: object, ordinal: number) =>
+  writeRestartToolCall(response, "exec", name, args, ordinal);
 
 async function startProvider(signal: AbortSignal, holdRecovery: boolean) {
   const firstRecovery = createDeferred<string>();
@@ -84,39 +62,16 @@ async function startProvider(signal: AbortSignal, holdRecovery: boolean) {
     offsets: [0],
     signal,
     createListener: () =>
-      createServer((request, response) => {
-        void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
-          const body = asRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      restartProviderServer(
+        failed,
+        async (request, response, body) => {
           expect(request.url).toBe("/v1/responses");
-          const tools = Array.isArray(body.tools)
-            ? body.tools.flatMap((tool) =>
-                isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
-              )
-            : [];
+          const tools = restartToolNames(body);
           const input = JSON.stringify(body.input);
           ordinal += 1;
           const text = (value: string) => {
             if (body.stream === false) {
-              response.writeHead(200, { "content-type": "application/json" });
-              response.end(
-                JSON.stringify({
-                  id: `resp_${ordinal}`,
-                  status: "completed",
-                  output: [
-                    {
-                      type: "message",
-                      id: `msg_${ordinal}`,
-                      role: "assistant",
-                      content: [{ type: "output_text", text: value, annotations: [] }],
-                    },
-                  ],
-                  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-                }),
-              );
+              writeRestartJsonText(response, value, String(ordinal));
             } else {
               writeOpenAiResponsesText(response, {
                 text: value,
@@ -203,13 +158,9 @@ async function startProvider(signal: AbortSignal, holdRecovery: boolean) {
             expect(input).toContain(cancelled ? "Termination requested" : "Command still running");
             text(cancelled ? CANCEL_FINAL : IDLE_FINAL);
           }
-        })().catch((error: unknown) => {
-          if (!request.aborted) {
-            failed.reject(error);
-          }
-          response.destroy(error instanceof Error ? error : undefined);
-        });
-      }),
+        },
+        { ignoreAborted: true },
+      ),
   });
   return {
     baseUrl: `http://127.0.0.1:${reservation.claim.port}/v1`,
@@ -254,28 +205,7 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
         browser: { enabled: false },
         discovery: { mdns: { mode: "off" } },
         plugins: { enabled: false },
-        models: {
-          mode: "replace",
-          providers: {
-            [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
-          },
-        },
-        agents: {
-          defaults: {
-            model: { primary: model.modelRef },
-            modelPolicy: { allow: [model.modelRef] },
-            models: {
-              [model.modelRef]: {
-                agentRuntime: { id: "openclaw" },
-                params: { transport: "sse", openaiWsWarmup: false },
-              },
-            },
-            skipBootstrap: true,
-            skills: [],
-            timeoutSeconds: 120,
-          },
-          entries: { main: {} },
-        },
+        ...restartModelConfig(model, undefined),
         tools: {
           allow: ["exec", "process"],
           codeMode: { enabled: false },

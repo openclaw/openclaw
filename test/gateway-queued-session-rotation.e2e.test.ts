@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { text } from "node:stream/consumers";
@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatPendingInputsPage } from "../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { GatewayChatClient } from "../src/tui/gateway-chat.js";
+import { readRestartTrace } from "./gateway-restart.test-support.js";
 import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
@@ -120,16 +121,7 @@ export default {
   );
 }
 
-async function readTraceCount(tracePath: string): Promise<number> {
-  try {
-    return (await readFile(tracePath, "utf8")).split("\n").filter(Boolean).length;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return 0;
-    }
-    throw error;
-  }
-}
+const readTraceCount = async (tracePath: string) => (await readRestartTrace(tracePath)).length;
 
 async function startScenario(name: string, trace = false) {
   const fixtureDir = await mkdtemp(path.join(tmpdir(), `openclaw-${name}-`));

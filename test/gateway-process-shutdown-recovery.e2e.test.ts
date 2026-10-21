@@ -14,12 +14,14 @@ import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { extractTextFromChatContent } from "../src/shared/chat-content.js";
 import { extractAssistantPhaseText } from "../src/shared/chat-message-content.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
+import {
+  writeRestartTitle,
+  restartModelConfig,
+  writeRestartToolCall,
+} from "./gateway-restart.test-support.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
@@ -79,32 +81,13 @@ function nodeCommand(source: string): string {
 }
 
 function writeExec(response: ServerResponse, command: string, ordinal: number) {
-  const item = {
-    type: "function_call",
-    id: `fc_shutdown_${ordinal}`,
-    call_id: `call_shutdown_${ordinal}`,
-    name: "exec",
-    arguments: JSON.stringify({ command, awaitResults: true, timeoutSeconds: 120 }),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_shutdown_${ordinal}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
+  writeRestartToolCall(
+    response,
+    "shutdown",
+    "exec",
+    { command, awaitResults: true, timeoutSeconds: 120 },
+    ordinal,
+  );
 }
 
 async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
@@ -167,24 +150,8 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
               )
             : [];
           if (tools.length === 0) {
-            const message = {
-              type: "message",
-              id: "msg_title",
-              role: "assistant",
-              status: "completed",
-              content: [{ type: "output_text", text: "Synthetic shutdown task", annotations: [] }],
-            };
             if (body.stream === false) {
-              response.writeHead(200, { "content-type": "application/json" });
-              response.end(
-                JSON.stringify({
-                  id: "resp_title",
-                  object: "response",
-                  status: "completed",
-                  output: [message],
-                  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-                }),
-              );
+              writeRestartTitle(response, "Synthetic shutdown task");
             } else {
               writeOpenAiResponsesText(response, {
                 text: "Synthetic shutdown task",
@@ -549,32 +516,12 @@ it(
               entries: { [pluginId]: { enabled: true } },
               slots: { memory: "none" },
             },
-            models: {
-              // Keep this synthetic restart fixture independent of remote catalog adoption.
-              catalogRefresh: { enabled: false },
-              mode: "replace",
-              providers: {
-                [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
-              },
-            },
-            agents: {
-              defaults: {
-                workspace: instance.state.workspaceDir,
-                model: { primary: model.modelRef },
-                modelPolicy: { allow: [model.modelRef] },
-                models: {
-                  [model.modelRef]: {
-                    agentRuntime: { id: "openclaw" },
-                    params: { transport: "sse", openaiWsWarmup: false },
-                  },
-                },
-                maxConcurrent: 8,
-                timeoutSeconds: 120,
-                skipBootstrap: true,
-                skills: [],
-              },
-              entries: { main: {} },
-            },
+            ...restartModelConfig(
+              model,
+              instance.state.workspaceDir,
+              { maxConcurrent: 8 },
+              { catalogRefresh: { enabled: false } },
+            ),
             tools: {
               allow: ["exec", "process"],
               exec: { mode: "full", host: "gateway" },
@@ -723,22 +670,6 @@ it(
           expect(provider.peakRecoveryConcurrency()).toBe(4);
           expect(provider.effects()).toBe(1);
           expect(provider.forbiddenEffects()).toBe(0);
-          console.info(
-            JSON.stringify({
-              proof: "process-shutdown-custody",
-              rawSigterm: ["stream", "tool", "parallel-a", "parallel-b"],
-              interruptedSessions: rawRecoveries.length,
-              recoveryConcurrency: provider.peakRecoveryConcurrency(),
-              managedRestart: true,
-              sigkill: true,
-              secondRestartDuringRecovery: true,
-              explicitStop: "terminal",
-              revocationBoundary: "before_tool_call",
-              effectsAfterReset: 0,
-              acceptedEffects: 1,
-              processes: 4,
-            }),
-          );
         } catch (cause) {
           throw new Error(
             JSON.stringify({

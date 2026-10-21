@@ -1,10 +1,11 @@
 // A real Gateway process must finish reset-started plugin work before SIGTERM exit.
 import { once } from "node:events";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionsCreateResult } from "../packages/gateway-protocol/src/schema/sessions.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { readRestartTrace as readTrace } from "./gateway-restart.test-support.js";
 import { withBuiltGateway } from "./helpers/built-gateway-proof.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
@@ -43,17 +44,6 @@ export default {
 };
 `,
   );
-}
-
-async function readTrace(tracePath: string): Promise<string[]> {
-  try {
-    return (await readFile(tracePath, "utf8")).split("\n").filter(Boolean);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
 }
 
 it("finishes a real reset-started session_end hook after an operating-system SIGTERM", async () => {

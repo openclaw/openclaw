@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,9 +13,10 @@ import { RUNTIME_CONTEXT_HEADER } from "../src/llm/types.js";
 import { GatewayChatClient } from "../src/tui/gateway-chat.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+  writeRestartToolCalls,
+  readRestartTrace as readTrace,
+} from "./gateway-restart.test-support.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -120,31 +121,7 @@ function writeToolsResponse(res: ServerResponse, id: string, tools: [string, str
     arguments: "{}",
     status: "completed",
   }));
-  writeOpenAiResponsesSse(res, [
-    ...items.flatMap((item, outputIndex) => [
-      {
-        type: "response.output_item.added",
-        output_index: outputIndex,
-        item: { ...item, status: "in_progress", arguments: "" },
-      },
-      {
-        type: "response.function_call_arguments.done",
-        item_id: item.id,
-        output_index: outputIndex,
-        arguments: item.arguments,
-      },
-      { type: "response.output_item.done", output_index: outputIndex, item },
-    ]),
-    {
-      type: "response.completed",
-      response: {
-        id,
-        status: "completed",
-        output: items,
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
+  writeRestartToolCalls(res, id, items, { argumentEvent: "done" });
 }
 
 async function startMockModelServer(holdSecondResponse = false) {
@@ -300,17 +277,6 @@ export default {
     ),
   ]);
   return { pluginDir, releasePath, tracePath };
-}
-
-async function readTrace(tracePath: string): Promise<string[]> {
-  try {
-    return (await readFile(tracePath, "utf8")).split("\n").filter(Boolean);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
 }
 
 async function writeSteeringAdmissionPlugin(

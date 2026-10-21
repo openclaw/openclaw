@@ -6,15 +6,13 @@ import path from "node:path";
 import { json } from "node:stream/consumers";
 import { afterEach, expect, it } from "vitest";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { writeRestartToolCalls } from "./gateway-restart.test-support.js";
 import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
   type OpenAiResponsesModelServer,
 } from "./helpers/openai-responses-model-fixture.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -129,27 +127,8 @@ function writeToolResponse(response: ServerResponse): void {
     arguments: JSON.stringify({ path: "note.txt", content: "done\n" }),
     status: "completed",
   };
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...item, status: "in_progress", arguments: "" },
-    },
-    {
-      type: "response.function_call_arguments.done",
-      item_id: item.id,
-      output_index: 0,
-      arguments: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_no_op_write",
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-      },
-    },
-  ]);
+  writeRestartToolCalls(response, "resp_no_op_write", [item], {
+    argumentEvent: "done",
+    usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+  });
 }

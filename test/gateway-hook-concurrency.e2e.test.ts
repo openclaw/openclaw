@@ -2,6 +2,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
@@ -10,7 +11,6 @@ import {
 import { createDeferred } from "./helpers/promise.js";
 
 const TEST_TIMEOUT_MS = 180_000;
-const MODEL_REF = "hook-concurrency/hook-concurrency";
 const SHARED_BUDGET = 8;
 const FAIRNESS_CRON_MARKER = "capacity group fairness cron marker";
 const FAIRNESS_HOOK_OFFSET = 100;
@@ -249,14 +249,6 @@ describe("Gateway hook concurrency", () => {
       );
       expect(modelServer.peak(), instance.logs()).toBeLessThanOrEqual(SHARED_BUDGET);
 
-      console.info(
-        `[capacity-group-fairness-trace] ${JSON.stringify({
-          admittedMarkers,
-          peakProviderConcurrency: modelServer.peak(),
-          saturatedProviderRequests: SHARED_BUDGET,
-        })}`,
-      );
-
       modelServer.releaseAll();
       for (const response of await Promise.all([...fairnessHooks, lateHook])) {
         expect(response.status, response.body).toBe(200);
@@ -271,43 +263,17 @@ describe("Gateway hook concurrency", () => {
 
 function createTestConfig(baseUrl: string): OpenClawConfig {
   return {
-    plugins: { slots: { memory: "none" } },
+    ...createOpenAiResponsesModelConfig({
+      baseUrl,
+      providerId: "hook-concurrency",
+      modelId: "hook-concurrency",
+      reasoning: false,
+      toolProfile: "minimal",
+    }),
     hooks: {
       enabled: true,
       allowRequestSessionKey: true,
       allowedSessionKeyPrefixes: ["hook:"],
-    },
-    agents: {
-      defaults: {
-        model: { primary: MODEL_REF },
-        models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
-        skipBootstrap: true,
-        skills: [],
-      },
-    },
-    tools: { profile: "minimal" },
-    models: {
-      mode: "replace",
-      providers: {
-        "hook-concurrency": {
-          baseUrl: `${baseUrl}/v1`,
-          apiKey: "test-token-placeholder",
-          api: "openai-responses",
-          request: { allowPrivateNetwork: true },
-          models: [
-            {
-              id: "hook-concurrency",
-              name: "hook-concurrency",
-              api: "openai-responses",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 128_000,
-              maxTokens: 4_096,
-            },
-          ],
-        },
-      },
     },
   };
 }

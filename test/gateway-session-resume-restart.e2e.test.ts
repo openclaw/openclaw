@@ -1,7 +1,7 @@
 // Separate Gateway processes prove automatic owner-authorized recovery and terminal cancellation.
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -14,12 +14,16 @@ import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-res
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
+import {
+  restartProviderServer,
+  restartToolNames,
+  writeRestartJsonText,
+  restartModelConfig,
+  writeRestartToolCall,
+} from "./gateway-restart.test-support.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
@@ -37,34 +41,8 @@ const ORDINARY_KEY = "agent:main:ordinary-permission-control";
 const ORDINARY_REQUEST = "ORDINARY_PERMISSION_CONTROL: wait for the operator.";
 const ORDINARY_FINAL = "ORDINARY_PERMISSION_CHANGE_FINISHED";
 
-function writeTool(response: ServerResponse, name: string, args: object, ordinal: number) {
-  const item = {
-    type: "function_call",
-    id: `fc_resume_${ordinal}`,
-    call_id: `call_resume_${ordinal}`,
-    name,
-    arguments: JSON.stringify(args),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_resume_${ordinal}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
-}
+const writeTool = (response: ServerResponse, name: string, args: object, ordinal: number) =>
+  writeRestartToolCall(response, "resume", name, args, ordinal);
 
 async function startProvider(
   signal: AbortSignal,
@@ -93,39 +71,16 @@ async function startProvider(
     offsets: [0],
     signal,
     createListener: () =>
-      createServer((request, response) => {
-        void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
+      restartProviderServer(
+        failed,
+        async (request, response, body) => {
           expect(request.url).toBe("/v1/responses");
-          const body = asRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-          const tools = Array.isArray(body.tools)
-            ? body.tools.flatMap((tool) =>
-                isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
-              )
-            : [];
+          const tools = restartToolNames(body);
           const input = JSON.stringify(body.input);
           const callOrdinal = ++ordinal;
           const text = (value: string) => {
             if (body.stream === false) {
-              response.writeHead(200, { "content-type": "application/json" });
-              response.end(
-                JSON.stringify({
-                  id: `resp_resume_${callOrdinal}`,
-                  status: "completed",
-                  output: [
-                    {
-                      type: "message",
-                      id: `msg_resume_${callOrdinal}`,
-                      role: "assistant",
-                      content: [{ type: "output_text", text: value, annotations: [] }],
-                    },
-                  ],
-                  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-                }),
-              );
+              writeRestartJsonText(response, value, `resume_${callOrdinal}`);
             } else {
               writeOpenAiResponsesText(response, {
                 text: value,
@@ -281,13 +236,9 @@ async function startProvider(
           }
           expect(input).toContain("OPERATOR_EFFECT_CONFIRMED");
           text(final(name));
-        })().catch((error: unknown) => {
-          if (!request.aborted) {
-            failed.reject(error);
-          }
-          response.destroy(error instanceof Error ? error : undefined);
-        });
-      }),
+        },
+        { ignoreAborted: true },
+      ),
   });
   return {
     baseUrl: `http://127.0.0.1:${reservation.claim.port}/v1`,
@@ -346,30 +297,12 @@ async function createInstance(
     browser: { enabled: false },
     discovery: { mdns: { mode: "off" } },
     plugins: { enabled: false },
-    models: {
-      catalogRefresh: { enabled: false },
-      mode: "replace",
-      providers: {
-        [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
-      },
-    },
-    agents: {
-      defaults: {
-        workspace: instance.state.workspaceDir,
-        model: { primary: model.modelRef },
-        modelPolicy: { allow: [model.modelRef] },
-        models: {
-          [model.modelRef]: {
-            agentRuntime: { id: "openclaw" },
-            params: { transport: "sse", openaiWsWarmup: false },
-          },
-        },
-        skipBootstrap: true,
-        skills: [],
-        timeoutSeconds: 120,
-      },
-      entries: { main: {} },
-    },
+    ...restartModelConfig(
+      model,
+      instance.state.workspaceDir,
+      {},
+      { catalogRefresh: { enabled: false } },
+    ),
     tools: {
       allow: ["exec", "sessions_send"],
       codeMode: { enabled: false },

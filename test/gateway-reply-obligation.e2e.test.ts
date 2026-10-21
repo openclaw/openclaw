@@ -10,11 +10,9 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
+import { writeRestartToolCalls } from "./gateway-restart.test-support.js";
 import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -364,30 +362,7 @@ async function startFixture(scenarios: Scenario[]) {
       }),
       status: "completed",
     };
-    const event = (type: string, fields: Record<string, unknown>) => ({
-      type: `response.${type}`,
-      output_index: 0,
-      ...fields,
-    });
-    writeOpenAiResponsesSse(response, [
-      event("output_item.added", {
-        item: { ...item, status: "in_progress", arguments: "" },
-      }),
-      event("function_call_arguments.done", {
-        item_id: item.id,
-        arguments: item.arguments,
-      }),
-      event("output_item.done", { item }),
-      {
-        type: "response.completed",
-        response: {
-          id: "resp_" + id,
-          status: "completed",
-          output: [item],
-          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-        },
-      },
-    ]);
+    writeRestartToolCalls(response, "resp_" + id, [item], { argumentEvent: "done" });
   }
   return {
     url: "http://127.0.0.1:" + reserved.claim.port,

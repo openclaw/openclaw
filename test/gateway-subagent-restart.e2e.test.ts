@@ -1,7 +1,7 @@
 // Managed process replacement proves recovery of a child whose requester already finished.
 import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -12,12 +12,16 @@ import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
+import {
+  restartProviderServer,
+  restartToolNames,
+  writeRestartTitle,
+  restartModelConfig,
+  writeRestartToolCall,
+} from "./gateway-restart.test-support.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
@@ -36,32 +40,13 @@ function writeSpawn(response: ServerResponse, name: string, ordinal: number) {
     cleanup: "delete",
     expectsCompletionMessage: false,
   };
-  const item = {
-    type: "function_call",
-    id: `fc_spawn_${ordinal}`,
-    call_id: `call_spawn_${ordinal}`,
+  writeRestartToolCall(
+    response,
+    "spawn",
     name,
-    arguments: JSON.stringify(name === "dispatch_action" ? { id: "sessions_spawn", args } : args),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_spawn_${ordinal}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
+    name === "dispatch_action" ? { id: "sessions_spawn", args } : args,
+    ordinal,
+  );
 }
 
 async function startProvider(signal: AbortSignal) {
@@ -86,98 +71,67 @@ async function startProvider(signal: AbortSignal) {
     offsets: [0, 1, 2, 3],
     signal,
     createListener: () =>
-      createServer((request, response) => {
-        void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
-          const body = asRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-          if (request.url === "/recovery-checkpoint") {
-            expect(typeof body.runId).toBe("string");
-            expect(typeof body.prompt).toBe("string");
-            expect(typeof body.sessionKey).toBe("string");
-            expect(typeof body.sessionId).toBe("string");
-            checkpoint.resolve({
-              runId: String(body.runId),
-              prompt: String(body.prompt),
-              sessionKey: String(body.sessionKey),
-              sessionId: String(body.sessionId),
-            });
-            await withinTest(releaseCheckpoint.promise, signal);
-            response.writeHead(204).end();
-            return;
-          }
-          expect(request.url).toBe("/v1/responses");
-          requests.push(JSON.stringify(body.input));
-          const tools = Array.isArray(body.tools)
-            ? body.tools.flatMap((tool) =>
-                isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
-              )
-            : [];
-          const text = (value: string) =>
-            writeOpenAiResponsesText(response, {
-              text: value,
-              messageId: `msg_${calls.length}_${parentCalls}`,
-              responseId: `resp_${calls.length}_${parentCalls}`,
-            });
-          if (tools.length === 0) {
-            const title = "Synthetic quiet child restart";
-            if (body.stream === false) {
-              response.writeHead(200, { "content-type": "application/json" });
-              response.end(
-                JSON.stringify({
-                  id: "resp_title",
-                  object: "response",
-                  status: "completed",
-                  output: [
-                    {
-                      type: "message",
-                      id: "msg_title",
-                      role: "assistant",
-                      status: "completed",
-                      content: [{ type: "output_text", text: title, annotations: [] }],
-                    },
-                  ],
-                  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-                }),
-              );
-            } else {
-              text(title);
-            }
-            return;
-          }
-          const input = JSON.stringify(body.input);
-          if (input.includes("You are running as a subagent")) {
-            expect(input).toContain(CHILD_TASK);
-            calls.push({ kind: "child", input });
-            childPending.resolve();
-            // The actual model transport remains pending until managed shutdown aborts it.
-            return;
-          }
-          if (input.includes("Unfinished child sessions to reconcile:")) {
-            calls.push({ kind: "recovery", input });
-            recovery.resolve(input);
-            await withinTest(releaseRecovery.promise, signal);
-            text(RECOVERY_FINAL);
-            return;
-          }
-          expect(input).toContain(PARENT_REQUEST);
-          calls.push({ kind: "parent", input });
-          parentCalls += 1;
-          if (parentCalls === 1) {
-            const tool = tools.includes("sessions_spawn") ? "sessions_spawn" : "dispatch_action";
-            expect(tools).toContain(tool);
-            writeSpawn(response, tool, calls.length);
+      restartProviderServer(failed, async (request, response, body) => {
+        if (request.url === "/recovery-checkpoint") {
+          expect(typeof body.runId).toBe("string");
+          expect(typeof body.prompt).toBe("string");
+          expect(typeof body.sessionKey).toBe("string");
+          expect(typeof body.sessionId).toBe("string");
+          checkpoint.resolve({
+            runId: String(body.runId),
+            prompt: String(body.prompt),
+            sessionKey: String(body.sessionKey),
+            sessionId: String(body.sessionId),
+          });
+          await withinTest(releaseCheckpoint.promise, signal);
+          response.writeHead(204).end();
+          return;
+        }
+        expect(request.url).toBe("/v1/responses");
+        requests.push(JSON.stringify(body.input));
+        const tools = restartToolNames(body);
+        const text = (value: string) =>
+          writeOpenAiResponsesText(response, {
+            text: value,
+            messageId: `msg_${calls.length}_${parentCalls}`,
+            responseId: `resp_${calls.length}_${parentCalls}`,
+          });
+        if (tools.length === 0) {
+          const title = "Synthetic quiet child restart";
+          if (body.stream === false) {
+            writeRestartTitle(response, title);
           } else {
-            expect(parentCalls).toBe(2);
-            expect(input).toContain("accepted");
-            text(PARENT_FINAL);
+            text(title);
           }
-        })().catch((error: unknown) => {
-          failed.reject(error);
-          response.destroy(error instanceof Error ? error : undefined);
-        });
+          return;
+        }
+        const input = JSON.stringify(body.input);
+        if (input.includes("You are running as a subagent")) {
+          expect(input).toContain(CHILD_TASK);
+          calls.push({ kind: "child", input });
+          childPending.resolve();
+          // The actual model transport remains pending until managed shutdown aborts it.
+          return;
+        }
+        if (input.includes("Unfinished child sessions to reconcile:")) {
+          calls.push({ kind: "recovery", input });
+          recovery.resolve(input);
+          await withinTest(releaseRecovery.promise, signal);
+          text(RECOVERY_FINAL);
+          return;
+        }
+        expect(input).toContain(PARENT_REQUEST);
+        calls.push({ kind: "parent", input });
+        parentCalls += 1;
+        if (parentCalls === 1) {
+          const tool = tools.includes("sessions_spawn") ? "sessions_spawn" : "dispatch_action";
+          expect(tools).toContain(tool);
+          writeSpawn(response, tool, calls.length);
+        } else {
+          expect(parentCalls).toBe(2);
+          expect(input).toContain("accepted");
+          text(PARENT_FINAL);
+        }
       }),
   });
   return {
@@ -421,32 +375,12 @@ it.skipIf(process.platform === "win32").for([
               entries: { [pluginId]: { enabled: true, hooks: { allowConversationAccess: true } } },
               slots: { memory: "none" },
             },
-            models: {
-              // Keep this synthetic restart fixture independent of remote catalog adoption.
-              catalogRefresh: { enabled: false },
-              mode: "replace",
-              providers: {
-                [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
-              },
-            },
-            agents: {
-              defaults: {
-                workspace: instance.state.workspaceDir,
-                model: { primary: model.modelRef },
-                modelPolicy: { allow: [model.modelRef] },
-                models: {
-                  [model.modelRef]: {
-                    agentRuntime: { id: "openclaw" },
-                    params: { transport: "sse", openaiWsWarmup: false },
-                  },
-                },
-                skipBootstrap: true,
-                skills: [],
-                timeoutSeconds: 120,
-                subagents: { runTimeoutSeconds: 120 },
-              },
-              entries: { main: {} },
-            },
+            ...restartModelConfig(
+              model,
+              instance.state.workspaceDir,
+              { subagents: { runTimeoutSeconds: 120 } },
+              { catalogRefresh: { enabled: false } },
+            ),
             tools: {
               allow: ["sessions_spawn", "sessions_send", "sessions_history", "subagents"],
               codeMode: { enabled: false },
@@ -530,7 +464,6 @@ it.skipIf(process.platform === "win32").for([
             JSON.stringify(await client.request("chat.history", { sessionKey: PARENT_KEY })),
           ).toContain(PARENT_FINAL);
           observeRecovery = true;
-          const recoveryStartedAt = Date.now();
           await restart(replaceChild);
           phase = "waiting-for-continuation";
           await client!.request("sessions.subscribe", { agentId: "main" });
@@ -538,7 +471,6 @@ it.skipIf(process.platform === "win32").for([
             Promise.race([provider.checkpoint, provider.failed]),
             AbortSignal.any([signal, AbortSignal.timeout(60_000)]),
           );
-          const recoveryMs = Date.now() - recoveryStartedAt;
           expect(checkpoint).toMatchObject({ sessionKey: PARENT_KEY, sessionId: parentSessionId });
           expect(checkpoint.prompt).toContain(child.key);
           expect(checkpoint.prompt).toContain(childRunId);
@@ -670,25 +602,6 @@ it.skipIf(process.platform === "win32").for([
           if (requestsAtRevocation !== undefined) {
             expect(provider.requests.length - requestsAtRevocation).toBe(0);
           }
-          console.log(
-            JSON.stringify({
-              proof: "quiet-subagent-managed-restart",
-              recoveryMs,
-              outcome,
-              replaceChild,
-              recoveryDispatches,
-              originalParentDispatches: 2,
-              ...(dispatchesAtRevocation === undefined
-                ? {}
-                : {
-                    dispatchesAfterRevocation: recoveryDispatches - dispatchesAtRevocation,
-                    providerRequestsAfterRevocation:
-                      provider.requests.length - (requestsAtRevocation ?? 0),
-                  }),
-              childDispatches: 1,
-              subsequentRestarts: 1,
-            }),
-          );
         } catch (cause) {
           throw new Error(
             JSON.stringify({
