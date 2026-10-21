@@ -34,7 +34,7 @@ process.stdout.write('Open this page to sign in:\\n  https://auth.meta.com/oauth
       META_API_KEY: "must-not-be-used",
     },
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    prompter: createTestWizardPrompter({ deviceCode: vi.fn() }),
+    prompter: createTestWizardPrompter({ deviceCode: vi.fn(), select: vi.fn() }),
     isRemote: false,
     openUrl: vi.fn(async () => {
       await writeFile(path.join(directory, "approve"), "yes");
