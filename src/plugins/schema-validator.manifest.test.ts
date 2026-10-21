@@ -106,12 +106,16 @@ it("admits equivalent immutable schemas once while detecting mutable descendants
   const admitSchema = vi.spyOn(schemaDefaults, "findJsonSchemaShapeError");
   try {
     for (const type of ["string", "number"]) {
-      expect(validateJsonSchemaValue({ schema: readSchema, value: { action: "read" } }).ok).toBe(true);
+      expect(validateJsonSchemaValue({ schema: readSchema, value: { action: "read" } }).ok).toBe(
+        true,
+      );
       mutableSchema.properties.value.type = type;
+      expect(validateJsonSchemaValue({ schema: mutableSchema, value: { value: "text" } }).ok).toBe(
+        type === "string",
+      );
       expect(
-        validateJsonSchemaValue({ schema: mutableSchema, value: { value: "text" } }).ok,
-      ).toBe(type === "string");
-      expect(validateJsonSchemaValue({ schema: sameReadSchema, value: { action: "read" } }).ok).toBe(true);
+        validateJsonSchemaValue({ schema: sameReadSchema, value: { action: "read" } }).ok,
+      ).toBe(true);
     }
     for (const work of [stringify, admitSchema]) {
       expect(
@@ -122,7 +126,9 @@ it("admits equivalent immutable schemas once while detecting mutable descendants
     }
 
     for (let index = 0; index < 2; index++) {
-      expect(validateJsonSchemaValue({ schema: readSchema, value: { action: "read" }, cache: false }).ok).toBe(true);
+      expect(
+        validateJsonSchemaValue({ schema: readSchema, value: { action: "read" }, cache: false }).ok,
+      ).toBe(true);
     }
     expect(stringify.mock.calls.filter(([value]) => value === readSchema)).toHaveLength(3);
     expect(admitSchema.mock.calls.filter(([value]) => value === readSchema)).toHaveLength(3);
@@ -131,4 +137,3 @@ it("admits equivalent immutable schemas once while detecting mutable descendants
     stringify.mockRestore();
   }
 });
-

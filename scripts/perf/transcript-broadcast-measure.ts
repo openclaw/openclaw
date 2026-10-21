@@ -1149,7 +1149,10 @@ const mock = createServer((req, res) => {
       : undefined;
     const index = facts.turnIndex;
     const toolOutputs =
-      facts.hasToolOutput && Array.isArray(input) && cohort
+      Array.isArray(input) &&
+      cohort &&
+      facts.purpose !== "activity-recap" &&
+      facts.purpose !== "session-observer"
         ? input.filter(
             (item) =>
               item?.type === "function_call_output" && cohort?.toolCallIds.has(item.call_id),
