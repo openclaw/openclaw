@@ -45,7 +45,6 @@ import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
 import { applySelectedSessionProjection, dismissChatError } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
-import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -666,10 +665,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }
       this.connectedClient = null;
       setQuestionPromptClient(this.questionPromptState, null);
-      stopChatRealtimeTalk(state);
+      this.retireRestrictedSessionActivity(state, snapshot);
       resetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
       return;
     }
+    this.retireRestrictedSessionActivity(state, snapshot);
     this.refreshSwarmRoster();
     // Route-binding effects above can synchronously publish a new snapshot and
     // re-enter this method; the inner application claims connectedClient, so the

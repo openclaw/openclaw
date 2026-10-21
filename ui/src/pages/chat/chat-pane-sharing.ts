@@ -8,6 +8,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -22,7 +23,10 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/session-row-reconcile.ts";
 import { ChatPaneReactions } from "./chat-pane-reactions.ts";
-import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { readChatSessionAccess } from "./chat-pane-state.ts";
+import { stopChatRealtimeTalk } from "./chat-realtime.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   typingActorIdForSessionMessage,
   typingDraftPreview,
@@ -46,6 +50,27 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
   private typingRequestTimer?: number;
   private typingRequestSentAt?: number;
   private pendingTypingRequest?: () => void;
+
+  protected retireRestrictedSessionActivity(
+    state: ChatPageHost,
+    snapshot: ApplicationGatewaySnapshot,
+  ): void {
+    if (snapshot.phase !== "connected") {
+      stopChatRealtimeTalk(state);
+      return;
+    }
+    const sessionAccess = readChatSessionAccess(snapshot, {
+      sessionKey: state.sessionKey,
+      agentId: resolveChatAgentId(state),
+      sessionId: state.currentSessionId || selectedChatSessionRow(state)?.sessionId,
+    });
+    if (sessionAccess === "revoked" || sessionAccess === "read-only") {
+      stopChatRealtimeTalk(state);
+      if (sessionAccess === "revoked" || selectedChatSessionRow(state)?.visibility !== "suggest") {
+        this.clearTypingActors();
+      }
+    }
+  }
 
   protected invalidateSessionSharing(payload: unknown): void {
     const state = this.state;
@@ -630,6 +655,15 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
         current.visibility !== visibility ||
         !this.hasMultipleIdentities()
       ) {
+        return;
+      }
+      const access = readChatSessionAccess(this.context.gateway.snapshot, {
+        sessionKey,
+        sessionId,
+        agentId: resolveUiConversationIdentity(scope.state, sessionKey).agentId,
+      });
+      if (access === "revoked" || (access === "read-only" && visibility !== "suggest")) {
+        this.clearTypingRequest();
         return;
       }
       const draftPreview = typing && preview ? typingDraftPreview(preview, cursor) : undefined;
