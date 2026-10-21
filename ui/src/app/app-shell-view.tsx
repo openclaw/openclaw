@@ -249,16 +249,15 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           >
             <Show when={view().settingsTakeover} fallback={props.host.navigationSidebar}>
               <LazySettingsSidebar
-                loader={props.host.settingsSidebar}
                 host={props.host}
                 sidebarProps={{ ...view().settingsSidebarProps, footerStatus: footerStatus() }}
               />
             </Show>
             <Show
               when={
-                (view().settingsTakeover
-                  ? props.host.settingsSidebar.renderer() === null
-                  : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT)) && footerStatus()
+                !view().settingsTakeover &&
+                !isOptionalElementDefined(APP_SIDEBAR_ELEMENT) &&
+                footerStatus()
               }
             >
               <aside class="sidebar">
@@ -325,11 +324,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             <FloatingUpdateCard {...view().floatingUpdateCard} />
           </Show>
           <Show when={view().embedNavigation}>
-            <LazySettingsSidebar
-              loader={props.host.settingsSidebar}
-              host={props.host}
-              sidebarProps={view().settingsSidebarProps}
-            />
+            <LazySettingsSidebar host={props.host} sidebarProps={view().settingsSidebarProps} />
           </Show>
           <ShellLayoutProvider
             value={{
@@ -421,7 +416,6 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           />
         </Show>
         <DevicePairSetup
-          loader={props.host.devicePairSetup}
           props={{
             open: view().overlaySnapshot.devicePairSetupOpen,
             lifecycle: view().overlaySnapshot.devicePairSetupLifecycle,

@@ -56,7 +56,6 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/child-session-load-errors.e2e.test.ts",
   "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
   "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
-  "ui/src/e2e/community-invite-showing.e2e.test.ts",
   "ui/src/e2e/composer-draft-store.e2e.test.ts",
   "ui/src/e2e/composer-recovery-fences.e2e.test.ts",
   "ui/src/e2e/config-raw-save.e2e.test.ts",

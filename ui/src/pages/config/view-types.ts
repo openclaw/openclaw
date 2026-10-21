@@ -33,6 +33,7 @@ type ConfigViewOptions = Partial<
     | "sessionObserverEnabled"
     | "sessionObserverUtilityModel"
     | "sessionObserverResolvedModel"
+    | "sessionObserverModelsScope"
     | "sessionObserverModelsUnavailable"
     | "sessionObserverDisabled"
     | "setSessionObserverEnabled"
@@ -44,7 +45,6 @@ type ConfigViewOptions = Partial<
     | "onCameraRefresh"
     | "onCameraSelect"
     | "pluginsHref"
-    | "sessionSourcePluginsLoading"
     | "configPath"
     | "navRootLabel"
     | "showRootTab"
@@ -64,8 +64,15 @@ type ConfigViewOptions = Partial<
 > & {
   textScale: number;
   hiddenSessionCatalogIds: ReadonlySet<string>;
+  hiddenSessionCatalogLabels: {
+    read: () => ReadonlyMap<string, string>;
+    scope: object | null;
+  };
+  sessionSourcePlugins?: {
+    read: () => ReadonlySet<string> | null;
+    scope: object | null;
+  };
   sessionObserverModels?: readonly ConfigPageProps["sessionObserverModels"][number][];
-  installedSessionSourcePluginIds?: ReadonlySet<string> | null;
   microphone?: SettingsMediaDeviceState;
   camera?: SettingsMediaDeviceState;
   onOpenFile?: () => void;

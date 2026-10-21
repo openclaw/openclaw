@@ -210,68 +210,52 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     }
 
     function ToolFilter(props: { toolNames: string[] }) {
-      let anchor!: HTMLButtonElement;
       let popover: PopoverHandle | undefined;
       return (
-        <>
-          <button
-            ref={(node) => {
-              anchor = node;
-            }}
-            id="activity-live-filter-trigger"
-            type="button"
-            class={[
-              "btn btn--sm activity-live-filter-trigger",
-              { active: Boolean(filters.toolFilter) },
-            ]}
-            title={t("activity.filters")}
-            aria-label={t("activity.filters")}
-            aria-haspopup="dialog"
-            aria-controls="activity-live-filter-popover"
-            aria-expanded="false"
-            onClick={() => popover?.overlay.request(!popover.overlay.open)}
-          >
-            <Icon name="listFilter" />
-          </button>
-          <Popover
-            id="activity-live-filter-popover"
-            ref={(handle) => {
-              popover = handle;
-            }}
-            anchor={anchor}
-            label={t("activity.filters")}
-            class="activity-live-filter-popover"
-            placement="bottom-end"
-            onOpenChange={(open) => {
-              if (open) {
-                popover?.overlay.surface.focus({ preventScroll: true });
-              }
-            }}
-          >
-            <div class="activity-live-filter-popover__panel">
-              <label class="field">
-                <span>{t("activity.toolFilter")}</span>
-                <select
-                  class="settings-select"
-                  aria-label={t("activity.toolFilter")}
-                  value={filters.toolFilter}
-                  onChange={(event) => update({ toolFilter: event.currentTarget.value })}
-                >
-                  <option value="" selected={filters.toolFilter === ""}>
-                    {t("activity.allTools")}
-                  </option>
-                  <For each={props.toolNames}>
-                    {(name) => (
-                      <option value={name} selected={name === filters.toolFilter}>
-                        {name}
-                      </option>
-                    )}
-                  </For>
-                </select>
-              </label>
-            </div>
-          </Popover>
-        </>
+        <Popover
+          id="activity-live-filter-popover"
+          triggerId="activity-live-filter-trigger"
+          triggerClass={[
+            "btn btn--sm activity-live-filter-trigger",
+            { active: Boolean(filters.toolFilter) },
+          ]}
+          triggerTitle={t("activity.filters")}
+          trigger={<Icon name="listFilter" />}
+          ref={(handle) => {
+            popover = handle;
+          }}
+          label={t("activity.filters")}
+          class="activity-live-filter-popover"
+          placement="bottom-end"
+          onOpenChange={(open) => {
+            if (open) {
+              popover?.overlay.surface.focus({ preventScroll: true });
+            }
+          }}
+        >
+          <div class="activity-live-filter-popover__panel">
+            <label class="field">
+              <span>{t("activity.toolFilter")}</span>
+              <select
+                class="settings-select"
+                aria-label={t("activity.toolFilter")}
+                value={filters.toolFilter}
+                onChange={(event) => update({ toolFilter: event.currentTarget.value })}
+              >
+                <option value="" selected={filters.toolFilter === ""}>
+                  {t("activity.allTools")}
+                </option>
+                <For each={props.toolNames}>
+                  {(name) => (
+                    <option value={name} selected={name === filters.toolFilter}>
+                      {name}
+                    </option>
+                  )}
+                </For>
+              </select>
+            </label>
+          </div>
+        </Popover>
       );
     }
 

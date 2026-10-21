@@ -409,6 +409,40 @@ leave it off for paired timing. Use only synthetic requests:
 parameters, stacks, and model rows are retained; authentication and other response
 payloads are omitted.
 
+Add `--reload-census` to count every RPC during that load window. This mode keeps
+parameter keys and opaque query IDs instead of parameter values; matching query
+IDs identify exact duplicates within one document. It also records native Long
+Animation Frame blocking and timestamps of changed sidebar row inventories.
+With `--request-stacks`, `--asset-dir /path/to/control-ui/assets` maps callers
+through the matching build's source maps.
+The first nonempty inventory and the last inventory change are DOM milestones,
+not paint times. Keep caller-stack diagnostics separate from untraced paired
+timing, and use matching fixture state, seeds, and observation windows.
+`--storage-state` accepts a synthetic Playwright storage-state file; use
+`--min-sidebar-rows` to reject captures with an empty or collapsed fixture roster.
+
+`control-ui-reload-fixture.ts` prepares a real Gateway fixture with 5,000 sessions,
+6,000 retained runs, 120 sessions assigned to the synthetic viewer, eight personal
+pins, seven browser plugins, and a synthetic model catalog. It seeds a dashboard
+widget through RPC and writes a Playwright preference file with Coding expanded.
+Run preparation sequentially on the benchmark host, with built runtime and UI assets:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/control-ui-reload-fixture.ts \
+  --state-dir /path/to/fixture --ui-root /path/to/control-ui --prepare
+node --import ./scripts/tsx.mjs scripts/perf/control-ui-reload-fixture.ts \
+  --state-dir /path/to/fixture --ui-root /path/to/control-ui
+```
+
+The default ports are 41514 (Gateway), 41515 (widget sandbox), and 41516 (proxy).
+Use distinct ports and state directories for concurrent sides. Once each fixture
+has been seeded, `--skip-seed` preserves its state on subsequent launches;
+`--runtime-entry` selects a separately built baseline or candidate runtime.
+Use the printed route with `--storage-state /path/to/fixture/browser-storage.json`,
+`--reload-census --min-sidebar-rows 10 --duration 15`. No provider credentials or
+model inference are needed. The fixture uses 8 MiB of transcript content rather
+than a multi-gigabyte database; this workload measures reload acquisition and rows.
+
 To isolate session activity from model selection, use
 `--activity-patch-sessions <key-a>,<key-b>` with `--load-runs 1` against existing
 synthetic sessions. This alternates navigation between those conversations and
@@ -1138,7 +1172,7 @@ board widget, and creates a synthetic workboard with one card per viewer. Reusin
 the fixture paginates its cards, removes surplus cards, and creates missing cards
 to preserve that count when the viewer count changes. The GitHub preview uses the real plugin with a
 benchmark-only in-process HTTP transport serving one synthetic public issue;
-other non-loopback fetches fail. No GitHub account is connected, so options and
+other non-loopback fetches fail. By default no GitHub account is connected, so options and
 PR subscriptions exercise disconnected-account reads and subscription admission,
 not remote PR discovery or credential refresh. The model catalog uses the local
 synthetic provider configuration. Board widgets are read through RPC, without a
@@ -1174,6 +1208,63 @@ time for every method's initial staggered poll. Shorter cohorts may require a
 shorter polling interval. This option does not add automatic mid-soak restarts;
 separate invocations against the same retained fixture start separate Gateways,
 and normal setup still resets the foreground sessions.
+
+To measure connected GitHub options, generate the fixture and run the dashboard
+soak with `--github-options-connected`. Generation registers the synthetic
+`openclaw-fixture/soak` origin before recording each repository fingerprint;
+existing disconnected fixtures cannot be reused for this mode. The harness gives
+the isolated Gateway a synthetic native GitHub token, serves `/user`, repository
+metadata, an empty PR list, and the preview issue entirely in process. Account
+verification (`/user`) cycles through deterministic 300, 600, and 900 ms delays;
+other routes retain the existing preview fixture's immediate responses. Delaying
+every preview request would exceed its shared two-second budget across serial
+visibility checks and item reads. No request reaches GitHub.
+This measures shared-account verification and discovery, not personal OAuth refresh.
+Setup creates session-owned managed worktrees through `sessions.create` and uses
+their returned roots for the foreground and diff sessions. This mode requires
+fresh foreground sessions (`--history-turns` is unsupported); the fixture's
+retained session histories remain part of the dashboard load.
+
+For either account mode, add `--entry src/entry.ts --github-options-observe` to
+record handler, admission, shared identity, native token lookup, credential
+verification, target discovery, receipt-read, and response-serialization durations in
+`dashboardRpc.githubObservation.stages`. A benchmark-only loader wraps the source
+owners and refuses missing source shapes; production imports remain unchanged.
+The nested `session-preparation` stage covers options admission's session reader,
+while `publication-session` records durable session preparation inside the
+publication owner. Use these stages to distinguish admission work from repeated
+session reads during target qualification.
+These durations overlap, and stale refresh work may finish after its originating
+handler. Use request IDs and timestamps to distinguish the critical path from
+background work; never add stage totals together. Gateway diagnostics separately
+record response bytes and dispatch work.
+For simultaneous comparisons using one checkout, place the baseline receipt
+owner beside `src/gateway/github-publication-shared-read.ts` and the baseline
+availability owner beside `src/gateway/github-publication-availability.ts`.
+Pass `--github-observation-owner <baseline-receipt-file>` and
+`--github-availability-owner <baseline-availability-file>` only on A. The result
+records their loaded paths and override flags in `githubObservation.owner` and
+`githubObservation.availabilityOwner`, and rejects a run unless both owners loaded
+and the handler was observed. Both sides must
+enable identical observation and use separate fixtures, ports, and CPU sets.
+
+Connected options use one additional socket per viewer granted only
+`operator.sessions.read`: broad dashboard grants skip repository qualification.
+The connected soak authenticates its synthetic operator through loopback
+trusted-proxy handshakes so the normal profile owner supplies a verified identity.
+An initial concurrent batch is retained in `coldSetupRpc`, before preview preflight;
+warm polls rotate over every session in `dashboardRpc.diffWorktrees`. Each polling
+record includes `githubOptionsSessionKey`. Every options response must expose the
+synthetic shared account without an unsupported-workspace reason.
+`dashboardRpc.githubOptionsConnected` records the additional socket count,
+every upstream route/sequence/delay/elapsed time/status, totals per route, and
+options observations by phase, session, latency, stale flag, and account login.
+The synthetic account changes login after sixty seconds from its first `/user`
+request; `accountRenameObserved` reports whether normal refresh made that change
+visible. Use a long enough soak to observe it; a short smoke is not freshness proof.
+The upstream elapsed times include the injected wait and fetch header resolution;
+they are not additive handler self-time. Use Gateway diagnostics for handler time
+and the existing RPC byte counts for serialization volume.
 
 Each allocation profile includes collected objects and reports decimal
 `allocatedMbPerTurn`. Allocation soaks keep one continuous sampling window and
@@ -1983,3 +2074,25 @@ starts real agent turns, and waits for success. The report must observe each
 turn's start and settlement events and each loopback inference request. Model
 and catalog traffic is reported separately and is excluded from the healthy-row
 rate comparison. The default run starts no model provider.
+
+## Prompt history fingerprints
+
+`prompt-cache-history-measure.ts` runs the production `convertToLlm` and history
+fingerprint owner over 400 synthetic assistant messages with text and nested tool
+arguments. It separates one cold call from 100 warm calls for append-normalized,
+sealed/reloaded, and mutable SDK history. It counts SHA-256 calls and UTF-8 input
+bytes per observation and per message, plus elapsed and process CPU time. These
+are fingerprint work counts, not whole-Gateway allocation or provider latency.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/prompt-cache-history-measure.ts \
+  --start-at <future-epoch-ms>
+```
+
+To compare a baseline, save its `prompt-cache-history.ts` beside the current
+module and pass its absolute path with `--owner`. Use the same runtime and fixture
+on both sides of each concurrent, locked pair, swapping CPU halves between pairs.
+Run at least five pairs. The retained append-normalized case should eliminate
+repeated nested-argument hashing; sealed history should remain at zero warm hash
+bytes, and mutable SDK content must still be inspected. Diagnostic output and
+in-place mutation coverage live in `prompt-cache-observability.history.test.ts`.

@@ -7,7 +7,13 @@ import type {
 
 type PublicReplyOptions<T> = T extends undefined
   ? undefined
-  : Omit<T, "internalEventExecution" | "onReplyOperationAdmitted" | "onReplyOperationOwned">;
+  : Omit<
+      T,
+      | "internalEventExecution"
+      | "onReplyOperationAdmitted"
+      | "onReplyOperationOwned"
+      | "assertChannelAuthority"
+    >;
 
 type PublicReplyFunction<T> = T extends (params: infer P) => infer R
   ? (params: PublicReplyParams<P>) => R

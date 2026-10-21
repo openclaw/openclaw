@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { onCleanup } from "solid-js";
+import { onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -23,7 +23,7 @@ export function SessionPicker(props: {
   let trigger!: HTMLButtonElement;
   let popover!: PopoverHandle;
   let cleanup: (() => void) | undefined;
-  onCleanup(() => cleanup?.());
+  onSettled(() => () => cleanup?.());
   return (
     <>
       <span
