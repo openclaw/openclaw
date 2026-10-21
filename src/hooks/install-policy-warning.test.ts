@@ -15,8 +15,12 @@ const mocks = vi.hoisted(() => ({
   dependencyScan: vi.fn(),
   run: vi.fn(),
 }));
-vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.run }));
-vi.mock("../plugins/install-security-scan.js", () => ({
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runCommandWithTimeout: mocks.run,
+}));
+vi.mock("../plugins/install-security-scan.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/install-security-scan.js")>()),
   scanPackageInstallSource: mocks.sourceScan,
   scanInstalledPackageDependencyTree: mocks.dependencyScan,
 }));
