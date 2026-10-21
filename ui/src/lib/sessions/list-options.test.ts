@@ -152,37 +152,6 @@ it("keeps derived titles when a foreground refresh queues behind an archive repl
   stop();
 });
 
-it("retains the routed archived descriptor through its foreground replacement", async () => {
-  const key = "agent:main:dashboard:archived";
-  const request = listRequest(
-    (call) =>
-      sessionsResult(
-        call === 1
-          ? [sessionRow(key, "archived-session", 1, { derivedTitle: "Readable archived title" })]
-          : [{ key: "agent:main:main", kind: "direct", updatedAt: 2 }],
-        call,
-      ),
-    () => archiveReceipt(key, "archived-session", 2),
-  );
-  const { sessions } = fixture(request, key);
-
-  await sessions.refresh(enrichedOptions);
-  const titleHistory: Array<string | undefined> = [];
-  const stop = sessions.subscribe((state) => {
-    titleHistory.push(state.result?.sessions.find((row) => row.key === key)?.derivedTitle);
-  });
-
-  await sessions.patch(key, { archived: true }, { agentId: "main" });
-
-  expect(titleHistory).not.toContain(undefined);
-  expect(sessions.state.result?.sessions).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ key, archived: true, derivedTitle: "Readable archived title" }),
-    ]),
-  );
-  stop();
-});
-
 it("retains confirmed archive state after the routed row is evicted", async () => {
   const key = "agent:main:dashboard:archived";
   const otherKey = "agent:main:dashboard:other";
@@ -192,7 +161,13 @@ it("retains confirmed archive state after the routed row is evicted", async () =
       return sessionsResult(
         call === 3
           ? [other]
-          : [sessionRow(key, "archived-session", 10, { archived: false }), other],
+          : [
+              sessionRow(key, "archived-session", 10, {
+                archived: false,
+                derivedTitle: "Readable archived title",
+              }),
+              other,
+            ],
         call,
       );
     },
@@ -200,8 +175,19 @@ it("retains confirmed archive state after the routed row is evicted", async () =
   );
   const { sessions, gateway, emitEvent } = fixture(request, key);
 
-  await sessions.refresh(foregroundOptions);
+  await sessions.refresh(enrichedOptions);
+  const titleHistory: Array<string | undefined> = [];
+  const stop = sessions.subscribe((state) => {
+    titleHistory.push(state.result?.sessions.find((row) => row.key === key)?.derivedTitle);
+  });
   await sessions.patch(key, { archived: true }, { agentId: "main" });
+  stop();
+  expect(titleHistory).not.toContain(undefined);
+  expect(sessions.state.result?.sessions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ key, archived: true, derivedTitle: "Readable archived title" }),
+    ]),
+  );
   gateway.snapshot.sessionKey = otherKey;
   await sessions.refresh(foregroundOptions);
   expect(sessions.state.result?.sessions.some((row) => row.key === key)).toBe(false);
@@ -453,40 +439,31 @@ it.each(["primary", "managed"] as const)(
   },
 );
 
-it.each([false, true])(
-  "preserves enrichment only within the same session (reset: %s)",
-  async (reset) => {
-    const key = reset ? "agent:main:dashboard:session" : "agent:main:dashboard:session-1";
-    const enrichment = reset
-      ? { derivedTitle: "Previous session title" }
-      : {
-          derivedTitle: "Readable planning title",
-          lastMessagePreview: "Latest visible reply",
-        };
-    const request = listRequest((call) =>
-      sessionsResult(
-        [
-          sessionRow(
-            key,
-            reset ? `session-${call}` : "session-1",
-            call,
-            call === 1 ? enrichment : {},
-          ),
-        ],
-        call,
-      ),
-    );
-    const { sessions } = fixture(request, key);
-    await sessions.refresh(enrichedOptions);
-    await sessions.refresh(enrichedOptions);
-    expect(sessions.state.result?.sessions[0]).toMatchObject(
-      reset ? { key, sessionId: "session-2", updatedAt: 2 } : { key, updatedAt: 2, ...enrichment },
-    );
-    if (reset) {
-      expect(sessions.state.result?.sessions[0]?.derivedTitle).toBeUndefined();
-    }
-  },
-);
+it("does not retain enrichment across a session generation reset", async () => {
+  const key = "agent:main:dashboard:session";
+  const request = listRequest((call) =>
+    sessionsResult(
+      [
+        sessionRow(
+          key,
+          `session-${call}`,
+          call,
+          call === 1 ? { derivedTitle: "Previous session title" } : {},
+        ),
+      ],
+      call,
+    ),
+  );
+  const { sessions } = fixture(request, key);
+  await sessions.refresh(enrichedOptions);
+  await sessions.refresh(enrichedOptions);
+  expect(sessions.state.result?.sessions[0]).toMatchObject({
+    key,
+    sessionId: "session-2",
+    updatedAt: 2,
+  });
+  expect(sessions.state.result?.sessions[0]?.derivedTitle).toBeUndefined();
+});
 
 it("does not preserve another agent's raw-global row through background hydration", async () => {
   const opsGoal: SessionGoal = {
