@@ -48,7 +48,12 @@ export async function createTelegramNativeCommandTestDriver(options: {
         match: input.match ?? "",
         message: {
           message_id: 17,
-          chat: { id: chatId, type: input.group ? "supergroup" : "private", is_forum: input.group },
+          date: input.group ? 1_700_000_000 : Math.floor(Date.now() / 1000),
+          chat: {
+            id: chatId,
+            type: input.group ? "supergroup" : "private",
+            ...(input.group ? { title: "Owners", is_forum: true } : {}),
+          },
           ...(input.group ? { message_thread_id: input.threadId } : {}),
           from: { id: senderId, username: input.group ? "admin" : "bob" },
         },
