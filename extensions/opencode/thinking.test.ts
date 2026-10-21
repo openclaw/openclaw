@@ -8,20 +8,13 @@ import { buildOpencodeZenLiveProviderConfig } from "./provider-catalog.js";
 
 const EFFORTS = ["off", "low", "high", "max"] as const;
 const BASE_URL = "https://opencode.ai/zen/v1";
-const metadata = {
-  opencode: {
-    api: BASE_URL,
-    npm: "@ai-sdk/openai-compatible",
-    models: {
-      "kimi-k3": {
-        id: "kimi-k3",
-        reasoning: true,
-        limit: { context: 256_000, output: 32_000 },
-        reasoning_options: [{ type: "effort", values: ["max"] }],
-      },
-    },
-  },
+const upstreamModel = {
+  id: "kimi-k3",
+  reasoning: true,
+  limit: { context: 256_000, output: 32_000 },
+  reasoning_options: [{ type: "effort", values: ["max"] }],
 };
+const metadata = { opencode: { id: "opencode", models: { "kimi-k3": upstreamModel } } };
 
 afterEach(() => {
   vi.restoreAllMocks();
