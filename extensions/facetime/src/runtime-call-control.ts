@@ -84,7 +84,6 @@ export function createFaceTimeCallControl(params: {
             feedDevice: FACETIME_FEED_DEVICE_NAME,
             microphoneDevice: FACETIME_MIC_DEVICE_NAME,
             processInputVerified: false,
-            processOutputSuppressed: false,
           };
           call.lastRoutingError = undefined;
         })();
@@ -124,7 +123,6 @@ export function createFaceTimeCallControl(params: {
     call.markCarrierActive(generation);
     if (call.audioTransport) {
       call.audioTransport.processInputVerified = true;
-      call.audioTransport.processOutputSuppressed = call.talk?.processOutputSuppressed() === true;
     }
   };
   const closeCall = async (call: ActiveFaceTimeCall, reason: string) => {
@@ -345,9 +343,6 @@ export function createFaceTimeCallControl(params: {
           return;
         }
         call.talk = talk;
-        if (call.audioTransport) {
-          call.audioTransport.processOutputSuppressed = true;
-        }
         params.logger.info("[facetime] realtime talk suppression ready");
       })();
     }

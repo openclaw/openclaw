@@ -228,7 +228,7 @@ export function sessionPullRequestsForGateway(
       retireConnection();
     }
     if (changed || snapshot.hello !== lifecycle.requestHello) {
-      retry.reset();
+      lifecycle.resetRetry();
       lifecycle.schedule();
     }
   };
@@ -359,7 +359,6 @@ export function sessionPullRequestsForGateway(
       automaticRefreshTimers.clear();
     },
   });
-  const { retry } = lifecycle;
 
   function sync() {
     const snapshot = gateway.snapshot;
@@ -426,7 +425,7 @@ export function sessionPullRequestsForGateway(
           for (const key of refreshSessionKeys) {
             pendingRefreshKeys.add(key);
           }
-          retry.schedule(() => {
+          lifecycle.scheduleRetry(() => {
             if (lifecycle.attached && isActive()) {
               lifecycle.schedule();
             }
@@ -476,7 +475,7 @@ export function sessionPullRequestsForGateway(
       });
     }
     orderedWatchedKeys = undefined;
-    retry.reset();
+    lifecycle.resetRetry();
     pruneUnwatched();
     if (isActive()) {
       if (!wasActive) {
@@ -503,7 +502,7 @@ export function sessionPullRequestsForGateway(
       );
     } else {
       pendingRefreshKeys.add(key);
-      retry.reset();
+      lifecycle.resetRetry();
       lifecycle.schedule();
     }
     return true;

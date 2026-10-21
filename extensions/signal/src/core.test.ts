@@ -13,10 +13,7 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveSignalAccount } from "./accounts.js";
-import {
-  clearSignalApprovalReactionTargetsForTest,
-  resolveSignalApprovalReactionTargetWithPersistence,
-} from "./approval-reactions.js";
+import { resolveSignalApprovalReactionTargetWithPersistence } from "./approval-reactions.js";
 import { signalPlugin } from "./channel.js";
 import * as clientModule from "./client-adapter.js";
 import {
@@ -34,6 +31,25 @@ import {
 } from "./reply-authors.js";
 import { buildSignalSetupPatch, signalDmPolicy } from "./setup-core.js";
 import * as transportDetectionModule from "./transport-detection.js";
+
+const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
+
+vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
+  return {
+    ...actual,
+    createApprovalReactionTargetStore: <TTarget>(
+      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
+    ) => {
+      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
+      if (params.namespace === "signal.approval-reactions.v2") {
+        reactionStores.add(store);
+      }
+      return store;
+    },
+  };
+});
 
 function signalConfig(signal: NonNullable<OpenClawConfig["channels"]>["signal"]): OpenClawConfig {
   return { channels: { signal } };
@@ -663,7 +679,7 @@ describe("signal outbound", () => {
   it.each(["explicit account", "resolved default account"])(
     "registers delivered approval reactions under the %s",
     async (mode) => {
-      clearSignalApprovalReactionTargetsForTest();
+      reactionStores.forEach((store) => store.clearForTest());
       const useDefault = mode === "resolved default account";
       const cfg: OpenClawConfig = useDefault
         ? {
@@ -722,7 +738,7 @@ describe("signal outbound", () => {
           }),
         ).resolves.toMatchObject({ approvalId: "exec-1", decision: "allow-once" });
         await expect(reactionTarget(messageId)).resolves.toBeNull();
-        clearSignalApprovalReactionTargetsForTest();
+        reactionStores.forEach((store) => store.clearForTest());
       } else {
         await expect(reactionTarget(messageId)).resolves.toEqual({
           approvalId: "exec-after-delivery",
