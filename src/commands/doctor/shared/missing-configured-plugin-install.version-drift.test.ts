@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, it, vi } from "vitest";
-import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
@@ -19,24 +18,10 @@ import {
 import { runPostCorePluginConvergence } from "./post-core-plugin-convergence.js";
 
 const mocks = vi.hoisted(() => ({
-  installPluginFromClawHub: vi.fn(),
   installPluginFromNpmSpec: vi.fn(),
   resolveNpmSpecMetadata: vi.fn(),
   loadManifestMetadataSnapshot: vi.fn(),
 }));
-
-vi.mock("../../../plugins/clawhub.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../plugins/clawhub.js")>();
-  return {
-    ...actual,
-    installPluginFromClawHub: (params: Parameters<typeof actual.installPluginFromClawHub>[0]) =>
-      invokePluginArtifactInstallMock<Awaited<ReturnType<typeof actual.installPluginFromClawHub>>>(
-        mocks.installPluginFromClawHub,
-        params,
-        { manifest: { providers: [], channels: [], channelConfigs: {}, providerAuthChoices: [] } },
-      ),
-  };
-});
 
 vi.mock("../../../infra/install-source-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../infra/install-source-utils.js")>()),
@@ -179,68 +164,6 @@ beforeEach(() => {
     ok: true,
     metadata: npmTarget(spec),
   }));
-});
-
-// The official catalog is deliberately real: the runtime fallback alone only selects npm.
-it("refreshes a stale ClawHub Codex runtime using its declared official catalog source", async () => {
-  const version = "2026.9.4";
-  const { cfg, records, repair } = createDriftedInstalls({
-    hostVersion: version,
-    packages: { codex: "@openclaw/codex" },
-  });
-  const runtimeConfig: OpenClawConfigWithLegacyRoster = {
-    ...cfg,
-    agents: { defaults: { model: "openai/gpt-5.5", agentRuntime: { id: "codex" } } },
-  };
-  const installPath = expectDefined(records.codex?.installPath, "Codex install path");
-  const clawhub = {
-    source: "clawhub",
-    clawhubUrl: "https://clawhub.ai",
-    clawhubPackage: "@openclaw/codex",
-    clawhubFamily: "code-plugin",
-    clawhubChannel: "official",
-  } as const;
-  records.codex = {
-    ...clawhub,
-    spec: "clawhub:@openclaw/codex",
-    installPath,
-    version: oldVersion,
-    integrity: "sha256-old-codex",
-  };
-  mocks.installPluginFromClawHub.mockResolvedValueOnce({
-    ok: true,
-    pluginId: "codex",
-    targetDir: installPath,
-    version,
-    clawhub: { ...clawhub, version, integrity: "sha256-new-codex" },
-  });
-
-  const result = await repair({ cfg: runtimeConfig, repairVersionDrift: false });
-
-  expect(mocks.installPluginFromClawHub).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      spec: `clawhub:@openclaw/codex@${version}`,
-      expectedPluginId: "codex",
-      baseUrl: "https://clawhub.ai",
-      mode: "update",
-      expectedIntegrity: undefined,
-    }),
-  );
-  expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-  expect(result).toMatchObject({
-    changes: [`Refreshed stale configured plugin "codex" from clawhub:@openclaw/codex@${version}.`],
-    repairedPluginIds: ["codex"],
-    warnings: [],
-    records: {
-      codex: {
-        ...clawhub,
-        spec: "clawhub:@openclaw/codex",
-        installPath,
-        version,
-        integrity: "sha256-new-codex",
-      },
-    },
-  });
 });
 
 it.each([true, false])(

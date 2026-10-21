@@ -74,7 +74,7 @@ function expectRenewed(
   added = 1,
 ) {
   expect(actual).toHaveLength(retained.length + added);
-  expect(actual).toEqual(expect.arrayContaining(retained));
+  expect(actual).toEqual(expect.arrayContaining([...retained]));
   expect(new Set(actual).size).toBe(actual.length);
   for (const binding of retired) {
     expect(actual).not.toContain(binding);
