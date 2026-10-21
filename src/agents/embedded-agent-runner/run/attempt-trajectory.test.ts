@@ -21,11 +21,13 @@ const { metadata, createRecorder, sessionFile } = vi.hoisted(() => ({
   sessionFile: vi.fn(async (_input: unknown) => "/tmp/trajectory.jsonl"),
 }));
 
+// mock-isolation: Capture attempt metadata without collecting real session/runtime metadata.
 vi.mock("../../../trajectory/metadata.js", () => ({ buildTrajectoryRunMetadata: metadata }));
 // mock-isolation: Recorder persistence is outside the attempt metadata contract.
 vi.mock("../../../trajectory/runtime.js", () => ({
   createTrajectoryRuntimeRecorder: createRecorder,
 }));
+// mock-isolation: Supply a synthetic transcript path without opening the session store.
 vi.mock("./attempt-transcript-helpers.js", () => ({
   resolveAttemptTrajectorySessionFile: sessionFile,
 }));

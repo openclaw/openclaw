@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   resolveCommandConfigWithSecrets: vi.fn(),
 }));
 
+// mock-isolation: Force the offline status path without contacting a live Gateway.
 vi.mock("../gateway/call.js", () => ({ callGateway: mocks.callGateway }));
 
 vi.mock("./config-validation.js", async (importOriginal) => ({
@@ -26,10 +27,12 @@ vi.mock("./config-validation.js", async (importOriginal) => ({
   requireValidConfigFileSnapshot: mocks.requireValidConfigFileSnapshot,
 }));
 
+// mock-isolation: Resolve only the synthetic external-plugin config and credentials.
 vi.mock("../cli/command-config-resolution.js", () => ({
   resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,
 }));
 
+// mock-isolation: JSON fallback proof does not need account rendering or runtime channel state.
 vi.mock("./channels/shared.js", () => ({
   appendBaseUrlBit: () => undefined,
   appendEnabledConfiguredLinkedBits: () => undefined,

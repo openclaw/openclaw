@@ -49,6 +49,7 @@ vi.mock("../config/config.js", () => ({
   captureRuntimeConfigAsyncReader: () => async () => loadConfig(),
 }));
 
+// mock-isolation: Supply token-resolution outcomes without reading operator credentials.
 vi.mock("./gateway-install-token.js", () => ({ resolveGatewayInstallToken }));
 
 vi.mock("./daemon-install-helpers.js", () => ({
@@ -56,6 +57,7 @@ vi.mock("./daemon-install-helpers.js", () => ({
   gatewayInstallErrorHint: vi.fn(() => "hint"),
 }));
 
+// mock-isolation: Capture install diagnostics without rendering interactive terminal notes.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 vi.mock("./configure.shared.js", () => ({

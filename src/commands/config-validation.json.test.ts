@@ -7,6 +7,7 @@ import { requireValidConfig, requireValidConfigFileSnapshot } from "./config-val
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const read = vi.hoisted(() => vi.fn());
+// mock-isolation: Exercise JSON diagnostics against synthetic snapshots without config-store I/O.
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: read,
   readConfigFileSnapshotForWrite: vi.fn(),

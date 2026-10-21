@@ -107,7 +107,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
     method = "test.entry",
     client = createOperatorWsClient(),
   ) => {
-    track(harness.awaitResponseFrame(id));
+    void track(harness.awaitResponseFrame(id));
     return track(harness.dispatcher.dispatch({ type: "req", id, method, params: {} }, client));
   };
   const request = (
@@ -236,13 +236,13 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
         events.push("response");
         return { kind: "sent" };
       });
-      dispatch(harness, "mutation", "device.token.revoke", client);
+      void dispatch(harness, "mutation", "device.token.revoke", client);
       await reached.promise;
-      dispatch(harness, "waiting", method, client);
+      void dispatch(harness, "waiting", method, client);
       await nextTurn();
       expect(waiter).not.toHaveBeenCalled();
       expect(harness.send).not.toHaveBeenCalled();
-      track(
+      void track(
         kernel.prepareClose().then(() => {
           events.push("closed");
         }),
@@ -274,7 +274,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
       extraHandlers: { "test.entry": handler },
       isClosed: () => disconnected,
     });
-    dispatch(harness, "disconnected", "test.entry", client);
+    void dispatch(harness, "disconnected", "test.entry", client);
     await reached.promise;
     disconnected = true;
     socket.emit("close");

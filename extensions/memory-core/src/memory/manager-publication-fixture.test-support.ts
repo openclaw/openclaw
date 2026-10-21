@@ -45,7 +45,10 @@ export function createPublication({
     db,
     backend,
     admission,
-    expectResult(command: Parameters<typeof backend.execute>[0], expected: object = { ok: true }) {
+    expectResult: (
+      command: Parameters<typeof backend.execute>[0],
+      expected: object = { ok: true },
+    ) => {
       expect(backend.execute(command)).toMatchObject(expected);
     },
     [Symbol.dispose]: close,

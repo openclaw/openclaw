@@ -26,6 +26,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // mock-isolation: Restore the synthetic heartbeat runner instead of scheduling real work.
   vi.doMock("../infra/heartbeat-runner-run.js", () => heartbeatModule);
   vi.useRealTimers();
   resetGatewayWorkAdmission();
@@ -36,6 +37,7 @@ it.each(["stop", "replace"] as const)(
   async (action) => {
     const loading = createDeferredCore();
     const release = createDeferredCore();
+    // mock-isolation: Hold runner loading at a controlled lifecycle boundary without real heartbeats.
     vi.doMock("../infra/heartbeat-runner-run.js", async () => {
       loading.resolve();
       await release.promise;

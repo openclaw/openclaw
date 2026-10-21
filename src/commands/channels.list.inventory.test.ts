@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
 }));
 
+// mock-isolation: Inventory uses the supplied config snapshot, not the operator's config store.
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: mocks.readConfigFileSnapshot }));
 vi.mock("../cli/command-config-resolution.js", () => ({
   resolveCommandConfigWithSecrets: async ({ config }: { config: OpenClawConfig }) => ({

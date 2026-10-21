@@ -3,6 +3,7 @@ import type { ModelFallbackDecisionParams } from "./model-fallback-observation.j
 
 const loggerMocks = vi.hoisted(() => ({ isEnabled: vi.fn(() => true), warn: vi.fn() }));
 
+// mock-isolation: Capture diagnostic payloads without writing to the process logger.
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
     ...loggerMocks,

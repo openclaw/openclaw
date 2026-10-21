@@ -16,11 +16,13 @@ const resolveSecretRefValues = vi.hoisted(() => vi.fn());
 const ensureDashboardGatewayReady = vi.hoisted(() => vi.fn());
 const waitForControlUiDocument = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Dashboard links use synthetic config and ports, not operator state.
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot,
   resolveGatewayPort,
 }));
 
+// mock-isolation: Capture link generation and browser handoff without opening a browser.
 vi.mock("./onboard-helpers.js", () => ({
   resolveControlUiLinks,
   detectBrowserOpenSupport,
@@ -33,10 +35,13 @@ vi.mock("../infra/browser-handoff.js", async (importOriginal) => ({
   openUrlPrivately,
 }));
 
+// mock-isolation: Observe clipboard handoff without changing the system clipboard.
 vi.mock("../infra/clipboard.js", () => ({ copyToClipboard }));
 
+// mock-isolation: Issue synthetic bootstrap tokens without creating real device authority.
 vi.mock("../infra/device-bootstrap.js", () => ({ issueDeviceBootstrapToken }));
 
+// mock-isolation: Select readiness outcomes without starting or probing a real Gateway.
 vi.mock("./gateway-readiness.js", () => ({ ensureDashboardGatewayReady }));
 
 vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
@@ -44,6 +49,7 @@ vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
   waitForControlUiDocument,
 }));
 
+// mock-isolation: Resolve synthetic SecretRefs without invoking credential providers.
 vi.mock("../secrets/resolve.js", () => ({ resolveSecretRefValues }));
 
 const runtime = createTestRuntime();
