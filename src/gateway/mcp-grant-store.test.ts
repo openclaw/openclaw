@@ -28,6 +28,8 @@ import {
 
 const T0 = 1_000_000_000_000;
 const admissions: PreparedAgentRunAdmission[] = [];
+const attach = (sessionKey: string, params: Partial<Parameters<typeof mintAttachGrant>[0]> = {}) =>
+  mintAttachGrant({ sessionKey, nowMs: T0, ...params });
 const grantParams = (token: string, captureKey: string, runtimeOwnerToken = "runtime-one") => ({
   token,
   captureKey,
@@ -75,11 +77,11 @@ describe("mcp-grant-store", () => {
   });
 
   it("requires a non-empty sessionKey", () => {
-    expect(() => mintAttachGrant({ sessionKey: "  ", nowMs: T0 })).toThrow();
+    expect(() => attach("  ")).toThrow();
   });
 
   it("resolves a live grant and drops it once expired (TTL)", () => {
-    const g = mintAttachGrant({ sessionKey: "agent:main:x", ttlMs: 1_000, nowMs: T0 });
+    const g = attach("agent:main:x", { ttlMs: 1_000 });
     expect(resolveAttachGrant(g.token, T0)?.sessionKey).toBe("agent:main:x");
     expect(resolveAttachGrant(g.token, T0 + 999)?.sessionKey).toBe("agent:main:x");
     expect(resolveAttachGrant(g.token, T0 + 1_000)).toBeUndefined();
@@ -87,28 +89,24 @@ describe("mcp-grant-store", () => {
   });
 
   it("binds a separate agent owner only to the canonical global session", () => {
-    const global = mintAttachGrant({ sessionKey: "global", agentId: " ops ", nowMs: T0 });
-    const scoped = mintAttachGrant({
-      sessionKey: "agent:main:telegram:1",
-      agentId: "ops",
-      nowMs: T0,
-    });
+    const global = attach("global", { agentId: " ops " });
+    const scoped = attach("agent:main:telegram:1", { agentId: "ops" });
 
     expect(global.agentId).toBe("ops");
     expect(scoped.agentId).toBeUndefined();
   });
 
   it("revokes by token", () => {
-    const g = mintAttachGrant({ sessionKey: "agent:main:x", nowMs: T0 });
+    const g = attach("agent:main:x");
     expect(revokeAttachGrant(g.token)).toBe(true);
     expect(resolveAttachGrant(g.token, T0)).toBeUndefined();
     expect(revokeAttachGrant(g.token)).toBe(false);
   });
 
   it("revokes every attach grant for one session", () => {
-    const first = mintAttachGrant({ sessionKey: "agent:main:first", nowMs: T0 });
-    const second = mintAttachGrant({ sessionKey: "agent:main:first", nowMs: T0 });
-    const other = mintAttachGrant({ sessionKey: "agent:main:other", nowMs: T0 });
+    const first = attach("agent:main:first");
+    const second = attach("agent:main:first");
+    const other = attach("agent:main:other");
 
     expect(revokeAttachGrantsForSession(" agent:main:first ")).toBe(2);
     expect(resolveAttachGrant(first.token, T0)).toBeUndefined();
@@ -117,11 +115,11 @@ describe("mcp-grant-store", () => {
   });
 
   it("clamps TTL: default for non-positive, ceiling at 12h", () => {
-    const def = mintAttachGrant({ sessionKey: "s", nowMs: T0 });
+    const def = attach("s");
     expect(def.expiresAtMs).toBe(T0 + 60 * 60 * 1000);
-    const zero = mintAttachGrant({ sessionKey: "s", ttlMs: 0, nowMs: T0 });
+    const zero = attach("s", { ttlMs: 0 });
     expect(zero.expiresAtMs).toBe(T0 + 60 * 60 * 1000);
-    const huge = mintAttachGrant({ sessionKey: "s", ttlMs: 999 * 60 * 60 * 1000, nowMs: T0 });
+    const huge = attach("s", { ttlMs: 999 * 60 * 60 * 1000 });
     expect(huge.expiresAtMs).toBe(T0 + 12 * 60 * 60 * 1000);
   });
 
