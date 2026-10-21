@@ -120,6 +120,77 @@ describe("session progress card lifetimes", () => {
   });
 });
 
+describe("session progress card read recovery", () => {
+  it.each(["initial", "empty", "card"] as const)(
+    "recovers a failed read without new agent work (%s)",
+    async (state) => {
+      vi.useFakeTimers();
+      const { gateway, request, emitChange } = createGateway();
+      const card = createProgressCard(1);
+      const failure = new Error("Temporary read failure");
+      request.mockRejectedValueOnce(failure);
+      if (state !== "initial") {
+        request.mockReset().mockResolvedValueOnce({ card: state === "empty" ? null : card });
+      }
+      const { store } = watchCards(gateway);
+      if (state !== "initial") {
+        await store.load(target);
+        request.mockRejectedValueOnce(failure);
+        emitChange(sessionKey, 2);
+      }
+      await expect(store.load(target)).rejects.toBe(failure);
+      expect(store.get(target)).toEqual(
+        state === "initial" ? undefined : state === "empty" ? null : card,
+      );
+      const requestsBeforeRetry = request.mock.calls.length;
+      const recovered = { ...card, revision: 2, markdown: "Recovered progress" };
+      request.mockResolvedValue({ card: recovered });
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(request).toHaveBeenCalledTimes(requestsBeforeRetry);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(store.get(target)).toEqual(recovered);
+      expect(store.getError(target)).toBeUndefined();
+      expect(request).toHaveBeenCalledTimes(requestsBeforeRetry + 1);
+      expect(request.mock.calls.every(([method]) => method === "progressCard.get")).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it.each(["hidden", "unwatched", "offline", "denied"] as const)(
+    "retires pending read recovery when %s",
+    async (boundary) => {
+      vi.useFakeTimers();
+      const { gateway, request, snapshotChanged } = createGateway();
+      const failure = new Error("Temporary read failure");
+      request.mockRejectedValue(failure);
+      const { store, owner } = watchCards(gateway);
+      await expect(store.load(target)).rejects.toBe(failure);
+      if (boundary === "hidden") {
+        store.watch(owner, [target], { admitAutomaticRead: () => false });
+      } else if (boundary === "unwatched") {
+        store.unwatch(owner);
+      } else if (boundary === "offline") {
+        gateway.snapshot.phase = "reconnecting";
+        snapshotChanged();
+      } else {
+        const denied = new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Participation required",
+          details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+        });
+        request.mockRejectedValueOnce(denied);
+        await expect(store.load(target)).rejects.toBe(denied);
+        expect(store.get(target)).toBeNull();
+        expect(store.getError(target)).toBe("access-denied");
+      }
+      const count = request.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(request).toHaveBeenCalledTimes(count);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+});
+
 describe("session progress card refresh", () => {
   it.each([
     { outcome: "accepted", eventFirst: false },
@@ -266,6 +337,12 @@ describe("session progress card refresh", () => {
         emitChange(sessionKey, 2);
         await expect(store.load(target)).rejects.toBe(failure);
         expect(store.getError(target)).toBe("unavailable");
+        request.mockImplementation(async (method) => {
+          if (method === "progressCard.get") {
+            throw failure;
+          }
+          return acceptance;
+        });
       }
       await vi.advanceTimersByTimeAsync(120_000);
       expect(store.getRefreshState(target)).toBe("timeout");
@@ -292,6 +369,9 @@ describe("session progress card refresh", () => {
       expect(store.getError(target)).toBe("unavailable");
       await vi.advanceTimersByTimeAsync(120_000);
       expect(store.getRefreshState(target)).toBe("timeout");
+      const readsBeforeFinalRetry = request.mock.calls.filter(
+        ([method]) => method === "progressCard.get",
+      ).length;
       request.mockImplementation(async (method) =>
         method === "progressCard.refresh" ? acceptance : { card },
       );
@@ -301,7 +381,7 @@ describe("session progress card refresh", () => {
       expect(retries).toHaveLength(3);
       expect(retries[2]).toEqual(retries[0]);
       expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(
-        previousReads.length + 2,
+        readsBeforeFinalRetry + 1,
       );
       expect(store.get(target)).toEqual(card);
       expect(store.getRefreshState(target)).toBe("updated");
@@ -392,9 +472,11 @@ describe("session progress card Gateway response boundary", () => {
     { method: "progressCard.get", denied: false },
     { method: "progressCard.put", denied: true },
     { method: "progressCard.put", denied: false },
+    { method: "progressCard.get", denied: true, forbidden: true },
+    { method: "progressCard.put", denied: false, forbidden: true },
   ])(
-    "revalidates after $method failure while hiding only denied content (denied: $denied)",
-    async ({ method, denied }) => {
+    "revalidates after $method failure while hiding only denied content (denied: $denied, forbidden: $forbidden)",
+    async ({ method, denied, forbidden }) => {
       const { gateway, request, emitChange, features } = createGateway();
       // Core methods are called directly; a missing advertisement is not a feature gate.
       features.methods = [];
@@ -412,22 +494,24 @@ describe("session progress card Gateway response boundary", () => {
       if (!displayed) {
         throw new Error("Expected the loaded progress card");
       }
-      const error = denied
-        ? new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "Participation required",
-            details: { code: "SESSION_PARTICIPATION_REQUIRED" },
-          })
-        : new Error("Temporary connection failure");
+      const error = forbidden
+        ? new GatewayRequestError({ code: "FORBIDDEN", message: "Forbidden" })
+        : denied
+          ? new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "Participation required",
+              details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+            })
+          : new Error("Temporary connection failure");
       request.mockRejectedValueOnce(error);
       if (method === "progressCard.get") {
         emitChange(sessionKey, 2);
         await expect(store.load(target)).rejects.toBe(error);
-        expect(store.getError(target)).toBe(denied ? "access-denied" : "unavailable");
       } else {
         await expect(store.dismiss(target, displayed)).rejects.toBe(error);
       }
       expect(store.get(target)).toEqual(denied ? null : card);
+      expect(store.getError(target)).toBe(denied ? "access-denied" : "unavailable");
       expect(store.get(sibling)).toEqual(siblingCard);
       const restored = { ...card, revision: 2, markdown: "Refreshed progress" };
       request.mockResolvedValueOnce({ card: restored });
@@ -659,84 +743,100 @@ describe("session progress card Gateway response boundary", () => {
     },
   );
 
-  it("refreshes a retained watch through replacement and same-client Gateway reconnects", async () => {
-    stubGatewayStoreTestGlobals();
-    const { gateway, current } = createGatewayStoreTestStore();
-    const alias = "agent:research:main";
-    const reconnectTarget = { sessionKey: alias, agentId: "research" };
-    const oldCard = {
-      sessionKey: "agent:research:global",
-      revision: 1,
-      updatedAt: 1,
-      markdown: "Global progress",
-    };
-    const nextCard = { ...oldCard, sessionKey: alias, markdown: "Per-sender progress" };
-    const hello = (mainSessionKey: string) => ({
-      ...GATEWAY_STORE_TEST_HELLO,
-      features: {
-        methods: ["progressCard.get"],
-      },
-      snapshot: { sessionDefaults: { mainSessionKey, mainKey: "main", defaultAgentId: "main" } },
-    });
-    gateway.start();
-    current().request.mockResolvedValue({ card: oldCard });
-    current().testOptions.onHello?.(hello("global"));
-    const store = sessionProgressCardsForGateway(gateway);
-    const owner = {};
-    onTestFinished(() => {
-      store.unwatch(owner);
-      gateway.stop();
-      setAvatarGatewayOrigin(null);
-      vi.unstubAllGlobals();
-    });
-    store.watch(owner, [reconnectTarget]);
-    await store.load(reconnectTarget);
-    expect(store.get(reconnectTarget)).toEqual(oldCard);
+  it.each([false, true])(
+    "refreshes a retained watch through Gateway reconnects (late failure: %s)",
+    async (lateFailure) => {
+      stubGatewayStoreTestGlobals();
+      const { gateway, current } = createGatewayStoreTestStore();
+      const alias = "agent:research:main";
+      const reconnectTarget = { sessionKey: alias, agentId: "research" };
+      const oldCard = {
+        sessionKey: "agent:research:global",
+        revision: 1,
+        updatedAt: 1,
+        markdown: "Global progress",
+      };
+      const nextCard = { ...oldCard, sessionKey: alias, markdown: "Per-sender progress" };
+      const hello = (mainSessionKey: string) => ({
+        ...GATEWAY_STORE_TEST_HELLO,
+        features: {
+          methods: ["progressCard.get"],
+        },
+        snapshot: { sessionDefaults: { mainSessionKey, mainKey: "main", defaultAgentId: "main" } },
+      });
+      gateway.start();
+      current().request.mockResolvedValue({ card: oldCard });
+      current().testOptions.onHello?.(hello("global"));
+      const store = sessionProgressCardsForGateway(gateway);
+      const owner = {};
+      onTestFinished(() => {
+        store.unwatch(owner);
+        gateway.stop();
+        setAvatarGatewayOrigin(null);
+        vi.unstubAllGlobals();
+      });
+      store.watch(owner, [reconnectTarget]);
+      await store.load(reconnectTarget);
+      expect(store.get(reconnectTarget)).toEqual(oldCard);
 
-    const staleRead = createDeferred<{ card: typeof oldCard }>();
-    current().request.mockReturnValueOnce(staleRead.promise);
-    current().testOptions.onEvent?.(
-      createGatewayEvent("progressCard.changed", { sessionKey: oldCard.sessionKey, revision: 2 }),
-    );
-    const oldRead = store.load(reconnectTarget);
-    current().testOptions.onEvent?.(
-      createGatewayEvent("progressCard.changed", { sessionKey: oldCard.sessionKey, revision: 3 }),
-    );
-    gateway.connect();
-    const replacement = current();
-    replacement.request.mockResolvedValue({ card: nextCard });
-    replacement.testOptions.onHello?.(hello("agent:main:main"));
-    await vi.waitFor(() => expect(store.get(reconnectTarget)).toEqual(nextCard));
-    staleRead.resolve({ card: oldCard });
-    await expect(oldRead).resolves.toBeNull();
-    expect(store.get(reconnectTarget)).toEqual(nextCard);
-    const replacementLifetime = store.getLifetime(reconnectTarget);
-    expect(replacementLifetime).toBeDefined();
-    expect(replacement.request).toHaveBeenCalledTimes(1);
+      const staleRead = createDeferred<{ card: typeof oldCard }>();
+      current().request.mockReturnValueOnce(staleRead.promise);
+      current().testOptions.onEvent?.(
+        createGatewayEvent("progressCard.changed", { sessionKey: oldCard.sessionKey, revision: 2 }),
+      );
+      const oldRead = store.load(reconnectTarget);
+      current().testOptions.onEvent?.(
+        createGatewayEvent("progressCard.changed", { sessionKey: oldCard.sessionKey, revision: 3 }),
+      );
+      gateway.connect();
+      const replacement = current();
+      replacement.request.mockResolvedValue({ card: nextCard });
+      replacement.testOptions.onHello?.(hello("agent:main:main"));
+      await vi.waitFor(() => expect(store.get(reconnectTarget)).toEqual(nextCard));
+      staleRead.resolve({ card: oldCard });
+      await expect(oldRead).resolves.toBeNull();
+      expect(store.get(reconnectTarget)).toEqual(nextCard);
+      const replacementLifetime = store.getLifetime(reconnectTarget);
+      expect(replacementLifetime).toBeDefined();
+      expect(replacement.request).toHaveBeenCalledTimes(1);
 
-    const interruptedRead = createDeferred<{ card: typeof nextCard }>();
-    replacement.request.mockReturnValueOnce(interruptedRead.promise);
-    replacement.testOptions.onEvent?.(
-      createGatewayEvent("progressCard.changed", { sessionKey: nextCard.sessionKey, revision: 2 }),
-    );
-    const reconnectRead = store.load(reconnectTarget);
-    replacement.testOptions.onEvent?.(
-      createGatewayEvent("progressCard.changed", { sessionKey: nextCard.sessionKey, revision: 3 }),
-    );
-    replacement.testOptions.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
-    expect(gateway.snapshot.phase).toBe("reconnecting");
-    expect(gateway.snapshot.client).toBe(replacement);
-    expect(store.get(reconnectTarget)).toEqual(nextCard);
-    const refreshedCard = { ...nextCard, revision: 2, markdown: "Progress while disconnected" };
-    replacement.request.mockResolvedValue({ card: refreshedCard });
-    replacement.testOptions.onHello?.(hello("agent:main:main"));
-    await vi.waitFor(() => expect(store.get(reconnectTarget)).toEqual(refreshedCard));
-    interruptedRead.resolve({ card: nextCard });
-    await expect(reconnectRead).resolves.toBeNull();
-    expect(store.get(reconnectTarget)).toEqual(refreshedCard);
-    expect(store.getLifetime(reconnectTarget)).toBe(replacementLifetime);
-    expect(replacement.request).toHaveBeenCalledTimes(3);
-  });
+      const interruptedRead = createDeferred<{ card: typeof nextCard }>();
+      replacement.request.mockReturnValueOnce(interruptedRead.promise);
+      replacement.testOptions.onEvent?.(
+        createGatewayEvent("progressCard.changed", {
+          sessionKey: nextCard.sessionKey,
+          revision: 2,
+        }),
+      );
+      const reconnectRead = store.load(reconnectTarget);
+      replacement.testOptions.onEvent?.(
+        createGatewayEvent("progressCard.changed", {
+          sessionKey: nextCard.sessionKey,
+          revision: 3,
+        }),
+      );
+      replacement.testOptions.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+      expect(gateway.snapshot.phase).toBe("reconnecting");
+      expect(gateway.snapshot.client).toBe(replacement);
+      expect(store.get(reconnectTarget)).toEqual(nextCard);
+      const refreshedCard = { ...nextCard, revision: 2, markdown: "Progress while disconnected" };
+      replacement.request.mockResolvedValue({ card: refreshedCard });
+      replacement.testOptions.onHello?.(hello("agent:main:main"));
+      await vi.waitFor(() => expect(store.get(reconnectTarget)).toEqual(refreshedCard));
+      if (lateFailure) {
+        const failure = new Error("Retired connection read failed");
+        interruptedRead.reject(failure);
+        await expect(reconnectRead).rejects.toBe(failure);
+      } else {
+        interruptedRead.resolve({ card: nextCard });
+        await expect(reconnectRead).resolves.toBeNull();
+      }
+      expect(store.getError(reconnectTarget)).toBeUndefined();
+      expect(store.get(reconnectTarget)).toEqual(refreshedCard);
+      expect(store.getLifetime(reconnectTarget)).toBe(replacementLifetime);
+      expect(replacement.request).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it.each([
     { method: "get", updatedAt: -MAX_DATE_TIMESTAMP_MS, valid: true },

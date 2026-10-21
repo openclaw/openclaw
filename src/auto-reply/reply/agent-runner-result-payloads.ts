@@ -11,6 +11,7 @@ import {
   createMissingReplyNotice,
   MISSING_REPLY_NOTICE_TEXT,
   isSyntheticSourceReplyTurn,
+  resolveClaimedReplyExpectation,
   resolveReplyCompletion,
   shouldDeliverMissingReplyNotice,
 } from "../../agents/reply-completion.js";
@@ -203,7 +204,7 @@ export async function prepareReplyAgentPayloads(state: {
   });
   const sourceReplyDelivery = resolveSourceReplyDelivery(runResult, terminalReplyDelivery);
   let completion = resolveReplyCompletion(
-    terminalReplyExpectation,
+    resolveClaimedReplyExpectation(terminalReplyExpectation, runResult.meta),
     blocked || heartbeatAcknowledgment
       ? "blocked"
       : authoredSilence

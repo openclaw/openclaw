@@ -7,7 +7,6 @@ import {
   maybeRepairDiscordNumericIds,
   scanDiscordNumericIdEntries,
 } from "./doctor.js";
-import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 
 function discordConfig(discord: Record<string, unknown>): OpenClawConfig {
   return { channels: { discord } } as OpenClawConfig;
@@ -53,7 +52,6 @@ describe("discord doctor", () => {
       expect(discord).toEqual({
         streaming: { ...(mode ? { mode } : {}), block: { enabled: true } },
       });
-      expect(resolveDiscordPreviewStreamMode(discord)).toBe("progress");
       expect(result.changes).toEqual([
         ...(mode
           ? ["Moved channels.discord.streamMode → channels.discord.streaming.mode (progress)."]

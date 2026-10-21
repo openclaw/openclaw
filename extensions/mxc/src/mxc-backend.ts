@@ -39,10 +39,7 @@ type MxcExecFinalizeToken = {
 const CONTAINER_ID_MAX_LEN = 64;
 function uniqueContainerId(runtimeId: string): string {
   const suffix = randomBytes(4).toString("hex");
-  const base =
-    runtimeId.length + suffix.length + 1 > CONTAINER_ID_MAX_LEN
-      ? runtimeId.slice(0, CONTAINER_ID_MAX_LEN - suffix.length - 1)
-      : runtimeId;
+  const base = runtimeId.slice(0, CONTAINER_ID_MAX_LEN - suffix.length - 1);
   return `${base}-${suffix}`;
 }
 

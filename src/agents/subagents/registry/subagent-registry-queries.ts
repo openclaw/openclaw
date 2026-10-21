@@ -587,19 +587,8 @@ export function buildScopedSubagentRunReadIndexFromRuns<T extends SubagentRunRea
 export function hasDescendantRunAwaitingSettleFromRuns(
   runs: Map<string, SubagentRunRecord>,
   rootSessionKey: string,
-  excludeRunId?: string,
-  requesterAgentId?: string,
-  requesterStorePath?: string | null,
-  settledBefore?: number,
-  rootRunIds?: ReadonlySet<string>,
 ): boolean {
-  return buildScopedSubagentRunReadIndexFromRuns(
-    runs,
-    rootSessionKey,
-    requesterAgentId,
-    requesterStorePath,
-    rootRunIds,
-  ).hasDescendantRunAwaitingSettle(rootSessionKey, excludeRunId, settledBefore);
+  return buildSubagentRunReadIndexFromRuns({ runs }).hasDescendantRunAwaitingSettle(rootSessionKey);
 }
 
 export function listDescendantRunsForRequesterFromRuns(

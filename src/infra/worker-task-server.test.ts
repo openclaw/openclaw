@@ -32,7 +32,13 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ error: vi.fn() }),
 }));
 // mock-isolation: Observe diagnostic cleanup without allocating a memory transport.
-vi.mock("./worker-memory.js", () => ({ serveWorkerMemorySamples: () => boundary.closeMemory }));
+vi.mock("./worker-memory.js", () => ({
+  serveWorkerMemorySamples: () => ({
+    close: boundary.closeMemory,
+    setTaskMetrics: () => {},
+    collectTask: () => undefined,
+  }),
+}));
 // mock-isolation: Keep process-wide idle timers outside the retirement fixture.
 vi.mock("./worker-idle-gc.js", () => ({
   cancelWorkerIdleGc: vi.fn(),
@@ -119,7 +125,10 @@ async function workerFixture() {
       return result.promise;
     },
     expectResult(this: void, taskId: number, value: unknown) {
-      expect(port.postMessage).toHaveBeenLastCalledWith({ status: "ok", value, taskId }, []);
+      expect(port.postMessage).toHaveBeenLastCalledWith(
+        { status: "ok", value, taskId, diagnostics: undefined },
+        [],
+      );
     },
   };
 }

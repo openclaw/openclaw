@@ -19,8 +19,8 @@ import {
   MANIFEST_REF,
   OWNER_EPOCH,
   SESSION_ID,
-  attachedEnvironment,
   acknowledgeCompletedWorkerTurn,
+  attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   createWorkerTurnTunnel,
@@ -32,7 +32,7 @@ import {
   sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
-  unusedEnvironments,
+  workerTurnEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
@@ -216,13 +216,9 @@ it.each(["worker-turn", "remote-exec"] as const)(
     const provider = createWorkerSessionTurnPlacementProvider({
       placements,
       resolveWorkspace: async () => ({ kind: "local", path: local }),
-      environments: {
-        ...unusedEnvironments(),
-        get: attachedEnvironment,
-        acquireTurnCredential: async () => credential(),
+      environments: workerTurnEnvironments(tunnel, {
         acknowledgeCredentialDelivery: async () => true,
-        startTunnel: async () => tunnel,
-      },
+      }),
     });
     await provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, async () => {
       await verifyFiles(input.prompt);

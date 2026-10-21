@@ -104,18 +104,22 @@ function prunableHistory(): AgentMessage[] {
   return [
     { role: "user", content: "first", timestamp: 1 },
     assistant("a1"),
-    {
-      role: "toolResult",
-      toolCallId: "old-tool",
-      toolName: "read",
-      content: [{ type: "text", text: "x".repeat(5_000) }],
-      isError: false,
-      timestamp: 1,
-    },
+    toolResult("old-tool", "x".repeat(5_000), 1),
     assistant("a2"),
     assistant("a3"),
     assistant("a4"),
   ];
+}
+
+function toolResult(toolCallId: string, text: string, timestamp: number): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName: "read",
+    content: [{ type: "text", text }],
+    isError: false,
+    timestamp,
+  };
 }
 
 describe("installEmbeddedAttemptContextGuards", () => {
@@ -275,22 +279,19 @@ describe("installEmbeddedAttemptContextGuards", () => {
     expect(removeLoopHook).toHaveBeenCalledOnce();
   });
 
-  it.each([{ name: "attempt configuration is absent", config: undefined }])(
-    "does not inspect providers when $name",
-    ({ config }) => {
-      hoisted.isCacheTtlEligibleProvider.mockReturnValue(true);
-      const input = createInput();
-      input.attempt = { ...input.attempt, config: config as never };
+  it("does not inspect providers when attempt configuration is absent", () => {
+    hoisted.isCacheTtlEligibleProvider.mockReturnValue(true);
+    const input = createInput();
+    input.attempt = { ...input.attempt, config: undefined as never };
 
-      const guards = installEmbeddedAttemptContextGuards(input as never);
+    const guards = installEmbeddedAttemptContextGuards(input as never);
 
-      expect(hoisted.isCacheTtlEligibleProvider).not.toHaveBeenCalled();
-      expect(hoisted.readLastCacheTtlTimestamp).not.toHaveBeenCalled();
-      guards.remove();
-    },
-  );
+    expect(hoisted.isCacheTtlEligibleProvider).not.toHaveBeenCalled();
+    expect(hoisted.readLastCacheTtlTimestamp).not.toHaveBeenCalled();
+    guards.remove();
+  });
 
-  it.each([undefined])("passes resolved route opt-in %s to pruning eligibility", (optIn) => {
+  it("passes absent route opt-in to pruning eligibility", () => {
     const input = createInput();
     const model = {
       ...cacheModel,
@@ -299,7 +300,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
       id: "gpt-4o",
       api: "openai-responses" as const,
       baseUrl: "https://proxy.example/v1",
-      compat: { supportsPromptCacheKey: optIn },
+      compat: { supportsPromptCacheKey: undefined },
       headers: { "x-test-private": "not-for-provider-hooks" },
     };
     input.attempt = {
@@ -314,7 +315,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
       "openai",
       "gpt-4o",
       "openai-responses",
-      { baseUrl: model.baseUrl, supportsPromptCacheKey: optIn },
+      { baseUrl: model.baseUrl, supportsPromptCacheKey: undefined },
     );
     guards.remove();
   });
@@ -394,17 +395,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
         }
         vi.setSystemTime(requestStart + 20_000);
         const expanded = thresholdCrossing
-          ? [
-              ...history,
-              {
-                role: "toolResult" as const,
-                toolCallId: "new-tool",
-                toolName: "read",
-                content: [{ type: "text" as const, text: "y".repeat(10_000) }],
-                isError: false,
-                timestamp: Date.now(),
-              },
-            ]
+          ? [...history, toolResult("new-tool", "y".repeat(10_000), Date.now())]
           : history;
         const second = await project(expanded);
         if (outcome === "success") {

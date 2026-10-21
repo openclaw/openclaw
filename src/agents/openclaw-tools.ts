@@ -151,11 +151,7 @@ export async function createOpenClawToolsWithPreparation(
 }
 
 /** @deprecated Use createOpenClawToolsAsync for runtime construction. */
-export function createOpenClawTools(
-  options?: OpenClawToolsOptions,
-  preparedDelegateTools?: AnyAgentTool[],
-  preparedWebSearchConfigured?: boolean,
-): AnyAgentTool[] {
+export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentTool[] {
   const captured = { ...options };
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
@@ -168,8 +164,8 @@ export function createOpenClawTools(
   );
   const steps = createOpenClawToolsSteps(
     captured,
-    preparedDelegateTools,
-    preparedWebSearchConfigured,
+    undefined,
+    undefined,
     undefined,
     undefined,
     !isEmbeddedMode() && hasMultipleSessionSharingIdentitiesNative(),
@@ -530,9 +526,9 @@ function* createOpenClawToolsSteps(
     options?.githubPublicationAvailable === true ||
     (options?.githubPublicationAvailable === false && githubActionsAvailable)
       ? createGitHubPublishTool({
+          ...options,
           publicationAvailable: options.githubPublicationAvailable,
           actionsAvailable: githubActionsAvailable,
-          sandbox: options.sandbox,
         })
       : null,
     transcriptsTool,

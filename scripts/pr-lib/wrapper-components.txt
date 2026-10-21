@@ -2439,6 +2439,7 @@ src/config/sessions/session-actor-memory-entry-guards.ts
 src/config/sessions/session-actor-memory-entry-install.ts
 src/config/sessions/session-actor-memory-entry.ts
 src/config/sessions/session-actor-memory-events.ts
+src/config/sessions/session-prior-workspace-boundary.ts
 src/config/sessions/session-actor-memory-fork.ts
 src/config/sessions/session-actor-memory-goals.ts
 src/config/sessions/session-actor-memory-history-anchors.ts

@@ -72,7 +72,8 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
         candidate.sourceIdentity === host.sourceIdentity &&
         candidate.sessionFileSource?.sessionKey === host.sessionFileSource?.sessionKey &&
         candidate.sessionFileSource?.agentId === host.sessionFileSource?.agentId &&
-        candidate.sessionFileSource?.path === host.sessionFileSource?.path,
+        candidate.sessionFileSource?.path === host.sessionFileSource?.path &&
+        candidate.sessionFileSource?.messageEntryId === host.sessionFileSource?.messageEntryId,
       );
 
     const sourceInput = createMemo(
@@ -84,6 +85,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
           props.sessionFileSource?.sessionKey,
           props.sessionFileSource?.agentId,
           props.sessionFileSource?.path,
+          props.sessionFileSource?.messageEntryId,
           snapshot?.client,
           snapshot?.phase === "connected",
           getCanvasWidgetFrameConnectionGeneration(),

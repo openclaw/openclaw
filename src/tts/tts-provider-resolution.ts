@@ -349,19 +349,14 @@ function resolvePreferredTtsProvider(
   return undefined;
 }
 
-export function resolveTtsProvider(
-  config: ResolvedTtsConfig,
-  prefsPath: string,
-  registry: TtsProviderRegistry = defaultProviderRegistry,
-  prefs = readPrefs(prefsPath),
-): TtsProvider {
-  const preferred = resolvePreferredTtsProvider(config, prefsPath, registry, prefs);
+export function resolveTtsProvider(config: ResolvedTtsConfig, prefsPath: string): TtsProvider {
+  const preferred = resolvePreferredTtsProvider(config, prefsPath);
   if (preferred) {
     return preferred;
   }
   const effectiveCfg = config.sourceConfig;
-  for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg, undefined, registry)) {
-    if (isSpeechProviderConfigured(config, provider.id, effectiveCfg, registry)) {
+  for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg)) {
+    if (isSpeechProviderConfigured(config, provider.id, effectiveCfg, defaultProviderRegistry)) {
       return provider.id;
     }
   }

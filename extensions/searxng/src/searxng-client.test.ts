@@ -6,9 +6,15 @@ installPinnedHostnameTestHooks();
 afterEach(() => vi.restoreAllMocks());
 
 const baseUrl = "http://127.0.0.1:8888";
-const requestUrl = `${baseUrl}/search?q=openclaw&format=json`;
+const query = "openclaw";
+const requestUrl = `${baseUrl}/search?q=${query}&format=json`;
+function searchConfig(endpoint: string, categories?: string, language?: string) {
+  const webSearch = { baseUrl: endpoint, categories, language };
+  return { plugins: { entries: { searxng: { config: { webSearch } } } } };
+}
+
 function search(params: Partial<Parameters<typeof runSearxngSearch>[0]> = {}) {
-  return runSearxngSearch({ baseUrl, query: "openclaw", cacheTtlMinutes: 0, ...params });
+  return runSearxngSearch({ config: searchConfig(baseUrl), query, cacheTtlMinutes: 0, ...params });
 }
 
 function mockFetch(...bodies: (Response | unknown[])[]) {
@@ -29,12 +35,7 @@ function row(path: string, fields: Record<string, unknown> = {}) {
 
 it("builds the request URL from plugin config", async () => {
   const fetch = mockFetch([]);
-  const webSearch = { baseUrl: `${baseUrl}/search/`, categories: "general,news", language: "en" };
-  await runSearxngSearch({
-    query: "openclaw",
-    cacheTtlMinutes: 0,
-    config: { plugins: { entries: { searxng: { config: { webSearch } } } } },
-  });
+  await search({ config: searchConfig(`${baseUrl}/search/`, "general,news", "en") });
 
   expectRequests(fetch, `${requestUrl}&categories=general%2Cnews&language=en`);
 });
@@ -102,7 +103,7 @@ it.each(["example.com", "internal"])("gates private redirects from search.%s", a
   const redirect = "https://127.0.0.1/search";
   const fetch = mockFetch(Response.redirect(redirect), [row("local")]);
   const endpoint = `https://search.${host}/searxng`;
-  const pending = search({ baseUrl: endpoint });
+  const pending = search({ config: searchConfig(endpoint) });
   if (host === "internal") {
     await expect(pending).resolves.toMatchObject({
       results: [{ url: "https://example.com/local" }],
@@ -119,7 +120,7 @@ it.each(["example.com", "internal"])("gates private redirects from search.%s", a
 
 it("rejects cleartext public hosts", async () => {
   const fetch = mockFetch([]);
-  await expect(search({ baseUrl: "http://search.example.com:8080" })).rejects.toThrow(
+  await expect(search({ config: searchConfig("http://search.example.com:8080") })).rejects.toThrow(
     "SearXNG HTTP base URL must target a trusted private or loopback host. Use https:// for public hosts.",
   );
   expect(fetch).not.toHaveBeenCalled();

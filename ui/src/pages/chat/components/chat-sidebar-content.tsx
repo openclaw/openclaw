@@ -21,8 +21,9 @@ import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
-import "../../../components/tooltip.ts";
 import { McpAppPanel } from "../../../components/solid/mcp-app-panel.tsx";
+import "../../../components/tooltip.ts";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import {
@@ -214,6 +215,11 @@ export function SidebarPanel(props: SidebarPanelProps) {
     >
       <div
         class="sidebar-panel"
+        data-file-entry-id={
+          props.content?.kind === "file"
+            ? props.content.sessionFileSource?.messageEntryId
+            : undefined
+        }
         data-file-session-key={
           props.content?.kind === "markdown"
             ? props.content.fileLinkSessionKey
@@ -448,7 +454,11 @@ export function SidebarPanel(props: SidebarPanelProps) {
                       {(file) => (
                         <div class="sidebar-file-view__path-bar">
                           <div class="sidebar-file-view__path-field">
-                            <span class="sidebar-file-view__path" title={file().path}>
+                            <span
+                              ref={createTextOverflow(() => file().path)}
+                              class="sidebar-file-view__path"
+                              title={file().path}
+                            >
                               {file().path}
                             </span>
                             <CopyButton

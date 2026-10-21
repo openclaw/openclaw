@@ -795,7 +795,6 @@ async function startInitializedCodexAppServerClientOnce(
         starting = CodexAppServerClient.start(startOptions, async () => {
           await params.assertCurrentAsync?.();
           assertStartupCurrent();
-          resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt);
         });
         return starting;
       });
