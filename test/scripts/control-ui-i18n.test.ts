@@ -48,6 +48,12 @@ const llm = vi.hoisted(() => ({ completeSimple: vi.fn() }));
 const strings = (values: Record<string, string>) => new Map(Object.entries(values));
 const childOptions = { reject: false, timeout: 120_000, stripFinalNewline: false } as const;
 const tsxArgs = ["--import", "./scripts/tsx.mjs"];
+const runI18n = (command: string) =>
+  execa(
+    process.execPath,
+    [...tsxArgs, "scripts/control-ui-i18n.ts", ...command.split(" ")],
+    childOptions,
+  );
 vi.mock("@openclaw/ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/ai")>();
   return {
@@ -97,59 +103,30 @@ describe("translation provider privacy and fallback", () => {
   });
 
   it("reports CLI failures without disclosing configured model or key values", async () => {
-    const result = await execa(
-      process.execPath,
-      [
-        ...tsxArgs,
-        "scripts/control-ui-i18n.ts",
-        "sync",
-        "--locale",
-        `${primary.toUpperCase()}/${fallback}/test-key`,
-      ],
-      childOptions,
-    );
+    const result = await runI18n(`sync --locale ${primary.toUpperCase()}/${fallback}/test-key`);
     expect(result.exitCode).toBe(1);
     expect(result.stderr.trim()).toBe("unknown locale: [redacted]/[redacted]/[redacted]");
   });
 
   it.each([
-    { args: ["sync", "--refresh-key"], error: "requires a catalog key" },
-    {
-      args: ["sync", "--locale", "pl", "--refresh-key", "chat.parentSession"],
-      error: "requires sync --write --locale",
-    },
-    {
-      args: ["sync", "--write", "--refresh-key", "chat.parentSession"],
-      error: "requires sync --write --locale",
-    },
-    {
-      args: ["check", "--locale", "pl", "--refresh-key", "chat.parentSession"],
-      error: "requires sync --write --locale",
-    },
-    {
-      args: ["sync", "--write", "--locale", "pl", "--force", "--refresh-key", "chat.parentSession"],
-      error: "cannot be combined with --force",
-    },
-    {
-      args: [
-        "sync",
-        "--write",
-        "--locale",
-        "pl",
-        ...Array.from({ length: 65 }, (_, i) => ["--refresh-key", `key${i}`]).flat(),
-      ],
-      error: "at most 64 distinct keys",
-    },
-    {
-      args: ["sync", "--write", "--locale", "pl", "--refresh-key", "missing.fixture.key"],
-      error: "unknown refresh key: missing.fixture.key",
-    },
-  ])("rejects invalid targeted refresh: $error", async ({ args, error }) => {
-    const result = await execa(
-      process.execPath,
-      ["--import", "./scripts/tsx.mjs", "scripts/control-ui-i18n.ts", ...args],
-      { reject: false, timeout: 120_000, stripFinalNewline: false },
-    );
+    ["sync --refresh-key", "requires a catalog key"],
+    ["sync --locale pl --refresh-key chat.parentSession", "requires sync --write --locale"],
+    ["sync --write --refresh-key chat.parentSession", "requires sync --write --locale"],
+    ["check --locale pl --refresh-key chat.parentSession", "requires sync --write --locale"],
+    [
+      "sync --write --locale pl --force --refresh-key chat.parentSession",
+      "cannot be combined with --force",
+    ],
+    [
+      `sync --write --locale pl ${Array.from({ length: 65 }, (_, i) => `--refresh-key key${i}`).join(" ")}`,
+      "at most 64 distinct keys",
+    ],
+    [
+      "sync --write --locale pl --refresh-key missing.fixture.key",
+      "unknown refresh key: missing.fixture.key",
+    ],
+  ])("rejects invalid targeted refresh: %s", async (args, error) => {
+    const result = await runI18n(args);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain(error);
   });
@@ -158,21 +135,7 @@ describe("translation provider privacy and fallback", () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     vi.stubEnv("OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL", "1");
-    const result = await execa(
-      process.execPath,
-      [
-        "--import",
-        "./scripts/tsx.mjs",
-        "scripts/control-ui-i18n.ts",
-        "sync",
-        "--write",
-        "--locale",
-        "pl",
-        "--refresh-key",
-        "chat.parentSession",
-      ],
-      { reject: false, timeout: 120_000, stripFinalNewline: false },
-    );
+    const result = await runI18n("sync --write --locale pl --refresh-key chat.parentSession");
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("--refresh-key requires a configured translation provider");
   });
@@ -345,15 +308,10 @@ describe("control-ui-i18n generated ownership", () => {
     const result = spawnSync(
       testNodeExecPath,
       [
-        "--import",
-        "./scripts/tsx.mjs",
+        ...tsxArgs,
         "--input-type=module",
         "--eval",
-        [
-          'import { loadControlUiSourceCatalog } from "./scripts/lib/control-ui-i18n-catalog.ts";',
-          "const catalog = loadControlUiSourceCatalog();",
-          "console.log(JSON.stringify(catalog));",
-        ].join("\n"),
+        'import { loadControlUiSourceCatalog } from "./scripts/lib/control-ui-i18n-catalog.ts";\nconsole.log(JSON.stringify(loadControlUiSourceCatalog()));',
       ],
       { cwd: process.cwd(), encoding: "utf8" },
     );

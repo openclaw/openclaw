@@ -772,7 +772,6 @@ ensure_vm_running`,
       [linux, '"Could not get lock"'],
       [linux, '"Unable to acquire the dpkg frontend lock"'],
       [linux, '"Unable to lock directory"'],
-      [linux, "downloadGuestFile"],
       [linux, "this.downloadGuestFile(tgzUrl"],
       [linux, "curl -fsSL --connect-timeout 10 --max-time 120 --retry 2"],
       [linux, "wget -q --timeout=10 --read-timeout=120 --tries=3"],
@@ -842,7 +841,6 @@ ensure_vm_running`,
       [windows, "gateway-reachable recovery"],
     ],
     "runs Windows ref onboarding through a detached done-file runner": [
-      [windows, "guestPowerShellBackground"],
       [windows, "runWindowsBackgroundPowerShell"],
       [transports, "Join-Path (Join-Path $env:WINDIR 'Temp\\\\openclaw-parallels')"],
       [transports, "icacls.exe $runDir /inheritance:r"],
@@ -874,7 +872,6 @@ ensure_vm_running`,
     ],
     "runs the Windows agent turn through the detached done-file runner": [
       [windows, 'guestPowerShellBackground(\n      "agent-turn"'],
-      [windows, "OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S"],
       [windows, 'readPositiveIntEnv(\n    "OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S"'],
       [windows, "windowsAgentTurnConfigPatchScript(this.auth.modelId)"],
       [windows, "--model"],
@@ -915,7 +912,6 @@ ensure_vm_running`,
       [powershell, "$ErrorActionPreference = 'Continue'"],
       [powershell, "$PSNativeCommandUseErrorActionPreference = $false"],
       [windows, "windowsOpenClawResolver"],
-      [windows, "Invoke-OpenClaw gateway"],
       [windows, "Join-Path $env:APPDATA 'npm\\\\openclaw.cmd'", false],
     ],
   };
@@ -1717,7 +1713,6 @@ if (commandArgs[0] === "list") {
       expect(source).toContain("modelProviderConfigBatchJson");
       expect(source).toContain("config set --batch-file");
     }
-    expect(windows).toContain("windowsAgentTurnConfigPatchScript");
     expect(powershell).toContain("agents.defaults.skipBootstrap");
     expect(powershell).toContain("tools.profile");
     expect(powershell).toContain("replace(/^\\\\uFEFF/u");
