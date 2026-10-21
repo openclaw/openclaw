@@ -43,7 +43,10 @@ import {
 import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { modelsAuthRefreshHandlers } from "./models-auth-refresh.js";
 import { readModelAuthStatusFacts } from "./models-auth-status-facts.js";
-import { readProviderUsageStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
+import {
+  readProviderUsageStaleWhileRevalidate,
+  refreshProviderUsage,
+} from "./models-auth-status-usage-cache.js";
 import type {
   ModelAuthExpiry,
   ModelAuthLogoutResult,
@@ -403,7 +406,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         agentDir,
         store,
       });
-      const usageByProvider = readProviderUsageStaleWhileRevalidate({
+      const usageParams = {
         agentId,
         agentDir,
         authStore: providerUsageRuntime.store,
@@ -412,7 +415,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         forceRefresh: refreshRequested,
         providerIds: usageProviderIds,
         now,
-      });
+      };
+      const usageByProvider = params.refreshUsage
+        ? await refreshProviderUsage(usageParams)
+        : readProviderUsageStaleWhileRevalidate(usageParams);
 
       const providers: ModelAuthStatusProvider[] = [];
       for (const prov of authHealth.providers) {

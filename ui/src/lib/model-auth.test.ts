@@ -3,11 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelAuthStatusResult } from "../api/types.ts";
 import { invalidateModelAuthStatusRequests } from "./model-auth-request-state.ts";
-import {
-  listEffectiveModelAuthProviders,
-  loadModelAuthStatus,
-  loadModelAuthStatusAfterRun,
-} from "./model-auth.ts";
+import { listEffectiveModelAuthProviders, loadModelAuthStatus } from "./model-auth.ts";
 
 const status = (ts: number): ModelAuthStatusResult => ({ ts, providers: [] });
 
@@ -236,35 +232,4 @@ describe("listEffectiveModelAuthProviders", () => {
     ]);
     expect(merged?.apiKey).toEqual({ source: "env", envVar: "GEMINI_API_KEY" });
   });
-});
-
-it("does not recheck post-run usage after all presenting owners retire", async () => {
-  vi.useFakeTimers();
-  let current = true;
-  const initial: ModelAuthStatusResult = {
-    ts: Date.now(),
-    providers: [
-      {
-        provider: "openai",
-        displayName: "OpenAI",
-        status: "ok",
-        profiles: [],
-        usage: { providerId: "openai", windows: [{ label: "5h", usedPercent: 1 }] },
-      },
-    ],
-  };
-  const request = vi.fn(async () => initial);
-  const client = { request } as unknown as GatewayBrowserClient;
-  const result = loadModelAuthStatusAfterRun(client, {
-    agentId: "main",
-    runId: "retired-run",
-    isCurrent: () => current,
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  current = false;
-  await vi.advanceTimersByTimeAsync(5_500);
-  expect(await result).toBe(initial);
-  expect(request).toHaveBeenCalledTimes(1);
-  await vi.advanceTimersByTimeAsync(120_000);
-  expect(request).toHaveBeenCalledTimes(1);
 });

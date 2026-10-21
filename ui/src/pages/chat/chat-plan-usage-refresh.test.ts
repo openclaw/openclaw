@@ -1,12 +1,15 @@
 /* @vitest-environment jsdom */
 
 import { expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import { refreshChatModelAuthStatus } from "./chat-state-refresh.ts";
+import { createSessionEventState } from "./chat-state.test-support.ts";
 
-it("updates the open popover after two quick runs and one SWR recheck each", async () => {
+it("updates the open popover after two quick runs with one shared usage read each", async () => {
   const startedAt = Date.now();
   let now = startedAt;
   const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -75,10 +78,11 @@ it("updates the open popover after two quick runs and one SWR recheck each", asy
     ).toContain("1%"),
   );
   expect(auth).toHaveBeenCalledTimes(1);
-  // Keep rendering setup on real timers; only the bounded rechecks use fake time.
+  // Keep rendering setup on real timers; advance idle time only to detect polling.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   for (const [index, nextUsage] of [18, 22].entries()) {
     now = startedAt + (index + 1) * 10_000;
+    usedPercent = nextUsage;
     fixture.emitGatewayEvent("chat", {
       sessionKey: key,
       agentId: "main",
@@ -87,29 +91,53 @@ it("updates the open popover after two quick runs and one SWR recheck each", asy
       state: "final",
       message: { role: "assistant", content: [{ type: "text", text: "Done" }], timestamp: now },
     });
-    await waitForSolid(() => expect(auth).toHaveBeenCalledTimes(2 + index * 2));
-    // The forced read returns the previous snapshot. The background provider
-    // fetch then publishes new usage before the one delayed ordinary read.
-    usedPercent = nextUsage;
-    await vi.advanceTimersByTimeAsync(5_500);
     await waitForSolid(() =>
       expect(
         pane.element.querySelector(".context-usage__limit")?.textContent,
         "refreshed usage",
       ).toContain(String(nextUsage) + "%"),
     );
-    expect(auth).toHaveBeenCalledTimes(3 + index * 2);
+    expect(auth).toHaveBeenCalledTimes(2 + index);
     expect(pane.element.querySelector<HTMLDetailsElement>(".context-usage details")?.open).toBe(
       true,
     );
   }
   await vi.advanceTimersByTimeAsync(120_000);
-  expect(auth).toHaveBeenCalledTimes(5);
+  expect(auth).toHaveBeenCalledTimes(3);
   expect(auth.mock.calls.map(([, params]) => params)).toEqual([
     { agentId: "main" },
-    { agentId: "main", refresh: true },
-    { agentId: "main" },
-    { agentId: "main", refresh: true },
-    { agentId: "main" },
+    { agentId: "main", refreshUsage: true },
+    { agentId: "main", refreshUsage: true },
   ]);
 });
+
+it.each(["failure", "session", "connection"] as const)(
+  "keeps displayed usage when a post-run read retires through %s",
+  async (retirement) => {
+    const response = createDeferred<ModelAuthStatusResult>();
+    const current: ModelAuthStatusResult = { ts: 1, providers: [] };
+    const request = vi.fn(() => response.promise);
+    const { state } = createSessionEventState({
+      client: createTestGatewayClient(request),
+      connected: true,
+      modelAuthStatusResult: current,
+    });
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
+    const pending = refreshChatModelAuthStatus(state, "retiring-run");
+    if (retirement === "failure") {
+      response.reject(new Error("Usage refresh failed"));
+    } else {
+      if (retirement === "session") {
+        state.sessionKey = "agent:main:other";
+      } else {
+        state.connectionEpoch += 1;
+      }
+      response.resolve({ ts: 2, providers: [] });
+    }
+    await pending;
+    expect(state.modelAuthStatusResult).toBe(current);
+    expect(request).toHaveBeenCalledOnce();
+  },
+);

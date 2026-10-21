@@ -475,7 +475,7 @@ function applyPageGatewayEvent(
           }
           if (terminalPayload && sessionMatches) {
             clearPendingQueueItemsForRun(state, terminalPayload.runId);
-            // Bypass cached usage after each run; split panes share the SWR recheck.
+            // Bypass cached usage after each run; split panes share the refresh.
             void refreshChatModelAuthStatus(state, terminalPayload.runId);
           }
           if (shouldRefreshPullRequests && payload) {

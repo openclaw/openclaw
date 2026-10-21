@@ -214,6 +214,27 @@ describe("usage.status provider usage cache", () => {
     expect(retained).toEqual(timeout ? first : usageSummary(61_000, 20));
     expect(mocks.loadSummary).toHaveBeenCalledTimes(2);
   });
+  it("preserves auth quota across failures without hiding usage.status errors", async () => {
+    await runUsageStatus();
+    for (const error of ["HTTP 503", "Unauthorized"]) {
+      now += 60_000;
+      mocks.loadSummary.mockResolvedValue({
+        updatedAt: now,
+        providers: [{ ...providerDescriptor, windows: [], error }],
+      });
+      await settledStatus();
+      await expect(runUsageStatus()).resolves.toMatchObject({
+        providers: [{ ...providerDescriptor, windows: [], error }],
+      });
+      const authUsage = readProviderUsageStaleWhileRevalidate({
+        ...(await getProviderUsageRuntimeSnapshot({ config })),
+        providerIds: ["openai"],
+        now,
+      });
+      expect(authUsage.get("openai")?.windows).toEqual([{ label: "5h", usedPercent: 10 }]);
+    }
+  });
+
   it("refreshes each provider set once per TTL when page reads interleave", async () => {
     // models.authStatus polls refreshable credentials only; usage.status polls every descriptor.
     mocks.listDescriptors.mockReturnValue([

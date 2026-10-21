@@ -86,14 +86,15 @@ export function nextModelAuthStatusRefreshAt(result: ModelAuthStatusResult): num
 
 export async function loadModelAuthStatus(
   client: GatewayBrowserClient,
-  opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
+  opts: { agentId: string; refresh?: boolean; refreshUsage?: boolean; signal?: AbortSignal },
 ): Promise<ModelAuthStatusResult> {
   opts.signal?.throwIfAborted();
   if (!hasOperatorReadAccess(client.auth)) {
     return EMPTY_AUTH_STATUS;
   }
   const params = {
-    ...(opts?.refresh ? { refresh: true } : {}),
+    ...(opts.refresh ? { refresh: true } : {}),
+    ...(opts.refreshUsage ? { refreshUsage: true } : {}),
     agentId: opts.agentId,
   };
   const request = async (signal?: AbortSignal) => {
@@ -113,10 +114,14 @@ export async function loadModelAuthStatus(
     state = { entries: new Map(), refreshes: 0 };
     authReads.set(client, state);
   }
-  if (opts.refresh) {
-    // Explicit refresh can change shared auth without a config event. Keep every
-    // refresh independent, and suspend ordinary sharing until all refreshes settle.
-    state.entries.clear();
+  if (opts.refresh || opts.refreshUsage) {
+    // Auth refresh can affect every agent; usage refresh retires only this agent.
+    // Do not retain ordinary reads while a refresh can still publish newer facts.
+    if (opts.refresh) {
+      state.entries.clear();
+    } else {
+      state.entries.delete(opts.agentId);
+    }
     state.refreshes += 1;
     try {
       return await request(opts.signal);
@@ -167,22 +172,15 @@ export async function loadModelAuthStatus(
   return await subscribeToSharedRequest(pending, {}, opts.signal);
 }
 
-// A terminal event reaches every split pane. Share its forced read and single
-// SWR follow-up per connection, agent, and run, rather than one timer per view.
+// A terminal event reaches every split pane. Share its usage read per connection, agent, and run.
 const postRunReads = new WeakMap<
   GatewayBrowserClient,
-  Map<
-    string,
-    {
-      promise: Promise<ModelAuthStatusResult>;
-      consumers: Set<() => boolean>;
-    }
-  >
+  Map<string, Promise<ModelAuthStatusResult>>
 >();
 
 export async function loadModelAuthStatusAfterRun(
   client: GatewayBrowserClient,
-  opts: { agentId: string; runId: string; isCurrent: () => boolean },
+  opts: { agentId: string; runId: string },
 ): Promise<ModelAuthStatusResult> {
   let reads = postRunReads.get(client);
   if (!reads) {
@@ -192,33 +190,10 @@ export async function loadModelAuthStatusAfterRun(
   const key = JSON.stringify([opts.agentId, opts.runId]);
   let pending = reads.get(key);
   if (!pending) {
-    const consumers = new Set<() => boolean>();
-    const promise = (async () => {
-      const initial = await loadModelAuthStatus(client, { agentId: opts.agentId, refresh: true });
-      if (
-        !initial.providers.some((provider) => provider.usage || isMonitoredAuthProvider(provider))
-      ) {
-        return initial;
-      }
-      // No usage-freshness marker is exposed: even refresh:true can return the
-      // previous snapshot. Allow the provider's five-second deadline, then read
-      // once without triggering another forced provider refresh. Never poll idle chats.
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 5_500);
-      });
-      if (![...consumers].some((isCurrent) => isCurrent())) {
-        return initial;
-      }
-      authReads.get(client)?.entries.delete(opts.agentId);
-      return await loadModelAuthStatus(client, { agentId: opts.agentId });
-    })().finally(() => reads.delete(key));
-    pending = { promise, consumers };
+    pending = loadModelAuthStatus(client, { agentId: opts.agentId, refreshUsage: true }).finally(
+      () => reads.delete(key),
+    );
     reads.set(key, pending);
   }
-  pending.consumers.add(opts.isCurrent);
-  try {
-    return await pending.promise;
-  } finally {
-    pending.consumers.delete(opts.isCurrent);
-  }
+  return await pending;
 }

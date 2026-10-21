@@ -384,7 +384,7 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, runId?: str
     resolveChatAgentId(host) === agentId;
   try {
     const result = runId
-      ? await loadModelAuthStatusAfterRun(client, { agentId, runId, isCurrent: ownsRequest })
+      ? await loadModelAuthStatusAfterRun(client, { agentId, runId })
       : await loadModelAuthStatus(client, { agentId });
     if (!ownsRequest()) {
       return;

@@ -80,9 +80,16 @@ function scopeProviderUsageCredentialKey(
   });
 }
 
-function mapProviderUsage(usage: Awaited<ReturnType<typeof loadProviderUsageSummary>>) {
+function mapProviderUsage(usage: UsageSummary, previous?: Map<string, ProviderUsageStatus>) {
   const usageByProvider = new Map<string, ProviderUsageStatus>();
   for (const snap of usage.providers) {
+    // Auth status has no usage-error field. Keep its last quota while usage.status
+    // still receives the provider's error in the unmodified summary.
+    const retained = snap.error ? previous?.get(snap.provider) : undefined;
+    if (retained) {
+      usageByProvider.set(snap.provider, retained);
+      continue;
+    }
     usageByProvider.set(snap.provider, {
       windows: snap.windows,
       ...(snap.summary ? { summary: snap.summary } : {}),
@@ -125,7 +132,7 @@ function scheduleProviderUsageRefresh(
     agentId: string;
     authStore?: AuthProfileStore;
     providerIds: UsageProviderId[];
-    lastGood?: UsageSummary;
+    previous?: ProviderUsageCacheEntry;
   },
 ): Promise<UsageSummary> {
   const isCurrent = () =>
@@ -149,7 +156,7 @@ function scheduleProviderUsageRefresh(
       timeoutMs: PROVIDER_USAGE_TIMEOUT_MS,
     })
       .then((freshUsage) => {
-        const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
+        const usage = retainLastGoodOnTimeout(freshUsage, params.previous?.summary);
         if (isCurrent()) {
           agentEntries(usageCacheByAgentId, params.agentId).set(params.providerKey, {
             agentDir: params.agentDir,
@@ -158,7 +165,7 @@ function scheduleProviderUsageRefresh(
             providerKey: params.providerKey,
             refreshedAt: Date.now(),
             summary: usage,
-            usageByProvider: mapProviderUsage(usage),
+            usageByProvider: mapProviderUsage(usage, params.previous?.usageByProvider),
           });
         }
         return usage;
@@ -227,7 +234,7 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
       credentialKey,
       providerIds,
       providerKey,
-      lastGood: matching?.summary,
+      previous: matching,
     },
   };
 }
@@ -246,6 +253,23 @@ export function readProviderUsageStaleWhileRevalidate(
     void scheduleProviderUsageRefresh(refreshParams).catch(() => {});
   }
   return matching?.usageByProvider ?? new Map();
+}
+
+/** Await the existing bounded provider fetch without rediscovering authentication. */
+export async function refreshProviderUsage(
+  params: ProviderUsageCacheParams,
+): Promise<Map<string, ProviderUsageStatus>> {
+  if (params.providerIds.length === 0) {
+    return new Map();
+  }
+  const { refreshParams } = resolveProviderUsageCacheRead(params);
+  const usage = await scheduleProviderUsageRefresh(refreshParams);
+  const failed = usage.providers.find((provider) => provider.error);
+  if (failed) {
+    throw new Error(`Provider usage refresh failed for ${failed.provider}. Try again later.`);
+  }
+  // Only return published usage: logout or credential replacement may retire this fetch.
+  return resolveProviderUsageCacheRead(params).matching?.usageByProvider ?? new Map();
 }
 
 /** Shares the models.authStatus cache contract with the unscoped usage.status RPC. */

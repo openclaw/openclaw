@@ -922,18 +922,28 @@ describe("models.authStatus", () => {
     }
   });
 
-  it("does not publish usage captured before a concurrent logout", async () => {
-    mocks.removeModelAuthCredentials.mockImplementationOnce(async () => {
-      setPreparedAuthStore({ version: 1, profiles: {} });
-    });
-    let usageFinished = false;
-    const usageBlocked = createDeferred();
-    const oauthProfile = healthProfile("openrouter", "oauth", "ok", "openrouter:default");
-    mockHealthProvider({ provider: "openrouter", status: "ok", profiles: [oauthProfile] });
-    mocks.loadProviderUsageSummary.mockImplementationOnce(async () => {
-      await usageBlocked.promise;
-      usageFinished = true;
-      return {
+  it.each([false, true])(
+    "does not publish usage captured before a concurrent logout (refreshUsage=%s)",
+    async (refreshUsage) => {
+      mocks.removeModelAuthCredentials.mockImplementationOnce(async () => {
+        setPreparedAuthStore({ version: 1, profiles: {} });
+      });
+      const started = createDeferred();
+      const usage = createDeferred<UsageSummary>();
+      const oauthProfile = healthProfile("openrouter", "oauth", "ok", "openrouter:default");
+      mockHealthProvider({ provider: "openrouter", status: "ok", profiles: [oauthProfile] });
+      mocks.loadProviderUsageSummary.mockImplementationOnce(() => {
+        started.resolve();
+        return usage.promise;
+      });
+
+      const pending = readAuthStatus({ refreshUsage });
+      await started.promise;
+      if (!refreshUsage) {
+        expect((await pending).providers[0]?.usage).toBeUndefined();
+      }
+      await logoutHandler(createLogoutOptions({ provider: "openrouter" }));
+      usage.resolve({
         updatedAt: 0,
         providers: [
           {
@@ -942,20 +952,12 @@ describe("models.authStatus", () => {
             windows: [{ label: "day", usedPercent: 99 }],
           },
         ],
-      };
-    });
-
-    const first = await readAuthStatus();
-    expect(first.providers[0]?.usage).toBeUndefined();
-    await waitForFast(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce());
-    await logoutHandler(createLogoutOptions({ provider: "openrouter" }));
-    usageBlocked.resolve();
-    await waitForFast(() => expect(usageFinished).toBe(true));
-
-    const afterLogout = await readAuthStatus();
-    expect(afterLogout.providers[0]?.usage).toBeUndefined();
-    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
-  });
+      });
+      expect((await pending).providers[0]?.usage).toBeUndefined();
+      expect((await readAuthStatus()).providers[0]?.usage).toBeUndefined();
+      expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("routes claude-cli OAuth profiles to Anthropic usage with plan and billing", async () => {
     const runtimeConfig = {};
@@ -1083,6 +1085,81 @@ describe("models.authStatus", () => {
     });
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
   });
+
+  it("awaits shared usage-only refreshes without rediscovering credentials", async () => {
+    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
+    await warmOAuthUsage();
+    const fresh = createDeferred<UsageSummary>();
+    mocks.loadProviderUsageSummary.mockImplementation(() => fresh.promise);
+    const one = createOptions({ refreshUsage: true });
+    const two = createOptions({ refreshUsage: true });
+    const pending = Promise.all([handler(one), handler(two)]);
+    // An ordinary read remains non-blocking and sees the previous snapshot.
+    expect((await readAuthStatus()).providers[0]?.usage?.windows[0]?.usedPercent).toBe(10);
+    fresh.resolve({
+      updatedAt: 1,
+      providers: [
+        { provider: "openai", displayName: "OpenAI", windows: [{ label: "5h", usedPercent: 20 }] },
+      ],
+    });
+    await pending;
+    for (const options of [one, two]) {
+      expectSuccess(
+        options,
+        expect.objectContaining({
+          providers: expect.arrayContaining([
+            expect.objectContaining({
+              usage: expect.objectContaining({
+                windows: [{ label: "5h", usedPercent: 20 }],
+              }),
+            }),
+          ]),
+        }),
+      );
+    }
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+    expect(mocks.refreshRuntimeAuthProfileStoreSources).not.toHaveBeenCalled();
+    expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).not.toHaveBeenCalled();
+    expect(mocks.loadDeferredCatalog).not.toHaveBeenCalled();
+    expect((await readAuthStatus()).providers[0]?.usage?.windows[0]?.usedPercent).toBe(20);
+  });
+
+  it("retains last good usage when a usage-only fetch times out", async () => {
+    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
+    await warmOAuthUsage();
+    mocks.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: 1,
+      providers: [{ provider: "openai", displayName: "OpenAI", windows: [], error: "Timeout" }],
+    });
+    expect((await readAuthStatus({ refreshUsage: true })).providers[0]?.usage?.windows).toEqual([
+      { label: "5h", usedPercent: 10 },
+    ]);
+  });
+
+  it.each(["HTTP 503", "Unauthorized"])(
+    "reports a usage-only provider failure instead of returning empty quota: %s",
+    async (error) => {
+      mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
+      await warmOAuthUsage();
+      mocks.loadProviderUsageSummary.mockResolvedValue({
+        updatedAt: 1,
+        providers: [{ provider: "openai", displayName: "OpenAI", windows: [], error }],
+      });
+      const options = createOptions({ refreshUsage: true });
+      await handler(options);
+      expect(firstRespondCall(options)).toEqual([
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("Provider usage refresh failed for openai"),
+        }),
+      ]);
+      expect((await readAuthStatus()).providers[0]?.usage?.windows).toEqual([
+        { label: "5h", usedPercent: 10 },
+      ]);
+    },
+  );
 
   it.each(["directory", "credentials"] as const)(
     "does not reuse usage after the prepared %s changes",
