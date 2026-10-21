@@ -28,6 +28,7 @@ const expectCommand = (type: string, input: unknown) =>
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
 }));
+// mock-isolation: Forwarding tests must never open or write host SQLite.
 vi.mock("../state/openclaw-state-db.js", () =>
   mocks.forbid("openOpenClawStateDatabase", "runOpenClawStateWriteTransaction"),
 );
@@ -45,6 +46,7 @@ vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
 vi.mock("./push-apns-relay-url.js", () =>
   mocks.forbid("normalizeApnsRelayBaseUrl", "normalizePersistedApnsRelayBaseUrl"),
 );
+// mock-isolation: APNs rows are decoded in the worker, never on this host path.
 vi.mock("./kysely-sync.js", () =>
   mocks.forbid("executeSqliteQuerySync", "executeSqliteQueryTakeFirstSync", "getNodeSqliteKysely"),
 );

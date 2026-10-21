@@ -123,12 +123,10 @@ describe("embedder gateways", () => {
     const nativePost = installBridge();
     Object.assign(window, { __OPENCLAW_NATIVE_GATEWAYS__: snapshot });
     const capability = (await nativeCapability())!;
-    expect(capability).toMatchObject({
-      snapshot: null,
-      openWindow: undefined,
-      reconnect: undefined,
-      reconnectCancel: undefined,
-    });
+    expect(capability.snapshot).toBeNull();
+    expect(capability.openWindow).toBeUndefined();
+    expect(capability.reconnect).toBeUndefined();
+    expect(capability.reconnectCancel).toBeUndefined();
     bridge.publish();
     const listener = vi.fn();
     capability.subscribe(listener);

@@ -23,12 +23,15 @@ const queries = vi.hoisted(() => {
 
 // Only an inert handle identity is needed; no native SQLite constructor runs.
 vi.mock("node:sqlite", () => ({ DatabaseSync: function MockDatabase() {} }));
+// mock-isolation: Kernel reads must never open or write host state.
 vi.mock("../state/openclaw-state-db.js", () =>
   queries.forbid("openOpenClawStateDatabase", "runOpenClawStateWriteTransaction"),
 );
+// mock-isolation: Kernel reads must not capture host state ownership.
 vi.mock("../state/openclaw-state-worker-context.js", () =>
   queries.forbid("captureOpenClawStateWorkerContext"),
 );
+// mock-isolation: Query compilation must not dispatch a real state worker.
 vi.mock("../state/openclaw-state-worker-store.js", () =>
   queries.forbid("executeOpenClawStateWorker"),
 );

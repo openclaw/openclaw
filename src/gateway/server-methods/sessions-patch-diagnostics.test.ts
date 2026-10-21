@@ -37,7 +37,7 @@ test.each([
   "disabled process diagnostics still report patches at the 1s threshold (%sms)",
   (elapsedMs, calls) => {
     diagnostics.scope("preflight");
-    at(elapsedMs, diagnostics.finish);
+    at(elapsedMs, () => diagnostics.finish());
     expect(log.mock.calls).toEqual(calls);
   },
 );
@@ -50,14 +50,14 @@ test("records parallel, repeated, and archive phases independently in canonical 
   at(100, () => group.mark("projection"));
   at(200, () => group.mark("runtimeSelection"));
   at(500, () => group.mark("archivePlacement"));
-  at(600, second.finish);
+  at(600, () => second.finish());
   at(900, () => group.mark("commit"));
   at(1_000, () => group.mark("snapshot"));
-  at(1_300, group.finish);
+  at(1_300, () => group.finish());
   const effects = expectDefined(diagnostics.scope("effects"), "archive effects");
   const cron = expectDefined(diagnostics.scope("cronEffects"), "archive cron effects");
-  at(1_400, first.finish);
-  at(1_800, cron.finish);
+  at(1_400, () => first.finish());
+  at(1_800, () => cron.finish());
   effects.finish();
   diagnostics.finish();
   expect(log).toHaveBeenCalledExactlyOnceWith(
@@ -67,7 +67,7 @@ test("records parallel, repeated, and archive phases independently in canonical 
 
 test("request settlement closes unfinished phases and retires retained markers", () => {
   const scope = expectDefined(diagnostics.scope("preflight"), "active preflight phase");
-  at(1_500, diagnostics.finish);
+  at(1_500, () => diagnostics.finish());
   at(3_000, () => scope.mark("catalog"));
   scope.finish();
   expect(diagnostics.scope("effects")).toBeUndefined();

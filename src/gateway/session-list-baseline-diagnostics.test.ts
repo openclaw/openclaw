@@ -41,19 +41,19 @@ async function publicationFixture(controlState = false) {
   return {
     projection,
     present: () => prepareSessionRowPublication(projection, 1)(),
-    invalidate(cause: "projection-revision" | "config" | "identity") {
+    invalidate: (cause: "projection-revision" | "config" | "identity") => {
       if (cause === "identity") {
         state.rowContext.identityProjection?.invalidate();
       } else {
         state = { ...state, revision: {}, cfg: cause === "config" ? { ...state.cfg } : state.cfg };
       }
     },
-    async flush() {
+    flush: async () => {
       await setImmediate();
       await waitForDiagnosticEventsDrained();
       return retainedBytes;
     },
-    async expectCauses(expected: string[]) {
+    expectCauses: async (expected: string[]) => {
       await waitForDiagnosticEventsDrained();
       expect(causes.splice(0)).toEqual(expected);
     },

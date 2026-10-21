@@ -19,6 +19,7 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
 }));
 
+// mock-isolation: Capture proxy dispatch without opening real network connections.
 vi.mock("./net/undici-runtime.js", () => ({
   createHttp1EnvHttpProxyAgent: mocks.proxyAgent,
   loadUndiciRuntimeDeps: mocks.runtime,

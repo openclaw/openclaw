@@ -61,7 +61,7 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_COLD !== "1")(
       const counts: number[] = [];
       try {
         await Promise.all(
-          Array.from({ length: 3 }, (_, index) =>
+          Array.from({ length: 3 }, async (_, index) =>
             sessionReadHandlers["sessions.list"]!({
               req: { type: "req", id: `cold-${index}`, method: "sessions.list" },
               params: { limit: 60 },
