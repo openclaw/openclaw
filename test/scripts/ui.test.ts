@@ -334,10 +334,7 @@ describe("scripts/ui", () => {
         resolvePnpmSpawnCall(
           ["install", argument],
           { PATH: "" },
-          {
-            npmExecPath: "",
-            platform: "win32",
-          },
+          { npmExecPath: "", platform: "win32" },
         ),
       ).toThrow(/unsafe windows cmd\.exe argument/i);
     }
@@ -476,7 +473,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     );
     expect(fs.readFileSync(cachedHtml, "utf8")).toBe(cachedSource);
     const plugin = path.join(root, "extensions/new-board");
-    fs.mkdirSync(plugin);
     writeFiles(plugin, {
       "package.json": JSON.stringify({
         name: "@openclaw/new-board",
@@ -525,9 +521,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       buildFiles("stale-runtime"),
     );
     if (retiredOnly) {
-      const unfinished = path.join(root, "dist", `control-ui.build-${deadPid}-y`);
-      fs.mkdirSync(unfinished);
-      fs.writeFileSync(path.join(unfinished, "junk"), "incomplete");
+      writeFiles(root, { [`dist/control-ui.build-${deadPid}-y/junk`]: "incomplete" });
     }
     build.vite(`
 import fs from "node:fs";
@@ -590,8 +584,7 @@ require("node:module").syncBuiltinESMExports();
         `control-ui.build-${deadPid}-dead`,
         `control-ui.build-${deadPid}-dead.retired`,
       ]) {
-        fs.mkdirSync(path.join(root, "dist", name), { recursive: true });
-        fs.writeFileSync(path.join(root, "dist", name, "sentinel"), name);
+        writeFiles(root, { [`dist/${name}/sentinel`]: name });
       }
     }
     const result = build.run({ OPENCLAW_CONTROL_UI_BUILD_ID: buildId }, args);
@@ -616,8 +609,6 @@ require("node:module").syncBuiltinESMExports();
       for (const name of liveUiBuildSiblings) {
         expect(fs.readFileSync(path.join(root, "dist", name, "sentinel"), "utf8")).toBe(name);
       }
-    }
-    if (seedSiblings) {
       if (process.platform !== "win32") {
         const published = [
           output,
@@ -691,8 +682,7 @@ require("node:module").syncBuiltinESMExports();
     const validators = validatorNames;
 
     for (const cacheRoot of cacheRoots) {
-      fs.mkdirSync(cacheRoot, { recursive: true });
-      fs.writeFileSync(path.join(cacheRoot, "0-sentinel"), "keep");
+      writeFiles(cacheRoot, { "0-sentinel": "keep" });
     }
     // Record before throwing: tsx catches some cache errors, so exit status alone
     // cannot prove that the loader left the cache untouched.

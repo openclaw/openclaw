@@ -281,6 +281,14 @@ function compilerFixture(prefix: string, scripts: string[]) {
   fs.symlinkSync(path.resolve("scripts/lib"), f.file("scripts/lib"), "dir");
   return f;
 }
+const compilerOptions = {
+  noEmit: true,
+  strict: true,
+  types: [],
+  lib: ["es5"],
+  module: "nodenext",
+  target: "es2022",
+};
 let fixtureReceipts: FixtureReceiptChannel;
 beforeAll(async () => {
   fixtureReceipts = await openFixtureReceiptChannel();
@@ -420,12 +428,7 @@ it.runIf(process.platform !== "win32")(
                 : ["src/empty.ts"];
         json(config, {
           compilerOptions: {
-            noEmit: true,
-            strict: true,
-            types: [],
-            lib: ["es5"],
-            module: "nodenext",
-            target: "es2022",
+            ...compilerOptions,
             incremental: true,
             tsBuildInfoFile: file(`.artifacts/${name}.tsbuildinfo`),
           },
@@ -525,14 +528,7 @@ exec ${JSON.stringify(native)} "$@"
       );
       for (const graph of expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS)) {
         json(graph.config, {
-          compilerOptions: {
-            noEmit: true,
-            strict: true,
-            types: [],
-            lib: ["es5"],
-            module: "nodenext",
-            target: "es2022",
-          },
+          compilerOptions,
           files: [file(noncoreConsumer)],
         });
       }
@@ -617,25 +613,21 @@ if (process.argv[2] === "boundary") {
         write(config, original);
       }
       const extensionPlan = await inspectExtension("plan", deletedNonCompilerPaths);
-      expect(extensionPlan.status, extensionPlan.stderr).toBe(0);
-      expect(JSON.parse(extensionPlan.stdout.trim())).toEqual({
-        mode: "changed",
-        names: [
-          "extensions",
-          "extensions-test",
-          "scripts",
-          ...TSGO_ROOT_TEST_SHARDS.map(({ name }) => name),
-        ],
-      });
+      const expectPlan = (result: Awaited<ReturnType<typeof runNodeScript>>, names: string[]) => {
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout.trim())).toEqual({ mode: "changed", names });
+      };
+      expectPlan(extensionPlan, [
+        "extensions",
+        "extensions-test",
+        "scripts",
+        ...TSGO_ROOT_TEST_SHARDS.map(({ name }) => name),
+      ]);
       const discovery = compilerEvents();
       expect(discovery).toHaveLength(7);
       expect(discovery.every((args) => args.includes("--listFilesOnly"))).toBe(true);
       const corePlan = await inspectExtension("core-plan", deletedNonCompilerPaths);
-      expect(corePlan.status, corePlan.stderr).toBe(0);
-      expect(JSON.parse(corePlan.stdout.trim())).toEqual({
-        mode: "changed",
-        names: ["core-test-agents-other"],
-      });
+      expectPlan(corePlan, ["core-test-agents-other"]);
       const deletedCompilerPlan = await inspectExtension("plan", ["extensions/example/removed.ts"]);
       expect(deletedCompilerPlan.status, deletedCompilerPlan.stderr).toBe(0);
       expect(JSON.parse(deletedCompilerPlan.stdout.trim()).mode).toBe("full");
