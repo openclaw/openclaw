@@ -23,7 +23,12 @@ import {
   createSessionSqliteMigrationFailureIssue,
 } from "./doctor-session-sqlite-failure.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
-import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
+import {
+  retireRecovery,
+  runStoreDoctor,
+  sessionScope as scopeFor,
+  writeJson,
+} from "./doctor-session-sqlite.fixtures.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
   containsObjects,
@@ -42,30 +47,12 @@ import {
 
 const { createLegacyStore, createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
 
-function writeJson(file: string, value: unknown) {
-  fs.writeFileSync(file, JSON.stringify(value));
-}
-
-function scopeFor(store: TestStore) {
-  return {
-    agentId: "main",
-    env: store.env,
-    sessionKey: "agent:main:main",
-    storePath: store.storePath,
-  };
-}
-
 function historyFor(store: TestStore, sessionKey?: string) {
-  return loadTranscriptEventsSync({
-    agentId: "main",
-    storePath: store.storePath,
-    sessionId: "session-1",
-    sessionKey,
-  });
+  return loadTranscriptEventsSync({ ...scopeFor(store), sessionKey });
 }
 
 function restoreStore(store: TestStore) {
-  return runDoctorSessionSqlite({ env: store.env, store: store.storePath, mode: "restore" });
+  return runStoreDoctor(store, "restore");
 }
 
 async function cleanReport(pending: ReturnType<typeof importLegacyStore>) {
@@ -78,7 +65,7 @@ function stateFor(store: TestStore) {
   const scope = scopeFor(store);
   return {
     entry: loadSessionEntry(scope),
-    history: loadTranscriptEventsSync({ ...scope, sessionId: "session-1" }),
+    history: loadTranscriptEventsSync(scope),
   };
 }
 
@@ -165,7 +152,7 @@ describe("runDoctorSessionSqlite", () => {
         }
       }
       closeDatabases();
-      const retired = await retireRecovery(store.env);
+      const retired = await retireRecovery(store);
       const manifest = readManifest(retried.migrationRun?.manifestPath);
       const indexMove = expectDefined(
         manifest.targets[0]?.completedMoves.find((move) => move.kind === "legacy-store"),
@@ -178,7 +165,7 @@ describe("runDoctorSessionSqlite", () => {
       expectFiles(transcriptBytes, transcriptPath);
       await importLegacyStore(store);
       closeDatabases();
-      const completed = await retireRecovery(store.env);
+      const completed = await retireRecovery(store);
       expect(completed.totals.removedFiles).toBe(2);
     },
   );
@@ -241,7 +228,7 @@ describe("runDoctorSessionSqlite", () => {
         ),
       ).toBe(true);
       closeDatabases();
-      const cleanup = await retireRecovery(store.env);
+      const cleanup = await retireRecovery(store);
       expect(cleanup.artifacts.filter((item) => item.outcome === "removed")).toEqual([]);
       expectFiles(replacement, source);
       expect(JSON.stringify(historyFor(store))).not.toContain("never imported");
@@ -282,7 +269,7 @@ describe("runDoctorSessionSqlite", () => {
     writeJson(manifestPath, manifest);
     closeDatabases();
     const originals = snapshotFiles([indexMove.archivePath, archivePath, siblingArchive]);
-    const result = await retireRecovery(store.env);
+    const result = await retireRecovery(store);
     for (const original of originals) {
       expect(result.artifacts.find((item) => item.path === original.file)?.outcome).toBe(
         "protected",
@@ -378,7 +365,7 @@ describe("runDoctorSessionSqlite", () => {
         // Explicit import admission does not grant cleanup ownership outside the state directory.
         return;
       }
-      const result = await retireRecovery(store.env);
+      const result = await retireRecovery(store);
       expect(result.status).toBe("complete");
       expect(result.totals.removedFiles).toBe(2);
       const receipt = readManifest(reimported.migrationRun?.manifestPath);
@@ -522,7 +509,7 @@ describe("runDoctorSessionSqlite", () => {
       expect(preview.artifacts.find((item) => item.path === archivePath)?.outcome).toBe(
         "verification-required",
       );
-      const result = await retireRecovery(store.env, preview);
+      const result = await retireRecovery(store, undefined, preview);
       expect(result.artifacts.find((item) => item.path === archivePath)?.outcome).toBe("removed");
       expect(result.artifacts.filter((item) => item.outcome === "protected")).toHaveLength(2);
       if (issue) {
@@ -558,15 +545,3 @@ describe("runDoctorSessionSqlite", () => {
     expectFiles(original, store.transcriptPath);
   });
 });
-
-function retireRecovery(
-  env: NodeJS.ProcessEnv,
-  preview = inspectSessionSqliteRecovery({ cfg: {}, env }),
-) {
-  return retireSessionSqliteRecovery({
-    env,
-    preview,
-    readConfig: async () => ({}),
-    confirm: async () => true,
-  });
-}
