@@ -1,4 +1,3 @@
-// Sandbox registry tests cover SQLite ordering and race safety for container/browser runtime records.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -79,11 +78,7 @@ function browserEntry(
   overrides: Partial<SandboxBrowserRegistryEntry> = {},
 ): SandboxBrowserRegistryEntry {
   return {
-    containerName: "browser-a",
-    sessionKey: "agent:main",
-    createdAtMs: 1,
-    lastUsedAtMs: 1,
-    image: "openclaw-browser:test",
+    ...containerEntry({ containerName: "browser-a", image: "openclaw-browser:test" }),
     cdpPort: 9222,
     ...overrides,
   };
@@ -100,15 +95,12 @@ function containerEntry(overrides: Partial<SandboxRegistryEntry> = {}): SandboxR
   };
 }
 
-async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.access(targetPath);
-    throw new Error(`expected ${targetPath} to be missing`);
-  } catch (error) {
-    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-    expect(code).toBe("ENOENT");
-  }
-}
+const reserve = (backendId: string) =>
+  reserveSandboxRegistryEntry(containerEntry({ backendId, workspaceDir: "/synthetic/workspace" }));
+const forbidHostSql = () =>
+  vi.spyOn(sqliteQueries, "executeSqliteQuerySync").mockImplementation(() => {
+    throw new Error("Registry writes must not execute SQL on the host");
+  });
 
 describe("registry race safety", () => {
   it("publishes every native batch row before observers and discards nested or outer rollback", () => {
@@ -259,9 +251,7 @@ describe("registry race safety", () => {
   });
 
   it("preserves a runtime whose activity advanced after the prune scan", async () => {
-    const entry = await reserveSandboxRegistryEntry(
-      containerEntry({ backendId: "prune-boundary", workspaceDir: "/synthetic/workspace" }),
-    );
+    const entry = await reserve("prune-boundary");
     const now = 2 * 60 * 60 * 1000;
     await updateRegistry({ ...entry, lastUsedAtMs: now });
     const removeRuntime = vi.fn(async () => {});
@@ -276,9 +266,7 @@ describe("registry race safety", () => {
   });
 
   it("settles accepted removal across direct database close", async ({ signal }) => {
-    const entry = await reserveSandboxRegistryEntry(
-      containerEntry({ backendId: "close-boundary", workspaceDir: "/synthetic/workspace" }),
-    );
+    const entry = await reserve("close-boundary");
     const providerEntered = createDeferred();
     const releaseProvider = createDeferred();
     const removeRuntime = vi.fn(async () => {
@@ -331,11 +319,8 @@ describe("registry race safety", () => {
   });
 
   it("settles browser activity in workers while preserving immutable fields and workspace custody", async () => {
-    // Admit the schema before observing the runtime write boundary.
     await updateRegistry(containerEntry());
-    const hostSql = vi.spyOn(sqliteQueries, "executeSqliteQuerySync").mockImplementation(() => {
-      throw new Error("Browser registry writes must not execute SQL on the host");
-    });
+    const hostSql = forbidHostSql();
     try {
       const entry = browserEntry({ workspaceDir: "/original/workspace", cdpPort: 0 });
       await updateBrowserRegistry(entry);
@@ -394,9 +379,7 @@ describe("registry race safety", () => {
       workspaceDir: "/original/workspace",
     });
     await updateRegistry(entry);
-    const hostSql = vi.spyOn(sqliteQueries, "executeSqliteQuerySync").mockImplementation(() => {
-      throw new Error("Sandbox registry writes must not execute SQL on the host");
-    });
+    const hostSql = forbidHostSql();
     try {
       await updateRegistry({ ...entry, lastUsedAtMs: 2, createdAtMs: 99, image: "ignored-update" });
       await completeSandboxRegistryReservation({
@@ -508,7 +491,9 @@ describe("registry race safety", () => {
     const registry = await readRegistry();
 
     expect(registry.entries.map((entry) => entry.containerName)).toEqual(["../escape"]);
-    await expectPathMissing(`${TEST_STATE_DIR}/escape.json`);
+    await expect(fs.access(`${TEST_STATE_DIR}/escape.json`)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it.each(["container", "browser"] as const)(

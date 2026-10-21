@@ -1,5 +1,3 @@
-// Sandbox security validation tests cover bind, network, seccomp, and AppArmor
-// hardening rules before Docker runtimes are created.
 import { mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -27,6 +25,16 @@ function bindResult(bind: string, options?: Omit<SandboxSecurityConfig, "binds">
   return expect(() => validateBindMounts([bind], options));
 }
 
+function directories(first: string, second: string) {
+  const root = tempDirs.make("openclaw-bind-");
+  const make = (name: string) => {
+    const dir = join(root, name);
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  };
+  return [make(first), make(second)] as const;
+}
+
 function homeAlias(credentialDir: string) {
   const dir = tempDirs.make("openclaw-home-");
   const realHome = join(dir, "real-home");
@@ -48,23 +56,6 @@ function expectBlockedTargetReason(
 }
 
 describe("getBlockedBindReason", () => {
-  it("blocks common Docker socket directories", () => {
-    expectBlockedTargetReason("/run:/run");
-    expectBlockedTargetReason("/var/run:/var/run:ro");
-  });
-
-  it("blocks parent sources that cover blocked descendants", () => {
-    const reason = getBlockedBindReason("/var:/var");
-    expect(reason).toMatchObject({ kind: "covers", blockedPath: "/var/run" });
-  });
-
-  it("blocks home parent sources that cover credential descendants", () => {
-    withEnv({ HOME: "/home/tester" }, () => {
-      const reason = getBlockedBindReason("/home/tester:/mnt/home:ro");
-      expect(reason).toMatchObject({ kind: "covers", blockedPath: "/home/tester/.aws" });
-    });
-  });
-
   it("blocks sensitive home credential paths", () => {
     withEnv({ HOME: "/home/tester" }, () => {
       const cases = [
@@ -99,18 +90,6 @@ describe("getBlockedBindReason", () => {
       expect(reason?.blockedPath).toBe("C:/Users/tester/.docker");
     });
   });
-
-  it("blocks canonical OS-home aliases for credential paths", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const { realHome, aliasHome } = homeAlias(".ssh");
-    withEnv({ HOME: aliasHome }, () => {
-      const reason = expectBlockedTargetReason(`${join(realHome, ".ssh", "config")}:/mnt/ssh:ro`);
-      expect(reason?.blockedPath).toBe(normalizePathForSnapshot(join(realHome, ".ssh")));
-    });
-  });
 });
 
 describe("validateBindMounts", () => {
@@ -132,21 +111,8 @@ describe("validateBindMounts", () => {
     },
   );
 
-  it("allows legitimate project directory mounts", () => {
-    const projectRoot = tempDirs.make("openclaw-sbx-safe-");
-    expect(
-      validateBindMounts([
-        `${join(projectRoot, "source")}:/source:rw`,
-        `${join(projectRoot, "projects")}:/projects:ro`,
-        `${join(projectRoot, "data")}:/data`,
-        `${join(projectRoot, "config")}:/config:ro`,
-      ]),
-    ).toBeUndefined();
-  });
-
-  it("allows undefined or empty binds", () => {
-    expect(validateBindMounts(undefined)).toBeUndefined();
-    expect(validateBindMounts([])).toBeUndefined();
+  it.each([undefined, []])("allows absent binds: %s", (binds) => {
+    expect(validateBindMounts(binds)).toBeUndefined();
   });
 
   it("blocks dangerous bind source paths", () => {
@@ -163,22 +129,24 @@ describe("validateBindMounts", () => {
     ] as const;
     for (const [label, bind, expected] of cases) {
       expect(() => validateBindMounts([bind]), label).toThrow(expected);
+      expect(getBlockedBindReason(bind)?.kind).toBe(
+        label === "host root mount" ? "covers" : "targets",
+      );
     }
   });
 
-  it("allows parent mounts that do not cover blocked descendants", () => {
-    expect(validateBindMounts(["/var/data:/data"])).toBeUndefined();
-  });
-
   it("blocks allowed source roots that cover blocked descendants", () => {
-    bindResult("/var:/var", { allowedSourceRoots: ["/var"] }).toThrow(
-      /covers blocked path "\/var\/run"/,
-    );
-
     withEnv({ HOME: "/home/tester" }, () => {
-      bindResult("/home/tester:/mnt/home:ro", { allowedSourceRoots: ["/home/tester"] }).toThrow(
-        /covers blocked path "\/home\/tester\/\.aws"/,
-      );
+      for (const [root, blockedPath] of [
+        ["/var", "/var/run"],
+        ["/home/tester", "/home/tester/.aws"],
+      ] as const) {
+        const bind = `${root}:/mnt:ro`;
+        expect(getBlockedBindReason(bind)).toMatchObject({ kind: "covers", blockedPath });
+        bindResult(bind, { allowedSourceRoots: [root] }).toThrow(
+          `covers blocked path "${blockedPath}"`,
+        );
+      }
     });
   });
 
@@ -187,11 +155,6 @@ describe("validateBindMounts", () => {
       bindResult("/home/tester/.docker/config.json:/mnt/docker:ro").toThrow(/blocked path/);
       bindResult("/home/tester/.netrc:/mnt/netrc:ro").toThrow(/blocked path/);
     });
-  });
-
-  it("allows drive-absolute Windows bind sources", () => {
-    expect(validateBindMounts(["D:/data/openclaw/src:/src:ro"])).toBeUndefined();
-    expect(validateBindMounts(["D:\\data\\openclaw\\output:/output:rw"])).toBeUndefined();
   });
 
   it("compares Windows allowed roots case-insensitively", () => {
@@ -212,65 +175,37 @@ describe("validateBindMounts", () => {
 
     const { realHome, aliasHome } = homeAlias(".docker");
     withEnv({ HOME: aliasHome }, () => {
-      bindResult(`${join(realHome, ".docker", "config.json")}:/mnt/docker:ro`).toThrow(
-        /credential paths/,
-      );
+      const bind = `${join(realHome, ".docker", "config.json")}:/mnt/docker:ro`;
+      expect(getBlockedBindReason(bind)).toMatchObject({
+        kind: "targets",
+        blockedPath: resolveSandboxHostPathViaExistingAncestor(
+          join(realHome, ".docker"),
+        ).replaceAll("\\", "/"),
+      });
+      bindResult(bind).toThrow(/credential paths/);
     });
   });
 
-  it("blocks symlink escapes into blocked directories", () => {
+  it.each([
+    ["/etc", "passwd", "blocked path"],
+    [null, "not-yet-created", "outside allowed roots"],
+    ["/var/run", "openclaw-not-created", "blocked path"],
+  ] as const)("blocks symlink escape into %s/%s", (destination, leaf, error) => {
     if (process.platform === "win32") {
       return;
     }
-
-    const dir = tempDirs.make("openclaw-sbx-");
-    const link = join(dir, "etc-link");
-    symlinkSync("/etc", link);
-    bindResult(`${link}/passwd:/mnt/passwd:ro`).toThrow(/blocked path/);
-  });
-
-  it("blocks symlink-parent escapes with non-existent leaf outside allowed roots", () => {
-    // Docker may create the final leaf; validate the existing ancestor so
-    // symlink parents cannot escape an allowed root.
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = tempDirs.make("openclaw-sbx-");
-    const workspace = join(dir, "workspace");
-    const outside = join(dir, "outside");
-    mkdirSync(workspace, { recursive: true });
-    mkdirSync(outside, { recursive: true });
-    const link = join(workspace, "alias-out");
-    symlinkSync(outside, link);
-    const missingLeaf = join(link, "not-yet-created");
-    bindResult(`${missingLeaf}:/mnt/data:ro`, { allowedSourceRoots: [workspace] }).toThrow(
-      /outside allowed roots/,
-    );
-  });
-
-  it("blocks symlink-parent escapes into blocked paths when leaf does not exist", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const dir = tempDirs.make("openclaw-sbx-");
-    const workspace = join(dir, "workspace");
-    mkdirSync(workspace, { recursive: true });
-    const link = join(workspace, "run-link");
-    symlinkSync("/var/run", link);
-    const missingLeaf = join(link, "openclaw-not-created");
-    bindResult(`${missingLeaf}:/mnt/run:ro`, { allowedSourceRoots: [workspace] }).toThrow(
-      /blocked path/,
+    const [workspace, outside] = directories("workspace", "outside");
+    const link = join(workspace, "escape");
+    symlinkSync(destination ?? outside, link);
+    bindResult(`${join(link, leaf)}:/mnt/data:ro`, { allowedSourceRoots: [workspace] }).toThrow(
+      error,
     );
   });
 
   it.runIf(process.platform !== "win32")(
     "validates the exact spaced source and target instead of a trimmed sibling",
     () => {
-      const root = tempDirs.make("openclaw-spaced-bind-");
-      const plain = join(root, "allowed");
-      const spaced = join(root, "allowed ");
-      mkdirSync(plain);
-      mkdirSync(spaced);
+      const [plain, spaced] = directories("allowed", "allowed ");
       bindResult(`${spaced}:/workspace `, { allowedSourceRoots: [spaced] }).not.toThrow();
       bindResult(`${spaced}:/data`, { allowedSourceRoots: [plain] }).toThrow(
         "outside allowed roots",
@@ -283,11 +218,7 @@ describe("validateBindMounts", () => {
   it.runIf(process.platform !== "win32")(
     "checks spaced source symlinks against blocked and allowed roots",
     () => {
-      const root = tempDirs.make("openclaw-spaced-bind-");
-      const allowed = join(root, "allowed");
-      const outside = join(root, "outside");
-      mkdirSync(allowed);
-      mkdirSync(outside);
+      const [allowed, outside] = directories("allowed", "outside");
       for (const [name, destination, error] of [
         ["blocked", "/etc", "blocked path"],
         ["external", outside, "outside allowed roots"],
@@ -309,31 +240,10 @@ describe("validateBindMounts", () => {
   });
 
   it("blocks bind sources outside allowed roots when allowlist is configured", () => {
-    const allowedRoot = tempDirs.make("openclaw-sbx-allowed-root-");
-    const externalRoot = tempDirs.make("openclaw-sbx-external-");
+    const [allowedRoot, externalRoot] = directories("allowed", "external");
     bindResult(`${externalRoot}:/data:ro`, { allowedSourceRoots: [allowedRoot] }).toThrow(
       /outside allowed roots/,
     );
-  });
-
-  it("allows bind sources in allowed roots when allowlist is configured", () => {
-    const projectRoot = tempDirs.make("openclaw-sbx-allowed-");
-    expect(
-      validateBindMounts([`${join(projectRoot, "cache")}:/data:ro`], {
-        allowedSourceRoots: [projectRoot],
-      }),
-    ).toBeUndefined();
-  });
-
-  it("allows bind sources outside allowed roots with explicit dangerous override", () => {
-    const allowedRoot = tempDirs.make("openclaw-sbx-allowed-root-");
-    const externalRoot = tempDirs.make("openclaw-sbx-external-");
-    expect(
-      validateBindMounts([`${externalRoot}:/data:ro`], {
-        allowedSourceRoots: [allowedRoot],
-        allowSourcesOutsideAllowedRoots: true,
-      }),
-    ).toBeUndefined();
   });
 
   it("blocks reserved container target paths by default", () => {
@@ -343,19 +253,30 @@ describe("validateBindMounts", () => {
     ).toThrow(/reserved container path/);
   });
 
-  it("allows reserved container target paths with explicit dangerous override", () => {
-    const projectRoot = tempDirs.make("openclaw-sbx-reserved-");
+  it.each([
+    ["project rw", "ROOT/source:/source:rw", {}],
+    ["project ro", "ROOT/projects:/projects:ro", {}],
+    ["project default", "ROOT/data:/data", {}],
+    ["project config", "ROOT/config:/config:ro", {}],
+    ["non-sensitive parent", "/var/data:/data", {}],
+    ["Windows forward slash", "D:/data/openclaw/src:/src:ro", {}],
+    ["Windows backslash", "D:\\data\\openclaw\\output:/output:rw", {}],
+    ["allowed root", "ROOT/cache:/data:ro", {}],
+    [
+      "outside-root override",
+      "ROOT/../external:/data:ro",
+      { allowSourcesOutsideAllowedRoots: true },
+    ],
+    ["reserved-target override", "ROOT:/workspace:rw", { allowReservedContainerTargets: true }],
+  ] as const)("accepts %s", (name, binds, options) => {
+    const [root] = directories("allowed", "external");
+    const allowedSourceRoots =
+      name === "allowed root" || name === "outside-root override" ? [root] : undefined;
     expect(
-      validateBindMounts([`${projectRoot}:/workspace:rw`], {
-        allowReservedContainerTargets: true,
-      }),
+      validateBindMounts([binds.replace("ROOT", root)], { allowedSourceRoots, ...options }),
     ).toBeUndefined();
   });
 });
-
-function normalizePathForSnapshot(input: string): string {
-  return resolveSandboxHostPathViaExistingAncestor(input).replaceAll("\\", "/");
-}
 
 describe("validateNetworkMode", () => {
   it("allows bridge/none/custom/undefined", () => {
@@ -389,20 +310,14 @@ describe("validateNetworkMode", () => {
 });
 
 describe("profile hardening", () => {
-  it.each([
-    {
-      name: "seccomp",
-      run: (seccompProfile: string) => validateSandboxSecurity({ seccompProfile }),
-      expected: /seccomp profile ".+" is blocked/,
-    },
-    {
-      name: "apparmor",
-      run: (apparmorProfile: string) => validateSandboxSecurity({ apparmorProfile }),
-      expected: /apparmor profile ".+" is blocked/,
-    },
-  ])("blocks unconfined profiles (case-insensitive): $name", ({ run, expected }) => {
-    expect(() => run("unconfined")).toThrow(expected);
-    expect(() => run("Unconfined")).toThrow(expected);
+  it.each(["seccomp", "apparmor"] as const)("blocks unconfined %s profiles", (name) => {
+    for (const profile of ["unconfined", "Unconfined"]) {
+      const config =
+        name === "seccomp" ? { seccompProfile: profile } : { apparmorProfile: profile };
+      expect(() => validateSandboxSecurity(config)).toThrow(
+        `${name} profile "${profile}" is blocked`,
+      );
+    }
   });
 });
 

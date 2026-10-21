@@ -14,35 +14,24 @@ let maybePruneSandboxes: typeof import("./prune.js").maybePruneSandboxes;
 let BROWSER_BRIDGES: typeof import("./browser-bridges.js").BROWSER_BRIDGES;
 const roots = useAutoCleanupTempDirTracker(afterEach);
 
-const configMocks = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(),
-}));
-
-const backendMocks = vi.hoisted(() => ({
-  getSandboxBackendManager: vi.fn(),
-  removeRuntime: vi.fn(),
-}));
-
-const registryMocks = vi.hoisted(() => ({
-  assertSandboxBrowserRegistryEntryCurrent: vi.fn(),
-  readBrowserRegistry: vi.fn(),
-  readRegistry: vi.fn(),
-  removeBrowserRegistryEntry: vi.fn(),
-  removeRegistryEntry: vi.fn(),
-}));
-
-const runtimeMocks = vi.hoisted(() => ({
-  error: vi.fn(),
-}));
-
-const bridgeMocks = vi.hoisted(() => ({
-  stopBrowserBridgeServer: vi.fn(),
-}));
-
-const persistentExecMocks = vi.hoisted(() => ({
-  recoverSandboxPersistentExecOrphans:
-    vi.fn<typeof import("./persistent-exec.js").recoverSandboxPersistentExecOrphans>(),
-}));
+const { configMocks, backendMocks, registryMocks, runtimeMocks, bridgeMocks, persistentExecMocks } =
+  vi.hoisted(() => ({
+    configMocks: { getRuntimeConfig: vi.fn() },
+    backendMocks: { getSandboxBackendManager: vi.fn(), removeRuntime: vi.fn() },
+    registryMocks: {
+      assertSandboxBrowserRegistryEntryCurrent: vi.fn(),
+      readBrowserRegistry: vi.fn(),
+      readRegistry: vi.fn(),
+      removeBrowserRegistryEntry: vi.fn(),
+      removeRegistryEntry: vi.fn(),
+    },
+    runtimeMocks: { error: vi.fn() },
+    bridgeMocks: { stopBrowserBridgeServer: vi.fn() },
+    persistentExecMocks: {
+      recoverSandboxPersistentExecOrphans:
+        vi.fn<typeof import("./persistent-exec.js").recoverSandboxPersistentExecOrphans>(),
+    },
+  }));
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: configMocks.getRuntimeConfig,
@@ -243,18 +232,8 @@ describe("maybePruneSandboxes", () => {
       },
     });
     registryMocks.readRegistry.mockResolvedValue({
-      entries: [
-        {
-          containerName: "shared-runtime",
-          backendId: "docker",
-          sessionKey: "shared",
-          createdAtMs: now - 4 * 60 * 60 * 1000,
-          lastUsedAtMs: now - 2 * 60 * 60 * 1000,
-          image: "openclaw-sandbox:trixie-slim",
-        },
-      ],
+      entries: [entry("shared-runtime", "main", { sessionKey: "shared" })],
     });
-    registryMocks.readBrowserRegistry.mockResolvedValue({ entries: [] });
 
     await maybePruneSandboxes();
 
