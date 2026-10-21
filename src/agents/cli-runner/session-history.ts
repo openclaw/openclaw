@@ -526,67 +526,6 @@ function renderClaudePreservedTurns(replies: ClaudeReply[]): string | undefined 
     : undefined;
 }
 
-function renderClaudeSessionGap(
-  entries: SessionEntry[],
-  replies: ClaudeReply[],
-  options:
-    | {
-        sessionKey?: string;
-        historyToolAvailable: boolean;
-        freshSession: boolean;
-        /** Content is withheld, so only an ordinary reply proves the session saw a turn. */
-        countPreservedTurns: boolean;
-      }
-    | undefined,
-): string | undefined {
-  if (!options) {
-    return undefined;
-  }
-  // An empty Claude reply has no saved assistant row, so the next turn may repeat this note.
-  const lastClaude =
-    replies.findLast((reply) => !options.countPreservedTurns || reply.kind === "ordinary")?.index ??
-    -1;
-  if (!options.freshSession && lastClaude < 0) {
-    return undefined;
-  }
-  const countsPreservedTurns =
-    !options.freshSession &&
-    replies.some((reply) => reply.index > lastClaude && reply.kind === "preserved");
-  const gap = entries
-    .slice(options.freshSession ? 0 : lastClaude + 1)
-    .filter(
-      (entry): entry is SessionMessageEntry =>
-        entry.type === "message" &&
-        (entry.message.role === "user" || entry.message.role === "assistant"),
-    );
-  const models = new Set<string>();
-  for (const entry of gap) {
-    if (entry.message.role === "assistant") {
-      models.add(`${entry.message.provider}/${entry.message.model}`);
-    }
-  }
-  const first = gap[0];
-  const last = gap.at(-1);
-  if (!first || !last || models.size === 0) {
-    return undefined;
-  }
-  const modelNames = [...models].toSorted();
-  const modelSummary = modelNames
-    .slice(0, 4)
-    .map((model) => JSON.stringify(truncateUtf16Safe(model, 120)))
-    .join(", ");
-  const readHint =
-    options.historyToolAvailable && options.sessionKey
-      ? ` Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history(${JSON.stringify({ sessionKey: options.sessionKey, limit: 100 })}) to read them; page older messages with offset if needed.`
-      : "";
-  const description = options.freshSession
-    ? "earlier messages in this chat"
-    : countsPreservedTurns
-      ? "messages recorded in this chat since your last reply here (possibly already in this session)"
-      : "messages occurred outside this Claude session";
-  return `[OpenClaw: ${gap.length} ${description} from ${first.timestamp} to ${last.timestamp}, using ${modelSummary}${modelNames.length > 4 ? ` (+${modelNames.length - 4} more models)` : ""}. Their contents are not included here.${readHint}]`;
-}
-
 /** Reads one active branch for bounded reference notes and eligible fresh-session history. */
 export async function loadCliSessionPromptContext(
   params: CliSessionHistoryParams & {
@@ -631,22 +570,58 @@ export async function loadCliSessionPromptContext(
   const entries = await loadCliSessionEntries(params);
   assertActive?.();
   const replies = params.provider === "claude-cli" ? classifyClaudeReplies(entries) : [];
-  const sessionGapContext = renderClaudeSessionGap(
-    entries,
-    replies,
+  let sessionGapContext: string | undefined;
+  if (
     assertActive &&
-      ((!contentBlocked && params.nativeSessionId) ||
-        params.rawTranscriptReseedReason === "auth-unknown" ||
-        (contentBlocked && !params.nativeSessionId))
-      ? {
-          sessionKey: params.sessionKey,
-          historyToolAvailable:
-            params.tools?.some((tool) => tool.name === "sessions_history") === true,
-          freshSession: !params.nativeSessionId,
-          countPreservedTurns: contentBlocked,
+    ((!contentBlocked && params.nativeSessionId) ||
+      params.rawTranscriptReseedReason === "auth-unknown" ||
+      (contentBlocked && !params.nativeSessionId))
+  ) {
+    const freshSession = !params.nativeSessionId;
+    const historyToolAvailable =
+      params.tools?.some((tool) => tool.name === "sessions_history") === true;
+    // An empty Claude reply has no saved assistant row, so the next turn may repeat this note.
+    // Withheld content means only an ordinary reply proves the session saw a turn.
+    const lastClaude =
+      replies.findLast((reply) => !contentBlocked || reply.kind === "ordinary")?.index ?? -1;
+    if (freshSession || lastClaude >= 0) {
+      const countsPreservedTurns =
+        !freshSession &&
+        replies.some((reply) => reply.index > lastClaude && reply.kind === "preserved");
+      const gap = entries
+        .slice(freshSession ? 0 : lastClaude + 1)
+        .filter(
+          (entry): entry is SessionMessageEntry =>
+            entry.type === "message" &&
+            (entry.message.role === "user" || entry.message.role === "assistant"),
+        );
+      const models = new Set<string>();
+      for (const entry of gap) {
+        if (entry.message.role === "assistant") {
+          models.add(`${entry.message.provider}/${entry.message.model}`);
         }
-      : undefined,
-  );
+      }
+      const first = gap[0];
+      const last = gap.at(-1);
+      if (first && last && models.size > 0) {
+        const modelNames = [...models].toSorted();
+        const modelSummary = modelNames
+          .slice(0, 4)
+          .map((model) => JSON.stringify(truncateUtf16Safe(model, 120)))
+          .join(", ");
+        const readHint =
+          historyToolAvailable && params.sessionKey
+            ? ` Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history(${JSON.stringify({ sessionKey: params.sessionKey, limit: 100 })}) to read them; page older messages with offset if needed.`
+            : "";
+        const description = freshSession
+          ? "earlier messages in this chat"
+          : countsPreservedTurns
+            ? "messages recorded in this chat since your last reply here (possibly already in this session)"
+            : "messages occurred outside this Claude session";
+        sessionGapContext = `[OpenClaw: ${gap.length} ${description} from ${first.timestamp} to ${last.timestamp}, using ${modelSummary}${modelNames.length > 4 ? ` (+${modelNames.length - 4} more models)` : ""}. Their contents are not included here.${readHint}]`;
+      }
+    }
+  }
   if (contentBlocked) {
     return {
       reseedMessages: [],
