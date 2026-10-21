@@ -13,10 +13,14 @@ afterEach(async () => {
   await state.cleanup();
 });
 const signal = () => new AbortController().signal;
-function policy(extras: string[] = []) {
-  return new MemoryWatchPolicy(state.workspaceDir, {
-    extraPaths: extras,
-    multimodal: { enabled: false, modalities: [], maxFileBytes: 10485760 },
+function policy(
+  extraPaths: ConstructorParameters<typeof MemoryWatchPolicy>[1]["extraPaths"] = [],
+  workspace = state.workspaceDir,
+  modalities: ("image" | "audio")[] = [],
+) {
+  return new MemoryWatchPolicy(workspace, {
+    extraPaths,
+    multimodal: { enabled: modalities.length > 0, modalities, maxFileBytes: 10485760 },
     sync: { watchDebounceMs: 0 },
   });
 }
@@ -28,42 +32,28 @@ it("observes root-entry links without following sources the indexer rejects", as
   await fs.symlink(state.path("target", "note.md"), path.join(state.workspaceDir, "MEMORY.md"));
   await fs.symlink(state.path("target"), state.path("extra-link"), "junction");
   const owner = policy([state.path("extra-link")]);
-  const groups = await owner.observations(signal());
-  const selected = groups.flatMap((group) =>
-    group.selections.map((selection) => ({
-      path: path.resolve(group.root.rootDir, selection.scope.path),
-      ...selection,
-    })),
+  const selected = new Map(
+    (await owner.observations(signal())).flatMap(({ root, selections }) =>
+      selections.map(
+        (selection) => [path.resolve(root.rootDir, selection.scope.path), selection] as const,
+      ),
+    ),
   );
-  expect(selected).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        path: path.join(state.workspaceDir, "memory"),
-        alias: true,
-        scope: expect.objectContaining({ kind: "entry" }),
-      }),
-      expect.objectContaining({
-        path: path.join(state.workspaceDir, "MEMORY.md"),
-        alias: true,
-        scope: expect.objectContaining({ kind: "entry" }),
-      }),
-      expect.objectContaining({ path: state.path("extra-link"), alias: true, core: false }),
-    ]),
-  );
-  expect(selected.every((selection) => !selection.path.startsWith(state.path("target")))).toBe(
-    true,
-  );
+  for (const name of ["memory", "MEMORY.md"]) {
+    expect(selected.get(path.join(state.workspaceDir, name))).toMatchObject({
+      alias: true,
+      scope: { kind: "entry" },
+    });
+  }
+  expect(selected.get(state.path("extra-link"))).toMatchObject({ alias: true, core: false });
+  expect([...selected.keys()].some((entry) => entry.startsWith(state.path("target")))).toBe(false);
 });
 
 it("observes the first intermediate alias separately and retains configured parent-alias behavior", async () => {
   await fs.mkdir(state.path("real", "workspace"), { recursive: true });
   await fs.mkdir(state.path("real", "extra"));
   await fs.symlink(state.path("real"), state.path("alias"), "junction");
-  const owner = new MemoryWatchPolicy(state.path("alias", "workspace"), {
-    extraPaths: [state.path("alias", "extra")],
-    multimodal: { enabled: false, modalities: [], maxFileBytes: 10485760 },
-    sync: { watchDebounceMs: 0 },
-  });
+  const owner = policy([state.path("alias", "extra")], state.path("alias", "workspace"));
   const groups = await owner.observations(signal());
   const scopes = groups.flatMap((group) =>
     owner.scopes(group).map((scope) => path.resolve(group.root.rootDir, scope.path)),
@@ -110,11 +100,11 @@ it("retains partial Root admission when a later configured boundary temporarily 
 
 it("selects configured patterns and multimodal files while pruning unrelated descendants", async () => {
   const extra = state.path("extra");
-  const owner = new MemoryWatchPolicy(state.workspaceDir, {
-    extraPaths: [{ path: extra, pattern: "..notes/**/*" }, state.path("other")],
-    multimodal: { enabled: true, modalities: ["image", "audio"], maxFileBytes: 10485760 },
-    sync: { watchDebounceMs: 0 },
-  });
+  const owner = policy(
+    [{ path: extra, pattern: "..notes/**/*" }, state.path("other")],
+    state.workspaceDir,
+    ["image", "audio"],
+  );
   const group = (await owner.observations(signal())).find((entry) =>
     entry.selections.some((selection) => selection.lexical === extra),
   )!;
