@@ -814,65 +814,33 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
     errorCount: 1,
     lastFailureAt: now - 1_000,
   });
-  type ModelCase = {
-    name: string;
-    reason: FailureReason;
-    before?: ProfileUsageStats;
-    modelId?: string;
-    expectedModel?: string | null;
-    until?: number;
-    checkSibling?: boolean;
-    realTime?: boolean;
-  };
-  const cases: ModelCase[] = [
-    { name: "first rate limit", reason: "rate_limit" },
-    {
-      name: "same-model not-found retry",
-      reason: "model_not_found",
-      before: activeStats("model_not_found"),
-      until: now + 30_000,
+  it.each([
+    ["rate_limit", undefined, sonnet, sonnet, undefined, false],
+    ["model_not_found", "model_not_found", sonnet, sonnet, now + 30_000, false],
+    ["model_not_found", undefined, sonnet, sonnet, undefined, true], // #116464
+    ["rate_limit", "rate_limit", "gpt-4.1", undefined, undefined, false],
+    ["auth", "rate_limit", "claude-opus-4.6", undefined, undefined, false],
+  ] as const)(
+    "%s after %s on %s",
+    async (reason, previousReason, modelId, expectedModel, until, checkSibling) => {
+      const store = makeStore({ [copilotId]: previousReason ? activeStats(previousReason) : {} });
+      store.profiles[copilotId] = createApiKeyCredential("github-copilot", "ghu_test");
+      if (reason !== "auth") {
+        vi.useFakeTimers();
+        vi.setSystemTime(now);
+      }
+      mockLockedUpdateForStore(store);
+      await markAuthProfileFailure({ store, profileId: copilotId, reason, modelId });
+      expect(store.usageStats?.[copilotId]).toMatchObject({
+        cooldownReason: reason,
+        cooldownModel: expectedModel,
+        ...(until !== undefined ? { cooldownUntil: until } : {}),
+      });
+      if (checkSibling) {
+        expect(
+          [sonnet, "gpt-4.1"].map((id) => isProfileInCooldown(store, copilotId, now, id)),
+        ).toEqual([true, false]);
+      }
     },
-    {
-      name: "not-found keeps sibling available (#116464)",
-      reason: "model_not_found",
-      checkSibling: true,
-    },
-    {
-      name: "different model widens",
-      reason: "rate_limit",
-      before: activeStats("rate_limit"),
-      modelId: "gpt-4.1",
-      expectedModel: null,
-    },
-    {
-      name: "auth supersedes rate limit",
-      reason: "auth",
-      before: activeStats("rate_limit"),
-      modelId: "claude-opus-4.6",
-      expectedModel: null,
-      realTime: true,
-    },
-  ];
-
-  it.each(cases)("$name", async (row) => {
-    const modelId = row.modelId ?? sonnet;
-    const store = makeStore({ [copilotId]: structuredClone(row.before ?? {}) });
-    store.profiles[copilotId] = createApiKeyCredential("github-copilot", "ghu_test");
-    if (!row.realTime) {
-      vi.useFakeTimers();
-      vi.setSystemTime(now);
-    }
-    mockLockedUpdateForStore(store);
-    await markAuthProfileFailure({ store, profileId: copilotId, reason: row.reason, modelId });
-    expect(store.usageStats?.[copilotId]).toMatchObject({
-      cooldownReason: row.reason,
-      cooldownModel: row.expectedModel === null ? undefined : (row.expectedModel ?? sonnet),
-      ...(row.until !== undefined ? { cooldownUntil: row.until } : {}),
-    });
-    if (row.checkSibling) {
-      expect(
-        [sonnet, "gpt-4.1"].map((id) => isProfileInCooldown(store, copilotId, now, id)),
-      ).toEqual([true, false]);
-    }
-  });
+  );
 });

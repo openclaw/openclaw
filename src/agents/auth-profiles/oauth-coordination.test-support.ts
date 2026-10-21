@@ -45,6 +45,10 @@ export function expectTerminal(credential: AuthProfileCredential | undefined) {
   expect(credential?.type === "oauth" && isOAuthRefreshFence(credential)).toBe(true);
   expect(credential?.type === "oauth" && isPendingOAuthRefreshFence(credential)).toBe(false);
 }
+export function requireOAuth(credential: AuthProfileCredential | undefined): OAuthCredential {
+  assert.ok(credential?.type === "oauth", "expected OAuth fixture");
+  return credential;
+}
 export function candidate(agentId: string, agentDir: string) {
   const databasePath = resolveAuthProfileDatabasePath(agentDir);
   return {
@@ -122,7 +126,7 @@ export function useOAuthCoordinationFixture() {
         allowOAuthGenerationReplacement: true,
       });
     },
-    blockRefresh(credential: () => OAuthCredential) {
+    blockRefresh(credential: () => OAuthCredential | undefined) {
       const started = createDeferredCore();
       const finish = createDeferredCore();
       releaseRefresh = finish.resolve;

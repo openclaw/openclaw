@@ -91,6 +91,34 @@ describe("createOAuthManager settlement credential validation", () => {
       access: createWorkspaceAccessToken("workspace-a", rotation),
       ...options,
     });
+  function createWorkspaceCredential(
+    accountId: string,
+    rotation: string,
+    overrides: Partial<OAuthCredential> = {},
+  ): OAuthCredential {
+    return {
+      type: "oauth",
+      provider,
+      access: createWorkspaceAccessToken(accountId, rotation),
+      refresh: `${rotation}-refresh`,
+      expires: Date.now() + 60 * 60 * 1000,
+      ...overrides,
+    };
+  }
+  const resolve = (agentDir: string, validateOAuthCredential: (value: OAuthCredential) => void) =>
+    resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+      store: ensureAuthProfileStore(agentDir),
+      profileId,
+      agentDir,
+      validateOAuthCredential,
+    });
+  const publish = (value: OAuthCredential, agentDir?: string) =>
+    persistAuthProfileBatch({
+      agentDir,
+      profiles: [{ profileId, credential: value }],
+      resetFailureState: true,
+      allowOAuthGenerationReplacement: true,
+    });
   const readLocal = (agentDir: string) =>
     loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
   const readShared = () => loadPersistedSharedAuthProfileStore(process.env)?.profiles[profileId];
@@ -171,27 +199,19 @@ describe("createOAuthManager settlement credential validation", () => {
       }
       expect(loadPersistedAuthProfileStore(mainAgentDir)).toBeNull();
 
-      refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue({
-        type: "oauth",
-        provider,
-        access: createWorkspaceAccessToken("workspace-a", "rotated"),
-        refresh: "workspace-a-rotated-refresh",
-        expires: Date.now() + 60 * 60 * 1000,
-        accountId: "workspace-a",
-      } as never);
+      refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(
+        createWorkspaceCredential("workspace-a", "rotated", {
+          refresh: "workspace-a-rotated-refresh",
+          accountId: "workspace-a",
+        }),
+      );
       const validatedWorkspaceIds: Array<string | undefined> = [];
       const observations: CanonicalAuthProfileCredentialObservation[] = [];
 
       await expect(
         withCanonicalAuthProfileCredentialObserver(
           (value) => observations.push(value),
-          () =>
-            resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-              store: ensureAuthProfileStore(localAgentDir),
-              profileId,
-              agentDir: localAgentDir,
-              validateOAuthCredential: workspaceValidator(validatedWorkspaceIds),
-            }),
+          () => resolve(localAgentDir, workspaceValidator(validatedWorkspaceIds)),
         ),
       ).resolves.toMatchObject({ apiKey: createWorkspaceAccessToken("workspace-a", "rotated") });
 
@@ -260,27 +280,16 @@ describe("createOAuthManager settlement credential validation", () => {
       }),
     );
     await refresh.started;
-    const newerShared = {
-      type: "oauth" as const,
-      provider,
-      access: createWorkspaceAccessToken("workspace-a", "newer-shared"),
-      refresh: "newer-shared-refresh",
-      expires: Date.now() + 60 * 60 * 1000,
-      accountId: "workspace-a",
-    };
-    await persistAuthProfileBatch({
-      profiles: [{ profileId, credential: newerShared }],
-      resetFailureState: true,
-      allowOAuthGenerationReplacement: true,
-    });
-    refresh.resolve({
-      type: "oauth",
-      provider,
-      access: createWorkspaceAccessToken("workspace-a", "local-rotation"),
-      refresh: "local-rotation-refresh",
-      expires: Date.now() + 30 * 60 * 1000,
+    const newerShared = createWorkspaceCredential("workspace-a", "newer-shared", {
       accountId: "workspace-a",
     });
+    await publish(newerShared);
+    refresh.resolve(
+      createWorkspaceCredential("workspace-a", "local-rotation", {
+        expires: Date.now() + 30 * 60 * 1000,
+        accountId: "workspace-a",
+      }),
+    );
 
     await expect(resolving).resolves.toMatchObject({
       apiKey: createWorkspaceAccessToken("workspace-a", "local-rotation"),
@@ -302,40 +311,22 @@ describe("createOAuthManager settlement credential validation", () => {
 
     const validatedWorkspaceIds: Array<string | undefined> = [];
     const resolving = work.track(() =>
-      resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-        store: ensureAuthProfileStore(peers[0]),
-        profileId,
-        agentDir: peers[0],
-        validateOAuthCredential: workspaceValidator(validatedWorkspaceIds),
-      }),
+      resolve(peers[0], workspaceValidator(validatedWorkspaceIds)),
     );
     await refresh.started;
-    await persistAuthProfileBatch({
-      agentDir: mainAgentDir,
-      profiles: [
-        {
-          profileId,
-          credential: {
-            type: "oauth",
-            provider,
-            access: createWorkspaceAccessToken("workspace-b", "relogin"),
-            refresh: "relogin-other-workspace-refresh",
-            expires: Date.now() + 10 * 60 * 1000,
-            email: "shared@example.test",
-          },
-        },
-      ],
-      resetFailureState: true,
-      allowOAuthGenerationReplacement: true,
-    });
-    refresh.resolve({
-      type: "oauth",
-      provider,
-      access: createWorkspaceAccessToken("workspace-a", "stale-rotation"),
-      refresh: "stale-rotation-refresh",
-      expires: Date.now() + 60 * 60 * 1000,
-      email: "shared@example.test",
-    });
+    await publish(
+      createWorkspaceCredential("workspace-b", "relogin", {
+        refresh: "relogin-other-workspace-refresh",
+        expires: Date.now() + 10 * 60 * 1000,
+        email: "shared@example.test",
+      }),
+      mainAgentDir,
+    );
+    refresh.resolve(
+      createWorkspaceCredential("workspace-a", "stale-rotation", {
+        email: "shared@example.test",
+      }),
+    );
 
     await expect(resolving).resolves.toMatchObject({
       apiKey: createWorkspaceAccessToken("workspace-a", "stale-rotation"),
@@ -367,28 +358,14 @@ describe("createOAuthManager settlement credential validation", () => {
 
     const validatedWorkspaceIds: Array<string | undefined> = [];
     const resolving = work.track(() =>
-      resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-        store: ensureAuthProfileStore(peers[0]),
-        profileId,
-        agentDir: peers[0],
-        validateOAuthCredential: workspaceValidator(validatedWorkspaceIds),
-      }),
+      resolve(peers[0], workspaceValidator(validatedWorkspaceIds)),
     );
     await refresh.started;
-    const conflictingOwner = {
-      type: "oauth" as const,
-      provider,
-      access: createWorkspaceAccessToken("workspace-b", "relogin"),
+    const conflictingOwner = createWorkspaceCredential("workspace-b", "relogin", {
       refresh: "relogin-other-workspace-refresh",
-      expires: Date.now() + 60 * 60 * 1000,
       email: "shared@example.test",
-    };
-    await persistAuthProfileBatch({
-      agentDir: peers[0],
-      profiles: [{ profileId, credential: conflictingOwner }],
-      resetFailureState: true,
-      allowOAuthGenerationReplacement: true,
     });
+    await publish(conflictingOwner, peers[0]);
     refresh.reject(new Error("provider refresh failed"));
 
     await expect(resolving).rejects.toThrow("credential owner mismatch");

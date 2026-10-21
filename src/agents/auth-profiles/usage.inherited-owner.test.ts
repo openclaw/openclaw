@@ -46,18 +46,16 @@ function createMainStore(): AuthProfileStore {
   const expires = Date.now() + 30 * 60 * 1000;
   return {
     version: 1,
-    profiles: {
-      [PRIMARY_ID]: createOAuthRefreshCredential({
-        access: "primary-access",
-        refresh: "primary-refresh",
-        expires,
-      }),
-      [BACKUP_ID]: createOAuthRefreshCredential({
-        access: "backup-access",
-        refresh: "backup-refresh",
-        expires,
-      }),
-    },
+    profiles: Object.fromEntries(
+      ["primary", "backup"].map((name) => [
+        `openai:${name}`,
+        createOAuthRefreshCredential({
+          access: `${name}-access`,
+          refresh: `${name}-refresh`,
+          expires,
+        }),
+      ]),
+    ),
     order: { openai: [PRIMARY_ID, BACKUP_ID] },
   };
 }
@@ -115,6 +113,19 @@ describe("inherited auth-profile usage persistence", () => {
     }).authProfileId;
   }
 
+  const fail = (
+    store: AuthProfileStore,
+    profileId: string,
+    reason: "rate_limit" | "timeout",
+    agentDir = childAgentDir,
+  ) => markAuthProfileFailure({ store, profileId, reason, agentDir });
+  const succeed = (
+    store: AuthProfileStore,
+    profileId: string,
+    provider = "openai",
+    agentDir = childAgentDir,
+  ) => markAuthProfileSuccess({ store, profileId, provider, agentDir });
+
   it.each(["shared", "inherited", "personal"] as const)(
     "keeps a newer %s success over an older exhausted WHAM reply",
     async (owner) => {
@@ -149,17 +160,12 @@ describe("inherited auth-profile usage persistence", () => {
       });
       const observedAt = Date.now() - 60_000;
       const clock = vi.spyOn(Date, "now").mockReturnValue(observedAt);
-      const olderFailure = markAuthProfileFailure({
-        store,
-        profileId,
-        reason: "rate_limit",
-        agentDir,
-      });
+      const olderFailure = fail(store, profileId, "rate_limit", agentDir);
       void olderFailure.catch(() => {});
       try {
         await awaitGateBeforeSettlement(arrived.promise, olderFailure, "WHAM probe did not start");
         clock.mockRestore();
-        await markAuthProfileSuccess({ store, profileId, provider: "openai", agentDir });
+        await succeed(store, profileId, "openai", agentDir);
         const success = readStats();
         expect(success?.lastProbeAt).toBeGreaterThan(observedAt);
         reply.resolve(exhausted());
@@ -168,7 +174,7 @@ describe("inherited auth-profile usage persistence", () => {
         expect(store.usageStats?.[profileId]).toEqual(success);
 
         fetch.mockResolvedValueOnce(exhausted());
-        await markAuthProfileFailure({ store, profileId, reason: "rate_limit", agentDir });
+        await fail(store, profileId, "rate_limit", agentDir);
         expect(readStats()).toMatchObject({
           blockedReason: "subscription_limit",
           blockedSource: "wham",
@@ -190,19 +196,9 @@ describe("inherited auth-profile usage persistence", () => {
     expect(turnStore.profiles[aliceId]?.provider).toBe("anthropic");
     expect(turnStore.profiles[bobId]).toBeUndefined();
 
-    await markAuthProfileFailure({
-      store: turnStore,
-      profileId: aliceId,
-      reason: "timeout",
-      agentDir: childAgentDir,
-    });
+    await fail(turnStore, aliceId, "timeout");
     expect(readUserModelAuthProfile(aliceId)?.usageStats?.cooldownUntil).toBeTypeOf("number");
-    await markAuthProfileSuccess({
-      store: turnStore,
-      profileId: aliceId,
-      provider: "anthropic",
-      agentDir: childAgentDir,
-    });
+    await succeed(turnStore, aliceId, "anthropic");
     expect(readUserModelAuthProfile(aliceId)?.usageStats).toMatchObject({
       errorCount: 0,
       lastUsed: expect.any(Number),
@@ -287,12 +283,7 @@ describe("inherited auth-profile usage persistence", () => {
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: mainAgentDir, store: contaminated }]);
     expectSharedOnly(ensureAuthProfileStore(mainAgentDir));
 
-    await markAuthProfileSuccess({
-      store: loaded,
-      profileId,
-      provider: "anthropic",
-      agentDir: mainAgentDir,
-    });
+    await succeed(loaded, profileId, "anthropic", mainAgentDir);
     expect(
       loadPersistedAuthProfileStore(mainAgentDir)?.usageStats?.[profileId]?.lastUsed,
     ).toBeGreaterThan(1);
@@ -385,12 +376,7 @@ describe("inherited auth-profile usage persistence", () => {
     const localCooldownUntil = Date.now() + 30_000;
     const childStore = createChildStore(localCooldownUntil);
 
-    await markAuthProfileSuccess({
-      store: childStore,
-      provider: "openai",
-      profileId: PRIMARY_ID,
-      agentDir: childAgentDir,
-    });
+    await succeed(childStore, PRIMARY_ID);
 
     const persistedMain = loadPersistedAuthProfileStore(mainAgentDir);
     expect(persistedMain?.lastGood?.openai).toBe(BACKUP_ID);
