@@ -63,6 +63,7 @@ export function sessionFileWorkspaceMatches(
   return (
     fields.every((field) => isDeepStrictEqual(previous?.[field], current?.[field])) &&
     previous?.worktree?.id === current?.worktree?.id &&
+    isDeepStrictEqual(previous?.priorWorkspace, current?.priorWorkspace) &&
     isDeepStrictEqual(
       previous?.skillsSnapshot?.librarySelections,
       current?.skillsSnapshot?.librarySelections,
@@ -148,7 +149,10 @@ export function createSessionFileReadAuthority(
     }
   };
   return {
-    authorizeHostRead: () => (hostAdmission ??= prepareHostRead()),
+    authorizeHostRead: () =>
+      source.fileWorkspace?.historical
+        ? Promise.resolve(false)
+        : (hostAdmission ??= prepareHostRead()),
     withCurrent: withHostAuthority,
     // Downloads retain the exact session row separately; recheck host configuration
     // and the placement owner's current observation immediately before HTTP delivery.

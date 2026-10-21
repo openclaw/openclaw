@@ -99,10 +99,11 @@ export function getGoogleMeetSetupStatus(
 
   if (config.auth.tokenPath) {
     const tokenPath = resolveUserPath(config.auth.tokenPath);
+    const tokenExists = fs.existsSync(tokenPath);
     checks.push({
       id: "google-oauth-token",
-      ok: fs.existsSync(tokenPath),
-      message: fs.existsSync(tokenPath)
+      ok: tokenExists,
+      message: tokenExists
         ? "Google OAuth token file found"
         : `Google OAuth token file missing at ${config.auth.tokenPath}`,
     });

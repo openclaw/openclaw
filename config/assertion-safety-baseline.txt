@@ -95,7 +95,6 @@ extensions/clickclack/src/outbound.ts	1
 extensions/clickclack/src/setup-claim.ts	1
 extensions/clickclack/src/setup-core.ts	5
 extensions/clickclack/src/setup-surface.ts	8
-extensions/clickclack/src/setup-verify.ts	1
 extensions/codex/harness.ts	1
 extensions/codex/index.ts	5
 extensions/codex/src/app-server/attempt-notifications.ts	1

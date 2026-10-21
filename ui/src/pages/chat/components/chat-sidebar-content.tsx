@@ -214,6 +214,11 @@ export function SidebarPanel(props: SidebarPanelProps) {
     >
       <div
         class="sidebar-panel"
+        data-file-entry-id={
+          props.content?.kind === "file"
+            ? props.content.sessionFileSource?.messageEntryId
+            : undefined
+        }
         data-file-session-key={
           props.content?.kind === "markdown"
             ? props.content.fileLinkSessionKey

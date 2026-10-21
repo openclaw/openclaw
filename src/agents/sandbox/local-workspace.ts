@@ -17,6 +17,14 @@ import {
 } from "./persistent-exec.types.js";
 import type { SandboxConfig, SandboxContext } from "./types.js";
 
+export function assertLocalSandboxWorkspaceBackend(backend: SandboxConfig["backend"]) {
+  if (backend !== "docker" && backend !== "podman") {
+    throw new Error(
+      "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
+    );
+  }
+}
+
 /** A writable project is an exact managed projection, never a role-policy override. */
 export async function prepareLocalSandboxWorkspace(params: {
   cfg: OpenClawConfig;
@@ -86,11 +94,7 @@ export async function prepareLocalSandboxWorkspace(params: {
   try {
     assertCurrent();
     markManagedWorktreePreparation();
-    if (params.sandbox.backend !== "docker" && params.sandbox.backend !== "podman") {
-      throw new Error(
-        "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
-      );
-    }
+    assertLocalSandboxWorkspaceBackend(params.sandbox.backend);
     const existing = await withLocalWorkspaceProjection(executionOwner, (state) => state.reuse());
     let workspaceDir: string;
     if (existing) {

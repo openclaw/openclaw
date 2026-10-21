@@ -49,7 +49,6 @@ export async function startFaceTimeTalkDriver(params: {
   logger: RuntimeLogger;
   callUUID: string;
   senderId: string;
-  senderIsOwner: true;
   captureBinary: string;
   signal?: AbortSignal;
   onHangupRequested: () => Promise<void>;
@@ -323,7 +322,6 @@ export async function startFaceTimeTalkDriver(params: {
     requesterSessionKey,
     normalizedCallUUID,
     senderId: params.senderId,
-    senderIsOwner: params.senderIsOwner,
     transcript,
     getBridge: () => bridge,
     getGeneration: () => modelMediaGeneration,

@@ -362,6 +362,7 @@ export function DesktopFileChrome(props: FileReaderChromeProps) {
                 scopeKey={[
                   props.content.sessionFileSource?.sessionKey ?? props.runtime?.sessionKey,
                   props.content.artifactId ?? props.content.path,
+                  props.content.sessionFileSource?.messageEntryId,
                   props.runtime?.connectionEpoch,
                 ].join("\0")}
                 download={(signal) => download()(signal)}
