@@ -132,29 +132,50 @@ function catalogModel(id: string, name: string, maxTokens = 8_192) {
   };
 }
 
+function oauthCredential(
+  provider: string,
+  access: string,
+  refresh: string,
+  fresh = false,
+): OAuthCredential {
+  return {
+    type: "oauth",
+    provider,
+    access,
+    refresh,
+    expires: Date.now() + (fresh ? 3_600_000 : -60_000),
+  };
+}
+
+function apiKeyCredential(provider: string, key: string) {
+  return { type: "api_key" as const, provider, key };
+}
+
+let state: OpenClawTestState;
+let agentDir: string;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ prefix: "catalog-auth-order-", agentEnv: "main" });
+  agentDir = state.agentDir();
+  discovery.providers = [];
+  // Keep capability discovery at the mocked refresh boundary, not the full runtime.
+  vi.spyOn(providerRuntime, "resolveProviderOAuthRefreshCapabilityWithPlugin").mockResolvedValue({
+    status: "available",
+  });
+});
+
+afterEach(async () => {
+  clearLiveCatalogCacheForTests();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  discovery.providers = [];
+  await state?.cleanup();
+});
+
 describe("Provider model discovery auth preparation", () => {
-  let state: OpenClawTestState;
-  let agentDir: string;
-
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ prefix: "catalog-auth-order-", agentEnv: "main" });
-    agentDir = state.agentDir();
+  beforeEach(() => {
     discovery.providers = [buildOpenAIProvider()];
-    // These fixtures supply refreshable providers and mock their refresh operation.
-    // Keep capability discovery at the same boundary instead of loading the full runtime.
-    vi.spyOn(providerRuntime, "resolveProviderOAuthRefreshCapabilityWithPlugin").mockResolvedValue({
-      status: "available",
-    });
   });
-
-  afterEach(async () => {
-    clearLiveCatalogCacheForTests();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    discovery.providers = [];
-    await state?.cleanup();
-  });
-
   function planCatalog(
     config: OpenClawConfig,
     store: AuthProfileStore,
@@ -197,13 +218,12 @@ describe("Provider model discovery auth preparation", () => {
     });
     const capturedCredential = structuredClone(store.profiles[profileId]);
     await state.writeAuthProfiles(store);
-    const refreshedCredential: OAuthCredential = {
-      type: "oauth",
-      provider: "chutes",
-      access: "refreshed-chutes-access",
-      refresh: "rotated-chutes-refresh-token",
-      expires: Date.now() + 3_600_000,
-    };
+    const refreshedCredential = oauthCredential(
+      "chutes",
+      "refreshed-chutes-access",
+      "rotated-chutes-refresh-token",
+      true,
+    );
     return { profileId, config, store, capturedCredential, refreshedCredential };
   }
 
@@ -243,8 +263,8 @@ describe("Provider model discovery auth preparation", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        [profileA]: { type: "api_key", provider: "openai", key: keyA },
-        [profileB]: { type: "api_key", provider: "openai", key: keyB },
+        [profileA]: apiKeyCredential("openai", keyA),
+        [profileB]: apiKeyCredential("openai", keyB),
       },
     };
     await state.writeAuthProfiles(store);
@@ -294,7 +314,7 @@ describe("Provider model discovery auth preparation", () => {
         refresh: "refresh-a",
       });
       if (source === "profile") {
-        store.profiles[profileB] = { type: "api_key", provider: providerId, key: keyB };
+        store.profiles[profileB] = apiKeyCredential(providerId, keyB);
       } else if (source === "config") {
         config.models = {
           providers: {
@@ -452,11 +472,7 @@ describe("Provider model discovery auth preparation", () => {
         access: "expired-radius-access",
         refresh: "radius-refresh-token",
       });
-      store.profiles[keyProfileId] = {
-        type: "api_key",
-        provider: "radius",
-        key: "selected-radius-key",
-      };
+      store.profiles[keyProfileId] = apiKeyCredential("radius", "selected-radius-key");
       const captured = structuredClone(store);
       await state.writeAuthProfiles(store);
       const persisted = readAuthProfileStoreForTest(agentDir).profiles[profileId];
@@ -571,13 +587,7 @@ describe("Provider model discovery auth preparation", () => {
       const profiles = Object.fromEntries(
         profileIds.map((profileId) => [
           profileId,
-          {
-            type: "oauth" as const,
-            provider: providerId,
-            access: `expired-${profileId}`,
-            refresh: `refresh-${profileId}`,
-            expires: Date.now() - 60_000,
-          },
+          oauthCredential(providerId, `expired-${profileId}`, `refresh-${profileId}`),
         ]),
       );
       const store: AuthProfileStore = { version: 1, profiles };
@@ -654,19 +664,17 @@ describe("Provider model discovery auth preparation", () => {
       const { profileId, config, store, capturedCredential, refreshedCredential } =
         await createChutesCatalogFixture();
       const fallbackProfileId = "chutes:fallback";
-      const fallbackCredential: OAuthCredential = {
-        type: "oauth",
-        provider: "chutes",
-        access: "expired-fallback-access",
-        refresh: "fallback-refresh-token",
-        expires: Date.now() - 60_000,
-      };
-      const refreshedFallback: OAuthCredential = {
-        ...fallbackCredential,
-        access: "refreshed-fallback-access",
-        refresh: "rotated-fallback-refresh-token",
-        expires: Date.now() + 3_600_000,
-      };
+      const fallbackCredential = oauthCredential(
+        "chutes",
+        "expired-fallback-access",
+        "fallback-refresh-token",
+      );
+      const refreshedFallback = oauthCredential(
+        "chutes",
+        "refreshed-fallback-access",
+        "rotated-fallback-refresh-token",
+        true,
+      );
       config.auth = { order: { chutes: [profileId, fallbackProfileId] } };
       store.profiles[fallbackProfileId] = fallbackCredential;
       await state.writeAuthProfiles(store);
@@ -783,11 +791,7 @@ describe("Provider model discovery auth preparation", () => {
     async (resultKind) => {
       const { config, store } = await createChutesCatalogFixture();
       const otherProfileId = "openai:other-source";
-      store.profiles[otherProfileId] = {
-        type: "api_key",
-        provider: "openai",
-        key: "independent-source-key",
-      };
+      store.profiles[otherProfileId] = apiKeyCredential("openai", "independent-source-key");
       await state.writeAuthProfiles(store);
       mockRefreshFailure();
       const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected HTTP"));
@@ -851,35 +855,17 @@ describe("provider catalog late-result finalization", () => {
   const peerId = "catalog-peer-fixture";
   const model = catalogModel("account-only", "Account Model");
 
-  let state: OpenClawTestState;
   let store: AuthProfileStore;
 
   beforeEach(async () => {
-    state = await createOpenClawTestState({ prefix: "catalog-late-result-", agentEnv: "main" });
     store = {
       version: 1,
       profiles: {
-        [profileId]: {
-          type: "oauth",
-          provider: providerId,
-          access: "expired-fixture-access",
-          refresh: "fixture-refresh",
-          expires: Date.now() - 60_000,
-        },
+        [profileId]: oauthCredential(providerId, "expired-fixture-access", "fixture-refresh"),
       },
     };
     await state.writeAuthProfiles(store);
-    vi.spyOn(providerRuntime, "resolveProviderOAuthRefreshCapabilityWithPlugin").mockResolvedValue({
-      status: "available",
-    });
     mockRefreshFailure("fixture refresh failed");
-  });
-
-  afterEach(async () => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    discovery.providers = [];
-    await state.cleanup();
   });
 
   it.each(["provider", "providers", "outcomes"] as const)(

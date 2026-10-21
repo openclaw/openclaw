@@ -424,56 +424,53 @@ describe("installTestEnv", () => {
   );
 
   it.each([
-    {
-      name: "explicit",
-      corepack: "tool-cache",
-      xdg: "xdg",
-      local: "local",
-      expected: "tool-cache",
-    },
-    { name: "explicit empty", corepack: "", xdg: "xdg", local: "local", expected: "" },
-    { name: "explicit whitespace", corepack: " tool-cache ", expected: " tool-cache " },
-    { name: "XDG before LOCALAPPDATA", xdg: "xdg", local: "local", expected: "xdg/node/corepack" },
-    { name: "empty XDG", xdg: "", local: "local", expected: "node/corepack" },
-    { name: "LOCALAPPDATA", local: "local", expected: "local/node/corepack" },
-    { name: "empty LOCALAPPDATA", local: "", expected: "node/corepack" },
-    { name: "OS home" },
-  ])("preserves the $name Corepack cache across HOME isolation and cleanup", (testCase) => {
-    const realHome = createTempHome();
-    withEnv(
-      {
-        HOME: realHome,
-        USERPROFILE: realHome,
-        COREPACK_HOME: testCase.corepack,
-        XDG_CACHE_HOME: testCase.xdg,
-        XDG_RUNTIME_DIR: path.join(realHome, "runtime"),
-        LOCALAPPDATA: testCase.local,
-      },
-      () => {
-        const callerEnv = { ...process.env };
-        const expected =
-          testCase.expected === undefined
-            ? path.join(
-                os.homedir(),
-                process.platform === "win32" ? "AppData/Local" : ".cache",
-                "node/corepack",
-              )
-            : testCase.corepack === undefined
-              ? path.normalize(testCase.expected)
-              : testCase.expected;
-        const testEnv = install({ mode: "hermetic" });
+    ["explicit", "tool-cache", "xdg", "local", "tool-cache"],
+    ["explicit empty", "", "xdg", "local", ""],
+    ["explicit whitespace", " tool-cache ", undefined, undefined, " tool-cache "],
+    ["XDG before LOCALAPPDATA", undefined, "xdg", "local", "xdg/node/corepack"],
+    ["empty XDG", undefined, "", "local", "node/corepack"],
+    ["LOCALAPPDATA", undefined, undefined, "local", "local/node/corepack"],
+    ["empty LOCALAPPDATA", undefined, undefined, "", "node/corepack"],
+    ["OS home"],
+  ])(
+    "preserves the %s Corepack cache across HOME isolation and cleanup",
+    (_name, corepack, xdg, local, cache) => {
+      const realHome = createTempHome();
+      withEnv(
+        {
+          HOME: realHome,
+          USERPROFILE: realHome,
+          COREPACK_HOME: corepack,
+          XDG_CACHE_HOME: xdg,
+          XDG_RUNTIME_DIR: path.join(realHome, "runtime"),
+          LOCALAPPDATA: local,
+        },
+        () => {
+          const callerEnv = { ...process.env };
+          const expected =
+            cache === undefined
+              ? path.join(
+                  os.homedir(),
+                  process.platform === "win32" ? "AppData/Local" : ".cache",
+                  "node/corepack",
+                )
+              : corepack === undefined
+                ? path.normalize(cache)
+                : cache;
+          const testEnv = install({ mode: "hermetic" });
 
-        expect(process.env.HOME).toBe(testEnv.tempHome);
-        expect(process.env.XDG_CACHE_HOME).toBe(path.join(testEnv.tempHome, ".cache"));
-        expect(process.env.XDG_RUNTIME_DIR).toBe(path.join(testEnv.tempHome, ".runtime"));
-        expect(process.env.COREPACK_HOME).toBe(expected);
-        setTestEnvValue("COREPACK_HOME", path.join(testEnv.tempHome, "changed-tool-cache"));
-        testEnv.cleanup();
-        expect(changedEnvKeys(callerEnv)).toEqual([]);
-        expect(fs.existsSync(testEnv.tempHome)).toBe(false);
-      },
-    );
-  });
+          expect(process.env.HOME).toBe(testEnv.tempHome);
+          expect(process.env.XDG_CACHE_HOME).toBe(path.join(testEnv.tempHome, ".cache"));
+          expect(process.env.XDG_RUNTIME_DIR).toBe(path.join(testEnv.tempHome, ".runtime"));
+          expect(process.env.COREPACK_HOME).toBe(expected);
+          setTestEnvValue("COREPACK_HOME", path.join(testEnv.tempHome, "changed-tool-cache"));
+          testEnv.cleanup();
+          expect(changedEnvKeys(callerEnv)).toEqual([]);
+          expect(fs.existsSync(testEnv.tempHome)).toBe(false);
+        },
+      );
+    },
+  );
 
   it.each([
     "TWILIO_ACCOUNT_SID",

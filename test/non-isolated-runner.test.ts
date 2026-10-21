@@ -16,6 +16,10 @@ import { agentReaderFixtureFiles } from "./non-isolated-runner.agent-reader-fixt
 import { authOwnershipFixtureFiles } from "./non-isolated-runner.auth-fixtures.ts";
 import { controllerStorageFixtureFiles } from "./non-isolated-runner.controller-fixtures.ts";
 import { domResourceFixtureFiles } from "./non-isolated-runner.dom-fixtures.ts";
+import {
+  createRunnerFixtureEnv,
+  withRunnerFixture,
+} from "./non-isolated-runner.fixture-support.ts";
 import { gatewayWorkerLifetimeFixtureFiles } from "./non-isolated-runner.gateway-lifecycle-fixtures.ts";
 import { mcpManagerFixtureFiles } from "./non-isolated-runner.mcp-fixtures.ts";
 import { mockResolutionFixtureFiles } from "./non-isolated-runner.mock-resolution-fixtures.ts";
@@ -41,20 +45,8 @@ const gatewayProjects = [
 ] as const;
 
 function childEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    // Drop parent Vitest state so the child run resolves its own config, and
-    // drop GITHUB_ACTIONS so the child's reporter cannot annotate the parent.
-    if (
-      key.startsWith("VITEST") ||
-      key.startsWith("OPENCLAW_VITEST") ||
-      key === "GITHUB_ACTIONS" ||
-      key === "FORCE_COLOR"
-    ) {
-      continue;
-    }
-    env[key] = value;
-  }
+  const env = createRunnerFixtureEnv();
+  delete env.FORCE_COLOR;
   env.NO_COLOR = "1";
   delete env.OPENCLAW_SKIP_CHANNELS;
   delete env.OPENCLAW_SKIP_CRON;
@@ -501,23 +493,6 @@ type ChildCompletion = Pick<ChildProcess, "exitCode" | "signalCode" | "killed"> 
 
 const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
 
-async function withFixtureRoot(name: string, run: (root: string) => Promise<void>) {
-  // Outer test cleanup must not erase unjoined writers; retain failed fixtures.
-  const parent = path.join(repoRoot, ".artifacts", name);
-  await fs.mkdir(parent, { recursive: true });
-  const root = await fs.mkdtemp(path.join(parent, "run-"));
-  try {
-    await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
-    await run(root);
-    await fs.rm(root, { recursive: true, force: true });
-  } catch (error) {
-    if (error instanceof Error) {
-      error.message += `; retained fixture ${root}`;
-    }
-    throw error;
-  }
-}
-
 async function runFixture(root: string, signal: AbortSignal, env = childEnv()) {
   const reportPath = path.join(root, "report.json");
   let child!: ChildProcess;
@@ -662,7 +637,7 @@ async function assertCompletion(
 }
 
 async function verifyRunnerCleanup(signal: AbortSignal) {
-  await withFixtureRoot("non-isolated-runner", async (root) => {
+  await withRunnerFixture("non-isolated-runner", async ({ root }) => {
     const files = fixtureFiles(root);
     for (const [name, content] of Object.entries(files)) {
       await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
@@ -766,18 +741,21 @@ export default defineConfig({
       ],
       ["inconsistent totals", ({ report }) => Object.assign(report, { numPassedTests: 44 })],
     ];
-    for (const patch of [
+    function patchFaults(label: string, target: (replay: Replay) => object, patches: object[]) {
+      for (const patch of patches) {
+        faults.push([
+          `${label}: ${JSON.stringify(patch)}`,
+          (replay) => Object.assign(target(replay), patch),
+        ]);
+      }
+    }
+    patchFaults("invalid native capture", ({ capture }) => capture, [
       { ended: undefined },
       { processTimedOut: true },
       { pid: child.pid! + 1 },
       { root: "other" },
-    ]) {
-      faults.push([
-        `invalid native capture: ${JSON.stringify(patch)}`,
-        ({ capture }) => Object.assign(capture, patch),
-      ]);
-    }
-    for (const patch of [
+    ]);
+    patchFaults("invalid native end", ({ capture }) => capture.ended!, [
       { reason: "interrupted" },
       { reason: "passed" },
       { unhandledErrors: 1 },
@@ -785,13 +763,8 @@ export default defineConfig({
       { failedModules: 7 },
       { suiteErrors: 4 },
       { suiteErrors: 7 },
-    ]) {
-      faults.push([
-        `invalid native end: ${JSON.stringify(patch)}`,
-        ({ capture }) => Object.assign(capture.ended!, patch),
-      ]);
-    }
-    for (const patch of [
+    ]);
+    patchFaults("abnormal child completion", ({ child: replayChild }) => replayChild, [
       { code: 0 },
       { code: 2 },
       { code: 143 },
@@ -800,12 +773,7 @@ export default defineConfig({
       { exitCode: null },
       { signalCode: "SIGTERM" },
       { killed: true },
-    ] satisfies Partial<ChildCompletion>[]) {
-      faults.push([
-        `abnormal child completion: ${JSON.stringify(patch)}`,
-        ({ child: replayChild }) => Object.assign(replayChild, patch),
-      ]);
-    }
+    ] satisfies Partial<ChildCompletion>[]);
     const nativeReport: JsonTestResults = JSON.parse(originals[0]!);
     for (const [index, file] of nativeReport.testResults.entries()) {
       if (!file.assertionResults.length) {
@@ -876,7 +844,7 @@ it("cleans every shared runner surface between files", (context) => {
 });
 
 async function verifyGatewayWorkerLifetimes(signal: AbortSignal) {
-  await withFixtureRoot("gateway-worker-lifetimes", async (root) => {
+  await withRunnerFixture("gateway-worker-lifetimes", async ({ root }) => {
     await fs.writeFile(path.join(root, "threads-events.log"), "");
     await fs.writeFile(path.join(root, "provenance-events.log"), "");
     const files = {
