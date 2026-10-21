@@ -1,4 +1,6 @@
 import { expect, onTestFinished, vi } from "vitest";
+import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as defaults from "../../media-understanding/defaults.js";
 import * as descriptions from "../../media-understanding/image-runtime.js";
@@ -7,11 +9,7 @@ import * as media from "../../media/web-media.js";
 import type { MediaUnderstandingProvider } from "../../plugin-sdk/media-understanding.js";
 import * as capabilities from "../../plugins/capability-provider-runtime.js";
 import * as models from "../embedded-agent-runner/model.js";
-import {
-  coerceImageAssistantText,
-  decodeDataUrl,
-  hasImageReasoningOnlyResponse,
-} from "./image-tool.helpers.js";
+import { decodeDataUrl, hasImageReasoningOnlyResponse } from "./image-tool.helpers.js";
 import { createImageTool } from "./image-tool.js";
 import * as execution from "./image-tool.model-execution.js";
 
@@ -35,6 +33,31 @@ export function createRequiredImageTool(args: Parameters<typeof createImageTool>
     throw new Error("expected image tool");
   }
   return tool;
+}
+
+export function makeImageModelDefinition(
+  id: string,
+  input: ModelDefinitionConfig["input"] = ["text", "image"],
+): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  };
+}
+
+export function createImageTestConfig(
+  agentDefaults: AgentDefaultsConfig,
+  providers?: Record<string, ModelProviderConfig>,
+): OpenClawConfig {
+  return {
+    agents: { defaults: agentDefaults },
+    ...(providers ? { models: { providers } } : {}),
+  };
 }
 
 export async function executeImplicitImageTool(
@@ -184,7 +207,6 @@ function setProviderDepsForTest(overrides?: Partial<ImageToolProviderDeps>): voi
 
 export const testing = {
   decodeDataUrl,
-  coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
   resolveImageCompressionPolicy: (
     params: Parameters<typeof execution.prepareImageCompressionPolicy>[0],

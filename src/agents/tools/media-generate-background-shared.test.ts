@@ -202,23 +202,6 @@ it.each([
   },
 );
 
-it("keeps failed completion notices in the durable agent-loop handoff", async () => {
-  announce.mockResolvedValue({
-    delivered: false,
-    path: "direct",
-    reason: "generated_media_missing",
-    error: "completion agent did not deliver generated media",
-  });
-  await expect(
-    imageGenerationTaskLifecycle.wakeTaskCompletion({
-      ...completion("image", "provider failed"),
-      status: "error",
-      statusLabel: "failed",
-    }),
-  ).resolves.toEqual({ status: "permanent_failure" });
-  expect(announce).toHaveBeenCalledTimes(1);
-});
-
 it.each([
   "agent:main:discord:direct:123",
   "agent:main:discord:channel:C123",
@@ -287,14 +270,24 @@ it("keeps the detached video tool run context registered until terminal status",
   expect(getAgentRunContext(handle.runId)).toBeUndefined();
 });
 
-it("keeps active video generation failure wakes agent-mediated", async () => {
-  announce.mockResolvedValue({ delivered: true, path: "steered" });
-  await videoGenerationTaskLifecycle.wakeTaskCompletion({
-    ...completion("video", "All video generation models failed."),
+it.each(["image", "video"] as const)("keeps %s failure wakes agent-mediated", async (kind) => {
+  announce.mockResolvedValue(
+    kind === "video"
+      ? { delivered: true, path: "steered" }
+      : {
+          delivered: false,
+          path: "direct",
+          reason: "generated_media_missing",
+          error: "completion agent did not deliver generated media",
+        },
+  );
+  const outcome = await createMediaGenerationTaskLifecycle(kind).wakeTaskCompletion({
+    ...completion(kind, "provider failed"),
     status: "error",
     statusLabel: "failed",
   });
-  expect(announce).toHaveBeenCalledTimes(1);
+  expect(outcome).toEqual({ status: kind === "video" ? "delivered" : "permanent_failure" });
+  expect(announce).toHaveBeenCalledOnce();
   expectReplyInstruction([
     "retry with adjusted parameters",
     "tell the user briefly what failed",
@@ -313,18 +306,13 @@ it.each(["admission", "generation"] as const)(
       await finishCleanup.promise;
       throw cleanupError;
     });
-    const lifecycle = {
-      createTaskRun: vi.fn(async () => {
-        if (phase === "admission") {
-          throw error;
-        }
-        return null;
-      }),
-      recordTaskProgress: vi.fn(),
-      completeTaskRun: vi.fn(),
-      failTaskRun: vi.fn(),
-      wakeTaskCompletion: vi.fn(async () => ({ status: "delivered" as const })),
-    };
+    const lifecycle = mockLifecycle();
+    lifecycle.createTaskRun.mockImplementation(async () => {
+      if (phase === "admission") {
+        throw error;
+      }
+      return null;
+    });
     const run = vi.fn(async () => {
       throw error;
     });
@@ -382,7 +370,7 @@ type ScheduleOptions = Parameters<typeof scheduleMediaGenerationTaskCompletion>[
 
 function mockLifecycle() {
   return {
-    createTaskRun: vi.fn(),
+    createTaskRun: vi.fn<ScheduleOptions["lifecycle"]["createTaskRun"]>(),
     recordTaskProgress: vi.fn(),
     completeTaskRun: vi.fn(),
     failTaskRun: vi.fn(),
@@ -447,19 +435,17 @@ function completionFixture(handle: ScheduleOptions["handle"]) {
 
 describe("media generation detachment admission", () => {
   it.each([
-    ["agent:main:cron:daily-media", true],
-    ["agent:main:cron:daily-media:run:run-123", false],
-    [undefined, undefined],
-  ] as const)("admits %s with detach=%s", async (sessionKey, detach) => {
-    const handle = await createImageMediaLifecycle().createTaskRun({
-      sessionKey,
-      prompt: "a synthetic lighthouse",
-    });
-    expect(handle?.detach).toBe(detach);
-  });
-
-  it("keeps exact cron media inline until a CLI resume binding is durable", async () => {
-    const sessionKey = "agent:main:cron:daily-media:run:run-123";
+    ["agent:main:cron:daily-media", true, true],
+    ["agent:main:cron:daily-media:run:run-123", false, true],
+    [undefined, undefined, false],
+  ] as const)("admits %s with detach=%s", async (sessionKey, detach, bindCli) => {
+    const lifecycle = createImageMediaLifecycle();
+    expect((await lifecycle.createTaskRun({ sessionKey, prompt: "before binding" }))?.detach).toBe(
+      detach,
+    );
+    if (!bindCli) {
+      return;
+    }
     const entry: SessionEntry = {
       sessionId: "run-123",
       updatedAt: 1,
@@ -470,11 +456,9 @@ describe("media generation detachment admission", () => {
       },
     };
     sessionMocks.loadSessionEntry.mockReturnValue(entry);
-    const lifecycle = createImageMediaLifecycle();
     expect((await lifecycle.createTaskRun({ sessionKey, prompt: "before binding" }))?.detach).toBe(
-      false,
+      detach,
     );
-
     sessionMocks.loadSessionEntry.mockReturnValue({
       ...entry,
       updatedAt: 2,
@@ -507,10 +491,8 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshTranscriptWrite);
       return { status: "delivered" as const };
     });
-    const completeTaskRun = vi.fn();
     const lifecycle = {
       ...mockLifecycle(),
-      completeTaskRun,
       wakeTaskCompletion,
     };
     const run = vi.fn(async () => generatedImageResult());
@@ -520,9 +502,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       async () => {
         scheduleImageCompletion({
           lifecycle,
-          handle: admitMediaHandle({
-            taskId: "task-image-disposed-owner",
-            runId: "tool:image_generate:disposed-owner",
+          handle: imageHandle("disposed-owner", {
             requesterSessionKey: sessionKey,
             taskLabel: "QA lighthouse",
           }),
@@ -544,7 +524,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(run).toHaveBeenCalledOnce();
     expect(freshTranscriptWrite).toHaveBeenCalledOnce();
     expect(wakeTaskCompletion).toHaveBeenCalledOnce();
-    expect(completeTaskRun).toHaveBeenCalledOnce();
+    expect(lifecycle.completeTaskRun).toHaveBeenCalledOnce();
     expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
   });
 
@@ -614,86 +594,61 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       ).toHaveBeenCalledWith(sessionKey);
     },
   );
-  it("keeps pending cron media active until a handoff retry delivers it", async () => {
+  it.each([
+    ["first retry", 2, 249],
+    ["capped backoff", 7, 7_749],
+    ["deadline", Infinity, 120_000],
+  ] as const)("keeps pending cron media active until %s", async (ending, attempts, elapsed) => {
     vi.useFakeTimers();
     const sessionKey = "agent:main:cron:daily-media:run:run-123";
-    announce
-      .mockResolvedValueOnce({
-        delivered: false,
-        path: "none",
-        reason: "completion_handoff_pending",
-        error: "cron run continuation is not ready",
-      })
-      .mockResolvedValueOnce({ delivered: true, path: "direct" });
+    let wakes = 0;
+    announce.mockImplementation(async () =>
+      ++wakes < attempts
+        ? {
+            delivered: false,
+            path: "none",
+            reason: "completion_handoff_pending",
+            error: "cron run continuation is not ready",
+          }
+        : { delivered: true, path: "direct" },
+    );
     const lifecycle = createImageMediaLifecycle();
-    const handle = await lifecycle.createTaskRun({
-      sessionKey,
-      prompt: "proof image",
-    });
+    const handle = await lifecycle.createTaskRun({ sessionKey, prompt: "proof image" });
     assert(handle);
-
-    const backgroundWork = scheduleImageCompletion({
-      lifecycle,
-      handle,
-    })();
+    const complete = vi.spyOn(lifecycle, "completeTaskRun");
+    const progress = vi.spyOn(lifecycle, "recordTaskProgress");
+    const onWakeFailure = vi.fn();
+    const backgroundWork = scheduleImageCompletion({ lifecycle, handle, onWakeFailure })();
     await vi.advanceTimersByTimeAsync(0);
-    expect(announce).toHaveBeenCalledTimes(1);
-    expect(taskExecutorMocks.completeOperation).not.toHaveBeenCalled();
+    expect(announce).toHaveBeenCalledOnce();
+    expect(complete).not.toHaveBeenCalled();
     expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(249);
-    expect(announce).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(elapsed);
+    if (ending !== "deadline") {
+      expect(announce).toHaveBeenCalledTimes(attempts - 1);
+      expect(complete).not.toHaveBeenCalled();
+      expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+    }
     await backgroundWork;
-
-    expect(announce).toHaveBeenCalledTimes(2);
-    expect(taskExecutorMocks.completeOperation).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledOnce();
+    expect(taskExecutorMocks.completeOperation).toHaveBeenCalledOnce();
     expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(false);
-  });
-
-  it("caps exponential pending-handoff retries until delivery succeeds", async () => {
-    vi.useFakeTimers();
-    let wakeAttempt = 0;
-    const { lifecycle, onWakeFailure, start } = completionFixture(imageHandle("pending"));
-    lifecycle.wakeTaskCompletion.mockImplementation(async () => {
-      wakeAttempt += 1;
-      return { status: wakeAttempt < 7 ? "pending" : "delivered" };
-    });
-    const backgroundWork = start();
-    await vi.advanceTimersByTimeAsync(7_749);
-    expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledTimes(6);
-    expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    await backgroundWork;
-    expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledTimes(7);
-    expect(lifecycle.recordTaskProgress).toHaveBeenCalledTimes(7);
-    expectCall(lifecycle.completeTaskRun, {
-      terminalResult: undefined,
-    });
-    expect(onWakeFailure).not.toHaveBeenCalled();
-  });
-
-  it("stops pending handoff retries at the completion deadline", async () => {
-    vi.useFakeTimers();
-    const { lifecycle, onWakeFailure, start } = completionFixture(
-      imageHandle("orphaned", {
-        requesterSessionKey: "agent:main:cron:job:run:run-id",
-      }),
-    );
-    lifecycle.wakeTaskCompletion.mockResolvedValue({ status: "pending" });
-    const backgroundWork = start();
-    await vi.advanceTimersByTimeAsync(120_000);
-    await backgroundWork;
-
-    expect(lifecycle.wakeTaskCompletion.mock.calls.length).toBeLessThan(70);
-    expectCall(lifecycle.completeTaskRun, {
-      terminalResult: expect.objectContaining({ terminalOutcome: "blocked" }),
-    });
-    expect(onWakeFailure).toHaveBeenCalledWith(
-      "Image generation completion wake failed after successful generation",
-      expect.objectContaining({ taskId: "task-image-orphaned" }),
-    );
+    if (ending !== "deadline") {
+      expect(announce).toHaveBeenCalledTimes(attempts);
+      expect(progress).toHaveBeenCalledTimes(attempts);
+      expectCall(complete, { terminalResult: undefined });
+      expect(onWakeFailure).not.toHaveBeenCalled();
+    } else {
+      expect(announce.mock.calls.length).toBeLessThan(70);
+      expectCall(complete, {
+        terminalResult: expect.objectContaining({ terminalOutcome: "blocked" }),
+      });
+      expect(onWakeFailure).toHaveBeenCalledWith(
+        "Image generation completion wake failed after successful generation",
+        expect.objectContaining({ taskId: handle.taskId }),
+      );
+    }
   });
 
   it.each(["delivered", "unconfirmed", "wake-error", "progress-error", "generation-error"])(

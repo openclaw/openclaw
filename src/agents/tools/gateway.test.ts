@@ -264,26 +264,31 @@ describe("gateway tool defaults", () => {
     expect(call.client?.internal?.agentRuntimeIdentity).toMatchObject(caller);
   });
 
-  it("retries stale node identity without provenance", async () => {
-    mocks.callGateway.mockRejectedValueOnce(new Error(staleIdentityMessage));
-    await runAsCaller(invokeNode, true);
-    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
-    expect(mocks.callGateway.mock.calls[0]?.[0].agentRuntimeIdentityToken).toEqual(
-      expect.any(String),
-    );
-    expect(mocks.callGateway.mock.calls[1]?.[0].agentRuntimeIdentityToken).toBeUndefined();
-    expect(mocks.callGateway.mock.calls[1]?.[0].params).toEqual(nodeParams);
-  });
-
-  it("retains identity on a node schema retry", async () => {
-    mocks.callGateway.mockRejectedValueOnce(schemaError(false));
-    await runAsCaller(invokeNode, true);
-    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
-    expect(mocks.callGateway.mock.calls[1]?.[0].params).toEqual(nodeParams);
-    expect(mocks.callGateway.mock.calls[1]?.[0].agentRuntimeIdentityToken).toEqual(
-      expect.any(String),
-    );
-  });
+  it.each(["stale identity", "node schema", "already dispatched"] as const)(
+    "retries only safe node failures: %s",
+    async (failure) => {
+      const staleIdentity = failure === "stale identity";
+      const dispatched = failure === "already dispatched";
+      const error = staleIdentity ? new Error(staleIdentityMessage) : schemaError(dispatched);
+      mocks.callGateway.mockRejectedValueOnce(error);
+      const request = runAsCaller(invokeNode, true);
+      if (dispatched) {
+        await expect(request).rejects.toBe(error);
+        expect(mocks.callGateway).toHaveBeenCalledOnce();
+      } else {
+        await request;
+        expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+        const [first, retry] = mocks.callGateway.mock.calls.map(([call]) => call);
+        if (staleIdentity) {
+          expect(first?.agentRuntimeIdentityToken).toEqual(expect.any(String));
+        }
+        expect(retry?.params).toEqual(nodeParams);
+        expect(retry?.agentRuntimeIdentityToken).toEqual(
+          staleIdentity ? undefined : expect.any(String),
+        );
+      }
+    },
+  );
 
   it.each(["preparation", "retry"])("checks dispatch authority after %s", async (stage) => {
     let current = true;
@@ -309,13 +314,6 @@ describe("gateway tool defaults", () => {
     await expect(result).rejects.toBe(refused);
     expect(assertCurrent).toHaveBeenCalledTimes(stage === "preparation" ? 1 : 2);
     expect(sent).toEqual(stage === "preparation" ? [] : [nodeParams]);
-  });
-
-  it("does not retry node commands already dispatched", async () => {
-    const error = schemaError(true);
-    mocks.callGateway.mockRejectedValueOnce(error);
-    await expect(runAsCaller(invokeNode, true)).rejects.toBe(error);
-    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
   });
 
   it.each([false, true])(
